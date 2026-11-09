@@ -226,11 +226,17 @@ impl Tti for M68k {
         1
     }
 
-    /// A stack slot's base is `%sp` and a displacement, so as the base of an
-    /// address it takes no register of its own (LU6, set for x86 too; the pin
-    /// counts it). Several stack arrays then share one index register in
-    /// place of one pointer IV each; the backend folds each access to
-    /// `(d8,%sp,Xn)` (`frameindexed.rs`).
+    /// DEVIATE M68K-LSR-FRAME (owner m68k-lsr-addressing, exit none while the
+    /// backend folds `(d8,%sp,Xn)`, `frameindexed.rs`): the pin's M68k has no
+    /// TTI, so its LSR keeps one pointer IV per stack array (`llc
+    /// -print-after=loop-reduce`, d1106deb); its x86 shares one index, as LU6
+    /// does here. A stack slot is `%sp` and a displacement, no register.
+    ///
+    /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
+    /// index-versus-pointer cost via Tti (no per-program patch):
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`;
+    ///   bintree O1 +0.06/+0.18%, frameless +0.05..+0.13%.
+    /// - M68K-LSR-D2U64-BYTES: double_to_uint64 +8..+26 B.
     fn frame_address_is_free(&self) -> bool {
         true
     }
