@@ -29,7 +29,7 @@
 //! Results are kept in the profile, as a multiply is asked about again and
 //! again.
 //!
-//! DEVIATE M1 (owner w6/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
+//! DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
 //! by `combineMul`
 //! ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 //! and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power

@@ -237,9 +237,9 @@ impl FunctionPass for IndVars {
         // the blocks and edges stay, so the tree and the loops do not.
         // First, as the pin's `rewriteNonIntegerIVs`: a float counter is an
         // integer one before ScalarEvolution looks at the loop.
+        let mut session = ScevSession::cached(unit.context, unit.layout, unit.function, analyses);
         let floats =
-            crate::floativ::enabled() && crate::floativ::converted(unit.context, unit.layout, unit.function, &outer);
-        let mut session = ScevSession::of(unit.context, unit.function, &outer);
+            crate::floativ::enabled() && crate::floativ::converted(unit.context, unit.function, session.loops());
         // The expressions of the pass before, as the pin keeps one SE for the
         // loop passes; handed back below, current.
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);

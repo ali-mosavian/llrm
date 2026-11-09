@@ -73,19 +73,6 @@ impl Target for Arm64 {
         &CPUS
     }
 
-    /// STUB: arm64 has no `timings.times`; no `-march` name maps to a CPU.
-    fn march(
-        &self,
-        _name: &str,
-    ) -> Option<&'static str> {
-        None
-    }
-
-    /// STUB: see `march`.
-    fn marches(&self) -> Vec<&'static str> {
-        Vec::new()
-    }
-
     fn layout(&self) -> llrm_target::layout::Layout {
         LAYOUT.clone()
     }
@@ -170,14 +157,6 @@ impl Target for Arm64 {
         convention.callee_saved().into_iter().map(|kept| (register(&kept.full), register(&kept.pushed))).collect()
     }
 
-    /// STUB: no CPU table until arm64 has a `timings.times`.
-    fn cpu_table(
-        &self,
-        _name: &str,
-    ) -> Option<llrm_target::timings::CpuTable> {
-        None
-    }
-
     fn registers_text(&self) -> String {
         include_str!("registers.regs").to_owned()
     }
@@ -195,39 +174,9 @@ impl Target for Arm64 {
         8
     }
 
-    fn huge_fill_routine(
-        &self,
-        _cell: u32,
-    ) -> Result<llrm_target::routines::HugeString, String> {
-        Err("a 64-bit flat target has no huge pointers".to_owned())
-    }
-
-    fn huge_copy_routine(
-        &self,
-        _down: bool,
-    ) -> Result<llrm_target::routines::HugeString, String> {
-        Err("a 64-bit flat target has no huge pointers".to_owned())
-    }
-
     /// Linux links glibc's libm.
     fn has_libm(&self) -> bool {
         true
-    }
-
-    fn divide_routine(
-        &self,
-        _signed: bool,
-        _wide_divisor: bool,
-    ) -> Result<llrm_target::routines::Divide, String> {
-        Err("`sdiv` and `udiv` divide 64 bits natively".to_owned())
-    }
-
-    /// A vector register holds a float at its own size.
-    fn float_width(
-        &self,
-        bytes: u32,
-    ) -> u32 {
-        bytes
     }
 
     /// The fixed-width encoding: every instruction is 4 bytes.
@@ -258,6 +207,11 @@ impl Target for Arm64 {
 
     fn default_cpu(&self) -> &'static str {
         Platform::Linux.cpu()
+    }
+
+    /// A `nop` is one 4-byte instruction.
+    fn max_nop_bytes(&self) -> u8 {
+        4
     }
 
     /// There is no `bsf` to prefix.
@@ -343,6 +297,9 @@ mod tests {
         assert_eq!((Arm64.stack_slot_bytes(), Arm64.stack_alignment()), (8, 16));
         assert_eq!((Arm64.return_address_bytes(false), Arm64.first_argument_offset(false)), (0, 16));
         assert!(Arm64.aligned_calls() && !Arm64.callee_pops());
+        // A `nop` is one 4-byte instruction: padding is whole words, not x86's
+        // 1-byte default.
+        assert_eq!(Arm64.max_nop_bytes(), 4);
         assert_eq!(Arm64.results(8), [reg::X0]);
         assert_eq!(Arm64.results(16), [reg::X0, register("x1")]);
     }
@@ -385,6 +342,22 @@ mod tests {
         assert_eq!(placement.places[..4], [register("x0"), register("v0"), register("v1"), register("x1")]);
         assert_eq!(placement.places[10], Place::Stack(0));
         assert_eq!(convention.float_result_register(), Some("v0"));
+    }
+
+    /// arm64 states none of these (no `-march` table, native divide, no huge
+    /// pointers, floats at their own size): the trait's defaults answer.
+    #[test]
+    fn the_trait_defaults_answer_what_arm64_does_not_state() {
+        assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("generic")), (None, 0, None));
+        // An unsupported default is loud: the error names the target and the method.
+        let refusal = |text: Result<_, String>| -> String { text.map(|_: ()| ()).unwrap_err() };
+        assert_eq!(
+            refusal(Arm64.divide_routine(true, true).map(drop)),
+            "arm64: divide_routine: the target states no inline divide"
+        );
+        assert!(refusal(Arm64.huge_fill_routine(4).map(drop)).starts_with("arm64: huge_fill_routine"));
+        assert!(refusal(Arm64.huge_copy_routine(false).map(drop)).starts_with("arm64: huge_copy_routine"));
+        assert_eq!((Arm64.float_width(4), Arm64.float_width(8)), (4, 8));
     }
 
     /// The shared passes' prices are the private driver's: one `Arm64Machine`.

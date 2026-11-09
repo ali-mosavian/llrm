@@ -21,13 +21,10 @@
 //! # See also
 //! LLVM `IndVarSimplify.cpp`. Tests: `floativ_tests.rs`.
 
-use llrm_analysis::scev::analysis::ScevSession;
 use llrm_mir::context::{ConstantKind, Context};
-use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
-use llrm_mir::passes::Outer;
 use llrm_mir::types::{FloatKind, Type};
 
 /// `LLRM_NO_FLOAT_IV`, read once; set, the step is skipped.
@@ -61,14 +58,11 @@ struct IntegerIv {
 /// whether anything changed.
 pub fn converted(
     context: &mut Context,
-    layout: &DataLayout,
     function: &mut Function,
-    outer: &Outer,
+    loops: &llrm_mir::loopinfo::LoopInfo,
 ) -> bool {
-    let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-    let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
     let mut found = Vec::new();
-    for l in env.loops.get_loops_in_preorder() {
+    for l in loops.get_loops_in_preorder() {
         let header = l.get_header();
         for phi in function.iter_block(header).take_while(|&one| function.instruction(one).opcode == Opcode::Phi) {
             if let Some(iv) = maybe_floating_point_recurrence(context, function, &l, phi)
@@ -78,7 +72,6 @@ pub fn converted(
             }
         }
     }
-    drop(session);
     let changed = !found.is_empty();
     for (iv, int) in &found {
         canonicalize_to_integer_iv(context, function, iv, int);
