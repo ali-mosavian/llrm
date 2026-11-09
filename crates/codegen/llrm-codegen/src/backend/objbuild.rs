@@ -1681,9 +1681,20 @@ fn declared_frames(
     frames
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Offsets `within` has read: the work `declared_frames` does, counted.
+    static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The items whose offset lies in `range`. Items are pushed at the image's
 /// length, so they are sorted by offset: a search per function, not a scan.
 fn within<'a, T>(items: &'a [T], at: impl Fn(&T) -> usize, range: &std::ops::Range<usize>) -> &'a [T] {
+    let at = |item: &T| {
+        #[cfg(test)]
+        PROBES.with(|probes| probes.set(probes.get() + 1));
+        at(item)
+    };
     let from = items.partition_point(|item| at(item) < range.start);
     let to = items.partition_point(|item| at(item) < range.end);
     &items[from..to]
@@ -2450,6 +2461,7 @@ mod tests {
     /// `declared_frames` scanned every declared mark, CFI and SEH entry of a
     /// segment for each function: four times the functions cost sixteen
     /// times the work (object write 1.08/1.16 per doubling at 600/2400).
+    /// Counted in offsets read, not time: a loaded machine cannot fail it.
     #[test]
     fn the_frames_of_a_segment_are_linear_in_its_functions() {
         let frames_of = |functions: usize| {
@@ -2463,20 +2475,13 @@ mod tests {
                 symbols.insert(name.clone(), (0, 16 * at));
                 sizes.insert(name, 16);
             }
-            let segments = [segment];
-            let best = (0..3)
-                .map(|_| {
-                    let started = std::time::Instant::now();
-                    let frames = declared_frames(64, &segments, &symbols, &sizes);
-                    assert_eq!(frames.len(), functions);
-                    started.elapsed()
-                })
-                .min()
-                .unwrap();
-            best
+            PROBES.with(|probes| probes.set(0));
+            let frames = declared_frames(64, &[segment], &symbols, &sizes);
+            assert_eq!(frames.len(), functions);
+            PROBES.with(|probes| probes.get())
         };
         let (small, large) = (frames_of(4_000), frames_of(16_000));
-        assert!(large < small * 8, "4x the functions cost {:?} against {:?}", large, small);
+        assert!(large < small * 8, "4x the functions read {large} offsets against {small}");
     }
 }
 

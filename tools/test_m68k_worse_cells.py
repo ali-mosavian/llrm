@@ -29,6 +29,22 @@ def cell(target, prog, level, ours, gcc, clang):
     return [(target, prog, level, name, b, k, 1, "") for name, (b, k) in (("ours", ours), ("gcc", gcc), ("clang", clang))]
 
 
+class HeaderRates(unittest.TestCase):
+    def test_a_flat_two_bytes_per_clock_header_is_refused(self):
+        stale = "# m68k matrix; byte_rate: 68000/68020/68040/68060 2 B per clk saved (O2: 1 clk = 2 B)\n"
+        rows = cell("m68k-68000", "partition", "O2", (98, 1264), (92, 1226), (150, 2104))
+        body = stale + COLS + "".join("\t".join(map(str, r)) + "\n" for r in rows)
+        with self.assertRaises(SystemExit) as why:
+            count(io.StringIO(body))
+        self.assertIn("timings.times", str(why.exception))
+
+    def test_the_committed_rates_are_per_cpu(self):
+        from m68k_worse_cells import committed_rates
+
+        rates = committed_rates()
+        self.assertEqual((rates["68000"], round(rates["68020"], 2), rates["68040"]), (0.5, 1.33, 3.2))
+
+
 class WorseCells(unittest.TestCase):
     def test_two_byte_loss_at_os_counts(self):
         rows = cell("m68k-68000", "fib", "Os", (22, 100), (20, 100), (24, 100))
