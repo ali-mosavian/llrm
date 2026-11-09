@@ -16,20 +16,25 @@
 //!   lda rc3; sta rc5; lda rc4  => txa; sta rc5; lda rc2        (rc4 is now dead)
 //! ```
 //!
-//! DEVIATE 1 (owner alloc-small, exit 2026-11-30): the pin asks the register
+//! DEVIATE MCP1 (owner alloc-small, exit 2026-12-15): the pin asks the register
 //! class whether a copy's source may replace its destination
-//! (`isForwardableRegClassCopy`, MachineCopyPropagation.cpp#L706). Here the
-//! question is which opcodes take which operand form: a memory operand of an
-//! ALU instruction, `lda`, `ldx` and `ldy` is any cell; a register never is.
+//! (`isForwardableRegClassCopy`, MachineCopyPropagation.cpp#L706). The 6502 has
+//! no classes: the question is which opcodes take which operand form (a memory
+//! operand of an ALU instruction, `lda`, `ldx` and `ldy` is any cell; a
+//! register never is), and a substitute cell must be zero page when the old
+//! one is (`same_form`). Evidence: `tests/copyprop.rs`; exit when the allocator
+//! states operand forms as classes.
 //!
-//! DEVIATE 2: a copy sets the zero and sign flags on the 6502. A transfer or
-//! load that is removed must leave the flags unread
-//! (`peephole::flags_unread_after`); a rewrite to another opcode that sets the
-//! same flags from the same value (`lda c` to `txa`) changes none.
+//! DEVIATE MCP2 (owner alloc-small, exit 2026-12-15): a copy sets the zero and
+//! sign flags on the 6502. A transfer or load that is removed must leave the
+//! flags unread (`peephole::flags_unread_after`); a rewrite to another opcode
+//! that sets the same flags from the same value (`lda c` to `txa`) changes
+//! none. The pin's copies are flag-free.
 //!
-//! DEVIATE 3: a store through an index or a pointer may write any cell, a call
-//! any register and any caller-saved cell: both end every tracked value. A
-//! label or a raw line starts a new block (the pin walks one block).
+//! DEVIATE MCP3 (owner alloc-small, exit 2026-12-15): a store through an index
+//! or a pointer may write any cell, a call any register and any caller-saved
+//! cell, a label or a raw line starts a new block, a jump or return ends one:
+//! all end every tracked value (the pin has regmasks and walks one block).
 //!
 //! # See also
 //! LLVM [`MachineCopyPropagation`]
