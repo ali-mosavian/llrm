@@ -1,4 +1,5 @@
 // flags: -O2
+// targets: !int16
 // clz, ctz and popcount of a 32-bit word, the zero-poison forms and the defined-zero ones (`x ? ... : 32`), each its own function.
 extern void report(long value);
 

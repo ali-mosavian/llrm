@@ -210,3 +210,14 @@ def test_a_program_whose_flags_all_force_a_32_bit_x86_mode_is_not_run_on_z80_or_
         assert not any(ct.applies(t, source) for t in ("z80-sdcc", "6502-sim65"))
         assert ct.applies("arm64-linux", source) and ct.applies("x86_32-linux", source)
     assert not ct.x86_32_only("// flags: -O2 -m32 | -O2 -m16\nint x;\n")
+
+
+def test_programs_that_assume_a_32_bit_int_or_an_80_bit_long_double_are_not_run_on_6502_or_z80():
+    """6502 reported WRONG for bitcount_u32 (15 want 31), bitcount_idioms and long_double_decimal_literal (0x999A want 0xCCCD, the
+    double's low word) at both levels: a 16-bit `unsigned` and a 64-bit long double answered correctly for their types, and the
+    sweep counted three unmeasured cells as miscompiles."""
+    for name in ("bitcount_u32", "bitcount_idioms", "long_double_decimal_literal"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("6502-sim65", "z80-sdcc")), name
+        assert ct.applies("x86_64-linux", source), name
+    assert ct.applies("arm64-linux", (RUN / "bitcount_u32.c").read_text())
