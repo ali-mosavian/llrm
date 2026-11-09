@@ -75,3 +75,41 @@ define void @set(ptr %p, ptr %q) nounwind {
     assert!(!asm.contains("ld (hl), #7"), "each store carries the constant:\n{asm}");
     assert_eq!(asm.matches("#7").count(), 1, "the constant is loaded more than once:\n{asm}");
 }
+
+/// local_initializers -O1: a constant word stored to a local went through the
+/// frame address (`ld hl, #5; add hl, sp; ld (hl), #9; inc hl; ld (hl), #0`),
+/// +7 B and +30 T against `ld bc, #9; ld -8(ix), c; ld -7(ix), b`.
+#[test]
+fn a_constant_word_stored_to_a_local_once_is_two_ix_stores() {
+    let ir = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
+declare void @use(ptr)
+define void @f() nounwind {
+  %a = alloca i16
+  store i16 9, ptr %a
+  call void @use(ptr %a)
+  ret void
+}
+"#;
+    let asm = text(ir, "f", 0, &Request::new(Level::Os)).expect("compiles");
+    assert!(asm.contains("(ix), #9") && asm.contains("(ix), #0"), "not stored through ix:\n{asm}");
+    assert!(!asm.contains("ld (hl), #9"), "stored through a built address:\n{asm}");
+}
+
+/// memory_expansion -O1: a constant stored to several locals as `ld d(ix), n`
+/// (4 B a byte) instead of from one pair (3 B a byte): +556 B.
+#[test]
+fn a_constant_stored_to_two_locals_is_loaded_once() {
+    let ir = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
+declare void @use(ptr, ptr)
+define void @f() nounwind {
+  %a = alloca i16
+  %b = alloca i16
+  store i16 9, ptr %a
+  store i16 9, ptr %b
+  call void @use(ptr %a, ptr %b)
+  ret void
+}
+"#;
+    let asm = text(ir, "f", 0, &Request::new(Level::Os)).expect("compiles");
+    assert!(!asm.contains("(ix), #9"), "each store carries the constant:\n{asm}");
+}

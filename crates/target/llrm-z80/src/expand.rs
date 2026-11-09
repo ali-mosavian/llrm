@@ -942,7 +942,7 @@ impl Printer<'_> {
                 self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes + self.spill_bytes));
                 self.push("add hl, sp");
             }
-            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
+            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" | "LD16fi" => {
                 // register first for a load, the stored value first for a
                 // store; the frame object and its offset last
                 let load = op.ends_with("rf");
@@ -952,7 +952,14 @@ impl Printer<'_> {
                     Some(Operand::Imm(extra)) => *extra,
                     other => return Err(format!("a frame offset that is {other:?}")),
                 };
-                if op == "LD8fi" {
+                if op == "LD16fi" {
+                    let Some(Operand::Imm(value)) = inst.operands.first() else {
+                        return Err("LD16fi without a constant".to_owned());
+                    };
+                    for (byte, slot) in [value & 0xFF, (value >> 8) & 0xFF].into_iter().zip(self.frame_slots(index, extra, 2)?) {
+                        self.push(format!("ld {slot}, #{byte}"));
+                    }
+                } else if op == "LD8fi" {
                     let value = self.immediate(inst, 0, 0xFF)?;
                     let slot = self.frame_slots(index, extra, 1)?.remove(0);
                     self.push(format!("ld {slot}, {value}"));

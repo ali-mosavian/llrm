@@ -300,6 +300,8 @@ let mayStore = 1 in {
   def LD8fr : Z80Inst<(outs), (ins GR8:$s, i16imm:$fi, i16imm:$o), "ld $o($fi), $s", []>;
   def LD8fi : Z80Inst<(outs), (ins i8imm:$v, i16imm:$fi, i16imm:$o), "ld $o($fi), $v", []>;
   def LD16fr : Z80Inst<(outs), (ins GR16:$s, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $s", []>;
+  // A constant word: two `ld d(ix), n` (4 B and 19 T each; from a pair 3 B and 19 T), so a constant with one user only.
+  def LD16fi : Z80Inst<(outs), (ins i16imm:$v, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $v", []>;
 }
 def : Pat<(i8 (load frameindex:$fi)), (LD8rf (to_tframeindex $fi), 0)>;
 def : Pat<(i8 (load (add frameindex:$fi, imm:$o))), (LD8rf (to_tframeindex $fi), imm:$o)>;
@@ -309,6 +311,8 @@ def : Pat<(store (i8 imm:$v), frameindex:$fi), (LD8fi imm:$v, (to_tframeindex $f
 def : Pat<(store (i8 imm:$v), (add frameindex:$fi, imm:$o)), (LD8fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR8:$s, frameindex:$fi), (LD8fr GR8:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR8:$s, (add frameindex:$fi, imm:$o)), (LD8fr GR8:$s, (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store (i16 imm_one_use:$v), frameindex:$fi), (LD16fi imm:$v, (to_tframeindex $fi), 0)>;
+def : Pat<(store (i16 imm_one_use:$v), (add frameindex:$fi, imm:$o)), (LD16fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR16:$s, frameindex:$fi), (LD16fr GR16:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR16:$s, (add frameindex:$fi, imm:$o)), (LD16fr GR16:$s, (to_tframeindex $fi), imm:$o)>;
 
