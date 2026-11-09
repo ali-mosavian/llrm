@@ -111,6 +111,9 @@ pub struct BuilderTarget {
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
+    /// The largest `alloca` alignment the target keeps; none: it realigns
+    /// the stack. A larger one is a named refusal, never a misaligned object.
+    pub max_alloca_align: Option<u64>,
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
@@ -468,6 +471,7 @@ impl BuilderTarget {
             soft_float: false,
             libcalls: None,
             stack_align: None,
+            max_alloca_align: None,
             float_store: false,
             jump_tables: true,
             opt_size: false,
@@ -3428,9 +3432,12 @@ impl Builder<'_> {
             Opcode::Store { align, volatile } => self.visit_store(inst, &instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
-            Opcode::Alloca { .. }
-                if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
-            Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
+            Opcode::Alloca { allocated, align, .. } => {
+                self.refuse_unkeepable_alignment(*allocated, *align)?;
+                if !instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) {
+                    self.visit_alloca(&instruction, *allocated, *align)?
+                }
+            }
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
@@ -3854,6 +3861,24 @@ impl Builder<'_> {
     /// `visitAlloca` for a dynamic one: the size scaled by the element size,
     /// rounded up to the stack alignment, and `DYNAMIC_STACKALLOC` on the
     /// root.
+    /// A target that cannot realign its stack (`max_alloca_align`) refuses an
+    /// object aligned past what it keeps: the object would land misaligned
+    /// and `ptr & (align - 1)` fold to zero. The pin realigns (`hasFP`).
+    fn refuse_unkeepable_alignment(
+        &self,
+        allocated: TypeId,
+        align: Option<u64>,
+    ) -> Result<(), Refused> {
+        let wanted = self.layout.pref_align(&self.module.context.types, allocated).max(align.unwrap_or(1));
+        match self.target.max_alloca_align {
+            Some(kept) if wanted > kept => Err(Refused(Box::leak(
+                format!("an object aligned to {wanted} needs stack realignment, not supported yet (keeps {kept})")
+                    .into_boxed_str(),
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     fn visit_alloca(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
