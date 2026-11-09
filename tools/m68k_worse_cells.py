@@ -33,6 +33,19 @@ def committed_rates(path: str = TIMINGS) -> dict[str, float]:
     return {"68" + cpu[-3:]: int(line) / int(fill) for cpu, line, fill in zip(rows["march"], rows["cache_line"], rows["line_fill_clocks"])}
 
 
+def rate_text(path: str = TIMINGS) -> str:
+    """The `byte_rate:` text of a table header, read from the committed `timings.times`, never typed: `68000/010 0.5, 68020 1.33, 030/040/060
+    3.2`. Every table writer prints this, and `rates` reads it back."""
+    groups: list[tuple[list[str], float]] = []
+    for cpu, value in committed_rates(path).items():
+        value = round(value, 2)
+        if groups and groups[-1][1] == value:
+            groups[-1][0].append(cpu)
+        else:
+            groups.append(([cpu], value))
+    return ", ".join("/".join([names[0], *(name[2:] for name in names[1:])]) + f" {value:g}" for names, value in groups)
+
+
 def rates(header: str) -> dict[str, float]:
     found = RATES.search(header)
     if not found:
