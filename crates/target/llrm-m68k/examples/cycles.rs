@@ -136,7 +136,62 @@ pub(crate) struct Total {
     pub(crate) insns: usize,
     pub(crate) clocks: Vec<u64>,
     pub(crate) partial: bool,
-    pub(crate) unknown: usize,
+    /// Executed instructions the listing does not show: unpriced on every model.
+    pub(crate) unlisted: usize,
+    /// Per model: executed instructions its tables cannot price (`extb.l` on the 68000).
+    pub(crate) unpriced: Vec<usize>,
+}
+
+impl Total {
+    fn new(models: usize) -> Self {
+        Total { insns: 0, clocks: vec![0; models], partial: false, unlisted: 0, unpriced: vec![0; models] }
+    }
+
+    /// Unpriced instructions in the column of model `slot`.
+    pub(crate) fn unknown_on(
+        &self,
+        slot: usize,
+    ) -> usize {
+        self.unlisted + self.unpriced[slot]
+    }
+
+    /// ` ?N` after a clock total that leaves `N` instructions out, else nothing.
+    fn mark_on(
+        &self,
+        slot: usize,
+    ) -> String {
+        match self.unknown_on(slot) {
+            0 => String::new(),
+            n => format!(" ?{n}"),
+        }
+    }
+
+    /// One executed instruction `text` of `bytes` bytes on every model. A model that cannot price it leaves its own
+    /// column short and no other: a 68020 program's `extb.l` is not a 68000 instruction, and made every column of the
+    /// exe read as incomplete (countgt, hex: `?16`, `?1` on complete 68020 totals, 2026-11-09).
+    fn charge(
+        &mut self,
+        models: &[Model],
+        text: &str,
+        bytes: u32,
+        taken: bool,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        for (slot, cpu) in models.iter().copied().enumerate() {
+            match cost_on(cpu, text, bytes, taken) {
+                Ok(one) => {
+                    self.clocks[slot] += u64::from(one.clocks);
+                    self.partial |= one.partial;
+                }
+                Err(why) => {
+                    self.unpriced[slot] += 1;
+                    if seen.insert(why.clone()) {
+                        eprintln!("unpriced: {why}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The qemu CPU a run of `exe` is traced on: the one its path names, the 68000
@@ -163,7 +218,23 @@ fn qemu_cpu_of(exe: &Path) -> &'static str {
 mod tests {
     use std::path::Path;
 
-    use super::{parse_listing, qemu_cpu_of};
+    use super::{Model, Total, parse_listing, qemu_cpu_of};
+
+    /// A 68020 program's `extb.l` made the 68020 column read `?N` too: the tool counted an instruction unknown when ANY
+    /// model could not price it (countgt, hex 2026-11-09: `?16` on a complete 68020 total). Each column counts its own.
+    #[test]
+    fn an_instruction_one_model_cannot_price_marks_only_that_column() {
+        let models = [Model::M68000, Model::M68020];
+        let mut total = Total::new(models.len());
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            total.charge(&models, "extb.l %d2", 2, false, &mut seen);
+        }
+        total.charge(&models, "addq.l #1, %d0", 2, false, &mut seen);
+        assert_eq!(total.mark_on(0), " ?16", "the 68000 has no extb");
+        assert_eq!(total.mark_on(1), "", "the 68020 priced all 17");
+        assert!(total.clocks[1] > total.clocks[0], "the 68020 column holds the extb clocks: {:?}", total.clocks);
+    }
 
     /// A small program's hot loop is inlined into `main`; the default priced
     /// everything but `main`, so a 100-iteration loop read as 0 clocks and an
@@ -218,7 +289,7 @@ pub(crate) fn price(
             },
         );
     let pcs = trace(exe, cap, &cpu);
-    let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
+    let mut total = Total::new(models.len());
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
@@ -230,26 +301,11 @@ pub(crate) fn price(
         total.insns += 1;
         *counts.entry(*pc).or_default() += 1;
         let Some((bytes, text)) = at.get(pc) else {
-            total.unknown += 1;
+            total.unlisted += 1;
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
-        let mut failed = false;
-        for (slot, cpu) in models.iter().copied().enumerate() {
-            match cost_on(cpu, text, *bytes as u32, taken) {
-                Ok(one) => {
-                    total.clocks[slot] += u64::from(one.clocks);
-                    total.partial |= one.partial;
-                }
-                Err(why) => {
-                    failed = true;
-                    if seen.insert(why.clone()) {
-                        eprintln!("unpriced: {why}");
-                    }
-                }
-            }
-        }
-        total.unknown += usize::from(failed);
+        total.charge(models, text, *bytes as u32, taken, &mut seen);
     }
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {
@@ -334,9 +390,12 @@ fn main() {
         for path in std::env::args().skip(2) {
             let total = price(&gcc, Path::new(&path), &models, true);
             let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let cells: Vec<String> =
-                total.clocks.iter().map(|one| format!("{one}{mark}{unknown} | {:.1}", *one as f64 / calls)).collect();
+            let cells: Vec<String> = total
+                .clocks
+                .iter()
+                .enumerate()
+                .map(|(slot, one)| format!("{one}{mark}{} | {:.1}", total.mark_on(slot), *one as f64 / calls))
+                .collect();
             let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
             println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
         }
@@ -349,7 +408,7 @@ fn main() {
             "insns {} clocks {} unpriced {} partial {}",
             total.insns,
             clocks.join(" "),
-            total.unknown,
+            (0..models.len()).map(|slot| total.unknown_on(slot).to_string()).collect::<Vec<_>>().join("/"),
             total.partial
         );
         return;
@@ -410,8 +469,8 @@ fn main() {
             }
             let total = price(&gcc, &exe, &models, false);
             let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
+            let clocks: Vec<String> =
+                total.clocks.iter().enumerate().map(|(slot, one)| format!("{one}{mark}{}", total.mark_on(slot))).collect();
             cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
         }
         println!("| {name} | {} |", cells.join(" | "));
