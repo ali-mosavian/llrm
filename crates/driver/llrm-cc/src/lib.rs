@@ -760,8 +760,10 @@ pub fn link_command(
     Ok(command)
 }
 
-/// The error for a clang whose datalayout differs from the table's. A row with a `clang_env` takes the fork's clang from that variable, and
-/// falls back to the pin's, which has no 16-bit layout: the message names the variable when it is unset.
+/// The error for a clang whose datalayout differs from the table's. A row with
+/// a `clang_env` takes the fork's clang from that variable, and falls back to
+/// the pin's, which has no 16-bit layout: the message names the variable when
+/// it is unset.
 fn layout_mismatch(
     path: &str,
     printed: &str,
