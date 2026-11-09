@@ -183,6 +183,9 @@ struct Emitter<'a> {
     save: llrm_support::hash::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
+    /// `CopyFromReg` of a virtual register is that register, as the pin's
+    /// `InstrEmitter` has it (see [`emit_with`]).
+    direct_copies: bool,
 }
 
 impl Emitter<'_> {
@@ -480,6 +483,14 @@ impl Emitter<'_> {
             }
             ISD::CopyFromReg => {
                 let src = self.register(n.ops[1]).ok_or("CopyFromReg of no register")?;
+                // `InstrEmitter::EmitCopyFromReg`: a virtual register is
+                // "just used directly"; only a physical one is copied. A copy
+                // here puts a value of an earlier block in a register defined
+                // inside the loop, where it is not loop-invariant.
+                if self.direct_copies && matches!(src, Reg::Virt(_)) {
+                    self.values.insert((node, 0), src);
+                    return Ok(());
+                }
                 let dst = self.new_reg(Class::of_type(n.values[0]));
                 self.values.insert((node, 0), dst);
                 into.push(Inst::copy(dst, src));
@@ -603,6 +614,19 @@ pub fn emit(
     name: &str,
     blocks: &[Selected],
 ) -> Result<MFunction, String> {
+    emit_with(name, blocks, false)
+}
+
+/// [`emit`], where `direct_copies` reads a virtual register a block takes from
+/// an earlier one directly, as the pin does; otherwise it is copied first. The
+/// private passes after the emitter were tuned on the copies (the corpus is
+/// +394 B at 68000 -O2 without them, 11-09), so the pin's shape is opt-in until
+/// the shared coalescer and allocator replace them.
+pub fn emit_with(
+    name: &str,
+    blocks: &[Selected],
+    direct_copies: bool,
+) -> Result<MFunction, String> {
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter = Emitter {
         dag: &first.dag,
@@ -612,6 +636,7 @@ pub fn emit(
         flags_from: None,
         save: Default::default(),
         saved: HashMap::default(),
+        direct_copies,
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();

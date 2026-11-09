@@ -73,7 +73,7 @@ fn a_stage_that_changes_nothing_hands_the_function_back_unchanged() {
                 let blocks = select_function(&module, &name, cpu).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
                 let mut function = emit(&name, &blocks).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
                 expand_cmov(&mut function).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
-                let back = host_ssa::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO), &mut Null)
+                let back = host_ssa::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO), |_| Box::new(Null))
                     .unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
                 assert_eq!(format!("{function:?}"), format!("{back:?}"), "{file} @{name} at {cpu:?} changed");
                 checked += 1;
@@ -92,6 +92,6 @@ fn a_stage_that_removes_an_instruction_is_seen() {
     let blocks = select_function(&module, "bench_sieve", Cpu::M68000).expect("selects");
     let mut function = emit("bench_sieve", &blocks).expect("emits");
     expand_cmov(&mut function).expect("expands");
-    let back = host_ssa::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO), &mut DropOne).expect("round trip");
+    let back = host_ssa::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO), |_| Box::new(DropOne)).expect("round trip");
     assert_ne!(format!("{function:?}"), format!("{back:?}"));
 }

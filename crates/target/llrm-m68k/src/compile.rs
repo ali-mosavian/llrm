@@ -12,7 +12,7 @@ use crate::expand::{Line, finish_with};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
-use crate::mfunc::{emit, expand_cmov};
+use crate::mfunc::{emit_with, expand_cmov};
 use crate::regalloc::{
     branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink, remove_identity_copies,
     remove_redundant_copies, two_address,
@@ -120,6 +120,10 @@ pub struct Options {
     /// phi elimination ([`crate::regalloc::shared_cse`]). Off until its corpus
     /// A/B has no cell worse than main (11-09: O2 68000 +542 B, 27 worse).
     pub shared_cse: bool,
+    /// A value read in a block after an earlier one defines it is read from its
+    /// register, as in the pin's MIR: what the hosted stages (MachineLICM) need
+    /// to see it as loop-invariant ([`crate::mfunc::emit_with`]).
+    pub direct_copies: bool,
     /// A small conditional block is copied into the predecessors that jump to
     /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
     pub tail_duplicate: bool,
@@ -193,6 +197,7 @@ impl Options {
         reuse_shift_flags: false,
         post_inc_across_blocks: false,
         shared_cse: false,
+        direct_copies: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
@@ -228,6 +233,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             post_inc_across_blocks: true,
             shared_cse: false,
+            direct_copies: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
@@ -460,7 +466,7 @@ fn items_once(
         &chain,
         &libcalls,
     )?;
-    let mut function = emit(name, &blocks)?;
+    let mut function = emit_with(name, &blocks, options.direct_copies)?;
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
     touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
