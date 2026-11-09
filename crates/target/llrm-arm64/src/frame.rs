@@ -356,9 +356,11 @@ fn layout(
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
     // `hasFP` also holds for a call frame over `DefaultSafeSPDisplacement`
     // (255 bytes): the scavenger's emergency slot is reached from the frame pointer.
-    // DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-30): x29 joins the allocation
-    // pool when no record is kept; in stft_fixed (-O1/-O2, bench) the greedy then lays
-    // two global-address pairs out differently, +1 executed insn, -4 B.
+    // DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins the allocation pool
+    // when no record is kept. stft_fixed -O1/-O2 (bench), +1 executed insn in a 78M run,
+    // -4 B: the greedy gives x29 to one global's base and rematerializes another global
+    // (`adrp`/`add` into x20) at the outer loop head, where the old code folded the
+    // address into x9; read from both assemblies.
     // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's `producePairRegisters`
     // (Mach-O compact unwind) saves the frame pointer beside the link register on
     // Darwin whatever `hasFP` says, without setting it up; here a Darwin call keeps
