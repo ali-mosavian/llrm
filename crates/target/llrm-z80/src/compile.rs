@@ -2198,6 +2198,16 @@ fn decomposed_functions(
     // module price at the level, and the second start wins only if strictly
     // better than the first
     let every: HashSet<usize> = (0..either.len()).filter(|at| either[*at].2.is_some()).collect();
+    // a function tuned for size (`optsize`/`minsize`) is priced bytes first at any level, as the pin's `ForCodeSize`
+    // reads it; the others by the level
+    let size_first: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            matches!(level, Level::Os | Level::Oz)
+                || selected.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.sized))
+        })
+        .collect();
+    let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2212,7 +2222,9 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if level == Level::O1 {
+                let better = if size_first[at] {
+                    prefers(Level::Os, price, best)
+                } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
                 } else {
                     prefers(level, price, best)
@@ -2229,12 +2241,13 @@ fn decomposed_functions(
     };
     // a tie keeps the faster form: the alternative at the size levels is the
     // inline form, at the others the all-calls form
-    let (first, second) = if matches!(level, Level::Os | Level::Oz) {
+    let module_level = if all_sized { Level::Os } else { level };
+    let (first, second) = if module_level == Level::Os {
         (descend(every), descend(HashSet::new()))
     } else {
         (descend(HashSet::new()), descend(every))
     };
-    let chosen = if prefers(level, second.0, first.0) { second.1 } else { first.1 };
+    let chosen = if prefers(module_level, second.0, first.0) { second.1 } else { first.1 };
     either
         .iter()
         .enumerate()
