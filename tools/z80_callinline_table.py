@@ -1,8 +1,8 @@
-"""Landing table: baseline (tbl7+tbl9) vs NEW sweep dir, per level and row, with inside-bar before/after per axis.
-usage: z80-callinline-table.py NEWDIR > table.tsv   (summary on stderr)"""
+"""Landing table: BASE vs NEW sweep dir (under ~/scratch/z80-hl, files new.<level>.tsv), per level and row, with
+inside-bar before/after per axis. usage: z80_callinline_table.py BASE NEW > table.tsv   (summary on stderr)"""
 import os, sys, collections
 H = os.path.expanduser("~/scratch/z80-hl")
-NEW = sys.argv[1]
+BASE, NEW = sys.argv[1], sys.argv[2]
 LV = {"1": "O1", "s": "Os", "z": "Oz", "2": "O2", "3": "O3"}
 
 def ours(path):
@@ -32,7 +32,7 @@ def inside(level, ours_, bar):
 print("prog\tlevel\tbase_B\tbase_T\tnew_B\tnew_T\tdB\tdT\tbar_B\tbar_T\tB_in_before\tB_in_after\tT_in_before\tT_in_after\tleaves_bar")
 left = 0; summ = collections.Counter(); rows = collections.Counter()
 for lv, name in LV.items():
-    base = {}; base.update(ours(f"{H}/tbl7/new.{lv}.tsv")); base.update(ours(f"{H}/tbl9/new.{lv}.tsv"))
+    base = ours(f"{H}/{BASE}/new.{lv}.tsv")
     new = ours(f"{H}/{NEW}/new.{lv}.tsv")
     if not new:
         continue
