@@ -67,8 +67,11 @@
 //!   expansion for the select of two i64 constants as a priced DEVIATE (or
 //!   the pass the pin uses to keep `mov -1` out of the first CMOV window).
 //!   The scheduler is right (traced: `MOV32r0` goes first, held by the live
-//!   EFLAGS). `f409` (32 B, pin 28 B) is the one function above the pin: the
-//!   CMOV diamond comes before the SETCC (cause not traced; w9 traces).
+//!   EFLAGS). `f409` (`x<y ? INT64_MIN/2^31 : 0`, symbol size): base 25 B
+//!   (O1, O2), head 30 / 32 B, clang 28 / 28, gcc 32 / 27, so head is over base
+//!   and over the best external (+2 at O1, +5 at O2); the head shape is
+//!   `setl al; and eax,255; shl` (FixupSetCC does not fire; the CMOV diamond
+//!   comes before the SETCC; cause not traced). Same exit as above.
 //! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
 //!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
 //!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
