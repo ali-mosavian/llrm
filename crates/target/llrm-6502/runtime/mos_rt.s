@@ -56,16 +56,16 @@ __crest:
 .export __mulqi3
 __mulqi3:                       ; rc2 * rc3 -> A
   lda #0
-  ldx #8
-@next:
-  lsr rc3
-  bcc @skip
+  beq @test
+@add:
   clc
   adc rc2
-@skip:
+@shift:
   asl rc2
-  dex
-  bne @next
+@test:
+  lsr rc3                       ; carry: the bit; zero: no multiplier bits are left
+  bcs @add
+  bne @shift
   rts
 
 .export __umulqihi3

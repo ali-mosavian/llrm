@@ -91,6 +91,24 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                     at += 1;
                 }
             }
+            // A C comment is white space (clang 24 prints `/* (nan) */` before an `llvm.is.fpclass` mask).
+            b'/' if bytes.get(at + 1) == Some(&b'*') => {
+                let opened = line;
+                at += 2;
+                loop {
+                    match bytes.get(at) {
+                        None => return fail(opened, "unterminated `/*` comment".to_owned()),
+                        Some(b'*') if bytes.get(at + 1) == Some(&b'/') => {
+                            at += 2;
+                            break;
+                        }
+                        Some(&byte) => {
+                            line += usize::from(byte == b'\n');
+                            at += 1;
+                        }
+                    }
+                }
+            }
             b'%' | b'@' => {
                 let (name, next) = match name_at(bytes, at + 1) {
                     Ok(Some(found)) => found,

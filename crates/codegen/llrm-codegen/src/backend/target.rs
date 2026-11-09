@@ -251,8 +251,9 @@ pub struct Segments {
     /// group, the data segment register is free between the points that need
     /// it (`needs_data_group`), so it comes last.
     pub selectors: Vec<RegId>,
-    /// The one every access without a prefix reads.
-    pub data: RegId,
+    /// The one every access without a prefix reads; none where the register
+    /// file names no data segment (a flat target without segment registers).
+    pub data: Option<RegId>,
     /// The one that reaches the data group while `data` holds something
     /// else: the stack's, where the stack lives in the data group.
     pub through: Option<RegId>,
@@ -289,7 +290,7 @@ impl Segments {
         let Some(segments) = machine.segments.as_ref() else {
             return Self {
                 selectors: Vec::new(),
-                data: registers.data(),
+                data: registers.data_segment,
                 through: None,
                 huge_shift: None,
                 offset_bytes,
@@ -312,7 +313,7 @@ impl Segments {
                 .into_iter()
                 .filter(|one| !reserved.iter().any(|name| named(one, name)))
                 .collect(),
-            data: register(&segments.data),
+            data: Some(register(&segments.data)),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
             huge_shift: machine.huge_shift(),
             offset_bytes,
@@ -715,7 +716,7 @@ mod tests {
     fn test_segment_registers_follow_the_machine() {
         let regs = crate::backend::registerinfo::test_regs();
         assert_eq!(BUILT_IN.selectors, [RegId::ES, RegId::FS, RegId::GS]);
-        assert_eq!((BUILT_IN.data, BUILT_IN.through), (RegId::DS, None));
+        assert_eq!((BUILT_IN.data, BUILT_IN.through), (Some(RegId::DS), None));
         let joined = crate::abi::machine::Machine {
             segments: llrm_x86_m16::machine::BUILT_IN
                 .segments
@@ -725,7 +726,7 @@ mod tests {
         };
         let joined = Segments::of(&joined, regs, 2);
         assert_eq!(joined.selectors, [RegId::ES, RegId::FS, RegId::GS, RegId::DS]);
-        assert_eq!((joined.data, joined.through), (RegId::DS, Some(RegId::SS)));
+        assert_eq!((joined.data, joined.through), (Some(RegId::DS), Some(RegId::SS)));
     }
 
     #[test]
