@@ -3314,6 +3314,7 @@ fn save_preserved<const STACK: bool>(
         }
     }
     used.sort_by_key(|r| r.index());
+    let saved_cells = used.clone();
     let mut saves = Vec::new();
     let mut restores = Vec::new();
     // Static slots: each cell goes on the hardware stack, three bytes to save
@@ -3365,9 +3366,22 @@ fn save_preserved<const STACK: bool>(
     // stack pointer
     let entry = &mut function.blocks[0].insts;
     let mut at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
-    // an argument that arrives in `a` or `x` is copied out first: a push goes through `a`
+    // an argument that arrives in `a` or `x` is copied out first: a push goes
+    // through `a`. A copy into a cell that is about to be saved is not: it
+    // would overwrite the caller's value before the push read it (`decode(table)`
+    // with `table` in `x` going to `rc9`), so the saves come before it and the
+    // emitter parks a live `a` in an index register while it pushes.
     while let Some(Inst { kind: Kind::Copy, operands, .. }) = entry.get(at) {
         if !matches!(operands.get(1), Some(Operand::Use(Reg::Phys(r))) if [reg::A, reg::X].contains(r)) {
+            break;
+        }
+        let target = match operands.first() {
+            Some(Operand::Def(Reg::Phys(r))) => Some(*r),
+            Some(Operand::Def(Reg::Virt(v))) => Some(assignment.0[*v as usize]),
+            _ => None,
+        };
+        let bytes = target.map_or_else(Vec::new, |r| if is_pair(r) { vec![lane(r, 0), lane(r, 1)] } else { vec![r] });
+        if bytes.iter().any(|byte| saved_cells.contains(byte)) {
             break;
         }
         at += 1;

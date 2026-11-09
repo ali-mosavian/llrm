@@ -1825,6 +1825,74 @@ done:
     }
 }
 
+/// A word argument in `a:x` that is indexed with and kept across calls goes to
+/// callee-saved cells. The copy out of `a:x` came before the save of those
+/// cells, so it overwrote the caller's `rc9` first and the push saved the
+/// clobbered value: JPEG-style `decode(table)` zeroed its caller's loop counter
+/// (huffman_decode, 111 read as 110 at the 13th `report`). The caller's cells
+/// must come back.
+#[test]
+fn a_cell_the_argument_is_copied_into_is_saved_before_the_copy() {
+    let ir = "@maxcode = global [4 x [18 x i16]] zeroinitializer
+@huffval = global [4 x [256 x i8]] zeroinitializer
+@valptr = global [4 x [17 x i16]] zeroinitializer
+@mincode = global [4 x [17 x i16]] zeroinitializer
+@bad = global i8 0
+declare i16 @getbit()
+define i16 @decode(i16 %t) {
+  %c0 = call i16 @getbit()
+  br label %head
+head:
+  %code = phi i16 [ %c0, %0 ], [ %code2, %body ]
+  %len = phi i16 [ 1, %0 ], [ %len2, %body ]
+  %mp = getelementptr [4 x [18 x i16]], ptr @maxcode, i16 0, i16 %t
+  %at = getelementptr [18 x i16], ptr %mp, i16 0, i16 %len
+  %m = load i16, ptr %at
+  %gt = icmp sgt i16 %code, %m
+  br i1 %gt, label %body, label %found
+body:
+  %d = mul i16 %code, 2
+  %b = call i16 @getbit()
+  %code2 = add i16 %d, %b
+  %len2 = add i16 %len, 1
+  %over = icmp sgt i16 %len2, 16
+  br i1 %over, label %fail, label %head
+fail:
+  store i8 1, ptr @bad
+  ret i16 0
+found:
+  %hv = getelementptr [4 x [256 x i8]], ptr @huffval, i16 0, i16 %t
+  %vp = getelementptr [4 x [17 x i16]], ptr @valptr, i16 0, i16 %t
+  %vi = getelementptr [17 x i16], ptr %vp, i16 0, i16 %len
+  %v = load i16, ptr %vi
+  %mn = getelementptr [4 x [17 x i16]], ptr @mincode, i16 0, i16 %t
+  %mi = getelementptr [17 x i16], ptr %mn, i16 0, i16 %len
+  %m2 = load i16, ptr %mi
+  %s = add i16 %v, %code
+  %n = sub i16 %s, %m2
+  %q = getelementptr [256 x i8], ptr %hv, i16 0, i16 %n
+  %r = load i8, ptr %q
+  %w = zext i8 %r to i16
+  ret i16 %w
+}";
+    let text = compile(ir, "decode");
+    let stub = ".export getbit\ngetbit:\n  lda #1\n  ldx #0\n  rts\n.segment \"DATA\"\n\
+                maxcode: .res 144\nhuffval: .res 1024\nvalptr: .res 136\nmincode: .res 136\nbad: .res 1\n.segment \"CODE\"\n";
+    let cells = ["rc8", "rc9", "rc10", "rc11", "rc12", "rc13"];
+    let mut setup = String::new();
+    for (at, cell) in cells.iter().enumerate() {
+        setup += &set(cell, 0xA1 + at as u16);
+    }
+    let mut after = String::new();
+    for (at, cell) in cells.iter().enumerate() {
+        after += &format!("  lda {cell}\n  cmp #${:X}\n  bne mismatch\n", 0xA1 + at);
+    }
+    after += "  pla\n  rts\nmismatch:\n  lda #99\n  rts\n";
+    let program = format!("{setup}{}  jsr decode\n  pha\n{after}", bytes(&[1, 0]));
+    // table 1: every maxcode is 0, the code runs past 16 bits and the call returns 0
+    assert_eq!(common::run_with("alloc-decode-cells", &program, &format!("{text}{stub}")), 0, "{text}");
+}
+
 /// A word argument arrives in `a:x`, which `__csave` changes: the three cells
 /// are pushed in line, and the restore was still a jump to `__crest` that the
 /// module never counted as linked (`ldx #3; jmp __crest` beside nine pushed
