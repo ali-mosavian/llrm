@@ -6636,3 +6636,55 @@ fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
         );
     }
 }
+
+/// `mov cx,ax; mov ax,bx; mov bx,cx`, with `after` the instructions that follow it.
+fn swap_through_a_temporary(after: Vec<Arc<Insn>>) -> LirBody {
+    let (ax, bx, cx) = (rl(RegId::AX, 2), rl(RegId::BX, 2), rl(RegId::CX, 2));
+    let mut insns = vec![
+        point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![ax.clone()]), vec![2], vec![1]),
+        point(2, sem(Operation::Move, "mov", vec![ax], vec![bx.clone()]), vec![3], vec![2]),
+        point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]),
+    ];
+    insns.extend(after);
+    insns.push(Arc::new(Insn {
+        reads_complete: true,
+        ..insn(9, Some((9, 9)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+    }));
+    body("swap", 1, vec![block(1, insns, vec![]).into()])
+}
+
+/// m64 -Os tail_calls `swapped` and `mixed`: a register swap through a scratch
+/// register was three moves (9 B at 64 bits) where gcc's `xchg` is 3 B, +23 B
+/// over the four functions that swap their arguments.
+#[test]
+fn a_swap_through_a_dead_temporary_is_one_xchg_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+
+    let made = swapped_registers(rules(), &swap_through_a_temporary(vec![]), &cpu);
+
+    assert_eq!(names_of(&made), ["xchg", "ret"]);
+}
+
+/// An `xchg` of registers is slower than three moves: not where the code is
+/// for speed.
+#[test]
+fn a_swap_through_a_temporary_stays_three_moves_for_speed() {
+    let mut cpu = peephole().cpu;
+    cpu.size = false;
+    let input = swap_through_a_temporary(vec![]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
+
+/// The temporary holds a value the swap leaves behind: the later read of it
+/// needs the moves.
+#[test]
+fn a_swap_whose_temporary_is_read_later_is_not_an_xchg() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    let (cx, dx) = (rl(RegId::CX, 2), rl(RegId::DX, 2));
+    let input = swap_through_a_temporary(vec![point(4, sem(Operation::Move, "mov", vec![dx], vec![cx]), vec![5], vec![4])]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
