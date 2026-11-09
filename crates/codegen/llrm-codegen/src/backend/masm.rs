@@ -1209,11 +1209,9 @@ pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
     let body = &procedure.body;
     // No pin alignment exists at 16 bits (real mode has no `and sp` frame the
     // pin builds).
-    let why = if !matches!(body.bits, 32 | 64) {
-        "in 16-bit code"
-    } else if procedure.entry != 0
+    let why = if procedure.entry != 0
         || procedure.interrupt.is_some()
-        || procedure.far
+        || (procedure.far && body.bits != 16)
         || procedure.stack_check.is_some()
         || procedure.callees.values().any(|one| !one.code.is_empty())
     {
@@ -1265,10 +1263,13 @@ pub fn realigned(procedure: Procedure) -> Procedure {
 /// of the frame is set up elsewhere: runtime-built, interrupt, stack-checked,
 /// far, inline-code, 16-bit and shrink-wrapped frames.
 pub fn saved_first(procedure: Procedure) -> Procedure {
+    // A 16-bit frame is the pin's only where it realigns (`and sp` needs the frame register and the registers pushed ahead of it);
+    // far or near, its return sequence is the body's.
+    let sixteen_realigned = procedure.body.bits == 16 && realign_of(&procedure.body) != 0;
     let eligible = procedure.entry == 0
         && procedure.interrupt.is_none()
-        && !procedure.far
-        && matches!(procedure.body.bits, 32 | 64)
+        && (!procedure.far || sixteen_realigned)
+        && (matches!(procedure.body.bits, 32 | 64) || sixteen_realigned)
         && (procedure.reserve != 0
             || moves_stack(&procedure.body)
             || procedure.registers.saved_first
@@ -2650,11 +2651,13 @@ fn built(
                 Some(Loc::Imm(imm)) if entry[at + 1].name.as_deref() == Some("sub") => Some(imm.value),
                 _ => None,
             })
-            .ok_or_else(|| Unprintable(format!("{}: a realigned frame with no stack adjustment", procedure.name)))?;
+            .ok_or_else(|| Unprintable(format!("{}: a realigned frame with no stack adjustment: {:?}", procedure.name, entry.iter().map(|one| (one.name.clone(), one.sources.clone())).collect::<Vec<_>>())))?;
         // What the body has pushed since the entry (a call's arguments) lies
         // between the stack pointer and the top: a block's pushes are taken
         // back before it ends.
         let kept = |why: &str| Unprintable(format!("{}: a realigned frame {why}", procedure.name));
+        // 16-bit addressing has no `[sp + disp]`: the cells are reached through `esp` (an address-size prefix).
+        let base = if procedure.body.bits == 16 { RegId::ESP } else { STACK };
         let (mut pushed, mut leaving) = (0, false);
         for item in out[body_from..].iter_mut() {
             match item {
@@ -2667,8 +2670,15 @@ fn built(
                         .iter()
                         .chain(what.sources.iter())
                         .enumerate()
-                        .filter_map(|(index, place)| below_top(place, bytes + pushed).map(|placed| (index, placed)))
+                        .filter_map(|(index, place)| below_top(place, bytes + pushed, base).map(|placed| (index, placed)))
                         .collect();
+                    // `[esp + index]` needs a dword index, and a 16-bit one does not zero its upper half: an indexed cell is refused
+                    // by name until the frame has a base register (the pin's) to reach the cells through.
+                    if procedure.body.bits == 16
+                        && shifted.iter().any(|(_, placed)| placed.address().is_some_and(|at| at.index_through != RegId::None))
+                    {
+                        return Err(kept("with an indexed local (16-bit addressing has no [sp + index])"));
+                    }
                     if !shifted.is_empty() {
                         let owned = what.to_mut();
                         let split = owned.dests.len();
@@ -2912,6 +2922,7 @@ fn stack_adjustment(what: &Semantics) -> Option<i64> {
 fn below_top(
     place: &Loc,
     bytes: i64,
+    base: RegId,
 ) -> Option<Loc> {
     let at = place.address()?;
     // A cell in a slot (`slot_tag`) is below the top even at displacement 0:
@@ -2920,7 +2931,7 @@ fn below_top(
     let below = |addr: &Addr| addr.disp < 0 || (addr.index != 0 && addr.index % 2 != 0 && addr.disp == 0);
     let addr = at.addr.filter(|addr| addr.space == Space::Frame && below(addr))?;
     Some(place.map_address(|one| ir::AddressRef {
-        through: STACK,
+        through: base,
         addr: Some(Addr { disp: addr.disp + bytes, ..addr }),
         disp_width: 0,
         ..one

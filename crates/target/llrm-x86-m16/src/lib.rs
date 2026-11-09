@@ -354,7 +354,7 @@ impl llrm_target::Target for M16 {
 
     /// Real mode has no `and sp` frame the pin builds.
     fn can_realign_stack(&self) -> bool {
-        false
+        true
     }
 
     fn frame_register(&self) -> RegId {

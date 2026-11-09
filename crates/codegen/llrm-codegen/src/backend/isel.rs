@@ -2271,7 +2271,7 @@ impl Selector<'_, '_, '_> {
         // `double[4]` at 4 mod 8 costs a 486 3 clocks an access (nbody -O2:
         // 18,404), and so does a `long[8]` at 2 mod 4.
         let kept = self.callee_facts.stack_alignment(self.arch, name);
-        let mut align_of = IndexMap::<usize, i64>::default();
+        let mut align_of = IndexMap::<usize, (i64, bool)>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
                 if let (&Opcode::Alloca { allocated, align: wanted, .. }, Some(size)) =
@@ -2285,16 +2285,20 @@ impl Selector<'_, '_, '_> {
                     // what the frame keeps the stack aligned to, the frame
                     // realigns the stack pointer.
                     let align = align.max(wanted.map_or(0, |one| one as i64));
-                    let widest = align_of.entry(group_of[&inst]).or_insert(1);
-                    *widest = (*widest).max(align);
+                    // Explicit: stated above the type's own ABI alignment. A double's 8 is the data layout's, and the
+                    // frame keeps it by laying the cell out, not by realigning the stack.
+                    let abi = self.layout.align(&self.module.context.types, allocated) as i64;
+                    let explicit = wanted.is_some_and(|one| one as i64 > abi);
+                    let widest = align_of.entry(group_of[&inst]).or_insert((1, false));
+                    *widest = ((*widest).0.max(align), (*widest).1 || explicit);
                 }
             }
         }
-        let order: Vec<(usize, i64)> = align_of.into_iter().collect();
+        let order: Vec<(usize, (i64, bool))> = align_of.into_iter().collect();
         // An object that needs more alignment than the one above it leaves a
         // gap; a later, smaller one takes it.
         let mut holes = Vec::<(i64, i64)>::new();
-        for (group, align) in order {
+        for (group, (align, explicit)) in order {
             self.alloca_align = self.alloca_align.max(align);
             let size = capacity[group];
             let fit = holes.iter().position(|&(low, high)| (high - size).div_euclid(align) * align >= low);
@@ -2326,6 +2330,7 @@ impl Selector<'_, '_, '_> {
             // every 8-aligned double or i64 local the frame lays on its own
             // alignment (the 486 clocks): +775 B in fcmp_all -O0.
             if self.arch.can_realign_stack()
+                && explicit
                 && align > self.arch.stack_alignment().max(2 * i64::from(self.arch.stack_slot_bytes()))
             {
                 self.over_aligned.push((disp, align));

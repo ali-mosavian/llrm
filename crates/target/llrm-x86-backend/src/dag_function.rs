@@ -1096,6 +1096,7 @@ fn selected_in(
     // type's alignment. Locals whose lifetime markers say they are never live
     // together are one object (StackColoring).
     let mut sizes: Vec<(llrm_mir::module::ValueId, i64, i64)> = Vec::new();
+    let mut explicit: Vec<llrm_mir::module::ValueId> = Vec::new();
     for (value, _) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return refuse("an alloca that is not an instruction");
@@ -1129,11 +1130,17 @@ fn selected_in(
         // frame keeps the stack aligned to, the frame realigns the stack
         // pointer.
         let align = align.max(wanted.map_or(0, |one| one as i64));
+        // Explicit: stated above the type's own ABI alignment (a double's 8 is the data layout's, laid out in the cell, not a reason to
+        // realign the stack).
+        if wanted.is_some_and(|one| one as i64 > layout.align(types, allocated) as i64) {
+            explicit.push(value);
+        }
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
     let objects = llrm_codegen::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
     let alloca_count = objects.len() as i32;
+    let explicit_objects: std::collections::HashSet<_> = explicit.iter().map(|value| info.static_allocas[value]).collect();
     // A local above the alignment the stack keeps realigns it: the pin's
     // `MaxAlignment > StackAlignment`
     // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641).
@@ -1143,7 +1150,7 @@ fn selected_in(
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if arch.can_realign_stack() && align > kept {
+        if arch.can_realign_stack() && align > kept && explicit_objects.contains(&(index as _)) {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }
