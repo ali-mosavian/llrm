@@ -3,7 +3,7 @@
 use llrm_z80::compile::{allocated, lines, machine_function, text};
 use llrm_z80::driver::{Level, Request};
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8";
 
 fn compiled(
     body: &str,
@@ -270,7 +270,7 @@ fn a_flag_reader_after_a_clobber_reads_the_flags_of_its_compare() {
 /// for a value made in `a` read the pointer operand.
 #[test]
 fn a_byte_in_a_is_stored_through_any_pair() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
         define void @cp(ptr %a, ptr %b, ptr %c) {\n  %v = load i8, ptr %c\n  store i8 %v, ptr %b\n  %w = load i8, ptr %a\n  store i8 %w, ptr %c\n  ret void\n}\n";
     let out = text(ir, "cp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld (de), a") && out.contains("ld (bc), a") && !out.contains("ex de, hl"), "{out}");
@@ -663,7 +663,7 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
 /// None", which refused every 64-bit divide by a constant in the C corpus.
 #[test]
 fn a_word_compare_nothing_reads_is_not_emitted() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @g = external global i64\n\
               define i1 @f() {\n  %a = load i64, ptr @g\n  %c = icmp ult i64 %a, 4294967297\n  ret i1 %c\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -715,7 +715,7 @@ fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
 /// lost to SDCC on bytes, clocks and instructions with it.
 #[test]
 fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borrow() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %d = sub i16 %x, %y\n  ret i16 %d\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl"), "{out}");
@@ -977,7 +977,7 @@ fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
 #[test]
 fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("mulhi3"), "{out}");
@@ -997,7 +997,7 @@ fn a_word_shifted_left_in_hl_is_doublings() {
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
 #[test]
 fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @r = external global i16\n\
               declare i16 @g()\n\
               define void @f() {\n  %v = call i16 @g()\n  store volatile i16 %v, ptr @r\n  ret void\n}\n";
@@ -1056,7 +1056,7 @@ fn a_call_through_a_pointer_puts_the_address_in_iy() {
 /// when both are zero: `ld a, h; or a, l`.
 #[test]
 fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @r = external global i8\n\
               define void @count16(i16 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i16 [ %n, %entry ], [ %i1, %loop ]\n  store volatile i8 1, ptr @r\n  %i1 = add i16 %i, -1\n  %c = icmp eq i16 %i1, 0\n  br i1 %c, label %done, label %loop\ndone:\n  ret void\n}\n";
     let out = text(ir, "count16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -1068,7 +1068,7 @@ fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
 /// the 23 rows hit it.
 #[test]
 fn a_freeze_is_a_copy() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %x, i8 %b) {\n  %c = icmp eq i8 %b, 0\n  %n = sub nsw i16 0, %x\n  %s = select i1 %c, i16 %x, i16 %n\n  %f = freeze i16 %s\n  %d = sdiv i16 %f, 3\n  %m = mul i16 %d, 3\n  %r = sub i16 %f, %m\n  ret i16 %r\n}\n";
     text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
 }
@@ -2100,7 +2100,7 @@ fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
 fn a_byte_shifted_far_rotates_through_a_and_masks() {
     let ir = |op: &str, ty: &str, n: u32| {
         format!(
-            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
              define {ty} @f({ty} %x) {{\n  %y = {op} {ty} %x, {n}\n  ret {ty} %y\n}}\n"
         )
     };
@@ -2124,7 +2124,7 @@ fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
 /// where `ld b, #129` does.
 #[test]
 fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
               define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
               define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
@@ -2203,7 +2203,7 @@ fn a_long_multiply_calls_the_routine_at_every_level() {
 /// `x * 3` of an `i64` was a call per half (compare_to_int64: +8k T of 37k).
 #[test]
 fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i64 @f(i64 %a) {\n  %m = mul i64 %a, 3\n  ret i64 %m\n}\n\
               define i32 @g(i32 %a, i32 %b, i32 %c) {\n  %m = mul i32 %a, %b\n  %n = mul i32 %m, %c\n  ret i32 %n\n}";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
