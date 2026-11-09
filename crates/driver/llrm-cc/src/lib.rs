@@ -478,7 +478,7 @@ fn backend_pass(flag: &str) -> Option<&'static str> {
     BACKEND_PASSES.iter().copied().find(|pass| *pass == name)
 }
 
-const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile", "-fpeel-loops"];
+const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile"];
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
 /// The target named by `-target`/`--target=`, and the job the rest of `argv`

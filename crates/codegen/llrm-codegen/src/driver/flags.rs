@@ -94,11 +94,11 @@ pub fn apply_pass_flag(
         )
 }
 
-/// gcc switches that turn off what this pipeline has no switch for: taken,
-/// changing nothing, so a gcc command line still builds (`-fno-peel-loops`: the
-/// translated LoopUnrollPass peels by the pin's rules). `-fpeel-loops` asks for
-/// it and is not here: llrm-cc refuses it by name.
-const INERT: &[&str] = &["-fno-peel-loops"];
+/// gcc switches for what this pipeline does by the pin's rules: taken,
+/// changing nothing, so a gcc or clang command line still builds
+/// (`-f[no-]peel-loops`: the translated LoopUnrollPass peels by the pin's
+/// rules).
+const INERT: &[&str] = &["-fpeel-loops", "-fno-peel-loops"];
 
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[

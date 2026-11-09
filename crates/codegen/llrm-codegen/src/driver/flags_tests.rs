@@ -440,24 +440,24 @@ fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
 }
 
 /// `Options::peel` was read nowhere: `-fno-peel-loops` and `-fpeel-loops`
-/// changed no object on x86_64, x86_32, m68k or arm64. The first is accepted as
-/// gcc's switch for what is not here to turn off; the second asks for peeling
-/// and is refused.
+/// changed no object on x86_64, x86_32, m68k or arm64. A drop-in driver keeps
+/// taking the switches of gcc and clang that it ignores, so both stay accepted
+/// and change nothing.
 #[test]
-fn fno_peel_loops_is_a_no_op_and_fpeel_loops_is_not_a_pass() {
+fn fpeel_loops_and_fno_peel_loops_are_accepted_and_change_nothing() {
     let mut options = pipeline(&["-O2"]);
     let before = options.clone();
     assert!(apply_pass_flag(&mut options, "-fno-peel-loops"));
+    assert!(apply_pass_flag(&mut options, "-fpeel-loops"));
     assert_eq!(options, before);
-    assert!(!apply_pass_flag(&mut options, "-fpeel-loops"));
 }
 
 /// llrm-nib took its `-f` flags through `Flags::take`, not `apply_pass_flag`:
 /// `-fno-peel-loops` was refused there ("unknown option") and `--dump` exited 2
-/// after the peel switch was deleted. Both paths take it.
+/// after the peel switch was deleted. Both paths take both switches.
 #[test]
-fn flags_take_accepts_fno_peel_loops_and_refuses_fpeel_loops() {
+fn flags_take_accepts_fpeel_loops_and_fno_peel_loops() {
     let mut flags = Flags::default();
     assert_eq!(flags.take(&["-fno-peel-loops".to_owned()], &mut 0), Ok(true));
-    assert!(flags.take(&["-fpeel-loops".to_owned()], &mut 0).is_err());
+    assert_eq!(flags.take(&["-fpeel-loops".to_owned()], &mut 0), Ok(true));
 }
