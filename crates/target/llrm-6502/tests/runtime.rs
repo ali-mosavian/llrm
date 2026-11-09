@@ -191,6 +191,25 @@ fn signed_word_division() {
     assert_eq!(word("modhi", &two_words(64536, 7), "__modhi3"), 65530);
 }
 
+/// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling over the bit loop alone) gives the
+/// fast routines' answers, for divisors under and over 256: -1000 / 7 = -142 r -6, 7 / -2 = -3 r 1, -1000 / -300 = 3 r
+/// -100, 30000 / 300 = 100 r 0.
+#[test]
+fn compact_signed_word_division_matches_the_fast_routines() {
+    for (a, b, quotient, remainder) in [
+        (64536u16, 7u16, 65394u16, 65530u16),
+        (7, 65534, 65533, 1),
+        (64536, 65236, 3, 65436),
+        (30000, 300, 100, 0),
+    ] {
+        let n = format!("{a}-{b}");
+        assert_eq!(word(&format!("divhic-{n}"), &two_words(a, b), "__divhi3c"), quotient, "{a} / {b}");
+        assert_eq!(word(&format!("modhic-{n}"), &two_words(a, b), "__modhi3c"), remainder, "{a} % {b}");
+        assert_eq!(word(&format!("divhif-{n}"), &two_words(a, b), "__divhi3"), quotient, "{a} / {b} fast");
+        assert_eq!(word(&format!("modhif-{n}"), &two_words(a, b), "__modhi3"), remainder, "{a} % {b} fast");
+    }
+}
+
 /// 0x03 << 4 = 0x30; 0xF0 >> 4 = 0x0F logical, 0xFF arithmetic; a count of 0
 /// changes nothing.
 #[test]
