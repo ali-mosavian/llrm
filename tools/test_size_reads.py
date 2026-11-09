@@ -25,7 +25,7 @@ DATA_TOO = re.compile(r"\.(rodata|data)\b|\$3|\$2\+\$3|\+\s*data")
 
 
 def text_only(line: str) -> bool:
-    return bool(TEXT_ONLY.search(line)) and not DATA_TOO.search(line)
+    return bool(TEXT_ONLY.search(line)) and not DATA_TOO.search(line) and "text-only by design:" not in line
 
 
 def reads(line: str) -> bool:
@@ -46,13 +46,8 @@ def test_no_script_takes_the_size_of_an_object_or_assembly_file_as_code_bytes():
     assert not hits, "file size read as a code size (use tools/ab/object_bytes.py, or list it in ALLOWED with the reason):\n" + "\n".join(hits)
 
 
-# (file, snippet of the line): text only, owner to extend to code + rodata + data (or say why the codegen comparison is code only).
+# (file, snippet of the line): text only, owner to extend to code + rodata + data, or to say `# text-only by design: WHY` on the line.
 TEXT_ONLY_ALLOWED = {
-    ("tools/cmp_ab.sh", "bytesA=$(size"): "cmp_ab owner",
-    ("tools/dag_vs_old.sh", "t=$(size -A"): "dag-vs-old owner: code of a codegen A/B",
-    ("tools/llc_backend_diff.sh", "t() { size -A"): "llc_backend_diff owner",
-    ("tools/llc_check.sh", "a=$(size -A"): "llc_check owner",
-    ("tools/llc_check.sh", "c=$(size -A"): "llc_check owner",
     ("tools/softfloat_cells/cells.sh", "text $(size -A"): "softfloat_cells owner",
     ("tools/softfloat_cells/m68k/bytes.sh", "text() { $B-size -A"): "softfloat m68k owner",
 }
@@ -71,6 +66,7 @@ def test_the_text_column_reads_are_recognised():
     """cmp_ab.sh: `size o.a.o | awk 'NR==2{print $1}'` reads the text column of an object whose data and bss are not counted."""
     assert text_only("bytesA=$(size $t/o.a.o | awk 'NR==2{print $1}')")
     assert text_only("t=$(size -A \"$out\" | awk '$1==\".text\"{print $2}')")
+    assert not text_only("t=$(size -A \"$o\" | awk '$1==\".text\"{print $2}')  # text-only by design: Dag and Old read the same data")
     assert not text_only("bytes() { size -A \"$1\" | awk '$1==\".text\"||$1~/^\\.rodata/{s+=$2} END{print s+0}'; }")
 
 
