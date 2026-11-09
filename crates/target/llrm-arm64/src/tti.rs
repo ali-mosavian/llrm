@@ -1203,6 +1203,13 @@ impl Lowering for AArch64Lowering {
         TABLE.with(|table| table.is_operation_legal_or_custom(node, EVT::integer(bits)))
     }
 
+    // AArch64ISelLowering.cpp#L1274, `EnableExtLdPromotion = true`: CodeGenPrepare promotes the
+    // operands of an extension towards the load that feeds them (CodeGenPrepare.cpp#L6747):
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1274
+    fn enable_ext_ld_promotion(&self) -> bool {
+        true
+    }
+
     // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1, Expand)` for every
     // integer type; the rest is the base class's `Legal`:
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1141
