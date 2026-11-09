@@ -16,7 +16,7 @@
 //! register), with a memory operand of the volatile flag and the global or
 //! frame object only (no offset); a machine
 //! opcode with no row is a named error (`machine opcode X has no arm64
-//! instruction yet`), which `--isel=shadow` falls back on. Rows added
+//! instruction yet`), a compile error. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
