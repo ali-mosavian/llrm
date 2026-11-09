@@ -554,3 +554,32 @@ fn a_register_prints_by_the_arm64_names() {
     let _file = enter(Regs(&crate::REGISTER_INFO));
     assert_eq!(format!("{:?} {:?} {:?}", crate::reg::X0, crate::reg::W3, crate::reg::V1), "x0 w3 v1");
 }
+
+/// A three-address `subs w, w, #imm` is not tied: the x86 rule (any `Binary`
+/// writes its first source) made the O0 two-address pass put a `mov` before
+/// every arm64 add, subtract and logic op. Only the forms whose row ties an
+/// operand (`MOVK`'s `^0`) are tied.
+#[test]
+fn only_a_row_with_a_tied_operand_is_untied_by_the_two_address_pass() {
+    use llrm_codegen::backend::twoaddr::{ties_in, untied_only};
+
+    let (rd, rn) = (Gpr(Gpr::FIRST_VIRTUAL + 1), Gpr(Gpr::FIRST_VIRTUAL + 2));
+    let width = WIDTHS[0];
+    let op = AddSub { subtract: true, set_flags: true };
+    let body = to_lir(&function(vec![
+        Op::I(Inst::AddSubImm { op, width, rd, rn, imm12: 4, shift12: false }),
+        Op::I(Inst::MoveWide { op: Wide::Keep, width, rd: rn, imm16: 0xbeef, lsl: 16 }),
+    ]))
+    .expect("the forms map")
+    .body;
+    let regs = Some(Regs(&crate::REGISTER_INFO));
+    let tied: Vec<(Option<String>, bool)> = body
+        .iter_insns()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| (what.name.as_deref().map(str::to_owned), ties_in(regs, what)))
+        .collect();
+    assert!(tied.contains(&(Some("SUBSWri".into()), false)), "{tied:?}");
+    assert!(tied.iter().any(|(name, tied)| name.as_deref().is_some_and(|n| n.starts_with("MOVK")) && *tied), "{tied:?}");
+    let after = untied_only(&body);
+    assert_eq!(after.iter_insns().count(), body.iter_insns().count(), "a copy was put before an untied form");
+}
