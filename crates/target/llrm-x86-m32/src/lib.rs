@@ -136,6 +136,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         lftr_any_stride: true,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
+        sdiv_pow2_stays_at_size: true,
         push_imm_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
