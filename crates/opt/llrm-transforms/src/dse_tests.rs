@@ -637,8 +637,17 @@ b3:
 
 /// `text` through Dse alone: @f printed. The interpreter does not run it.
 fn ran(text: &str) -> String {
+    ran_on("", text)
+}
+
+/// `ran` over a module of the given `target datalayout` ("" for the default).
+fn ran_on(
+    layout: &str,
+    text: &str,
+) -> String {
+    let layout = if layout.is_empty() { String::new() } else { format!("target datalayout = \"{layout}\"\n") };
     let mut module = parsed(&format!(
-        "@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
+        "{layout}@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
     ));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -750,5 +759,21 @@ b0:
 "
         ));
         assert_eq!(after.matches("@w(").count(), kept, "{attrs} {ret}: {after}");
+    }
+}
+
+/// A byte stored over the first byte of an `i16` constant is its high byte on a
+/// big-endian target: merged little-endian, m68k -O2 wrote 0x07060504 for
+/// 0x04050607 (tests/run/c/memmove_overlap printed 142037926, not 96854020).
+#[test]
+fn test_a_merged_partial_overlap_store_follows_the_byte_order() {
+    for (layout, merged) in [("E", 0x0902), ("e", 0x0109)] {
+        let after = ran_on(
+            layout,
+            &format!(
+                "define void @f() {{\nb0:\n  store i16 258, ptr {CELL}\n  store i8 9, ptr {CELL}\n  ret void\n}}\n"
+            ),
+        );
+        assert!(after.contains(&format!("store i16 {merged},")), "{layout}: {after}");
     }
 }

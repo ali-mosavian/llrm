@@ -464,6 +464,8 @@ pub fn pushed_immediates(
     if body.bits != 32 || !(body.min_size || cpu.min_size || at_size) {
         return body.clone();
     }
+    let regs = body.regs();
+    let sp = Loc::Reg(reg(regs.named(regs.stack, 4), 4));
     let imm8 = |one: &Insn| match &one.what {
         Some(what)
             if what.op == Operation::Move
@@ -473,7 +475,10 @@ pub fn pushed_immediates(
         {
             match (what.dests.as_slice(), what.sources.as_slice()) {
                 ([Loc::Reg(dest)], [Loc::Imm(Imm { value, width: 4, address: None })])
-                    if dest.width == 4 && (-128..=127).contains(value) && ![0, -1].contains(value) =>
+                    if dest.width == 4
+                        && (-128..=127).contains(value)
+                        && ![0, -1].contains(value)
+                        && Loc::Reg(dest.clone()) != sp =>
                 {
                     Some(dest.clone())
                 }
