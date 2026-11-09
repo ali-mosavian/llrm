@@ -54,3 +54,16 @@ fn a_flag_it_does_not_know_is_an_error_not_a_silent_drop() {
 fn excess_precision_is_taken_as_there_is_none_to_keep() {
     assert!(llc(&["-fexcess-precision=standard"]).status.success());
 }
+
+/// `-fsanitize=bounds` (the `idioms` variant) answered `unrecognized argument`, the
+/// text of a typo. It is refused by name: a sanitizer is never silently dropped.
+#[test]
+fn a_sanitizer_is_refused_by_name() {
+    for flag in ["-fsanitize=bounds", "-fno-sanitize=bounds"] {
+        let done = llc(&[flag]);
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        assert!(!done.status.success(), "{flag}");
+        assert!(stderr.contains(flag) && stderr.contains("sanitizer checks are not implemented"), "{flag}: {stderr}");
+        assert!(!stderr.contains("unrecognized argument"), "{flag}: {stderr}");
+    }
+}

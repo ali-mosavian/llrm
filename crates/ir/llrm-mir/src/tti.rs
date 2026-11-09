@@ -1558,6 +1558,16 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: whether a counter of an integer width the target does
+    /// not hold natively (`DataLayout::legal_integer`) whose range provably
+    /// fits a native width becomes a counter of that width (`narrowiv`). LLVM
+    /// only widens counters; `for (long i = 0; i < 12; ++i)` keeps four bytes a
+    /// compare on an 8-bit target. Off by default; a target opts in where it
+    /// measured a win. DEVIATE IV-NARROW (owner z80-b, review 2026-12-20).
+    fn narrows_counters(&self) -> bool {
+        false
+    }
+
     /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
     /// on every target.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default;

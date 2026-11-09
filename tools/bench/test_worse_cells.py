@@ -58,3 +58,23 @@ def test_a_missing_reference_column_is_reported_not_skipped(tmp_path):
     rows, _, missing = worse_cells.worse({"huge/c/Os": {"code_bytes": 195, "clocks": 10}}, tmp_path, 500)
     assert rows == [("huge/c/Os", ["B 195 vs 190(bcc) +2.6%"])]
     assert missing == ["huge/c/Os: no stored tc"]
+
+
+def test_a_constant_table_kept_outside_the_code_counts(tmp_path):
+    """Code bytes alone hid a table in data: ours 100 B code + 300 B data read as better than a reference with 150 B code + 0 B data. m16's worse counts
+    (c O1 4, O2 7, Os 2) were text-only until data and static (data + bss) joined the judgement."""
+    folder(tmp_path, "tab", "[bcc.O1]\ncode_bytes = 150\nclocks = 10\ndata_bytes = 0\nbss_bytes = 0\n[bcc.O2]\ncode_bytes = 150\nclocks = 10\ndata_bytes = 0\nbss_bytes = 0\n")
+    ours = {"code_bytes": 100, "clocks": 10, "data_bytes": 300, "bss_bytes": 0}
+    for level in ("O1", "O2"):
+        rows = worse_cells.worse({f"tab/c/{level}": ours}, tmp_path, 500)[0]
+        assert rows and "data B 300 vs 0(bcc)" in "; ".join(rows[0][1]), level
+
+
+def test_bss_counts_only_through_static(tmp_path):
+    """A zero table moved from data to bss leaves static equal: not worse; extra bss is worse as static, not as its own axis."""
+    folder(tmp_path, "z", "[ow.Os]\ncode_bytes = 100\nclocks = 10\ndata_bytes = 40\nbss_bytes = 0\n")
+    moved = {"code_bytes": 100, "clocks": 10, "data_bytes": 0, "bss_bytes": 40}
+    assert worse_cells.worse({"z/c/Os": moved}, tmp_path, 500)[0] == []
+    grown = {**moved, "bss_bytes": 60}
+    findings = worse_cells.worse({"z/c/Os": grown}, tmp_path, 500)[0][0][1]
+    assert findings == ["static B 60 vs 40(ow) +50.0%"]
