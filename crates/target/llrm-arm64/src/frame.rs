@@ -15,7 +15,6 @@
 //! [`crate::shrinkwrap`]'s.
 
 use llrm_object::assembler::Cfi;
-
 use rustc_hash::FxHashSet as HashSet;
 
 use crate::mc::inst::*;
@@ -355,16 +354,18 @@ fn layout(
     let keeps =
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
     // `hasFP` also holds for a call frame over `DefaultSafeSPDisplacement`
-    // (255 bytes): the scavenger's emergency slot is reached from the frame pointer.
-    // DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins the allocation pool
-    // when no record is kept. stft_fixed -O1/-O2 (bench), +1 executed insn in a 78M run,
-    // -4 B: the greedy gives x29 to one global's base and rematerializes another global
-    // (`adrp`/`add` into x20) at the outer loop head, where the old code folded the
+    // (255 bytes): the scavenger's emergency slot is reached from the frame
+    // pointer. DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins
+    // the allocation pool when no record is kept. stft_fixed -O1/-O2
+    // (bench), +1 executed insn in a 78M run, -4 B: the greedy gives x29 to
+    // one global's base and rematerializes another global (`adrp`/`add`
+    // into x20) at the outer loop head, where the old code folded the
     // address into x9; read from both assemblies.
-    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's `producePairRegisters`
-    // (Mach-O compact unwind) saves the frame pointer beside the link register on
-    // Darwin whatever `hasFP` says, without setting it up; here a Darwin call keeps
-    // the whole record. Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
+    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's
+    // `producePairRegisters` (Mach-O compact unwind) saves the frame
+    // pointer beside the link register on Darwin whatever `hasFP` says,
+    // without setting it up; here a Darwin call keeps the whole record.
+    // Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
     let record = function.dynamic || keeps || function.outgoing > SAFE_SP_DISPLACEMENT || (darwin && function.calls);
     let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
@@ -420,12 +421,25 @@ fn layout(
 }
 
 impl Layout {
-    /// The bytes the first saved pair's store takes off the stack pointer
-    /// (`stp [sp, #-N]!`) where the frame is only saved registers and fits the
-    /// pair's offset (`AArch64FrameLowering`, the first CSR push).
-    fn folded_bump(&self) -> Option<i64> {
-        let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
-        (first == 0 && self.size <= 512).then_some(self.size as i64)
+    /// The bytes the first save takes off the stack pointer (`stp [sp, #-N]!`)
+    /// where the frame is only saved registers and `N` is in range of the
+    /// access (`convertCalleeSaveRestoreToSPPrePostIncDec`: the pin checks the
+    /// offset against the opcode's, -512..504 for a pair and -256..255 for a
+    /// single register, and makes a separate `sub`/`add` when it is out). The
+    /// prologue subtracts and the epilogue adds, so one frame can fold in one
+    /// and not the other.
+    fn folded_bump(
+        &self,
+        store: bool,
+    ) -> Option<i64> {
+        let (first, pair) = match self.saves.first() {
+            Some((Save::GprPair(_, second) | Save::FprPair(_, second), at)) => (*at, second.is_some()),
+            Some((Save::Record, at)) => (*at, true),
+            None => (self.frame_record?, true),
+        };
+        let (least, most) = if pair { (-512, 504) } else { (-256, 255) };
+        let by = self.size as i64;
+        (first == 0 && (least..=most).contains(&if store { -by } else { by })).then_some(by)
     }
 
     /// The locals' bytes where the saved registers are pushed first and the
@@ -466,8 +480,8 @@ struct Emitter {
     /// follows `emitFramePointerSetup`).
     saved: Vec<Cfi>,
     /// The restores' `.cfi_restore`s, stated together before the terminator
-    /// (`AArch64EpilogueEmitter::finalizeEpilogue`: `emitCalleeSavedGPRRestores`
-    /// at `getFirstTerminator`).
+    /// (`AArch64EpilogueEmitter::finalizeEpilogue`:
+    /// `emitCalleeSavedGPRRestores` at `getFirstTerminator`).
     restored: Vec<Cfi>,
 }
 
@@ -697,7 +711,7 @@ fn prologue(
         }
         return;
     }
-    let bump = frame.folded_bump();
+    let bump = frame.folded_bump(true);
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(-(frame.size as i64));
         emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
@@ -773,7 +787,7 @@ fn take_down(
     if frame.frame_record.is_some() {
         emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: frame.size as i64 });
     }
-    let bump = frame.folded_bump();
+    let bump = frame.folded_bump(false);
     save_registers(frame, emitter, false, bump, 0);
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(frame.size as i64);
@@ -912,4 +926,36 @@ fn lower_inst(
     }
     emitter.insts.push(inst);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(
+        size: u64,
+        save: Save,
+    ) -> Layout {
+        Layout { size, dynamic: false, slots: Vec::new(), saves: vec![(save, 0)], frame_record: None, locals: 0 }
+    }
+
+    /// A pair's pre-index reaches -512 and its post-index 504: a 512 byte
+    /// frame folds the prologue's update and not the epilogue's, as the pin's
+    /// range check per opcode. One rule for both made the epilogue's `ldp
+    /// [sp], #512` fail to encode.
+    #[test]
+    fn a_pair_folds_512_bytes_going_down_and_not_coming_up() {
+        let pair = frame(512, Save::GprPair(19, Some(20)));
+        assert_eq!((pair.folded_bump(true), pair.folded_bump(false)), (Some(512), None));
+        let near = frame(496, Save::GprPair(19, Some(20)));
+        assert_eq!((near.folded_bump(true), near.folded_bump(false)), (Some(496), Some(496)));
+    }
+
+    /// A single register reaches -256 and 255.
+    #[test]
+    fn a_single_register_folds_at_most_255_bytes_coming_up() {
+        let single = frame(256, Save::GprPair(30, None));
+        assert_eq!((single.folded_bump(true), single.folded_bump(false)), (Some(256), None));
+        assert_eq!(frame(272, Save::GprPair(30, None)).folded_bump(true), None);
+    }
 }
