@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""m32cells.py BINDIR LEVEL [NAME...]: real-flow code bytes at m32, ours (llrm-cc) against the pin's clang, per tests/run/c and bench program.
+"""m32cells.py BINDIR LEVEL [NAME...]: real-flow bytes at m32, ours (llrm-cc) against the pin's clang, per tests/run/c and bench program.
+
+Size rule (as m16, #8466): a cell is padding-free code + data (.data, .rodata*: constant pools, jump tables, strings), strict. Static = data + bss is a second
+axis; bss alone is never judged. A constant kept out of .text counts for every column.
 
 Columns: ours; pin at OUR stack alignment (the target description's, via pin.stack_alignment); pin at 16 (the Linux default), labelled CF6.
 A row whose pin and ours stack alignments differ is refused unless the pin column carries the CF6 label: the unlabelled pin column was
@@ -17,6 +20,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "ab"))
+import object_bytes  # noqa: E402
 import pin  # noqa: E402
 
 ROOT = HERE.parents[1]
@@ -62,6 +67,31 @@ def code_bytes(obj: Path) -> int:
     return total
 
 
+@dataclass(frozen=True)
+class Footprint:
+    code: int  # padding-free .text
+    data: int  # initialised and constant sections
+    bss: int
+
+    @property
+    def size(self) -> int:
+        return self.code + self.data
+
+    @property
+    def static(self) -> int:
+        return self.data + self.bss
+
+
+def footprint(obj: Path) -> Footprint:
+    _, data, bss = object_bytes.elf_footprint(obj)
+    return Footprint(code_bytes(obj), data, bss)
+
+
+def worse(ours: Footprint, other: Footprint) -> list[str]:
+    """The axes on which ours is larger than `other`: size (code + data) and static (data + bss), each strict; bss alone is not an axis."""
+    return [f"{axis} {getattr(ours, axis)} vs {getattr(other, axis)}" for axis in ("size", "static") if getattr(ours, axis) > getattr(other, axis)]
+
+
 def one(src: Path, bindir: Path, level: str, cols: tuple[Column, Column, Column]) -> tuple:
     flag = "-Os" if level == "Os" else "-" + level
     inc = ["-I" + str(ROOT / "bench"), "-I" + str(ROOT / "runtime/shared/posix")]
@@ -75,10 +105,10 @@ def one(src: Path, bindir: Path, level: str, cols: tuple[Column, Column, Column]
         env = dict(os.environ, LLRM_CC_TARGET="x86_32-linux", LLRM_LLC=str(bindir / "llrm-llc"), LLRM_PIN_CLANG=clang)
         try:
             subprocess.run([str(bindir / "llrm-cc"), flag, "-c", "-o", str(t / "o.o"), str(src), *inc], cwd=ROOT, env=env, check=True, capture_output=True)
-            sizes = [code_bytes(t / "o.o")]
+            sizes = [footprint(t / "o.o")]
             for column in pins:
                 subprocess.run([clang, flag, "-c", *pin_flags(column), *inc, str(src), "-o", str(t / f"{column.name}.o")], check=True, capture_output=True)
-                sizes.append(code_bytes(t / f"{column.name}.o"))
+                sizes.append(footprint(t / f"{column.name}.o"))
         except subprocess.CalledProcessError as e:
             return name, None, (e.stderr or b"")[:60]
     return name, sizes, ""
@@ -91,7 +121,8 @@ def main(argv: list[str]) -> int:
     srcs = [s for s in srcs if not names or s.stem in names]
     with ThreadPoolExecutor(int(os.environ.get("JOBS", "6"))) as ex:
         rows = list(ex.map(lambda s: one(s, bindir, level, cols), srcs))
-    print("\t".join(["cell", "ours", f"pin(a{cols[1].stack_alignment})", "ours-pin", f"pin16({cols[2].label})", "ours-pin16"]))
+    print("# size = padding-free code + data (.data, .rodata*); static = data + bss, judged apart; bss alone is not judged")
+    print("\t".join(["cell", "ours", f"pin(a{cols[1].stack_alignment})", "ours-pin", f"pin16({cols[2].label})", "ours-pin16", "static ours-pin", "static ours-pin16"]))
     failed = 0
     for name, sizes, why in rows:
         if sizes is None:
@@ -99,7 +130,7 @@ def main(argv: list[str]) -> int:
             print(f"{name}\tFAIL\t{why}")
         else:
             o, p, p16 = sizes
-            print(f"{name}\t{o}\t{p}\t{o - p}\t{p16}\t{o - p16}")
+            print(f"{name}\t{o.size}\t{p.size}\t{o.size - p.size}\t{p16.size}\t{o.size - p16.size}\t{o.static - p.static}\t{o.static - p16.static}")
     print(f"compiled {len(rows) - failed} of {len(rows)}", file=sys.stderr)
     return 1 if failed == len(rows) else 0
 

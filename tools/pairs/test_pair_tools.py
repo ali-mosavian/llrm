@@ -254,3 +254,35 @@ def test_m32run_links_a_non_pic_object_that_calls_through_the_plt_without_crashi
         return  # no 32-bit libc on this host
     done = subprocess.run([str(tmp_path / "a.out")], capture_output=True)
     assert done.returncode == 0 and done.stdout == b"7\n", (done.returncode, done.stdout)
+
+
+def assemble32(tmp_path: Path, name: str, text: str) -> Path:
+    source = tmp_path / f"{name}.s"
+    source.write_text(text)
+    obj = tmp_path / f"{name}.o"
+    subprocess.run(["as", "--32", str(source), "-o", str(obj)], check=True)
+    return obj
+
+
+def test_an_m32_cell_counts_the_constants_kept_outside_the_text(tmp_path):
+    """The m32 matrix summed `.text` alone: ours with a 64 B table in .rodata and 8 B of code read better than a reference of 30 B of immediates and no
+    table (72 vs 30 B once the table counts)."""
+    cells = load("m32cells")
+    table = assemble32(tmp_path, "table", ".text\nf: movl tab(,%eax,4), %eax\nret\n.section .rodata\ntab: .fill 64,1,7\n")
+    immediates = assemble32(tmp_path, "imm", ".text\nf: cmpl $3, %eax\nja 1f\nmovl $5, %eax\nret\n1: movl $9, %eax\nmovl $11, %edx\nmovl $13, %ecx\nret\n")
+    ours, other = cells.footprint(table), cells.footprint(immediates)
+    assert ours.code < other.code, "premise: the code alone favours the table"
+    assert (ours.data, other.data) == (64, 0)
+    assert cells.worse(ours, other) == [f"size {ours.size} vs {other.size}", f"static {ours.static} vs {other.static}"]
+    assert cells.worse(other, ours) == []
+
+
+def test_a_table_moved_from_data_to_bss_is_not_worse_but_extra_bss_is(tmp_path):
+    """#8466's rule: bss is judged only inside static (data + bss). A zero table moved .data -> .bss shrinks the size and leaves the footprint."""
+    cells = load("m32cells")
+    initialised = cells.footprint(assemble32(tmp_path, "d", ".text\nf: ret\n.data\ntab: .fill 40,1,0\n"))
+    zeroed = cells.footprint(assemble32(tmp_path, "z", ".text\nf: ret\n.bss\n.lcomm tab, 40\n"))
+    larger = cells.footprint(assemble32(tmp_path, "l", ".text\nf: ret\n.bss\n.lcomm tab, 60\n"))
+    assert (initialised.data, initialised.bss, zeroed.data, zeroed.bss) == (40, 0, 0, 40)
+    assert cells.worse(zeroed, initialised) == []
+    assert cells.worse(larger, initialised) == ["static 60 vs 40"]

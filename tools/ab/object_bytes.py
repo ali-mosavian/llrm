@@ -19,7 +19,8 @@ import sizes  # noqa: E402
 
 Z80_CODE_AREAS = {"_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"}
 Z80_DATA_AREAS = {"_DATA", "_CONST", "_INITIALIZED"}
-ELF_DATA = re.compile(r"\.(data|rodata|bss|sdata|sbss|tdata|tbss)\b")
+ELF_INITIALISED = re.compile(r"\.(data|rodata|sdata|tdata)\b")  # .data.rel.ro, .rodata.cst8 (constant pools), .rodata.str1.1 included
+ELF_ZERO_FILLED = re.compile(r"\.(bss|sbss|tbss)\b")
 
 
 class Unreadable(Exception):
@@ -59,12 +60,22 @@ def mos6502_bytes(source: Path) -> tuple[int, int]:
     return int(found.group(1)), sum(int(m.group(2)) for m in re.finditer(r"(RODATA|DATA|BSS):\s+(\d+)", listing))
 
 
-def elf_bytes(obj: Path) -> tuple[int, int]:
-    """size(1) reads every endianness (m68k is big-endian; elfsize.code_bytes reads little-endian only): `.text*` is the code, the data
-    sections (not debug, not .comment) the data."""
+def elf_footprint(obj: Path) -> tuple[int, int, int]:
+    """`(code, data, bss)` of an ELF object, read by size(1) (m68k is big-endian; elfsize.code_bytes reads little-endian only): `.text*` is the code,
+    the initialised and constant sections (jump tables, constant pools, strings) the data, the zero-filled ones the bss. Not debug, not .comment, not unwind tables."""
     listing = run(["size", "-A", str(obj)]).stdout
     rows = [line.split() for line in listing.splitlines()]
-    return elfsize.text_bytes(listing), sum(int(row[1]) for row in rows if len(row) > 1 and ELF_DATA.match(row[0]) and row[1].isdigit())
+    sized = [(row[0], int(row[1])) for row in rows if len(row) > 1 and row[1].isdigit()]
+    return (
+        elfsize.text_bytes(listing),
+        sum(size for name, size in sized if ELF_INITIALISED.match(name)),
+        sum(size for name, size in sized if ELF_ZERO_FILLED.match(name)),
+    )
+
+
+def elf_bytes(obj: Path) -> tuple[int, int]:
+    code, data, bss = elf_footprint(obj)
+    return code, data + bss
 
 
 def object_bytes(target: str, obj: Path) -> tuple[int, int]:
