@@ -58,7 +58,7 @@ fn the_choice_is_made_for_the_68020_and_later_only() {
     assert!(out.contains("__ctzdi2"), "{out}");
 }
 
-/// `-fsize-libcalls=call|inline` overrides the choice.
+/// `Options::size_libcalls` overrides the choice.
 #[test]
 fn the_mode_forces_one_way() {
     let call = Options { size: true, size_libcalls: Mode::Call, ..Options::default() };
@@ -282,27 +282,19 @@ mod driver {
     fn text(
         ir: &str,
         level: Level,
-        flag: Option<&str>,
     ) -> String {
-        let mut policy = Policy::default();
-        if let Some(flag) = flag {
-            assert!(policy.take(flag), "{flag} is taken");
-        }
-        assembly_flagged(ir, Cpu::M68020, level, false, None, CodeModel::Small, &policy).expect("compiles")
+        assembly_flagged(ir, Cpu::M68020, level, false, None, CodeModel::Small, &Policy::default()).expect("compiles")
     }
 
-    /// -Os chooses by bytes per module, -O2 never calls, and
-    /// `-fsize-libcalls=` overrides the choice.
+    /// -Os chooses by bytes per module and -O2 never calls, whatever the
+    /// functions' attributes.
     #[test]
-    fn the_driver_chooses_at_os_and_the_flag_overrides() {
-        // the level decides, not the attribute
+    fn the_driver_chooses_at_os_and_never_at_o2() {
         let one = ctz64(1).replace(" optsize", "");
         let three = ctz64(3).replace(" optsize", "");
-        assert!(!text(&one, Level::Os, None).contains("__ctzdi2"));
-        assert!(text(&three, Level::Os, None).contains("__ctzdi2"));
-        assert!(!text(&three, Level::O2, None).contains("__ctzdi2"));
-        assert!(text(&one, Level::Os, Some("-fsize-libcalls=call")).contains("__ctzdi2"));
-        assert!(!text(&three, Level::Os, Some("-fsize-libcalls=inline")).contains("__ctzdi2"));
+        assert!(!text(&one, Level::Os).contains("__ctzdi2"));
+        assert!(text(&three, Level::Os).contains("__ctzdi2"));
+        assert!(!text(&three, Level::O2).contains("__ctzdi2"));
     }
 }
 

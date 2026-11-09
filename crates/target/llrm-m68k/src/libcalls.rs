@@ -30,7 +30,7 @@ use llrm_mir::module::{Function, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 
 /// How a build chooses: by bytes (the default), or one way for everything
-/// (`-fsize-libcalls=inline|call`, which the size table is measured with).
+/// (`Options::size_libcalls`, which the size table is measured with).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Mode {
     #[default]
