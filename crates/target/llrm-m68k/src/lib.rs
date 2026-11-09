@@ -34,6 +34,7 @@ pub mod foldload;
 pub mod frame;
 pub mod isa;
 pub mod kernels;
+pub mod libcalls;
 pub mod loopinc;
 pub mod mac;
 pub mod machine;

@@ -16,7 +16,7 @@ use llrm_z80::target::Z80;
 /// the z80's too). Every call, a callee's or a libcall's, names F.
 #[test]
 fn a_call_register_mask_names_the_flags() {
-    let text = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let text = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
         declare i16 @g(i16)\n\
         define i32 @f(i16 %n, i32 %a, i32 %b) {\n\
           %c = icmp eq i16 %n, 12\n  %r = call i16 @g(i16 %n)\n  %q = udiv i32 %a, %b\n\
