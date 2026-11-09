@@ -301,7 +301,7 @@ pub fn machine_with<'a>(
         }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target), pool }),
         Box::new(twoaddr::TwoAddress {
-            lea: target.three_address_for(target.size || target.min_size),
+            lea: target.three_address(),
             loop_carried: target.commutes_loop_carried(),
             unoptimized: !target.optimized,
         }),
