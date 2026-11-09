@@ -31,3 +31,12 @@ def test_the_level_and_the_x86_mode_are_not_taken_from_the_header():
     seen = []
     cr.classify("x86_64-linux", "// flags: -O1 -m32 -march=i486 -DA\nint x;\n", lambda f: seen.append(f) or (0, ""))
     assert seen[0][0] == "-DA" and "-O1" not in seen[0] and "-m32" not in seen[0]
+
+
+def test_register_upper_half_names_its_dos_abi_so_m64_does_not_run_it():
+    """`-mabi=watcom` only exists on the DOS rows; with no `// targets:` line m64 refused it (`no ABI "watcom"`)."""
+    import corpus_targets
+
+    source = (Path(__file__).parent.parent / "tests/run/c/register_upper_half.c").read_text()
+    assert not corpus_targets.applies("x86_64-linux", source)
+    assert corpus_targets.applies("x86_32-dos", source)
