@@ -3027,7 +3027,7 @@ mod tests {
     /// `forward_high_bytes` cannot fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
     #[test]
     fn a_word_shifted_by_a_byte_and_more_clears_the_pair_next_to_the_copy() {
-        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n@g = global i16 0\n\
+        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n@g = global i16 0\n\
                   define i8 @f(i8 %a, i16 %x) {\n  %s = lshr i16 %x, 15\n  %t = add i16 %s, %x\n\
                   store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
         let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();
