@@ -81,7 +81,7 @@ pub fn chain(
 /// immediate, hoisted and shared), where a chain repeats its instructions at
 /// each site; counting the load per site made a tie of 6 B and grew
 /// `rotate_small` (four `x * 31`) by 12 B.
-fn multiply(cpu: Cpu) -> (usize, u32) {
+pub fn multiply(cpu: Cpu) -> (usize, u32) {
     one(cpu, "muls.l %d1, %d0", 4)
 }
 

@@ -87,3 +87,33 @@ Rows (owner m68k-b unless noted; exits in the PR body): M68K-MUL-CALLTARGET 6, M
 | run/select_of_constants | 68000 | Os | 16916 | 19672 | +2756 | M68K-MUL-SCHED |
 | run/select_of_constants | 68020 | O2 | 20440 | 21254 | +814 | M68K-MUL-SCHED |
 | run/select_of_constants | 68020 | O3 | 20440 | 21254 | +814 | M68K-MUL-SCHED |
+
+## 68020 -O1 per constant (mul_constants' constants): chain against `muls.l`, and gcc
+
+Model of `crates/target/llrm-m68k/examples/mulprice.rs` (bytes / clocks from the m68k tables; the chain has no constant to load). "Picks" = the hook at -O1 strict / -Os / -O2. Function bytes = operand load (4 B) + sequence, without `rts`; gcc 15 `-m68020 -O1` single function `x*K`.
+
+| x* | chain B / clk | muls.l B / clk | picks | ours muls.l function B | gcc form, B |
+|---|---|---|---|---|---|
+| 3 | 6 / 8 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 10 |
+| 5 | 6 / 8 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 10 |
+| 6 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 9 | 6 / 8 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 10 |
+| 10 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 12 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 17 | 6 / 8 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 10 |
+| 18 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 20 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 24 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 25 | none | 4 / 45 (+2 B constant load) | muls.l / muls.l / muls.l | 10 | chain 14 |
+| 36 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 40 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 45 | none | 4 / 45 (+2 B constant load) | muls.l / muls.l / muls.l | 10 | chain 16 |
+| 72 | 8 / 12 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 12 |
+| 81 | none | 4 / 45 (+2 B constant load) | muls.l / muls.l / muls.l | 10 | chain 14 |
+| 100 | none | 4 / 45 (+2 B constant load) | muls.l / muls.l / muls.l | 10 | chain 16 |
+| 125 | none | 4 / 45 (+2 B constant load) | muls.l / muls.l / muls.l | 10 | chain 14 |
+| 127 | 6 / 8 | 4 / 45 (+2 B constant load) | muls.l / muls.l / chain | 10 | chain 10 |
+| 129 | 6 / 8 | 4 / 45 (+6 B constant load) | muls.l / muls.l / chain | 14 | chain 10 |
+| 255 | 6 / 8 | 4 / 45 (+6 B constant load) | muls.l / muls.l / chain | 14 | chain 10 |
+
+Reading: with the constant's register set per site, the chain is no larger (3, 5, 9, 17: tie; 129, 255: 4 B smaller) and 5x faster, so strict -O1 would take it; with the register shared across sites `muls.l` is 2 B smaller per extra site. The hook cannot know the sharing, so it assumes shared and keeps `muls.l`. gcc picks the chain for every constant (`synth_mult`, 25..125 too). Plan: M68K-MUL-LATE, a priced rewrite after selection that sees the constant register's real uses (like `calltarget::choose`), and `synth_mult` for the constants with no `(2^n±1)<<k` form. Owner m68k-b, exit 2026-11-14.
