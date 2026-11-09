@@ -2272,12 +2272,9 @@ fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
     }
 }
 
-/// The z80's datalayout names its stack alignment (`S8`: one byte). Without an `S` the mid-end read the stack as
-/// unbounded and raised alloca alignments past what the frame keeps (m16's cause); `S` and the alignment the
-/// builder keeps are one fact.
+/// The z80 datalayout named no stack alignment, so a pass raising an alloca to a type's preferred alignment had no bound.
 #[test]
-fn the_datalayout_names_the_stack_alignment() {
+fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
     let text = llrm_z80::LAYOUT.lines().find_map(|l| l.strip_prefix("datalayout = ")).expect("a datalayout").trim_matches('"');
-    let layout = llrm_mir::datalayout::DataLayout::parse(text).expect("parses");
-    assert_eq!(layout.stack_align, Some(1), "{text}");
+    llrm_target::testing::assert_stack_facts("z80", text, llrm_target::Target::stack_alignment(&llrm_z80::target::Z80) as u64, None);
 }
