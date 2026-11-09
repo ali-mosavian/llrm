@@ -5,10 +5,9 @@ import sys
 # different value is a failure, not an exception. stft_single: clang -ffp-contract=on, gcc fast and ours print
 # 40144774; -ffp-contract=off prints 502187692 (clang and gcc), clang fast 232171158; none is the .out's
 # 78803551, the DOS/x87 value. The float result depends on contraction, so aarch64 cannot reach it.
-EXCEPTIONS = {
-    ("stft_single", "O2"): ("40144774", "78803551", "verified: value depends on -ffp-contract (off 502187692, on 40144774)"),
-    ("stft_single", "Os"): ("40144774", "78803551", "verified: value depends on -ffp-contract (off 502187692, on 40144774)"),
-}
+# Every level prints 40144774 (O1 and O3 were missed at first: their cells failed the check).
+CAUSE = "verified: value depends on -ffp-contract (off 502187692, on 40144774)"
+EXCEPTIONS = {("stft_single", level): ("40144774", "78803551", CAUSE) for level in ("O1", "O2", "O3", "Os")}
 
 
 def same_value(reported, expected):

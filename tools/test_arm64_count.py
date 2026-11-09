@@ -92,7 +92,8 @@ class KernelRange(unittest.TestCase):
         sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
         import expect
 
-        self.assertEqual(expect.status("stft_single", "O2", "40144774:f14311fc", "78803551\n"), "exception")
+        for level in ("O1", "O2", "O3", "Os"):
+            self.assertEqual(expect.status("stft_single", level, "40144774:f14311fc", "78803551\n"), "exception", level)
         self.assertEqual(expect.status("stft_single", "O2", "-1", "78803551\n"), "fail")
         self.assertEqual(expect.status("stft_single", "O2", "502187692", "78803551\n"), "fail")
         self.assertEqual(expect.status("stft_single", "O2", "78803551", "78803551\n"), "ok")
