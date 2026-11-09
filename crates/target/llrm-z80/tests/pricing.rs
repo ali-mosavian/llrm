@@ -92,7 +92,7 @@ fn a_block_the_passes_made_takes_the_frequency_of_the_one_before_it() {
 /// the loop's 32, not at 1; the join at 32, the arm made for one side at half.
 #[test]
 fn the_frequency_of_a_loop_reaches_the_blocks_cut_from_it() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
 define i16 @f(i16 %n, i16 %x) {\n\
 entry:\n  br label %loop\n\
 loop:\n  %i = phi i16 [ 0, %entry ], [ %in, %loop ]\n  %s = phi i16 [ 0, %entry ], [ %sn, %loop ]\n\
@@ -121,7 +121,7 @@ exit:\n  ret i16 %sn\n}";
     assert!((heaviest - 32.0).abs() < 1e-6, "no block cut from the loop weighs the loop: {lines:?}");
 }
 
-const SUM_41: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+const SUM_41: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
 @t = global [41 x i16] zeroinitializer\n\
 define i16 @f() {\n\
 entry:\n  br label %loop\n\

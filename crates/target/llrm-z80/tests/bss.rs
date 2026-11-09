@@ -11,7 +11,7 @@ fn assembly(
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
-        format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\ntarget triple = \"z80-unknown-none\"\n{ir}"),
+        format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n{ir}"),
     )
     .unwrap();
     let out = dir.join("g.s");

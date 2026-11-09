@@ -4,11 +4,11 @@
 //! `x == 0 ? -1 : 0` were `test; sete; movzx; neg`; the pin has `cmp x, 1;
 //! sbb r, r`.
 //!
-//! DEVIATE SD219: the `ADOX` form (no x86 target of ours has ADX), the
-//! or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)` folds of
-//! `combineAdd` are not translated. (The `SUB(…, ADC/SBB)` folds of
-//! `combineSub` are, in `x86_lowering`.) Exit: with the rest of
-//! `combineSBB`/`combineADC`. Owner w10. Review 2026-12-10.
+//! DEVIATE SD219: the `ADOX` form (no x86 target of ours has ADX) is not
+//! translated. (The `SUB(…, ADC/SBB)` folds of `combineSub`, the or/xor entry
+//! `combineOrXorWithSETCC` and the `ADD(ADC/SBB)` folds of `combineAdd` are,
+//! in `x86_lowering`.) Exit: with the rest of `combineSBB`/`combineADC`.
+//! Owner w10. Review 2026-12-10.
 //!
 //! # See also
 //! LLVM's `combineAddOrSubToADCOrSBB`
