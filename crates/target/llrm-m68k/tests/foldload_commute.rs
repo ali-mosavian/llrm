@@ -9,5 +9,15 @@ use llrm_m68k::driver::{Level, assembly, cpu_of};
 fn a_loaded_addend_is_added_from_post_increment_whichever_operand_it_is() {
     let out =
         assembly(include_str!("../bench/kernels/arrsum.ll"), cpu_of("68000").unwrap(), Level::Os).expect("compiles");
-    assert!(out.contains("add.l\t(%a0)+, %d"), "the load stayed a separate move:\n{out}");
+    // any address register: #7787 let the pointer take %a1, and the test named
+    // %a0
+    let folded = out
+        .lines()
+        .any(
+            |line| {
+                let line = line.trim_start();
+                line.starts_with("add.l\t(%a") && line.contains(")+, %d")
+            },
+        );
+    assert!(folded, "the load stayed a separate move:\n{out}");
 }

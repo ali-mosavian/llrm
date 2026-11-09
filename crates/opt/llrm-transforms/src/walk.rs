@@ -1110,7 +1110,7 @@ pub(crate) fn take_walk_promotions(
 /// 6368 clocks against 6209) and the copies are of the tree (fib: 132006
 /// clocks, 294986 copied after tail-call elimination made it a loop).
 ///
-/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w-6, review
+/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w10-instcombine, review
 /// 2026-11-30. The rule is cost-based: the target's `gcc_insns` (150 here,
 /// 450 for peeling), the call frequency over the entry's (10%), depth 3; no
 /// shape of a program. Depth 3 and cap 450 kept. The priced row is recpow -O1:

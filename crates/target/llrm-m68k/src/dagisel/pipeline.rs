@@ -236,7 +236,9 @@ impl Select for M68kChooser<'_> {
         adapter: &mut llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter<'_>,
         node: u32,
     ) -> llrm_dagisel::interp::Outcome {
-        super::indexed::select(adapter, node).unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
+        super::indexed::select(adapter, node)
+            .or_else(|| super::bfffo::select(adapter, node))
+            .unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }
 

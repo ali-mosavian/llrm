@@ -149,6 +149,24 @@ pub fn target_lowering_with(
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
     set(&[CtTz, CtLz, CtPop], &int, Action::Expand);
+    // DEVIATE BC1 (llrm-sdag `actions`): the shared compiler-rt routines
+    // (`__clzsi2`, `__ctzdi2`, `__popcountsi2`, ...) against the inline
+    // expansion; the pin keeps `Expand` here. gcc calls libgcc for all six on
+    // the 68000 and 68010, and so does this. From the 68020 gcc counts a
+    // 32-bit `clz`, a 64-bit `clz` and a 32-bit `ctz` with `bfffo`
+    // (M68K-BFFFO, see `bfffo`), and our routines cost more clocks there than
+    // the inline code (u64 O2: -540 B, +4000 clk), so the 68020 and later
+    // stay inline until the routines are as fast as libgcc's. Owner m68k. Exit:
+    // 2026-11-30.
+    if !m68020 {
+        set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
+    }
+    // DEVIATE M68K-BFFFO (see `bfffo`): `bfffo` counts the leading zeros of an
+    // `i32`, 32 for zero, so both forms are one instruction. The pin keeps
+    // `Expand`. Owner m68k. Exit: 2026-11-30.
+    if cpu.has_bit_field_find() {
+        set(&[CtLz, CtLzZeroPoison], &[MVT::I32], Action::Legal);
+    }
     set(&[ConstantPool, JumpTable, GlobalAddress, ExternalSymbol], &[MVT::I32], Action::Custom);
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy, StackSave, StackRestore], &[MVT::Other], Action::Expand);

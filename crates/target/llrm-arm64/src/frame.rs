@@ -75,6 +75,7 @@ enum Csr {
 fn saved_list(
     allocation: &Allocation,
     record: bool,
+    link: bool,
     darwin: bool,
 ) -> Vec<Csr> {
     let pad = |list: &[u32], base: u32| -> Vec<u32> {
@@ -86,7 +87,7 @@ fn saved_list(
         all.dedup();
         all
     };
-    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X);
+    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X).chain(link.then_some(Csr::X(30)));
     let fprs = pad(&allocation.saved_fprs, 8).into_iter().map(Csr::D);
     let frame = [Csr::Lr, Csr::Fp].into_iter().filter(|_| record);
     if darwin { frame.chain(gprs).chain(fprs).collect() } else { gprs.chain(frame).chain(fprs).collect() }
@@ -339,6 +340,9 @@ fn pairs_at(
     count
 }
 
+/// The pin's `DefaultSafeSPDisplacement`.
+pub const SAFE_SP_DISPLACEMENT: u64 = 255;
+
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
@@ -346,12 +350,23 @@ fn layout(
 ) -> Layout {
     let (mut slots, locals_end) = place_objects(function);
     // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
-    // or a variable-sized object keeps the frame record; so does a call, which
-    // saves the link register beside it.
+    // or a variable-sized object keeps the frame record. A call without one
+    // saves the link register alone, with its neighbours in the list.
     let keeps =
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
-    let record = function.calls || function.dynamic || keeps;
-    let pairs = paired(&saved_list(allocation, record, darwin));
+    // `hasFP` also holds for a call frame over `DefaultSafeSPDisplacement`
+    // (255 bytes): the scavenger's emergency slot is reached from the frame pointer.
+    // DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins the allocation pool
+    // when no record is kept. stft_fixed -O1/-O2 (bench), +1 executed insn in a 78M run,
+    // -4 B: the greedy gives x29 to one global's base and rematerializes another global
+    // (`adrp`/`add` into x20) at the outer loop head, where the old code folded the
+    // address into x9; read from both assemblies.
+    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's `producePairRegisters`
+    // (Mach-O compact unwind) saves the frame pointer beside the link register on
+    // Darwin whatever `hasFP` says, without setting it up; here a Darwin call keeps
+    // the whole record. Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
+    let record = function.dynamic || keeps || function.outgoing > SAFE_SP_DISPLACEMENT || (darwin && function.calls);
+    let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);
     // Filled from the top; where the area has a spare word, the first single

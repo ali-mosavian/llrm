@@ -122,6 +122,18 @@ fn text_bytes(
 }
 
 /// The kernel's C source built by m68k gcc into an object's text.
+/// The shared external-bar flags (`tools/external_flags.py --target none`, hash cd1e12d510e4); `tools/m68k_column_probe.py`
+/// fails when this list and that file differ. Relocation is ours: none (static), asserted by the same probe.
+const EXTERNAL_FLAGS: [&str; 5] = [
+    "-fomit-frame-pointer",
+    "-fno-stack-protector",
+    "-fno-stack-clash-protection",
+    "-U_FORTIFY_SOURCE",
+    "-fno-asynchronous-unwind-tables",
+];
+/// gcc 15's upstream default, pinned (clang has no such option).
+const GCC_ZERO_INIT_PADDING: &str = "-fzero-init-padding-bits=standard";
+
 fn gcc_object(
     root: &Path,
     cpu: &str,
@@ -133,7 +145,9 @@ fn gcc_object(
         .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
         .arg(format!("-B{}/usr/lib/gcc-cross/m68k-linux-gnu/15/", root.display()))
         .arg(format!("-B{}/usr/m68k-linux-gnu/bin/", root.display()))
-        .args(["-ffreestanding", "-nostdlib", "-fno-asynchronous-unwind-tables"])
+        .args(["-ffreestanding", "-nostdlib"])
+        .args(EXTERNAL_FLAGS)
+        .arg(GCC_ZERO_INIT_PADDING)
         .arg(format!("-mcpu={cpu}"))
         .arg(format!("-{level}"))
         .arg("-c")
@@ -216,7 +230,8 @@ fn clang_object(
 ) -> Result<(), String> {
     let ir = object.with_extension("ll");
     let status = Command::new(clang)
-        .args(["--target=m68k-linux-gnu", "-ffreestanding", "-fno-asynchronous-unwind-tables", "-fno-pic"])
+        .args(["--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic"])
+        .args(EXTERNAL_FLAGS)
         .arg(format!("-mcpu={cpu}"))
         .arg(format!("-{level}"))
         .args(["-S", "-emit-llvm"])

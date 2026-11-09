@@ -347,3 +347,15 @@ def test_novec_build_turns_gccs_vectorizer_off(built, tmp_path):
     obj = lambda w, c: (w / "b" / f"nbody.{c}O3.o").read_bytes()
     assert obj(work, "gcc") != obj(built, "gcc")
     assert obj(work, "clang") == obj(built, "clang")
+
+
+def test_an_lp64_only_cell_is_refused_at_m32():
+    """run_mulconst_i64 (`// targets: lp64`) ran at m32 with a 32-bit long: ok=False for gcc, clang and llrm alike, and the cell was quoted."""
+    with pytest.raises(SystemExit, match="not a cell"):
+        harness.check_applies("run_mulconst_i64")
+    import sys
+    sys.argv = ["harness.py", "run_mulconst_i64", "gccO1"]
+    with pytest.raises(SystemExit, match="not a cell"):
+        harness.main()
+    harness.check_applies("run_urem_eq")
+    harness.check_applies("x_iir")
