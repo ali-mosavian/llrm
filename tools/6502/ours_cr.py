@@ -51,11 +51,16 @@ def reachable_runtime(text):
     by = {n: i for i, (n, _) in enumerate(blocks)}
     # a name in a comment is not a reference (the Rust port reads code only)
     toks = lambda t: [by[x] for line in t.splitlines() for x in re.split(r"[^A-Za-z0-9_]", line.split(";")[0]) if x in by]
+    def falls_through(body):  # a routine that does not end in rts or jmp runs on into the next label's text
+        code = [l.split(";")[0].strip() for l in body.splitlines()]
+        code = [l for l in code if l]
+        return bool(code) and code[-1].split()[0] not in ("rts", "jmp", "rti", "bra")
     want = [False] * len(blocks); q = list(toks(text))
     while q:
         i = q.pop()
         if not want[i]:
             want[i] = True; q += [j for j in toks(blocks[i][1]) if j != i]
+            if falls_through(blocks[i][1]) and i + 1 < len(blocks): q.append(i + 1)
     out = "".join(b for (n, b), w in zip(blocks, want) if w)
     if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __sb, __st, __sr, __sg\n"
     return macros + out if out else out

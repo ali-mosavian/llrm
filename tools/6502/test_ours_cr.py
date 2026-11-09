@@ -62,6 +62,24 @@ class ReportGlue(unittest.TestCase):
         main = "".join(f"  lda #{i + 1}\n  sta rc{i + 2}\n" for i in range(4))
         self.assertEqual(self.dump(False, main), [1, 2, 3, 4])
 
+class ReachableRuntime(unittest.TestCase):
+    """reachable_runtime kept the routines a program names. `memcpy` ends where `memcpy_body` begins, which nothing names,
+    so the copy loop was left out and stack_arrays_copy read WRONG (got -101, want 303) on the A:X branch (2026-11-09)."""
+    def test_a_routine_that_runs_on_into_the_next_label_takes_its_body(self):
+        f = tempfile.NamedTemporaryFile("w", suffix=".s", delete=False)
+        f.write(".export memcpy\nmemcpy:\n  sta rc6\nmemcpy_body:\n  lda (rc4),y\n  rts\n.export other\nother:\n  rts\n"); f.close()
+        self.addCleanup(os.unlink, f.name)
+        src = open(os.path.join(HERE, "ours_cr.py")).read()
+        ns = {}
+        old = os.environ.get("OURS_RT"); os.environ["OURS_RT"] = f.name
+        try:
+            exec("import os, re\n" + src[src.index("RT = open("):src.index("# `report(long)`")], ns)
+        finally:
+            os.environ.pop("OURS_RT") if old is None else os.environ.__setitem__("OURS_RT", old)
+        out = ns["reachable_runtime"]("  jsr memcpy\n")
+        self.assertIn("lda (rc4),y", out)
+        self.assertNotIn("other:", out)
+
 class PadSpan(unittest.TestCase):
     """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
     a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""

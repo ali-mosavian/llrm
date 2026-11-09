@@ -18,7 +18,8 @@ pub fn datalayout() -> String {
 }
 
 /// The runtime routines `text` reaches, as ca65 text. Routines are the
-/// top-level labels of `mos_rt.s`; one is reached when another's text names it.
+/// top-level labels of `mos_rt.s`; one is reached when another's text names it
+/// or runs on into it.
 pub fn reachable_runtime(text: &str) -> String {
     let mut blocks: Vec<(String, String)> = Vec::new();
     let mut bss = String::new();
@@ -83,9 +84,17 @@ pub fn reachable_runtime(text: &str) -> String {
     for i in tokens(text) {
         queue.push(i);
     }
+    // a routine that does not end in `rts` or `jmp` runs on into the next label's text
+    let falls_through = |body: &str| {
+        let last = body.lines().rev().map(|l| l.split(';').next().unwrap_or("").trim()).find(|l| !l.is_empty());
+        last.is_some_and(|l| !matches!(l.split_whitespace().next(), Some("rts" | "jmp" | "rti" | "bra")))
+    };
     while let Some(i) = queue.pop() {
         if !std::mem::replace(&mut wanted[i], true) {
             queue.extend(tokens(&blocks[i].1).into_iter().filter(|&j| j != i));
+            if falls_through(&blocks[i].1) && i + 1 < blocks.len() {
+                queue.push(i + 1);
+            }
         }
     }
     let mut out = String::new();

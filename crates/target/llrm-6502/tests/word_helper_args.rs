@@ -19,10 +19,12 @@ fn body(op: &str) -> Vec<String> {
     text[from..].split(".segment").next().unwrap().lines().map(|line| line.trim().to_owned()).collect()
 }
 
+/// A product is left out: two words of unknown width tie, and the DAG's operand
+/// order decides which is the multiplier (`mul_operand_order.rs`).
 #[test]
 fn a_word_divide_of_the_arguments_moves_nothing() {
     for (op, routine) in
-        [("sdiv", "__divhi3"), ("udiv", "__udivhi3"), ("srem", "__modhi3"), ("urem", "__umodhi3"), ("mul", "__mulhi3")]
+        [("sdiv", "__divhi3"), ("udiv", "__udivhi3"), ("srem", "__modhi3"), ("urem", "__umodhi3")]
     {
         let lines = body(op);
         let moves: Vec<_> =
