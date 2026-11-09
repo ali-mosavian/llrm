@@ -592,7 +592,7 @@ pub trait Tti {
     /// Whether SZ2 tries all the sites of a callee that stays in one caller as one unit, not one
     /// site at a time: the pin inlines each site on its cost and lets later passes merge the
     /// copies (three `report(const)` calls sink into one), which a trial of one site cannot see.
-    /// False: a site alone.
+    /// False: a site alone. Part of DEVIATE SZ1 (the pin has no SZ2 trial): wasm, exit 2026-11-20.
     fn inline_trial_groups_sites(&self) -> bool {
         false
     }
