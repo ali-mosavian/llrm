@@ -22,6 +22,7 @@ def status(prog, level, reported, expected):
     """`ok`, `exception` (the named observed value), or `fail`."""
     if same_value(reported, expected):
         return "ok"
+    level = level if level.startswith("O") else "O" + level  # cell.sh passes 1/2/3/s
     named = EXCEPTIONS.get((prog, level))
     if named and str(reported).split(":")[0] == named[0] and expected.split()[0] == named[1]:
         return "exception"
