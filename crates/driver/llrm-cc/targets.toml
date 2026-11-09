@@ -8,6 +8,7 @@
 # `llc_passes` (default true) says the backend takes the `-f[no-]PASS` switches; a row that does not gives `llc_passes_reason`, and the driver leaves them out with a warning (clang has written `noinline` and the loop hints into the IR).
 # `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
 # `unroll_at_o1` (default false) makes `-funroll-loops` the default at -O1 (DEVIATE UNROLL-O1: clang marks every loop unroll-disable there, so the pin's -O1 never unrolls).
+# `thread_jumps_at_o1` (default false) makes `-fthread-jumps` the default at -O1 for the backend (DEVIATE JUMPTHREAD-O1: the pin's -O1 pipeline has no JumpThreadingPass).
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
@@ -239,6 +240,7 @@ clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
+thread_jumps_at_o1 = true
 object = "elf"
 link = []
 
@@ -250,6 +252,7 @@ clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
+thread_jumps_at_o1 = true
 object = "elf"
 link = []
 
@@ -261,6 +264,7 @@ clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68010", "-ffreestanding"]
 llc = ["-mcpu=68010"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
+thread_jumps_at_o1 = true
 object = "elf"
 link = []
 
@@ -272,6 +276,7 @@ clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68030", "-ffreestanding"]
 llc = ["-mcpu=68030"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
+thread_jumps_at_o1 = true
 object = "elf"
 link = []
 
@@ -283,6 +288,7 @@ clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68040", "-ffreestanding"]
 llc = ["-mcpu=68040"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
+thread_jumps_at_o1 = true
 object = "elf"
 link = []
 
@@ -294,6 +300,7 @@ clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68060", "-ffreestanding"]
 llc = ["-mcpu=68060"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
+thread_jumps_at_o1 = true
 object = "elf"
 link = []
 
