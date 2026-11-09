@@ -45,7 +45,7 @@
 //! peepholes and before `drop_dead_stores`: earlier, it hid the copies those
 //! peepholes match (`shift_seven` 2 tests, `hand_shrax7` +4 B). Dead writes go
 //! first (`MaybeDeadCopies`), else a dead `lda` is kept alive as a transfer's
-//! source. Off unless `LLRM_6502_MCP` is set.
+//! source. On by default; `LLRM_6502_MCP=0` is the kill switch ([`enabled`]).
 //!
 //! # Not subsumed
 //! With the pass on, skipping a special-case peephole (162 cells, 2026-11-09)
@@ -61,6 +61,7 @@
 //! (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp#L926)
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 
 use crate::asm::{Asm, Inst, Line, Op, Operand};
 use crate::peephole::flags_unread_after;
@@ -174,6 +175,11 @@ fn cell_of(operand: &Operand) -> Option<String> {
 fn reads_cell(op: Op) -> bool {
     use Op::*;
     matches!(op, Lda | Ldx | Ldy | Adc | Sbc | And | Ora | Eor | Cmp | Cpx | Cpy | Bit)
+}
+
+/// Whether the pass runs, given the value of `LLRM_6502_MCP`: on unless it is `0`.
+pub fn enabled(setting: Option<&OsStr>) -> bool {
+    setting.is_none_or(|value| value != "0")
 }
 
 /// Forward copy propagation of `asm`.

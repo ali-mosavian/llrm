@@ -2,7 +2,7 @@
 //! `sta rc4` and loaded it back after `stx rc3; lda rc3` (A:X live-in, 2026-11-09).
 
 use llrm_6502::asm::Asm;
-use llrm_6502::copyprop::copy_propagation;
+use llrm_6502::copyprop::{copy_propagation, enabled};
 use llrm_6502::peephole_cells::drop_dead_stores;
 
 fn run(text: &str) -> String {
@@ -59,4 +59,14 @@ fn a_load_into_a_that_nothing_reads_does_not_make_a_transfer_out_of_an_index_loa
         run("  lda rc0\n  lda rc1\n  ldx rc1\n  lda rc0\n  clc\n  adc rc3\n  rts\n"),
         "  ldx rc1\n  lda rc0\n  clc\n  adc rc3\n  rts\n"
     );
+}
+
+/// The pass shipped behind `LLRM_6502_MCP=1` and nothing exercised it in the product:
+/// it runs unless the variable is `0`.
+#[test]
+fn the_pass_runs_unless_the_kill_switch_is_zero() {
+    use std::ffi::OsStr;
+    assert!(enabled(None));
+    assert!(enabled(Some(OsStr::new("1"))));
+    assert!(!enabled(Some(OsStr::new("0"))));
 }
