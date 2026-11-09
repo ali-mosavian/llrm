@@ -1,7 +1,7 @@
 //! `MachineCombiner` madd patterns on arm64
 //! (`AArch64InstrInfo::getMaddPatterns`).
 
-use llrm_arm64::driver::{self, IselMode, Level};
+use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
 /// The second product of `acc + a*b + c*d` in a loop stayed `mul` + `add` when
@@ -24,7 +24,6 @@ l:\n  %i = phi i64 [ %n, %l ], [ 0, %entry ]\n  %acc = phi i64 [ %s2, %l ], [ 0,
   %s1 = add i64 %m1, %acc\n  %s2 = add i64 %s1, %m2\n  %n = add nuw nsw i64 %i, 1\n\
   %c = icmp eq i64 %n, 6\n  br i1 %c, label %x, label %l\n\
 x:\n  ret i64 %s2\n}\n";
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(ir, Platform::Linux, Level::Os).expect("lowers");
     assert_eq!(asm.matches("madd").count(), 2, "{asm}");
     // A product on its own is a `madd` with the zero register as the addend.

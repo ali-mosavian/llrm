@@ -197,40 +197,6 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
     llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
 }
 
-/// Which instruction selector makes the machine function (`--isel=`).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum IselMode {
-    Hand,
-    Dag,
-    /// The DAG path, the hand selector where it refuses (counted on stderr).
-    #[default]
-    Shadow,
-}
-
-impl IselMode {
-    /// The mode `--isel=NAME` names.
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "hand" => Some(Self::Hand),
-            "dag" => Some(Self::Dag),
-            "shadow" => Some(Self::Shadow),
-            _ => None,
-        }
-    }
-}
-
-static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Shadow);
-
-/// Chooses the selector for the compiles that follow (the process's, as the
-/// pass flags are).
-pub fn set_isel_mode(mode: IselMode) {
-    *ISEL_MODE.lock().unwrap() = mode;
-}
-
-fn isel_mode() -> IselMode {
-    *ISEL_MODE.lock().unwrap()
-}
-
 /// `name` through the DAG path: the pin's table and the shared stages.
 fn dag_select(
     module: &llrm_mir::module::Module,
@@ -263,17 +229,7 @@ fn lower_function(
     let global = module.global(id);
     let function = global.function().ok_or("not a function")?;
     let name = global.name.owned().ok_or("an unnamed function")?;
-    let mut machine = match isel_mode() {
-        IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
-        IselMode::Dag => dag_select(module, &name, &program.layout, platform, lines),
-        // A refusal of the DAG path falls back to the hand selector,
-        // counted.
-        IselMode::Shadow => dag_select(module, &name, &program.layout, platform, lines).or_else(|why| {
-            eprintln!("isel-shadow: @{name}: {why}");
-            crate::isel::selected(module, id, &program.layout, platform, lines)
-        }),
-    }
-    .map_err(|why| format!("@{name}: {why}"))?;
+    let mut machine = dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
     // The shared phases that need SSA see the body as selection made it,

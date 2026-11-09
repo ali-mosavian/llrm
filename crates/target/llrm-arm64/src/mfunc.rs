@@ -588,9 +588,14 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
 /// DEVIATE ARM64-PHI-SHAPE (owner arm64-phi, exit 2026-11-17 with the shared
 /// pass, gap 3 of docs/architecture/arm64-spike.md): every such edge is split,
 /// where the pin splits by liveness (`SplitPHIEdges`). Selection used to split
-/// the same edges, so the code is the same; the registers of the phis' edges
-/// are numbered after selection, so the allocator's tie-breaks can name other
-/// registers (3 of 675 corpus cells differ in register names only).
+/// the same edges, so the code is the same. The registers of the phis' edges
+/// are numbered here, after selection, in the pin's order (`LowerPHINode`:
+/// [L372](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L372),
+/// [L415](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L415),
+/// [L620](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L620)),
+/// so an exact priority tie in the greedy allocator (lower vreg index first)
+/// can fall the other way than before: jpeg_single -O3 is +36 B and +0.054%
+/// executed for that reason (2026-11-09, closed as pin-faithful tie-order).
 pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =

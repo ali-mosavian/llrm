@@ -563,6 +563,19 @@ fn decision_line(
     format!("dec v{reg} stage={stage:?} size={size} w={weight:.4} -> {verdict}")
 }
 
+/// One line of `LLRM_GREEDY_DECISIONS` for `tryEvict`: why `virt` may or may
+/// not take `phys` by evicting what holds it (`verdict`: the interfering
+/// interval and the rule that denied or allowed it). Two builds' lines diff to
+/// the first eviction that changed; without them a spill the pin avoids by
+/// evicting a lighter interval cannot be told from a split.
+fn eviction_line(
+    virt: u32,
+    phys: &str,
+    verdict: &str,
+) -> String {
+    format!("  evict? v{virt} {phys}: {verdict}")
+}
+
 type RecolorStack = Vec<(Rc<LiveInterval>, RegId)>;
 
 /// `RAGreedy` (RegAllocGreedy.h#L55) over `RegAllocBase`.
@@ -1218,6 +1231,18 @@ impl<'a> RAGreedy<'a> {
     /// `canEvictInterferenceBasedOnCost` (RegAllocEvictionAdvisor.cpp#L207):
     /// all interferences between `virt` and `phys` can be evicted for less
     /// than `max_cost` (updated when true).
+    /// The `LLRM_GREEDY_DECISIONS` line of one eviction check ([`eviction_line`]).
+    fn trace_eviction(
+        &self,
+        virt: &Rc<LiveInterval>,
+        phys: RegId,
+        verdict: impl FnOnce() -> String,
+    ) {
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("{}", eviction_line(virt.reg(), &self.matrix.tri().name(phys), &verdict()));
+        }
+    }
+
     fn can_evict_interference_based_on_cost(
         &mut self,
         virt: &Rc<LiveInterval>,
@@ -1228,6 +1253,7 @@ impl<'a> RAGreedy<'a> {
     ) -> bool {
         // It is only possible to evict virtual register interference.
         if self.matrix.check_interference(virt, phys) > InterferenceKind::VirtReg {
+            self.trace_eviction(virt, phys, || "a fixed range holds it".to_owned());
             return false;
         }
         let is_local = virt.empty() || self.lis.interval_is_in_one_mbb(virt).is_some();
@@ -1241,6 +1267,7 @@ impl<'a> RAGreedy<'a> {
             // If there is 10 or more interferences, chances are one is heavier.
             let interferences = self.matrix.query_vregs(virt.reg(), &virt.range, unit, EVICT_INTERFERENCE_CUTOFF);
             if interferences.len() >= EVICT_INTERFERENCE_CUTOFF {
+                self.trace_eviction(virt, phys, || format!("{} or more interferences", EVICT_INTERFERENCE_CUTOFF));
                 return false;
             }
             // Check if any interfering live range is heavier than MaxWeight.
@@ -1251,20 +1278,26 @@ impl<'a> RAGreedy<'a> {
                 // virtual register is one that we
                 // have scavenged a physical register for.
                 if fixed.contains(&intf_reg) {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} is fixed (last-chance recoloring)"));
                     return false;
                 }
                 // Never evict spill products. They cannot split or spill.
                 if self.extra.get_stage(intf_reg) == LiveRangeStage::Done {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} is a spill product"));
                     return false;
                 }
                 let urgent = self.is_urgent_eviction(virt, &intf);
                 // Only evict older cascades or live ranges without a cascade.
                 let intf_cascade = self.extra.get_cascade(intf_reg);
                 if cascade == intf_cascade {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} has the same cascade {cascade}"));
                     return false;
                 }
                 if cascade < intf_cascade {
                     if !urgent {
+                        self.trace_eviction(virt, phys, || {
+                            format!("v{intf_reg} has a newer cascade {intf_cascade} than {cascade}, not urgent")
+                        });
                         return false;
                     }
                     // We permit breaking cascades for urgent evictions. It
@@ -1286,6 +1319,9 @@ impl<'a> RAGreedy<'a> {
                 cost.max_weight = cost.max_weight.max(intf.weight());
                 // Abort if this would be too expensive.
                 if cost.at_least(max_cost) {
+                    self.trace_eviction(virt, phys, || {
+                        format!("v{intf_reg} w={:.4} costs at least the best so far", intf.weight())
+                    });
                     return false;
                 }
                 if urgent {
@@ -1293,6 +1329,9 @@ impl<'a> RAGreedy<'a> {
                 }
                 // Apply the eviction policy for non-urgent evictions.
                 if !self.should_evict(virt, is_hint, &intf, breaks_hint) {
+                    self.trace_eviction(virt, phys, || {
+                        format!("v{intf_reg} w={:.4} is not lighter than v{} w={:.4}", intf.weight(), virt.reg(), virt.weight())
+                    });
                     return false;
                 }
                 // If !MaxCost.isMax(), then we're just looking for a cheap
@@ -1305,10 +1344,12 @@ impl<'a> RAGreedy<'a> {
                     && self.lis.interval_is_in_one_mbb(&intf).is_some()
                     && !self.can_reassign(&intf, phys)
                 {
+                    self.trace_eviction(virt, phys, || format!("local v{intf_reg} cannot move"));
                     return false;
                 }
             }
         }
+        self.trace_eviction(virt, phys, || format!("ok, evicts up to w={:.4}", cost.max_weight));
         *max_cost = cost;
         true
     }
@@ -1472,7 +1513,12 @@ impl<'a> RAGreedy<'a> {
         cost_per_use_limit: u8,
         fixed: &HashSet<u32>,
     ) -> Option<RegId> {
-        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed)?;
+        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed);
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            let verdict = best.map_or_else(|| "none".to_owned(), |phys| self.matrix.tri().name(phys));
+            eprintln!("  try evict v{} -> {verdict}", virt.reg());
+        }
+        let best = best?;
         self.evict_interference(virt, best, new_vregs);
         Some(best)
     }
@@ -1929,6 +1975,12 @@ mod tests {
     /// reads: it names the interval, its stage, size and weight, and the
     /// outcome. A sys.c function's allocation changed by one removed copy, and
     /// no line said which interval it was (v127, w 0.4365 to 0.3018).
+    #[test]
+    fn test_an_eviction_line_names_the_interval_the_register_and_the_rule() {
+        let line = eviction_line(289, "ECX", "v545 w=6404.0000 is not lighter than v289 w=4717.0000");
+        assert_eq!(line, "  evict? v289 ECX: v545 w=6404.0000 is not lighter than v289 w=4717.0000");
+    }
+
     #[test]
     fn test_a_decision_line_names_the_interval_its_stage_weight_and_outcome() {
         let line = decision_line(127, LiveRangeStage::Split, 1, 0.30180937, "assign EBX");
