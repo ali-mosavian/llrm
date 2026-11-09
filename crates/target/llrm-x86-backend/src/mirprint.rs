@@ -352,15 +352,17 @@ fn instruction(
             }
             writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
         }
-        // `rep stosb`: the count, the destination and the byte arrive in cx, di
-        // and al, and cx and di leave.
-        ("stosb", Some(Loc::Mem(_)), _) => {
+        // `rep stosb`/`rep stosd`: the count, the destination and the value arrive
+        // in cx, di and al (ecx, edi and eax), and the count and destination leave.
+        ("stosb" | "stosd", Some(Loc::Mem(_)), _) => {
+            let (op, value, count, destination) =
+                if name == "stosb" { ("STOSB", "al", "cx", "di") } else { ("STOSD", "eax", "ecx", "edi") };
             writeln!(
                 out,
-                "    REP_STOSB_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit $al, implicit $edi"
+                "    REP_{op}_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit ${value}, implicit $edi"
             )
             .unwrap();
-            for (held, register) in [(what.dests.get(1), "cx"), (what.dests.get(2), "di")] {
+            for (held, register) in [(what.dests.get(1), count), (what.dests.get(2), destination)] {
                 if let Some(Loc::Held(held)) = held {
                     writeln!(out, "    {} = COPY ${register}", vreg(held)?).unwrap();
                 }
@@ -1244,6 +1246,26 @@ mod tests {
         assert!(text.contains("REP_STOSB_32 implicit-def $ecx, implicit-def $edi"), "{text}");
         assert!(text.contains("%3 = COPY $cx\n    %4 = COPY $di"), "{text}");
         assert_eq!(physical(RegId::ES, 2).as_deref(), Ok("es"));
+    }
+
+    /// `rep stosd` (a dword fill, the memset of a local array) was refused
+    /// ("`stosd` (Fill) with 3 destinations"), so `_bench_jpeg_fixed` at m32 -Os
+    /// never reached the pin's greedy.
+    #[test]
+    fn test_a_dword_fill_prints_as_rep_stosd() {
+        use llrm_lir::Mem;
+        let fill = insn(
+            "stosd",
+            Operation::Fill,
+            vec![Loc::Mem(Mem::new(None, 0)), held(3), held(4)],
+            vec![held(5), held(6), held(7)],
+        );
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![fill, ret]))];
+        let body = LirBody::new("fill", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("REP_STOSD_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit $eax"), "{text}");
+        assert!(text.contains("%3 = COPY $ecx\n    %4 = COPY $edi"), "{text}");
     }
 
     #[test]
