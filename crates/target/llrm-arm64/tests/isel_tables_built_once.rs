@@ -23,3 +23,25 @@ fn asking_for_a_pin_register_builds_no_table() {
     });
     assert_eq!(made, 0, "{made} allocations for 50 questions");
 }
+
+/// The action table was built for every block selected (17 in rectwo): a
+/// function of many blocks builds it once, and a second compile builds none.
+#[test]
+fn the_action_table_is_built_once_however_many_blocks_are_selected() {
+    use llrm_arm64::driver::{self, IselMode};
+    use llrm_arm64::machine::Platform;
+
+    let blocks: String = (0..12)
+        .map(|n| format!("b{n}:\n  %x{n} = load volatile i32, ptr %p\n  %c{n} = icmp eq i32 %x{n}, {n}\n  br i1 %c{n}, label %b{next}, label %done\n", next = n + 1))
+        .collect();
+    let ir = format!(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+define i32 @f(ptr %p, i32 %a) {{\nentry:\n  br label %b0\n{blocks}b12:\n  br label %done\ndone:\n  ret i32 %a\n}}\n"
+    );
+    driver::set_isel_mode(IselMode::Dag);
+    driver::assembly(&ir, Platform::Linux, true).expect("lowers");
+    let first = llrm_arm64::dag::pipeline::action_tables_built();
+    assert_eq!(first, 1, "{first} tables for the blocks of one function");
+    driver::assembly(&ir, Platform::Linux, true).expect("lowers again");
+    assert_eq!(llrm_arm64::dag::pipeline::action_tables_built(), first, "a second compile built a table");
+}

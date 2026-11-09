@@ -533,15 +533,37 @@ impl SchedInfo for Aarch64Sched {
 const APPLE_M1: Aarch64Features = Aarch64Features { cssc: false, lse: true, outline_atomics: false, lse2: true };
 
 thread_local! {
-    /// The action table, by `shouldOptForSize`: built once per thread, as the
-    /// pin builds `AArch64TargetLowering` once per subtarget, not per block
-    /// (2.3 M of rectwo's isel in 17 blocks).
-    static ACTIONS: [TargetLowering; 2] = [false, true].map(|size| {
-        let mut tli = TargetLowering::aarch64(APPLE_M1);
-        tli.set_opt_for_size(size);
-        tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
-        tli
-    });
+    /// The action tables built so far, by the subtarget features and
+    /// `shouldOptForSize` they were built for: the pin builds
+    /// `AArch64TargetLowering` once per subtarget, not per block (2.3 M of
+    /// rectwo's isel in 17 blocks). Two subtargets in one process get two.
+    static ACTIONS: std::cell::RefCell<Vec<(([bool; 4], bool), std::rc::Rc<TargetLowering>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The action table of `features`, built on first ask on this thread.
+fn actions(
+    features: Aarch64Features,
+    opt_for_size: bool,
+) -> std::rc::Rc<TargetLowering> {
+    let key = ([features.cssc, features.lse, features.outline_atomics, features.lse2], opt_for_size);
+    if let Some(found) = ACTIONS.with(|all| all.borrow().iter().find(|(one, _)| *one == key).map(|(_, tli)| tli.clone())) {
+        return found;
+    }
+    let mut tli = TargetLowering::aarch64(features);
+    tli.set_opt_for_size(opt_for_size);
+    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
+    BUILT.with(|built| built.set(built.get() + 1));
+    let tli = std::rc::Rc::new(tli);
+    ACTIONS.with(|all| all.borrow_mut().push((key, tli.clone())));
+    tli
+}
+
+/// How many action tables this thread has built: one per subtarget and size
+/// setting, however many blocks were selected.
+pub fn action_tables_built() -> usize {
+    BUILT.with(std::cell::Cell::get)
 }
 
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
@@ -554,7 +576,7 @@ pub fn select_block(
 ) -> Result<Vec<Unit>, Refusal> {
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
-    let legal = ACTIONS.with(|tables| legalized_with(dag, &tables[usize::from(opt_for_size)], &mut lowering, None, false));
+    let legal = legalized_with(dag, &actions(APPLE_M1, opt_for_size), &mut lowering, None, false);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
     if let Some(why) = lowering.custom {
