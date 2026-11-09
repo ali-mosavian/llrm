@@ -237,3 +237,14 @@ def test_the_result_line_counts_the_cells_not_tested_and_names_every_one(tmp_pat
     objsweep.sweep(args, sorted(tmp_path.glob("*.c")), "old")
     out = capsys.readouterr().out
     assert "13 cells NOT TESTED" in out and out.count("failed on both") >= 13
+
+
+def test_a_program_for_other_targets_is_not_a_cell(tmp_path, capsys):
+    """lru (`far` pointers, `// targets: dos`) was swept on arm64, m68k, 6502, wasm and z80 and counted as 5 cells failed on both sides each."""
+    (tmp_path / "lru.c").write_text("// targets: dos\nint x;\n")
+    (tmp_path / "ok.c").write_text("int y;\n")
+    stub = _selector_stub(tmp_path, "none")
+    args = type("A", (), {"old": stub, "new": stub, "targets": "m64", "levels": "O2", "jobs": 1})()
+    assert objsweep.sweep(args, sorted(tmp_path.glob("*.c")), "dag") == 0
+    out = capsys.readouterr().out
+    assert "1 identical" in out and "0 cells NOT TESTED" in out and "1 n/a by // targets:" in out

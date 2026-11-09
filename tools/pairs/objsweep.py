@@ -24,6 +24,9 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import corpus_targets  # noqa: E402
+
 # Code whose change moves the objects of the DAG selector or of the machine passes after it, not only of the old selector.
 SELECTOR_PATHS = re.compile(r"selectiondag|dagisel|/isel|isel\.rs|/shadow|crates/target/|schedul|crates/codegen/llrm-codegen/src/backend/")
 
@@ -44,6 +47,7 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
 
 
 CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat", "a64": "arm64-linux", "m68k": "m68k-68000", "mos": "6502-sim65", "z80": "z80-sdcc", "wasm": "wasm32"}  # llrm-cc's LLRM_CC_TARGET rows
+ROWS = {**CC_TARGETS, "m64": "x86_64-linux"}  # the corpus_targets row of each target, for `// targets:`
 NO_ISEL = {"m68k", "mos", "z80", "wasm"}  # their llc has one selector and takes no --isel
 FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": [], "m68k": [], "mos": [], "z80": [], "wasm": []}  # llrm-cc rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
 
@@ -156,6 +160,10 @@ def selector_faults(args, cells, both, scratch: Path) -> list[str]:
 def _sweep(args, sources: list[Path], isel: str, scratch: Path) -> int:
     legs = lambda target: DEBUG_LEGS[target] if getattr(args, "debug", False) else [[]]  # noqa: E731
     cells = [(s, t, lv, tuple(leg)) for s in sources for t in args.targets.split(",") for lv in args.levels.split(",") for leg in legs(t)]
+    # A program whose `// targets:` line leaves the target out is not a program of that target (`far` pointers on arm64): it is not a cell.
+    planned = len(cells)
+    cells = [cell for cell in cells if corpus_targets.applies(ROWS[cell[1]], cell[0].read_text(errors="replace"))]
+    not_applicable = planned - len(cells)
 
     def run(cell):
         source, target, level, leg = cell
@@ -181,7 +189,7 @@ def _sweep(args, sources: list[Path], isel: str, scratch: Path) -> int:
     compiled = same + len(changed)
     selector_fault = selector_faults(args, cells, both, scratch) if not NO_ISEL.issuperset(args.targets.split(",")) else []
     untested = len(both) + len(one_side)
-    print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}; {compiled} compiled on both sides; {untested} cells NOT TESTED")
+    print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}; {compiled} compiled on both sides; {untested} cells NOT TESTED; {not_applicable} n/a by // targets:")
     if cells and not compiled:
         # "0 changed" of cells that never compiled is no identity: the sweep must not pass.
         print("objsweep: NO EVIDENCE: no cell compiled on both sides, so nothing was compared")
