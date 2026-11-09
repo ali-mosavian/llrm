@@ -116,3 +116,59 @@ fn all_legal_sizes_its_visited_set_once() {
     assert!(legal, "premise: nothing illegal is reachable");
     assert!(made <= 6, "{made} allocations to visit 500 nodes");
 }
+
+fn fixed_multiply_scale(
+    tli: &TargetLowering,
+    vt: EVT,
+) -> (bool, SDValue, SDValue) {
+    let mut dag = dag();
+    // the pointer in the width of the registers
+    let operand = |dag: &mut SelectionDAG, slot: i32| {
+        let ptr = dag.get_register(vt, 7);
+        let chain = dag.entry_node();
+        let info = MemInfo {
+            mem_vt: vt,
+            align: 2,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(vt, chain, ptr, info)
+    };
+    let (a, b) = (operand(&mut dag, 1), operand(&mut dag, 2));
+    let scale = dag.get_constant(7, EVT::I32);
+    let product = dag.get_node(ISD::SMulFixSat, vt, &[a, b, scale]);
+    dag.set_root(product);
+    let mut legalizer = TypeLegalizer::new(&mut dag, tli);
+    legalizer.run().unwrap();
+    let legal = legalizer.all_legal();
+    let node = (0..dag.node_count() as u32)
+        .map(|node| SDValue { node, res: 0 })
+        .find(|&v| dag.opcode(v) == ISD::SMulFixSat)
+        .expect("the multiply stays");
+    (legal, scale, dag.operand(node, 2))
+}
+
+/// The `i32` scale of `llvm.smul.fix.sat.i16` is an operand the 16-bit type
+/// legalizer must expand; it had no case and the compile stopped at
+/// `Unsupported { op: SMulFixSat, ty: I32, what: "expand operand" }`
+/// (fixed_point on z80 and 6502). The low half of the scale replaces it.
+#[test]
+fn the_i32_scale_of_a_fixed_multiply_is_its_low_half_on_a_16_bit_target() {
+    // registers of 1, 8 and 16 bits only, as z80's and 6502's: `i32` expands
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false));
+    tli.init_actions();
+    let (legal, scale, now) = fixed_multiply_scale(&tli, EVT::I16);
+    assert!(legal);
+    assert_ne!(now, scale);
+}
+
+/// Where `i32` is legal the scale is not an illegal operand: the node keeps it.
+#[test]
+fn the_scale_of_a_fixed_multiply_is_kept_where_i32_is_legal() {
+    let (legal, scale, now) = fixed_multiply_scale(&p5(), EVT::I32);
+    assert!(legal);
+    assert_eq!(now, scale);
+}
