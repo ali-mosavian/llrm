@@ -63,6 +63,20 @@ fn a_byte_plus_the_low_bit_of_another_runs() {
     }
 }
 
+/// The loop counts the bits of every byte it is given, run on sim65.
+#[test]
+fn a_bit_count_loop_runs() {
+    let text = format!("target datalayout = \"{}\"\n{POPCOUNT}", datalayout());
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let selection = select_function(&module, "popcount", Cpu::Mos6502).expect("selects");
+    let function = function_text(&module, "popcount", &selection).expect("emits");
+    assert!(function.contains("lsr a"), "{function}");
+    for x in [0u8, 1, 2, 0x80, 0x55, 0xB5, 0xFF] {
+        let got = common::run_with(&format!("popcount-{x}"), &format!("  lda #{x}\n  jsr popcount\n"), &function);
+        assert_eq!(got, x.count_ones() as i32, "popcount({x})");
+    }
+}
+
 /// The combiner offers every target node to the hook: the one with a single
 /// operand was indexed past its end (the `_` arm took it for a multiply).
 #[test]
