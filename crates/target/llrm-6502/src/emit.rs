@@ -241,6 +241,17 @@ pub fn expand(
         // The carry in is already in C.
         op::ADDOC8 => byte3(&mut out, "", "adc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
         op::SUBOC8 => byte3(&mut out, "", "sbc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
+        // a byte op reading its second operand through a pointer: `ldy #off; op (p),y`
+        code if crate::pointer_alu::pointer_alu(code).is_some() => {
+            let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
+            let ((lo, hi), off) = (word(&o[fold.ptr])?, if fold.y_form { imm(&o[fold.ptr + 1])? } else { 0 });
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
+            if let Some(carry) = fold.carry {
+                writeln!(out, "  {}", carry.to_lowercase()).unwrap();
+            }
+            writeln!(out, "  ldy #{off}\n  lda {}\n  {} ({lo}),y\n  sta {}", reg(&o[fold.a])?, fold.mnemonic.to_lowercase(), reg(&o[0])?)
+                .unwrap();
+        }
         op::AND8 => {
             let (d, a, b) = simple(o)?;
             byte3(&mut out, "", "and", &d, &a, &b);

@@ -1164,6 +1164,37 @@ impl Builder {
         Ok(())
     }
 
+    /// `d := a op *(p + off)`: `ldy #off; op (p),y`, or `op (p)` on a 65C02 (`off` is `None`).
+    fn alu_pointer(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        off: Option<i64>,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        self.define(d);
+        let (d, a) = (self.byte(d)?, self.byte(a)?);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(acc, a);
+        let kind = Kind::Op(pointer_kind(mnemonic, off.is_some()));
+        let mut operands = vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr)];
+        if let Some(off) = off {
+            operands.extend([Operand::Imm(off), Operand::Def(y)]);
+        }
+        let mut inst = Inst::new(kind, operands);
+        inst.commutable = false;
+        self.push(inst);
+        self.copy(d, acc);
+        Ok(())
+    }
+
     /// `d := a op g[i]` for a global indexed by a byte: x takes the index, the
     /// op reads `g,x`.
     fn alu_indexed(
@@ -1453,6 +1484,25 @@ fn accumulate(
     inst
 }
 
+/// The kind of an ALU op reading `(p),y` (`y`) or the 65C02's `(p)`.
+fn pointer_kind(
+    mnemonic: &str,
+    y: bool,
+) -> &'static str {
+    match (mnemonic, y) {
+        ("ADC", true) => "ADCPY",
+        ("SBC", true) => "SBCPY",
+        ("AND", true) => "ANDPY",
+        ("ORA", true) => "ORAPY",
+        ("EOR", true) => "EORPY",
+        ("ADC", false) => "ADCP0",
+        ("SBC", false) => "SBCP0",
+        ("AND", false) => "ANDP0",
+        ("ORA", false) => "ORAP0",
+        _ => "EORP0",
+    }
+}
+
 /// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
 /// & 255`.
 fn is_identity(
@@ -1528,6 +1578,7 @@ fn pointer_cells(
                     op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => {
                         at == 1
                     }
+                    code if crate::pointer_alu::pointer_alu(code).is_some_and(|fold| at == fold.ptr) => true,
                     op::STZP | op::LEASP16 | op::JSRI => at == 0,
                     _ => false,
                 };
@@ -1566,6 +1617,7 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
         let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let at = match *opcode {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => 1,
+            code if crate::pointer_alu::pointer_alu(code).is_some() => crate::pointer_alu::pointer_alu(code).expect("guarded").ptr,
             op::STZP | op::LEASP16 | op::JSRI => 0,
             _ => continue,
         };
@@ -1760,6 +1812,12 @@ pub fn build_with_places(
                 };
                 let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
+            }
+            // a byte op reading `(p),y` (or the 65C02's `(p)`): the load folded into it
+            code if crate::pointer_alu::pointer_alu(code).is_some() => {
+                let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
+                let offset = if fold.y_form { Some(immediate(&o[fold.ptr + 1])?) } else { None };
+                b.alu_pointer(fold.mnemonic, fold.carry, name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?, offset)?
             }
             op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
                 let (mnemonic, carry) = match inst.opcode {
@@ -3678,6 +3736,12 @@ fn emit_with<const STACK: bool>(
                     let (d, s) = (regs[0], regs[1]);
                     parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live);
                     writeln!(out, "  inc {}", register_name(lane(d, 1))).unwrap();
+                }
+                (Kind::Op(step @ ("ADCPY" | "SBCPY" | "ANDPY" | "ORAPY" | "EORPY")), [_, _, _, Operand::Imm(off), _]) => {
+                    writeln!(out, "  ldy #{off}\n  {} ({}),y", step[..3].to_lowercase(), register_name(lane(regs[2], 0))).unwrap()
+                }
+                (Kind::Op(step @ ("ADCP0" | "SBCP0" | "ANDP0" | "ORAP0" | "EORP0")), _) => {
+                    writeln!(out, "  {} ({})", step[..3].to_lowercase(), register_name(lane(regs[2], 0))).unwrap()
                 }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
