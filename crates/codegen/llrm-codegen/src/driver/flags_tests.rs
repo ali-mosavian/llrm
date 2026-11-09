@@ -111,10 +111,7 @@ fn each_level_selects_gcc_s_passes() {
     let os = pipeline(&["-Os"]);
     assert_eq!((os.inline, os.unroll), (Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!(
-        (oz.inline, oz.unroll),
-        (Threshold::default().for_min_size(), false)
-    );
+    assert_eq!((oz.inline, oz.unroll), (Threshold::default().for_min_size(), false));
     assert!(parsed(&["-O4"]).is_err());
 }
 
@@ -442,8 +439,10 @@ fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
     assert!(!options.cgpaddr);
 }
 
-/// `Options::peel` was read nowhere: `-fno-peel-loops` and `-fpeel-loops` changed no object on x86_64, x86_32, m68k or arm64.
-/// The first is accepted as gcc's switch for what is not here to turn off; the second asks for peeling and is refused.
+/// `Options::peel` was read nowhere: `-fno-peel-loops` and `-fpeel-loops`
+/// changed no object on x86_64, x86_32, m68k or arm64. The first is accepted as
+/// gcc's switch for what is not here to turn off; the second asks for peeling
+/// and is refused.
 #[test]
 fn fno_peel_loops_is_a_no_op_and_fpeel_loops_is_not_a_pass() {
     let mut options = pipeline(&["-O2"]);
@@ -451,4 +450,14 @@ fn fno_peel_loops_is_a_no_op_and_fpeel_loops_is_not_a_pass() {
     assert!(apply_pass_flag(&mut options, "-fno-peel-loops"));
     assert_eq!(options, before);
     assert!(!apply_pass_flag(&mut options, "-fpeel-loops"));
+}
+
+/// llrm-nib took its `-f` flags through `Flags::take`, not `apply_pass_flag`:
+/// `-fno-peel-loops` was refused there ("unknown option") and `--dump` exited 2
+/// after the peel switch was deleted. Both paths take it.
+#[test]
+fn flags_take_accepts_fno_peel_loops_and_refuses_fpeel_loops() {
+    let mut flags = Flags::default();
+    assert_eq!(flags.take(&["-fno-peel-loops".to_owned()], &mut 0), Ok(true));
+    assert!(flags.take(&["-fpeel-loops".to_owned()], &mut 0).is_err());
 }

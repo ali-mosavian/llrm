@@ -78,9 +78,7 @@ pub fn apply_pass_flag(
     options: &mut pipeline::Options,
     flag: &str,
 ) -> bool {
-    // gcc's `-fno-peel-loops` turns off what this pipeline never had as a switch (the translated LoopUnrollPass peels by the
-    // pin's rules): accepted, so a gcc command line still builds. `-fpeel-loops` asks for it and is refused by name.
-    if flag == "-fno-peel-loops" {
+    if INERT.contains(&flag) {
         return true;
     }
     let Some(name) = flag.strip_prefix("-f") else { return false };
@@ -95,6 +93,12 @@ pub fn apply_pass_flag(
             },
         )
 }
+
+/// gcc switches that turn off what this pipeline has no switch for: taken,
+/// changing nothing, so a gcc command line still builds (`-fno-peel-loops`: the
+/// translated LoopUnrollPass peels by the pin's rules). `-fpeel-loops` asks for
+/// it and is not here: llrm-cc refuses it by name.
+const INERT: &[&str] = &["-fno-peel-loops"];
 
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
@@ -435,6 +439,7 @@ impl Flags {
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
             _ if flag.starts_with("-fno-sanitize=") => self.sanitize.set(&flag["-fno-sanitize=".len()..], false)?,
+            _ if INERT.contains(&flag) => {}
             _ if flag.starts_with("-f") => {
                 let (name, on) = match flag[2..].strip_prefix("no-") {
                     Some(name) => (name, false),
