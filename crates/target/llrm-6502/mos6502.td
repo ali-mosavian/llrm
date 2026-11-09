@@ -369,6 +369,10 @@ def SDTMOSFunnel1 : SDTypeProfile<1, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDT
 def MOSfshl1 : SDNode<"MOSISD::FSHL1", SDTMOSFunnel1>;
 def MOSfshr1 : SDNode<"MOSISD::FSHR1", SDTMOSFunnel1>;
 
+// A byte shifted right by one and the bit that left it, which is the carry: `LDA a; LSR A; STA d`.
+def SDTMOSShr1 : SDTypeProfile<2, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i1>, SDTCisVT<2, i8>]>;
+def MOSsrl1c : SDNode<"MOSISD::SRL1C", SDTMOSShr1>;
+
 // No `Defs = [P]`: an implicit result would be a third result type, which the generator rejects.
 let isCodeGenOnly = 0 in {
   // Unsigned divide and remainder: the quotient in the result registers, the remainder left in rc6:rc7 by
@@ -395,6 +399,8 @@ let isCodeGenOnly = 0 in {
       [(set i16:$d, (MOSfshl1 i16:$a, i16:$b))]>;
   def FSHR1 : MOSInst<(outs Imag16:$d), (ins Imag16:$a, Imag16:$b), "fshr1 $d, $a, $b",
       [(set i16:$d, (MOSfshr1 i16:$a, i16:$b))]>;
+  def SRL1C8 : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a), "srl1c $d, $co, $a",
+      [(set i8:$d, i1:$co, (MOSsrl1c i8:$a))]>;
   def SRA32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag8:$b), "sra32",
       [(set i16:$dl, i16:$dh, (MOSsra32 i16:$al, i16:$ah, i8:$b))]>;
 }
