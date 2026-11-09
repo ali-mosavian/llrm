@@ -9,10 +9,15 @@ listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench 
 what ships) is never judged.
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
-Usage: m68k_worse_cells.py m68k.tsv [-v] [--whole]   (--whole: add the corpus table's lib_bytes column to code_bytes) [--allow-one-sided]
+O1 cells follow the VIRTUAL-OK rule of tools/virtual_ok.py (verdict()).
+Usage: m68k_worse_cells.py m68k.tsv [-v] [--whole] [--allow-one-sided]   (--whole: add the corpus table's lib_bytes column to code_bytes)
 """
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from virtual_ok import virtual_ok  # noqa: E402
 
 RATES = re.compile(r"byte_rate: (.*?) B per clk")
 
@@ -38,6 +43,20 @@ def excess(level: str, rate: float, ours: tuple[int, int | None], other: tuple[i
     if level == "O1":
         return max(extra, ours[1] - other[1])
     return extra - rate * (other[1] - ours[1])
+
+
+def verdict(level: str, rate: float, ours, refs: dict) -> str:
+    """"ok", "VIRTUAL-OK" or "WORSE" for one cell (oversight, 2026-11-09, as fputable.verdict for the m32 FPU table).
+
+    `ours` and each of `refs` (gcc, clang) are (bytes, clocks). O1 has a per-axis bar and the rule of tools/virtual_ok.py
+    (pin: clang). Other levels, and a cell without both columns or without clocks, are one metric.
+    """
+    if max(excess(level, rate, ours, ref) for ref in refs.values()) <= 0:
+        return "ok"
+    gcc, clang = refs.get("gcc"), refs.get("clang")
+    if level != "O1" or gcc is None or clang is None or None in (*ours, *gcc, *clang):
+        return "WORSE"
+    return "VIRTUAL-OK" if virtual_ok(ours, [gcc, clang], clang) else "WORSE"
 
 
 def _seen(lines):
@@ -71,6 +90,17 @@ def cells(lines):
         if "ours" in by and others:
             rate = table[target.split("-")[1]]
             yield target, prog, level, max(excess(level, rate, by["ours"], other) for other in others)
+
+
+def verdicts(lines):
+    """(target, prog, level, verdict, excess) of every judged cell."""
+    table, seen, _ = _seen(lines)
+    for (target, prog, level), by in seen.items():
+        refs = {name: by[name] for name in ("gcc", "clang") if name in by}
+        if "ours" in by and refs:
+            rate = table[target.split("-")[1]]
+            worst = max(excess(level, rate, by["ours"], ref) for ref in refs.values())
+            yield target, prog, level, verdict(level, rate, by["ours"], refs), worst
 
 
 def skipped(lines) -> list[tuple[str, str, str]]:
@@ -164,12 +194,13 @@ def one_sided(lines) -> list[tuple[str, str, str, str]]:
 
 
 def count(lines) -> tuple[int, int]:
-    """(worse, judged). A cell where ours failed to build and an external did is judged and worse: not building is the worst result."""
+    """(worse, judged). A cell where ours failed to build and an external did is judged and worse: not building is the worst result.
+    A VIRTUAL-OK cell is not worse."""
     lines = list(lines)
-    results = list(cells(lines))
+    results = list(verdicts(lines))
     _, seen, _ = _seen(lines)
     broken = [key for key in ours_failed(lines) if {"gcc", "clang"} & set(seen.get(key, {}))]
-    return sum(1 for *_, e in results if e > 0) + len(broken), len(results) + len(broken)
+    return sum(1 for _, _, _, v, _ in results if v == "WORSE") + len(broken), len(results) + len(broken)
 
 
 if __name__ == "__main__":
@@ -180,9 +211,9 @@ if __name__ == "__main__":
         return with_library(open(path)) if "--whole" in sys.argv else open(path)
 
     if "-v" in sys.argv:
-        for target, prog, level, e in sorted(cells(source()), key=lambda c: -c[3]):
-            if e > 0:
-                print(f"{target} {prog} {level} +{e:.1f} B")
+        for target, prog, level, v, e in sorted(verdicts(source()), key=lambda c: -c[4]):
+            if v != "ok":
+                print(f"{target} {prog} {level} +{e:.1f} B {v}")
     lost = missing(source())
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))

@@ -145,6 +145,26 @@ def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
 
 
 
+SMALL_INT_TARGETS = ("x86_16-dos", "x86_16-wat", "z80-sdcc", "6502-sim65")
+
+
+def test_a_program_marked_x86_widths_is_not_run_on_any_16_bit_int_target():
+    """select_of_constants was tagged `!x86-m16`, which left z80 and 6502 in: their correct 16-bit output (6528, 11412, ...) read as WRONG against the 32-bit-int .out. The marker `// x86-widths:` says the .out depends on the x86 widths; every target with a 16-bit int must be excluded by the tags."""
+    marked = [p for p in sorted(RUN.glob("*.c")) if "\n// x86-widths:" in p.read_text()]
+    assert len(marked) >= 3
+    for path in marked:
+        source = path.read_text()
+        assert not any(ct.applies(t, source) for t in SMALL_INT_TARGETS), f"{path.name} is for a 16-bit-int target"
+
+
+def test_a_program_run_on_z80_or_6502_is_also_run_at_m16():
+    """m16 executes the corpus with a 16-bit int against the shared .out, so a program it does not run has no executed proof that its .out is width-independent; select_of_constants and shl_of_a_zero_extended_dividend were such programs and z80/6502 reported WRONG on them."""
+    for path in sorted(RUN.glob("*.c")):
+        source = path.read_text()
+        small = [t for t in ("z80-sdcc", "6502-sim65") if ct.applies(t, source)]
+        assert not small or ct.applies("x86_16-wat", source), f"{path.name} is for {small} but not for m16"
+
+
 def test_tail_calls_edges_is_not_run_where_the_backend_takes_no_fno_inline_names():
     """tail_calls_edges is callee-pop x86 code (every variant -march=i486 or -mabi=...) and its `-fno-inline=NAME` flags are backend-only: llrm-wasm-llc refused them (build failure, 3 cells). It is for the x86 rows."""
     source = (RUN / "tail_calls_edges.c").read_text()
@@ -193,3 +213,13 @@ def test_a_program_with_no_reference_output_is_not_in_the_corpus_uncompared():
     assert ct.expected_output(source, "arm64-linux").name == "widening_multiply.arm64.out"
     assert ct.expected_output(source, "m68k-68020").name == "widening_multiply.out"
     assert (RUN / "widening_multiply.x86_64.why").exists() and (RUN / "widening_multiply.arm64.why").exists()
+
+
+def test_a_program_whose_flags_all_force_a_32_bit_x86_mode_is_not_run_on_z80_or_6502():
+    """urem_eq (`-m32 -march=i486`) and spill_store_order (`-m32`) were run on z80 and 6502 and read WRONG: their .out is the 32-bit-int result (74938 for a 16-bit 57373), and spill_store_order shifts a 16-bit unsigned by 16 (poison)."""
+    for name in ("urem_eq", "spill_store_order"):
+        source = (RUN / f"{name}.c").read_text()
+        assert ct.x86_32_only(source)
+        assert not any(ct.applies(t, source) for t in ("z80-sdcc", "6502-sim65"))
+        assert ct.applies("arm64-linux", source) and ct.applies("x86_32-linux", source)
+    assert not ct.x86_32_only("// flags: -O2 -m32 | -O2 -m16\nint x;\n")
