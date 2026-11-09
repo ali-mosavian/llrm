@@ -1202,6 +1202,7 @@ pub fn value_tracking_at(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(at),
+        pending_intrinsics: &[],
     };
     let known = llrm_mir::valuetracking::known::compute_known_bits(&q, operand, 0);
     let range = llrm_mir::valuetracking::range::compute_constant_range(&q, operand, false, 0).intersect_with(
