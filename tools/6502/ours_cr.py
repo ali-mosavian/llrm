@@ -59,6 +59,10 @@ def reachable_runtime(text):
     out = "".join(b for (n, b), w in zip(blocks, want) if w)
     if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __sb, __st, __sr, __sg\n"
     return macros + out if out else out
+# `report(long)` takes the value's four bytes in rc2..rc5 (the ABI before A:X arguments) or in a, x, rc2, rc3 (OURS_ARGS_AX=1, the A:X branch)
+AX_ARGS = os.environ.get("OURS_ARGS_AX") == "1"
+REPORT_RC = "  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n  iny\n  lda rc4\n  sta (lp),y\n  iny\n  lda rc5\n  sta (lp),y"
+REPORT_AX = "  sta (lp),y\n  iny\n  txa\n  sta (lp),y\n  iny\n  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y"
 def driver():
     s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $A0\nptr = $A2\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
     s += """.segment "CODE"
@@ -101,17 +105,7 @@ d3:
   jmp $FFF9
 report:
   ldy #0
-  lda rc2
-  sta (lp),y
-  iny
-  lda rc3
-  sta (lp),y
-  iny
-  lda rc4
-  sta (lp),y
-  iny
-  lda rc5
-  sta (lp),y
+%s
   lda lp
   clc
   adc #4
@@ -120,7 +114,7 @@ report:
   inc lp+1
 r1:
   rts
-""" % (LOG >> 8, LOG >> 8)
+""" % (LOG >> 8, LOG >> 8, REPORT_AX if AX_ARGS else REPORT_RC)
     return s
 def sh(cmd, cwd, timeout=300, text=True):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=text, timeout=timeout)
