@@ -3,6 +3,7 @@
 pub mod abi;
 pub mod alloc;
 pub mod asm;
+pub mod copyprop;
 pub mod dagisel;
 pub mod driver;
 pub mod elf;

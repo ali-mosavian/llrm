@@ -1,0 +1,38 @@
+//! Copy propagation across a store of the other register: `k_mulax3` kept
+//! `sta rc4` and loaded it back after `stx rc3; lda rc3` (A:X live-in, 2026-11-09).
+
+use llrm_6502::asm::Asm;
+use llrm_6502::copyprop::copy_propagation;
+use llrm_6502::peephole_cells::drop_dead_stores;
+
+fn run(text: &str) -> String {
+    let mut asm = Asm::parse(text);
+    copy_propagation(&mut asm);
+    drop_dead_stores(&mut asm);
+    asm.text()
+}
+
+/// `sta rc2; stx rc3; sta rc4; lda rc3; sta rc5; lda rc4` kept the mirror
+/// `rc4` (2 B) and read `rc3` from memory when `x` held it (1 B).
+#[test]
+fn a_cell_that_mirrors_another_is_read_from_the_earlier_and_a_transfer_replaces_a_load() {
+    assert_eq!(
+        run("  sta rc2\n  stx rc3\n  sta rc4\n  lda rc3\n  sta rc5\n  lda rc4\n  asl a\n  rol rc5\n  clc\n  adc rc2\n  rts\n"),
+        "  sta rc2\n  stx rc3\n  txa\n  sta rc5\n  lda rc2\n  asl a\n  rol rc5\n  clc\n  adc rc2\n  rts\n"
+    );
+}
+
+/// The source is written between the copy and the read: the copy holds the old value.
+#[test]
+fn a_cell_is_not_read_from_a_source_that_changed() {
+    let text = "  sta rc2\n  sta rc4\n  lda #1\n  sta rc2\n  lda rc4\n  rts\n";
+    assert_eq!(run(text), text);
+}
+
+/// A load of the value `a` holds goes, unless a branch reads its flags.
+#[test]
+fn a_reload_of_the_value_a_holds_goes_when_the_flags_are_unread() {
+    assert_eq!(run("  sta rc2\n  lda rc2\n  clc\n  adc rc3\n  rts\n"), "  sta rc2\n  clc\n  adc rc3\n  rts\n");
+    let text = "  sta rc2\n  lda rc2\n  beq L1\n  rts\nL1:\n  rts\n";
+    assert_eq!(run(text), text);
+}

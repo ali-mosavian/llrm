@@ -130,6 +130,9 @@ pub fn run_with(
     drop_reloads(asm);
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
+    if std::env::var_os("LLRM_6502_MCP").is_some() {
+        crate::copyprop::copy_propagation(asm);
+    }
     if known_loads {
         drop_known_loads(asm);
     }
