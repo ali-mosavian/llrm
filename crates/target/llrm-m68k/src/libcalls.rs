@@ -10,6 +10,10 @@
 //! once. A function built for speed never calls: the library is slower
 //! (bitcount_u64 -O2: +8% clocks at the 68020, +18% at the 68060).
 //!
+//! A function with more kinds of site than [`MEASURED_KINDS`], or more
+//! instructions than [`MEASURED_INSTRUCTIONS`], is not measured and stays
+//! inline.
+//!
 //! A unit that defines a routine named in `libcalls.tsv` never calls it (the
 //! body would recurse).
 //!
@@ -19,6 +23,14 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
+
+/// DEVIATE M68K-SIZE-LIBCALL-CAP: a function is built `1 + kinds` times to
+/// price its sites, so the work stays linear in the size of the functions with
+/// a site: one with more kinds than this, or more instructions than the next
+/// constant, is not measured and stays inline (the pin's choice). Owner m68k.
+/// Review: 2026-12-20.
+const MEASURED_KINDS: usize = 2;
+const MEASURED_INSTRUCTIONS: usize = 1000;
 
 use llrm_codegen::backend::libcall_choice::{Candidate, Costs, Member, choose};
 use llrm_codegen::backend::selectiondag::actions::{Action, TargetLowering};
@@ -198,7 +210,7 @@ pub fn chosen(
             for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
                 let (Some(name), true) = (global.name.as_deref(), built_for_size(function)) else { continue };
                 let here = present(module, function);
-                if here.is_empty() {
+                if here.is_empty() || here.len() > MEASURED_KINDS || function.walk().count() > MEASURED_INSTRUCTIONS {
                     continue;
                 }
                 let Ok(inline) = bytes_of(name, &[]) else { continue };

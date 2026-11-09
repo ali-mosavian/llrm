@@ -346,3 +346,37 @@ fn the_choice_is_the_same_every_time_and_in_any_function_order() {
     assert_eq!(forward[0], backward[0], "{forward:?} against {backward:?}");
     assert_ne!(forward[0], 0, "the module has sites that pay");
 }
+
+/// A function is built `1 + kinds` times to price its sites, so the work is
+/// bounded (M68K-SIZE-LIBCALL-CAP): two kinds cost 3 builds, three kinds or
+/// more than 1000 instructions none. Before the cap `shift_int64_masked_amount`
+/// (three kinds in `main`) was built four times: 3.7x the compile time.
+#[test]
+fn a_function_with_many_kinds_or_many_instructions_is_built_a_bounded_number_of_times() {
+    let builds = |sites: &str, filler: usize| {
+        let chain: String = (0..filler).map(|n| format!("  %a{} = add i64 %a{n}, 1\n", n + 1)).collect();
+        let ir = format!(
+            "{HEAD}declare i64 @llvm.ctpop.i64(i64)\ndeclare i64 @llvm.cttz.i64(i64, i1)\ndeclare i64 @llvm.ctlz.i64(i64, i1)\n\
+             define i64 @f(i64 %x, i64 %n) optsize {{\n  %a0 = add i64 %x, 0\n{chain}{sites}  ret i64 %x\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        let count = std::cell::Cell::new(0);
+        llrm_m68k::libcalls::chosen(
+            &module,
+            Mode::Auto,
+            |_| true,
+            |_, _| {
+                count.set(count.get() + 1);
+                Ok(100)
+            },
+        );
+        count.get()
+    };
+    let pop = "  %p = call i64 @llvm.ctpop.i64(i64 %x)\n";
+    let ctz = "  %c = call i64 @llvm.cttz.i64(i64 %x, i1 true)\n";
+    let shl = "  %s = shl i64 %x, %n\n";
+    assert_eq!(builds(pop, 0), 2, "one kind: inline and as a call");
+    assert_eq!(builds(&format!("{pop}{ctz}"), 0), 3, "two kinds");
+    assert_eq!(builds(&format!("{pop}{ctz}{shl}"), 0), 0, "three kinds are not measured");
+    assert_eq!(builds(pop, 1100), 0, "a long function is not measured");
+}
