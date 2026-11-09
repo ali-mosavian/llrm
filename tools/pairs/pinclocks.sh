@@ -11,7 +11,7 @@ CLANG=${LLVM_BIN:-$HOME/scratch/llvm-build/bin}/clang
 mkdir -p $W/b; cp $SRC/abi $W/ 2>/dev/null; VSGCC_WORK=$W; eval "$(grep -E '^(gcc -m32 -c|sha256sum) ' $H/run.sh)"; unset VSGCC_WORK; cp $SRC/b/*.c $W/b/ 2>/dev/null; rm -f $W/res.jsonl
 EMU=$(python3 $R/tools/linkrecipe.py x86-m32 ld-emulation)
 LIBGCC=$(gcc -m32 -print-libgcc-file-name)
-F="-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
+F="-Dfar= -m32 -march=i486 $(python3 $R/tools/external_flags.py --reloc=-fno-pic)"
 one(){ P=$1; o=$2
   cd $W/b
   $CLANG $F -mstack-alignment=4 -$o $X -c -o $P.clang$o.o $P.c 2>$P.clang$o.err || { echo "FAIL $P $o" >> $W/fails; return; }

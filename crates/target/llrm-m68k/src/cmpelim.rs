@@ -174,12 +174,17 @@ pub fn eliminate_adjacent_tests(
                     before.operands.first(),
                     Some(Operand::Def(def)) if physical(*def) == physical(tested)
                 );
+                // a load of a frame slot the allocator made again is a `move`,
+                // which sets the codes in hardware though the
+                // allocator does not count it as the setter
                 mnemonic == "tst"
-                    && before.sets_flags
+                    && (before.sets_flags || is_frame_load(before))
                     && flags_read_after(&block.insts, at)
                         .is_some_and(|needed| leaves_codes(before, result, size, needed, false))
             })();
             if drop {
+                // the reader now reads the load's codes: it is the setter
+                block.insts[at - 1].sets_flags = true;
                 block.insts.remove(at);
             } else {
                 at += 1;
