@@ -55,3 +55,39 @@ fn a_run_of_halfword_copies_is_merged_to_the_end() {
     ];
     assert_eq!(kinds, want, "{asm}");
 }
+
+/// The loads and stores of `ir` at -O2, in the order the backend emits them.
+fn access_kinds(ir: &str) -> Vec<String> {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir").join(ir);
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .env("LLRM_WASM_BACKEND_ONLY", "1")
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("i32.load") || line.starts_with("i32.store"))
+        .map(|line| line.split_whitespace().next().unwrap().to_owned())
+        .collect()
+}
+
+/// A store through a pointer that steps through `@line` (`phi [@line, gep phi
+/// 3]`) does not touch a load from `@planes`: the pin's `aliasPHI` says so, the
+/// load follows the first store and needs no local. The DAG's oracle looked
+/// through no phi: both loads went above the first store, one held in a local
+/// (jpeg_fixed -O2: two extra `local.set`/`local.get` in 49,152 iterations).
+#[test]
+fn a_store_through_a_stepping_phi_does_not_wait_for_a_load_of_another_global() {
+    assert_eq!(access_kinds("alias_phi.ll"), ["i32.load8_u", "i32.store8", "i32.load8_u", "i32.store8"]);
+}
+
+/// The same loop where the phi may also point where the loads do (`phi [%q,
+/// gep phi 3]`, `%q` a parameter): `aliasPHI` stays MayAlias, both loads stay
+/// above the first store.
+#[test]
+fn a_phi_with_a_source_that_may_alias_still_orders_the_loads_first() {
+    assert_eq!(access_kinds("alias_phi_may.ll"), ["i32.load8_u", "i32.load8_u", "i32.store8", "i32.store8"]);
+}
