@@ -18,9 +18,8 @@
 //! DEVIATE LU3: a call ends the forward scan; the pin goes on over one when
 //! the base survives it (callee-saved). Exit: none, a missed merge.
 
-use llrm_support::hash::HashMap;
-
 use llrm_object::assembler::Cfi;
+use llrm_support::hash::HashMap;
 
 use crate::frame::Lowered;
 use crate::layout::label_of;
@@ -30,6 +29,9 @@ use crate::pairs::{is_memory, leaves_the_block};
 
 /// `UpdateLimit` (`-aarch64-update-scan-limit`).
 const UPDATE_LIMIT: usize = 100;
+
+/// `LdStConstLimit` (`-aarch64-load-store-const-scan-limit`).
+const CONST_LIMIT: usize = 10;
 
 /// A load or store of one or two registers at `[base, #imm]`, as far as the
 /// update merge goes.
@@ -397,6 +399,149 @@ impl Function<'_> {
     }
 }
 
+impl Function<'_> {
+    /// Whether `register` is dead after `block[at]`: no later instruction of
+    /// the block reads it before writing it, and no block control may reach
+    /// reads it (the kill flag `findMatchingConstOffsetBackward` asks for).
+    fn dead_after(
+        &mut self,
+        block: usize,
+        at: usize,
+        register: Gpr,
+    ) -> bool {
+        let key = Reg::Gpr(register);
+        for index in at + 1..self.blocks[block].len() {
+            let Some(inst) = &self.blocks[block][index] else { continue };
+            let (defs, uses) = inst.defs_and_uses();
+            if is_call(inst) {
+                return !uses.contains(&key) && !call_reads(register) && call_clobbers(register);
+            }
+            if uses.contains(&key) {
+                return false;
+            }
+            if leaves_the_block(inst) {
+                return !self.live_out(block, register);
+            }
+            if defs.contains(&key) {
+                return true;
+            }
+        }
+        !self.live_out(block, register)
+    }
+
+    /// Whether `register` is read from the start of a block that control goes
+    /// to from `block`, or is left live by the function.
+    fn live_out(
+        &mut self,
+        block: usize,
+        register: Gpr,
+    ) -> bool {
+        let successors = self.successors(block);
+        if successors.is_empty() {
+            return self.exits.contains(&Reg::Gpr(register));
+        }
+        let live = self.live_in(register);
+        successors.iter().any(|next| live[*next])
+    }
+}
+
+/// `isMatchingMovConstInsn` with `findMatchingConstOffsetBackward`: the
+/// `movz`/`movk` pair before `at` that builds `index` (at most `CONST_LIMIT`
+/// instructions back, `index` not otherwise used), as the indices of the two
+/// and the constant. Only a pair under 2^24 is a pair of immediates an `add`
+/// takes.
+fn const_offset_before(
+    insts: &[Option<Inst>],
+    at: usize,
+    index: Gpr,
+) -> Option<(usize, usize, u32)> {
+    let mut count = 0;
+    for here in (0..at).rev() {
+        let Some(inst) = &insts[here] else { continue };
+        if !matches!(inst, Inst::Cfi(_) | Inst::Mark(_) | Inst::Nop) {
+            count += 1;
+        }
+        if let Inst::MoveWide { op: Wide::Keep, width: Width::W, rd, imm16: high, lsl } = inst {
+            if *rd == index {
+                let zero = (0..here).rev().find(|&before| insts[before].is_some())?;
+                if let Some(Inst::MoveWide { op: Wide::Zero, width: Width::W, rd: zrd, imm16: low, lsl: 0 }) =
+                    &insts[zero]
+                {
+                    if zrd == rd {
+                        let offset = (u32::from(*high) << lsl) + u32::from(*low);
+                        return (offset >> 24 == 0).then_some((zero, here, offset));
+                    }
+                }
+            }
+        }
+        if touches(inst, Reg::Gpr(index)) || count >= CONST_LIMIT {
+            return None;
+        }
+    }
+    None
+}
+
+/// `tryToMergeIndexLdSt`: a load at `[base, index]` whose `index` is a
+/// `movz`/`movk` constant and dies there becomes an `add` of the high part to
+/// the base and a load at the low 12 bits (scaled):
+///
+/// ```text
+/// mov x8, #17767; movk x8, #291, lsl #16; ldr x0, [x1, x8]
+///     -> add x8, x1, #4, lsl #12; ldr x0, [x8, #4464]
+/// ```
+///
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64LoadStoreOptimizer.cpp#L3002
+fn merge_index_in(
+    function: &mut Function<'_>,
+    block: usize,
+) {
+    let mut at = 0;
+    while at < function.blocks[block].len() {
+        let step = merge_index_at(function, block, at);
+        at += if step { 2 } else { 1 };
+    }
+}
+
+fn merge_index_at(
+    function: &mut Function<'_>,
+    block: usize,
+    at: usize,
+) -> bool {
+    // `isMergeableIndexLdSt`: the loads at an X register, unshifted.
+    let Some(Inst::Load {
+        mem,
+        addr: Addr::Register { base, index, extend: Extend::Uxtx | Extend::Sxtx, shifted: false },
+        mmo,
+    }) = function.blocks[block][at].clone()
+    else {
+        return false;
+    };
+    let scale = size_of(&mem) as u32;
+    let Some((zero, keep, offset)) = const_offset_before(&function.blocks[block], at, index) else { return false };
+    // The pin never meets `[x8, x8]`: the index would be its own base.
+    if base == index || offset & (scale - 1) != 0 || !function.dead_after(block, at, index) {
+        return false;
+    }
+    let low = offset & (4096 * scale - 1);
+    let high = offset - low;
+    let add = Inst::AddSubImm {
+        op: AddSub { subtract: false, set_flags: false },
+        width: Width::X,
+        rd: index,
+        rn: base,
+        imm12: (high >> 12) as u16,
+        shift12: true,
+    };
+    let loc = function.locs[block][at];
+    function.blocks[block][at] = Some(Inst::Load { mem, addr: Addr::Offset { base: index, imm: i64::from(low) }, mmo });
+    function.blocks[block].insert(at, Some(add));
+    function.locs[block].insert(at, loc);
+    function.blocks[block][keep] = None;
+    function.blocks[block][zero] = None;
+    function.live.clear();
+    true
+}
+
 /// `tryToMergeLdStUpdate`.
 fn merge_in(
     function: &mut Function<'_>,
@@ -445,6 +590,9 @@ pub fn fold(
     };
     for block in 0..function.blocks.len() {
         merge_in(&mut function, block);
+    }
+    for block in 0..function.blocks.len() {
+        merge_index_in(&mut function, block);
     }
     let kept = function.blocks.into_iter().zip(function.locs);
     blocks
@@ -687,5 +835,79 @@ mod tests {
         ];
         let out = fold(blocks, &[Reg::Gpr(Gpr(0))]);
         assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Offset { .. }, .. }), "{out:?}");
+    }
+
+    fn wide(
+        op: Wide,
+        reg: u32,
+        imm16: u16,
+        lsl: u8,
+    ) -> Inst {
+        Inst::MoveWide { op, width: Width::W, rd: Gpr(reg), imm16, lsl }
+    }
+
+    fn load_at(
+        bytes: u8,
+        base: u32,
+        index: u32,
+    ) -> Inst {
+        Inst::Load {
+            mem: int(bytes, 0),
+            addr: Addr::Register { base: Gpr(base), index: Gpr(index), extend: Extend::Uxtx, shifted: false },
+            mmo: MemOperand::default(),
+        }
+    }
+
+    /// `mov w8, #4464; movk w8, #1, lsl #16; ldr w0, [x1, x8]` (offset 70000)
+    /// stayed three instructions; the pin's `aarch64-ldst-opt` makes it
+    /// `add x8, x1, #16, lsl #12; ldr w0, [x8, #4464]`.
+    #[test]
+    fn a_dead_movz_movk_index_becomes_an_add_and_an_offset() {
+        let out = merged(vec![
+            wide(Wide::Zero, 8, 4464, 0),
+            wide(Wide::Keep, 8, 1, 16),
+            load_at(4, 1, 8),
+            Inst::Ret { rn: Gpr(30) },
+        ]);
+        assert!(
+            matches!(
+                &out[..],
+                [
+                    Inst::AddSubImm { rd: Gpr(8), rn: Gpr(1), imm12: 16, shift12: true, .. },
+                    Inst::Load { addr: Addr::Offset { base: Gpr(8), imm: 4464 }, .. },
+                    Inst::Ret { .. },
+                ]
+            ),
+            "{out:?}"
+        );
+    }
+
+    /// The index is read again: the pin needs its kill flag, so nothing merges.
+    #[test]
+    fn a_live_index_keeps_the_register_form() {
+        let out = merged(vec![
+            wide(Wide::Zero, 8, 4464, 0),
+            wide(Wide::Keep, 8, 1, 16),
+            load_at(4, 1, 8),
+            load_at(4, 2, 8),
+            Inst::Ret { rn: Gpr(30) },
+        ]);
+        assert_eq!(out.len(), 5, "{out:?}");
+        assert!(out.iter().any(|inst| matches!(inst, Inst::MoveWide { op: Wide::Keep, .. })), "{out:?}");
+    }
+
+    /// An offset the access size does not divide, one of 2^24 or more, and a
+    /// pair further than `CONST_LIMIT` instructions back all stay.
+    #[test]
+    fn an_offset_the_pin_leaves_is_left() {
+        let unaligned = merged(vec![wide(Wide::Zero, 8, 4465, 0), wide(Wide::Keep, 8, 1, 16), load_at(4, 1, 8)]);
+        assert_eq!(unaligned.len(), 3, "{unaligned:?}");
+        let wide_offset = merged(vec![wide(Wide::Zero, 8, 4464, 0), wide(Wide::Keep, 8, 256, 16), load_at(4, 1, 8)]);
+        assert_eq!(wide_offset.len(), 3, "{wide_offset:?}");
+        let mut far = vec![wide(Wide::Zero, 8, 4464, 0), wide(Wide::Keep, 8, 1, 16)];
+        far.extend(std::iter::repeat_with(|| step(5, 1)).take(CONST_LIMIT));
+        far.push(load_at(4, 1, 8));
+        let len = far.len();
+        assert_eq!(merged(far).len(), len);
     }
 }
