@@ -160,6 +160,11 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
+    /// not the library call: the setup is a few bytes against the call's push
+    /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
+    /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
+    pub rep_movs_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -388,6 +393,7 @@ impl Tuning {
         lftr_any_stride: false,
         imul_at_size: false,
         rep_stos_at_size: false,
+        rep_movs_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
