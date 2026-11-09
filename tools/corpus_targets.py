@@ -20,6 +20,7 @@ FAMILY = re.compile(r"^x86_(16|32|64)-")
 M68K = re.compile(r"^m68k-")
 LP64 = re.compile(r"^(x86_64|arm64)-")
 SMALL = re.compile(r"^(x86_16|z80|6502)-")  # 16-bit pointers and int
+EIGHT_BIT = re.compile(r"^(z80|6502)(-|$)")  # a 16-bit int and no x86 mode to give `-m32` a meaning
 FREESTANDING = re.compile(r"^(wasm32|z80|6502)(-|$)")
 
 
@@ -40,7 +41,23 @@ def flags_for(family: str, source: str) -> list[str]:
     return []
 
 
+def flag_configurations(source: str) -> list[list[str]]:
+    """The `|`-separated configurations of the program's `// flags:` line (first lines), each a token list."""
+    for line in source.splitlines()[:HEADER_LINES]:
+        if line.startswith("// flags:"):
+            return [one.split() for one in line.removeprefix("// flags:").split("|")]
+    return []
+
+
+def x86_32_only(source: str) -> bool:
+    """Every configuration of the program's flags forces a 32-bit x86 mode (`-m32`, `-mabi=sysv`): its .out was written for 32-bit int and pointers."""
+    configurations = flag_configurations(source)
+    return bool(configurations) and all(any(t in ("-m32", "-mabi=sysv") for t in one) for one in configurations)
+
+
 def applies(target: str, source: str) -> bool:
+    if EIGHT_BIT.match(target) and x86_32_only(source):
+        return False
     listed = tags(source)
     if listed is None:
         return True

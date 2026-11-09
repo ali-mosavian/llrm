@@ -288,7 +288,10 @@ impl Emitter<'_> {
             _ => None,
         };
         let n = self.dag.node(SDValue { node, res: 0 });
-        let unsupported = || "SUBREG_TO_REG of anything but a cleared low word".to_owned();
+        let unsupported = || "SUBREG_TO_REG of anything but a cleared low word or a rotated low word".to_owned();
+        if let Some(rotate) = n.ops.iter().copied().find(|op| name_of(self, *op) == Some("ROL16di")) {
+            return self.rotated_low_word(node, rotate, into);
+        }
         let clear = n.ops.iter().copied().find(|op| name_of(self, *op) == Some("CLR16dd")).ok_or_else(unsupported)?;
         let extract = *self.dag.node(clear).ops.first().ok_or_else(unsupported)?;
         let swap = *self.dag.node(extract).ops.first().ok_or_else(unsupported)?;
@@ -316,6 +319,45 @@ impl Emitter<'_> {
         mask.ties = vec![(0, 1)];
         into.push(mask);
         // the mask sets the codes the cleared word (`CLR16dd`) was to set
+        self.flags_from = None;
+        Ok(())
+    }
+
+    /// `SUBREG_TO_REG (ROL16di (EXTRACT_SUBREG x) k)`: the pin's `bswap`
+    /// rotates the low word of a register in place (`rol.w #8, dn; swap dn;
+    /// rol.w #8, dn`), the high word staying as it was. Sub-register lanes
+    /// are the pin's coalescer's, not this allocator's: it is the register
+    /// rotated by `rol.w`, one definition tied to its source, and the dead
+    /// extract and 16-bit rotate are dropped.
+    fn rotated_low_word(
+        &mut self,
+        node: u32,
+        rotate: SDValue,
+        into: &mut Vec<Inst>,
+    ) -> Result<(), String> {
+        let unsupported = || "SUBREG_TO_REG of a rotate that is not of a sub-register".to_owned();
+        let rol = self.dag.node(rotate);
+        let (extract, amount) = (*rol.ops.first().ok_or_else(unsupported)?, *rol.ops.get(1).ok_or_else(unsupported)?);
+        let ISD::Machine(code) = self.dag.opcode(rotate) else { return Err(unsupported()) };
+        let desc = local::desc(code as u16).ok_or("ROL16di: no description")?;
+        let ISD::Machine(extract_code) = self.dag.opcode(extract) else { return Err(unsupported()) };
+        if opcode_name(extract_code) != Some("EXTRACT_SUBREG") {
+            return Err(unsupported());
+        }
+        let base = *self.dag.node(extract).ops.first().ok_or_else(unsupported)?;
+        let Some(Operand::Use(source)) = self.operand(base)? else { return Err(unsupported()) };
+        let Some(amount) = self.operand(amount)? else { return Err(unsupported()) };
+        let dead: Vec<Reg> =
+            [rotate, extract].iter().filter_map(|v| self.values.get(&(v.node, v.res)).copied()).collect();
+        into.retain(|inst| {
+            !matches!(
+                inst.operands.first(),
+                Some(Operand::Def(reg)) if dead.contains(reg)
+            )
+        });
+        let dst = self.new_reg(Class::Dr32);
+        self.values.insert((node, 0), dst);
+        into.push(op_inst("ROL16di", desc, vec![Operand::Def(dst), Operand::Use(source), amount]));
         self.flags_from = None;
         Ok(())
     }
