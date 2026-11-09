@@ -114,14 +114,16 @@ pub fn edge_odds(
         },
         function,
     );
-    // A block's label number is its place among the selector's ids, or in
-    // the IR's layout where there are none.
-    let ids: Vec<u32> = if machine.block_ids.is_empty() {
-        function.layout().iter().map(|block| block.0).collect()
+    // A block's place is found by its id: the selector's, kept beside each
+    // block through the passes that insert blocks, or the IR's layout order
+    // among the blocks that are not an edge block.
+    let position: HashMap<u32, u32> = if machine.block_ids.is_empty() {
+        let edges: HashSet<&str> = machine.split_edges.iter().map(|(_, _, edge)| edge.as_str()).collect();
+        let places = (0..machine.blocks.len()).filter(|&at| !edges.contains(machine.blocks[at].label.as_str()));
+        function.layout().iter().map(|block| block.0).zip(places.map(|at| at as u32)).collect()
     } else {
-        machine.block_ids.clone()
+        machine.block_ids.iter().enumerate().map(|(at, &id)| (id, at as u32)).collect()
     };
-    let position: HashMap<u32, u32> = ids.iter().enumerate().map(|(at, &id)| (id, at as u32)).collect();
     let mut odds = Odds::default();
     for &block in function.layout() {
         let Some(&from) = position.get(&block.0) else { continue };
@@ -146,6 +148,18 @@ pub fn edge_odds(
             entry.0 = entry.0 + probability;
         }
         *index += 1;
+    }
+    // The odds of an edge `lower_phis` split are the new block's: the
+    // source's edge to it has the probability of the edge it replaced, and its
+    // own edge is certain (`ReplaceUsesOfBlockWith`, MachineBasicBlock.cpp#L1263;
+    // `NMBB->addSuccessor`, #L1276).
+    let place = |label: &str| machine.blocks.iter().position(|block| block.label == label).map(|at| at as u32);
+    for (from, to, edge) in &machine.split_edges {
+        let (Some(from), Some(to), Some(edge)) = (place(from), place(to), place(edge)) else { continue };
+        if let Some(replaced) = odds.remove(&(from, to)) {
+            odds.insert((from, edge), replaced);
+        }
+        odds.insert((edge, to), (BranchProbability::get_one(), 0));
     }
     odds
 }
