@@ -287,6 +287,42 @@ fn cheaper(
 mod tests {
     use super::*;
 
+    /// call_keeps -O1 was 1876 B for 57813 T (long multiplies and shifts inline) against 1473 B for 64413 T with the
+    /// routines: a clock rise of 11% for 21% of the bytes. The price counted each routine call as 17 T, so the form
+    /// with the routines looked far faster than it is and no rate was stated for the strict level.
+    #[test]
+    fn at_o1_the_form_with_the_smaller_relative_regret_wins() {
+        let (inline, calls) = ((1916, 11124), (1473, 12449));
+        assert!(prefers(Level::O1, calls, inline) && !prefers(Level::O1, inline, calls));
+        // a form 1% smaller for 30% more clocks does not
+        assert!(!prefers(Level::O1, (990, 14300), (1000, 11000)));
+        assert!(prefers(Level::O1, (1000, 11000), (990, 14300)));
+    }
+
+    /// div_constants_long -O1 took `call __ashlsi3` for a xorshift step (-14 B, +10% clocks measured): against a
+    /// module whose static clocks are one hot loop elsewhere, the call's 500 T were 0.001% and the 14 B 0.08%.
+    #[test]
+    fn at_o1_a_call_is_priced_against_its_own_function_not_the_module() {
+        let routines = std::collections::HashSet::from(["__ashlsi3".to_owned()]);
+        let hot_loop = (4000, 40_000_000, std::collections::HashSet::new());
+        let step = ("step".to_owned(), (30, 700, routines), Some((44, 120, std::collections::HashSet::new())));
+        let variants: Variants = (vec![hot_loop], vec![step]);
+        let (calls, inline) = (std::collections::HashSet::new(), std::collections::HashSet::from([0]));
+        let module = |form| module_price(&variants, form);
+        assert!(prefers(Level::O1, module(&calls), module(&inline)), "the module price cannot see the cost");
+        assert!(!prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
+    }
+
+    /// Bytes first at the size levels, 1 B = 3 T from O2: a form that is 30% slower for 5% fewer bytes wins the
+    /// first and loses the second.
+    #[test]
+    fn the_size_levels_take_bytes_and_o2_takes_the_rate() {
+        let (small, fast) = ((1900, 14300), (2000, 11000));
+        assert!(prefers(Level::Os, small, fast) && prefers(Level::Oz, small, fast));
+        assert!(!prefers(Level::O2, small, fast) && !prefers(Level::O3, small, fast));
+        assert!(prefers(Level::O2, (1000, 11000), (1100, 11000)));
+    }
+
     /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
     /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
     #[test]
@@ -2037,7 +2073,7 @@ fn decomposes(
 /// The priced forms of the module's functions: those with one form, and
 /// those that call `__mulsi3` with the form built with shifts and adds too
 /// (bytes, runtime routines reached).
-type Priced = (u32, std::collections::HashSet<String>);
+type Priced = (u32, u64, std::collections::HashSet<String>);
 type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
 
 fn variants(
@@ -2049,8 +2085,8 @@ fn variants(
     // the printed form of every function, and for those with an alternative
     // the form with the shifts
     let priced = |lines: Vec<Line>| {
-        let bytes = expand::price_emitted(&lines, speed).0;
-        (bytes, crate::runtime_size::referenced(&lines))
+        let (bytes, clocks) = expand::price_emitted(&lines, speed);
+        (bytes, clocks, crate::runtime_size::referenced(&lines))
     };
     let mut fixed: Vec<Priced> = Vec::new();
     let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
@@ -2076,23 +2112,25 @@ fn variants(
 fn module_price(
     (fixed, either): &Variants,
     decomposes: &std::collections::HashSet<usize>,
-) -> u32 {
+) -> (u32, u64) {
     use std::collections::HashSet;
     let mut reached: HashSet<String> = HashSet::new();
-    let mut bytes = 0;
-    for (one_bytes, refs) in fixed {
+    let (mut bytes, mut clocks) = (0, 0);
+    for (one_bytes, one_clocks, refs) in fixed {
         bytes += one_bytes;
+        clocks += one_clocks;
         reached.extend(refs.iter().cloned());
     }
     for (at, (_, call, decomposed)) in either.iter().enumerate() {
-        let (one_bytes, refs) = match decomposed {
+        let (one_bytes, one_clocks, refs) = match decomposed {
             Some(decomposed) if decomposes.contains(&at) => decomposed,
             _ => call,
         };
         bytes += one_bytes;
+        clocks += one_clocks;
         reached.extend(refs.iter().cloned());
     }
-    bytes + crate::runtime_size::reached(&reached)
+    (bytes + crate::runtime_size::reached(&reached), clocks)
 }
 
 /// The module's bytes with every function calling `__mulsi3` and with every
@@ -2104,7 +2142,42 @@ pub fn module_prices(
     let (selected, alternatives) = cached_both(ir, request)?;
     let variants = variants(&selected, &alternatives, request);
     let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
-    Ok((module_price(&variants, &std::collections::HashSet::new()), module_price(&variants, &every)))
+    Ok((module_price(&variants, &std::collections::HashSet::new()).0, module_price(&variants, &every).0))
+}
+
+/// The price of function `at` alone in the form `decomposes` gives it: its bytes and clocks, and the bytes of the
+/// runtime routines it reaches that no other function of the module reaches. The clocks of a function are
+/// weighted by the loops inside it only, so against the whole module's clocks (dominated by a hot loop elsewhere)
+/// a call that costs a hundredfold in a function the loop calls would not register.
+fn own_price(
+    (fixed, either): &Variants,
+    decomposes: &std::collections::HashSet<usize>,
+    at: usize,
+) -> (u32, u64) {
+    use std::collections::HashSet;
+    let others: HashSet<String> = fixed
+        .iter()
+        .flat_map(|(.., refs)| refs.iter())
+        .chain(
+            either
+                .iter()
+                .enumerate()
+                .filter(|(one, _)| *one != at)
+                .flat_map(|(one, (_, call, decomposed))| match decomposed {
+                    Some(decomposed) if decomposes.contains(&one) => decomposed.2.iter(),
+                    _ => call.2.iter(),
+                }),
+        )
+        .cloned()
+        .collect();
+    let (_, call, decomposed) = &either[at];
+    let (bytes, clocks, refs) = match decomposed {
+        Some(decomposed) if decomposes.contains(&at) => decomposed,
+        _ => call,
+    };
+    let mut with = others.clone();
+    with.extend(refs.iter().cloned());
+    (bytes + crate::runtime_size::reached(&with) - crate::runtime_size::reached(&others), *clocks)
 }
 
 /// The functions of the module that call `__mulsi3`, built with the shifts
@@ -2118,10 +2191,12 @@ fn decomposed_functions(
     use std::collections::HashSet;
     let variants = variants(selected, alternatives, request);
     let either = &variants.1;
+    let level = request.level;
     let total = |decomposes: &HashSet<usize>| module_price(&variants, decomposes);
-    // descend from all shifts and from all calls (two functions may together
-    // pay for a routine neither pays for alone); the smaller module wins, a tie
-    // goes to the shifts
+    // descend from all alternatives and from none (two functions may together
+    // pay for a routine neither pays for alone); a flip needs a strictly better
+    // module price at the level, and the second start wins only if strictly
+    // better than the first
     let every: HashSet<usize> = (0..either.len()).filter(|at| either[*at].2.is_some()).collect();
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
@@ -2137,7 +2212,12 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                if price < best {
+                let better = if level == Level::O1 {
+                    prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
+                } else {
+                    prefers(level, price, best)
+                };
+                if better {
                     (chosen, best, moved) = (other, price, true);
                 }
             }
@@ -2147,14 +2227,44 @@ fn decomposed_functions(
         }
         (best, chosen)
     };
-    let (from_shifts, from_calls) = (descend(every), descend(HashSet::new()));
-    let chosen = if from_calls.0 < from_shifts.0 { from_calls.1 } else { from_shifts.1 };
+    // a tie keeps the faster form: the alternative at the size levels is the
+    // inline form, at the others the all-calls form
+    let (first, second) = if matches!(level, Level::Os | Level::Oz) {
+        (descend(every), descend(HashSet::new()))
+    } else {
+        (descend(HashSet::new()), descend(every))
+    };
+    let chosen = if prefers(level, second.0, first.0) { second.1 } else { first.1 };
     either
         .iter()
         .enumerate()
         .filter(|(at, (_, _, decomposed))| decomposed.is_some() && chosen.contains(at))
         .map(|(_, (one, ..))| one.clone())
         .collect()
+}
+
+/// Whether the module price `new` (bytes, clocks) is strictly better than `old` at `level`: bytes first at the
+/// size levels; 1 B = 3 T at O2 and up; at O1, where no rate stands for the strict bar on both axes, the
+/// smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that gives
+/// up a few percent of one axis for a large part of the other wins, and the reverse does not.
+/// DEVIATE z80-callinline-price: the pin keys a call against inline on `optsize` alone (`ForCodeSize`) and
+/// prices neither the routine's clocks nor the bytes against each other. Owner z80, exit 2026-11-20.
+fn prefers(
+    level: Level,
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    match level {
+        Level::Os | Level::Oz => new < old,
+        Level::O1 => {
+            let regret = |one: (u32, u64), other: (u32, u64)| {
+                let (bytes, clocks) = (f64::from(one.0) / f64::from(one.0.min(other.0).max(1)), one.1 as f64 / other.1.min(one.1).max(1) as f64);
+                bytes.max(clocks)
+            };
+            regret(new, old) < regret(old, new)
+        }
+        _ => cheaper(level, new, old),
+    }
 }
 
 fn lines_of(

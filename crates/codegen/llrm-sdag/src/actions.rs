@@ -135,6 +135,9 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// The shift routines are used as a function tuned for size uses them, in a function that is not (the
+    /// unsized form the caller prices against the inline one).
+    force_shift_calls: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
@@ -182,6 +185,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             size_shift_call: None,
+            force_shift_calls: false,
             inline_constant_mul: None,
             small_divide: false,
             size_only: false,
@@ -293,7 +297,7 @@ impl TargetLowering {
         amount: u128,
         bits: u128,
     ) -> bool {
-        self.opt_for_size
+        (self.opt_for_size || self.force_shift_calls)
             && self.size_shift_call.is_some_and(|(granule, least)| {
                 (bits / granule).saturating_sub(amount / granule) * (amount % granule) >= least
             })
@@ -363,7 +367,10 @@ impl TargetLowering {
                 _ => None,
             };
         }
-        let sized = self.opt_for_size.then(|| self.maps.size_libcall_names.get(&(op, vt)).copied()).flatten();
+        let shift = matches!(op, ISD::Shl | ISD::Srl | ISD::Sra);
+        let sized = (self.opt_for_size || (self.force_shift_calls && shift))
+            .then(|| self.maps.size_libcall_names.get(&(op, vt)).copied())
+            .flatten();
         sized.or_else(|| self.maps.libcall_names.get(&(op, vt)).copied())
     }
 
@@ -525,6 +532,14 @@ impl TargetLowering {
         c: u128,
     ) -> bool {
         !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
+    }
+
+    /// Use the shift routines (`set_size_shift_call`) whether or not the function is tuned for size.
+    pub fn set_force_shift_calls(
+        &mut self,
+        force: bool,
+    ) {
+        self.force_shift_calls = force;
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.
