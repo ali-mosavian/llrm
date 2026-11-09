@@ -10,8 +10,8 @@ fn refusal(
     tag: &str,
     body: &str,
 ) -> String {
-    let dir = std::env::temp_dir().join(format!("llrm-refuse-unlowered-arm64-{tag}"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
     let (source, out) = (dir.join("g.ll"), dir.join("g.s"));
     let _ = std::fs::remove_file(&out);
     std::fs::write(&source, format!("{HEAD}{body}")).unwrap();

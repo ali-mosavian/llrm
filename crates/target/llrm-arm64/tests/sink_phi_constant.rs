@@ -7,8 +7,8 @@ use std::process::Command;
 /// in x0, as the pin has it.
 #[test]
 fn a_constant_returned_through_a_phi_is_made_on_its_own_edge() {
-    let dir = std::env::temp_dir().join("llrm-sink-phi-constant");
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
     let (source, out) = (dir.join("f.ll"), dir.join("f.s"));
     std::fs::write(
         &source,
