@@ -68,6 +68,7 @@ const SOURCE_ORDER: Options = Options {
     hoist_flag_setters: false,
     reuse_shift_flags: false,
     post_inc_across_blocks: false,
+    shared_cse: false,
     tail_duplicate: false,
     rematerialize_arguments: false,
     loop_top_by_jumps: false,

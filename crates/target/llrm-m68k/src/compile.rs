@@ -116,6 +116,10 @@ pub struct Options {
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
+    /// The shared flow's `MachineCSE` runs on the function in SSA form, before
+    /// phi elimination ([`crate::regalloc::shared_cse`]). Off until its corpus
+    /// A/B has no cell worse than main (11-09: O2 68000 +542 B, 27 worse).
+    pub shared_cse: bool,
     /// A small conditional block is copied into the predecessors that jump to
     /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
     pub tail_duplicate: bool,
@@ -188,6 +192,7 @@ impl Options {
         hoist_flag_setters: false,
         reuse_shift_flags: false,
         post_inc_across_blocks: false,
+        shared_cse: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
@@ -222,6 +227,7 @@ impl Default for Options {
             hoist_flag_setters: true,
             reuse_shift_flags: true,
             post_inc_across_blocks: true,
+            shared_cse: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
@@ -496,6 +502,9 @@ fn items_once(
     }
     function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
+    if options.shared_cse {
+        function = crate::regalloc::shared_cse(&function)?;
+    }
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);
     eliminate_phis_with(&mut function, false);

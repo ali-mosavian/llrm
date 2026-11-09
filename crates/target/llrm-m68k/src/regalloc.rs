@@ -293,6 +293,19 @@ const CONDITIONAL: [(&str, &str); 7] = [
     ("Bgt8", "Ble8"),
 ];
 
+/// The shared flow's `MachineCSE` over the m68k function, still in SSA form
+/// (before phi elimination): the function through `to_ssa_lir`, the stage and
+/// `from_ssa`.
+pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
+    // the classes read the target's description: once per thread, not per function
+    thread_local! {
+        static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
+            std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
+    }
+    let mut stage = llrm_codegen::backend::precse::MachineCse { classes: CLASSES.with(std::rc::Rc::clone), keep_compare: false };
+    llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), &mut stage)
+}
+
 /// `BranchFolder` over the m68k function.
 pub fn branch_fold(
     function: &mut MFunction,

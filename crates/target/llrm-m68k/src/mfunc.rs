@@ -194,6 +194,33 @@ impl Emitter<'_> {
         Reg::Virt(self.function.classes.len() as u32 - 1)
     }
 
+    /// `InstrEmitter::CreateVirtualRegisters`: a result that a `CopyToReg` of
+    /// a virtual register of the result's own class copies is defined in that
+    /// register, and the copy is not made. The pin's phi inputs and values
+    /// that leave their block are one definition, so `MachineCSE` sees a
+    /// constant and its readers, not a constant and a copy.
+    fn defined_in_copy_destination(
+        &mut self,
+        node: u32,
+        res: u8,
+        class: Class,
+    ) -> Option<Reg> {
+        let value = SDValue { node, res };
+        let dag = self.dag;
+        let users: Vec<SDValue> = dag
+            .users(value)
+            .filter(|&user| {
+                dag.node(SDValue { node: user, res: 0 }).opcode == ISD::CopyToReg
+                    && dag.node(SDValue { node: user, res: 0 }).ops[2] == value
+            })
+            .map(|user| dag.node(SDValue { node: user, res: 0 }).ops[1])
+            .collect();
+        users.into_iter().find_map(|destination| match self.register(destination) {
+            Some(Reg::Virt(v)) if self.function.classes[v as usize] == class => Some(Reg::Virt(v)),
+            _ => None,
+        })
+    }
+
     fn register(
         &mut self,
         node: SDValue,
@@ -447,7 +474,9 @@ impl Emitter<'_> {
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
                     return Err("CopyToReg of a value that is no register".to_owned());
                 };
-                into.push(Inst::copy(dst, src));
+                if src != dst {
+                    into.push(Inst::copy(dst, src));
+                }
             }
             ISD::CopyFromReg => {
                 let src = self.register(n.ops[1]).ok_or("CopyFromReg of no register")?;
@@ -481,7 +510,10 @@ impl Emitter<'_> {
                     .first()
                     .and_then(|one| Class::of_pin(one.reg_class))
                     .unwrap_or_else(|| Class::of_type(n.values[0]));
-                let dst = self.new_reg(class);
+                let dst = match self.defined_in_copy_destination(node, 0, class) {
+                    Some(own) => own,
+                    None => self.new_reg(class),
+                };
                 self.values.insert((node, 0), dst);
                 into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
             }
@@ -523,7 +555,10 @@ impl Emitter<'_> {
                         .and_then(|one| Class::of_pin(one.reg_class))
                         .unwrap_or_else(|| Class::of_type(*vt));
                     let class = extension_result(name, class);
-                    let reg = self.new_reg(class);
+                    let reg = match self.defined_in_copy_destination(node, at as u8, class) {
+                        Some(own) => own,
+                        None => self.new_reg(class),
+                    };
                     self.values.insert((node, at as u8), reg);
                     operands.push(Operand::Def(reg));
                 }
