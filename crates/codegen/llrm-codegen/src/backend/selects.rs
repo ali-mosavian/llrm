@@ -53,11 +53,15 @@
 //!   and +64 (-O3), 12 of 420 functions grow by 1..7 B. Harness (run_, cycle
 //!   model) clocks base -> head: O1 270645 -> 273325 (+1.0%), O2 267647 ->
 //!   270127 (+0.9%), O3 266972 -> 270147 (+1.2%), Os 455460 -> 458620 (+0.7%);
-//!   code without padding is smaller (O1 -108, O2 -100, O3 -118, Os -118 B),
-//!   the +32/+32/+64 is alignment padding (+140/+132/+182). Cause: the
-//!   scheduler puts the CMOV diamond before the SETCC (`f409`, 32 B; pin 28
-//!   B), so FixupSetCC cannot fire and MaskByAnd emits `and eax,255`. General
-//!   scheduling cause (SD31, NodeNum), filed with sdag-d; not patched here.
+//!   .text counts 16-B function alignment: f381 and f383 (`select c, 2, -2`
+//!   i64) grow 29 -> 33 B and cross a slot (+16 each; O3: f381-f384, +64);
+//!   the functions that shrink stay in their slot. Cause: the second CMOV's
+//!   constant (`mov edx,0`) is emitted into the first sink block, so
+//!   `EmitLoweredSelect`'s cascade (one diamond) does not fire and two
+//!   diamonds are made (base: one). Fix: emit a select's immediates above the
+//!   first branch (separate PR). `f409` (32 B, pin 28 B) is the scheduler
+//!   putting the CMOV diamond before the SETCC (SD31, NodeNum), filed with
+//!   sdag-d.
 //! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
 //!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
 //!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
@@ -78,8 +82,8 @@
 //!   -O2/-Os .text 602 -> 618 B. Cause: the shared `add (sext i1 c), x` ->
 //!   `sub x, (zext c)` fold (pin `visitADDLikeCommutative`) now fires; `add
 //!   hl,de` (11 T) becomes `ex de,hl; or a,a; sbc hl,bc` (23 T), +12 T per
-//!   execution of the site (static; ucsim run PASS, T not measured by the
-//!   runner).
+//!   execution of the site (static estimate, not measured; ucsim run PASS,
+//!   the runner prints no T).
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
