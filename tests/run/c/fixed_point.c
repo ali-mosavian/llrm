@@ -13,7 +13,7 @@ extern void report(long value);
                 T r = p[i] * p[j];                           \
                 union { T f; U i; } u;                       \
                 u.f = r;                                     \
-                report((long)u.i);                           \
+                report((__INT32_TYPE__)u.i);                           \
             }                                                \
     } while (0)
 
@@ -26,7 +26,7 @@ extern void report(long value);
             T r = p[i] << by;                                \
             union { T f; U i; } u;                           \
             u.f = r;                                         \
-            report((long)u.i);                               \
+            report((__INT32_TYPE__)u.i);                               \
         }                                                    \
     } while (0)
 
@@ -47,19 +47,19 @@ int main(void)
 {
     MUL(_Sat short _Fract, unsigned char, sf);
     MUL(_Sat _Fract, unsigned short, f);
-    MUL(_Sat long _Fract, unsigned long, lf);
+    MUL(_Sat long _Fract, __UINT32_TYPE__, lf);
     MUL(_Sat unsigned short _Fract, unsigned char, usf);
     MUL(_Sat unsigned _Fract, unsigned short, uf);
-    MUL(_Sat unsigned long _Fract, unsigned long, ulf);
+    MUL(_Sat unsigned long _Fract, __UINT32_TYPE__, ulf);
     MUL(_Sat short _Accum, unsigned short, sa);
-    MUL(_Sat _Accum, unsigned long, a);
+    MUL(_Sat _Accum, __UINT32_TYPE__, a);
     MUL(_Sat long _Accum, unsigned long long, la);
     MUL(_Sat unsigned short _Accum, unsigned short, usa);
-    MUL(_Sat unsigned _Accum, unsigned long, ua);
+    MUL(_Sat unsigned _Accum, __UINT32_TYPE__, ua);
     MUL(_Sat unsigned long _Accum, unsigned long long, ula);
     SHL(_Sat short _Fract, unsigned char, sf);
     SHL(_Sat _Fract, unsigned short, f);
-    SHL(_Sat long _Fract, unsigned long, lf);
+    SHL(_Sat long _Fract, __UINT32_TYPE__, lf);
     SHL(_Sat unsigned _Fract, unsigned short, uf);
     SHL(_Sat short _Accum, unsigned short, sa);
     SHL(_Sat long _Accum, unsigned long long, la);
