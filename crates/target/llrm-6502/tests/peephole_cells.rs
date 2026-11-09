@@ -88,6 +88,18 @@ fn a_store_across_a_call_stays_when_a_read_or_the_return_follows() {
     }
 }
 
+/// The 65C02 stores a zero with `stz`: `float_conversions_loop` kept a `stz rc10` after the call that only the
+/// restore followed (65C02-FLOATCONV-8590), where the 6502's `ldy #0; sty rc10` was dropped. Every store op is a store.
+#[test]
+fn a_dead_stz_goes_like_a_dead_sta() {
+    let mut a = asm("  stz rc10\n  jsr f\n  pla\n  sta rc10\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  jsr f\n  pla\n  sta rc10\n  rts\n");
+    let mut a = asm("  stz rc2\n  jsr f\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  stz rc2\n  jsr f\n  rts\n");
+}
+
 /// `sta rc3; lda rc2; ldx rc3` went through memory to reach `x`.
 #[test]
 fn a_byte_stored_and_loaded_into_x_is_transferred() {
