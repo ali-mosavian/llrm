@@ -229,8 +229,8 @@ impl Tti for M68k {
     /// A stack slot's base is `%sp` and a displacement, so as the base of an
     /// address it takes no register of its own (LU6, set for x86 too; the pin
     /// counts it). Several stack arrays then share one index register in
-    /// place of one pointer IV each; the backend forms the address with a
-    /// `lea` per access (`(d,%sp,Xn)` is not folded yet).
+    /// place of one pointer IV each; the backend folds each access to
+    /// `(d8,%sp,Xn)` (`frameindexed.rs`).
     fn frame_address_is_free(&self) -> bool {
         true
     }
