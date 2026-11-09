@@ -1241,6 +1241,36 @@ fn test_a_runtime_loop_bound_by_a_divide_chain_is_not_unrolled() {
     assert!(!runtime_unrolled("double", "1.0", FDIV, true));
 }
 
+/// floats -O2: `volatile double value` keeps the chain in memory, a load of
+/// what the last trip stored.
+#[test]
+fn test_a_runtime_loop_bound_by_a_chain_through_memory_is_not_unrolled() {
+    let text = "define double @f(i64 %n) {
+entry:
+  %slot = alloca double
+  store volatile double 1.0, ptr %slot
+  %skip = icmp sle i64 %n, 0
+  br i1 %skip, label %out, label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %x = load volatile double, ptr %slot
+  %m = fmul double %x, 1.5
+  %q = fdiv double %m, 1.25
+  store volatile double %q, ptr %slot
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, %n
+  br i1 %more, label %loop, label %out
+
+out:
+  %r = load volatile double, ptr %slot
+  ret double %r
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled_text(text, true));
+}
+
 /// The veto asks the loop, not the pass: a trip that is many independent
 /// operations around a one-cycle `add` chain is bound by the core's issue
 /// width and is unrolled as the pin does.

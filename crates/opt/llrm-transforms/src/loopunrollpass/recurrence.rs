@@ -16,9 +16,12 @@
 //! between the walks is the latency a trip adds. Only a single-block loop is
 //! priced: its operations all run each trip, so the sums are the trip's.
 //!
-//! Known limits, not claims: a chain through memory (`a[i] = a[i - 1] * c`)
-//! shows no growth and keeps the pin's unroll, and so does a loop of several
-//! blocks. Latencies and throughputs are the `Tti`'s, as the pin's.
+//! A load of the address a store of the trip wrote waits for that store, as a
+//! phi waits for its latch value: a variable kept in memory (`volatile double
+//! value`, floats -O2) is a chain like any other. Known limits, not claims: a
+//! chain through different addresses (`a[i] = a[i - 1] * c`) shows no growth and
+//! keeps the pin's unroll, and so does a loop of several blocks. Latencies and
+//! throughputs are the `Tti`'s, as the pin's.
 //!
 //! <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectOptimize.cpp#L1305>
 
@@ -38,7 +41,12 @@ pub(super) fn recurrence_bound(
     if width == 0 || !run.tti.vetoes_recurrence_bound_unroll() {
         return false;
     }
-    let &[block] = lp.get_blocks() else { return false };
+    let &[block] = lp.get_blocks() else {
+        if llrm_support::debug::enabled("unroll") {
+            eprintln!("unroll: RU-REC: {} blocks, not priced", lp.get_blocks().len());
+        }
+        return false;
+    };
     let price = |inst: InstId, kind: CostKind| {
         let cost = instruction_cost(run.tti, run.context, run.layout, run.globals, run.function, inst, kind);
         cost.valid.then_some(cost.value)
@@ -49,6 +57,9 @@ pub(super) fn recurrence_bound(
         .iter_block(block)
         .map(|inst| price(inst, CostKind::RecipThroughput))
         .sum::<Option<i64>>();
+    if llrm_support::debug::enabled("unroll") {
+        eprintln!("unroll: RU-REC: chain {chain:?}, issue {issue:?}, width {width}");
+    }
     let (Some(chain), Some(issue)) = (chain, issue) else { return false };
     chain * width >= issue
 }
@@ -61,6 +72,8 @@ fn chain_growth(
     latency: impl Fn(InstId) -> Option<i64>,
 ) -> Option<i64> {
     let mut path: IdMap<InstId, i64> = IdMap::new();
+    // The path of the value last stored to an address, by the address operand.
+    let mut stored: Vec<(Operand, i64)> = Vec::new();
     let mut longest = [0i64; 2];
     for longest in &mut longest {
         for inst in function.iter_block(block) {
@@ -77,7 +90,17 @@ fn chain_growth(
                 })
                 .max()
                 .unwrap_or(0);
-            let here = operands + latency(inst)?;
+            let instruction = function.instruction(inst);
+            let forwarded = match instruction.opcode {
+                Opcode::Load { .. } => stored.iter().find(|(address, _)| *address == instruction.operands[0]),
+                _ => None,
+            };
+            let here = operands.max(forwarded.map_or(0, |&(_, path)| path)) + latency(inst)?;
+            if let Opcode::Store { .. } = instruction.opcode {
+                let address = instruction.operands[1];
+                stored.retain(|(one, _)| *one != address);
+                stored.push((address, here));
+            }
             path.insert(inst, here);
             *longest = (*longest).max(here);
         }
