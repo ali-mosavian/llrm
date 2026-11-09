@@ -93,6 +93,37 @@ impl Target for Arm64 {
         CALLING.native().aligned_calls
     }
 
+    /// The x86 machine phases the pin has no AArch64 pass for
+    /// (`AArch64PassConfig`,
+    /// [AArch64TargetMachine.cpp#L821](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp#L821)
+    /// to L959, adds none of them) or whose facts arm64 lacks. AArch64 does run
+    /// `MachineCombiner`, `PeepholeOptimizer`, `MachineCSE`, `MachineSink`,
+    /// the coalescer, the allocator and the generic post-RA passes: those stay.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("FarIndirectCalls", "x86 real-mode far calls; AArch64 has no segmented call"),
+            ("LoadFold", "x86 memory operands on ALU forms; AArch64 is load/store, only loads and stores touch memory"),
+            ("CmpAsSub", "X86TargetLowering::EmitCmp; AArch64 selection reuses SUBS itself (emitComparison)"),
+            ("CmovConversion", "X86CmovConversion; the pin's AArch64 has EarlyIfConverter and CondBrTuning instead"),
+            ("MaskByAnd", "DEVIATE MA1, movzx versus and: x86 forms, and arm64 states no clocks"),
+            ("X86OptimizeLEAs", "x86 lea; AArch64 has no scaled-address arithmetic instruction"),
+            ("CallFrameOpt", "X86CallFrameOptimization turns movs into pushes; AArch64 has no push"),
+            ("PushFold", "x86 push of a memory operand; AArch64 has no push"),
+            ("FlagsCopy", "X86FlagsCopyLowering; AArch64 keeps NZCV in a register the allocator sees"),
+            ("FixupSetCC", "X86FixupSetCC, setcc then movzx; AArch64 has cset"),
+            ("FloatUnhoist", "x87 stack"),
+            ("FloatFold", "x87 stack"),
+            ("FloatSink", "x87 stack"),
+            ("FloatPrep", "x87 stack"),
+            ("FloatAlloc", "x87 stack; scalar floating point lives in the v registers the greedy allocator assigns"),
+            ("VectorSaves", "Win64 xmm6-15 saves; AArch64's d8-d15 are saved by its frame lowering"),
+            ("FixupBW", "X86FixupBWInsts, partial-register loads; AArch64 loads zero-extend"),
+            ("FixupLEAs", "X86FixupLEAs"),
+            ("LeafFold", "DEVIATE LEAF-FOLD-OS, an x86 -Os join; arm64 states leaf_fold_at_size false"),
+            ("BreakFalseDeps", "x86 partial-register dependency breaking; the pin's AArch64 adds no such pass"),
+        ]
+    }
+
     fn frame_register(&self) -> RegId {
         register(&CALLING.native().frame)
     }
@@ -367,7 +398,7 @@ mod tests {
     /// pointers, floats at their own size): the trait's defaults answer.
     #[test]
     fn the_trait_defaults_answer_what_arm64_does_not_state() {
-        assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("generic")), (None, 0, None));
+        assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("nonesuch")), (None, 0, None));
         // An unsupported default is loud: the error names the target and the
         // method.
         let refusal = |text: Result<_, String>| -> String { text.map(|_: ()| ()).unwrap_err() };
@@ -406,10 +437,18 @@ mod tests {
             &Rules::NONE,
             &Arm64.frame_registers(),
             llrm_codegen::backend::shadow::Selector::Old,
+            &Arm64.omitted_phases().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         )
         .unwrap_or_else(|error| panic!("{error}"));
         let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
         println!("{} phases: {}", names.len(), names.join(" "));
+        assert_eq!(names.len(), 27, "47 phases less the 20 omitted");
+        for (name, why) in Arm64.omitted_phases() {
+            assert!(!names.contains(name) && !why.is_empty(), "{name}");
+        }
+        for kept in ["MachineCombiner", "PeepholeOptimizer", "MachineCSE", "Coalescer", "RegAlloc", "ControlFlow"] {
+            assert!(names.contains(&kept), "{kept}");
+        }
     }
 
     /// The shared passes' prices are the private driver's: one `Arm64Machine`.

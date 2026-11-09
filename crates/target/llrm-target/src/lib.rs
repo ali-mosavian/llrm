@@ -582,6 +582,14 @@ pub trait Target {
         false
     }
 
+    /// The machine phases (`flow::machine_with`'s class names) this target does
+    /// not run, each with why. The pin's `TargetPassConfig` adds each target's
+    /// own passes while the phase list here is x86's, so a target names what
+    /// its pin has no pass for. An unknown name is an error in `machine_with`.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 

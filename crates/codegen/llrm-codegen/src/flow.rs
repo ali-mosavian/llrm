@@ -54,6 +54,7 @@ pub fn machine<'a>(
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         crate::backend::shadow::Selector::Old,
+        &[],
     )
 }
 
@@ -169,6 +170,7 @@ pub fn machine_with<'a>(
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
     selector: crate::backend::shadow::Selector,
+    omitted: &[&str],
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -385,6 +387,14 @@ pub fn machine_with<'a>(
         // The pin's pre-emit pass: the distances are those of the final order.
         Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
+    // A target's own phase list (the pin's TargetPassConfig): what it names is
+    // left out, and a name that is no phase is an error, not a silent no-op.
+    for name in omitted {
+        if !phases.iter().any(|phase| phase.class_name() == *name) {
+            return Err(format!("the target omits {name:?}, which is no machine phase here (or is named twice)"));
+        }
+        phases.retain(|phase| phase.class_name() != *name);
+    }
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");
     }
@@ -404,8 +414,9 @@ pub fn machine_with<'a>(
         // must be, and none of those is.
         let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
         let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
-        let off: Vec<&str> =
+        let mut off: Vec<&str> =
             if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        off.extend(omitted.iter().map(|one| slot_of(one)));
         llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)
@@ -562,6 +573,34 @@ mod tests {
     use crate::model::ir::{self, Loc, Operation};
     use crate::model::lir::{Insn, LirBlock};
     use crate::support::hash::IndexMap;
+
+    /// A target's omitted phase that is no phase (a typo, or a phase renamed)
+    /// was a silent no-op; it is an error, and an x86 target omits none.
+    #[test]
+    fn test_an_omitted_phase_that_does_not_exist_is_an_error() {
+        let build = |omitted: &[&str]| {
+            machine_with(
+                &IndexMap::default(),
+                None,
+                None,
+                None,
+                false,
+                "486",
+                &crate::backend::target::BUILT_IN,
+                &crate::backend::classes::RegisterClasses::m16(),
+                &crate::backend::targets::x86_m16::RULES,
+                &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+                crate::backend::shadow::Selector::Old,
+                omitted,
+            )
+            .map(|phases| phases.iter().map(|phase| phase.class_name()).collect::<Vec<_>>())
+        };
+        let all = build(&[]).unwrap();
+        assert!(llrm_target::Target::omitted_phases(&llrm_x86_m16::M16).is_empty());
+        let without = build(&["FlagsCopy"]).unwrap();
+        assert_eq!(without.len() + 1, all.len());
+        assert!(build(&["NoSuchPhase"]).unwrap_err().contains("NoSuchPhase"));
+    }
 
     struct LosesDefinition;
 
