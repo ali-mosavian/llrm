@@ -494,3 +494,30 @@ fn a_layout_mismatch_names_the_variable_of_the_forks_clang_when_it_is_unset() {
     let set = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| Some("clang".into()));
     assert!(!set.contains(name), "{set}");
 }
+
+/// Every `-nostdinc` compile spawned `clang -print-resource-dir` (~1 process
+/// per compile) although the dir follows from the binary's path.
+#[test]
+fn resource_dir_comes_from_the_clang_path_without_a_spawn() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib/clang/24/include")).unwrap();
+    std::fs::write(root.join("bin/clang"), "").unwrap();
+    let spawns = std::cell::Cell::new(0);
+    let found = resource_include(&root.join("bin/clang"), || {
+        spawns.set(spawns.get() + 1);
+        None
+    });
+    assert_eq!((found, spawns.get()), (Some(root.canonicalize().unwrap().join("lib/clang/24")), 0));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn resource_dir_spawns_only_when_the_layout_is_missing() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-fallback-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/clang"), "").unwrap();
+    let found = resource_include(&root.join("bin/clang"), || Some(PathBuf::from("/spawned")));
+    assert_eq!(found, Some(PathBuf::from("/spawned")));
+    std::fs::remove_dir_all(&root).unwrap();
+}
