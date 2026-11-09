@@ -1166,15 +1166,6 @@ impl Lowering for AArch64Lowering {
         true
     }
 
-    // AArch64ISelLowering.h, `isSExtCheaperThanZExt`: `w` to `x` is one `sxtw`.
-    fn is_sext_cheaper_than_zext(
-        &self,
-        from_bits: u32,
-        to_bits: u32,
-    ) -> bool {
-        from_bits == 32 && to_bits == 64
-    }
-
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942
     fn is_truncate_free(
         &self,

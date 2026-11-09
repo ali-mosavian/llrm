@@ -453,3 +453,12 @@ fn lftr_counts_any_constant_stride() {
     use llrm_mir::tti::Tti;
     assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
 }
+
+/// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class says no,
+/// TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a pin line that does not exist.
+#[test]
+fn sign_extension_is_not_cheaper_than_zero_extension() {
+    for (from, to) in [(8, 32), (16, 32), (32, 64), (8, 64)] {
+        assert!(!AArch64Lowering.is_sext_cheaper_than_zext(from, to), "{from} -> {to}");
+    }
+}
