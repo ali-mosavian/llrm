@@ -2128,6 +2128,59 @@ b2:
     assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
 }
 
+/// `hoistMulAddAssociation` rewrites in place, so the next product of a
+/// 4x-unrolled `t = t * 31 + x * 6` chain sees the factor already folded in:
+/// `t * 923521 + ...`, no `* 31` left (pin LICM after the unroll,
+/// PassBuilderPipelines.cpp#L1508). llrm decided on the loop as it stood and
+/// skipped every product that read a replaced one: the running sum was
+/// multiplied twice (`* 31` each) where the pin multiplies it once
+/// (`mul_constants` -O2 wasm32, +3..4 B in each of 31 functions).
+#[test]
+fn test_a_chain_of_products_of_sums_is_reassociated_through_every_link() {
+    let text = "define i32 @f() {
+b0:
+  br label %b1
+
+b1:
+  %n = phi i32 [ 200, %b0 ], [ %n1, %b1 ]
+  %x0 = phi i32 [ 7, %b0 ], [ %x4, %b1 ]
+  %t0 = phi i32 [ 9, %b0 ], [ %t4, %b1 ]
+  %a1 = mul i32 %x0, 1664525
+  %x1 = add i32 %a1, 1013904223
+  %m1 = mul i32 %t0, 31
+  %c1 = mul i32 %x1, 6
+  %t1 = add i32 %c1, %m1
+  %a2 = mul i32 %x1, 1664525
+  %x2 = add i32 %a2, 1013904223
+  %m2 = mul i32 %t1, 31
+  %c2 = mul i32 %x2, 6
+  %t2 = add i32 %c2, %m2
+  %a3 = mul i32 %x2, 1664525
+  %x3 = add i32 %a3, 1013904223
+  %m3 = mul i32 %t2, 31
+  %c3 = mul i32 %x3, 6
+  %t3 = add i32 %c3, %m3
+  %a4 = mul i32 %x3, 1664525
+  %x4 = add i32 %a4, 1013904223
+  %m4 = mul i32 %t3, 31
+  %c4 = mul i32 %x4, 6
+  %t4 = add i32 %c4, %m4
+  %n1 = add nsw i32 %n, -4
+  %k = icmp eq i32 %n1, 0
+  br i1 %k, label %b2, label %b1
+
+b2:
+  ret i32 %t4
+}
+";
+    let after = licm_printed(text);
+    let body = &after[after.find("\nb1:\n").expect("b1")..];
+    // Only the phi `%t0` is multiplied in the loop; the sums `%t1..%t3` are
+    // not.
+    let sums = body.lines().filter(|line| line.contains("= mul i32 %t")).count();
+    assert_eq!(sums, 1, "{sums} products of the running sum in the loop, want 1:\n{after}");
+}
+
 /// `Instruction::mayHaveSideEffects` of a call was the list of every location
 /// it writes (a `Vec` of `MemRef`s, `memory::stated` read three times over)
 /// asked for a yes: 1 M Ir of a jpeg_fixed -O2 compile in `sink_region` alone.

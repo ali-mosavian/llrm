@@ -191,6 +191,25 @@ fn signed_word_division() {
     assert_eq!(word("modhi", &two_words(64536, 7), "__modhi3"), 65530);
 }
 
+/// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling over the bit loop alone) gives the
+/// fast routines' answers, for divisors under and over 256: -1000 / 7 = -142 r -6, 7 / -2 = -3 r 1, -1000 / -300 = 3 r
+/// -100, 30000 / 300 = 100 r 0.
+#[test]
+fn compact_signed_word_division_matches_the_fast_routines() {
+    for (a, b, quotient, remainder) in [
+        (64536u16, 7u16, 65394i32, 65530i32),
+        (7, 65534, 65533, 1),
+        (64536, 65236, 3, 65436),
+        (30000, 300, 100, 0),
+    ] {
+        let n = format!("{a}-{b}");
+        assert_eq!(word(&format!("divhic-{n}"), &two_words(a, b), "__divhi3c"), quotient, "{a} / {b}");
+        assert_eq!(word(&format!("modhic-{n}"), &two_words(a, b), "__modhi3c"), remainder, "{a} % {b}");
+        assert_eq!(word(&format!("divhif-{n}"), &two_words(a, b), "__divhi3"), quotient, "{a} / {b} fast");
+        assert_eq!(word(&format!("modhif-{n}"), &two_words(a, b), "__modhi3"), remainder, "{a} % {b} fast");
+    }
+}
+
 /// 0x03 << 4 = 0x30; 0xF0 >> 4 = 0x0F logical, 0xFF arithmetic; a count of 0
 /// changes nothing.
 #[test]
@@ -333,14 +352,16 @@ fn the_fast_long_shifts_agree_with_the_bit_loops_for_every_count() {
 
 /// `__ashlsi3` shifted one bit per trip of a loop of 25 clocks: a shift by 21,
 /// the average one of f32 add (`__ashlsi3` was 18% of it), took about 530
-/// clocks. The speed variant is two byte moves and five bits, under 260.
+/// clocks. The speed variant is two byte moves and five bits, about 260; the bound is 300, since a page cross
+/// anywhere in `mos_rt.s` moves it by a clock (inserting 29 lines of unrelated routines made 259 into 260 and failed
+/// `< 260`), and the bit loop it must beat is at 530.
 #[test]
 fn a_long_shift_by_21_takes_whole_byte_steps() {
     let empty = common::cycles_with("fshl-empty", "", "");
     let setup = "  lda #1\n  sta __sa\n  lda #21\n  sta __sb\n";
     let setup_only = common::cycles_with("fshl-setup", setup, "") - empty;
     let fast = common::cycles_with("fshl-21", &format!("{setup}  jsr __ashlsi3_fast\n"), "") - empty - setup_only;
-    assert!(fast < 260, "1 << 21 took {fast} clocks");
+    assert!(fast < 300, "1 << 21 took {fast} clocks");
 }
 
 /// A word multiply by a small multiplier ran all sixteen iterations: 1234 * 56
