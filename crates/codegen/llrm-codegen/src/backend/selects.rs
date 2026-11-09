@@ -55,13 +55,14 @@
 //!   270127 (+0.9%), O3 266972 -> 270147 (+1.2%), Os 455460 -> 458620 (+0.7%);
 //!   .text counts 16-B function alignment: f381 and f383 (`select c, 2, -2`
 //!   i64) grow 29 -> 33 B and cross a slot (+16 each; O3: f381-f384, +64);
-//!   the functions that shrink stay in their slot. Cause: the second CMOV's
-//!   constant (`mov edx,0`) is emitted into the first sink block, so
-//!   `EmitLoweredSelect`'s cascade (one diamond) does not fire and two
-//!   diamonds are made (base: one). Fix: emit a select's immediates above the
-//!   first branch (separate PR). `f409` (32 B, pin 28 B) is the scheduler
-//!   putting the CMOV diamond before the SETCC (SD31, NodeNum), filed with
-//!   sdag-d.
+//!   the functions that shrink stay in their slot. Cause: base made one
+//!   diamond for both halves in MIR (29 B); the DAG makes two CMOV pseudos
+//!   and the second one's `mov -1` sits between them, so the cascade does not
+//!   merge them (33 B). The pin's `f381` is 33 B too (clang -O2 -march=i486),
+//!   so this is pin parity against a luckier base. The scheduler is right
+//!   (traced: `MOV32r0` goes first, held by the live EFLAGS). `f409` (32 B,
+//!   pin 28 B) is the one function above the pin: the CMOV diamond comes
+//!   before the SETCC (cause not traced; sdag-d).
 //! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
 //!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
 //!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
