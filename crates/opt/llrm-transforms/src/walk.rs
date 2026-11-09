@@ -548,6 +548,8 @@ impl ProgramPass for Walk {
                                     && left == calls.len() as i64;
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee)));
+                                } else if tti.inline_trial_groups_sites() && calls.len() > 1 {
+                                    units.push((calls, 0));
                                 } else {
                                     units.extend(calls.into_iter().map(|one| (vec![one], 0)));
                                 }
