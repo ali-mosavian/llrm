@@ -1159,3 +1159,130 @@ out:
     );
     assert!(!out.contains("%i = phi"), "the outer loop is gone: {out}");
 }
+
+/// A counted loop over `ty` elements of `@a`, `n` run-time trips, `@f`'s body
+/// given by `body` (defining `%y`, the next `%x`; `%v` is the element), as the
+/// loop pass manager hands it over; whether the x86-64 loop unroller
+/// (`target_unrolling`) changed `@f`, with the recurrence veto as asked.
+fn runtime_unrolled(
+    ty: &str,
+    init: &str,
+    body: &str,
+    veto: bool,
+) -> bool {
+    runtime_unrolled_text(
+        &format!(
+            "define {ty} @f(ptr %a, i64 %n) {{
+entry:
+  %skip = icmp sle i64 %n, 0
+  br i1 %skip, label %out, label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %latch ]
+  %x = phi {ty} [ {init}, %entry ], [ %y, %latch ]
+  %p = getelementptr {ty}, ptr %a, i64 %i
+  %v = load {ty}, ptr %p
+{body}
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, %n
+  br i1 %more, label %loop, label %done
+
+done:
+  ret {ty} %y
+
+out:
+  ret {ty} {init}
+}}
+"
+        )
+        .replace("%latch", "%loop"),
+        veto,
+    )
+}
+
+fn runtime_unrolled_text(
+    text: &str,
+    veto: bool,
+) -> bool {
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tuning = llrm_mir::target::Tuning { unroll_recurrence_veto: veto, ..llrm_mir::target::Tuning::PIN };
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls")
+}
+
+const CHAIN: &str = "  %m = mul i64 %x, 3\n  %y = add i64 %m, %v";
+const WIDE: &str = "  %m = mul i64 %v, 5\n  %w = add i64 %m, 7\n  %y = add i64 %x, %w";
+const FDIV: &str = "  %q = fdiv double %x, %v\n  %y = fadd double %q, 1.0";
+
+/// floats -O2 394 B and recfloat 318 B against gcc's 207 and 153 at the same
+/// clocks: a loop whose trip is the latency of `x = x * 3 + a[i]` was unrolled
+/// by 4 at run time, with a guard and a remainder loop that bought no clock.
+#[test]
+fn test_a_runtime_loop_bound_by_its_chain_is_not_unrolled() {
+    assert!(runtime_unrolled("i64", "1", CHAIN, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled("i64", "1", CHAIN, true), "unrolled although a trip waits on the last one");
+}
+
+/// The same for a divide chain, `s = s / a[i] + 1.0` (floats -O2, recfloat).
+#[test]
+fn test_a_runtime_loop_bound_by_a_divide_chain_is_not_unrolled() {
+    assert!(runtime_unrolled("double", "1.0", FDIV, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled("double", "1.0", FDIV, true));
+}
+
+/// The veto asks the loop, not the pass: a trip that is many independent
+/// operations around a one-cycle `add` chain is bound by the core's issue
+/// width and is unrolled as the pin does.
+#[test]
+fn test_a_runtime_loop_bound_by_issue_is_still_unrolled() {
+    assert!(runtime_unrolled("i64", "0", WIDE, true));
+}
+
+/// Known limit: only a single-block loop is priced (its operations all run each
+/// trip). A chain across a branch inside the loop keeps the pin's unroll.
+#[test]
+fn test_a_runtime_loop_of_several_blocks_is_left_to_the_pin() {
+    let text = "define i64 @f(ptr %a, i64 %n) {
+entry:
+  %skip = icmp sle i64 %n, 0
+  br i1 %skip, label %out, label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %latch ]
+  %x = phi i64 [ 1, %entry ], [ %y, %latch ]
+  %p = getelementptr i64, ptr %a, i64 %i
+  %v = load i64, ptr %p
+  %odd = icmp slt i64 %v, 0
+  br i1 %odd, label %neg, label %latch
+
+neg:
+  br label %latch
+
+latch:
+  %m = mul i64 %x, 3
+  %y = add i64 %m, %v
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, %n
+  br i1 %more, label %loop, label %done
+
+done:
+  ret i64 %y
+
+out:
+  ret i64 1
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(runtime_unrolled_text(text, true));
+}

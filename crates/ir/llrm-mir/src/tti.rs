@@ -822,6 +822,16 @@ pub trait Tti {
         0
     }
 
+    /// `getSchedModel().IssueWidth`; 0: the model states none.
+    fn issue_width(&self) -> u32 {
+        0
+    }
+
+    /// `Tuning::unroll_recurrence_veto`.
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
