@@ -4,7 +4,7 @@ mode = 8
 llvm_triple = "mos-unknown-none"
 llvm_cpu = "mos6502"
 
-datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 
 # No multiply, divide, shift by a variable or bit count instruction: the compiler expands them (to libcalls
 # where a loop is too big).
