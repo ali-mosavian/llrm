@@ -1652,6 +1652,8 @@ pub fn build_with_places(
     items: &[Item],
     places: Vec<llrm_codegen::model::lir::SrcLoc>,
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
+    let diamonds = crate::selectdiamond::lower(items);
+    let items = &diamonds[..];
     // A block starts at a label that follows an instruction (or the first). The
     // entry block stays apart from a loop header that follows it directly: the
     // entry has no predecessors.

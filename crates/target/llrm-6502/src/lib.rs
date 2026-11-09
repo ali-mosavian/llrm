@@ -18,6 +18,7 @@ pub mod prepare;
 pub mod relax;
 pub mod routines;
 pub mod select;
+pub mod selectdiamond;
 pub mod sharecmp;
 pub mod staticlocals;
 pub mod target;
