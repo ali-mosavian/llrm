@@ -45,6 +45,11 @@
 //!     alignment: no "a load of it dominates" proof.
 //! 28. `isAssociative` is the integer operations only (`combine_shared`'s
 //!     DEVIATE 2), so a float accumulator is not recognized.
+//! 29. TRE-1 (owner x86-m16-b, review 2026-11-30): where the target asks
+//!     (`Tti::tre_prices_spills`), a loop that carries an accumulator is kept
+//!     only if the spill model prices it no higher than the recursion it
+//!     replaces. The pin adds the accumulator whenever it can. Default: the
+//!     pin's.
 //!
 //! # Example
 //! `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that
@@ -154,18 +159,43 @@ fn eliminate(
     if function_parts(context, function.ty).1 || !can_tre(function) {
         return if marked { Outcome::Marked } else { Outcome::Unchanged };
     }
+    let original = outer.target().tti().is_some_and(|tti| tti.tre_prices_spills()).then(|| function.clone());
     let mut eliminator = TailRecursionEliminator::new(context, layout, function, declared, outer, id);
     let blocks = eliminator.function.layout().to_vec();
     let mut changed = false;
     for block in blocks {
         changed |= eliminator.process_block(block);
     }
+    let accumulated = eliminator.acc_pn.is_some();
     eliminator.cleanup_and_finalize();
+    if let Some(original) = original.filter(|_| changed && accumulated) {
+        if spill_price(context, layout, function, outer) > spill_price(context, layout, &original, outer) {
+            *function = original;
+            return if marked { Outcome::Marked } else { Outcome::Unchanged };
+        }
+    }
     match (changed, marked) {
         (true, _) => Outcome::Looped,
         (false, true) => Outcome::Marked,
         (false, false) => Outcome::Unchanged,
     }
+}
+
+/// DEVIATE 29 (`Tti::tre_prices_spills`): what the one spill model
+/// ([`crate::spill`]) forecasts for `function`, the traffic of the values that
+/// do not fit with a call keeping what the target says. `None` where the model
+/// has no price. O(n): one liveness and one sweep.
+fn spill_price(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    outer: &Outer,
+) -> Option<i64> {
+    let frequency = crate::profit::_loop_products(function, None)?;
+    let across = |inst| crate::spill::kept_across(outer, context, function, inst);
+    let costs = outer.target().costs();
+    crate::profit::spill_forecast(context, layout, function, &costs, crate::spill::Room::of(outer), &across, &frequency)
+        .map(|forecast| forecast.cost)
 }
 
 /// `canTRE`

@@ -1654,6 +1654,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE TRE-1 (beyond the pin, whose `TailCallElim` adds an accumulator
+    /// whenever the recursion allows it; owner x86-m16-b, review 2026-11-30):
+    /// whether the accumulator loop is kept only if the one spill model
+    /// (`spill`) prices its register pressure no higher than the recursion it
+    /// replaces. A tree recursion keeps its other call, and a loop that
+    /// carries the accumulator past it holds one value more across that call
+    /// than the call's registers keep.
+    fn tre_prices_spills(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU5: whether a formula whose base register is a non-affine
     /// addrec of an enclosing loop is charged the induction variables its
     /// expansion keeps live across that loop (one for each order past the

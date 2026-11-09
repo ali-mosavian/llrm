@@ -453,3 +453,69 @@ fn a_function_whose_elimination_is_deferred_keeps_its_call() {
     assert_eq!(calls(&after), 1, "{after}");
     assert!(!after.contains("tailrecurse"), "{after}");
 }
+
+/// rectwo's `paths`: a tree recursion whose second call is the tail call.
+const TREE: &str = "define i32 @f(i16 %n, i16 %m) {
+b0:
+  %a = icmp eq i16 %n, 0
+  %b = icmp eq i16 %m, 0
+  %c = or i1 %a, %b
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i32 1
+
+b2:
+  %n1 = sub i16 %n, 1
+  %x = call i32 @f(i16 %n1, i16 %m)
+  %m1 = sub i16 %m, 1
+  %y = call i32 @f(i16 %n, i16 %m1)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+";
+
+const TREE_INPUTS: &[&[i128]] = &[&[0, 0], &[1, 1], &[2, 3], &[3, 3]];
+
+/// `text` through the pass on `machine`, run as before on `inputs`.
+fn eliminated_on(
+    text: &str,
+    inputs: &[&[i128]],
+    machine: std::rc::Rc<dyn llrm_mir::target::Machine>,
+) -> String {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(TailCallElim);
+    manager.run_module(&mut module, machine).unwrap();
+    let after = crate::testing::printed(&module);
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    after
+}
+
+fn tree_calls(text: &str) -> usize {
+    text.matches("call i32 @f(").count()
+}
+
+/// rectwo -O1 m16 was 87 B against main's 79: the pin's TRE carries the
+/// accumulator past the first call, which holds the two arguments and the
+/// accumulator across it, one value more than `si` and `di` keep, and the
+/// loop spills two. At m16 (`Tti::tre_prices_spills`) the recursion stays.
+#[test]
+fn a_tree_recursion_whose_accumulator_does_not_fit_the_kept_registers_stays_recursive() {
+    let pin = managed(&mut parsed(&format!("{DOS}{TREE}")), TailCallElim);
+    assert_eq!(tree_calls(&pin), 1, "premise: the pin's pass makes the loop: {pin}");
+    assert!(pin.contains("accumulator.tr"), "{pin}");
+    let m16 = eliminated_on(TREE, TREE_INPUTS, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
+    assert_eq!(tree_calls(&m16), 2, "{m16}");
+    assert!(!m16.contains("accumulator.tr"), "{m16}");
+}
+
+/// A recursion with no call left after the loop holds nothing across a call:
+/// the accumulator loop of `sum` is kept at m16.
+#[test]
+fn an_accumulator_loop_with_no_call_left_is_kept_in_real_mode() {
+    let m16 = eliminated_on(SUM, &[&[0], &[1], &[5]], std::rc::Rc::new(llrm_x86_m16::Dos::default()));
+    assert_eq!(calls(&m16), 0, "{m16}");
+    assert!(m16.contains("accumulator.tr"), "{m16}");
+}

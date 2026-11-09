@@ -1489,6 +1489,13 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE TRE-1: Borland's convention keeps `si` and `di` across a call,
+    /// and the accumulator of a tree recursion's loop is the value that does
+    /// not fit (rectwo -O1: 87 B against main's 79).
+    fn tre_prices_spills(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn address_registers(&self) -> u32 {
         self.real_mode
             .as_ref()
