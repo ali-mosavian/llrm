@@ -120,6 +120,16 @@ def coverage(cells, corpus_names):
     return len(corpus_names & have), sorted(corpus_names - have)
 
 
+def unmeasured(rows):
+    """{program: cause} from the matrix's `ours` rows with no numbers: a program is UNMEASURED, never OK, and says why."""
+    causes = {}
+    for r in rows:
+        r = list(r) + [""] * (8 - len(r))
+        if r[3] == "ours" and not r[4].isdigit() and r[7].startswith("n/a"):
+            causes.setdefault(r[1], r[7][len("n/a: "):])
+    return causes
+
+
 def main(argv):
     args = [a for a in argv if not a.startswith("--")]
     corpus = argv[argv.index("--corpus") + 1] if "--corpus" in argv else None
@@ -136,7 +146,10 @@ def main(argv):
     inside, missing = coverage(cells, names) if corpus else (0, [])
     if corpus:
         print(f"coverage: {inside} of {len(names)} applicable corpus programs in the table, {len(missing)} missing; {len(dropped)} dropped by corpus_targets.applies")
-        print("missing:", " ".join(missing))
+        causes = unmeasured(rows)
+        print("unmeasured (never counted OK), program: cause:")
+        for name in missing:
+            print(f"  {name}: {causes.get(name, 'never run: not in the harness program list')}")
     tally = collections.Counter(r[-1] for r in graded)
     hands = collections.Counter(hand_verdict(cells[r[:3]], r[1]) for r in graded)
     hands.pop("", None)

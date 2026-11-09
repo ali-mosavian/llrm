@@ -155,6 +155,11 @@ class VirtualOk(unittest.TestCase):
         at_os = t.cells_of(FULL + [row("k", "Os", "hand", 10, 5)])
         self.assertEqual(t.hand_verdict(at_os[("k", "Os", "6502")], "Os"), "HAND_OK")  # Os is bytes only
 
+    def test_a_program_with_no_numbers_is_unmeasured_with_its_cause(self):
+        """41 corpus programs were absent from the table with no cause; 19 of them failed (refused, link, wrong output)."""
+        rows = [row("bad", "O2", "ours", "", "") + ["", "n/a: WRONG got [1] want [2]"], row("good", "O2", "ours", 5, 50)]
+        self.assertEqual(t.unmeasured(rows), {"bad": "WRONG got [1] want [2]"})
+
 
 if __name__ == "__main__":
     unittest.main()
