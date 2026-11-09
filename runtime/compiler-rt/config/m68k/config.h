@@ -7,6 +7,9 @@
 #define SF_DIV_HW32 1
 #define SF_SPECIALS_ONCE 1 /* 68020: mul -4.3% executed instructions, text -20 B; on the 68000 it costs 18..30 B */
 #endif
+#if defined(__mc68020__) || defined(__mc68030__) || defined(__mc68040__) || defined(__mc68060__)
+#define SF_BFFFO 1 /* the count builtins are one bfffo each (llrm-m68k M68K-BFFFO): the bit-count routines use them in place of the ladder */
+#endif
 #define SF_WIDE_ABS_MASK 1 /* f64 compare: masks, not 64-bit shifts */
 #define SF_CONV_SPLIT 1 /* f64 int-to-float one object per entry: __floatsidf alone linked all four (1076 B Os, libgcc 920-986) */
 #endif

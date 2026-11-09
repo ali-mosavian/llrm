@@ -9,7 +9,7 @@ use llrm_z80::driver::{Level, Request};
 /// r; add a, a; sbc a, a; ld r, a`) when `a` is free.
 #[test]
 fn the_sign_mask_of_a_byte_is_not_seven_arithmetic_shifts() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i32 @f(i16 %x) {\n %s = ashr i16 %x, 8\n %b = trunc i16 %s to i8\n %r = sext i8 %b to i32\n ret i32 %r\n}";
     let asm = text(ir, "f", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(!asm.contains("sra "), "{asm}");

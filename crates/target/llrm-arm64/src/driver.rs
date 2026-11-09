@@ -137,17 +137,14 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
-/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`),
-/// applied to every mid-end run of the process.
-static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// The `-f` switches of the command line (`-fno-unroll-loops`, `-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end
+/// run of the process: the same parser as every other backend's `llc`.
+static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
+    std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
 
-/// Records `flag` if it names a mid-end pass; false when it does not.
+/// Records `flag` if the driver passes it on to a backend; false when it is not one.
 pub fn pass_flag(flag: &str) -> bool {
-    if !llrm_codegen::driver::flags::apply_pass_flag(&mut Options::default(), flag) {
-        return false;
-    }
-    PASS_FLAGS.lock().unwrap().push(flag.to_owned());
-    true
+    POLICY.lock().unwrap().take(flag)
 }
 
 /// `program` through the shared mid-end at `level`.
@@ -157,8 +154,10 @@ pub fn optimized_at(
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
-    for flag in PASS_FLAGS.lock().unwrap().iter() {
-        llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
+    {
+        let policy = POLICY.lock().unwrap();
+        policy.mark(program)?;
+        policy.apply(&mut options);
     }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
@@ -304,8 +303,8 @@ fn lower_function(
     let snapshot = (tight && !loose).then(|| machine.clone());
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
-            && !(machine.calls
-                || machine.dynamic
+            && !(machine.dynamic
+                || machine.outgoing > crate::frame::SAFE_SP_DISPLACEMENT
                 || llrm_codegen::backend::framefree::keeps_frame_pointer(
                     machine.frame_pointer.as_deref(),
                     machine.calls,

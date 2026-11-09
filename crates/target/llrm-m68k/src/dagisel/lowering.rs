@@ -154,10 +154,11 @@ pub fn target_lowering_with(
     // expansion; the pin keeps `Expand` here. gcc calls libgcc for all six on
     // the 68000 and 68010, and so does this. From the 68020 gcc counts a
     // 32-bit `clz`, a 64-bit `clz` and a 32-bit `ctz` with `bfffo`
-    // (M68K-BFFFO, see `bfffo`), and our routines cost more clocks there than
-    // the inline code (u64 O2: -540 B, +4000 clk), so the 68020 and later
-    // stay inline until the routines are as fast as libgcc's. Owner m68k. Exit:
-    // 2026-11-30.
+    // (M68K-BFFFO, see `bfffo`). Whole linked programs, 2026-11-09, every
+    // count called against inline: u64 O2 -12 B and +1000 clk (+3% to +18% in
+    // all six cells), u32 +24 B, so the 68020 and later stay inline at speed
+    // levels; size-built functions choose per module (M68K-SIZE-LIBCALL, see
+    // `libcalls`). Owner m68k. Exit: 2026-11-30.
     if !m68020 {
         set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
     }
@@ -204,6 +205,16 @@ pub struct M68kLowering {
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
     fn little_endian(&self) -> bool {
         false
+    }
+
+    /// `getScalarShiftAmountTy`: the pin's m68k keeps the default, the pointer
+    /// type (`i32`). A shift a combine made after legalization with the
+    /// shared `i8` amount had no pattern: `CannotSelect(Shl)`.
+    fn shift_amount_type(
+        &self,
+        _shifted: EVT,
+    ) -> EVT {
+        EVT::I32
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
@@ -835,13 +846,5 @@ fn lower_vastart(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let index = dag.var_args_frame_index?;
-    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
-    let first = dag.get_frame_index(EVT::I32, index);
-    let base = match dag.node(list).data {
-        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
-        _ => MemBase::Unknown,
-    };
-    let info = MemInfo { mem_vt: EVT::I32, align: 2, volatile: false, base, ext: None, space: 0, ordering: None };
-    Some(dag.get_store(chain, first, list, info))
+    llrm_codegen::backend::selectiondag::target_calling::lower_vastart_frame_index(dag, node, EVT::I32, 2)
 }
