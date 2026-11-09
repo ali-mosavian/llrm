@@ -352,14 +352,16 @@ fn the_fast_long_shifts_agree_with_the_bit_loops_for_every_count() {
 
 /// `__ashlsi3` shifted one bit per trip of a loop of 25 clocks: a shift by 21,
 /// the average one of f32 add (`__ashlsi3` was 18% of it), took about 530
-/// clocks. The speed variant is two byte moves and five bits, under 260.
+/// clocks. The speed variant is two byte moves and five bits, about 260; the bound is 300, since a page cross
+/// anywhere in `mos_rt.s` moves it by a clock (inserting 29 lines of unrelated routines made 259 into 260 and failed
+/// `< 260`), and the bit loop it must beat is at 530.
 #[test]
 fn a_long_shift_by_21_takes_whole_byte_steps() {
     let empty = common::cycles_with("fshl-empty", "", "");
     let setup = "  lda #1\n  sta __sa\n  lda #21\n  sta __sb\n";
     let setup_only = common::cycles_with("fshl-setup", setup, "") - empty;
     let fast = common::cycles_with("fshl-21", &format!("{setup}  jsr __ashlsi3_fast\n"), "") - empty - setup_only;
-    assert!(fast < 260, "1 << 21 took {fast} clocks");
+    assert!(fast < 300, "1 << 21 took {fast} clocks");
 }
 
 /// A word multiply by a small multiplier ran all sixteen iterations: 1234 * 56
