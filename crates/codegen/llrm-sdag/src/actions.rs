@@ -859,6 +859,11 @@ impl TargetLowering {
         // from it are `Custom` (`LowerF128Call`).
         let quad = [MVT::F128];
         t.set_ops(&[FAdd, FSub, FMul, FDiv], &quad, LibCall);
+        // The sign-bit operations are Expand, a rewrite of the bits
+        // (`ExpandFNEG`). The pin's FCOS, FMA, FRINT, FSIN and FSQRT
+        // are Expand too, to libcalls this table does not name yet.
+        // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L641>
+        t.set_ops(&[FAbs, FCopySign, FNeg], &quad, Expand);
         t.set_ops(&[ConstantFP], &quad, Expand);
         t.set_ops(&[SetCC, BrCC, Select, SelectCC], &quad, Custom);
         t.set_ops(&[FpExtend], &quad, Custom);

@@ -613,6 +613,9 @@ pub fn select_block(
 ) -> Result<Vec<Unit>, Refusal> {
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
+    // The scratch objects the legalizer asks for (a float's sign byte through
+    // memory) are frame objects numbered after the function's.
+    dag.first_temporary = info.next_stack_object();
     let legal = legalized_with(dag, &actions(APPLE_M1, opt_for_size), &mut lowering, None, false);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
@@ -620,6 +623,9 @@ pub fn select_block(
         return Err(Refusal::Legalize(why));
     }
     legal?;
+    for (size, align) in std::mem::take(&mut dag.temporaries) {
+        info.new_stack_object(size, align);
+    }
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     super::combine::shift_amounts_mod(dag);
