@@ -1,6 +1,6 @@
 # M68K-KNOWN-WRONG-ALIGN: an over-aligned local is silently misaligned
 
-Owner: m68k. Exit: a named refusal lands with the PR that follows #8457 (2026-11-11), then stack realign (2026-11-16, or 11-14 if m16's realign is target-neutral shared code).
+Owner: m68k. Exit: a named refusal lands with the PR that follows #8457 (2026-11-11), then stack realign 2026-11-14: m16's realign is shared code (`over_aligned`/`realign_of`, `Op::AndSp`, due 11-13; design `~/scratch/handoff/m16-realign-design.md`); m68k supplies its own `and.l #-A,%sp`, locals addressed from `%sp` and parameters from `%a6`.
 
 TL;DR: today an `alloca` aligned past what the frame keeps (4) is neither realigned nor refused, and the optimizer still folds `ptr & (align - 1)` to 0 from the IR alignment. Wrong code, no message.
 
