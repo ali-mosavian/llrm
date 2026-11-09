@@ -533,6 +533,50 @@ pub fn sequence_copies(
     out
 }
 
+/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are deleted, and the phi operands that
+/// came from them. Selection makes one for every IR block, such as the `unreachable` default of a `switch`.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/UnreachableBlockElim.cpp>
+pub fn remove_unreachable_blocks(function: &mut MFunc) {
+    let count = function.blocks.len();
+    let labels: HashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    let mut reached = vec![false; count];
+    let mut pending = vec![0usize];
+    while let Some(at) = pending.pop() {
+        if at >= count || std::mem::replace(&mut reached[at], true) {
+            continue;
+        }
+        pending.extend(successors_of(&function.blocks[at], at, count, &labels));
+    }
+    if reached.iter().all(|&one| one) {
+        return;
+    }
+    let dead: rustc_hash::FxHashSet<String> = function
+        .blocks
+        .iter()
+        .zip(&reached)
+        .filter(|(_, reached)| !**reached)
+        .map(|(block, _)| block.label.clone())
+        .collect();
+    let mut at = 0;
+    function.blocks.retain(|_| {
+        at += 1;
+        reached[at - 1]
+    });
+    let mut at = 0;
+    function.block_ids.retain(|_| {
+        at += 1;
+        reached[at - 1]
+    });
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            if let Op::Phi { incoming, .. } = op {
+                incoming.retain(|(_, from)| !dead.contains(from));
+            }
+        }
+    }
+}
+
 /// Phi elimination (`PHIElimination::LowerPHINode`,
 /// llvm/lib/CodeGen/PHIElimination.cpp): each phi `d = phi [v, p]..` gets a
 /// register `i` of its own; `i = COPY v` goes at the end of each predecessor

@@ -275,6 +275,7 @@ fn lower_function(
     }
     .map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
+    crate::mfunc::remove_unreachable_blocks(&mut machine);
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
