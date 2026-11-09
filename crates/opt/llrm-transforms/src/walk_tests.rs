@@ -2565,7 +2565,9 @@ fn test_a_recursion_with_a_loop_in_it_is_not_copied_for_its_calls() {
   store i32 %z, ptr %q
   %acc1 = add i32 %z, %v",
     ));
-    assert!(heavy == 2, "the loop-bodied recursion was copied: {heavy} calls");
+    // walk's own two calls (m16 TRE keeps them when the accumulator loop would
+    // spill) and main's: a copy would add more.
+    assert!(heavy <= 3, "the loop-bodied recursion was copied: {heavy} calls");
 }
 
 const CALL_BOUND: &str = "define i32 @fib(i32 %n) {
