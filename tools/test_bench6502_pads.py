@@ -34,3 +34,9 @@ def test_a_cell_whose_bytes_move_between_logs_is_refused():
     one = "| kernel | a |\n|---|---|\n| lz4 | 448 B, 39000 cy |\n"
     with pytest.raises(AssertionError, match="bytes differ"):
         b.merged([one, one.replace("448 B", "449 B")])
+
+
+def test_the_summary_counts_the_kernels_of_every_table():
+    """A merge that dropped a table printed nothing about it; the counts make a lost or doubled table visible."""
+    log = "| kernel | a |\n|---|---|\n| x | 1 B, 2 cy |\n| y | 1 B, 2 cy |\n\n| kernel | b | c |\n|---|---|---|\n| x | 1 B, 2 cy | 1 B, 2 cy |\n"
+    assert b.summary(log) == "2 tables, kernels per table: 2,1"

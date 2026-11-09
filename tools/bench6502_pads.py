@@ -28,6 +28,14 @@ def _cells(text):
     return out
 
 
+def summary(text):
+    """'N tables, kernels per table: a,b,...' so a merge that lost or doubled a table is visible in the log."""
+    kernels = {}
+    for header, kernel, _ in _cells(text):
+        kernels.setdefault(header, set()).add(kernel)
+    return f"{len(kernels)} tables, kernels per table: " + ",".join(str(len(k)) for k in kernels.values())
+
+
 def merged(texts, reduce=None):
     """The first text with every cell's cycles the mean (or `reduce`, e.g. min) of the same cell, found by table, kernel and
     column, in all texts. The logs must hold the same cells, and a cell's bytes cannot move with the padding."""
@@ -57,4 +65,6 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     least = "--min" in args
     out, logs = [a for a in args if a != "--min"][0], [a for a in args if a != "--min"][1:]
-    open(out, "w").write(merged([open(l).read() for l in logs], min if least else None))
+    texts = [open(l).read() for l in logs]
+    open(out, "w").write(merged(texts, min if least else None))
+    print(f"{out}: {len(logs)} logs, {summary(texts[0])}")
