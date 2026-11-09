@@ -55,6 +55,8 @@ pub struct Prepared {
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
     sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
+    /// The level the module is compiled at: -Os for a module `oz_best_of` found smaller there.
+    level: Level,
 }
 
 impl Prepared {
@@ -69,10 +71,18 @@ pub fn prepare(
     ir: &str,
     request: &Request,
 ) -> Result<Prepared, String> {
+    let best_of = request.level == Level::Oz && request.oz_best_of;
+    let request = &effective(ir, request)?;
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
-    let (selections, alternatives) = selections_with_alternatives(ir, request)?;
-    Ok(Prepared { selections: Selections::new(selections), alternatives: Selections::new(alternatives), sources })
+    // -Oz has just compiled the module both ways (`effective`) and holds both: the one it keeps is not selected again
+    let (selections, alternatives) = if best_of {
+        cached_both(ir, request)?
+    } else {
+        let (selections, alternatives) = selections_with_alternatives(ir, request)?;
+        (Selections::new(selections), Selections::new(alternatives))
+    };
+    Ok(Prepared { selections, alternatives, sources, level: request.level })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -87,10 +97,75 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The module most recently run through the mid-end and selection, with
-    /// what it was run for.
-    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections, Selections)>> =
-        const { std::cell::RefCell::new(None) };
+    /// The two modules most recently run through the mid-end and selection (two: -Oz compiles a module as -Oz and as
+    /// -Os, then reads the one it keeps), most recent first, with what each was run for.
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
+    /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
+    static KEPT_LINES: std::cell::RefCell<std::collections::HashMap<(usize, String, usize), Vec<Line>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The level `effective` chose for the module most recently asked about.
+    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Level)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
+fn selection_key(request: &Request) -> SelectionKey {
+    let mut environment: Vec<(String, String)> =
+        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
+    environment.sort();
+    (
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of)),
+        environment,
+    )
+}
+
+/// The request `ir` is compiled with. DEVIATE z80-oz-best-of (see `Request::oz_best_of`): at -Oz, the -Os one where
+/// the module is smaller in bytes (the runtime it reaches included), else the request itself.
+pub fn effective(
+    ir: &str,
+    request: &Request,
+) -> Result<Request, String> {
+    if request.level != Level::Oz || !request.oz_best_of {
+        return Ok(request.clone());
+    }
+    let key = selection_key(request);
+    let held = CHOSEN.with(|held| held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., level)| *level));
+    let level = match held {
+        Some(level) => level,
+        None => {
+            let os = Request { level: Level::Os, ..request.clone() };
+            // an -Os compile that is refused, or whose lines are, leaves -Oz
+            let level = match (module_bytes(ir, request), module_bytes(ir, &os)) {
+                (Ok(oz), Ok(os)) if os < oz => Level::Os,
+                _ => Level::Oz,
+            };
+            // keep only the lines of the module that stays
+            let kept = cached_both(ir, &Request { level, ..request.clone() }).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+            KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
+            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, level)));
+            level
+        }
+    };
+    Ok(Request { level, ..request.clone() })
+}
+
+/// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
+/// once.
+fn module_bytes(
+    ir: &str,
+    request: &Request,
+) -> Result<u32, String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
+    let at = std::rc::Rc::as_ptr(&selected) as usize;
+    for (number, (name, ..)) in selected.iter().enumerate() {
+        let lines = lines_in(&selected, &alternatives, name, number, request)?;
+        bytes += expand::price_emitted(&lines, false).0;
+        reached.extend(crate::runtime_size::referenced(&lines));
+        KEPT_LINES.with(|kept| kept.borrow_mut().insert((at, name.clone(), number), lines));
+    }
+    Ok(bytes + crate::runtime_size::reached(&reached) + crate::data::image_bytes(&crate::data::text_at(ir, request)?))
 }
 
 /// [`selections`] of `ir`, kept for the next function of the same module:
@@ -113,16 +188,10 @@ fn cached_both(
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
-    let mut environment: Vec<(String, String)> =
-        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
-    environment.sort();
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
-    let key = (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips)),
-        environment,
-    );
+    let key = selection_key(request);
     let held = SELECTED.with(|held| {
-        held.borrow().as_ref().filter(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
+        held.borrow().iter().find(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
     });
     if let Some(one) = held {
         return Ok(one);
@@ -130,7 +199,11 @@ fn cached_both(
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (main, alternatives) = selections_with_alternatives(ir, request)?;
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
-    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone(), other.clone())));
+    SELECTED.with(|held| {
+        let mut held = held.borrow_mut();
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
+        held.truncate(2);
+    });
     Ok((one, other))
 }
 
@@ -286,6 +359,42 @@ fn cheaper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// call_keeps -O1 was 1876 B for 57813 T (long multiplies and shifts inline) against 1473 B for 64413 T with the
+    /// routines: a clock rise of 11% for 21% of the bytes. The price counted each routine call as 17 T, so the form
+    /// with the routines looked far faster than it is and no rate was stated for the strict level.
+    #[test]
+    fn at_o1_the_form_with_the_smaller_relative_regret_wins() {
+        let (inline, calls) = ((1916, 11124), (1473, 12449));
+        assert!(prefers(Level::O1, calls, inline) && !prefers(Level::O1, inline, calls));
+        // a form 1% smaller for 30% more clocks does not
+        assert!(!prefers(Level::O1, (990, 14300), (1000, 11000)));
+        assert!(prefers(Level::O1, (1000, 11000), (990, 14300)));
+    }
+
+    /// div_constants_long -O1 took `call __ashlsi3` for a xorshift step (-14 B, +10% clocks measured): against a
+    /// module whose static clocks are one hot loop elsewhere, the call's 500 T were 0.001% and the 14 B 0.08%.
+    #[test]
+    fn at_o1_a_call_is_priced_against_its_own_function_not_the_module() {
+        let routines = std::collections::HashSet::from(["__ashlsi3".to_owned()]);
+        let hot_loop = (4000, 40_000_000, std::collections::HashSet::new());
+        let step = ("step".to_owned(), (30, 700, routines), Some((44, 120, std::collections::HashSet::new())));
+        let variants: Variants = (vec![hot_loop], vec![step]);
+        let (calls, inline) = (std::collections::HashSet::new(), std::collections::HashSet::from([0]));
+        let module = |form| module_price(&variants, form);
+        assert!(prefers(Level::O1, module(&calls), module(&inline)), "the module price cannot see the cost");
+        assert!(!prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
+    }
+
+    /// Bytes first at the size levels, 1 B = 3 T from O2: a form that is 30% slower for 5% fewer bytes wins the
+    /// first and loses the second.
+    #[test]
+    fn the_size_levels_take_bytes_and_o2_takes_the_rate() {
+        let (small, fast) = ((1900, 14300), (2000, 11000));
+        assert!(prefers(Level::Os, small, fast) && prefers(Level::Oz, small, fast));
+        assert!(!prefers(Level::O2, small, fast) && !prefers(Level::O3, small, fast));
+        assert!(prefers(Level::O2, (1000, 11000), (1100, 11000)));
+    }
 
     /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
     /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
@@ -495,6 +604,9 @@ fn allocate_once(
         if std::env::var("LLRM_NO_Z80_CARRY").is_err() {
             crate::forward::carry_pairs_across_edges(&mut function);
         }
+    }
+    if std::env::var("LLRM_NO_Z80_COMMUTE").is_err() {
+        crate::commute::commute_to_the_dying_source(&mut function);
     }
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
@@ -801,6 +913,32 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
+/// For each instruction of each block, whether it lies inside the stack arguments of a call: after an
+/// `ADJCALLSTACKDOWN` of bytes and before the matching `ADJCALLSTACKUP`.
+fn call_areas(function: &MFunction) -> Vec<Vec<bool>> {
+    let entry = expand::call_bytes_at_entry(function);
+    function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(b, block)| {
+            let mut area = entry[b].0 != 0;
+            block
+                .insts
+                .iter()
+                .map(|inst| {
+                    match (inst.kind, inst.operands.first()) {
+                        (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => area = true,
+                        (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => area = false,
+                        _ => {}
+                    }
+                    area
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The pass the push-and-pop conversion was before `stack_slots`, the start
 /// the other forms must beat. Spill slots that nothing else needs a frame for
 /// become `push` and `pop`, and the frame goes: `digits` kept a counter across
@@ -845,13 +983,19 @@ pub fn frameless_slots_are_a_stack(
     if !any {
         return false;
     }
+    // a `push` or `pop` between the pushes of a call's stack arguments moves them; such a spill stays a slot
+    // (x87_arguments -O2: "a pushed spill inside the stack arguments of a call")
+    let areas = call_areas(function);
     let succs = llrm_spike_mf::regalloc::successors(function);
     let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
     entry[0] = Some(Vec::new());
     let mut work = vec![0usize];
     while let Some(b) = work.pop() {
         let mut stack = entry[b].clone().expect("a block on the list has a stack");
-        for inst in &function.blocks[b].insts {
+        for (at, inst) in function.blocks[b].insts.iter().enumerate() {
+            if areas[b][at] && spill(inst).is_some() {
+                return false;
+            }
             match spill(inst) {
                 Some((true, slot, _)) if !stack.contains(&slot) => stack.push(slot),
                 Some((false, slot, _)) if stack.last() == Some(&slot) => {
@@ -1013,15 +1157,10 @@ pub fn stack_slot_report_by(
     let mut barred: std::collections::BTreeMap<i32, StackRefusal> = std::collections::BTreeMap::new();
     let mut accesses: std::collections::BTreeMap<i32, (usize, usize)> = std::collections::BTreeMap::new();
     let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
-    let call_bytes = expand::call_bytes_at_entry(function);
+    let areas = call_areas(function);
     for (b, block) in function.blocks.iter().enumerate() {
-        let mut area = call_bytes[b].0 != 0;
-        for inst in &block.insts {
-            match (inst.kind, inst.operands.first()) {
-                (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => area = true,
-                (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => area = false,
-                _ => {}
-            }
+        for (at, inst) in block.insts.iter().enumerate() {
+            let area = areas[b][at];
             if let Some((store, slot, register)) = spill(inst) {
                 chosen.insert(slot);
                 let counts = accesses.entry(slot).or_default();
@@ -2013,8 +2152,8 @@ thread_local! {
 /// 57 B for the calls, the shift routines the copies call), so the functions
 /// the call makes smaller keep it only where together they save what the
 /// routines cost (switch_table_holes -Os: 40 B saved, 57 B routine).
-/// DEVIATE z80-mul-function-price: the pin's `decomposeMulByConstant` has no
-/// such choice. Owner z80. Every runtime routine a variant reaches is already
+/// DEVIATE z80-callinline-price (replaces z80-mul-function-price; see `prefers`): the pin's
+/// `decomposeMulByConstant` has no such choice. Owner z80. Every runtime routine a variant reaches is already
 /// priced (`runtime_size`), so no libcall is left out of the total.
 fn decomposes(
     selected: &Selections,
@@ -2037,7 +2176,7 @@ fn decomposes(
 /// The priced forms of the module's functions: those with one form, and
 /// those that call `__mulsi3` with the form built with shifts and adds too
 /// (bytes, runtime routines reached).
-type Priced = (u32, std::collections::HashSet<String>);
+type Priced = (u32, u64, std::collections::HashSet<String>);
 type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
 
 fn variants(
@@ -2049,8 +2188,8 @@ fn variants(
     // the printed form of every function, and for those with an alternative
     // the form with the shifts
     let priced = |lines: Vec<Line>| {
-        let bytes = expand::price_emitted(&lines, speed).0;
-        (bytes, crate::runtime_size::referenced(&lines))
+        let (bytes, clocks) = expand::price_emitted(&lines, speed);
+        (bytes, clocks, crate::runtime_size::referenced(&lines))
     };
     let mut fixed: Vec<Priced> = Vec::new();
     let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
@@ -2076,23 +2215,25 @@ fn variants(
 fn module_price(
     (fixed, either): &Variants,
     decomposes: &std::collections::HashSet<usize>,
-) -> u32 {
+) -> (u32, u64) {
     use std::collections::HashSet;
     let mut reached: HashSet<String> = HashSet::new();
-    let mut bytes = 0;
-    for (one_bytes, refs) in fixed {
+    let (mut bytes, mut clocks) = (0, 0);
+    for (one_bytes, one_clocks, refs) in fixed {
         bytes += one_bytes;
+        clocks += one_clocks;
         reached.extend(refs.iter().cloned());
     }
     for (at, (_, call, decomposed)) in either.iter().enumerate() {
-        let (one_bytes, refs) = match decomposed {
+        let (one_bytes, one_clocks, refs) = match decomposed {
             Some(decomposed) if decomposes.contains(&at) => decomposed,
             _ => call,
         };
         bytes += one_bytes;
+        clocks += one_clocks;
         reached.extend(refs.iter().cloned());
     }
-    bytes + crate::runtime_size::reached(&reached)
+    (bytes + crate::runtime_size::reached(&reached), clocks)
 }
 
 /// The module's bytes with every function calling `__mulsi3` and with every
@@ -2104,7 +2245,42 @@ pub fn module_prices(
     let (selected, alternatives) = cached_both(ir, request)?;
     let variants = variants(&selected, &alternatives, request);
     let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
-    Ok((module_price(&variants, &std::collections::HashSet::new()), module_price(&variants, &every)))
+    Ok((module_price(&variants, &std::collections::HashSet::new()).0, module_price(&variants, &every).0))
+}
+
+/// The price of function `at` alone in the form `decomposes` gives it: its bytes and clocks, and the bytes of the
+/// runtime routines it reaches that no other function of the module reaches. The clocks of a function are
+/// weighted by the loops inside it only, so against the whole module's clocks (dominated by a hot loop elsewhere)
+/// a call that costs a hundredfold in a function the loop calls would not register.
+fn own_price(
+    (fixed, either): &Variants,
+    decomposes: &std::collections::HashSet<usize>,
+    at: usize,
+) -> (u32, u64) {
+    use std::collections::HashSet;
+    let others: HashSet<String> = fixed
+        .iter()
+        .flat_map(|(.., refs)| refs.iter())
+        .chain(
+            either
+                .iter()
+                .enumerate()
+                .filter(|(one, _)| *one != at)
+                .flat_map(|(one, (_, call, decomposed))| match decomposed {
+                    Some(decomposed) if decomposes.contains(&one) => decomposed.2.iter(),
+                    _ => call.2.iter(),
+                }),
+        )
+        .cloned()
+        .collect();
+    let (_, call, decomposed) = &either[at];
+    let (bytes, clocks, refs) = match decomposed {
+        Some(decomposed) if decomposes.contains(&at) => decomposed,
+        _ => call,
+    };
+    let mut with = others.clone();
+    with.extend(refs.iter().cloned());
+    (bytes + crate::runtime_size::reached(&with) - crate::runtime_size::reached(&others), *clocks)
 }
 
 /// The functions of the module that call `__mulsi3`, built with the shifts
@@ -2118,11 +2294,23 @@ fn decomposed_functions(
     use std::collections::HashSet;
     let variants = variants(selected, alternatives, request);
     let either = &variants.1;
+    let level = request.level;
     let total = |decomposes: &HashSet<usize>| module_price(&variants, decomposes);
-    // descend from all shifts and from all calls (two functions may together
-    // pay for a routine neither pays for alone); the smaller module wins, a tie
-    // goes to the shifts
+    // descend from all alternatives and from none (two functions may together
+    // pay for a routine neither pays for alone); a flip needs a strictly better
+    // module price at the level, and the second start wins only if strictly
+    // better than the first
     let every: HashSet<usize> = (0..either.len()).filter(|at| either[*at].2.is_some()).collect();
+    // a function tuned for size (`optsize`/`minsize`) is priced bytes first at any level, as the pin's `ForCodeSize`
+    // reads it; the others by the level
+    let size_first: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            matches!(level, Level::Os | Level::Oz)
+                || selected.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.sized))
+        })
+        .collect();
+    let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2137,7 +2325,14 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                if price < best {
+                let better = if size_first[at] {
+                    prefers(Level::Os, price, best)
+                } else if level == Level::O1 {
+                    prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
+                } else {
+                    prefers(level, price, best)
+                };
+                if better {
                     (chosen, best, moved) = (other, price, true);
                 }
             }
@@ -2147,14 +2342,46 @@ fn decomposed_functions(
         }
         (best, chosen)
     };
-    let (from_shifts, from_calls) = (descend(every), descend(HashSet::new()));
-    let chosen = if from_calls.0 < from_shifts.0 { from_calls.1 } else { from_shifts.1 };
+    // a tie keeps the faster form: the alternative at the size levels is the
+    // inline form, at the others the all-calls form
+    let module_level = if all_sized { Level::Os } else { level };
+    let (first, second) = if module_level == Level::Os {
+        (descend(every), descend(HashSet::new()))
+    } else {
+        (descend(HashSet::new()), descend(every))
+    };
+    let chosen = if prefers(module_level, second.0, first.0) { second.1 } else { first.1 };
     either
         .iter()
         .enumerate()
         .filter(|(at, (_, _, decomposed))| decomposed.is_some() && chosen.contains(at))
         .map(|(_, (one, ..))| one.clone())
         .collect()
+}
+
+/// Whether the module price `new` (bytes, clocks) is strictly better than `old` at `level`: bytes first at the
+/// size levels; 1 B = 3 T at O2 and up; at O1, where no rate stands for the strict bar on both axes, the
+/// smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that gives
+/// up a few percent of one axis for a large part of the other wins, and the reverse does not.
+/// DEVIATE z80-callinline-price: the pin keys a call against inline on `optsize` alone (`ForCodeSize`) and
+/// prices neither the routine's clocks nor the bytes against each other. It prices the multiply calls and the long
+/// shift calls (`size_shift_call`) by the same model (`runtime_size::routine_clocks`). Owner z80, exit 2026-11-20.
+fn prefers(
+    level: Level,
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    match level {
+        Level::Os | Level::Oz => new < old,
+        Level::O1 => {
+            let regret = |one: (u32, u64), other: (u32, u64)| {
+                let (bytes, clocks) = (f64::from(one.0) / f64::from(one.0.min(other.0).max(1)), one.1 as f64 / other.1.min(one.1).max(1) as f64);
+                bytes.max(clocks)
+            };
+            regret(new, old) < regret(old, new)
+        }
+        _ => cheaper(level, new, old),
+    }
 }
 
 fn lines_of(
@@ -2213,6 +2440,7 @@ pub fn text(
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
+    let request = &effective(ir, request)?;
     let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
     let (selected, alternatives) = cached_both(ir, request)?;
     text_of(source, &selected, &alternatives, name, number, request)
@@ -2226,6 +2454,7 @@ pub fn text_in(
     request: &Request,
 ) -> Result<String, String> {
     let source = prepared.sources.get(name).cloned();
+    let request = &Request { level: prepared.level, ..request.clone() };
     text_of(source, &prepared.selections, &prepared.alternatives, name, number, request)
 }
 
@@ -2256,7 +2485,13 @@ fn text_of(
         .find(|(one, ..)| one == name)
         .is_some_and(|(_, source, _)| source.as_ref().is_ok_and(|s| s.local));
     out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
-    for line in lines_in(selected, alternatives, name, number, request)? {
+    let at = std::rc::Rc::as_ptr(selected) as usize;
+    let kept = KEPT_LINES.with(|kept| kept.borrow_mut().remove(&(at, name.to_owned(), number)));
+    let lines = match kept {
+        Some(lines) => lines,
+        None => lines_in(selected, alternatives, name, number, request)?,
+    };
+    for line in lines {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),

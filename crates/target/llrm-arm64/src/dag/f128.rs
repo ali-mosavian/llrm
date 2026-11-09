@@ -11,9 +11,11 @@
 //! `softenSetCCOperands`: the routine named by `RTLIB`, its result an integer
 //! that a compare reads against zero.
 //!
-//! DEVIATE SD534: `f128` `SELECT`, `FNEG`, `FABS`, `FCOPYSIGN`, `FSQRT` and
-//! the libm routines are not translated: the node stays `Custom` and the
-//! function is refused. Exit: B3.
+//! `SELECT` is the pin's `F128CSEL` block split (`emit.rs`), and `FNEG`, `FABS` and `FCOPYSIGN` its sign-byte rewrite
+//! through a stack slot (`ExpandFNEG`, in the shared legalizer).
+//!
+//! DEVIATE SD534: `f128` `FSQRT`, `FMA`, `FRINT`, `FSIN`, `FCOS` and the other libm routines are not translated: the
+//! node is refused as a libcall the table does not name. Exit: B3.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp`: `LowerF128Call`, `LowerFP_EXTEND`,

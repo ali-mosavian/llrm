@@ -1074,6 +1074,72 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
+/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; the pin's llc
+/// writes `rep movsb` at `minsize`, gcc -Os inlines it too (memory_expansion
+/// 23405 B against 22295 and 22749): +1110 B, half of the 88 cells worse than
+/// the pin at the same rules. DEVIATE REP-MOVS-OS.
+#[test]
+fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+                define void @f(ptr align 1 %d, ptr align 1 %s) optsize {\n\
+                \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 700, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
+}
+
+/// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
+/// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
+/// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.
+#[test]
+fn a_small_immediate_at_m32_os_is_push_pop() {
+    let text = |attrs: &str, value: i32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f() {attrs} {{\n  ret i32 {value}\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str, value: i32| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs, value), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize", 40);
+    assert!(at_os.contains("pushd 40") && at_os.contains("pop eax"), "{at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize", 40);
+    assert!(marked.contains("pushd 40") && marked.contains("pop eax"), "{marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "", 40);
+    assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
+    let wide = listing(&["-mabi=sysv", "-Os"], "optsize", 4000);
+    assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
+}
+
+/// A signed divide by 1024 is `idiv` at m32 -Os and -Oz (a `minsize` function too), the
+/// `sar; shr; add; sar` sequence at -O2: 4 Os cells -131 B (jpeg_fixed -45). The pin keeps the
+/// `idiv` at minsize only (`isIntDivCheap`); -Os is a DEVIATION. DEVIATE SDIV-POW2-OS.
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
+    let text = |attrs: &str| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f(i32 %x) {attrs} {{\n  %q = sdiv i32 %x, 1024\n  ret i32 %q\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize");
+    assert!(at_os.contains("idiv"), "-Os: {at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize");
+    assert!(marked.contains("idiv"), "minsize function: {marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "");
+    assert!(!at_speed.contains("idiv") && at_speed.contains("sar"), "-O2: {at_speed}");
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.

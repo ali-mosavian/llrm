@@ -40,6 +40,8 @@
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
 //!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
 //!   both.
+//! - [`zero_cells_with_stz`]: 65C02 `lda #0; sta m` (a run of stores of the zero)
+//!   with `a` dead after: `stz m` each.
 //! - [`step_in_place`]: `lda #1; clc; adc m; sta m` (also `lda m; clc; adc #1;
 //!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta m`,
 //!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
@@ -84,8 +86,8 @@ pub(crate) fn flags_unread_after(
         }
         let Line::Inst(inst) = line else { return false };
         // a jump leaves the block: no block reads the flags its predecessor
-        // left
-        if inst.op == Op::Jmp {
+        // left (`bra` is the 65C02's)
+        if matches!(inst.op, Op::Jmp | Op::Bra) {
             return true;
         }
         match inst.flags() {
@@ -130,6 +132,7 @@ pub fn run_with(
     drop_reloads(asm);
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
+    zero_cells_with_stz(asm);
     if known_loads {
         drop_known_loads(asm);
     }
@@ -158,6 +161,8 @@ pub fn run_with(
     }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
+    // a transfer that fed an `or` of zero is gone: the load is next to its store
+    drop_reloads(asm);
     crate::peephole_cells::store_then_index_load(asm);
     // last of the cell passes: the choice is by the final size, after the
     // chain passes have taken what they take from the loop's neighbours
@@ -1010,12 +1015,12 @@ fn walk<'a>(
     targets: &[&str],
     quiet: &[&str],
     at_label: &HashMap<&'a str, Known<'a>>,
-) -> (Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>, HashMap<&'a str, Known<'a>>) {
+) -> (Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst, usize)>, HashMap<&'a str, Known<'a>>) {
     let mut known: Option<Known<'a>> = Some([None; 3]);
     let mut keep = vec![true; lines.len()];
     let mut transfers: Vec<(usize, Op)> = Vec::new();
     let mut carried: HashMap<&str, Known> = HashMap::default();
-    let mut stores: Vec<(usize, Inst)> = Vec::new();
+    let mut stores: Vec<(usize, Inst, usize)> = Vec::new();
     let mut skip = 0;
     for (at, line) in lines.iter().enumerate() {
         if at < skip {
@@ -1049,7 +1054,7 @@ fn walk<'a>(
             && let Some(by) =
                 [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| state[*r] == Some(Value::Imm(value.as_str())))
         {
-            stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }));
+            stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }, 3));
             // the shortcut writes the cell the skipped `sta` wrote
             match &store.operand {
                 Operand::Direct(name) => forget_cell(&mut state, Some(name)),
@@ -1137,6 +1142,19 @@ fn walk<'a>(
                     state[from] = Some(Value::Cell(name.as_str()));
                 }
             }
+            // `or` and `xor` of a zero are the load of the operand (the same
+            // flags): `tya; ora m` with `y` = 0 is `lda m`, and the transfer
+            // is then a dead write
+            (Op::Ora | Op::Eor, _, Operand::Imm(_) | Operand::Direct(_))
+                if state[0] == Some(Value::Imm("0")) && (operand.is_cell() || matches!(operand, Operand::Imm(_))) =>
+            {
+                stores.push((at, Inst { op: Op::Lda, operand: operand.clone(), place: line.inst().map_or(0, |inst| inst.place) }, 0));
+                state[0] = match operand {
+                    Operand::Imm(value) => Some(Value::Imm(value.as_str())),
+                    Operand::Direct(name) => Some(Value::Cell(name.as_str())),
+                    _ => None,
+                };
+            }
             (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => state[0] = None,
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => state[0] = None,
             (Op::Ldx | Op::Inx | Op::Dex, ..) => state[1] = None,
@@ -1182,19 +1200,22 @@ pub fn drop_known_loads(asm: &mut Asm) {
     for (at, op) in transfers {
         asm.lines[at] = Line::Inst(Inst::new(op, Operand::None));
     }
-    for (at, store) in stores {
-        asm.lines[at] = Line::Inst(store);
-        keep[at + 1..at + 4].fill(false);
+    for (at, replacement, dropped) in stores {
+        asm.lines[at] = Line::Inst(replacement);
+        keep[at + 1..at + 1 + dropped].fill(false);
     }
     retain(asm, &keep);
 }
 
 /// The loads to keep and to turn into transfers, once the values at the labels
-/// hold; none if eight walks do not settle them.
-fn decide_known_loads(lines: &[Line]) -> Option<(Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>)> {
+/// hold. A walk that does not settle them loses a value at some label (each
+/// label starts absent, then holds three registers, and values are only lost),
+/// so `4 * labels + 2` walks reach the fixed point; a cap of eight left a
+/// 3800-line function (jpeg_single, nine walks) with every redundant load.
+fn decide_known_loads(lines: &[Line]) -> Option<(Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst, usize)>)> {
     let (targets, quiet) = branch_targets(lines);
     let mut at_label: HashMap<&str, Known> = HashMap::default();
-    for _ in 0..8 {
+    for _ in 0..4 * targets.len() + 2 {
         let (keep, transfers, stores, carried) = walk(lines, &targets, &quiet, &at_label);
         if carried == at_label {
             return Some((keep, transfers, stores));
@@ -2036,6 +2057,58 @@ fn carry_dead_from(
         }
     }
     false
+}
+
+/// 65C02: `lda #0; sta m` (and further `[lda #0;] sta n` after it) with `a`
+/// dead after the last store: `stz m`, `stz n`. The zero reaches the cell
+/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered.
+pub fn zero_cells_with_stz(asm: &mut Asm) {
+    if !asm.cmos {
+        return;
+    }
+    let runs = {
+        let exits = Exits::of(asm);
+        let lines = &asm.lines;
+        let zero = |n: usize| {
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Lda && i.operand == Operand::Imm("0".into()))
+        };
+        let cell = |n: usize| {
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
+        };
+        let mut runs = Vec::new();
+        let mut at = 0;
+        while at + 1 < lines.len() {
+            if !(zero(at) && cell(at + 1)) {
+                at += 1;
+                continue;
+            }
+            // the run: stores, each after a `lda #0` or straight after the last store
+            let mut end = at + 2;
+            loop {
+                if cell(end) {
+                    end += 1;
+                } else if zero(end) && cell(end + 1) {
+                    end += 2;
+                } else {
+                    break;
+                }
+            }
+            if flags_unread_after(lines, end) && dead_from(lines, end, Registers::A, &mut HashSet::default(), exits) {
+                runs.push((at, end));
+            }
+            at = end;
+        }
+        runs
+    };
+    for (at, end) in runs.into_iter().rev() {
+        let stores: Vec<Line> = asm.lines[at..end]
+            .iter()
+            .filter_map(Line::inst)
+            .filter(|i| i.op == Op::Sta)
+            .map(|i| Line::Inst(Inst { op: Op::Stz, operand: i.operand.clone(), place: i.place }))
+            .collect();
+        asm.lines.splice(at..end, stores);
+    }
 }
 
 /// A step of one of a byte in memory as `inc m` or `dec m`.
