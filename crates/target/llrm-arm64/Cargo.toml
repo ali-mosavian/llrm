@@ -13,6 +13,7 @@ llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
+llrm-alloc = { workspace = true }
 llrm-codegen = { workspace = true }
 llrm-support = { workspace = true }
 llrm-env = { workspace = true }

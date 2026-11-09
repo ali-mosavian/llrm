@@ -342,6 +342,12 @@ fn index_section(
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
     /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
     /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites

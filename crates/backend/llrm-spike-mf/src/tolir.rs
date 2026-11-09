@@ -118,6 +118,7 @@ impl<T: Target> Converted<T> {
             T::joins_sub_registers(),
             T::joins_lanes(),
             T::joins_loop_carried_first(),
+            T::joins_unnarrowed_for_free(),
             registers,
             Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
