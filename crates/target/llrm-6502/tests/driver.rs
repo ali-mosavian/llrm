@@ -1411,12 +1411,13 @@ define i8 @rem() {
 /// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
 /// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
 /// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
-/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines). The arms call different functions: with one callee the
+/// pin merges them into `g(2 - c)`, and the `sbc` that merge leaves read as a compare chain (red on release/next 5a1802c07e).
 #[test]
 fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
     let branch = |compare: &str, then: &str, other: &str| {
         module(&format!(
-            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+            "declare i8 @g(i8)\ndeclare i8 @h(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @h(i8 2)\n  ret i8 %b\n}}"
         ))
     };
     let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();

@@ -103,11 +103,8 @@ impl<T: Target> Converted<T> {
         let kind_infos = infos.clone();
         let kinds = Rc::new(RefCell::new(UseKindTable::default()));
         let priced = Rc::clone(&kinds);
-        let palettes = self
-            .orders
-            .iter()
-            .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
-            .collect();
+        let palettes = shared_palettes(&self.orders);
+        let originals = palettes.clone();
         let (body, palettes, joined) = llrm_codegen::coalescer::env::coalesce(
             &self.body,
             palettes,
@@ -217,7 +214,10 @@ impl<T: Target> Converted<T> {
             }),
         );
         for (value, order) in self.orders.iter_mut() {
-            if let Some(allowed) = palettes.get(value) {
+            // A set no join narrowed is the one it started as.
+            if let Some(allowed) =
+                palettes.get(value).filter(|now| !originals.get(value).is_some_and(|was| Rc::ptr_eq(now, was)))
+            {
                 order.retain(|register| allowed.contains(register));
             }
         }
@@ -2522,6 +2522,21 @@ fn allocate_greedy_pinned<T: Target>(
     Ok((back.assignment, back.slots))
 }
 
+/// The registers each value may take as sets, one set for all the values
+/// that start with the same order (a class's values do): a set is built once
+/// per distinct order, not once per value (arm64 shellsort: 700 values, 8
+/// classes).
+fn shared_palettes(orders: &IndexMap<u32, Vec<RegId>>) -> IndexMap<u32, Rc<BTreeSet<RegId>>> {
+    let mut interned: llrm_support::hash::HashMap<&[RegId], Rc<BTreeSet<RegId>>> = Default::default();
+    orders
+        .iter()
+        .map(|(value, order)| {
+            let set = interned.entry(order.as_slice()).or_insert_with(|| Rc::new(order.iter().copied().collect()));
+            (*value, Rc::clone(set))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod lane_def_tests {
     use super::*;
@@ -2547,5 +2562,29 @@ mod lane_def_tests {
     fn a_byte_written_into_a_pair_is_not_a_literal_to_make_again() {
         assert!(is_literal_move(&literal(false)));
         assert!(!is_literal_move(&literal(true)));
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    /// A set was built for every value, a few hundred times the sets a
+    /// function's classes need, and every join cloned them: 4 M of the
+    /// 64 M arm64 shellsort's allocation costs. Values of one order share one
+    /// set; an order of its own gets its own.
+    #[test]
+    fn test_values_of_one_order_share_one_palette() {
+        let first = vec![RegId::AX, RegId::BX];
+        let second = vec![RegId::AX];
+        let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
+        for value in 1..=700u32 {
+            orders.insert(value, if value % 100 == 0 { second.clone() } else { first.clone() });
+        }
+        let palettes = shared_palettes(&orders);
+        let distinct: std::collections::HashSet<*const BTreeSet<RegId>> = palettes.values().map(Rc::as_ptr).collect();
+        assert_eq!(distinct.len(), 2, "one set per distinct order");
+        assert_eq!(palettes[&1].iter().copied().collect::<Vec<_>>(), first);
+        assert_eq!(palettes[&100].iter().copied().collect::<Vec<_>>(), second);
     }
 }

@@ -3244,7 +3244,7 @@ impl Emitter<'_, '_> {
                 self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Held(target)], ..what });
                 Ok(Some(()))
             }
-            "MOV32ImmSExti8" => {
+            "MOV32ImmSExti8" | "MOV64ImmSExti8" => {
                 let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let source = self.operand(node.ops[0])?;

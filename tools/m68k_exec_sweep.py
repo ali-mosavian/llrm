@@ -157,7 +157,7 @@ def main() -> int:
     cc = o0_sweep.compiler()
     target = f"m68k-{args.cpu}"
     chosen = [p for p in sorted((ROOT / "tests/run/c").glob("*.c")) if not args.names or p.stem in args.names]
-    programs = [p for p in chosen if ct.applies(target, p.read_text())]
+    programs = [p for p in chosen if ct.applies(target, p.read_text(), p)]
     support = build_support(cc, root, args.cpu, cache_dir(cc), args.jobs)
     levels = args.levels.split(",")
     jobs = [(p, level) for p in programs for level in levels]
