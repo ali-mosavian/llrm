@@ -304,6 +304,19 @@ class SizeTests(unittest.TestCase):
     def test_a_counter_the_base_lacks_is_not_judged(self):
         self.assertEqual(bench.against("x", dict(SIZED), {"instructions": 100, "memory_operands": 40}), [])
 
+    def test_a_clock_rise_within_the_executed_pad_nops_is_not_raised_without_a_corrected_base(self):
+        """M16-CLOCK-FARCALL-PAD: jpeg_fixed read +172 clocks on #8545 from 171 more executed jwlink pad nops, the code unchanged; a base without
+        layout_clocks cannot say, and a rise of at most the new side's pad nops is explained by the pad alone."""
+        base = SIZED | {"clocks": 74423823}
+        moved = SIZED | {"clocks": 74423995, "pad_nops": 199}
+        self.assertEqual(bench.against("jpeg_fixed", moved, base), [])
+        self.assertEqual(len(bench.against("jpeg_fixed", moved | {"pad_nops": 100}, base)), 1, "a rise past the pad nops is real")
+
+    def test_clocks_are_judged_on_the_layout_corrected_column_where_both_sides_have_it(self):
+        base = SIZED | {"clocks": 1000, "layout_clocks": 990, "pad_nops": 10}
+        self.assertEqual(bench.against("x", SIZED | {"clocks": 1170, "layout_clocks": 990, "pad_nops": 180}, base), [])
+        self.assertEqual(len(bench.against("x", SIZED | {"clocks": 1000, "layout_clocks": 995, "pad_nops": 5}, base)), 1)
+
     def test_the_size_ratio_to_a_reference_may_not_worsen(self):
         """llrm's code grew 200 -> 260 against BCC's 300: the ratio went 0.67 -> 0.87."""
         problems = bench.ratio_problems("x", "bcc", SIZED | {"code_bytes": 260}, SIZED, SIZED | {"code_bytes": 300})

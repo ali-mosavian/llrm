@@ -878,7 +878,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     for (benchmark, language, opt), counts in measured.items():
         if benchmark != name or "error" in counts or "skip" in counts:
             continue
-        new = {one: counts[one] for one in (*COUNTERS, "clocks", *SIZES, "kernel_ms") if one in counts}
+        new = {one: counts[one] for one in (*COUNTERS, "clocks", "layout_clocks", "pad_nops", *SIZES, "kernel_ms") if one in counts}
         old = tables.get(language, {}).get(opt, {})
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
@@ -931,7 +931,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
-    got, want = with_footprint(got), with_footprint(want)
+    got, want = pad_corrected(with_footprint(got), with_footprint(want))
     problems = []
     priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
     if priced:
@@ -956,6 +956,20 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         if got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
     return problems
+
+
+def pad_corrected(got: dict, want: dict) -> tuple[dict, dict]:
+    """m16 clocks as the judge sees them (M16-CLOCK-FARCALL-PAD): jwlink's far-call pad is a `nop` that runs at even offsets and a free prefix at odd
+    ones, so a one-byte shift earlier in a segment moves one clock per executed call between sites (#8545: jpeg_fixed +172, jpeg_single -170 on
+    the same code). Both sides with `layout_clocks`: those are compared (raw stays in the row). A base without the column: a rise of at most the
+    new side's executed pad nops is explained by the pad alone (delta = layout delta + new pads - old pads <= new pads), so it is not raised."""
+    if "clocks" not in got or "clocks" not in want:
+        return got, want
+    if "layout_clocks" in got and "layout_clocks" in want:
+        return {**got, "clocks": got["layout_clocks"]}, {**want, "clocks": want["layout_clocks"]}
+    if 0 < got["clocks"] - want["clocks"] <= got.get("pad_nops", 0):
+        return {**got, "clocks": want["clocks"]}, want
+    return got, want
 
 
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
