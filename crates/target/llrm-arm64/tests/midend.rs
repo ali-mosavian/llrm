@@ -598,7 +598,8 @@ fn debug_only_inline_cost_prints_the_decision_and_the_instruction_costs() {
     let llc = std::path::Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
     let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/inline_small_callee.ll");
     let run = |extra: &[&str]| {
-        let out = std::env::temp_dir().join(format!("inline_cost_{}.s", extra.len()));
+        let scratch = tempfile::tempdir().unwrap();
+        let out = scratch.path().join("f.s");
         let said = std::process::Command::new(llc)
             .args(extra)
             .args(["-S", "-o"])
@@ -625,7 +626,8 @@ fn isel_dump_prints_the_operations_after_each_machine_phase() {
     let llc = std::path::Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
     let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/inline_small_callee.ll");
     let run = |dump: bool| {
-        let out = std::env::temp_dir().join(format!("isel_dump_{dump}.s"));
+        let scratch = tempfile::tempdir().unwrap();
+        let out = scratch.path().join("f.s");
         let mut command = std::process::Command::new(llc);
         command.args(["-S", "-o"]).arg(&out).arg(ir).env_remove("ISEL_DUMP");
         if dump {
