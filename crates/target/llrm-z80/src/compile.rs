@@ -605,6 +605,9 @@ fn allocate_once(
             crate::forward::carry_pairs_across_edges(&mut function);
         }
     }
+    if std::env::var("LLRM_NO_Z80_COMMUTE").is_err() {
+        crate::commute::commute_to_the_dying_source(&mut function);
+    }
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
