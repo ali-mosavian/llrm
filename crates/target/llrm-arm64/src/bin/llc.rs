@@ -13,6 +13,9 @@
 
 use llrm_arm64::driver;
 
+#[global_allocator]
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
+
 fn main() {
     // The mid-end recurses along dependency chains (a 3,000-line function
     // overflowed the main thread's 8 MB): the compile runs on a thread with
