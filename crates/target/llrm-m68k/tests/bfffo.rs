@@ -1,7 +1,8 @@
 //! `bfffo` counts leading and trailing zeros from the 68020. The pin selects no
 //! bitfield instruction (DEVIATE M68K-BFFFO, `dagisel/bfffo.rs`): `clz32` was
 //! the 20-instruction shift-or-popcount expansion, 828 B against gcc's 772 in
-//! `bitcount_u32`.
+//! `bitcount_u32` (executables with every count routine linked into both
+//! columns, not whole-program: docs/working/m68k-bitcount-cells.md).
 
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;

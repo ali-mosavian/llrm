@@ -48,3 +48,21 @@ def test_a_routine_the_program_does_not_reference_is_not_linked(tmp_path):
     assert "ctzsi2" in linked, linked
     assert linked.isdisjoint({"ctzdi2", "clzdi2", "popcountsi2", "popcountdi2"}), linked
     assert got["whole"] == got["program"] + got["library"]
+
+
+@pytest.mark.skipif(not GCC or not Path(o0_sweep.compiler()).exists(), reason="needs GCC_M68K and llrm-cc")
+def test_both_columns_link_by_the_same_rule(tmp_path):
+    """Two columns, one rule: each links only the members its own code references. popcount is a libcall in the gcc column and inline in ours, so the gcc column
+    carries __popcountsi2 and ours does not; neither carries a routine its code does not call."""
+    source = tmp_path / "pop.c"
+    source.write_text("int main(void) { volatile unsigned x = 7; return __builtin_popcount(x) != 3; }\n")
+    cc = o0_sweep.compiler()
+    cache = sweep.cache_dir(cc)
+    ours = size.measure(source, "68020", "Os", "ours", cc, GCC, cache, tmp_path)
+    gcc = size.measure(source, "68020", "Os", "gcc", cc, GCC, cache, tmp_path)
+    linked = {name: {size.short(m) for m in got["members"]} for name, got in (("ours", ours), ("gcc", gcc))}
+    assert linked["gcc"] == {"popcountsi2"}, linked
+    assert linked["ours"] == set(), linked
+    for got in (ours, gcc):
+        assert got["whole"] == got["program"] + got["library"]
+    assert gcc["library"] > 0 and ours["library"] == 0
