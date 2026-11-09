@@ -318,6 +318,9 @@ impl<T: Target> Converted<T> {
                                 // the zero register is no lane: nothing writes
                                 // it
                                 .filter(|register| registers.known(**register))
+                                // the stack pointer a call rewrites has no
+                                // lanes
+                                .filter(|register| Lanes::exists(**register))
                                 .map(|register| Lanes::span(*register, 0, 1))
                                 .fold(Lanes::new(), |all, one| all.or(&one))
                         };
@@ -404,6 +407,23 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
+    convert(function, registers)
+}
+
+/// [`to_lir`] for a function still in SSA form, phis kept: what the shared
+/// machine stages before `PHIElimination` read. [`from_ssa`] reads the result
+/// back.
+pub fn to_ssa_lir<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+) -> Result<Converted<T>, String> {
+    convert(function, registers)
+}
+
+fn convert<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+) -> Result<Converted<T>, String> {
     // A class's width once, not once per register of it.
     let mut width_of: Vec<(T::Class, u32)> = Vec::new();
     let widths: Vec<u32> = function
@@ -528,12 +548,14 @@ pub fn to_lir<T: Target>(
         let mut lir = LirBlock::new(at as i64, insns);
         if reachable[at] {
             lir.succ = successors[at].iter().map(|to| *to as i64).collect();
+            lir.phis = block.phis.iter().map(|phi| made.phi(phi)).collect::<Result<Vec<_>, _>>()?.into();
         }
         blocks.push(LirBlockRef::from(lir));
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
+    body.registers = Some(registers);
     match &function.odds {
         Some(odds) => stated_odds(&mut body, function, odds),
         None => loop_branch_odds(&mut body),
@@ -705,6 +727,22 @@ struct Made<'f, T: Target> {
 }
 
 impl<T: Target> Made<'_, T> {
+    /// `PHI result, (value, predecessor)..` in the body's numbering: a virtual
+    /// register `v` is the value `v + 1`, a predecessor its block's position.
+    fn phi(
+        &self,
+        phi: &crate::mfunc::Phi,
+    ) -> Result<llrm_codegen::model::lir::Phi, String> {
+        let value = |register: &Reg| match register {
+            Reg::Virt(v) => Ok(v + 1),
+            Reg::Phys(_) => Err(format!("{}: a phi of a physical register", self.function.name)),
+        };
+        Ok(llrm_codegen::model::lir::Phi {
+            result: value(&phi.result)?,
+            incoming: phi.incoming.iter().map(|(pred, from)| Ok((*pred as i64, value(from)?))).collect::<Result<_, String>>()?,
+        })
+    }
+
     /// The value of a physical register: one for the whole function, so
     /// greedy's liveness follows it across blocks and through every rewrite.
     fn pinned(
@@ -2149,6 +2187,119 @@ fn substitute<'a, T: Target>(
         };
     }
     Ok(made)
+}
+
+/// A shared machine stage's result as a machine function again: the stage ran
+/// on [`to_ssa_lir`]'s body and may have removed instructions, moved them
+/// between blocks and renamed the values they read, which is all it is given
+/// back as. An instruction it made, a block it added and a value it created
+/// are refused: a stage hosted here must not make them (each later stage
+/// extends this when it needs to).
+pub fn from_ssa<T: Target>(
+    original: &MFunction<T::Class>,
+    converted: &Converted<T>,
+    body: &LirBody,
+) -> Result<MFunction<T::Class>, String> {
+    let name = &original.name;
+    if body.blocks.len() != original.blocks.len() {
+        return Err(format!("{name}: a stage changed the number of blocks"));
+    }
+    let known = original.classes.len() as u32;
+    // what each instruction read before the stage, by its place
+    let before: llrm_support::hash::HashMap<i64, &Insn> =
+        converted.body.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (insn.at, &**insn)).collect();
+    // a value another replaces, found from the readers the stage rewrote
+    let mut renamed: IndexMap<u32, u32> = IndexMap::default();
+    let mut note = |from: u32, to: u32| -> Result<(), String> {
+        match renamed.insert(from, to) {
+            Some(held) if held != to => Err(format!("{name}: a stage renamed value {from} to {held} and to {to}")),
+            _ => Ok(()),
+        }
+    };
+    for block in body.blocks.iter() {
+        for insn in block.insns.iter() {
+            let Some(old) = before.get(&insn.at) else {
+                return Err(format!("{name}: a stage made an instruction"));
+            };
+            if old.uses.len() != insn.uses.len() {
+                return Err(format!("{name}: a stage changed what an instruction reads"));
+            }
+            for (a, b) in old.uses.iter().zip(&insn.uses) {
+                if a != b {
+                    note(*a, *b)?;
+                }
+            }
+        }
+    }
+    let rename = |value: u32| *renamed.get(&value).unwrap_or(&value);
+    let register = |value: u32| -> Result<Reg, String> {
+        match converted.body.pins.get(&value) {
+            Some(register) => Ok(Reg::Phys(*register)),
+            None if value >= 1 && value <= known => Ok(Reg::Virt(value - 1)),
+            None => Err(format!("{name}: a stage made value {value}")),
+        }
+    };
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    for (at, lir) in body.blocks.iter().enumerate() {
+        if lir.at != at as i64 {
+            return Err(format!("{name}: a stage reordered the blocks"));
+        }
+        if !converted.reachable[at] {
+            blocks.push(original.blocks[at].clone());
+            continue;
+        }
+        let mut insts = Vec::with_capacity(lir.insns.len());
+        for insn in lir.insns.iter() {
+            // a bundle is two instructions
+            let places = if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE)) { 2 } else { 1 };
+            for k in 0..places {
+                let (b, i) = *converted
+                    .origin
+                    .get((insn.at / 2) as usize + k)
+                    .ok_or_else(|| format!("{name}: an instruction with no origin"))?;
+                let mut inst = original.blocks[b].insts[i].clone();
+                for operand in &mut inst.operands {
+                    if let Operand::Use(Reg::Virt(v)) = operand {
+                        *v = rename(*v + 1) - 1;
+                    }
+                }
+                insts.push(inst);
+            }
+        }
+        let mut phis = Vec::with_capacity(lir.phis.len());
+        for phi in lir.phis.iter() {
+            phis.push(crate::mfunc::Phi {
+                result: register(phi.result)?,
+                incoming: phi
+                    .incoming
+                    .iter()
+                    .map(|(pred, value)| Ok((*pred as usize, register(rename(*value))?)))
+                    .collect::<Result<_, String>>()?,
+            });
+        }
+        blocks.push(Block { id: original.blocks[at].id, insts, phis });
+    }
+    let mut function = original.clone();
+    function.blocks = blocks;
+    Ok(function)
+}
+
+/// `stage` run on `function` in SSA form by the shared flow's
+/// [`LIRTransform`](llrm_codegen::model::passes::LIRTransform), and the result
+/// back as a machine function.
+pub fn host_ssa<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+    stage: &mut dyn llrm_codegen::model::passes::LIRTransform,
+) -> Result<MFunction<T::Class>, String> {
+    let converted = to_ssa_lir::<T>(function, registers)?;
+    // The shared stages read an instruction's effects (the flags it sets, the
+    // memory it touches) off the instruction; the spike target states them
+    // here, as the pre-RA scheduler's input has them.
+    let _lanes = llrm_codegen::backend::lanes::enter(registers);
+    let input = converted.with_effects(function, registers);
+    let body = stage.transform(input)?;
+    from_ssa(function, &converted, &body)
 }
 
 /// What greedy's edited function is as a machine function again.
