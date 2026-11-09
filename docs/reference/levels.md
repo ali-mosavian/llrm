@@ -238,3 +238,7 @@ We match -O0 only: `Options::none()` has no allocation search, so a function is 
 -Os does not match. gcc's one region is the allocator without loop-tree regions; the counterpart here is no live-range splitting. Measured on 131 files: compile -35% (`d_faces`) and -20% (`d_alias`), but bytes +0.49% geomean, worst `pl_trace` +5.8%. Splitting earns its bytes in this allocator, so -Os splits.
 
 A function is allocated once below -Omax, as LLVM's greedy allocator and gcc's IRA do. -Omax tries other shapes of a body (`-fallocation-search`) and makes each function by the allocator alone and by the spiller's route, keeping the cheaper (`-fallocation-routes`). The switches are independent and set either anywhere.
+
+## wasm32 levels
+
+The tables above are the x86 rows (gcc's model). wasm32 compares with the pin, which is LLVM, so its levels come from `llrm-wasm`'s own `Level::mid_end`: -O2 is `Options::default()` (peeling on, complete unrolling may grow the code, unswitching off), not `standard()` (no peeling, no growth); -O3 is `speed()`, -Omax `aggressive()`, -Os `size()`, -Oz `min_size()`. LLVM's -O2 peels and unrolls with growth, so `default()` is the nearer model. Not priced against `standard()` on wasm bytes yet. `lower_switches`, `merge_stores` and `write_through` are off at every level: the DAG does those, as in the pin.
