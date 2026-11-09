@@ -80,9 +80,10 @@ fn select_indirect<D: AddrDag>(
     results.push((offset, None));
 }
 
-/// `SelectPointer`: `SelectIndirect` for an address that is a pointer. A global's address (or a constant) is left to the absolute
-/// forms: `lda g+36` is one instruction where a pointer pair is four to build, and the folds into an ALU op have no absolute form
-/// for every carry op.
+/// `SelectPointer`: `SelectIndirect` for an address that is a pointer. A
+/// global's address (or a constant) is left to the absolute forms: `lda g+36`
+/// is one instruction where a pointer pair is four to build, and the folds into
+/// an ALU op have no absolute form for every carry op.
 fn select_pointer<D: AddrDag>(
     dag: &mut D,
     value: SDValue,

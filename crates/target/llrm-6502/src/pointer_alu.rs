@@ -1,9 +1,11 @@
-//! The ops that read their second operand through a pointer (`ADD8P`..`SUBOC16P`): one table for the allocator, the frame
-//! code and the selector.
+//! The ops that read their second operand through a pointer
+//! (`ADD8P`..`SUBOC16P`): one table for the allocator, the frame code and the
+//! selector.
 
 use crate::dagisel::generated::ids::opcode as op;
 
-/// One folded op: the 6502 mnemonic, the carry set-up before it, and where its operands sit.
+/// One folded op: the 6502 mnemonic, the carry set-up before it, and where its
+/// operands sit.
 pub struct PointerAlu {
     pub mnemonic: &'static str,
     pub carry: Option<&'static str>,
@@ -11,9 +13,11 @@ pub struct PointerAlu {
     pub a: usize,
     /// The operand holding the pointer; the offset follows it.
     pub ptr: usize,
-    /// The operands and the result are words, the second at `off` and `off + 1`.
+    /// The operands and the result are words, the second at `off` and `off +
+    /// 1`.
     pub word: bool,
-    /// The operand after the pointer is a byte register holding the index (`(p),y` with `y` the index), not an offset.
+    /// The operand after the pointer is a byte register holding the index
+    /// (`(p),y` with `y` the index), not an offset.
     pub indexed: bool,
 }
 

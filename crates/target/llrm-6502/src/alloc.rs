@@ -1164,7 +1164,8 @@ impl Builder {
         Ok(())
     }
 
-    /// `d := a op *(p + off)`: `ldy #off; op (p),y`. `y` is written even where a 65C02 prints `op (p)` for an offset of 0.
+    /// `d := a op *(p + off)`: `ldy #off; op (p),y`. `y` is written even where
+    /// a 65C02 prints `op (p)` for an offset of 0.
     fn alu_pointer(
         &mut self,
         mnemonic: &'static str,
@@ -1183,13 +1184,15 @@ impl Builder {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         self.copy(acc, a);
-        let operands = vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
+        let operands =
+            vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
         self.push(Inst::new(Kind::Op(pointer_kind(mnemonic)), operands));
         self.copy(d, acc);
         Ok(())
     }
 
-    /// `d := a op *(p + index)`: the index byte goes to `y`, the op reads `(p),y`.
+    /// `d := a op *(p + index)`: the index byte goes to `y`, the op reads
+    /// `(p),y`.
     fn alu_pointer_indexed(
         &mut self,
         mnemonic: &'static str,
@@ -1221,8 +1224,8 @@ impl Builder {
         Ok(())
     }
 
-    /// The same on a word: the carry runs from the low byte to the high, the high byte of the second operand being at
-    /// `off + 1`.
+    /// The same on a word: the carry runs from the low byte to the high, the
+    /// high byte of the second operand being at `off + 1`.
     fn alu16_pointer(
         &mut self,
         fold: &crate::pointer_alu::PointerAlu,
@@ -1241,8 +1244,13 @@ impl Builder {
         }
         for (lane, (to, from)) in [(dl, al), (dh, ah)].into_iter().enumerate() {
             self.copy(acc, from);
-            let operands =
-                vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
+            let operands = vec![
+                Operand::Def(acc),
+                Operand::Use(acc),
+                Operand::Use(ptr),
+                Operand::Imm(off + lane as i64),
+                Operand::Def(y),
+            ];
             self.push(Inst::new(Kind::Op(pointer_kind(fold.mnemonic)), operands));
             self.copy(to, acc);
         }
@@ -1663,7 +1671,9 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
         let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let at = match *opcode {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => 1,
-            code if crate::pointer_alu::pointer_alu(code).is_some() => crate::pointer_alu::pointer_alu(code).expect("guarded").ptr,
+            code if crate::pointer_alu::pointer_alu(code).is_some() => {
+                crate::pointer_alu::pointer_alu(code).expect("guarded").ptr
+            }
             op::STZP | op::LEASP16 | op::JSRI => 0,
             _ => continue,
         };
@@ -1859,7 +1869,8 @@ pub fn build_with_places(
                 let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
             }
-            // a byte op reading `(p),y` (or the 65C02's `(p)`): the load folded into it
+            // a byte op reading `(p),y` (or the 65C02's `(p)`): the load folded
+            // into it
             code if crate::pointer_alu::pointer_alu(code).is_some() => {
                 let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
                 let (d, a, pointer) = (name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?);
@@ -3790,7 +3801,10 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live);
                     writeln!(out, "  inc {}", register_name(lane(d, 1))).unwrap();
                 }
-                (Kind::Op(step @ ("ADCPY" | "SBCPY" | "ANDPY" | "ORAPY" | "EORPY")), [_, _, _, Operand::Imm(off), _]) => {
+                (
+                    Kind::Op(step @ ("ADCPY" | "SBCPY" | "ANDPY" | "ORAPY" | "EORPY")),
+                    [_, _, _, Operand::Imm(off), _],
+                ) => {
                     let (op, p) = (step[..3].to_lowercase(), register_name(lane(regs[2], 0)));
                     if cmos && *off == 0 {
                         writeln!(out, "  {op} ({p})").unwrap()

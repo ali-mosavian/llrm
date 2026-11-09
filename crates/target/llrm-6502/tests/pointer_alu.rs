@@ -1,7 +1,8 @@
-//! A value loaded through a pointer and used once by an ALU op is that op's memory operand (bytes, words
-//! and the carry chains of wider sums): `x + *p` was
-//! `ldy #0; lda (p),y; sta t; clc; txa; adc t` and is `clc; ldy #0; adc (p),y` (the 65C02 with offset 0: `clc; adc (p)`),
-//! as llvm-mos does (scmp's final subtract, 2026-11-09).
+//! A value loaded through a pointer and used once by an ALU op is that op's
+//! memory operand (bytes, words and the carry chains of wider sums): `x + *p`
+//! was `ldy #0; lda (p),y; sta t; clc; txa; adc t` and is `clc; ldy #0; adc
+//! (p),y` (the 65C02 with offset 0: `clc; adc (p)`), as llvm-mos does (scmp's
+//! final subtract, 2026-11-09).
 
 mod common;
 
@@ -48,7 +49,8 @@ fn run(
     common::run_on(target, &format!("pointer-alu-{name}-{x}-{tag}"), &main, &format!("{}{DATA}", text(cpu, name))).0
 }
 
-/// No copy of the loaded byte survives: the op reads `(rc2)` itself, on both CPUs.
+/// No copy of the loaded byte survives: the op reads `(rc2)` itself, on both
+/// CPUs.
 #[test]
 fn a_loaded_byte_is_read_by_the_op_that_uses_it() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -60,7 +62,8 @@ fn a_loaded_byte_is_read_by_the_op_that_uses_it() {
     }
 }
 
-/// The 65C02 has `(zp)` for offset 0: no `ldy`; the NMOS part needs the index, and the offset 3 needs it on both.
+/// The 65C02 has `(zp)` for offset 0: no `ldy`; the NMOS part needs the index,
+/// and the offset 3 needs it on both.
 #[test]
 fn only_a_zero_offset_on_a_65c02_drops_the_index() {
     assert!(!text(Cpu::W65c02, "addp").contains("ldy"), "{}", text(Cpu::W65c02, "addp"));
@@ -70,8 +73,8 @@ fn only_a_zero_offset_on_a_65c02_drops_the_index() {
     }
 }
 
-/// A byte read twice stays one load (folding it would read the memory twice); a read that the source orders before a store
-/// stays before it.
+/// A byte read twice stays one load (folding it would read the memory twice); a
+/// read that the source orders before a store stays before it.
 #[test]
 fn a_load_with_two_uses_or_a_store_before_its_user_is_not_folded() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -83,7 +86,8 @@ fn a_load_with_two_uses_or_a_store_before_its_user_is_not_folded() {
     }
 }
 
-/// Every op, on both CPUs, against the bytes in memory: buf[0] = 5, buf[3] = 77.
+/// Every op, on both CPUs, against the bytes in memory: buf[0] = 5, buf[3] =
+/// 77.
 #[test]
 fn the_folded_ops_compute_what_the_loads_did() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -99,7 +103,8 @@ fn the_folded_ops_compute_what_the_loads_did() {
     }
 }
 
-/// A word run: `x` in rc4:rc5, the result's low byte in A and its high byte in X.
+/// A word run: `x` in rc4:rc5, the result's low byte in A and its high byte in
+/// X.
 fn run_word(
     cpu: Cpu,
     name: &str,
@@ -112,11 +117,17 @@ fn run_word(
         "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  lda #<{x}\n  sta rc4\n  lda #>{x}\n  sta rc5\n  jsr {name}\n{}",
         if high { "  txa\n" } else { "" }
     );
-    common::run_on(target, &format!("pointer-alu-{name}-{x}-{high}-{tag}"), &main, &format!("{}{DATA}", text(cpu, name))).0
+    common::run_on(
+        target,
+        &format!("pointer-alu-{name}-{x}-{high}-{tag}"),
+        &main,
+        &format!("{}{DATA}", text(cpu, name)),
+    )
+    .0
 }
 
-/// Words and a 32-bit sum read the memory through `(rc2),y` lane by lane, with no copy of the loaded
-/// bytes, on both CPUs.
+/// Words and a 32-bit sum read the memory through `(rc2),y` lane by lane, with
+/// no copy of the loaded bytes, on both CPUs.
 #[test]
 fn a_loaded_word_is_read_lane_by_lane_by_the_op_that_uses_it() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -124,14 +135,20 @@ fn a_loaded_word_is_read_lane_by_lane_by_the_op_that_uses_it() {
             let text = text(cpu, name);
             let reads = text.matches(&format!("  {op} (rc2)")).count();
             assert!(reads >= lanes, "{cpu:?} {name}: {reads} reads, want {lanes}:\n{text}");
-            // `sum32` adds two loaded values: one of them is still loaded, the other is the operand
-            assert!(name == "sum32" || !text.contains("lda (rc2)"), "{cpu:?} {name} still loads a lane into A first:\n{text}");
+            // `sum32` adds two loaded values: one of them is still loaded, the
+            // other is the operand
+            assert!(
+                name == "sum32" || !text.contains("lda (rc2)"),
+                "{cpu:?} {name} still loads a lane into A first:\n{text}"
+            );
         }
     }
 }
 
-/// The word ops, with carries and borrows across the lanes, against the bytes in memory: the word at buf+2 is 77*256+200 =
-/// 19912, the word at buf is 9*256+5 = 2309, the byte at buf is 5, and buf+4 and buf+8 hold 0x0001FFFF and 1.
+/// The word ops, with carries and borrows across the lanes, against the bytes
+/// in memory: the word at buf+2 is 77*256+200 = 19912, the word at buf is
+/// 9*256+5 = 2309, the byte at buf is 5, and buf+4 and buf+8 hold 0x0001FFFF
+/// and 1.
 #[test]
 fn the_word_ops_compute_what_the_loads_did() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -150,8 +167,10 @@ fn the_word_ops_compute_what_the_loads_did() {
     }
 }
 
-/// A byte at `p + i` is read as `adc (p),y` with `i` in `y`: the pointer is not built by an add first (`clc; lda rc2; adc i;
-/// sta rc4; ...`), which the offset form did before the indexed one existed (dotx and fletcher, 2026-11-09).
+/// A byte at `p + i` is read as `adc (p),y` with `i` in `y`: the pointer is not
+/// built by an add first (`clc; lda rc2; adc i; sta rc4; ...`), which the
+/// offset form did before the indexed one existed (dotx and fletcher,
+/// 2026-11-09).
 #[test]
 fn a_byte_at_a_pointer_plus_an_index_is_read_through_y() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -164,15 +183,22 @@ fn a_byte_at_a_pointer_plus_an_index_is_read_through_y() {
         let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
         for (i, x) in [(0u8, 3u8), (1, 250), (3, 77)] {
             let main = format!("  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  ldx #{x}\n  lda #{i}\n  jsr addi\n");
-            let got = common::run_on(target, &format!("pointer-alu-addi-{i}-{x}-{tag}"), &main, &format!("{}{DATA}", text(cpu, "addi"))).0;
+            let got = common::run_on(
+                target,
+                &format!("pointer-alu-addi-{i}-{x}-{tag}"),
+                &main,
+                &format!("{}{DATA}", text(cpu, "addi")),
+            )
+            .0;
             let buf = [5u8, 9, 200, 77];
             assert_eq!(got, i32::from(x.wrapping_add(buf[i as usize])), "{cpu:?} {x} + buf[{i}]");
         }
     }
 }
 
-/// A load from a global stays an absolute `lda g`: its address is not built as a pointer pair to fold the load (`byval_inline`
-/// grew 16 B and a push/pop pair of rc10/rc11 when it was).
+/// A load from a global stays an absolute `lda g`: its address is not built as
+/// a pointer pair to fold the load (`byval_inline` grew 16 B and a push/pop
+/// pair of rc10/rc11 when it was).
 #[test]
 fn a_global_is_not_folded_as_a_pointer() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {

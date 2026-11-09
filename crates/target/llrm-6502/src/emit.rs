@@ -241,7 +241,8 @@ pub fn expand(
         // The carry in is already in C.
         op::ADDOC8 => byte3(&mut out, "", "adc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
         op::SUBOC8 => byte3(&mut out, "", "sbc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
-        // an op reading its second operand through a pointer: `ldy #off; op (p),y`, a lane at a time
+        // an op reading its second operand through a pointer: `ldy #off; op
+        // (p),y`, a lane at a time
         code if crate::pointer_alu::pointer_alu(code).is_some() => {
             let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
             let ((lo, hi), off) = (word(&o[fold.ptr])?, if fold.indexed { 0 } else { imm(&o[fold.ptr + 1])? });
