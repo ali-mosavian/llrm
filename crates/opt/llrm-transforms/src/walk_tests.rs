@@ -3075,3 +3075,20 @@ rec:
 ";
     assert!(!is_tree(linear, "sum"), "sum is a tree");
 }
+
+/// A target that has not opted in prices `llvm.lifetime.*` as the calls they are in the IR (the inlining bars of x86 m16
+/// were fit so; pricing them 0 there stopped `sum` being inlined into `top` in `an_os_call_on_stack_records`), one that has
+/// prices them 0.
+#[test]
+fn test_free_intrinsics_are_priced_only_where_a_target_asks() {
+    let module = parsed(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)\ndefine i32 @f() {\n  %a = alloca i32\n  call void @llvm.lifetime.start.p0(i64 4, ptr %a)\n  ret i32 0\n}\n",
+    );
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap().2;
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let priced = |free_intrinsics| {
+        let costs = llrm_mir::target::OperationCosts { call: 5, argument: 2, free_intrinsics, ..Default::default() };
+        crate::walk::function_bytes(&module, &layout, &costs, function)
+    };
+    assert_eq!(priced(false) - priced(true), 5 + 2 * 2, "the marker call and its two arguments");
+}

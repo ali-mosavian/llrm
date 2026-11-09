@@ -17,6 +17,11 @@ pub struct Aarch64Ids {
     registers: Vec<(u16, RegId)>,
 }
 
+/// The table of the file, built once: every call to `pin_register` and every
+/// selected block used to build it again (3.5 M of rectwo's 11 M in isel, 17
+/// blocks).
+pub static IDS: std::sync::LazyLock<Aarch64Ids> = std::sync::LazyLock::new(Aarch64Ids::new);
+
 impl Aarch64Ids {
     /// Every register of `reg::REGISTERS` that the arm64 file has.
     pub fn new() -> Aarch64Ids {

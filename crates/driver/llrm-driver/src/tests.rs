@@ -1074,6 +1074,22 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
+/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; the pin's llc
+/// writes `rep movsb` at `minsize`, gcc -Os inlines it too (memory_expansion
+/// 23405 B against 22295 and 22749): +1110 B, half of the 88 cells worse than
+/// the pin at the same rules. DEVIATE REP-MOVS-OS.
+#[test]
+fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+                define void @f(ptr align 1 %d, ptr align 1 %s) optsize {\n\
+                \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 700, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.

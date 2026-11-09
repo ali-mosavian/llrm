@@ -1,5 +1,6 @@
 """`uv run --project tools python -m unittest discover -s tools/bench`"""
 
+import io
 import os
 import re
 import sys
@@ -9,10 +10,13 @@ import pytest
 import types
 import unittest
 import unittest.mock
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# bench.main re-runs itself under load_guard unless LG_GUARDED=1: above the guard's load limit every test that calls it waits (a 70 min hang)
+os.environ.setdefault("LG_GUARDED", "1")
 import bench  # noqa: E402
 
 BASE = {"instructions": 100, "memory_operands": 40}
@@ -304,6 +308,27 @@ class SizeTests(unittest.TestCase):
     def test_a_counter_the_base_lacks_is_not_judged(self):
         self.assertEqual(bench.against("x", dict(SIZED), {"instructions": 100, "memory_operands": 40}), [])
 
+    def test_a_real_clock_rise_under_a_base_without_the_column_is_still_raised(self):
+        """A rise of 5 clocks against a base with no layout_clocks, the new side running 10 pad nops: the pad may or may not explain it, so the
+        judge flags it (the excuse hid it until it was made opt-in)."""
+        base = SIZED | {"clocks": 1000}
+        self.assertEqual(len(bench.against("x", SIZED | {"clocks": 1005, "pad_nops": 10}, base)), 1)
+
+    def test_the_pad_excuse_for_a_base_without_the_column_is_opt_in_and_warns(self):
+        """jpeg_fixed read +172 clocks on #8545 from 171 more executed jwlink pad nops, the code unchanged: with LLRM_BENCH_EXCUSE_PAD a rise of at
+        most the new side's pad nops is not raised and the cell prints a warning; one past the pad nops is raised."""
+        base = SIZED | {"clocks": 74423823}
+        moved = SIZED | {"clocks": 74423995, "pad_nops": 199}
+        with mock.patch.dict(os.environ, {"LLRM_BENCH_EXCUSE_PAD": "1"}), mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(bench.against("jpeg_fixed", moved, base), [])
+            self.assertEqual(len(bench.against("jpeg_fixed", moved | {"pad_nops": 100}, base)), 1)
+        self.assertIn("excused", err.getvalue())
+
+    def test_clocks_are_judged_on_the_layout_corrected_column_where_both_sides_have_it(self):
+        base = SIZED | {"clocks": 1000, "layout_clocks": 990, "pad_nops": 10}
+        self.assertEqual(bench.against("x", SIZED | {"clocks": 1170, "layout_clocks": 990, "pad_nops": 180}, base), [])
+        self.assertEqual(len(bench.against("x", SIZED | {"clocks": 1000, "layout_clocks": 995, "pad_nops": 5}, base)), 1)
+
     def test_the_size_ratio_to_a_reference_may_not_worsen(self):
         """llrm's code grew 200 -> 260 against BCC's 300: the ratio went 0.67 -> 0.87."""
         problems = bench.ratio_problems("x", "bcc", SIZED | {"code_bytes": 260}, SIZED, SIZED | {"code_bytes": 300})
@@ -407,7 +432,7 @@ class OwnFramesTests(unittest.TestCase):
         from unittest import mock
 
         variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bas")
-        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run:
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.cpulimit, "run") as run:
             run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
             bench.build(variant, "O2", Path(where), "V000")
         command = run.call_args[0][0]
@@ -421,7 +446,7 @@ class OwnFramesTests(unittest.TestCase):
         from unittest import mock
 
         variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bq16")
-        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run, mock.patch.dict(os.environ, {"LLRM_ISEL": "old"}):
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.cpulimit, "run") as run, mock.patch.dict(os.environ, {"LLRM_ISEL": "old"}):
             run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
             bench.build(variant, "O2", Path(where), "V000")
         self.assertIn("--isel=old", run.call_args[0][0])
@@ -1176,7 +1201,7 @@ def test_a_kernel_folded_to_a_constant_is_an_error_not_a_row(tmp_path, monkeypat
     exe.write_bytes(b"")
 
     def run(instructions):
-        region = types.SimpleNamespace(instructions=instructions, memory_operands=0, clocks=15)
+        region = types.SimpleNamespace(instructions=instructions, memory_operands=0, clocks=15, layout_clocks=15, pad_nops=0)
         return lambda *a, **k: types.SimpleNamespace(output=b"15007\n", error="", region=region)
 
     monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
@@ -1344,7 +1369,7 @@ def test_the_emulation_cap_can_be_raised_for_cells_the_default_cannot_reach(monk
     """grep bq32 runs 642M instructions: above the cap's half, so its clocks were missing on both sides and the cell was judged on the rest. LLRM_FLAT_LIMIT raises the cap for one run and the row says which."""
     from types import SimpleNamespace
 
-    ran = SimpleNamespace(error=None, region=SimpleNamespace(instructions=642_000_000, clocks=1234), rep_iterations=0)
+    ran = SimpleNamespace(error=None, region=SimpleNamespace(instructions=642_000_000, clocks=1234, layout_clocks=1234, pad_nops=0), rep_iterations=0)
     monkeypatch.setattr(bench.flatcount, "run", lambda image, region, cwd, limit=bench.flatcount.LIMIT: ran)
     monkeypatch.setattr(bench.flatcount, "agrees", lambda *a: True)
     monkeypatch.delenv("LLRM_FLAT_LIMIT", raising=False)
@@ -1524,3 +1549,8 @@ def test_a_timed_out_borland_job_says_so_not_no_object(tmp_path, monkeypatch):
     monkeypatch.setattr(bench.dosbatch, "c_support", lambda mode, folder: [])
     built = bench.build_borland("bcc", [(types.SimpleNamespace(source=source), "R000")], "Os", tmp_path / "work")
     assert built["R000"].startswith("bcc: timed out after 1800 s"), built
+
+
+def test_the_module_keeps_bench_main_from_re_running_under_load_guard():
+    """bench.main waits at the load guard unless LG_GUARDED=1; at load above its limit the whole file hung 70 minutes at its first test that calls main."""
+    assert os.environ.get("LG_GUARDED") == "1"

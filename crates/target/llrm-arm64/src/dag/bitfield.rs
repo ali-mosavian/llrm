@@ -150,7 +150,8 @@ fn useful_bits_for_use<D: Dag>(
         return useful;
     }
     let me = Value::new(user, 0);
-    match dag.opcode(user) {
+    // A machine node's opcode is stored complemented.
+    match !dag.opcode(user) {
         op::ANDSWri | op::ANDSXri | op::ANDWri | op::ANDXri => {
             let imm = decode_logical(target_imm(dag, user, 1) as u32, bits);
             useful_bits(dag, me, useful & imm, bits, depth + 1)

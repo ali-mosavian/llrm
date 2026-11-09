@@ -42,13 +42,19 @@ fn named(
 /// The pointers `Licm` promotes out of `@f`'s loops (by name) and whether their
 /// stores leave too.
 fn promoted(text: &str) -> Vec<(Vec<String>, bool)> {
+    promoted_on(text, llrm_mir::target::Neutral)
+}
+
+/// [`promoted`] on `machine`.
+fn promoted_on(
+    text: &str,
+    machine: impl llrm_mir::target::Machine + 'static,
+) -> Vec<(Vec<String>, bool)> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.add(Licm { apply: false, speculate: true });
-    passes
-        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
-        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     DECIDED.with(|all| {
         all.borrow()
@@ -328,6 +334,102 @@ fn test_a_global_stored_on_some_paths_and_loaded_is_promoted() {
         promoted(&conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n")),
         [(vec!["constant".to_owned()], false)]
     );
+}
+
+/// A machine whose module is single-threaded, as wasm's is.
+struct SingleThreaded(llrm_mir::target::Neutral);
+
+impl llrm_mir::target::Machine for SingleThreaded {
+    fn single_threaded(&self) -> bool {
+        true
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
+/// A slot whose address a call took before the loop, stored on one path only.
+fn captured_slot_loop() -> String {
+    "declare void @use(ptr)
+
+define i32 @f(i32 %n) {
+b0:
+  %s = alloca i32
+  call void @use(ptr %s)
+  store i32 0, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %x = load i32, ptr %s
+  %t = icmp eq i32 %x, 3
+  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr %s
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}
+"
+    .to_owned()
+}
+
+/// The pin's `isThreadLocalObject` takes every object of a single-threaded
+/// module, so a slot a call captured before the loop still has its store sunk
+/// with its load; in a `POSIX` module a captured slot is not thread-local.
+/// long_double_variadic -Os wasm32: `sum`'s `va_list` slot, handed to
+/// `va_start`, kept its store and was read back, +12 B.
+#[test]
+fn test_a_captured_slot_stored_on_some_paths_is_sunk_only_in_a_single_threaded_module() {
+    let text = captured_slot_loop();
+    assert_eq!(promoted(&text), [(vec!["s".to_owned()], false)]);
+    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["s".to_owned()], true)]);
+}
+
+/// The pin's `isWritableObject` takes no global ("we may not have provenance
+/// to perform the write"), so single-threaded or not a global stored on some
+/// paths keeps its store in the loop: jpeg_fixed `emit` -O1 wasm32 stored
+/// `adler_a` and `adler_b` on the path where the loop does not run, +28 B.
+#[test]
+fn test_a_global_stored_on_some_paths_keeps_its_store_in_a_single_threaded_module() {
+    let text = conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n");
+    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["constant".to_owned()], false)]);
 }
 
 /// A call that is handed the slot's address may read or write it: no promotion.

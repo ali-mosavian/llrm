@@ -200,6 +200,9 @@ pub struct M68kLowering {
     /// A global's address is an absolute one, not PC-relative (the medium
     /// model on the 68000 and 68010, the large model).
     pub absolute_data: bool,
+    /// The CPU and the level's price, which [`super::mulprice`] reads.
+    pub cpu: Cpu,
+    pub price: crate::timing::Price,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -215,6 +218,16 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         _shifted: EVT,
     ) -> EVT {
         EVT::I32
+    }
+
+    /// `M68kTargetLowering::decomposeMulByConstant`, priced: DEVIATE
+    /// M68K-MUL-PRICE, see [`super::mulprice`].
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c)
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
