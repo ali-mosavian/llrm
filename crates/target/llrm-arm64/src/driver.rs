@@ -304,8 +304,7 @@ fn lower_function(
     let snapshot = (tight && !loose).then(|| machine.clone());
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
-            && !(machine.calls
-                || machine.dynamic
+            && !(machine.dynamic
                 || llrm_codegen::backend::framefree::keeps_frame_pointer(
                     machine.frame_pointer.as_deref(),
                     machine.calls,

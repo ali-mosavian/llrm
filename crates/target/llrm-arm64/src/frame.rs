@@ -75,6 +75,7 @@ enum Csr {
 fn saved_list(
     allocation: &Allocation,
     record: bool,
+    link: bool,
     darwin: bool,
 ) -> Vec<Csr> {
     let pad = |list: &[u32], base: u32| -> Vec<u32> {
@@ -86,7 +87,7 @@ fn saved_list(
         all.dedup();
         all
     };
-    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X);
+    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X).chain(link.then_some(Csr::X(30)));
     let fprs = pad(&allocation.saved_fprs, 8).into_iter().map(Csr::D);
     let frame = [Csr::Lr, Csr::Fp].into_iter().filter(|_| record);
     if darwin { frame.chain(gprs).chain(fprs).collect() } else { gprs.chain(frame).chain(fprs).collect() }
@@ -346,12 +347,12 @@ fn layout(
 ) -> Layout {
     let (mut slots, locals_end) = place_objects(function);
     // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
-    // or a variable-sized object keeps the frame record; so does a call, which
-    // saves the link register beside it.
+    // or a variable-sized object keeps the frame record. A call without one
+    // saves the link register alone, with its neighbours in the list.
     let keeps =
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
-    let record = function.calls || function.dynamic || keeps;
-    let pairs = paired(&saved_list(allocation, record, darwin));
+    let record = function.dynamic || keeps;
+    let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);
     // Filled from the top; where the area has a spare word, the first single
