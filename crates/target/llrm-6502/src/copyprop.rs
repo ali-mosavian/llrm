@@ -158,6 +158,9 @@ fn reads_cell(op: Op) -> bool {
 
 /// Forward copy propagation of `asm`.
 pub fn copy_propagation(asm: &mut Asm) {
+    // The pin deletes a copy nothing reads as it walks (`MaybeDeadCopies`): a dead
+    // load into `a` must not be kept alive as the source of a transfer.
+    crate::peephole::drop_dead_writes(asm);
     let mut out: Vec<Line> = Vec::with_capacity(asm.lines.len());
     let mut track = Tracker::default();
     let lines = std::mem::take(&mut asm.lines);

@@ -50,3 +50,13 @@ fn a_reload_of_the_value_a_holds_goes_when_the_flags_are_unread() {
     let text = "  sta rc2\n  lda rc2\n  beq L1\n  rts\nL1:\n  rts\n";
     assert_eq!(run(text), text);
 }
+
+/// `lda rc1` fed only `tax`'s source and was dead itself: rewriting `ldx rc1` to
+/// `tax` kept it alive, 65C02 `fill_nest` +2 B and +64 executed instructions.
+#[test]
+fn a_load_into_a_that_nothing_reads_does_not_make_a_transfer_out_of_an_index_load() {
+    assert_eq!(
+        run("  lda rc0\n  lda rc1\n  ldx rc1\n  lda rc0\n  clc\n  adc rc3\n  rts\n"),
+        "  ldx rc1\n  lda rc0\n  clc\n  adc rc3\n  rts\n"
+    );
+}
