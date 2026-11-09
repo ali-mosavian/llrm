@@ -154,10 +154,11 @@ pub fn target_lowering_with(
     // expansion; the pin keeps `Expand` here. gcc calls libgcc for all six on
     // the 68000 and 68010, and so does this. From the 68020 gcc counts a
     // 32-bit `clz`, a 64-bit `clz` and a 32-bit `ctz` with `bfffo`
-    // (M68K-BFFFO, see `bfffo`), and our routines cost more clocks there than
-    // the inline code (u64 O2: -540 B, +4000 clk), so the 68020 and later
-    // stay inline until the routines are as fast as libgcc's. Owner m68k. Exit:
-    // 2026-11-30.
+    // (M68K-BFFFO, see `bfffo`). Whole linked programs, 2026-11-09, every
+    // count called against inline: u64 O2 -12 B and +1000 clk (+3% to +18% in
+    // all six cells), u32 +24 B, so the 68020 and later stay inline at speed
+    // levels; size-built functions choose per module (M68K-SIZE-LIBCALL, see
+    // `libcalls`). Owner m68k. Exit: 2026-11-30.
     if !m68020 {
         set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
     }

@@ -211,6 +211,22 @@ fn function_items(
             names.push(global.name.owned().ok_or("an unnamed function")?);
         }
     }
+    // one scan of the module, not one per function (M68K-SIZE-LIBCALL)
+    let backend = Options {
+        libcalls: backend
+            .libcalls
+            .or_else(
+                || {
+                    let kinds = crate::libcalls::chosen(module, backend.size_libcalls, |one| {
+                        backend.size
+                            || llrm_mir::memory::has(&one.attrs, "optsize")
+                            || llrm_mir::memory::has(&one.attrs, "minsize")
+                    });
+                    Some(crate::libcalls::mask(&kinds))
+                },
+            ),
+        ..backend
+    };
     let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
         names
             .iter()
@@ -222,7 +238,8 @@ fn function_items(
             .collect()
     };
     let near = compile(true)?;
-    let calls = near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
+    let calls =
+        near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
     let bytes: usize = near
         .iter()
         .flat_map(|(_, items)| items)
