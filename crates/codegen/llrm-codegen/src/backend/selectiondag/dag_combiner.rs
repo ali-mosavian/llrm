@@ -1578,6 +1578,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
         let amount_vt = self.hooks.shift_amount_type(vt);
+        let register_wide = self.tli.is_some_and(|tli| tli.types.is_type_legal(vt));
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -1590,6 +1591,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
         }
         if c1.wrapping_sub(1) & mask == c2 {
+            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, review 2026-12-20; ends
+            // if the pin's M68k lowers a select of constants itself or
+            // `convertSelectOfConstantsToMath` is answered per target): where
+            // a true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
+            // and `sext (not c)` is the inverted `Scc` with no mask:
+            // `c ? C : C-1` is `C + sext (!c)`. The pin's own forms: the sext
+            // arm ([L13102][sext]) and `or (sext (not c)), C` ([L13122][not]).
+            //
+            // [sext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13102
+            // [not]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13122
+            // Only in a register-wide type: an expanded one pays the sext's
+            // high half (`add` with carry of `zext` is cheaper there).
+            if dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne && register_wide {
+                let not = dag.get_not(cond, EVT::I1);
+                let not = dag.get_sext_or_trunc(not, vt);
+                return Some(dag.get_node(ISD::Add, vt, &[not, then]));
+            }
             let cond = dag.get_zext_or_trunc(cond, vt);
             return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
         }
