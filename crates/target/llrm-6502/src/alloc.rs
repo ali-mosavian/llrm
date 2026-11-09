@@ -2436,16 +2436,11 @@ pub fn build_with_places(
                     op::SRLV16 => "__lshrhi3",
                     _ => "__ashrhi3",
                 };
-                let (mut xl, mut xh) = b.read_word(name(&o[1])?)?;
+                let (xl, xh) = b.read_word(name(&o[1])?)?;
                 let (dl, dh) = b.write_word(name(&o[0])?)?;
                 let counted = matches!(code, op::SHLV16 | op::SRLV16 | op::SRAV16);
                 let second = if counted { None } else { Some(b.read_word(name(&o[2])?)?) };
-                let (mut yl, mut yh) = second.unwrap_or((xl, xh));
-                // a product goes either way round: the operand that arrives in
-                // `rc2` is the second
-                if code == op::MUL16 && (b.arrives_in(xl) == Some(rc(2)) || b.arrives_in(yl) == Some(reg::A)) {
-                    (xl, xh, yl, yh) = (yl, yh, xl, xh);
-                }
+                let (yl, yh) = second.unwrap_or((xl, xh));
                 if counted {
                     // a shift takes the word in rc2:rc3 and the count in rc4
                     b.copy(Reg::Phys(rc(2)), xl);

@@ -13,7 +13,7 @@
 use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
-use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
+use llrm_codegen::backend::selectiondag::known_bits::{masked_value_is_zero, max_significant_bits};
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
 
@@ -160,7 +160,7 @@ impl CombineHooks for MosCombines {
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
-            _ => decompose_mul(dag, node, self.sized),
+            _ => decompose_mul(dag, node, self.sized).or_else(|| multiplier_with_fewer_bits(dag, node, self.sized)),
         }
     }
 }
@@ -433,6 +433,30 @@ fn carry_in(
     let all = dag.get_constant(255, EVT::I8);
     let sum = dag.get_node_multi(ISD::UAddO, &[EVT::I8, EVT::I1], &[byte, all]);
     SDValue { node: sum.node, res: 1 }
+}
+
+/// A word product whose second operand has more significant bits than its
+/// first: the operands trade places. The second one is the shifting multiplier
+/// of `__mulhi3`, which runs one pass for each of its bits up to the highest
+/// set one (a byte widened to a word: 8 passes, not 16). At -Os the order of the
+/// source stays: the swap costs copies when the arguments arrive in the other
+/// registers (`x * c` with `x` a masked byte: 4 B, against 17 B swapped).
+///
+/// DEVIATE 6502-MUL-ORDER: the pin puts a constant second (`visitMUL`) and
+/// leaves the rest in source order; its libcall takes the operands as they
+/// stand. Owner: llrm-6502-b. Exit: 2026-12-10, when a value-range source
+/// beyond known bits (loop trip counts) can order the unknown pairs.
+fn multiplier_with_fewer_bits(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    sized: bool,
+) -> Option<SDValue> {
+    if sized || dag.opcode(node) != ISD::Mul || dag.value_type(node) != EVT::I16 {
+        return None;
+    }
+    let (first, second) = (dag.operand(node, 0), dag.operand(node, 1));
+    (max_significant_bits(dag, second) > max_significant_bits(dag, first))
+        .then(|| dag.get_node(ISD::Mul, EVT::I16, &[second, first]))
 }
 
 /// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,

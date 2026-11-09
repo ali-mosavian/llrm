@@ -35,6 +35,33 @@ class HeaderFlags(unittest.TestCase):
     def test_no_header_no_flags(self):
         self.assertEqual(header_flags_fn()(self.write("int x;")), [])
 
+class ReportGlue(unittest.TestCase):
+    """The glue's `report(long)` read its four bytes from rc2..rc5. On the A:X branch the value arrives in a, x, rc2, rc3,
+    so every program of the corpus read WRONG there, the base dist's too (2026-11-09); every A:X-branch row taken before
+    OURS_ARGS_AX=1 (the "13 programs differ" scans, the first helper A/B) is void."""
+    def dump(self, ax, main):
+        src = open(os.path.join(HERE, "ours_cr.py")).read()
+        ns = {}
+        old = os.environ.get("OURS_ARGS_AX")
+        os.environ["OURS_ARGS_AX"] = "1" if ax else "0"
+        try:
+            exec("import os\nSIM = 'sim6502'\nLOG = 0xF000\n" + src[src.index("# `report(long)`"):src.index("def sh(")], ns)
+        finally:
+            os.environ.pop("OURS_ARGS_AX") if old is None else os.environ.__setitem__("OURS_ARGS_AX", old)
+        w = Path(tempfile.mkdtemp())
+        (w / "d.s").write_text(ns["driver"]())
+        (w / "f.s").write_text(".export main\n.import report\nrc2 = $82\nrc3 = $83\nrc4 = $84\nrc5 = $85\nmain:\n" + main + "  jsr report\n  rts\n")
+        k = subprocess.run(["cl65", "-t", "sim6502", "--asm-define", "DUMP", "-o", "x.bin", "d.s", "f.s"], cwd=w, capture_output=True, text=True)
+        self.assertEqual(k.returncode, 0, k.stderr)
+        r = subprocess.run(["sim65", "-c", "x.bin"], cwd=w, capture_output=True, timeout=60)
+        return list(r.stdout.split(b"\n")[0])
+    def test_a_long_in_a_x_rc2_rc3_is_reported_whole(self):
+        main = "  lda #3\n  sta rc2\n  lda #4\n  sta rc3\n  lda #1\n  ldx #2\n"
+        self.assertEqual(self.dump(True, main), [1, 2, 3, 4])
+    def test_the_old_glue_still_reads_rc2_to_rc5(self):
+        main = "".join(f"  lda #{i + 1}\n  sta rc{i + 2}\n" for i in range(4))
+        self.assertEqual(self.dump(False, main), [1, 2, 3, 4])
+
 class PadSpan(unittest.TestCase):
     """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
     a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""
