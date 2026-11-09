@@ -3,7 +3,10 @@
 //! `(x & 32768) != 0` into `(trunc x to i16) < 0` only where the truncate is free, and m68k says nothing:
 //! the low word of a data register is the word operand, so the truncate is free.
 
+use llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_m68k::compile::{Options, text_with};
+use llrm_m68k::dagisel::lowering::M68kLowering;
 use llrm_m68k::dagisel::hooks::Cpu;
 
 const SIGN_BIT_OF_A_WORD: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
@@ -39,4 +42,21 @@ fn a_word_sign_test_is_tst_w() {
         assert!(out.contains("tst.w"), "{cpu:?}:\n{out}");
         assert!(!out.contains("32768"), "{cpu:?}:\n{out}");
     }
+}
+
+/// Only a narrowing to a byte or a word has an operand: an `i1` or a long is not free.
+#[test]
+fn only_a_narrowing_to_a_byte_or_a_word_is_free() {
+    let hooks = M68kLowering { short: true, ..M68kLowering::default() };
+    for (from, to, free) in [
+        (EVT::I32, EVT::I16, true),
+        (EVT::I32, EVT::I8, true),
+        (EVT::I64, EVT::I16, true),
+        (EVT::I32, EVT::I1, false),
+        (EVT::I64, EVT::I32, false),
+        (EVT::I16, EVT::I16, false),
+    ] {
+        assert_eq!(hooks.is_truncate_free(from, to), free, "{from:?} -> {to:?}");
+    }
+    assert!(!M68kLowering::default().is_truncate_free(EVT::I32, EVT::I16), "the pin leaves it false");
 }
