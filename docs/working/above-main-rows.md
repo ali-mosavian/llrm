@@ -156,12 +156,13 @@ Design only; no code before the coordinator's go.
 
 Estimates, not measurements; CSE comes through the shared flow. Gap card: `~/scratch/handoff/m68k-onto-machine-with-gaps-2026-11-09.md`. Every step: x86 md5 identity, m68k A/B bytes and clocks (68000/68020, O1/O2/Os), compile time linear at 600 and 1200 functions.
 
-- 2026-11-12 20:00Z: pre-phi `MFunction` to `LirBody` and back, round trip md5-equal on sieve; `precse` runs on it.
-- 2026-11-14: `precse` hosted behind a flag, corpus A/B; JT-O1-1..3 re-measured.
-- 2026-11-18: optimizephis, deadmi, machinelicm, machinesink hosted one at a time (the spike `machine_sink` goes).
-- 2026-11-24: shared phielim, two-address, coalescer, greedy through `machine_with` (m68k classes, rules, frame facts from llrm-target-m68k).
+- 2026-11-09 (done): pre-phi `MFunction` to `LirBody` and back (null stage equal on 18 functions x 2 CPUs); the shared `precse` and `MachineLICM` run on it, both off. `machine_with` builds for m68k.
+- 2026-11-09 attribution: hosted CSE and the pin's direct `CopyFromReg` are one effect (68000 O2 +394 B, 16 of 20 worse cells shared): the pin's MIR shape on private passes tuned on copies (shiftadd, addrroles, loopinc, allocator hints). CSE stays off until they are shape-robust or retired by step 4.
+- 2026-11-12 20:00Z: report (this list, per-pass losses, the verdicts).
+- 2026-11-18: step 4a: shared PhiElimination and TwoAddress hosted (`from_ssa` takes new copies, renamed defs, new vregs); private `eliminate_phis_with`, `fold_reserved_copies`, `commute_tied`, `two_address`, `machine_sink` retired; m68k classes, rules and the omitted-phase list from the target description.
+- 2026-11-24: step 4b: the copy-shape cells re-measured (CSE and `direct_copies` on); the private passes that still lose a cell are made shape-robust or replaced.
 - 2026-11-30: post-RA copyprop, branch folding, block placement shared.
-- 2026-12-04: frame/epilogue from `FrameRegisters`; the replaced private passes deleted; JT-O1-1..3 closed.
+- 2026-12-04: frame/epilogue from `FrameRegisters`; replaced private passes deleted; JT-O1-1..3 closed.
 
 Files, one writer each (merge direction one way: m68k-machine-with branches off `alim/m68k-machine-with` b654939e04):
 - m68k-lsr-addressing: this section, the first-running-step report (2026-11-12 20:00Z), the A/B scripts (`~/scratch/handoff/m68k-mw/`); no code from b654939e04 on.
