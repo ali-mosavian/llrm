@@ -301,6 +301,10 @@ fn allocated_with(
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
+    // at the size levels bytes decide and the immediate stores are the smaller (4 B against a pair's 3 B and 3 B once)
+    if !matches!(request.level, Level::Os | Level::Oz) && std::env::var("LLRM_NO_Z80_IMM_SPLIT").is_err() {
+        split_loop_constant_stores(&mut hoisted);
+    }
     if !hoist_constants(&mut hoisted) {
         return allocate(function, name, request.level);
     }
@@ -1399,6 +1403,46 @@ pub fn spills_first(
             let moved = insts.remove(at);
             insts.insert(first, moved);
             first += 1;
+        }
+    }
+}
+
+/// A constant word stored from an immediate in a loop (`LD16mi`, `LD16fi`) is the constant and a store from a
+/// register again, so [`hoist_constants`] can hold it across the loop: the immediate store is 6 T a trip dearer
+/// than the register one and 1 B smaller, and the pricing of the two variants (`priced_in_loops`) decides which
+/// stays. The selector chose the immediate form without a loop depth to see, as the pin's x86 does
+/// (`imm_su` counts users only); this is the frequency-aware half, beyond the pin (row Z80-IMM-LOOP). Linear in the
+/// instructions.
+fn split_loop_constant_stores(function: &mut MFunction) {
+    let cfg = Cfg::new(function);
+    let in_loop: Vec<bool> = (0..function.blocks.len()).map(|b| cfg.loops().iter().any(|(_, body)| body[b])).collect();
+    for (b, _) in in_loop.iter().enumerate().filter(|(_, in_loop)| **in_loop) {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            let inst = &mut function.blocks[b].insts[at];
+            let (store, Some(Operand::Imm(value))) = (
+                match inst.kind {
+                    Kind::Op("LD16mi") => "LD16mr",
+                    Kind::Op("LD16fi") => "LD16fr",
+                    _ => {
+                        at += 1;
+                        continue;
+                    }
+                },
+                inst.operands.first().cloned(),
+            ) else {
+                at += 1;
+                continue;
+            };
+            let constant = function.classes.len() as u32;
+            function.classes.push(crate::mfunc::Class::Gr16);
+            inst.kind = Kind::Op(store);
+            inst.operands[0] = Operand::Use(Reg::Virt(constant));
+            let mut made = Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(constant)), Operand::Imm(value)]);
+            made.rematerializable = true;
+            made.cheap_as_move = true;
+            function.blocks[b].insts.insert(at, made);
+            at += 2;
         }
     }
 }
