@@ -88,6 +88,13 @@ def level_flags(lvl, noivopts_os):
     return [f"-{lvl}"] + (["-fno-ivopts"] if noivopts_os and lvl == "Os" else [])
 
 
+def header_flags(noivopts_os):
+    """The table header's flag list, from the lists the compile line is built from (it named -fno-tree-loop-distribute-patterns,
+    which no cell was compiled with)."""
+    extra = f" (+ {' '.join(level_flags('Os', True)[1:])} at -Os)" if noivopts_os else ""
+    return " ".join(level_flags("<level>", False) + CFLAGS) + extra
+
+
 def cc1_line(path):
     """Table header line: the md5 only; a local path in a table is refused by the landing runner."""
     return f"cc1 md5 {md5(path)}"
@@ -224,7 +231,7 @@ def main():
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
     hdr = [cc1_line(a.cc1), f"version: {ver}",
            "assembler/linker/sim: " + sh(["sim65", "--version"], w).stderr.strip().splitlines()[0] + " (ca65/ld65 via cl65 -t " + TARGET + ")",
-           "flags: cc1 -quiet -<level>" + (" (+ -fno-ivopts at -Os)" if a.noivopts_os else "") + " -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls plus the caller's result move"]
+           "flags: cc1 -quiet " + header_flags(a.noivopts_os) + " -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls plus the caller's result move"]
     rows, bad, notes = {}, [], {}
     for name, args, wide, expect, ksrc, rel in kernels:
         if name not in want:

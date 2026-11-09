@@ -102,3 +102,29 @@ def test_a_flag_gcc_cannot_take_is_refused_not_passed_on():
     for token in ("-ffixed-point", "-fno-inline=sum5", "-fsanitize=stack"):
         with pytest.raises(ValueError):
             external_flags.gcc_program_flags(["-O2", token])
+
+
+def test_a_gcc_flag_list_may_differ_from_the_programs_only_by_the_named_translation():
+    program = ["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"]
+    external_flags.check_gcc_flags(program, ["-fno-inline", "-fwrapv", "-mcmodel=medium"])
+    external_flags.check_gcc_flags(program, ["-mcmodel=medium", "-fno-inline", "-D__clang__", "-fwrapv"], allowed_extra=("-D__clang__",))
+
+
+@pytest.mark.parametrize(
+    "gcc",
+    [
+        ["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"],  # the program's flag verbatim: gcc keeps inlining called-once functions
+        ["-fno-inline", "-mcmodel=medium"],  # one dropped
+        ["-fno-inline", "-fwrapv", "-mcmodel=medium", "-fno-unroll-loops"],  # one added
+        ["-fno-inline", "-fwrapv", "-fwrapv", "-mcmodel=medium"],  # one twice
+    ],
+)
+def test_any_other_difference_between_gcc_and_the_program_is_refused(gcc):
+    """The gcc column was built with a flag set nobody compared with the program's: a silent mismatch moves cells (arm64 ours column without -fomit-frame-pointer: 24 of 72 cells, -4..-16 B)."""
+    with pytest.raises(ValueError):
+        external_flags.check_gcc_flags(["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"], gcc)
+
+
+def test_a_flag_gcc_cannot_take_has_no_gcc_column():
+    with pytest.raises(ValueError, match="no gcc column"):
+        external_flags.check_gcc_flags(["-ffixed-point"], [])
