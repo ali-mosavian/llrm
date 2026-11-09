@@ -2,7 +2,7 @@
 
 Owner: 6502. Exit: 2026-11-30. Opened 2026-11-09 (coordinator's survey, same refusal as [z80](z80-alloca.md) and [m68k](m68k-alloca.md)).
 
-`int a[n]` and `__builtin_alloca(n)` refuse at every level: `CannotSelect(DynamicStackAlloc)`. Reproduced on release/next 2026-11-09 with the IR of z80-alloca.md through `llrm-6502-llc -S`. `frame.rs` lists dynamic allocas as not translated (DEVIATE, "when a program needs them").
+`int a[n]` and `__builtin_alloca(n)` refuse at every level: `CannotSelect(DynamicStackAlloc)`. Reproduced on release/next 2026-11-09: the IR of z80-alloca.md with the 6502 datalayout (`e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8`) through `llrm-6502-llc -S -O2` ends `CannotSelect("DynamicStackAlloc")`. `frame.rs` lists dynamic allocas as not translated (DEVIATE, "when a program needs them").
 
 ## Plan
 Reuse the shared expansion (`legalize_dag.rs` `ISD::DynamicStackAlloc`, run when the target's `stack_pointer()` hook states `(sp, stack_align)`); no private copy. The software stack pointer is `rs0` (`rc0:rc1`), the stack grows down, alignment 1, so the hook is `(rs0, 1)`.
