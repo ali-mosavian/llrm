@@ -2583,14 +2583,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// Real mode cannot realign the stack: an over-aligned local is clamped to the
-/// stack alignment (#7706), not refused, and no `and sp` is emitted.
+/// Real mode cannot realign the stack: a local aligned past 32 is refused by name
+/// (#8570), not clamped (#7706); the refusal is the only guard against a wrong
+/// promised alignment, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_clamped_not_refused() {
+fn m16_over_aligned_local_is_refused_by_name() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("and sp,"), "{listing}");
+    let why = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().expect("refused");
+    assert!(why.to_string().contains("an object aligned to 64 needs stack realignment"), "{why}");
 }
 
 /// jwlink turns a far call to the same segment into `push cs; call near` plus
