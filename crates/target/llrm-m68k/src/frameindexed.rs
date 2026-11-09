@@ -26,6 +26,23 @@ use crate::mfunc::{Inst, MFunction};
 use crate::regalloc::Assignment;
 use crate::scaledindex::memory_at;
 
+/// The bytes beyond the laid-out displacement of a slot that the stack pointer
+/// can be further down when it is read: a call's arguments still pushed when
+/// the next call's are being pushed (`2 * calls`), a saved condition code (4),
+/// and the rounding of a frame the fold shrinks (8).
+pub fn margin(calls: i64) -> i64 {
+    2 * calls + 4 + 8
+}
+
+/// Whether a displacement that can be anywhere in `low..=high` is an indexed
+/// operand's 8-bit one.
+pub fn fits(
+    low: i64,
+    high: i64,
+) -> bool {
+    i8::try_from(low).is_ok() && i8::try_from(high).is_ok()
+}
+
 /// The range of the displacement of a frame index from its frame register,
 /// over every stack depth the code reaches it at.
 pub struct Bounds {
@@ -45,9 +62,7 @@ impl Bounds {
         let inputs = FrameInputs::of(&insts, function, assignment, slots, short);
         let calls = call_area(&insts, &|_| true);
         let layout = inputs.layout(calls);
-        // A call's arguments still pushed when the next call's are being, a
-        // saved condition code, and the rounding of a frame the fold shrinks.
-        Bounds { margin: 2 * calls + 4 + 8, inputs, layout }
+        Bounds { margin: margin(calls), inputs, layout }
     }
 
     fn range(
@@ -134,7 +149,7 @@ pub fn fold(
                 |&(b, i, o)| {
                     let Operand::Imm(disp) = function.blocks[b].insts[i].operands[o - 1] else { return false };
                     let shift = d + disp;
-                    i8::try_from(low + shift).is_ok() && i8::try_from(high + shift).is_ok()
+                    fits(low + shift, high + shift)
                 },
             );
         if !fits {
