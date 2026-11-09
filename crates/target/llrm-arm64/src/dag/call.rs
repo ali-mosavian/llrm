@@ -224,7 +224,7 @@ impl Aarch64Calling {
         size: SDValue,
     ) -> Option<SDValue> {
         let total = u64::try_from(dag.constant(size)?).ok()?;
-        if total == 0 || crate::isel::memops::pieces(total).len() > crate::isel::memops::COPY_OPS {
+        if total == 0 || crate::dag::memops::pieces(total).len() > crate::dag::memops::COPY_OPS {
             return None;
         }
         // A target constant stays a constant through selection.
@@ -352,11 +352,11 @@ impl TargetCalling for Aarch64Calling {
             if total < 16 {
                 return None;
             }
-            crate::isel::memops::wide_pieces(total)
+            crate::dag::memops::wide_pieces(total)
         } else {
-            crate::isel::memops::pieces(total)
+            crate::dag::memops::pieces(total)
         };
-        if total == 0 || ops.len() > crate::isel::memops::FILL_OPS {
+        if total == 0 || ops.len() > crate::dag::memops::FILL_OPS {
             return None;
         }
         let value = match constant {
@@ -416,7 +416,7 @@ impl TargetCalling for Aarch64Calling {
         // sequence, which the hook does not make (DEVIATE SD526).
         if outs.iter().any(|&(.., byval)| {
             byval.is_some_and(|byval| {
-                byval.size == 0 || crate::isel::memops::pieces(u64::from(byval.size)).len() > crate::isel::memops::COPY_OPS
+                byval.size == 0 || crate::dag::memops::pieces(u64::from(byval.size)).len() > crate::dag::memops::COPY_OPS
             })
         }) {
             return Err("an arm64 byval argument too large to copy in line");
