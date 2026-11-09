@@ -303,7 +303,7 @@ pub fn greedy_rewritten(
         order: &|value| target::order(confined.get(&value), segments, classes),
         pins,
         unspillable: &unspill,
-        data: Some(segments.data),
+        data: segments.data,
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,

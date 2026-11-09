@@ -1445,6 +1445,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let vt = self.dag.value_type(node);
         let NodeData::CondCode(cond) = self.dag.node(ops[4]).data else { return None };
         let compare = self.dag.get_setcc(EVT::I1, ops[0], ops[1], cond);
+        // `SimplifySelectCC`: a compare that folded to a constant names the arm.
+        if self.dag.opcode(compare) != ISD::SetCC {
+            return self.dag.constant(compare).map(|value| if value != 0 { ops[2] } else { ops[3] });
+        }
         let simpler = self.visit_setcc(compare)?;
         if self.dag.opcode(simpler) != ISD::SetCC {
             return None;
