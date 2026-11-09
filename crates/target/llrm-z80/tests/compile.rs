@@ -2293,3 +2293,17 @@ fn the_unnamed_arguments_of_a_variadic_call_go_on_the_stack() {
         assert_eq!(caller.matches("push").count(), 2, "{level:?}: both unnamed words are pushed\n{caller}");
     }
 }
+
+/// A long shifted by a variable on each arm of a diamond, a library call per arm, panicked in `tail_calls` ("attempt to
+/// subtract with overflow", a block of only the bare stack release); the soft-float member `fix_usi` could not be built.
+#[test]
+fn a_library_call_on_each_arm_of_a_diamond_compiles() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+              define i32 @f(i1 %c, i32 %x, i16 %n) {\n  %k = zext i16 %n to i32\n  br i1 %c, label %a, label %b\n\
+              a:\n  %s = shl i32 %x, %k\n  br label %j\nb:\n  %t = lshr i32 %x, %k\n  br label %j\n\
+              j:\n  %p = phi i32 [ %s, %a ], [ %t, %b ]\n  ret i32 %p\n}\n";
+    for level in [Level::O0, Level::O1, Level::Os, Level::O2] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("ret"), "{level:?}: {out}");
+    }
+}

@@ -211,20 +211,9 @@ fn function_items(
             names.push(global.name.owned().ok_or("an unnamed function")?);
         }
     }
-    // one scan of the module, not one per function (M68K-SIZE-LIBCALL)
+    // chosen once for the module, not per function (M68K-SIZE-LIBCALL)
     let backend = Options {
-        libcalls: backend
-            .libcalls
-            .or_else(
-                || {
-                    let kinds = crate::libcalls::chosen(module, backend.size_libcalls, |one| {
-                        backend.size
-                            || llrm_mir::memory::has(&one.attrs, "optsize")
-                            || llrm_mir::memory::has(&one.attrs, "minsize")
-                    });
-                    Some(crate::libcalls::mask(&kinds))
-                },
-            ),
+        libcalls: backend.libcalls.or_else(|| Some(crate::compile::libcalls_for(module, cpu, backend))),
         ..backend
     };
     let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
@@ -240,15 +229,7 @@ fn function_items(
     let near = compile(true)?;
     let calls =
         near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
-    let bytes: usize = near
-        .iter()
-        .flat_map(|(_, items)| items)
-        .map(|item| match item {
-            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
-            Item::Bytes(bytes) => bytes.len(),
-            _ => 0,
-        })
-        .sum();
+    let bytes: usize = near.iter().map(|(_, items)| crate::compile::items_bytes(items)).sum();
     if calls && bytes > crate::pccall::REACH { compile(false) } else { Ok(near) }
 }
 
