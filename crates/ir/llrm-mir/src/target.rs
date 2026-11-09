@@ -851,6 +851,10 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
+    /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
+    /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
+    pub free_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -1005,6 +1009,7 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            free_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }

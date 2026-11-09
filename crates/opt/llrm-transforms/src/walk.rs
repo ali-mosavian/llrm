@@ -1371,9 +1371,11 @@ pub fn function_bytes(
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
                 // `llvm.lifetime.*`, `llvm.assume` and the rest the cost model calls free emit no instruction: priced as
-                // calls they were 60 B of 267 in stack_arrays_copy (object 94).
+                // calls they were 60 B of 267 in stack_arrays_copy (object 94). A target opts in (`free_intrinsics`):
+                // the others' inlining bars were fit with the markers priced as calls.
                 Opcode::Call(_) | Opcode::Invoke(_)
-                    if llrm_mir::memory::callee(&module.context, function, inst)
+                    if costs.free_intrinsics
+                        && llrm_mir::memory::callee(&module.context, function, inst)
                         .and_then(|global| module.global(global).name.as_deref())
                         .is_some_and(llrm_mir::tti::is_free_intrinsic) =>
                 {

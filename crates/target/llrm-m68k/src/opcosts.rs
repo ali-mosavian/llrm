@@ -153,7 +153,8 @@ const FUNCTION_SCALE_PERCENT: i64 = 150;
 
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
-    let mut costs = OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, ..OperationCosts::default() };
+    let mut costs =
+        OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, free_intrinsics: true, ..OperationCosts::default() };
     for (class, form) in forms(cpu) {
         let size = bytes(&form)?;
         match class {
