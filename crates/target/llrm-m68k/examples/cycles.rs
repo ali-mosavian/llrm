@@ -134,6 +134,36 @@ pub(crate) struct Total {
 }
 
 impl Total {
+    pub(crate) fn new(models: &[Model]) -> Total {
+        Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0, unpriced: vec![0; models.len()] }
+    }
+
+    /// Charge one executed instruction to every model; a model with no row
+    /// for it counts it unpriced and keeps its own mark.
+    pub(crate) fn charge(
+        &mut self,
+        models: &[Model],
+        text: &str,
+        bytes: u32,
+        taken: bool,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        for (slot, cpu) in models.iter().copied().enumerate() {
+            match cost_on(cpu, text, bytes, taken) {
+                Ok(one) => {
+                    self.clocks[slot] += u64::from(one.clocks);
+                    self.partial |= one.partial;
+                }
+                Err(why) => {
+                    self.unpriced[slot] += 1;
+                    if seen.insert(why.clone()) {
+                        eprintln!("unpriced: {why}");
+                    }
+                }
+            }
+        }
+    }
+
     /// The unpriced instructions of the model in `slot`.
     pub(crate) fn unknown_of(
         &self,
@@ -167,7 +197,9 @@ fn qemu_cpu_of(exe: &Path) -> &'static str {
 mod tests {
     use std::path::Path;
 
-    use super::qemu_cpu_of;
+    use llrm_m68k::isa::Cpu as Model;
+
+    use super::{Total, qemu_cpu_of};
 
     /// The 040 and 060 matrix columns priced the instruction counts of a trace
     /// on `m68000` (partition 040: 202 instructions for gcc's 121).
@@ -181,6 +213,22 @@ mod tests {
         ] {
             assert_eq!(qemu_cpu_of(Path::new(path)), cpu, "{path}");
         }
+    }
+
+    /// 68020-only `extb.l` was marked unpriced on the 68020 column too
+    /// (`?16` there, though the 68020 has a row for it).
+    #[test]
+    fn an_instruction_one_model_lacks_marks_only_that_models_column() {
+        let models = [Model::M68000, Model::M68020];
+        let mut total = Total::new(&models);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            total.charge(&models, "extb.l %d2", 2, false, &mut seen);
+        }
+        total.charge(&models, "addq.l #1, %d0", 2, false, &mut seen);
+        assert_eq!(total.unknown_of(0), 16, "68000 lacks extb.l");
+        assert_eq!(total.unknown_of(1), 0, "68020 prices extb.l");
+        assert!(total.clocks[1] > total.clocks[0]);
     }
 }
 
@@ -212,8 +260,7 @@ pub(crate) fn price(
             },
         );
     let pcs = trace(exe, cap, &cpu);
-    let mut total =
-        Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0, unpriced: vec![0; models.len()] };
+    let mut total = Total::new(models);
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
@@ -229,20 +276,7 @@ pub(crate) fn price(
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
-        for (slot, cpu) in models.iter().copied().enumerate() {
-            match cost_on(cpu, text, *bytes as u32, taken) {
-                Ok(one) => {
-                    total.clocks[slot] += u64::from(one.clocks);
-                    total.partial |= one.partial;
-                }
-                Err(why) => {
-                    total.unpriced[slot] += 1;
-                    if seen.insert(why.clone()) {
-                        eprintln!("unpriced: {why}");
-                    }
-                }
-            }
-        }
+        total.charge(models, text, *bytes as u32, taken, &mut seen);
     }
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {
