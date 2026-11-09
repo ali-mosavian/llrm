@@ -9,12 +9,15 @@
 //! (a label of `Space::Segment`) whose `index` is its place in
 //! [`Lowered::symbols`]; a block is its position in the function.
 //! The class of a `COPY`'s registers is in its name (`COPY`, `COPY_FPR`) until
-//! `LirBody::class_like` carries it.
+//! `LirBody::class_like` carries it. A location's width is in bytes, as the
+//! shared phases read it (the verifier compares it with the register's bytes);
+//! the producer's `bits` are converted at `loc`, `imm` and `bits_of`.
 
 mod control;
 mod float;
 mod integer;
 mod memory;
+pub mod stages;
 #[cfg(test)]
 mod tests;
 
@@ -42,9 +45,23 @@ fn loc(
     bits: u32,
 ) -> Loc {
     match lir_register(register) {
-        MfReg::Phys(register) => Loc::Reg(LirRegLoc { register, width: bits }),
-        MfReg::Virt(value) => Loc::Held(Held { value, width: bits, offset: 0 }),
+        MfReg::Phys(register) => Loc::Reg(LirRegLoc { register: viewed(register, bits), width: bits / 8 }),
+        MfReg::Virt(value) => Loc::Held(Held { value, width: bits / 8, offset: 0 }),
     }
+}
+
+/// The register of `root` that is `bits` wide (`w3` for `x3` at 32): the
+/// file has one id per width, as the pin's `W3` is its own register.
+fn viewed(
+    root: llrm_lir::registers::RegId,
+    bits: u32,
+) -> llrm_lir::registers::RegId {
+    Regs(&crate::REGISTER_INFO).view(root, bits).unwrap_or(root)
+}
+
+/// The register a view is of: the id the machine register numbers go by.
+fn rooted(register: llrm_lir::registers::RegId) -> llrm_lir::registers::RegId {
+    Regs(&crate::REGISTER_INFO).root(register)
 }
 
 fn gpr_loc(
@@ -62,7 +79,7 @@ fn vreg_loc(
 }
 
 fn imm(value: i64) -> Loc {
-    Loc::Imm(Imm { value, width: 64, address: None })
+    Loc::Imm(Imm { value, width: 8, address: None })
 }
 
 fn value_of(loc: &Loc) -> i64 {
@@ -74,15 +91,15 @@ fn value_of(loc: &Loc) -> i64 {
 
 fn bits_of(loc: &Loc) -> u32 {
     match loc {
-        Loc::Reg(register) => register.width,
-        Loc::Held(held) => held.width,
+        Loc::Reg(register) => register.width * 8,
+        Loc::Held(held) => held.width * 8,
         other => panic!("a register, found {other:?}"),
     }
 }
 
 fn gpr_of(loc: &Loc) -> Gpr {
     match loc {
-        Loc::Reg(LirRegLoc { register, .. }) => from_gpr(MfReg::Phys(*register)),
+        Loc::Reg(LirRegLoc { register, .. }) => from_gpr(MfReg::Phys(rooted(*register))),
         Loc::Held(held) => from_gpr(MfReg::Virt(held.value)),
         other => panic!("a register operand, found {other:?}"),
     }
@@ -108,7 +125,7 @@ fn reg_of(
 ) -> Reg {
     let class = if fpr { crate::lir_view::Class::Fpr } else { crate::lir_view::Class::Gpr };
     match loc {
-        Loc::Reg(LirRegLoc { register, .. }) => machine_register(MfReg::Phys(*register), class),
+        Loc::Reg(LirRegLoc { register, .. }) => machine_register(MfReg::Phys(rooted(*register)), class),
         Loc::Held(held) => machine_register(MfReg::Virt(held.value), class),
         other => panic!("a register operand, found {other:?}"),
     }
@@ -471,7 +488,8 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
         lowered.succ.extend(successors_of(block, index, function.blocks.len(), &labels).into_iter().map(|b| b as i64));
         blocks.push(lowered.into());
     }
-    let body = LirBody::new(function.name.clone(), 0, blocks, IndexMap::default(), IndexMap::default());
+    let mut body = LirBody::new(function.name.clone(), 0, blocks, IndexMap::default(), IndexMap::default());
+    body.registers = Some(Regs(&crate::REGISTER_INFO));
     Ok(Lowered { body, memory_operands, symbols, debug_values })
 }
 

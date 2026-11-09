@@ -362,6 +362,33 @@ fn every_instruction_form_round_trips() {
     round_trip(&function).expect("every instruction round-trips");
 }
 
+/// The body names arm64's register file. It had none, so the first shared
+/// phase run on it (`PhiElimination`) panicked: every stage of every function
+/// of the corpus read "the body has no register file".
+#[test]
+fn the_body_carries_the_arm64_register_file() {
+    let lowered = to_lir(&function(vec![Op::I(Inst::Nop)])).expect("a nop maps");
+    assert!(std::ptr::eq(lowered.body.regs().0, &crate::REGISTER_INFO));
+}
+
+/// The verifier accepts what the producer makes, for every form and width.
+/// It named a register at a width that register is not (`x3` at 32 where the
+/// file has `w3`) in the first operand of every function of the 24 programs, so
+/// every shared phase's output was malformed by inheritance.
+#[test]
+fn the_producer_names_registers_at_their_own_width() {
+    use llrm_target::Target as _;
+    let all = instructions();
+    let lowered = to_lir(&function(all.into_iter().map(Op::I).collect())).expect("every form maps");
+    let complaints = llrm_codegen::backend::verify::verify_for(
+        &lowered.body,
+        false,
+        &crate::description::Arm64.layout().spaces.roles,
+    );
+    let widths: Vec<_> = complaints.iter().filter(|one| one.contains("not the width")).collect();
+    assert!(widths.is_empty(), "{} of {}: {:?}", widths.len(), complaints.len(), widths.first());
+}
+
 /// The operations that are not instructions.
 #[test]
 fn every_pseudo_operation_round_trips() {

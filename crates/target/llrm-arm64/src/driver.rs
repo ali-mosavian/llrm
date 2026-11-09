@@ -294,6 +294,9 @@ fn lower_function(
     if crate::lir_body::checking() {
         machine = crate::lir_body::round_trip(&machine)?;
     }
+    if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
+        crate::lir_body::stages::observe(&machine)?;
+    }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.
     // `x16`/`x17` are the lowerer's scratch pair where an offset does not
