@@ -1,7 +1,5 @@
 //! The m68k machine states `TargetLowering` facts to CodeGenPrepare. Without
-//! them the mid-end skipped every step that reads one, so a 64-bit shift with
-//! a cast on each arm kept its cast on the wrong side of the branch (see
-//! `cgp_cast_sinking.rs`).
+//! them the mid-end skips every step that reads one.
 
 use llrm_m68k::driver::machine;
 use llrm_mir::lowering::CgpStep;
