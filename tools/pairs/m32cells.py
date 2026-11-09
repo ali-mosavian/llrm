@@ -10,7 +10,6 @@ read at 16 against our 4 and counted cells (select_of_constants, wc_mixed) that 
 """
 
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -25,9 +24,6 @@ import object_bytes  # noqa: E402
 import pin  # noqa: E402
 
 ROOT = HERE.parents[1]
-PAD = re.compile(r"^(?:(?:data16|cs|ds) )*nop\b|^xchg\s+ax,ax$|^mov\s+(\w+),\1$|^lea\s+(\w+),\[\2(?:\+eiz\*1)?\+0x0\]$|^\.byte")
-
-
 class Refused(Exception):
     """A row whose two sides were built under different ABI settings, with no label saying so."""
 
@@ -56,40 +52,25 @@ def pin_flags(column: Column) -> list[str]:
     return ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", *told]
 
 
-def code_bytes(obj: Path) -> int:
-    """.text bytes, alignment padding excluded."""
-    out = subprocess.run(["objdump", "-d", "-M", "intel", "-w", str(obj)], capture_output=True, text=True, check=True).stdout
-    total = 0
-    for line in out.splitlines():
-        m = re.match(r"\s*[0-9a-f]+:\s+((?:[0-9a-f]{2} )+)\s*(.*)", line)
-        if m and m.group(2).strip() and not PAD.match(m.group(2).strip()):
-            total += len(m.group(1).split())
-    return total
+TARGET = "x86_32-linux"
 
 
-@dataclass(frozen=True)
-class Footprint:
-    code: int  # padding-free .text
-    data: int  # initialised and constant sections
-    bss: int
-
-    @property
-    def size(self) -> int:
-        return self.code + self.data
-
-    @property
-    def static(self) -> int:
-        return self.data + self.bss
+def footprint(obj: Path) -> object_bytes.Footprint:
+    """One reader for every column (tools/ab/object_bytes.py): code without alignment padding, data and bss."""
+    return object_bytes.footprint(TARGET, obj)
 
 
-def footprint(obj: Path) -> Footprint:
-    _, data, bss = object_bytes.elf_footprint(obj)
-    return Footprint(code_bytes(obj), data, bss)
+def size(found: object_bytes.Footprint) -> int:
+    return found.code + found.data
 
 
-def worse(ours: Footprint, other: Footprint) -> list[str]:
+def static(found: object_bytes.Footprint) -> int:
+    return found.data + found.bss
+
+
+def worse(ours: object_bytes.Footprint, other: object_bytes.Footprint) -> list[str]:
     """The axes on which ours is larger than `other`: size (code + data) and static (data + bss), each strict; bss alone is not an axis."""
-    return [f"{axis} {getattr(ours, axis)} vs {getattr(other, axis)}" for axis in ("size", "static") if getattr(ours, axis) > getattr(other, axis)]
+    return [f"{axis} {measure(ours)} vs {measure(other)}" for axis, measure in (("size", size), ("static", static)) if measure(ours) > measure(other)]
 
 
 def one(src: Path, bindir: Path, level: str, cols: tuple[Column, Column, Column]) -> tuple:
@@ -130,7 +111,7 @@ def main(argv: list[str]) -> int:
             print(f"{name}\tFAIL\t{why}")
         else:
             o, p, p16 = sizes
-            print(f"{name}\t{o.size}\t{p.size}\t{o.size - p.size}\t{p16.size}\t{o.size - p16.size}\t{o.static - p.static}\t{o.static - p16.static}")
+            print(f"{name}\t{size(o)}\t{size(p)}\t{size(o) - size(p)}\t{size(p16)}\t{size(o) - size(p16)}\t{static(o) - static(p)}\t{static(o) - static(p16)}")
     print(f"compiled {len(rows) - failed} of {len(rows)}", file=sys.stderr)
     return 1 if failed == len(rows) else 0
 

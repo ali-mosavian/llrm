@@ -25,7 +25,7 @@ def test_a_z80_object_counts_its_assembled_code_not_the_text(tmp_path):
     source = tmp_path / "o.s"
     source.write_text("\t.area _CODE\n_f::\n\tld hl, #5\n\tret\n" + "; a long comment that is no code\n" * 40)
     done = run("z80-sdcc", source)
-    assert done.returncode == 0 and done.stdout.split() == ["4", "0"], done.stderr
+    assert done.returncode == 0 and done.stdout.split() == ["4", "0", "0"], done.stderr
     assert source.stat().st_size > 1000
 
 
@@ -33,7 +33,7 @@ def test_a_z80_object_counts_its_data_areas_apart(tmp_path):
     source = tmp_path / "o.s"
     source.write_text("\t.area _CODE\n_f::\n\tret\n\t.area _CONST\n_t::\n\t.db 1,2,3,4,5\n")
     done = run("z80-sdcc", source)
-    assert done.stdout.split() == ["1", "5"], done.stderr
+    assert done.stdout.split() == ["1", "5", "0"], done.stderr
 
 
 def test_an_omf_object_counts_code_and_data_not_the_file(tmp_path):
@@ -41,7 +41,7 @@ def test_an_omf_object_counts_code_and_data_not_the_file(tmp_path):
     pytest.importorskip("iced_x86")
     obj = Path(__file__).resolve().parents[2] / "tests/fixtures/bench/fpbench-v-g3.obj"
     done = run("x86_16-wat", obj)
-    assert done.returncode == 0 and done.stdout.split() == ["1135", "333"], done.stderr
+    assert done.returncode == 0 and done.stdout.split() == ["1135", "333", "3"], done.stderr
     assert obj.stat().st_size > 4000
 
 
@@ -51,7 +51,7 @@ def test_an_elf_object_counts_text_and_data_sections(tmp_path):
     obj = tmp_path / "o.o"
     subprocess.run(["cc", "-O1", "-c", str(c), "-o", str(obj)], check=True)
     done = run("x86_32-linux", obj)
-    code, data = (int(n) for n in done.stdout.split())
+    code, data, align = (int(n) for n in done.stdout.split())
     assert code > 0 and data >= 40 + 7 + 80, done.stdout
 
 
@@ -59,7 +59,7 @@ def test_a_6502_object_counts_the_assembled_code_segment(tmp_path):
     source = tmp_path / "o.s"
     source.write_text("\t.segment \"CODE\"\n_f:\n\tlda #5\n\trts\n" + "; padding comment\n" * 40)
     done = run("6502-sim65", source)
-    assert done.returncode == 0 and done.stdout.split() == ["3", "0"], done.stderr
+    assert done.returncode == 0 and done.stdout.split() == ["3", "0", "0"], done.stderr
 
 
 def test_a_missing_or_empty_object_is_an_error(tmp_path):
@@ -67,3 +67,25 @@ def test_a_missing_or_empty_object_is_an_error(tmp_path):
     empty.write_bytes(b"")
     assert run("x86_32-linux", empty).returncode == 2
     assert run("x86_32-linux", tmp_path / "absent.o").returncode == 2
+
+
+def test_an_x86_elf_code_column_leaves_the_alignment_padding_out_and_reports_it_apart(tmp_path):
+    """Two figures went by one name: the repo reader's ELF CODE was the `.text*` section size with alignment padding, the harness columns (m32 code_bytes,
+    m64 code_size) padding-free. Two functions 16-aligned: 5 B of code, 11 of nop fill, 1 B of code."""
+    source = tmp_path / "a.s"
+    source.write_text(".text\n.globl f, g\nf: movl 4(%esp), %eax\nret\n.balign 16\ng: ret\n")
+    obj = tmp_path / "a.o"
+    subprocess.run(["as", "--32", str(source), "-o", str(obj)], check=True)
+    section = sum(int(line.split()[1]) for line in subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True).stdout.splitlines() if line.startswith(".text"))
+    code, data, align = (int(n) for n in run("x86_32-linux", obj).stdout.split())
+    assert section == 17, "premise: the section is 17 B with the padding"
+    assert (code, align) == (6, 11), (code, data, align)
+    assert code + align == section
+
+
+def test_a_non_x86_elf_code_column_keeps_the_section_size_and_prints_align_zero():
+    """m68k is big-endian; elfsize reads little-endian only, so its CODE is the section size, ALIGN 0, as the module docstring says."""
+    import object_bytes
+
+    assert object_bytes.Footprint(10, 0, 0).align == 0
+    assert "WITH padding" in object_bytes.__doc__

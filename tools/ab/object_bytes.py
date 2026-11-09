@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""object_bytes.py TARGET OBJECT: `CODE DATA` bytes of one compiled object, printed. Exit 2 and a message where they cannot be read.
-DATA is the initialised, constant and zero-filled data the object carries (an audit row is code + data); CODE alone is size(1)'s `.text`.
+"""object_bytes.py TARGET OBJECT: `CODE DATA ALIGN` bytes of one compiled object, printed. Exit 2 and a message where they cannot be read.
+DATA is the initialised, constant and zero-filled data the object carries (an audit row is code + data). ALIGN is the alignment padding CODE leaves out.
+CODE is padding-free for x86 (x86_32 and x86_64 ELF through sizes.code_size, the OMF through sizes.code_bytes), ALIGN its padding. Every other ELF target
+(m68k is big-endian, elfsize reads little-endian only) keeps size(1)'s `.text*` section size WITH padding and prints ALIGN 0: its CODE is not comparable
+with an x86 CODE, whose padding is left out.
 
 Never the file's size: an OMF object's records, a z80 `.s` text and a 6502 `.s` text each held 4-6x the code of tables that read them
 (wasm-b's cells.sh fell back to `stat -c %s`: +1052 where the assembled _CODE was +175). A size that cannot be parsed is an error, not a fallback.
@@ -9,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -60,38 +64,55 @@ def mos6502_bytes(source: Path) -> tuple[int, int]:
     return int(found.group(1)), sum(int(m.group(2)) for m in re.finditer(r"(RODATA|DATA|BSS):\s+(\d+)", listing))
 
 
-def elf_footprint(obj: Path) -> tuple[int, int, int]:
-    """`(code, data, bss)` of an ELF object, read by size(1) (m68k is big-endian; elfsize.code_bytes reads little-endian only): `.text*` is the code,
-    the initialised and constant sections (jump tables, constant pools, strings) the data, the zero-filled ones the bss. Not debug, not .comment, not unwind tables."""
+@dataclass(frozen=True)
+class Footprint:
+    code: int  # `.text*`, without alignment padding where the target's reader can tell it (x86), else the section size
+    data: int  # initialised and constant sections (jump tables, constant pools, strings)
+    bss: int  # zero-filled sections
+    align: int = 0  # the padding `code` leaves out; 0 for a target whose reader keeps it in `code`
+
+
+def elf_footprint(target: str, obj: Path) -> Footprint:
+    """x86 ELF: sizes.code_size and sizes.data_bytes, the readers the bench and the matrix use (padding-free code; data = allocated non-executable sections but
+    `.eh_frame` and `.note*`). Other ELF: size(1) reads every endianness: `.text*` is the code, `.data`/`.rodata*` the data, `.bss` the bss."""
+    if target.startswith(("x86_32", "x86_64")):
+        size = sizes.code_size(obj)
+        data, bss = sizes.data_bytes(obj)
+        return Footprint(size.code, data, bss, size.align)
     listing = run(["size", "-A", str(obj)]).stdout
     rows = [line.split() for line in listing.splitlines()]
     sized = [(row[0], int(row[1])) for row in rows if len(row) > 1 and row[1].isdigit()]
-    return (
+    return Footprint(
         elfsize.text_bytes(listing),
         sum(size for name, size in sized if ELF_INITIALISED.match(name)),
         sum(size for name, size in sized if ELF_ZERO_FILLED.match(name)),
     )
 
 
-def elf_bytes(obj: Path) -> tuple[int, int]:
-    code, data, bss = elf_footprint(obj)
-    return code, data + bss
-
-
-def object_bytes(target: str, obj: Path) -> tuple[int, int]:
+def footprint(target: str, obj: Path) -> Footprint:
     if not obj.is_file() or obj.stat().st_size == 0:
         raise Unreadable(f"{obj}: no object")
     if target.startswith("z80"):
-        return z80_bytes(obj)
+        code, data = z80_bytes(obj)
+        return Footprint(code, data, 0)
     if target.startswith("6502"):
-        return mos6502_bytes(obj)
+        code, data = mos6502_bytes(obj)
+        return Footprint(code, data, 0)
     if target.startswith("wasm"):
         raise Unreadable("wasm objects are not read: a module's code section is not an object's .text")
     if sizes.is_elf(obj):
-        return elf_bytes(obj)
+        return elf_footprint(target, obj)
     if target.startswith("x86_16"):
-        return sizes.code_bytes(obj), sum(sizes.data_bytes(obj))
+        size = sizes.code_size(obj)
+        initialised, zero = sizes.data_bytes(obj)
+        return Footprint(size.code, initialised, zero, size.align)
     raise Unreadable(f"{target}: no reader for {obj}")
+
+
+def object_bytes(target: str, obj: Path) -> tuple[int, int]:
+    """`(code, data + bss)`, the pair the audit rows use."""
+    found = footprint(target, obj)
+    return found.code, found.data + found.bss
 
 
 def main(argv: list[str]) -> int:
@@ -99,7 +120,8 @@ def main(argv: list[str]) -> int:
         print("usage: object_bytes.py TARGET OBJECT", file=sys.stderr)
         return 2
     try:
-        print(*object_bytes(argv[1], Path(argv[2])))
+        found = footprint(argv[1], Path(argv[2]))
+        print(found.code, found.data + found.bss, found.align)
     except Exception as error:  # any failure to read is an error exit, never a number
         print(f"object_bytes: {argv[1]} {argv[2]}: {error}", file=sys.stderr)
         return 2

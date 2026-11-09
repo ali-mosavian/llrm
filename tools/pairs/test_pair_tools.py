@@ -273,7 +273,7 @@ def test_an_m32_cell_counts_the_constants_kept_outside_the_text(tmp_path):
     ours, other = cells.footprint(table), cells.footprint(immediates)
     assert ours.code < other.code, "premise: the code alone favours the table"
     assert (ours.data, other.data) == (64, 0)
-    assert cells.worse(ours, other) == [f"size {ours.size} vs {other.size}", f"static {ours.static} vs {other.static}"]
+    assert cells.worse(ours, other) == [f"size {cells.size(ours)} vs {cells.size(other)}", f"static {cells.static(ours)} vs {cells.static(other)}"]
     assert cells.worse(other, ours) == []
 
 
