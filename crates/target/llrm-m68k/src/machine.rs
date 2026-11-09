@@ -42,6 +42,22 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    /// Frames keep what the shipped targets ask for (m68k Linux, AmigaOS and
+    /// TOS: 4) and nothing realigns them (`frame.rs`): an object asking more
+    /// is clamped to it, so the optimizer never folds `ptr & 7` to 0 on a
+    /// frame that gives an address ending in 4.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::SHIPPED_STACK_ALIGN as u64)
+    }
+
+    /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
+    /// preferred one, so locals of those are accepted (and clamped); an
+    /// object aligned further needs the realignment the pin does and this
+    /// target does not translate yet, and is refused by name.
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(8)
+    }
+
     fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
         Some(Rc::new(crate::lowering::M68kLowering))
     }
