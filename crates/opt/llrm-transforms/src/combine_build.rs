@@ -138,6 +138,12 @@ impl Combiner<'_> {
         let parameters: Vec<TypeId> = args.iter().map(|&arg| self.type_of(arg)).collect();
         let function_type = self.context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
         let callee = self.declared.declare(name, function_type);
+        if callee.0 as usize >= self.env.globals.len()
+            && !self.pending_intrinsics.iter().any(|(id, _)| *id == callee.0)
+            && let Some(intrinsic) = llrm_mir::valuetracking::pattern::intrinsic_id_of_name(name)
+        {
+            self.pending_intrinsics.push((callee.0, intrinsic));
+        }
         let pointer = self.context.types.ptr(0);
         let callee =
             Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));

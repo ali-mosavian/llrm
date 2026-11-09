@@ -103,3 +103,17 @@ fn values_that_need_nine_walks_still_settle() {
     // `b7` is only fallen into, with `a` = 0: `ldy #0` is the 1-byte `tay`
     assert_eq!(known(text), text.replacen("b7:\n  lda #0\n  ldy #0\n", "b7:\n  lda #0\n  tay\n", 1));
 }
+
+/// k_isspace's `(c - 9) < 5` of an `int`: `ldy #0 … sta rc4; tya; ora rc4` is the
+/// load of `rc4` that `a` holds already, so the `ora`, the `tya` and the `ldy`
+/// were 3 B and 5 clocks of nothing (the `ldy` goes too when `y` is dead at the return) (46 B, 75 clocks at -O2).
+#[test]
+fn an_or_of_a_known_zero_is_the_load_of_its_operand() {
+    use llrm_6502::peephole::run;
+    let text = "k_isspace:\n  ldy #0\n  clc\n  lda rc2\n  adc #247\n  ldx #0\n  sta rc4\n  tya\n  ora rc4\n  cmp #5\n  lda rc3\n  sbc #0\n  lda #1\n  bcc _cmd1\n  lda #0\n_cmd1:\n  sta rc4\n  lda rc2\n  cmp #32\n  bne _cz2\n  lda rc3\n  cmp #0\n_cz2:\n  beq _cmt3\n  lda #0\n  jmp _cmd3\n_cmt3:\n  lda #1\n_cmd3:\n  ora rc4\n  rts\n";
+    let mut asm = Asm::parse(text);
+    run(&mut asm);
+    let out = asm.text();
+    assert!(!out.contains("tya") && !out.contains("ora rc4\n  cmp"), "{out}");
+    assert!(out.contains("sta rc4\n  cmp #5\n"), "{out}");
+}
