@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, single_input, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, ours_failed, single_input, skipped  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -69,6 +69,21 @@ class WorseCells(unittest.TestCase):
         """A matrix with an absent column passed as 'fewer worse cells'; it must fail instead."""
         rows = [("m68k-68000", "muldiv", "Os", n, b, "", "", "") for n, b in (("ours", ""), ("gcc", 66))]
         self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "muldiv", "Os")])
+
+    def test_ours_failing_to_build_where_gcc_builds_is_worse(self):
+        """The corpus table: a program ours cannot compile is a loss, not a hole and not a skipped cell."""
+        rows = [("m68k-68000", "p", "O2", "ours", "", "", "", "n/a: compile-fail: ours: error"), ("m68k-68000", "p", "O2", "gcc", 40, "", "", "")]
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+        self.assertEqual(missing(tsv(*rows)), [])
+
+    def test_ours_failing_with_no_external_number_is_skipped_not_judged(self):
+        rows = [("m68k-68000", "p", "O2", n, "", "", "", "n/a: compile-fail: x") for n in ("ours", "gcc", "clang")]
+        self.assertEqual(count(tsv(*rows)), (0, 0))
+        self.assertEqual(missing(tsv(*rows)), [])
+
+    def test_ours_with_no_number_and_no_reason_is_still_a_hole(self):
+        rows = [("m68k-68000", "p", "O2", "ours", "", "", "", ""), ("m68k-68000", "p", "O2", "gcc", 40, "", "", "")]
+        self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "p", "O2")])
 
     def test_max_run_on_one_input_is_reported(self):
         """max(7, 42) alone: gcc skipped the move, ours ran it; the other order reverses it (+6.4 B-eq at 060)."""

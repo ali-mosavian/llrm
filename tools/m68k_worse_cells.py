@@ -93,15 +93,28 @@ def single_input(lines) -> list[tuple[str, str, str, str]]:
     return found
 
 
+def ours_failed(lines) -> set[tuple[str, str, str]]:
+    """The cells where `ours` has no number and says why (`n/a: compile-fail: ...`): a failure the table names, not a hole. The corpus
+    matrix (tools/m68k_corpus_matrix.py) writes these."""
+    return {(r[0], r[1], r[2]) for r in (l.rstrip("\n").split("\t") for l in lines if not l.startswith("#"))
+            if len(r) >= 8 and r[3] == "ours" and r[4] == "" and r[7].startswith("n/a:")}
+
+
 def missing(lines) -> list[tuple[str, str, str]]:
-    """The cells with no `ours` number: a column that is absent hides its cells, so a matrix with any fails."""
+    """The cells with no `ours` number and no stated reason: a column that is absent hides its cells, so a matrix with any fails."""
+    lines = list(lines)
     _, seen, keys = _seen(lines)
-    return [key for key in keys if "ours" not in seen.get(key, {})]
+    named = ours_failed(lines)
+    return [key for key in keys if "ours" not in seen.get(key, {}) and key not in named]
 
 
 def count(lines) -> tuple[int, int]:
+    """(worse, judged). A cell where ours failed to build and an external did is judged and worse: not building is the worst result."""
+    lines = list(lines)
     results = list(cells(lines))
-    return sum(1 for *_, e in results if e > 0), len(results)
+    _, seen, _ = _seen(lines)
+    broken = [key for key in ours_failed(lines) if {"gcc", "clang"} & set(seen.get(key, {}))]
+    return sum(1 for *_, e in results if e > 0) + len(broken), len(results) + len(broken)
 
 
 if __name__ == "__main__":

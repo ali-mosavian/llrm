@@ -97,6 +97,8 @@ class Tools:
         self.llc = str(Path(os.environ["LLVM_M68K"]) / "llc")
         self.env = {**os.environ, "LD_LIBRARY_PATH": f"{self.root}/usr/lib/x86_64-linux-gnu"}
         self.gcc = f"{self.root}/usr/bin/m68k-linux-gnu-gcc"
+        # The unpacked cross gcc ships no compiler headers (stddef.h): M68K_GCC_HEADERS is a directory of target-neutral ones
+        self.headers = os.environ.get("M68K_GCC_HEADERS")
         self.as_ = f"{self.root}/usr/bin/m68k-linux-gnu-as"
         self.objdump = f"{self.root}/usr/bin/m68k-linux-gnu-objdump"
         every = external_flags.flags("none", (), 15)
@@ -126,7 +128,7 @@ class Tools:
                 asm.write_text(".text\n" + relaxing_branches(asm.read_text()))
                 ok, timed, err = self.run([self.as_, "--fatal-warnings", f"-m{cpu}", "-o", str(obj), str(asm)])
         elif compiler == "gcc":
-            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
+            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
         else:
             ir = work / f"{stem}.ll"
             ok, timed, err = self.run([self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", str(path), "-o", str(ir)])
