@@ -68,6 +68,14 @@ class CorpusMatrix(unittest.TestCase):
             os.environ.setdefault(name, "/x/" + name)
         self.assertIn("-fno-inline", mx.Tools().column_lines().split("# inlining:", 1)[1])
 
+    def test_the_header_rate_is_read_from_timings_times_per_cpu(self):
+        """The 11-09 table said `2 B per clk saved` for all four CPUs; timings.times gives 0.5, 1.33 and 3.2: every O2/O3 verdict was void."""
+        import m68k_worse_cells as wc
+        note = mx.rate_note()
+        self.assertIn(wc.rate_text(), note)
+        self.assertNotIn("68000/68020/68040/68060 2 B", note)
+        self.assertEqual({cpu: round(rate, 2) for cpu, rate in wc.rates(note).items()}, {cpu: round(rate, 2) for cpu, rate in wc.committed_rates().items()})
+
     def test_the_header_prints_every_columns_compile_lines(self):
         """A reader of a table saw only a hash of the setup; the three faults of 11-09 (hard float, rodata, inlining) were in command lines nobody printed."""
         import os

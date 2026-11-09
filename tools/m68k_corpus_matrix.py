@@ -33,6 +33,7 @@ import corpus_targets as ct  # noqa: E402
 import external_flags  # noqa: E402
 import m68k_exec_sweep as sweep  # noqa: E402
 import m68k_program_size as program_size  # noqa: E402
+import m68k_worse_cells as worse_cells  # noqa: E402
 import o0_sweep  # noqa: E402
 
 TIMEOUT = 180
@@ -92,6 +93,11 @@ def long_double_abi_mismatch(source: str) -> bool:
     """gcc's m68k `long double` is the 12-byte extended type (sizeof 12, `__addxf3`); the pin's clang and ours make it a 64-bit double
     (sizeof 8, `__adddf3`) and gcc has no option to match. A program that names the type is not like-for-like against gcc."""
     return bool(re.search(r"\blong\s+double\b", code_without_comments(source)))
+
+
+def rate_note() -> str:
+    """The header's byte-rate text: per CPU, read from the committed timings.times (a typed flat 2 B per clk voided every O2/O3 verdict of the 11-09 table)."""
+    return f"byte_rate: {worse_cells.rate_text()} B per clk saved, read from crates/target/llrm-m68k/src/timings.times"
 
 
 def gcc_program_flags(flags: list[str], source: str = "") -> list[str]:
@@ -310,7 +316,7 @@ def main() -> int:
     header = (f"# m68k corpus matrix (code_bytes = code + rodata + data of the object alone; lib_bytes = the compiler-rt members it links, OUR archive at the same level for all three columns, so the gcc and clang library numbers are an estimate (libgcc's m68k routines are not in the gcc root); whole program = code_bytes + lib_bytes; NO CLOCKS: no libc is linked, so O2/O3 are judged on bytes alone, an upper bound; gcc -msoft-float like ours{headers_note}; denominator {len(corpus)} programs = "
               f"{len(corpus) - n_bench} tests/run/c + {n_bench} bench, {len(same)} more in both (counted once, same.tsv); "
               f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) + f"; whole-program unknown (a column calls a helper our archive lacks) {unknown}"
-              + "; byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved (unused: no clocks)"
+              + "; " + rate_note() + " (unused: no clocks)"
               + "; external flags: tools/external_flags.py --target none, hash cd1e12d510e4\n")
     (out / "m68k-corpus.tsv").write_text(header + tools.stamps() + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\tlib_bytes\n" + "\n".join(rows) + "\n")
     (out / "reasons.tsv").write_text("target\tprog\tlevel\treason\tcause\n" + "\n".join(reasons) + "\n" + "".join(f"m68k-{c}\t{i}\t-\tnot-targeted\t\n" for c, i in na))

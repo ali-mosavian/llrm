@@ -38,6 +38,15 @@ class HeaderRates(unittest.TestCase):
             count(io.StringIO(body))
         self.assertIn("timings.times", str(why.exception))
 
+    def test_the_rate_text_follows_the_table_it_is_read_from(self):
+        """A header writer that types its rates cannot follow a changed timings.times: this one reads them."""
+        import tempfile
+        from m68k_worse_cells import rate_text
+        with tempfile.NamedTemporaryFile("w", suffix=".times") as table:
+            table.write("march m68000 m68020 m68040\ncache_line 2 4 16\nline_fill_clocks 4 3 4\n")
+            table.flush()
+            self.assertEqual(rate_text(table.name), "68000 0.5, 68020 1.33, 68040 4")
+
     def test_the_committed_rates_are_per_cpu(self):
         from m68k_worse_cells import committed_rates
 
