@@ -1089,6 +1089,20 @@ fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
     assert!(cost < threshold, "the rate refused a copy at -O1");
 }
 
+/// DEVIATE wasm SZ1 reaches -O1: with the rate off a speed caller holds a
+/// growing inline the pin's `default<O1>` takes (jpeg_fixed -O1 22099 B against
+/// the pin's 26245). Closing #8527 kept it: undoing it moved 33 wasm -O1 rows
+/// up by 28 525 B.
+#[test]
+fn the_size_rule_holds_a_growing_inline_in_a_speed_caller_at_o1() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = PolicyOnly(policy, Some(false), false);
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti), params, (2, false));
+    assert!(cost >= threshold, "-O1 took a growing inline the size rule holds");
+}
+
 const BOUNDED_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer
 @ref = internal global [1200 x i8] zeroinitializer
 @sum = internal global i16 0
