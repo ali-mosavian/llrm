@@ -14,19 +14,19 @@
 //! kills of the blocks it passes through. A phi's operand is a use at the end
 //! of its predecessor.
 //!
-//! DEVIATE LV1 (owner w-1, exit with `Insn::requires`/`delivers`/`clobbers` as
+//! DEVIATE LV1 (owner anyisa, exit with `Insn::requires`/`delivers`/`clobbers` as
 //! operands): the physical-register half (`HandlePhysReg*`,
 //! `UpdatePhysRegDefs`, `HandleRegMask`) is absent. LIR carries a fixed
 //! register as `requires`, `delivers` and `clobbers` of the instruction, which
 //! TwoAddress reads from it (`processCopy`).
 //!
-//! DEVIATE LV4 (owner w-1, exit with LV3): the body that TwoAddress reads has
+//! DEVIATE LV4 (owner anyisa, exit with LV3): the body that TwoAddress reads has
 //! values with several definitions (a phi's temporary, the copy of a tied
 //! pair), so a block can hold several kills of one value, one for each segment
 //! that dies in it; the pin's holds one per block and PHIElimination and
 //! TwoAddress keep it by explicit calls.
 //!
-//! DEVIATE LV2 (owner w-1, no exit): a kill is an instruction id with the block
+//! DEVIATE LV2 (owner anyisa, no exit): a kill is an instruction id with the block
 //! it is in (the pin's pointer and `getParent`), or a phi's result for the dead
 //! definition of a phi (the pin's PHI instruction).
 //!
@@ -219,7 +219,7 @@ impl LiveVariables {
         this
     }
 
-    /// DEVIATE LV3 (owner w-1, exit 2026-12-11, `livevariables-plan.md`): the
+    /// DEVIATE LV3 (owner anyisa, exit 2026-12-11, `livevariables-plan.md`): the
     /// same `VarInfo`s of a body that is not in SSA form, which the pin never
     /// recomputes (PHIElimination keeps its own up to date). A value is alive
     /// through a block that it enters and leaves without defining it; it is

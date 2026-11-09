@@ -53,12 +53,12 @@
 //! x_ll_div +1), -Os and m16 unchanged; the skip-edge zero of x_life waits on
 //! phi operands without a copy (DAG isel).
 //!
-//! DEVIATE CSE3 (owner w2, exit 2026-11-22): both selectors mark a load
+//! DEVIATE CSE3 (owner anyisa, exit 2026-11-30: GOT loads taken, or measured
+//! not to matter): the DAG selector marks a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
-//! `noalias readonly` argument), and the DAG selector the load of an incoming
-//! stack argument (an immutable fixed object) and of a constant-pool entry. The
-//! pin also takes GOT loads, which ours lacks; the old selector reads an
-//! incoming argument as a memory operand of its reader, not a load of its own.
+//! `noalias readonly` argument), and the load of an incoming stack argument (an
+//! immutable fixed object) and of a constant-pool entry. The pin also takes GOT
+//! loads, which ours lacks.
 //!
 //! Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
 //! elimination after allocation, was ours alone (the pin runs MachineCSE once,

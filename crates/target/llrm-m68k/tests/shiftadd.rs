@@ -17,12 +17,27 @@ fn a_shift_by_one_whose_codes_nothing_reads_is_an_add() {
     assert!(out.contains("add.l\t%d0, %d0") && !out.contains("lsl"), "{out}");
 }
 
+/// The shift has a second use (the returned value), so the zero test cannot
+/// become a mask test of `x`: it reads the result's codes, the add's now that
+/// it is an add.
 #[test]
 fn a_zero_test_reads_the_adds_codes_as_it_read_the_shifts() {
     let out = compiled(
+        "define i32 @f(i32 %x) {\nentry:\n  %r = shl i32 %x, 1\n  %c = icmp eq i32 %r, 0\n  br i1 %c, label %zero, label %rest\nzero:\n  ret i32 7\nrest:\n  ret i32 %r\n}\n",
+    );
+    assert!(out.contains("add.l\t%d0, %d0"), "{out}");
+    assert!(!out.contains("tst"), "{out}");
+}
+
+/// InstCombine's `foldICmpShlConstant` (the pin's) turns a lone `(x << 1) == 0`
+/// into `(x & 0x7fffffff) == 0` before the backend sees a shift: this form is
+/// the pin's, and the add never appears for it.
+#[test]
+fn a_lone_zero_test_of_a_shift_is_the_pins_mask_test() {
+    let out = compiled(
         "define i32 @f(i32 %x) {\n  %r = shl i32 %x, 1\n  %c = icmp eq i32 %r, 0\n  %z = zext i1 %c to i32\n  ret i32 %z\n}\n",
     );
-    assert!(out.contains("add.l\t%d0, %d0") && !out.contains("tst"), "{out}");
+    assert!(out.contains("and.l\t#2147483647, %d0") && !out.contains("add.l"), "{out}");
 }
 
 #[test]

@@ -430,8 +430,9 @@ fn every_instruction_states_its_effect() {
         let says = |lanes: &Lanes, lane: &Lanes| lane.is_subset(lanes);
         assert_eq!(says(&reads, &flags), facts.reads_flags, "{op:?} reads the flags");
         assert_eq!(says(&writes, &flags), facts.sets_flags, "{op:?} sets the flags");
-        assert_eq!(says(&reads, &memory), facts.may_load || facts.may_store, "{op:?} reads memory");
-        assert_eq!(says(&writes, &memory), facts.may_store, "{op:?} writes memory");
+        assert_eq!(says(&reads, &memory), facts.may_load || facts.may_store || facts.call, "{op:?} reads memory");
+        assert_eq!(says(&writes, &memory), facts.may_store || facts.call, "{op:?} writes memory");
+        assert!(insn.volatile || !(facts.side_effects || facts.call), "{op:?} is volatile");
         let (defs, uses) = op.defs_and_uses();
         let strip = |lanes: Lanes| lanes.minus(&flags).minus(&memory);
         // One lane per machine register: a register named twice is one lane.
@@ -453,4 +454,37 @@ fn a_wide_copy_is_128_bits() {
     let lowered = to_lir(&function).expect("maps");
     let what = lowered.body.blocks[0].insns[0].what.as_ref().unwrap();
     assert_eq!(what.dests.iter().chain(&what.sources).map(bits_of).collect::<Vec<_>>(), vec![128, 128]);
+}
+
+/// A call touches any memory and is not moved across; a trap is not moved
+/// across either (LLVM: `isCall`, `BRK` `hasSideEffects`). Before this, facts
+/// gave both none, so a shared stage that read the lanes could move a store
+/// past a call.
+#[test]
+fn a_call_and_a_trap_are_barriers() {
+    let call = Op::Call { callee: Callee::Symbol("f".into()), uses: vec![], defs: vec![], tail: false };
+    let trap = Op::I(Inst::Brk { imm16: 1 });
+    let lowered = to_lir(&function(vec![call, trap])).expect("maps");
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    let memory = Lanes::flags(Lanes::MEMORY);
+    let insns = &lowered.body.blocks[0].insns;
+    let (reads, writes) = insns[0].declared.unwrap();
+    assert!(memory.is_subset(&reads) && memory.is_subset(&writes), "a call reads and writes memory");
+    assert!(insns[0].volatile && insns[1].volatile);
+}
+
+/// The side tables stand in for the instruction's own memory operand: a body
+/// rebuilt without them refuses a load rather than inventing one (DEVIATE 5).
+#[test]
+fn a_load_rebuilt_without_its_memory_operand_is_refused() {
+    let load = Inst::Load {
+        mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
+        addr: Addr::Offset { base: g(1), imm: 0 },
+        mmo: MemOperand::default(),
+    };
+    let function = function(vec![Op::I(load)]);
+    let mut lowered = to_lir(&function).expect("maps");
+    lowered.memory_operands.clear();
+    let Err(Unmapped(why)) = from_lir(&lowered, &function) else { panic!("rebuilt a load with no memory operand") };
+    assert!(why.starts_with("LDR"), "{why}");
 }
