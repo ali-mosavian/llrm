@@ -5,6 +5,8 @@
 
 use std::rc::Rc;
 
+use llrm_support::debug;
+
 pub use llrm_codegen::driver::flags::apply_pass_flag;
 use llrm_mir::program::Program;
 use llrm_target::Target;
@@ -294,27 +296,37 @@ fn tail(
     let mut sources: Vec<Option<&llrm_mir::module::Module>> = Vec::new();
     for name in &names {
         SELECTED.with(|count| count.set(count.get() + 1));
-        let mut selection = select_function(module, name, request.cpu)?;
+        // `LLRM_DEBUG=time`: each selection and each pricing (allocate + emit) is a span, so the count per function
+        // is in the report (`LLRM_DEBUG=time,timefunc` charges them to the function).
+        let mut selection = debug::in_function(name, || debug::timed("6502 select", || select_function(module, name, request.cpu)))?;
         let mut as_called = true;
         let mut paged_chosen = false;
         let mut source = None;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
-            let mut other = select_function(looped, name, request.cpu)?;
+            let mut other = debug::in_function(name, || {
+                debug::timed("6502 select (copies as loops)", || select_function(looped, name, request.cpu))
+            })?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, looped, &selection, request)? {
+            if debug::in_function(name, || {
+                debug::timed("6502 price (copies as loops)", || cheaper(module, name, &other, looped, &selection, request))
+            })? {
                 selection = other;
                 as_called = false;
                 source = Some(looped);
             }
         }
         if let Some((_, paged)) = paged.as_ref().filter(|(names, _)| as_called && names.contains(name)) {
-            let mut other = select_function(paged, name, request.cpu)?;
+            let mut other = debug::in_function(name, || {
+                debug::timed("6502 select (paged loops)", || select_function(paged, name, request.cpu))
+            })?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
-            if cheaper(module, name, &other, paged, &selection, request)? {
+            if debug::in_function(name, || {
+                debug::timed("6502 price (paged loops)", || cheaper(module, name, &other, paged, &selection, request))
+            })? {
                 selection = other;
                 paged_chosen = true;
                 source = Some(paged);
@@ -324,7 +336,9 @@ fn tail(
         sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
-    crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
+    debug::timed("6502 multiply images", || {
+        crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)
+    })?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {
@@ -332,7 +346,7 @@ fn tail(
         selection.source = file.clone().map(|file| (file, scope));
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
-    let pieces = module_text(module, &parts)?;
+    let pieces = debug::timed("6502 module text", || module_text(module, &parts))?;
     let (mut clocks, mut bytes) = (0i64, 0i64);
     if price {
         let weights: Vec<Vec<u64>> = names

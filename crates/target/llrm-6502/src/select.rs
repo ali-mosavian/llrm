@@ -123,6 +123,18 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
+    // every allocate-and-emit of a function is a span: pricing an alternative, the shared-saves and wide-division
+    // retries of `module_text` and the final text each run it (`LLRM_DEBUG=time`)
+    llrm_support::debug::in_function(name, || {
+        llrm_support::debug::timed("6502 allocate and emit", || function_text_once(module, name, selection))
+    })
+}
+
+fn function_text_once(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+) -> Result<String, String> {
     // a call through a pointer no `!callees` bounds may come back into this
     // function
     let recursive = module
