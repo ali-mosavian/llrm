@@ -38,6 +38,8 @@ pub(crate) struct Facts {
     defs: HashMap<u32, Vec<(usize, usize)>>,
     /// How many operands read each virtual register in the function.
     use_counts: Vec<u32>,
+    /// Words the liveness solver visited.
+    steps: u64,
 }
 
 fn virt(reg: Reg) -> Option<u32> {
@@ -50,6 +52,11 @@ fn uses(inst: &Inst) -> impl Iterator<Item = u32> + '_ {
 
 fn defines(inst: &Inst) -> impl Iterator<Item = u32> + '_ {
     inst.operands.iter().filter_map(|o| if let Operand::Def(r) = o { virt(*r) } else { None })
+}
+
+/// Words the liveness solver visits on `function`: the cost the tests bound.
+pub fn liveness_steps<C>(function: &MFunction<C>) -> u64 {
+    Facts::of(function).steps
 }
 
 impl Facts {
@@ -80,10 +87,12 @@ impl Facts {
         let mut live_in = vec![vec![0u64; words]; blocks];
         let mut live_out = vec![vec![0u64; words]; blocks];
         let mut changed = true;
+        let mut steps = 0u64;
         while changed {
             changed = false;
             for b in (0..blocks).rev() {
                 for w in 0..words {
+                    steps += 1;
                     let out = succs[b].iter().fold(0, |acc, &s| acc | live_in[s][w]);
                     let input = gen_[b][w] | (out & !kill[b][w]);
                     if out != live_out[b][w] || input != live_in[b][w] {
@@ -94,7 +103,7 @@ impl Facts {
                 }
             }
         }
-        Facts { live_out, defs, use_counts }
+        Facts { live_out, defs, use_counts, steps }
     }
 
     /// `isPlainlyKilled`: nothing reads `reg` after instruction `at` of block
