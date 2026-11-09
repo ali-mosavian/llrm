@@ -5,8 +5,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import m64_worse_cells as worse_cells  # noqa: E402
 
 
-def row(program, compiler, code, data=0):
-    return f"x86-m64\t{program}\tO1\t{compiler}\t{code}\t0\t{data}\t\t\t\t\t\t\t\n"
+def row(program, compiler, code, data=0, pad=0):
+    text = code + pad if isinstance(code, int) else code
+    return f"x86-m64\t{program}\tO1\t{compiler}\t{code}\t{text}\t{data}\t\t\t\t\t\t\t\n"
 
 
 def test_a_row_with_no_gcc_cell_is_refused_not_compared_with_clang():
@@ -51,3 +52,37 @@ def test_a_table_without_the_object_bytes_mark_is_refused(tmp_path):
     table.write_text("# x86-m64 matrix, data_bytes .data+.rodata*\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
     done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
     assert done.returncode != 0 and "data=object_bytes" in done.stderr
+
+
+def test_a_column_whose_code_exceeds_its_emitted_text_is_refused_not_compared():
+    """Padding on one side only: gcc's raw .text (padded) in the code column against our padding-free code made ours look 8 B smaller than it is.
+    Padding-free code can never exceed the emitted text, so a column that does was measured another way."""
+    text = row("p", "ours", 300, pad=16) + row("p", "gcc", 310) + row("p", "clang", 320)
+    text = text.replace("O1\tgcc\t310\t310", "O1\tgcc\t310\t302")
+    rows, missing = worse_cells.worse(worse_cells.cells(text.splitlines()))
+    assert rows == [] and len(missing) == 1 and "gcc" in missing[0] and "padding" in missing[0]
+
+
+def test_a_column_with_no_emitted_text_is_refused_because_its_padding_cannot_be_told():
+    text = row("p", "ours", 300) + row("p", "gcc", 250) + row("p", "clang", 280)
+    text = text.replace("O1\tclang\t280\t280", "O1\tclang\t280\t")
+    rows, missing = worse_cells.worse(worse_cells.cells(text.splitlines()))
+    assert rows == [] and len(missing) == 1 and "clang" in missing[0]
+
+
+def test_padding_is_its_own_column_and_not_part_of_the_comparison():
+    """Ours aligns functions (pad 16) and gcc does not at -O1: the verdict is on code, the padding is reported beside it."""
+    text = row("p", "ours", 300, pad=16) + row("p", "gcc", 310) + row("p", "clang", 320)
+    table = worse_cells.cells(text.splitlines())
+    rows, missing = worse_cells.worse(table)
+    assert rows == [] and missing == [] and worse_cells.padding(table)[("p", "O1")] == {"ours": 16, "gcc": 0, "clang": 0}
+
+
+def test_a_table_without_the_padding_free_mark_is_refused(tmp_path):
+    import subprocess
+    import sys
+
+    table = tmp_path / "raw.tsv"
+    table.write_text("# x86-m64 matrix; data=object_bytes; code_bytes .text incl. padding\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+    done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+    assert done.returncode != 0 and "padding-free" in done.stderr
