@@ -1217,7 +1217,7 @@ impl Builder {
             for (lane, to) in [low, high].into_iter().enumerate() {
                 let operands =
                     vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
-                self.push(Inst::new(Kind::Op("LDPY"), operands));
+                self.push(Inst::new(Kind::Op("LDPYZ"), operands));
                 self.copy(to, acc);
             }
             let (left, right) = if sub { (a, cell.as_str()) } else { (cell.as_str(), a) };
@@ -1232,7 +1232,7 @@ impl Builder {
         match place {
             Place::Offset(off) => {
                 let operands = vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
-                self.push(Inst::new(Kind::Op("LDPY"), operands));
+                self.push(Inst::new(Kind::Op("LDPYZ"), operands));
             }
             Place::Index(index) => {
                 let index = self.byte(index)?;
@@ -1241,6 +1241,19 @@ impl Builder {
             }
         }
         self.copy(loaded, acc);
+        // `*p + 1` and `*p - 1` step in place, as `INC8` and `DEC8` do
+        let step = match self.constants.get(a).map(|value| *value & 0xFF) {
+            Some(1) if fold.mnemonic == "ADC" && fold.a == 1 => Some("INC"),
+            Some(255) if fold.mnemonic == "ADC" && fold.a == 1 => Some("DEC"),
+            _ => None,
+        };
+        if let Some(step) = step {
+            self.define(d);
+            let d = self.byte(d)?;
+            self.copy(d, loaded);
+            self.push(Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(d)]));
+            return Ok(());
+        }
         let (left, right) = if sub { (a, cell.as_str()) } else { (cell.as_str(), a) };
         self.alu(fold.mnemonic, fold.carry, d, left, right)
     }
@@ -3886,6 +3899,14 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
+                (Kind::Op("LDPYZ"), [_, _, Operand::Imm(off), _]) => {
+                    let p = register_name(lane(regs[1], 0));
+                    if cmos && *off == 0 {
+                        writeln!(out, "  lda ({p})").unwrap()
+                    } else {
+                        writeln!(out, "  ldy #{off}\n  lda ({p}),y").unwrap()
+                    }
+                }
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
