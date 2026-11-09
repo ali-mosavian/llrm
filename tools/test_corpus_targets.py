@@ -307,3 +307,30 @@ def test_programs_that_pun_a_32_bit_word_do_not_type_it_long():
         assert "typedef long sfi32" not in text and "unsigned long u; float f" not in text, source.name
     text = (RUN / "fixed_point.c").read_text()
     assert "unsigned long," not in text and "report((long)u.i)" not in text
+
+
+def test_a_65c02_row_is_as_not_applicable_as_a_6502_row():
+    """The width and freestanding regexes spelled `6502` and missed `65c02`: bitfield_overhang_init, memcpy_runtime, memfuncs_runtime and
+    widening_multiply (`!int16`, `!ptr16`, `!freestanding`) were run and refused on 65c02, 12 rows."""
+    for name in ("bitfield_overhang_init", "memcpy_runtime", "memfuncs_runtime", "widening_multiply"):
+        source = (RUN / f"{name}.c").read_text()
+        for target in ("6502-sim65", "65c02-sim65"):
+            assert not ct.applies(target, source), (name, target)
+    assert not ct.applies("65c02-sim65", "// flags: -O2 -m32\nint x;\n"), "a 32-bit-x86-only program is no 65c02 program either"
+
+
+def test_a_program_with_a_far_pointer_is_dos_only_without_a_tag():
+    """sum_three declares `short far *data` with no `// targets: dos`: 30 rows were refused by a clang front-end error on every other target."""
+    source = (HERE.parent / "bench/parity/sum_three/sum_three.c").read_text()
+    for target in ("x86_64-linux", "arm64-linux", "m68k-68020", "z80", "6502-sim65", "wasm32", "x86_32-linux"):
+        assert not ct.applies(target, source), target
+    assert ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
+    assert ct.applies("x86_64-linux", "/* as far as we know */\nint x; int far_away;\n"), "prose and names are not a far pointer"
+
+
+def test_a_program_that_prints_through_the_hosted_libc_is_not_run_for_macos():
+    """widening_multiply includes <stdio.h>; the arm64-macos row has no macOS sysroot, so it parsed the host's /usr/include/stdio.h and died."""
+    source = (RUN / "widening_multiply.c").read_text()
+    assert not ct.applies("arm64-macos", source)
+    assert ct.applies("arm64-linux", source) and ct.applies("x86_64-linux", source)
+    assert not ct.applies("arm64-macos", "// targets: !macos\nint x;\n") and ct.applies("arm64-linux", "// targets: !macos\nint x;\n")

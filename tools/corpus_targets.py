@@ -19,14 +19,14 @@ DOS = re.compile(r"^x86_(16|32)-(dos|wat)")
 FAMILY = re.compile(r"^x86_(16|32|64)-")
 M68K = re.compile(r"^m68k-")
 LP64 = re.compile(r"^(x86_64|arm64)-")
-SMALL = re.compile(r"^(x86_16|z80|6502)-")  # 16-bit pointers and int
-EIGHT_BIT = re.compile(r"^(z80|6502)(-|$)")  # a 16-bit int and no x86 mode to give `-m32` a meaning
-FREESTANDING = re.compile(r"^(wasm32|z80|6502)(-|$)")
+SMALL = re.compile(r"^(x86_16|z80|6502|65c02)-")  # 16-bit pointers and int
+EIGHT_BIT = re.compile(r"^(z80|6502|65c02)(-|$)")  # a 16-bit int and no x86 mode to give `-m32` a meaning
+FREESTANDING = re.compile(r"^(wasm32|z80|6502|65c02)(-|$)")
 BYTE_STACK = re.compile(r"^z80(-|$)")  # `Machine::kept_stack_align` 1: llrm-z80
 
 
 DOS_DIRECTORIES = ("tests/fixtures/callconv/", "runtime/qb/dos/", "tests/cc/models/")  # Watcom/DOS sources: far/huge, regparm, QB far heap
-DOS_MARKERS = re.compile(r"\b__asm\s*\{|\bQB_FAR\b|\b__(far|huge|near|segment)\b|\b__emit__\b|#\s*include\s*<(dos|i86|conio|bios)\.h>")
+DOS_MARKERS = re.compile(r"\b__asm\s*\{|\bQB_FAR\b|\b__(far|huge|near|segment)\b|\bfar\s*\*|\b__emit__\b|#\s*include\s*<(dos|i86|conio|bios)\.h>")
 
 
 def default_tags(source: str, path: Path | None) -> list[str] | None:
@@ -80,7 +80,7 @@ def applies(target: str, source: str, path: Path | None = None) -> bool:
     names = {target, f"x86-m{family.group(1)}" if family else target}
 
     def matches(token: str) -> bool:
-        return token in names or (token == "dos" and bool(DOS.match(target))) or (token == "m68k" and bool(M68K.match(target))) or (token == "lp64" and bool(LP64.match(target))) or (token in ("ptr16", "int16") and bool(SMALL.match(target))) or (token == "freestanding" and bool(FREESTANDING.match(target))) or (token == "byte-stack" and bool(BYTE_STACK.match(target))) or (token == "linux" and target.endswith("-linux"))
+        return token in names or (token == "dos" and bool(DOS.match(target))) or (token == "m68k" and bool(M68K.match(target))) or (token == "lp64" and bool(LP64.match(target))) or (token in ("ptr16", "int16") and bool(SMALL.match(target))) or (token == "freestanding" and bool(FREESTANDING.match(target))) or (token == "byte-stack" and bool(BYTE_STACK.match(target))) or (token == "linux" and target.endswith("-linux")) or (token == "macos" and target.endswith("-macos"))
 
     positive = [t for t in listed if not t.startswith("!")]
     return not any(matches(t[1:]) for t in listed if t.startswith("!")) and (not positive or any(matches(t) for t in positive))
