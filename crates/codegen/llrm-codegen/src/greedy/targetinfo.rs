@@ -18,6 +18,12 @@ pub trait TargetRegisterInfo {
         any_saved: bool,
     ) -> u32;
 
+    /// `getCSRCost`: see `GreedyEnv::csr_cost` (pin TargetRegisterInfo.h#L865,
+    /// 0 unless the target overrides it: AArch64 and RISC-V).
+    fn csr_cost(&self) -> u32 {
+        0
+    }
+
     /// `getCSRCostScale`: the percentage of that cost the allocator charges
     /// (the default is LLVM's, X86 takes it).
     fn csr_cost_scale(&self) -> u32 {

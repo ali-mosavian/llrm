@@ -913,18 +913,27 @@ fn test_the_cost_of_a_first_use_of_a_callee_saved_register_reaches_greedy() {
             Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
         }
     }
-    let splits_with = |cost: u32| {
+    let splits_with = |cost: u32, target: u32| {
         let f = lowered(across_a_call(1));
         let mut converted = to_lir::<Saver>(&f, regs()).expect("converts");
         converted.tri.csr_first_use_cost = cost;
+        converted.tri.csr_cost = target;
         let order = |value: u32| converted.order(value);
         let inputs = converted.inputs(regs(), &order);
         let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
         let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
         (decided.parents.len(), decided.placed.iter().filter(|(_, r)| *r == RegId::EBX).count())
     };
-    assert_eq!(splits_with(0), splits_with(0), "the control: the answer does not depend on chance");
-    assert_ne!(splits_with(0), splits_with(1_000), "the cost never changed what greedy did");
+    assert_eq!(splits_with(0, 0), splits_with(0, 0), "the control: the answer does not depend on chance");
+    assert_ne!(splits_with(0, 0), splits_with(1_000, 0), "the cost never changed what greedy did");
+    // AArch64 sets getCSRCost (5), and the pin then takes the first branch of
+    // initializeCSRCost: the first-use cost is not consulted (arm64 spilled
+    // and split ranges the pin gives a callee-saved register: jpeg_fixed -O1).
+    assert_eq!(
+        splits_with(1_000, 5),
+        splits_with(0, 5),
+        "a target that sets getCSRCost was priced by its first-use cost"
+    );
 }
 
 /// A literal live across a call is made again where it is read, not stored and

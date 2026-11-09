@@ -255,6 +255,10 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tri.csr_first_use_cost(!self.saved.is_empty())
     }
 
+    fn csr_cost(&self) -> u32 {
+        self.tri.csr_cost()
+    }
+
     fn csr_cost_scale(&self) -> u32 {
         self.tri.csr_cost_scale()
     }

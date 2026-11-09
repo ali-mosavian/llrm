@@ -859,6 +859,13 @@ impl AllocTarget for Arm64 {
         1
     }
 
+    /// AArch64RegisterInfo.h#L56-60: spill or split a really cold range
+    /// rather than use a callee-saved register (5 out of an entry frequency
+    /// of 2^14).
+    fn csr_cost() -> u32 {
+        5
+    }
+
     /// `stp`/`ldp` save two registers in 4 bytes; a spill is one 4-byte
     /// `str`/`ldr`; a made-again constant is a `movz` or an `adrp`+`add`.
     fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {

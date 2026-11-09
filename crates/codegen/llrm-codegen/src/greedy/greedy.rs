@@ -414,6 +414,13 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
+    /// `TRI->getCSRCost()`: a nonzero value puts `initializeCSRCost` on its
+    /// first branch, a threshold in entry-block executions out of 2^14 (AArch64
+    /// 5: spill or split a really cold range rather than use a callee-saved
+    /// register). Zero for the targets that do not set it.
+    fn csr_cost(&self) -> u32 {
+        0
+    }
     /// `TRI->getCSRCostScale(MF)`: the percentage of the first-use cost
     /// charged.
     fn csr_cost_scale(&self) -> u32 {
@@ -465,6 +472,31 @@ pub(crate) fn is_unused_callee_saved_reg(
 
 /// The cost of using a callee-saved register for the first time: its push and
 /// pop (`first_use` entry executions) scaled by `CSR_COST_SCALE` percent.
+/// `initializeCSRCost`'s first branch (RegAllocGreedy.cpp#L2425-2453): the
+/// target's `getCSRCost()` is relative to an entry frequency of 2^14 and is
+/// rescaled to the function's. `-regalloc-csr-first-time-cost` defaults to 0
+/// and `-regalloc-csr-cost-scale` is unset, so the branch is taken exactly
+/// when `csr_cost` is nonzero.
+fn csr_cost_from_target(
+    csr_cost: u32,
+    entry: u64,
+) -> BlockFrequency {
+    const FIXED_ENTRY: u64 = 1 << 14;
+    let cost = BlockFrequency(u64::from(csr_cost));
+    if entry == 0 {
+        return BlockFrequency(0);
+    }
+    if entry < FIXED_ENTRY {
+        cost * BranchProbability::new(entry as u32, FIXED_ENTRY as u32)
+    } else if entry <= u64::from(u32::MAX) {
+        cost / BranchProbability::new(FIXED_ENTRY as u32, entry as u32)
+    } else {
+        // BranchProbability takes 32-bit numbers: the pin multiplies by the
+        // integer ratio.
+        BlockFrequency(cost.get_frequency() * (entry / FIXED_ENTRY))
+    }
+}
+
 fn csr_cost_of(
     first_use: u32,
     scale: u32,
@@ -1536,15 +1568,18 @@ impl<'a> RAGreedy<'a> {
         self.select_or_split_impl(virt, new_vregs, &mut fixed, &mut recolor_stack, 0)
     }
 
-    /// `initializeCSRCost` (RegAllocGreedy.cpp#L2423), the target's branch:
-    /// `getCSRFirstUseCost` entry-block executions, scaled by
-    /// `getCSRCostScale` percent. No split support, no cost: a range never
+    /// `initializeCSRCost` (RegAllocGreedy.cpp#L2423): `getCSRCost()` when the
+    /// target sets it, else `getCSRFirstUseCost` entry-block executions, scaled
+    /// by `getCSRCostScale` percent. No split support, no cost: a range never
     /// pre-splits.
     fn initialize_csr_cost(&mut self) {
         self.csr_cost = BlockFrequency(0);
         let Some(split) = &self.split else { return };
         let entry = split.mbfi.get_entry_freq().get_frequency();
-        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), self.env.csr_cost_scale(), entry);
+        self.csr_cost = match self.env.csr_cost() {
+            0 => csr_cost_of(self.env.csr_first_use_cost(), self.env.csr_cost_scale(), entry),
+            target => csr_cost_from_target(target, entry),
+        };
     }
 
     /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
@@ -1946,6 +1981,19 @@ mod tests {
     use crate::greedy::matrix::NoFixed;
     use crate::greedy::spill::SimpleSpiller;
     use crate::greedy::virtregmap::RegisterInfo;
+
+    /// `initializeCSRCost`'s first branch rescales `getCSRCost()` (out of an
+    /// entry frequency of 2^14) to the function's entry frequency, in the pin's
+    /// three cases (RegAllocGreedy.cpp#L2437-2452).
+    #[test]
+    fn test_the_target_csr_cost_follows_the_entry_frequency() {
+        let at = |entry: u64| csr_cost_from_target(5, entry).get_frequency();
+        assert_eq!(at(1 << 14), 5, "the entry the cost is stated against");
+        assert_eq!(at(1 << 15), 10, "a larger entry scales it up");
+        assert_eq!(at(1 << 13), 2, "a smaller entry scales it down (5 / 2 in 31-bit fixed point)");
+        assert_eq!(at(1 << 40), 5 << 26, "past 32 bits, the integer ratio");
+        assert_eq!(at(0), 0, "no entry frequency, no cost");
+    }
 
     /// C5 priced every candidate register of a vreg by walking all its
     /// instructions (137 k `encoding_bytes` calls, 23.6 M Ir on
