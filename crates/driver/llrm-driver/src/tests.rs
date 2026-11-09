@@ -2697,9 +2697,10 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
-/// it): the pin's `tryOptimizeLEAtoMOV` makes `lea rdi, [rsp]` a `mov rdi, rsp`
-/// (#8601), two bytes shorter than `lea rdi, [rsp+8]`, so 32 bytes.
+/// add rsp, 32; pop rbx; ret`, but for the local's address: the pin's llc puts
+/// the local at `[rsp+8]` (`lea rdi, [rsp+8]`, 5 bytes, FDE 34 long); ours at
+/// `[rsp]` (FR1, the call pad above it), and the pin's `tryOptimizeLEAtoMOV`
+/// makes that `mov rdi, rsp` (3 bytes, #8601), so 32.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
