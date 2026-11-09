@@ -188,7 +188,7 @@ rule restored_copy
 // is `xchg a,b` where the code is for size: 3 bytes for 9 at m64 (gcc -Os does it; the pin does not).
 // A register `xchg` costs more clocks than the three moves, so only where the profile is for size.
 group swapped_registers
-    walk window skip meta
+    walk window skip nothing
 
 rule swapped_registers
     match   mov t:reg, a:reg ; mov a, b:reg ; mov b, t

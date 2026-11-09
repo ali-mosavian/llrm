@@ -6643,8 +6643,11 @@ fn swap_through_a_temporary(after: Vec<Arc<Insn>>) -> LirBody {
     let mut insns = vec![
         point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![ax.clone()]), vec![2], vec![1]),
         point(2, sem(Operation::Move, "mov", vec![ax], vec![bx.clone()]), vec![3], vec![2]),
-        point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]),
     ];
+    // The allocator's cycle breaker leaves the anchor of the middle move's
+    // virtual value between the moves.
+    insns.push(lir::anchor(Arc::clone(&insns[1])));
+    insns.push(point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]));
     insns.extend(after);
     insns.push(Arc::new(Insn {
         reads_complete: true,
