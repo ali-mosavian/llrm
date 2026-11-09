@@ -32,6 +32,7 @@ pub mod flags;
 pub mod foldarg;
 pub mod foldload;
 pub mod frame;
+pub mod frameindexed;
 pub mod isa;
 pub mod kernels;
 pub mod libcalls;
