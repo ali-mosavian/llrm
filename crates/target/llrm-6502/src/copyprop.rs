@@ -36,6 +36,17 @@
 //! cell, a label or a raw line starts a new block, a jump or return ends one:
 //! all end every tracked value (the pin has regmasks and walks one block).
 //!
+//! # Where it runs
+//! After allocation, as the pin does twice: after the register rewrite
+//! ([`addOptimizedRegAlloc`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1546))
+//! and last in the late optimizations
+//! ([`addMachineLateOptimization`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1575)).
+//! Here it is one run in `peephole::run_with`, after the shape-specific
+//! peepholes and before `drop_dead_stores`: earlier, it hid the copies those
+//! peepholes match (`shift_seven` 2 tests, `hand_shrax7` +4 B). Dead writes go
+//! first (`MaybeDeadCopies`), else a dead `lda` is kept alive as a transfer's
+//! source. Off unless `LLRM_6502_MCP` is set.
+//!
 //! # See also
 //! LLVM [`MachineCopyPropagation`]
 //! (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp#L926)
