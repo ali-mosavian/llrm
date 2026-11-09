@@ -253,12 +253,23 @@ fn valid_as_scaled_immediate(
     (offset & (i64::from(size) - 1)) == 0 && offset >= 0 && (offset as u64) < (range << log2(size))
 }
 
-/// `isWorthFoldingADDlow`: every user is a plain load or store.
+/// `isWorthFoldingADDlow`: every user is a load or store, atomic ones no
+/// stronger than monotonic (`ldar` and `stlr` take a register alone).
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L1250
 fn worth_folding_addlow<D: AddrDag>(
     dag: &D,
     n: SDValue,
 ) -> bool {
-    dag.users(n).into_iter().all(|(user, _)| matches!(dag.opcode(user), o if o == isd::LOAD || o == isd::STORE))
+    const MONOTONIC: u8 = 2;
+    dag.users(n)
+        .into_iter()
+        .all(
+            |(user, _)| {
+                let opcode = dag.opcode(user);
+                [isd::LOAD, isd::STORE, isd::ATOMIC_LOAD, isd::ATOMIC_STORE].contains(&opcode)
+                    && dag.atomic_ordering(user).is_none_or(|ordering| ordering <= MONOTONIC)
+            },
+        )
 }
 
 /// `SelectAddrModeIndexed`: base and 12-bit scaled offset.
