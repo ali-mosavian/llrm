@@ -1747,12 +1747,13 @@ done:
 /// A word shifted by n bits is n `asl`/`rol` pairs (4 bytes each, 20 for the
 /// shift by 5 in hash16) or, with an index register free, a counted loop of 9
 /// bytes that takes 5 more clocks a bit. The level decides: at size (12 clocks
-/// a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
-/// byte) none is. Both bytes of each result are checked, the shifted word added
+/// a byte) a shift of 5 to 7 bits is the loop (the shorter ones are decided by
+/// the final size, see `a_short_word_shift_stays_in_a_where_that_is_shorter`);
+/// at speed (1 clock a byte) none is. Both bytes of each result are checked, the shifted word added
 /// to the word so that the shift stays in cells.
 #[test]
 fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
-    for (op, k) in [("shl", 3u32), ("shl", 4), ("shl", 5), ("shl", 7), ("lshr", 3), ("lshr", 6)] {
+    for (op, k) in [("shl", 5u32), ("shl", 7), ("lshr", 6)] {
         let name = format!("{op}{k}");
         let ir =
             format!("define i16 @{name}(i16 %x) {{\n  %p = {op} i16 %x, {k}\n  %q = add i16 %p, %x\n  ret i16 %q\n}}");
@@ -3316,5 +3317,180 @@ mod post_ra {
         run(&mut f);
         assert!(!copies(&f).iter().any(|(to, from)| *to == reg::RC3 || *from == reg::RC3), "{:?}", copies(&f));
         assert!(copies(&f).contains(&(reg::A, reg::X)), "the compare reads x");
+    }
+}
+
+/// `x * 9` at the size level was `lda lo; sta t; ...; ldx #3; loop; ...; lda t`:
+/// a copy of the shifted byte and its reload, 30 bytes and 100 clocks, against
+/// 26 and 69 for the shifts kept in `a` (k_mulax9; the loop was larger and
+/// slower than the speed level's code). `shift_loop_in_a` takes the run in `a`
+/// where the final text is shorter; a shift where it is not stays the loop.
+#[test]
+fn a_short_word_shift_stays_in_a_where_that_is_shorter() {
+    let ir = "define i16 @m9(i16 %x) {\n  %p = mul i16 %x, 9\n  ret i16 %p\n}";
+    let text = compile_at(ir, "m9", 16, Tuning::SIZE);
+    assert!(!text.contains("dex") && !text.contains("dey"), "a loop for three shifts:\n{text}");
+    assert!(text.matches("asl a").count() == 3, "{text}");
+    for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
+        let want = x.wrapping_mul(9);
+        let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+        let run = |after: &str| common::run_with(&format!("alloc-m9-{x}"), &format!("{setup}  jsr m9\n{after}"), &text);
+        assert_eq!(run(""), i32::from(want & 0xFF), "{x} * 9, low byte");
+        assert_eq!(run("  txa\n"), i32::from(want >> 8), "{x} * 9, high byte");
+    }
+}
+
+/// The loop pass on the text: the copy and the reload go with the loop.
+#[test]
+fn a_counted_shift_loop_with_a_copy_is_the_run_in_a() {
+    let before = "  lda rc2\n  sta rc4\n  lda rc3\n  sta rc5\n  ldx #3\n_sh1:\n  asl rc4\n  rol rc5\n  dex\n  bne _sh1\n  clc\n  lda rc4\n  adc rc2\n  tay\n  lda rc5\n  adc rc3\n  tax\n  tya\n  rts\n";
+    let after = pass(llrm_6502::peephole_cells::shift_loop_in_a, before);
+    assert!(!after.contains("dex") && !after.contains("_sh1"), "{after}");
+    assert_eq!(after.matches("asl a").count(), 3, "{after}");
+    assert!(!after.contains("sta rc4"), "the copy of the low byte stays:\n{after}");
+}
+
+/// Sibling: where `a` is read after the loop the run in `a` would clobber it;
+/// the loop stays.
+#[test]
+fn a_counted_shift_loop_stays_where_a_is_live() {
+    let before = "  lda rc7\n  ldx #3\n_sh1:\n  asl rc4\n  rol rc5\n  dex\n  bne _sh1\n  sta rc6\n  rts\n";
+    let after = pass(llrm_6502::peephole_cells::shift_loop_in_a, before);
+    assert!(after.contains("_sh1") && after.contains("dex"), "{after}");
+}
+/// The candidate was built from a blank `Asm`: the routines called with an
+/// argument in `a` were forgotten, so the cleanup dropped `lda #255` before
+/// `jsr memset` in `idioms` -Os and the program printed a wrong result
+/// (2026-11-08).
+#[test]
+fn the_run_in_a_keeps_the_argument_of_a_later_call() {
+    let mut asm = Asm::parse(
+        "  lda rc2\n  sta rc4\n  ldx #3\n_sh1:\n  asl rc4\n  rol rc5\n  dex\n  bne _sh1\n  lda rc4\n  clc\n  adc #1\n  sta rc6\n  lda rc5\n  adc #0\n  sta rc7\n  lda #255\n  jsr memset\n  rts\n",
+    );
+    asm.no_x_result = true;
+    asm.no_y_result = true;
+    asm.a_callees.insert("memset".to_string());
+    llrm_6502::peephole_cells::shift_loop_in_a(&mut asm);
+    let text = asm.text();
+    assert!(!text.contains("_sh1"), "the loop stays:\n{text}");
+    assert!(text.contains("lda #255"), "the argument of memset is gone:\n{text}");
+}
+/// A pass's candidate carries every field of the function's `Asm`: built from
+/// a blank one it forgot `a_callees` and the cleanup dropped a call's
+/// argument (`idioms` -Os, 2026-11-08). Every field is set here, so one a
+/// candidate misses shows as a difference.
+#[test]
+fn a_candidate_carries_every_field_of_the_asm() {
+    let mut asm = Asm::parse("  lda rc2\n  rts\n");
+    asm.no_a_result = true;
+    asm.no_x_result = true;
+    asm.no_y_result = true;
+    asm.a_callees.insert("a".to_string());
+    asm.x_callees.insert("x".to_string());
+    asm.y_callees.insert("y".to_string());
+    asm.result_cells.insert("rc2".to_string());
+    asm.place = 7;
+    let lines = Asm::parse("  nop\n").lines;
+    let mut want = asm.clone();
+    want.lines = lines.clone();
+    assert_eq!(asm.candidate_from(lines), want);
+}
+
+/// The region ended before its branch and was closed by a return, which reads
+/// no flag: the cleanup dropped `cmp rc5` ahead of `bne` (`volatile_bitfield`
+/// -Os printed a wrong result, 2026-11-08). A branch ends the region and stays
+/// in it, so what it reads stays live.
+#[test]
+fn the_run_in_a_keeps_the_compare_a_branch_reads() {
+    let mut asm = Asm::parse(
+        "  sta rc3\n  ldy #3\n_sh2:\n  lsr rc2\n  ror rc5\n  dey\n  bne _sh2\n  lda rc2\n  ora rc3\n  and #127\n  sta rc6\n  lda #0\n  sta rc8\n  sta rc9\n  sta rc2\n  sta rc3\n  lda rc4\n  cmp rc5\n  bne cz3\n  txa\n  cmp rc6\ncz3:\n  beq out\n  rts\nout:\n  rts\n",
+    );
+    asm.no_x_result = true;
+    asm.no_y_result = true;
+    asm.no_a_result = true;
+    llrm_6502::peephole_cells::shift_loop_in_a(&mut asm);
+    let text = asm.text();
+    assert!(text.contains("cmp rc5"), "the compare the branch reads is gone:\n{text}");
+}
+
+/// Each candidate was built from the whole function and cleaned with whole-
+/// function passes, so the pass cost grew with the square of the loops:
+/// `select_of_constants` -Os (24k lines, ~400 loops) went from 8 s to over
+/// 400 s (2026-11-08). Counted in candidate lines, not seconds: four times the
+/// loops must cost about four times the work, not sixteen.
+#[test]
+fn the_shift_run_choice_does_work_in_proportion_to_the_loops() {
+    let text = |n: usize| -> String {
+        (0..n)
+            .map(|i| {
+                format!(
+                    "  lda rc2\n  sta rc4\n  ldx #3\n_sh{i}:\n  asl rc4\n  rol rc5\n  dex\n  bne _sh{i}\n  lda rc4\n  sta rc6\n  lda rc5\n  sta rc7\n  jsr use{i}\nb{i}:\n"
+                )
+            })
+            .collect::<String>()
+            + "  rts\n"
+    };
+    let work = |n: usize| {
+        let mut asm = Asm::parse(&text(n));
+        let before = llrm_6502::peephole_cells::SHIFT_CANDIDATE_LINES.with(|w| w.get());
+        llrm_6502::peephole_cells::shift_loop_in_a(&mut asm);
+        llrm_6502::peephole_cells::SHIFT_CANDIDATE_LINES.with(|w| w.get()) - before
+    };
+    let (small, large) = (work(200), work(800));
+    assert!(small > 0, "no candidate was built");
+    assert!(large <= 6 * small, "800 loops built {large} candidate lines, 200 built {small}");
+}
+
+/// Other callees, other registers: an argument in `x` written after the run
+/// survives it, and an argument in `a` written before the loop is live across
+/// it, so the loop stays.
+#[test]
+fn the_run_in_a_respects_the_argument_registers_of_other_callees() {
+    let after = "  lda rc2\n  sta rc4\n  ldx #3\n_sh1:\n  asl rc4\n  rol rc5\n  dex\n  bne _sh1\n  lda rc4\n  clc\n  adc #1\n  sta rc6\n  lda rc5\n  adc #0\n  sta rc7\n  ldy #9\n  jsr plot\n  rts\n";
+    let mut asm = Asm::parse(after);
+    asm.no_x_result = true;
+    asm.no_y_result = true;
+    asm.y_callees.insert("plot".to_string());
+    llrm_6502::peephole_cells::shift_loop_in_a(&mut asm);
+    let text = asm.text();
+    assert!(!text.contains("_sh1") && text.contains("ldy #9"), "{text}");
+
+    let live = "  lda #65\n  ldx #3\n_sh1:\n  asl rc4\n  rol rc5\n  dex\n  bne _sh1\n  jsr putc\n  rts\n";
+    let mut asm = Asm::parse(live);
+    asm.no_x_result = true;
+    asm.no_y_result = true;
+    asm.a_callees.insert("putc".to_string());
+    llrm_6502::peephole_cells::shift_loop_in_a(&mut asm);
+    let text = asm.text();
+    assert!(text.contains("_sh1") && text.contains("lda #65"), "the loop was replaced under a live a:\n{text}");
+}
+/// The pass is a size decision, not a multiply rule: shifts of other shapes
+/// (a shift xored with a second word, a right shift returned, a shift stored
+/// through a pointer) are as small at size as at speed or smaller, and compute
+/// the same value.
+#[test]
+fn counted_shift_loops_are_chosen_by_final_size_for_other_shapes_too() {
+    let shapes = [
+        ("xor3", "define i16 @xor3(i16 %x, i16 %y) {\n  %p = shl i16 %x, 3\n  %q = xor i16 %p, %y\n  ret i16 %q\n}"),
+        ("shr3", "define i16 @shr3(i16 %x) {\n  %p = lshr i16 %x, 3\n  ret i16 %p\n}"),
+        ("shl4", "define i16 @shl4(i16 %x) {\n  %p = shl i16 %x, 4\n  ret i16 %p\n}"),
+    ];
+    for (name, ir) in shapes {
+        let size = compile_at(ir, name, 16, Tuning::SIZE);
+        let speed = compile_at(ir, name, 16, Tuning::SPEED);
+        let bytes = |text: &str| llrm_6502::peephole_cells::bytes_of_text(text);
+        assert!(bytes(&size) <= bytes(&speed), "{name}: larger at size than at speed:\n{size}\n{speed}");
+        for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xFFFF] {
+            let y = 0x5A5Au16;
+            let want = match name {
+                "xor3" => (x << 3) ^ y,
+                "shr3" => x >> 3,
+                _ => x << 4,
+            };
+            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8);
+            let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), &size);
+            assert_eq!(run(""), i32::from(want & 0xFF), "{name} {x:#x}, low byte");
+            assert_eq!(run("  txa\n"), i32::from(want >> 8), "{name} {x:#x}, high byte");
+        }
     }
 }

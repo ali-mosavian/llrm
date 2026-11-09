@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, single_input, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, one_sided, single_input, skipped  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -77,6 +77,14 @@ class WorseCells(unittest.TestCase):
         self.assertEqual(len(single_input(tsv(*once))), 3)
         self.assertEqual(single_input(tsv(*both)), [])
 
+
+    def test_a_cell_with_one_external_column_is_listed_not_judged_silently(self):
+        """z80's table took the next-best column for a row missing its best variant and understated the gaps by up
+        to 1.7 kB: a cell with gcc but no clang (or the reverse) is judged against what exists, and named."""
+        rows = cell("m68k-68000", "both", "Os", (22, 100), (20, 100), (24, 100))
+        rows += [("m68k-68000", "gcc_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "gcc_only", "Os", "gcc", 20, 100, 1, "")]
+        rows += [("m68k-68000", "clang_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "clang_only", "Os", "clang", 20, 100, 1, "")]
+        self.assertEqual(one_sided(tsv(*rows)), [("m68k-68000", "gcc_only", "Os", "clang"), ("m68k-68000", "clang_only", "Os", "gcc")])
 
 if __name__ == "__main__":
     unittest.main()

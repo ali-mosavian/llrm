@@ -12,10 +12,11 @@
 //! lowest of their slots, after the stack adjustment and before the `unlk` or
 //! `adda.l` in the epilogue.
 //!
-//! DEVIATE: the shipped build rounds the frame to 4, the m68k Linux stack
-//! boundary gcc keeps, not the pin's 8, which only pads a frame (a function
-//! that pushes two words and calls paid `lea (-4,%sp),%sp` and an `addq.l #4`).
-//! Exit: none, a target's ABI fact.
+//! DEVIATE M68K-STACK-ALIGN: the shipped build rounds the frame to 4, the m68k
+//! Linux stack boundary gcc keeps, not the pin's 8, which only pads a frame (a
+//! function that pushes two words and calls paid `lea (-4,%sp),%sp` and an
+//! `addq.l #4`). Owner: m68k. Review: 2026-12-20. Row and price:
+//! `docs/working/m68k-stack-align-row.md`.
 //!
 //! DEVIATE: not translated are stack realignment and the base pointer,
 //! dynamic allocas, tail calls (`TCReturnAddrDelta`), a stack adjustment over
