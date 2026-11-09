@@ -46,7 +46,7 @@ Earlier byte figures from `m68k-bitcount-ab-2026-11-08/prog.sh` (`text=` of an e
 A blanket libcall loses clocks everywhere (+3% to +18%) and bytes on u32 and idioms; it wins 12 to 16 B on u64 only. Inline stays right at 68020+ at -O2; at -Os only a per-site choice (ctz64 and popcount64 past their break-even use counts) could gain, at most about 20 B in one program.
 
 ## M68K-SIZE-LIBCALL (2026-11-09)
-`libcalls.tsv` (inline bytes, call bytes per site; member bytes) is the table; `tests/size_libcalls.rs` fails when the compiler disagrees with its site columns. A size-built function calls where the module's total is smaller, a member linked once. Per use count, ctz64 (inline 46 B/site, call 18 B + 48 B member), computed from the verified columns and run on qemu 68020/40/60 for all of 1, 2, 3 uses:
+`libcalls.tsv` lists each candidate's routine and the routine's linked bytes; the bytes of a site, inline and as a call, are measured per function. A size-built function calls where the module's total is smaller, a member linked once. Per use count, ctz64 (plain site: inline 46 B, call 18 B, member 48 B), run on qemu 68020/40/60 for 1, 2, 3 uses:
 
 | uses | inline B | call B | choice |
 |---|---|---|---|
@@ -54,4 +54,4 @@ A blanket libcall loses clocks everywhere (+3% to +18%) and bytes on u32 and idi
 | 2 | 92 | 84 | call (-8) |
 | 3 | 138 | 102 | call (-36) |
 
-Variable 64-bit shifts, the second class (62 B/site inline, 24 B + 72 B member): 1 use inline, 2 uses call (-4). Measured, 68020 Os, whole programs: bitcount_u64 594 -> 574 (-20); bitcount_u32 330, bitcount_idioms 404 unchanged; O2 unchanged (the pass is Os-only). Ops the table takes next (same rows, no new code): 32/64-bit divide and remainder, soft-float add/mul.
+Variable 64-bit shifts, the second class, and the other kinds are priced by the bytes each function builds to with and without the call (M68K-SIZE-LIBCALL-COVER): a site's inline size depends on its operands, so a flat column called `__ashldi3` in shuttle_value (68020 Os 230 -> 286 B, fixed out of the table in #8487). Measured at Os, 136 programs vs before the pass: 68020/68040/68060 135 identical, bitcount_u64 594 -> 574 whole the only moved cell; 68000 all identical. Compile time over the 136 at Os: +5.4% total, geomean +2.9% (load 43). Ops the table takes next (same rows, no new code): 32/64-bit divide and remainder, soft-float add/mul.
