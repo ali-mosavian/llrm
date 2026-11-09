@@ -95,21 +95,19 @@ impl Kind {
 
 static COSTS: LazyLock<Costs<Kind>> = LazyLock::new(|| parse(include_str!("libcalls.tsv")));
 
-/// The table: `candidate KEY ROUTINE INLINE CALL` and `member ROUTINE BYTES
-/// [NEEDS,..]` lines, `#` comments.
+/// The table: `candidate KEY ROUTINE` and `member ROUTINE BYTES [NEEDS,..]`
+/// lines, `#` comments.
 pub fn parse(text: &str) -> Costs<Kind> {
     let mut costs = Costs { candidates: Vec::new(), members: HashMap::new() };
     for line in text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()) {
         let fields: Vec<&str> = line.split('\t').collect();
         match fields[..] {
-            ["candidate", key, routine, inline_bytes, call_bytes] => costs.candidates.push(Candidate {
+            ["candidate", key, routine] => costs.candidates.push(Candidate {
                 key: KINDS
                     .into_iter()
                     .find(|kind| kind.name() == key)
                     .unwrap_or_else(|| panic!("libcalls.tsv: kind {key}")),
                 routine: routine.to_owned(),
-                inline_bytes: inline_bytes.parse().expect("inline bytes"),
-                call_bytes: call_bytes.parse().expect("call bytes"),
             }),
             ["member", routine, bytes] => {
                 costs
@@ -141,12 +139,12 @@ pub fn costs() -> &'static Costs<Kind> {
     &COSTS
 }
 
-/// The sites of each kind in `function`.
-fn count(
+/// The kinds with a site in `function`.
+fn present(
     module: &Module,
     function: &Function,
-    sites: &mut HashMap<Kind, u32>,
-) {
+) -> Vec<Kind> {
+    let mut found = Vec::new();
     let types = &module.context.types;
     for (_, inst) in function.walk() {
         let instruction = function.instruction(inst);
@@ -177,25 +175,41 @@ fn count(
             }
             _ => continue,
         };
-        *sites.entry(kind).or_default() += 1;
+        if !found.contains(&kind) {
+            found.push(kind);
+        }
     }
+    found
 }
 
 /// The kinds to call in this module's size-built functions (`built_for_size`
-/// says which), in `mode`.
+/// says which), in `mode`. `bytes_of(name, kinds)` is the bytes of the
+/// function built with `kinds` as calls: the saving of a kind is what the
+/// functions with a site of it lose by it, summed, as measured.
 pub fn chosen(
     module: &Module,
     mode: Mode,
     built_for_size: impl Fn(&Function) -> bool,
+    bytes_of: impl Fn(&str, &[Kind]) -> Result<usize, String>,
 ) -> Vec<Kind> {
-    let mut sites = HashMap::new();
-    for (_, _, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
-        if built_for_size(function) {
-            count(module, function, &mut sites);
-        }
-    }
     let mut kinds = match mode {
-        Mode::Auto => choose(&COSTS, &sites),
+        Mode::Auto => {
+            let mut saved: HashMap<Kind, i64> = HashMap::new();
+            for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
+                let (Some(name), true) = (global.name.as_deref(), built_for_size(function)) else { continue };
+                let here = present(module, function);
+                if here.is_empty() {
+                    continue;
+                }
+                let Ok(inline) = bytes_of(name, &[]) else { continue };
+                for kind in here {
+                    if let Ok(called) = bytes_of(name, &[kind]) {
+                        *saved.entry(kind).or_default() += inline as i64 - called as i64;
+                    }
+                }
+            }
+            choose(&COSTS, &saved)
+        }
         Mode::Inline => Vec::new(),
         Mode::Call => KINDS.to_vec(),
     };

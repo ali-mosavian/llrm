@@ -68,62 +68,35 @@ fn the_mode_forces_one_way() {
 }
 
 use llrm_m68k::compile::items_with;
-use llrm_m68k::libcalls::{Kind, costs};
-use llrm_m68k::object::assemble;
 
-/// The IR of a function with one site of `kind`.
-fn site(kind: Kind) -> String {
-    let (decl, body, ret) = match kind {
-        Kind::Ctz64 => ("declare i64 @llvm.cttz.i64(i64, i1)", "%r = call i64 @llvm.cttz.i64(i64 %x, i1 true)", "i64"),
-        Kind::Clz64 => ("declare i64 @llvm.ctlz.i64(i64, i1)", "%r = call i64 @llvm.ctlz.i64(i64 %x, i1 true)", "i64"),
-        Kind::Pop32 => ("declare i32 @llvm.ctpop.i32(i32)", "%r = call i32 @llvm.ctpop.i32(i32 %x)", "i32"),
-        Kind::Pop64 => ("declare i64 @llvm.ctpop.i64(i64)", "%r = call i64 @llvm.ctpop.i64(i64 %x)", "i64"),
-        Kind::Shl64 => ("", "%r = shl i64 %x, %n", "i64"),
-        Kind::Shr64 => ("", "%r = lshr i64 %x, %n", "i64"),
-        Kind::Sar64 => ("", "%r = ashr i64 %x, %n", "i64"),
-    };
-    let arg = match kind {
-        Kind::Pop32 => "i32 %x",
-        Kind::Shl64 | Kind::Shr64 | Kind::Sar64 => "i64 %x, i64 %n",
-        _ => "i64 %x",
-    };
-    let (tail, ret) = match kind {
-        Kind::Ctz64 | Kind::Clz64 | Kind::Pop64 => ("%t = trunc i64 %r to i32 ret i32 %t", "i32"),
-        _ => (if ret == "i64" { "ret i64 %r" } else { "ret i32 %r" }, ret),
-    };
-    format!("{HEAD}{decl}\ndefine {ret} @f({arg}) optsize {{ {body} {tail} }}\n")
-}
+/// Three variable 64-bit shifts of the corpus's `shuttle_value`, whose
+/// operands are masked or zero-extended: the expansion is about 32 B a site,
+/// not the 62 B of a plain one, so `__ashldi3` (72 B) saves 16 B and costs
+/// more. With a flat 62 B column the pass called and the linked program was
+/// 230 B -> 286 B at -Os.
+const SHUTTLE: &str = "define i64 @g(i64 %x, i32 %y, i32 %z) optsize {
+  %yy = zext i32 %y to i64
+  %s = lshr i64 %x, %yy
+  %m = and i64 %s, 4294967295
+  %zm = and i32 %z, 31
+  %zz = zext i32 %zm to i64
+  %w = shl i64 %m, %zz
+  %wm = and i64 %w, 4294967295
+  %z2 = zext i32 %z to i64
+  %w2 = shl i64 %wm, %z2
+  ret i64 %w2
+}\n";
 
-/// The bytes of the one function, with the routine it may call after it as a
-/// stub.
-fn bytes(
-    kind: Kind,
-    routine: &str,
-    mode: Mode,
-) -> usize {
-    let module = llrm_mir::parse::module(&site(kind)).expect("parses");
-    let options = Options { size: true, size_libcalls: mode, mid_end: false, ..Options::default() };
-    let mut items = items_with(&module, "f", Cpu::M68020, options).expect("compiles");
-    items.push(llrm_m68k::compile::Item::Label(routine.to_owned()));
-    items.push(llrm_m68k::object::item("RTS", vec![]));
-    let assembled = assemble(&items, 0).expect("assembles");
-    assembled.labels.iter().find(|(name, _)| name == routine).expect("the stub").1 as usize
-}
-
-/// The table's candidate columns are what the compiler emits (a stale table
-/// would choose by numbers that are not the bytes).
 #[test]
-fn the_table_gives_the_bytes_the_compiler_emits() {
-    for candidate in &costs().candidates {
-        let inline = bytes(candidate.key, &candidate.routine, Mode::Inline);
-        let call = bytes(candidate.key, &candidate.routine, Mode::Call);
-        assert_eq!(
-            (candidate.inline_bytes as usize, candidate.call_bytes as usize),
-            (inline, call),
-            "{:?}: table (inline, call) against the compiler",
-            candidate.key
-        );
-    }
+fn shifts_whose_operands_are_narrow_stay_inline_when_the_call_would_not_save_bytes() {
+    let options = Options { mid_end: false, ..Options::default() };
+    let out = asm(&format!("{HEAD}{SHUTTLE}"), "g", Cpu::M68020, options);
+    assert!(!out.contains("jsr"), "{out}");
+    // the same count of plain shifts does call
+    let plain: String = (0..3)
+        .map(|n| format!("define i64 @s{n}(i64 %x, i64 %n) optsize {{ %r = shl i64 %x, %n ret i64 %r }}\n"))
+        .collect();
+    assert!(asm(&format!("{HEAD}{plain}"), "s0", Cpu::M68020, options).contains("jsr\t__ashldi3"));
 }
 
 /// A member another site already links costs this site nothing: a `ctpop.i64`
@@ -184,15 +157,33 @@ mod executed {
     const RUNTIME: &str = "declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i32 @llvm.ctpop.i32(i32)\n\
          define i32 @__ctzdi2(i64 %x) { %r = call i64 @llvm.cttz.i64(i64 %x, i1 false) %t = trunc i64 %r to i32 ret i32 %t }\n\
          define i32 @__popcountsi2(i32 %x) { %r = call i32 @llvm.ctpop.i32(i32 %x) ret i32 %r }\n\
-         define i64 @__ashldi3(i64 %x, i32 %n) { %w = zext i32 %n to i64 %r = shl i64 %x, %w ret i64 %r }\n";
+         define i64 @__ashldi3(i64 %x, i32 %n) { %w = zext i32 %n to i64 %r = shl i64 %x, %w ret i64 %r }\n\
+         declare i64 @llvm.ctpop.i64(i64)\n\
+         define i32 @__popcountdi2(i64 %x) { %r = call i64 @llvm.ctpop.i64(i64 %x) %t = trunc i64 %r to i32 ret i32 %t }\n\
+         define i64 @__lshrdi3(i64 %x, i32 %n) { %w = zext i32 %n to i64 %r = lshr i64 %x, %w ret i64 %r }\n\
+         define i64 @__ashrdi3(i64 %x, i32 %n) { %w = zext i32 %n to i64 %r = ashr i64 %x, %w ret i64 %r }\n";
 
     /// The user unit: `uses` functions of each class built for size, and `f`,
     /// which exits 42 when every result is right. Its calls to the routines
     /// are external.
-    fn program(uses: usize) -> (String, Vec<String>) {
-        let mut ir = format!("{HEAD}declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i32 @llvm.ctpop.i32(i32)\n");
+    fn program(
+        uses: usize,
+        wide: bool,
+    ) -> (String, Vec<String>) {
+        let mut ir = format!(
+            "{HEAD}declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i32 @llvm.ctpop.i32(i32)\ndeclare i64 @llvm.ctpop.i64(i64)\n"
+        );
         let mut names = Vec::new();
         for n in 0..uses {
+            if wide {
+                ir.push_str(&format!(
+                    "define i32 @d{n}(i64 %x) optsize {{ %r = call i64 @llvm.ctpop.i64(i64 %x) %t = trunc i64 %r to i32 ret i32 %t }}\n\
+                     define i64 @r{n}(i64 %x, i64 %n) optsize {{ %r = lshr i64 %x, %n ret i64 %r }}\n\
+                     define i64 @a{n}(i64 %x, i64 %n) optsize {{ %r = ashr i64 %x, %n ret i64 %r }}\n"
+                ));
+                names.extend([format!("d{n}"), format!("r{n}"), format!("a{n}")]);
+                continue;
+            }
             ir.push_str(&format!(
                 "define i32 @c{n}(i64 %x) optsize {{ %r = call i64 @llvm.cttz.i64(i64 %x, i1 true) %t = trunc i64 %r to i32 ret i32 %t }}\n\
                  define i32 @p{n}(i32 %x) optsize {{ %r = call i32 @llvm.ctpop.i32(i32 %x) ret i32 %r }}\n\
@@ -212,6 +203,15 @@ mod executed {
             ));
         };
         for n in 0..uses {
+            if wide {
+                check(&mut checks, format!("call i32 @d{n}(i64 -1)"), "i32", 64);
+                check(&mut checks, format!("call i32 @d{n}(i64 1311768467463790320)"), "i32", 32);
+                check(&mut checks, format!("call i64 @r{n}(i64 -1, i64 40)"), "i64", 0xFFFFFF);
+                check(&mut checks, format!("call i64 @r{n}(i64 -9223372036854775808, i64 63)"), "i64", 1);
+                check(&mut checks, format!("call i64 @a{n}(i64 -9223372036854775808, i64 33)"), "i64", -1i64 << 30);
+                check(&mut checks, format!("call i64 @a{n}(i64 4294967296, i64 0)"), "i64", 4294967296);
+                continue;
+            }
             check(&mut checks, format!("call i32 @c{n}(i64 4294967296)"), "i32", 32);
             check(&mut checks, format!("call i32 @c{n}(i64 -9223372036854775808)"), "i32", 63);
             check(&mut checks, format!("call i32 @p{n}(i32 -1)"), "i32", 32);
@@ -231,10 +231,11 @@ mod executed {
     /// The user unit's text and items, then the runtime's.
     fn linked(
         uses: usize,
+        wide: bool,
         cpu: Cpu,
     ) -> (String, Vec<llrm_m68k::compile::Item>) {
         let options = Options { mid_end: false, ..Options::default() };
-        let (user, names) = program(uses);
+        let (user, names) = program(uses, wide);
         let user = llrm_mir::parse::module(&user).expect("parses");
         // local labels are numbered by function: the runtime's follow the user
         // unit's
@@ -246,7 +247,7 @@ mod executed {
             items.extend(items_with(&user, function, cpu, options).unwrap_or_else(|why| panic!("{cpu:?}: {why}")));
             text.push_str(&text_with(&user, function, cpu, options).unwrap());
         }
-        for function in ["__ctzdi2", "__popcountsi2", "__ashldi3"] {
+        for function in ["__ctzdi2", "__popcountsi2", "__ashldi3", "__popcountdi2", "__lshrdi3", "__ashrdi3"] {
             items.extend(items_with(&runtime, function, cpu, options).unwrap_or_else(|why| panic!("{cpu:?}: {why}")));
         }
         (text, items)
@@ -257,13 +258,37 @@ mod executed {
         let Some(qemu) = support::qemu() else { return };
         for uses in 1..=3 {
             for (cpu, name) in [(Cpu::M68020, "m68020"), (Cpu::M68040, "m68040"), (Cpu::M68060, "m68060")] {
-                let (text, items) = linked(uses, cpu);
+                let (text, items) = linked(uses, false, cpu);
                 // one use of each class stays inline, from the second the sites
                 // call
                 for routine in ["__ctzdi2", "__popcountsi2", "__ashldi3"] {
                     assert_eq!(text.contains(&format!("jsr\t{routine}")), uses >= 2, "{uses} uses {cpu:?} {routine}");
                 }
                 let path = support::unique_path("size_libcalls");
+                write_executable(&path, &executable(&items).unwrap()).unwrap();
+                let code = support::run(&qemu, &["-cpu", name], &path);
+                std::fs::remove_file(&path).ok();
+                assert_eq!(code, Some(42), "{uses} uses {cpu:?}");
+            }
+        }
+    }
+    /// `ctpop.i64` and the right shifts, the other classes of the table: the
+    /// 64-bit count calls from one use (32 B + `__popcountsi2` against 124 B),
+    /// the shifts from two.
+    #[test]
+    fn wide_popcount_and_right_shifts_agree_on_qemu_at_68020_68040_68060() {
+        let Some(qemu) = support::qemu() else { return };
+        for uses in 1..=3 {
+            for (cpu, name) in [(Cpu::M68020, "m68020"), (Cpu::M68040, "m68040"), (Cpu::M68060, "m68060")] {
+                let (text, items) = linked(uses, true, cpu);
+                for (routine, from) in [("__popcountdi2", 1), ("__lshrdi3", 2), ("__ashrdi3", 2)] {
+                    assert_eq!(
+                        text.contains(&format!("jsr\t{routine}")),
+                        uses >= from,
+                        "{uses} uses {cpu:?} {routine}"
+                    );
+                }
+                let path = support::unique_path("size_libcalls_wide");
                 write_executable(&path, &executable(&items).unwrap()).unwrap();
                 let code = support::run(&qemu, &["-cpu", name], &path);
                 std::fs::remove_file(&path).ok();
