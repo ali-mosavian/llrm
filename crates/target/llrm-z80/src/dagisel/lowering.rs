@@ -783,6 +783,12 @@ fn lower_setcc_carry(
     node: SDValue,
 ) -> Option<SDValue> {
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    // The low words' subtract folded to no borrow (`x - 0` never borrows): the high compare stands alone.
+    if dag.constant(borrow) == Some(0) && matches!(dag.value_type(high), EVT::I8 | EVT::I16) {
+        let (code, flags) = compare(dag, cond_of(dag, dag.operand(node, 3)), high, other);
+        let code = cc_operand(dag, code);
+        return Some(dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]));
+    }
     if dag.opcode(borrow) != ISD::USubO || dag.value_type(high) != EVT::I16 {
         return None;
     }
