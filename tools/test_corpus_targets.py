@@ -210,3 +210,10 @@ def test_a_program_whose_flags_all_force_a_32_bit_x86_mode_is_not_run_on_z80_or_
         assert not any(ct.applies(t, source) for t in ("z80-sdcc", "6502-sim65"))
         assert ct.applies("arm64-linux", source) and ct.applies("x86_32-linux", source)
     assert not ct.x86_32_only("// flags: -O2 -m32 | -O2 -m16\nint x;\n")
+
+
+def test_a_program_aligning_a_local_past_a_byte_stack_is_not_run_on_z80():
+    """z80 passed over_aligned_local_after_even_pushes on a folded `ptr & 15` (frames keep one byte): now a named refusal."""
+    source = (RUN / "over_aligned_local_after_even_pushes.c").read_text()
+    assert not ct.applies("z80-sdcc", source)
+    assert ct.applies("x86_64-linux", source) and ct.applies("m68k-68020", source) and ct.applies("wasm32", source)
