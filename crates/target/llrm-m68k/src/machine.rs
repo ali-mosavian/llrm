@@ -66,8 +66,9 @@ impl Machine for M68kMachine {
         Spaces::FLAT
     }
 
+    /// Clocks per operation at this CPU ([`crate::clockcosts`]).
     fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
+        crate::clockcosts::clock_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation clocks: {why}"))
     }
 
     /// Code bytes per operation at this CPU ([`crate::opcosts`]); clocks are

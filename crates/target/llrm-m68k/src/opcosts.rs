@@ -11,7 +11,7 @@
 //! words from their stack slots, calls, takes the arguments off and stores the
 //! result words, priced once here as that expansion.
 //!
-//! Clocks are not here yet: `costs()` still prices an operation at one.
+//! Clocks are `clockcosts.rs`: `costs()` is the same forms priced from the timing tables.
 //!
 //! # See also
 //! MC68000UM chapter 8 (effective-address extension words); `sizes.rs`, the

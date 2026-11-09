@@ -46,6 +46,7 @@ pub mod narrow;
 pub mod narrow_add;
 pub mod negadd;
 pub mod object;
+pub mod clockcosts;
 pub mod opcosts;
 pub mod pccall;
 pub mod regalloc;
