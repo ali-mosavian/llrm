@@ -1991,6 +1991,76 @@ pub fn is_free_intrinsic(name: &str) -> bool {
     FREE.iter().any(|one| name == *one || name.strip_prefix(one).is_some_and(|rest| rest.starts_with('.')))
 }
 
+/// `TargetTransformInfoImplBase::getIntrinsicInstrCost` (TargetTransformInfoImpl.h:923-978
+/// in the pin): what a target with no `TargetTransformInfo` of its own, M68k
+/// among them, prices an intrinsic at. The intrinsics that make no code are
+/// free, a `bswap` of a width that is not a power of two has no answer, and
+/// every other one costs `TCC_Basic`, `ctlz` and `cttz` included (the
+/// `BasicTTIImplBase` price of 10 for an operation the target expands is not
+/// the pin's for such a target).
+pub fn generic_intrinsic_cost(
+    name: &str,
+    ret: Option<Ty>,
+) -> Cost {
+    // the intrinsics of the pin's list, `llvm.` stripped, `_` written `.`
+    const FREE: [&str; 40] = [
+        "allow.runtime.check",
+        "allow.ubsan.check",
+        "annotation",
+        "assume",
+        "sideeffect",
+        "pseudoprobe",
+        "arithmetic.fence",
+        "dbg.assign",
+        "dbg.declare",
+        "dbg.value",
+        "dbg.label",
+        "invariant.start",
+        "invariant.end",
+        "launder.invariant.group",
+        "is.constant",
+        "lifetime.start",
+        "lifetime.end",
+        "experimental.noalias.scope.decl",
+        "objectsize",
+        "ptr.annotation",
+        "var.annotation",
+        "experimental.gc.result",
+        "experimental.gc.relocate",
+        "coro.alloc",
+        "coro.begin",
+        "coro.begin.custom.abi",
+        "coro.dead",
+        "coro.id",
+        "coro.id.async",
+        "coro.id.retcon",
+        "coro.id.retcon.once",
+        "coro.noop",
+        "coro.free",
+        "coro.end",
+        "coro.frame",
+        "coro.size",
+        "coro.align",
+        "coro.suspend",
+        "coro.subfn.addr",
+        "threadlocal.address",
+    ];
+    const ALSO_FREE: [&str; 3] = ["experimental.widenable.condition", "ssa.copy", "noalias.scope.decl"];
+    let bare = name.strip_prefix("llvm.").or_else(|| name.strip_prefix("llrm.")).unwrap_or(name);
+    let named = |one: &&str| bare == *one || bare.strip_prefix(*one).is_some_and(|rest| rest.starts_with('.'));
+    if FREE.iter().chain(ALSO_FREE.iter()).any(named) {
+        return Cost::FREE;
+    }
+    if bare == "bswap" || bare.starts_with("bswap.") {
+        if let Some(Ty::Int(bits)) = ret
+            && !bits.is_power_of_two()
+        {
+            return Cost::INVALID;
+        }
+    }
+    Cost::BASIC
+}
+
 /// The generic profile: `TargetTransformInfoImplBase`'s defaults, what a target
 /// with no cost model of its own is priced by (T10): one unit for an operation,
 /// nothing for a `phi` (unless throughput is asked), a constant, or a
@@ -1999,6 +2069,16 @@ pub fn is_free_intrinsic(name: &str) -> bool {
 pub struct Basic;
 
 impl Tti for Basic {
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        _: &[Ty],
+        _: CostKind,
+    ) -> Cost {
+        generic_intrinsic_cost(name, ret)
+    }
+
     fn cmp_sel_cost(
         &self,
         _: CmpSel,
@@ -2275,5 +2355,20 @@ mod access_tests {
         };
         Counts(Basic).get_unrolling_preferences_for(&LoopShape { has_calls: true, ..LoopShape::default() }, &mut up);
         assert_eq!(up.max_count, 7);
+    }
+
+    /// A target with no TTI of its own prices `ctlz`, `cttz` and `ctpop` at
+    /// `TCC_Basic` (TargetTransformInfoImpl.h:923-978), not at `BasicTTI`'s
+    /// 10: invalid here, SimplifyCFG would not speculate a guarded count.
+    #[test]
+    fn the_generic_profile_prices_the_counts_at_one() {
+        for name in ["llvm.ctlz.i32", "llvm.cttz.i32", "llvm.ctpop.i64", "llvm.bswap.i32"] {
+            assert_eq!(generic_intrinsic_cost(name, Some(Ty::Int(32))), Cost::BASIC, "{name}");
+            assert_eq!(Basic.intrinsic_cost(name, Some(Ty::Int(32)), &[], CostKind::SizeAndLatency), Cost::BASIC, "{name}");
+        }
+        for name in ["llvm.assume", "llvm.lifetime.start.p0", "llvm.dbg.value", "llvm.coro.id", "llvm.ssa.copy"] {
+            assert_eq!(generic_intrinsic_cost(name, None), Cost::FREE, "{name}");
+        }
+        assert_eq!(generic_intrinsic_cost("llvm.bswap.i24", Some(Ty::Int(24))), Cost::INVALID);
     }
 }

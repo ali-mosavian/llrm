@@ -100,6 +100,47 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// M68k has no `TargetTransformInfo` in the pin:
+    /// `TargetTransformInfoImplBase`'s price, `TCC_Basic` for `ctlz`,
+    /// `cttz` and `ctpop` ([`llrm_mir::tti::generic_intrinsic_cost`]).
+    /// SimplifyCFG then speculates `x ? ctlz(x) : 32` into a select (it was
+    /// too dear to).
+    ///
+    /// DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k, review 2026-12-20): an
+    /// integer intrinsic whose operation this CPU's lowering does not make
+    /// legal is priced by its expansion, as `BasicTTIImplBase` does (legal 1,
+    /// custom 2, else a call), from the table the lowering itself uses
+    /// ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). The pin's
+    /// price is 1 for all of them: `fixed_point` -O2 unrolled its 3x3 loops of
+    /// `smul.fix` to 3604 B, gcc 1644.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        _: &[Ty],
+        _: CostKind,
+    ) -> Cost {
+        let generic = llrm_mir::tti::generic_intrinsic_cost(name, ret);
+        let (Some(Ty::Int(bits)), true) = (ret, generic == Cost::BASIC) else { return generic };
+        thread_local! {
+            static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, std::rc::Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+                const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let lowering = LOWERING.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some((_, one)) = cache.iter().find(|(cpu, _)| *cpu == self.cpu) {
+                return one.clone();
+            }
+            let made = std::rc::Rc::new(crate::dagisel::lowering::target_lowering_with(self.cpu, true));
+            cache.push((self.cpu, made.clone()));
+            made
+        });
+        match llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits) {
+            Some(cost) => Cost::of(cost),
+            None => generic,
+        }
+    }
+
     fn opt_size_inline_byte_gate(&self) -> bool {
         true
     }
