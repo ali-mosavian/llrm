@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Per-row A/B of two ours_cr tsv files (name, ours, bytes, clocks): failing rows first, then the table.
-ab_rows.py BASE.tsv NEW.tsv --level O1|O2|O3|Os [--clocks mean|min] [--noise F] [--allow-worse N]: exit 1 when more rows fail than N (default 0).
+ab_rows.py BASE.tsv NEW.tsv --level O1|O2|O3|Os [--clocks mean|min] [--noise F] [--allow-worse N] [--allow-unmeasured N]: exit 1 when more rows fail than N (default 0).
 clocks that grew by no more than the fraction F of the row (default 0, strict) are layout noise: the same binary moves ~0.5% between
 the 16 pads, a mean of 16 layouts still moves 0.03% on a code shift of one byte.
 The verdict is the level's rule, asserted and not only printed (oversight 2026-11-07):
@@ -23,6 +23,14 @@ def rows(path, clocks="mean"):
             if verdict == "PASS" and name in out:
                 out[name] = (out[name][0], min(data["layouts"]))
     return out
+
+def unmeasured(path):
+    """Programs the run did not measure (refused, failed to link, wrong), from PATH.json beside the tsv: they are in no tsv row, so a program
+    that fails on both sides is on neither side and `compare` cannot see it."""
+    import json, os
+    if not os.path.exists(path + ".json"):
+        return set()
+    return {name for name, verdict, _ in json.load(open(path + ".json")) if verdict != "PASS"}
 
 CLOCKS_PER_BYTE = 3
 
@@ -52,6 +60,12 @@ def main(argv):
     clocks = argv[argv.index("--clocks") + 1] if "--clocks" in argv else "mean"
     noise = float(argv[argv.index("--noise") + 1]) if "--noise" in argv else 0.0
     worse, better, same, missing = compare(rows(argv[1], clocks), rows(argv[2], clocks), level, noise)
+    allowed_dark = int(argv[argv.index("--allow-unmeasured") + 1]) if "--allow-unmeasured" in argv else 0
+    dark = sorted(unmeasured(argv[1]) | unmeasured(argv[2]))
+    for name in dark:
+        print(f"UNMEASURED {name}")
+    if len(dark) > allowed_dark:
+        print(f"{level}: VOID, {len(dark)} programs were not measured on a side: no verdict over the rest")
     if missing:
         print(f"{level}: VOID, {len(missing)} rows are on one side only (refused, failed or not run): no verdict")
     print(f"{level}: failing {len(worse)} better {len(better)} same {len(same)} missing {len(missing)}")
@@ -60,7 +74,7 @@ def main(argv):
             print(f"{tag:6} {name:34} {bb:6} -> {nb:6} B ({nb - bb:+d})  {bc:10} -> {nc:10} cy ({nc - bc:+d})")
     for name in missing:
         print(f"MISSING {name}")
-    return 1 if len(worse) > allowed or missing else 0
+    return 1 if len(worse) > allowed or missing or len(dark) > allowed_dark else 0
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

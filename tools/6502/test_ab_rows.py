@@ -84,5 +84,19 @@ class Void(unittest.TestCase):
         good = tsv([("bit_setclear", 10, 10)])
         self.assertEqual(ab_rows.main(["x", good, str(out), "--level", "O1"]), 1)
 
+    def test_a_row_that_fails_on_both_sides_is_unmeasured_and_fails_the_run(self):
+        """2026-11-09: 72 of 162 cells failed ca65 on both sides, left both tsv files, and the A/B printed "-12 B, 0 larger" over 90 cells."""
+        import contextlib, io, json
+        a, b = tsv([("p", 10, 10)]), tsv([("p", 10, 10)])
+        for path in (a, b):
+            json.dump([["p", "PASS", {}], ["q", "LINK", "ca65 range error"]], open(path + ".json", "w"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = ab_rows.main(["x", a, b, "--level", "Os"])
+        self.assertEqual(status, 1)
+        self.assertIn("UNMEASURED q", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ab_rows.main(["x", a, b, "--level", "Os", "--allow-unmeasured", "1"]), 0)
+
 if __name__ == "__main__":
     unittest.main()
