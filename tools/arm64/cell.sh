@@ -8,5 +8,6 @@ bash "$H/build2.sh" "$P" "$L" "$C" >/dev/null 2>"$O/err.$P.$L.$C" || { echo "ref
 X=$O/$P.$L.$C
 bytes=$(python3 -c "import sys;sys.path.insert(0,'$H');import matrix_kb;print(matrix_kb.kernel_bytes('$X.o'))") || exit 1
 read -r value instrs _ < <("${UNICORN_PYTHON:-python3}" "$H/count.py" --kernel "$X.elf")
+python3 "$H/expect.py" "$value" "${B:-$H/../..}/bench/$P/$P.out" || exit 1  # a program that failed (-1) is no measurement
 [ -n "$instrs" ] || { echo "unmeasured: $P $L $C" >&2; exit 1; }
 printf '%s\t%s\t%s\t%s\t%s\tkernel\n' "$P" "$L" "$C" "$bytes" "$instrs"

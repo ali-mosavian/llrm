@@ -4,7 +4,7 @@ The range is chosen, never defaulted: `--kernel` counts the compiled kernels (ev
 `report`, the runtime's first function, without `main`'s own bytes); `--whole` counts the program, runtime included. A count with no flag once ran whole and was read as the kernel
 (a constant +12..13 offset that was not one: tile clang 980 vs 16866).
 """
-import argparse, hashlib, os, struct, sys
+import argparse, hashlib, os, struct, sys, tempfile
 
 BENCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'bench')
 
@@ -12,6 +12,14 @@ BENCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'be
 def find_input(name):
     """The file a program opens by its DOS name: ARM64_BENCH_DATA/NAME, else the same name, any case, in a bench/<prog>/ dir."""
     wanted = name.upper()
+    if wanted == 'SIGNAL':  # generated, not stored: the corpus the DOS harness writes (tools/hostshim/host.py)
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dosbatch'))
+        import signal_gen
+        data = signal_gen.signal()
+        path = os.path.join(tempfile.gettempdir(), 'arm64-bench-SIGNAL-' + hashlib.md5(data).hexdigest())
+        if not os.path.exists(path):
+            open(path, 'wb').write(data)
+        return path
     if os.environ.get('ARM64_BENCH_DATA'):
         return os.path.join(os.environ['ARM64_BENCH_DATA'], wanted)
     for folder in sorted(os.listdir(BENCH)):

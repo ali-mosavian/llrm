@@ -69,5 +69,24 @@ class KernelRange(unittest.TestCase):
             count.check_sum({"kernel": 70, "main": 10, "runtime": 20, "other": 5}, 105)
 
 
+    def test_a_signal_file_is_generated_for_the_stft_programs(self):
+        # find_input found no SIGNAL (generated, not stored): stft read -1 and every column "agreed" on a
+        # 3,286 instruction run in place of 21,900,690.
+        import hashlib
+
+        count = self.load()
+        path = count.find_input("signal")
+        self.assertEqual(len(open(path, "rb").read()), 131072)
+        self.assertEqual(hashlib.md5(open(path, "rb").read()).hexdigest(), "a7e4387b9cd82c5726d09f56a2b21933")
+
+    def test_a_failed_program_is_not_the_expected_value(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
+        import expect
+
+        self.assertTrue(expect.same_value("30825279", "30825279\n"))
+        self.assertTrue(expect.same_value("2890111581:89e49c23", "-1404855715\n"))
+        self.assertFalse(expect.same_value("-1", "30825279\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
