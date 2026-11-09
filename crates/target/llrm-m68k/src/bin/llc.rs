@@ -8,6 +8,9 @@ use std::io::Write;
 use llrm_m68k::compile::CodeModel;
 use llrm_m68k::driver::{self, Level, Policy};
 
+#[global_allocator]
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
+
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
@@ -48,6 +51,14 @@ fn run() -> i32 {
                     return 2;
                 }
             },
+            // DEBT M68K-SANITIZE, owner target-m68k, exit 2026-11-12: the run-time
+            // checks are not built; refused by name, never dropped. The pin's
+            // clang `-fsanitize` stays a reference column (it needs a ubsan
+            // handler stub to link).
+            other if other.starts_with("-fsanitize") || other.starts_with("-fno-sanitize") => {
+                eprintln!("llrm-m68k-llc: {other}: sanitizer checks are not implemented at m68k (M68K-SANITIZE)");
+                return 2;
+            }
             other if other.starts_with("-f") && policy.take(other) => {}
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
             other if llrm_debug::is_debug_flag(other) => {

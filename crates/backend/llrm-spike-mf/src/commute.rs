@@ -14,6 +14,9 @@
 //! (M68k has none). Reason: the spike has no analysis manager. Exit: the
 //! neutral-LIR task.
 //!
+//! [`commute_accumulator`] makes the same choice for a commutable instruction
+//! whose tie is on a physical register (`P = copy first; op P, P, second`).
+//!
 //! # See also
 //! `llvm/lib/CodeGen/TwoAddressInstructionPass.cpp`, pin d1106deb71cc:
 //! `isRevCopyChain` (L320), `noUseAfterLastDef` (L351), `isKilled` (L454),
@@ -412,4 +415,191 @@ fn profitable<T: Target>(
         return false;
     }
     last_def_b != 0 && last_def_c != 0 && last_def_c > last_def_b
+}
+
+/// How many single-predecessor blocks [`commute_accumulator`] walks back.
+const MAX_BLOCKS_BACK: usize = 4;
+
+/// Swaps the sources of every commutable instruction that reads and writes a
+/// fixed register (`P = copy first; op P, P, second`) where `second` arrives in
+/// `P` and `first` does not: the `SrcRegMap` branch of `isProfitableToCommute`
+/// (TwoAddressInstructionPass.cpp#L648), with the tied register named by the
+/// instruction itself, so `second` is read from `P` and `first` from where
+/// the instruction's second operand lives (`Target::operand_class`).
+///
+/// Both sources must die at the instruction and be read nowhere else, so
+/// their classes may follow the swap; `second` must be copied from `P`, not
+/// written since, along single-predecessor blocks (the argument copies of
+/// an accumulator machine sit in the entry block); `first` must be copied
+/// from a register or from one that dies there (`stored_without_a_copy`),
+/// or the memory place costs a move through `P`.
+///
+/// DEVIATE 6502-COMMUTE: the tie is on a physical register, where the pin
+/// ties virtual registers of the accumulator's class and `commute_tied`
+/// swaps those. Reason: the instruction names the register itself. Exit:
+/// 2026-11-30, when such instructions carry the register as a tied virtual
+/// operand. Owner: 6502.
+pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) {
+    let facts = Facts::of(function);
+    let mut preds = vec![Vec::new(); function.blocks.len()];
+    for (from, succs) in successors(function).iter().enumerate() {
+        for &to in succs {
+            // a branch to the next block is also its fall through
+            if !preds[to].contains(&from) {
+                preds[to].push(from);
+            }
+        }
+    }
+    for b in 0..function.blocks.len() {
+        for at in 0..function.blocks[b].insts.len() {
+            let inst = &function.blocks[b].insts[at];
+            let Kind::Op(name) = inst.kind else { continue };
+            let [Operand::Def(Reg::Phys(written)), Operand::Use(Reg::Phys(read)), Operand::Use(Reg::Virt(second))] =
+                inst.operands[..]
+            else {
+                continue;
+            };
+            if !inst.commutable || written != read {
+                continue;
+            }
+            let Some(wanted) = T::operand_class(name, 2) else { continue };
+            let root = T::root(written);
+            let touches = |o: &Operand| match o {
+                Operand::Def(Reg::Phys(q)) | Operand::Use(Reg::Phys(q)) => T::overlaps(T::root(*q), root),
+                _ => false,
+            };
+            // `P = first` is the nearest write of `P`; nothing between reads it
+            let Some(load) = (0..at).rev().find(|&i| {
+                let between = &function.blocks[b].insts[i];
+                between.call || between.operands.iter().any(touches)
+            }) else {
+                continue;
+            };
+            let moved = &function.blocks[b].insts[load];
+            let (Kind::Copy, [Operand::Def(Reg::Phys(into)), Operand::Use(Reg::Virt(first))]) =
+                (moved.kind, &moved.operands[..])
+            else {
+                continue;
+            };
+            let first = *first;
+            if *into != written
+                || first == second
+                || facts.use_counts[first as usize] != 1
+                || facts.use_counts[second as usize] != 1
+            {
+                continue;
+            }
+            let from_first = facts.arrives_in::<T>(function, &preds, b, load, first);
+            let from_second = facts.arrives_in::<T>(function, &preds, b, load, second);
+            let is_p = |from: Option<RegId>| from.is_some_and(|from| T::overlaps(T::root(from), root));
+            if !is_p(from_second) || is_p(from_first) || !facts.stored_without_a_copy(function, first) {
+                continue;
+            }
+            let Some(held) = T::meet(function.classes[first as usize], wanted) else { continue };
+            function.classes[first as usize] = held;
+            function.classes[second as usize] = T::any();
+            function.blocks[b].insts[load].operands[1] = Operand::Use(Reg::Virt(second));
+            function.blocks[b].insts[at].operands[2] = Operand::Use(Reg::Virt(first));
+        }
+    }
+}
+
+impl Facts {
+    /// Whether `reg` can be given the memory operand's place as it is: every
+    /// definition is a copy, from a physical register or from a register that
+    /// dies there. A value computed into the place, or a lane of a register
+    /// that lives on, has to be moved there through the accumulator the other
+    /// source now holds.
+    fn stored_without_a_copy<C>(
+        &self,
+        function: &MFunction<C>,
+        reg: u32,
+    ) -> bool {
+        let Some(defs) = self.defs.get(&reg) else { return false };
+        defs.iter().all(|&(b, at)| {
+            let inst = &function.blocks[b].insts[at];
+            match (inst.kind, &inst.operands[..]) {
+                (Kind::Copy, [Operand::Def(_), Operand::Use(Reg::Phys(_))]) => true,
+                (Kind::Copy, [Operand::Def(_), Operand::Use(Reg::Virt(source))]) => {
+                    self.plainly_killed(function, b, at, *source)
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// The physical register `reg` is a copy of, through copies, as read at
+    /// instruction `at` of block `b`: every copy before `at`, and nothing
+    /// writing that register from the first copy to `at` along single
+    /// predecessors (`getMappedReg(reg, SrcRegMap)`, past one block).
+    fn arrives_in<T: Target>(
+        &self,
+        function: &MFunction<T::Class>,
+        preds: &[Vec<usize>],
+        b: usize,
+        at: usize,
+        reg: u32,
+    ) -> Option<RegId> {
+        let mut reg = reg;
+        for _ in 0..MAX_DATA_FLOW_EDGE {
+            let [(def_block, def_at)] = self.defs.get(&reg)?[..] else { return None };
+            if def_block == b && def_at >= at {
+                return None;
+            }
+            let inst = &function.blocks[def_block].insts[def_at];
+            let (Kind::Copy, [Operand::Def(_), Operand::Use(source)]) = (inst.kind, &inst.operands[..]) else {
+                return None;
+            };
+            match *source {
+                Reg::Virt(next) => reg = next,
+                Reg::Phys(phys) => {
+                    return Self::untouched::<T>(function, preds, (def_block, def_at), (b, at), phys).then_some(phys);
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether no instruction from `from` to `to` (exclusive) writes `phys`,
+    /// `to` being reached from `from` along single predecessors.
+    fn untouched<T: Target>(
+        function: &MFunction<T::Class>,
+        preds: &[Vec<usize>],
+        from: (usize, usize),
+        to: (usize, usize),
+        phys: RegId,
+    ) -> bool {
+        let root = T::root(phys);
+        let writes = |insts: &[Inst]| {
+            insts
+                .iter()
+                .any(
+                    |inst| (inst.call && T::caller_saved().iter().any(|&one| T::overlaps(one, root)))
+                        || inst.operands.iter().any(|o| {
+                            matches!(
+                                o,
+                                Operand::Def(Reg::Phys(q)) if T::overlaps(T::root(*q), root)
+                            )
+                        }),
+                )
+        };
+        let ((from_block, from_at), (mut block, at)) = (from, to);
+        if block == from_block {
+            return from_at < at && !writes(&function.blocks[block].insts[from_at + 1..at]);
+        }
+        if writes(&function.blocks[block].insts[..at]) {
+            return false;
+        }
+        for _ in 0..MAX_BLOCKS_BACK {
+            let [pred] = preds[block][..] else { return false };
+            if pred == from_block {
+                return !writes(&function.blocks[pred].insts[from_at + 1..]);
+            }
+            if writes(&function.blocks[pred].insts) {
+                return false;
+            }
+            block = pred;
+        }
+        false
+    }
 }

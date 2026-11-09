@@ -4,9 +4,9 @@
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
 
-const LOCATED_LAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+const LOCATED_LAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8";
 
-const LOCATED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"
+const LOCATED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"
 define i16 @f(i16 %a, i16 %b) !dbg !5 {
   %c = add i16 %a, %b, !dbg !7
   %d = xor i16 %c, %a, !dbg !8
@@ -107,7 +107,7 @@ fn the_adb_lists_a_declared_function_with_its_type() {
     assert!(adb.contains("S:G$g$0_0$0({2}DF,SI:S),C,0,0"), "{adb}");
 }
 
-const VARIABLES: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"
+const VARIABLES: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"
 declare i16 @g(i16)
 define i16 @f(i16 %a, i16 %b) !dbg !5 {
   %x = alloca i16, align 1

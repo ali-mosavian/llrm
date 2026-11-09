@@ -152,6 +152,9 @@ pub mod combine_icmp_const;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
+pub mod combine_icmp_table;
+#[cfg(test)]
+mod combine_icmp_table_tests;
 pub mod combine_invert;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
@@ -222,6 +225,7 @@ pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
 pub mod exitne;
+pub mod narrowiv;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
