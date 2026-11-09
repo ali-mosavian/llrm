@@ -715,6 +715,40 @@ fn gpr_order() -> Vec<RegId> {
         .collect()
 }
 
+type Flags = (Class, bool, bool, bool);
+
+thread_local! {
+    static ORDERS: std::cell::RefCell<Vec<(Flags, Vec<RegId>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static ORDERS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many allocation orders this thread has built.
+pub fn candidate_orders_built() -> usize {
+    ORDERS_BUILT.with(std::cell::Cell::get)
+}
+
+/// The registers the allocator tries for `class`, in order. The order depends
+/// on the target and the frame's needs (`darwin`, the scratch registers, the
+/// frame pointer) and is asked for by every instruction converted and every
+/// interval allocated, 4,274 times for shellsort's two functions: it is built
+/// once per such state.
+pub fn candidate_order(class: Class) -> Vec<RegId> {
+    let state = (class, darwin(), scratch_free(), frame_pointer_free());
+    ORDERS.with(|orders| {
+        if let Some((_, order)) = orders.borrow().iter().find(|(known, _)| *known == state) {
+            return order.clone();
+        }
+        ORDERS_BUILT.with(|built| built.set(built.get() + 1));
+        let order = match class {
+            Class::Gpr => gpr_order(),
+            Class::Fpr => fpr_order(),
+            Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+        };
+        orders.borrow_mut().push((state, order.clone()));
+        order
+    })
+}
+
 fn callee_saved_fpr(id: RegId) -> bool {
     (8..=15).any(|n| self::id(Class::Fpr, n) == id)
 }
@@ -779,11 +813,7 @@ impl AllocTarget for Arm64 {
     }
 
     fn candidates(class: Class) -> Vec<RegId> {
-        match class {
-            Class::Gpr => gpr_order(),
-            Class::Fpr => fpr_order(),
-            Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
-        }
+        candidate_order(class)
     }
 
     fn view(
@@ -920,6 +950,23 @@ mod tests {
         let before = address_pair_runs();
         allocate(&mut function, false).expect("allocates");
         assert_eq!(address_pair_runs() - before, 1);
+    }
+
+    /// `candidates` rebuilt its register order (a chain of ranges mapped to ids
+    /// into a vector) on every call: 3.5 M of shellsort's 583 M, 4,274 calls.
+    /// The order is built once per target state and class. (The state flags are
+    /// process-wide, so the test leaves them alone.)
+    #[test]
+    fn the_candidate_order_is_built_once_per_state() {
+        let before = candidate_orders_built();
+        let first = candidate_order(Class::Gpr);
+        for _ in 0..50 {
+            assert_eq!(candidate_order(Class::Gpr), first);
+        }
+        assert_eq!(candidate_orders_built() - before, 1, "built again for the same state");
+        let (fpr, quad) = (candidate_order(Class::Fpr), candidate_order(Class::Quad));
+        assert!(quad.len() < fpr.len() && !first.is_empty(), "the premise: the classes have their own orders");
+        assert_eq!(candidate_orders_built() - before, 3);
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a
