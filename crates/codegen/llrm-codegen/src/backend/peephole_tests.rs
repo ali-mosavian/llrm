@@ -6530,3 +6530,37 @@ fn test_a_float_slot_copy_needs_the_targets_x87_and_move_costs() {
     without._costs = std::sync::Arc::new(cpu._costs.iter().filter(|(name, _)| name != "x87_store").cloned().collect());
     assert!(crate::backend::floatslotcopy::copied(&input, &without, &saved(), &classes).is_none());
 }
+
+/// The pass is for the x87: a body whose register file lists no x87 registers
+/// (any non-x86 target, were one ever to reach it) is left alone even where
+/// its cells and costs would qualify.
+#[test]
+fn test_a_float_slot_copy_is_skipped_on_a_register_file_without_x87() {
+    use llrm_lir::registers::{Info, Regs, class};
+    let base = &llrm_x86_m16::REGISTER_INFO;
+    let mut table = base.table;
+    for entry in table.iter_mut().flatten() {
+        entry.classes &= !class::RFP;
+    }
+    let bare = Regs(Box::leak(Box::new(Info {
+        table,
+        frame: base.frame,
+        stack: base.stack,
+        loads: base.loads,
+        scratch: base.scratch,
+        bytes: base.bytes,
+        data_segment: base.data_segment,
+        stack_segment: base.stack_segment,
+        code_segment: base.code_segment,
+        far_segment: base.far_segment,
+        widths: base.widths,
+        effects: base.effects,
+        cache: Default::default(),
+        views: base.views,
+        byte_lanes: base.byte_lanes,
+    })));
+    let mut input = float_copy_body((-4, 4), (-8, 4), &[]);
+    assert!(float_copy(&input, false).is_some(), "with the x86 register file the pair is copied");
+    input.registers = Some(bare);
+    assert!(float_copy(&input, false).is_none(), "without x87 registers it is not");
+}

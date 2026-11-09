@@ -240,6 +240,11 @@ pub fn copied(
     saved: &[RegId],
     classes: &RegisterClasses,
 ) -> Option<LirBody> {
+    // A register file with no x87 registers (no such target reaches this pass)
+    // has no float cells to copy.
+    if body.regs().rfp_registers().is_empty() {
+        return None;
+    }
     let prices = Prices::of(cpu)?;
     let has_pair =
         body.blocks.iter().any(|block| (0..block.insns.len()).any(|at| popped_by(&block.insns, at).is_some()));
