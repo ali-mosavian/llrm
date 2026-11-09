@@ -293,6 +293,22 @@ fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
     assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
 }
 
+/// x_jpeg_single -O1 at m32: `next()` inlined twice into `getbit` with the refill's variable
+/// copy as an inline `rep movs` (about 30 B each against a call's 13), the cell 1762 B over
+/// the best external. MEM-1 trades bytes for clocks at -O2/-O3 only: -O1 keeps the call.
+#[test]
+fn a_variable_copy_stays_a_call_where_bytes_are_strict() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = BuilderTarget::for_pointer_bits(32)
+        .with_libcalls(&["memcpy"])
+        .with_tti(Some(std::rc::Rc::new(tti)))
+        .with_bytes_strict(true);
+    let dump = built("copy", &target).expect("builds");
+    assert!(dump.contains("'memcpy'") && !dump.contains("REP_MOVS"), "-O1 keeps the call:\n{dump}");
+}
+
 /// x_mergesort -O3: a copy of `n << 2` bytes ended in a `rep movsb` of `xor
 /// ecx, ecx` (a dead tail, ~5 clk and three instructions per copy, 1818
 /// copies). A length with its low two bits known zero has one `rep movs`.
