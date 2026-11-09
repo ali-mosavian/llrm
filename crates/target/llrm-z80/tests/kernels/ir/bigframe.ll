@@ -1,5 +1,5 @@
 source_filename = "bigframe.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 
 ; A 300-byte local: its end is out of the byte displacement of IX, so the spill slots below it and the
 ; element at 290 are reached through IY.
