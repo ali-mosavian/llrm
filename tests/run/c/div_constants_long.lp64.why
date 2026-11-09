@@ -1,0 +1,1 @@
+ABI: LP64 `long` is 64 bits, the 32-bit-long text of div_constants_long.out does not apply; clang -m64 == gcc -m64 == aarch64 gcc under qemu.

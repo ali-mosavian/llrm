@@ -2,18 +2,22 @@
 //! operand, a constant moves to the right, a sum of nested same-op constants
 //! folds (`reassociateOps`), and where the target has no native instruction
 //! `smax x, -1` is `x | (x >>s 31)` and `smin x, 0` is `x & (x >>s 31)`.
+//! Operands of one known sign flip between `umin`/`umax` and `smin`/`smax`
+//! where the op is illegal and the other legal, or where InstCombine broke a
+//! saturation (`umin (smax x, c), c2`).
 //!
-//! DEVIATE SD252: not the FP-to-saturate folds, `reassociateReduction`, the
-//! `vscale` fold, nor the flip to the opposite signedness (it needs the
-//! opposite op to be legal, and none is on this target). Owner sdag-b.
+//! DEVIATE SD252: not the FP-to-saturate folds, `reassociateReduction` nor the
+//! `vscale` fold. Owner sdag-b.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::visitIMINMAX`
 //! ([L6433](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L6433)).
 
+use super::actions::Action;
 use super::dag::SDValue;
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
+use super::known_bits::known_bits;
 use super::mvt::EVT;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
@@ -56,6 +60,36 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let amount = by(self.dag);
                 let sign = self.dag.get_node(ISD::Sra, vt, &[n0, amount]);
                 return Some(self.dag.get_node(ISD::And, vt, &[n0, sign]));
+            }
+        }
+        // If both operands are known to have the same sign (both non-negative
+        // or both negative), flip between UMIN/UMAX and SMIN/SMAX
+        // ([L6496](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L6496)).
+        // Only if the current op isn't legal and the flipped is, or the
+        // saturation pattern is broken by canonicalization in InstCombine.
+        let legal = |op| {
+            tli.types.is_type_legal(vt) && matches!(vt, EVT::Simple(_)) && tli.operation_action(op, vt) == Action::Legal
+        };
+        let is_op_illegal = !legal(op);
+        let is_sat_broken = op == ISD::UMin && self.dag.opcode(n0) == ISD::SMax;
+        if is_sat_broken || is_op_illegal {
+            let sign_of = |dag: &mut super::dag::SelectionDAG, value: SDValue| {
+                let known = known_bits(dag, value);
+                let top = 1_u128 << (bits - 1);
+                (known.zero & top != 0).then_some(false).or_else(|| (known.one & top != 0).then_some(true))
+            };
+            let same_sign = self.dag.is_undef(n0) || self.dag.is_undef(n1) || {
+                let first = sign_of(self.dag, n0);
+                first.is_some() && first == sign_of(self.dag, n1)
+            };
+            let flipped = match op {
+                ISD::UMin => ISD::SMin,
+                ISD::UMax => ISD::SMax,
+                ISD::SMin => ISD::UMin,
+                _ => ISD::UMax,
+            };
+            if same_sign && ((is_sat_broken && is_op_illegal) || legal(flipped)) {
+                return Some(self.dag.get_node(flipped, vt, &[n0, n1]));
             }
         }
         None
