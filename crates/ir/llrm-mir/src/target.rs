@@ -218,7 +218,7 @@ pub struct Tuning {
     /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
     pub carry_slot_indexes: bool,
     /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
-    /// latency is at least its issue-bound time is not unrolled at run time
+    /// latency exceeds its issue-bound time is not unrolled at run time
     /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
     /// the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,

@@ -1,6 +1,6 @@
 //! DEVIATE RU-REC (owner x86-m64; exit 2026-11-20): a loop is not unrolled at
-//! run time when its loop-carried dependence already takes as long as the
-//! core needs to issue one trip.
+//! run time when its loop-carried dependence takes longer than the core needs
+//! to issue one trip.
 //!
 //! The pin's `getUnrollingPreferences` sets `UP.Runtime` for any loop that fits
 //! the loop buffer (BasicTTIImpl.h L738-803) and asks nothing of the loop.
@@ -32,7 +32,7 @@ use super::*;
 
 /// Whether the runtime unroll of `lp` is vetoed: the target asks it
 /// (`Tuning::unroll_recurrence_veto`), states its issue width, and the loop is
-/// a single block whose chain is at least its throughput cost over that width.
+/// a single block whose chain is longer than its throughput cost over that width.
 pub(super) fn recurrence_bound(
     run: &Run,
     lp: Loop,
@@ -61,7 +61,10 @@ pub(super) fn recurrence_bound(
         eprintln!("unroll: RU-REC: chain {chain:?}, issue {issue:?}, width {width}");
     }
     let (Some(chain), Some(issue)) = (chain, issue) else { return false };
-    chain * width >= issue
+    // Strictly: when the two are equal the issue side binds too, and the copies
+    // do relieve it (jpeg -O2: chain 3, issue 12 / 4, +2.9% instructions, clocks
+    // unmeasured).
+    chain * width > issue
 }
 
 /// The longest dependence path through two walks of `block`, the second minus
