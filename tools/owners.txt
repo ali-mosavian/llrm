@@ -10,6 +10,7 @@ m16
 m32
 m64
 m68k
+m68k-matrix
 x87
 x86-m16
 x86-m32

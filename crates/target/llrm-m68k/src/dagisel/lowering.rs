@@ -210,6 +210,18 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         self.short
     }
 
+    /// DEVIATE m68k-truncate-free (owner m68k-matrix, review 2026-12-20): the pin's m68k leaves
+    /// `isTruncateFree` false, so `foldSetCCWithAnd` keeps `(x & 32768) != 0` as `and.l #32768`. The low
+    /// word and byte of a data register are the `.w` and `.b` operands: truncating is free, and
+    /// `(trunc x to i16) < 0` is `tst.w` (crc16 -O1 at 68000: 4972 clk against gcc's 4200).
+    fn is_truncate_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.short && from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,
