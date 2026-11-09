@@ -54,7 +54,7 @@ class Harness(unittest.TestCase):
 
 
 class Table(unittest.TestCase):
-    ROWS = "a\tO2\tours\t10\t100\t{m}\tok\na\tO2\tclang\t10\t90\t{m}\tok\na\tO2\tgcc\t10\t120\t{m}\texception\n"
+    ROWS = "a\tO2\tours\t10\t100\t{m}\tok\t-fomit-frame-pointer\na\tO2\tclang\t10\t90\t{m}\tok\t-fomit-frame-pointer\na\tO2\tgcc\t10\t120\t{m}\texception\t-fomit-frame-pointer\n"
 
     def run_table(self, rows_metric, flag):
         with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as rows:
@@ -84,8 +84,8 @@ class Table(unittest.TestCase):
     def test_an_unmeasured_cell_is_a_hard_line_not_a_gap(self):
         # A build that failed once left its cell out of the table: no row, no verdict, no trace.
         rows = (
-            "a\tO2\tours\t10\t100\tkernel\tok\na\tO2\tclang\t10\t90\tkernel\tok\na\tO2\tgcc\t\t\tkernel\tunmeasured:build failed\n"
-            "b\tO2\tours\t10\t100\tkernel\tok\nb\tO2\tclang\t10\t90\tkernel\tok\nb\tO2\tgcc\t10\t120\tkernel\tok\n"
+            "a\tO2\tours\t10\t100\tkernel\tok\tF\na\tO2\tclang\t10\t90\tkernel\tok\tF\na\tO2\tgcc\t\t\tkernel\tunmeasured:build failed\t\n"
+            "b\tO2\tours\t10\t100\tkernel\tok\tF\nb\tO2\tclang\t10\t90\tkernel\tok\tF\nb\tO2\tgcc\t10\t120\tkernel\tok\tF\n"
         )
         with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
             handle.write(rows)
@@ -101,6 +101,52 @@ class Table(unittest.TestCase):
         self.assertIn("a\tO2\tUNMEASURED\tgcc\tunmeasured:build failed", done.stdout)
         self.assertNotIn("a\tO2\tworse", done.stdout)
         self.assertIn("b\tO2\tworse", done.stdout)
+
+    def table(self, rows):
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
+            handle.write(rows)
+        try:
+            return subprocess.run(
+                [sys.executable, os.path.join(HERE, "table.py"), handle.name, "--metric", "kernel", "--count-commit", "abc"], capture_output=True, text=True
+            )
+        finally:
+            os.unlink(handle.name)
+
+    def test_ours_built_without_the_flags_the_bar_has_is_refused(self):
+        # 2026-11-09: "ours" had no -fomit-frame-pointer, the bar had it: 24 of 72 cells read 4-16 B worse than they are.
+        done = self.table(
+            "a\tO2\tours\t10\t100\tkernel\tok\t-fno-pic\na\tO2\tclang\t10\t90\tkernel\tok\t-fno-pic -fomit-frame-pointer\n"
+            "a\tO2\tgcc\t10\t120\tkernel\tok\t-fno-pic -fomit-frame-pointer\n"
+        )
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("a O2: ours vs clang: -fomit-frame-pointer", done.stderr)
+
+    def test_a_column_with_no_recorded_flag_set_is_refused(self):
+        done = self.table("a\tO2\tours\t10\t100\tkernel\tok\tunknown\na\tO2\tclang\t10\t90\tkernel\tok\tunknown\n")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("no recorded flag set", done.stderr)
+
+    def test_a_row_without_the_flag_field_is_refused(self):
+        done = self.table("a\tO2\tours\t10\t100\tkernel\tok\n")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("a row has 8", done.stderr)
+
+
+class FlagSet(unittest.TestCase):
+    def test_the_neutral_set_is_the_same_for_gcc_clang_and_ours_whatever_the_spelling(self):
+        sys.path.insert(0, HERE)
+        import flagset
+
+        neutral = "-fno-pic -fno-pie -mbranch-protection=none -fomit-frame-pointer -fno-stack-protector"
+        gcc = neutral.split() + ["-fzero-init-padding-bits=standard", "-fno-tree-vectorize", "-O2", "-I", "x", "-DX=1", "-ffreestanding"]
+        ours = neutral.split() + ["-target", "aarch64-unknown-linux-gnu", "-O2", "-ffreestanding"]
+        self.assertEqual(flagset.canonical(gcc), flagset.canonical(ours + ["-fno-vectorize"]))
+
+    def test_the_omitted_frame_pointer_is_a_difference(self):
+        sys.path.insert(0, HERE)
+        import flagset
+
+        self.assertNotEqual(flagset.canonical(["-fno-pic"]), flagset.canonical(["-fno-pic", "-fomit-frame-pointer"]))
 
 
 if __name__ == "__main__":
