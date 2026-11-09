@@ -294,7 +294,7 @@ pub fn object_in(
     name: &str,
     model: CodeModel,
 ) -> Result<Vec<u8>, String> {
-    object_flagged(text, cpu, level, name, model, &Policy::default())
+    object_flagged(text, cpu, level, name, model, &Policy::default(), None)
 }
 
 /// [`object_in`] with the mid-end flags in `policy`.
@@ -305,6 +305,7 @@ pub fn object_flagged(
     name: &str,
     model: CodeModel,
     policy: &Policy,
+    dump: Option<&std::path::Path>,
 ) -> Result<Vec<u8>, String> {
     // The file symbol is the module's own `source_filename`, as the pin's: the
     // path of a scratch IR file would differ between two compiles of one
@@ -313,7 +314,10 @@ pub fn object_flagged(
         .lines()
         .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
         .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
-    let module = lowered(text, cpu, level, None, policy)?;
+    if let Some(dump) = dump {
+        std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
+    }
+    let module = lowered(text, cpu, level, dump, policy)?;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
         strict: level == Level::O1,

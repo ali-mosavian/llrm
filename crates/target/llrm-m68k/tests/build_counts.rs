@@ -34,3 +34,25 @@ fn the_builds_channel_names_each_function_and_its_trials() {
     assert!(report.contains("[builds] bs trials:"), "{report}");
     assert!(report.contains("compare_destinations"), "{report}");
 }
+
+/// `llrm-cc --dump DIR -c` wrote no stage files at m68k: only the `-S` path
+/// took the directory, so a same-IR pin comparison needed a detour through
+/// `-S`.
+#[test]
+fn an_object_build_writes_the_stage_dump_as_the_assembly_build_does() {
+    let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data_rt/bswap_forms.ll");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("dump-c-{}", std::process::id()));
+    let status = Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"))
+        .args(["-c", "-O2", "-mcpu=68000", "-o"])
+        .arg(dir.with_extension("o"))
+        .arg(format!("--dump={}", dir.display()))
+        .arg(ir)
+        .env("LLRM_VERIFY", "0")
+        .status()
+        .expect("runs");
+    assert!(status.success());
+    let stages = std::fs::read_dir(&dir).map(|entries| entries.count()).unwrap_or(0);
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_file(dir.with_extension("o")).ok();
+    assert!(stages > 10, "{stages} stage files");
+}

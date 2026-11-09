@@ -86,7 +86,7 @@ fn run() -> i32 {
         if assembly {
             driver::assembly_flagged(&text, cpu, level, debug, dump.as_deref().or(env.as_deref()), model, &policy).map(String::into_bytes)
         } else {
-            driver::object_flagged(&text, cpu, level, &input, model, &policy)
+            driver::object_flagged(&text, cpu, level, &input, model, &policy, dump.as_deref().or(env.as_deref()))
         }
     });
     match result {
