@@ -88,7 +88,10 @@ fn listing(
 ) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
-        .args(["-d", "--no-show-raw-insn"])
+        // An executable linked by gcc says `m68k:68000` whatever the code: the
+        // instructions from the 68020 on (`extb.l`, `muls.l`) are `.short` and
+        // priced as nothing. The widest decoder reads them all.
+        .args(["-m", "m68k:68040", "-d", "--no-show-raw-insn"])
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
