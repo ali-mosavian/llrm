@@ -8,6 +8,17 @@ use llrm_6502::peephole_cells::drop_dead_stores;
 fn run(text: &str) -> String {
     let mut asm = Asm::parse(text);
     copy_propagation(&mut asm);
+    asm.text()
+}
+
+/// The copies that nothing reads go too; `results` are the cells the function returns.
+fn run_and_drop(
+    text: &str,
+    results: &[&str],
+) -> String {
+    let mut asm = Asm::parse(text);
+    asm.result_cells = results.iter().map(|one| one.to_string()).collect();
+    copy_propagation(&mut asm);
     drop_dead_stores(&mut asm);
     asm.text()
 }
@@ -17,7 +28,10 @@ fn run(text: &str) -> String {
 #[test]
 fn a_cell_that_mirrors_another_is_read_from_the_earlier_and_a_transfer_replaces_a_load() {
     assert_eq!(
-        run("  sta rc2\n  stx rc3\n  sta rc4\n  lda rc3\n  sta rc5\n  lda rc4\n  asl a\n  rol rc5\n  clc\n  adc rc2\n  rts\n"),
+        run_and_drop(
+            "  sta rc2\n  stx rc3\n  sta rc4\n  lda rc3\n  sta rc5\n  lda rc4\n  asl a\n  rol rc5\n  clc\n  adc rc2\n  rts\n",
+            &["rc2", "rc3", "rc5"]
+        ),
         "  sta rc2\n  stx rc3\n  txa\n  sta rc5\n  lda rc2\n  asl a\n  rol rc5\n  clc\n  adc rc2\n  rts\n"
     );
 }
