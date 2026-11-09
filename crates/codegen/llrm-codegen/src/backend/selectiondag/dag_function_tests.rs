@@ -811,15 +811,13 @@ define i32 @f(i32 %a) {
     assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
 }
 
-/// #7754 kept an `imul` at m32 -O1 where the chain was longer in bytes
-/// (x_iir -O1 49525 -> 130525 clocks); the fix to that clock loss made -O1 take
-/// every faster chain, which is +547 B on mul_constants against the pin's
-/// `imul`. -O1 is strict in bytes and clocks (no rate to trade one for the
-/// other): a chain only where it is no longer than the `imul` as well as
-/// faster; `x * 1664525` stays the 6-byte `imul` the pin emits, `x * 5` is
-/// one `lea`.
+/// -O1 turned `x * 1664525` into eight `lea`/`shl` steps (29 B against the
+/// pin's 6-byte `imul`): mul_constants +547 B, x_spill_store_order +54 B,
+/// urem_eq +99 B over the pin. -O1 is strict in bytes and clocks (no rate to
+/// trade them), so it is the pin's `combineMul` alone: `x * 1664525` stays the
+/// `imul`, `x * 5` is one `lea`.
 #[test]
-fn at_m32_o1_a_multiply_is_a_chain_only_where_it_is_no_longer_than_the_imul() {
+fn at_m32_o1_a_multiply_is_the_pins_combine_mul_alone() {
     let imuls_of = |constant: u32| {
         let module = crate::testing::module(&format!(
             "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"

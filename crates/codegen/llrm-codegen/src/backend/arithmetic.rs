@@ -197,21 +197,6 @@ pub fn chain_by_clocks_then_bytes<'a>(
     Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
 }
 
-/// [`chain_by_clocks_then_bytes`] where no byte is traded for a clock (-O1): the
-/// chain only if it is no longer than the `imul r,r,imm` it replaces as well
-/// as faster, else None (the multiply stays). At -O1 both bytes and clocks are
-/// strict: a chain that wins clocks by adding bytes is an -O2 trade.
-pub fn chain_dominating_imul<'a>(
-    number: i64,
-    width: i64,
-    cpu: impl Into<ProfileOrName<'a>>,
-    arch: &dyn llrm_target::Target,
-) -> Result<Option<Vec<(&'static str, i64)>>, String> {
-    let Some(chain) = chain_by_clocks_then_bytes(number, width, cpu, arch)? else { return Ok(None) };
-    let longer = chain_bytes(&chain, width, arch) > arch.multiply_immediate_bytes(number, width);
-    Ok((!longer).then_some(chain))
-}
-
 /// The chain for a multiply by `number` of `width` bytes in a block `freq`
 /// times as hot as the entry, where the clocks it saves over `imul r,r,imm`
 /// pay for the bytes it adds at `milliclocks_per_byte` (the target's rate at
@@ -668,25 +653,6 @@ mod tests {
         }
         assert_eq!(longer, 0, "at equal clocks a Pareto choice is never longer");
         assert!(shorter > 0, "no constant had a shorter chain of equal clocks");
-    }
-
-    /// -O1 turned `x * 1664525` into eight `lea`/`shl` steps (29 B, 3 clocks
-    /// faster than 13-42) where the pin keeps the 6-byte `imul`; with the other
-    /// constants of mul_constants/mulconst_i64/urem_eq/spill_store_order it made
-    /// -O1 up to +547 B larger than the pin. At -O1 a chain must be no longer
-    /// than the `imul` too.
-    #[test]
-    fn test_a_chain_longer_than_the_imul_is_not_taken_at_o1() {
-        use llrm_target::Target as _;
-        let arch = &llrm_x86_m32::M32;
-        let m32 = targets::tuned_for(arch, "486", false).unwrap();
-        assert_eq!(chain_dominating_imul(1664525, 4, m32, arch).unwrap(), None);
-        assert_eq!(chain_dominating_imul(5, 4, m32, arch).unwrap(), Some(vec![("lea", 4)]));
-        for number in 2..5000 {
-            if let Some(chain) = chain_dominating_imul(number, 4, m32, arch).unwrap() {
-                assert!(chain_bytes(&chain, 4, arch) <= arch.multiply_immediate_bytes(number, 4), "x{number}: {chain:?}");
-            }
-        }
     }
 
     /// An `imul` by a 31-bit constant took 41 clocks on a 486 (Table 10.1 note
