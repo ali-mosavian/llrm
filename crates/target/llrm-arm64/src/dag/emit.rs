@@ -746,6 +746,23 @@ struct Emitter<'a> {
     ops: Vec<Op>,
     /// The constant pool entries the function has used so far.
     pool: std::cell::RefCell<Vec<PoolEntry>>,
+    /// The label of the block segment `ops` ends: the selector's block, or the
+    /// join of the last split.
+    segment: String,
+    /// The splits (`F128CSEL`) in the block being emitted.
+    cuts: Vec<Cut>,
+    /// The splits so far in the function, for fresh labels.
+    splits: usize,
+}
+
+/// A block split in two where a pseudo-instruction is expanded to control flow
+/// (`EmitF128CSEL`): the `ops` before `at` end the head, the rest begin the
+/// join `end`, after the empty block `taken` that falls into it.
+struct Cut {
+    at: usize,
+    taken: String,
+    end: String,
+    phi: Op,
 }
 
 impl Emitter<'_> {
@@ -1381,6 +1398,36 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// `AArch64TargetLowering::EmitF128CSEL`: the block ends in `b.cc taken; b
+    /// end`, `taken` is empty and falls into `end`, which begins with `dest
+    /// = PHI [if_true, taken], [if_false, head]` and holds the rest of the
+    /// block.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L3276>
+    fn f128_select(
+        &mut self,
+        id: u32,
+        operands: &[Operand],
+    ) -> Result<(), String> {
+        let [Operand::Fpr(if_true), Operand::Fpr(if_false), Operand::Imm(cond), ..] = operands else {
+            return Err("F128CSEL: operands are not those of its form".into());
+        };
+        let (taken, end) =
+            (format!(".L{}.t{}", self.function, self.splits), format!(".L{}.j{}", self.function, self.splits));
+        self.splits += 1;
+        let dest = self.mf.fpr();
+        self.mf.wide.push(Reg::Fpr(dest));
+        self.ops.push(Op::I(Inst::BranchCond { cond: cond_of(*cond)?, target: Target::Label(taken.clone()) }));
+        self.ops.push(Op::I(Inst::Branch { link: false, target: Target::Label(end.clone()) }));
+        let phi = Op::Phi {
+            dst: Reg::Fpr(dest),
+            incoming: vec![(Reg::Fpr(*if_true), taken.clone()), (Reg::Fpr(*if_false), self.segment.clone())],
+        };
+        self.cuts.push(Cut { at: self.ops.len(), taken, end: end.clone(), phi });
+        self.segment = end;
+        self.fvalues.insert((id, 0), dest);
+        Ok(())
+    }
+
     fn node(
         &mut self,
         id: u32,
@@ -1619,6 +1666,9 @@ impl Emitter<'_> {
                 if name == "COPY_TO_REGCLASS" || name == "COPY" {
                     return self.copy_to_class(id, &operands);
                 }
+                if name == "F128CSEL" {
+                    return self.f128_select(id, &operands);
+                }
                 if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
                     let float_result = node.values[0].is_floating_point();
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
@@ -1632,7 +1682,9 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 if name == "BRK" {
-                    let [Operand::Imm(imm16)] = operands.as_slice() else { return Err("a BRK without an immediate".into()) };
+                    let [Operand::Imm(imm16)] = operands.as_slice() else {
+                        return Err("a BRK without an immediate".into());
+                    };
                     let imm16 = u16::try_from(*imm16).map_err(|_| format!("a BRK immediate {imm16} over 16 bits"))?;
                     self.ops.push(Op::I(Inst::Brk { imm16 }));
                     return Ok(());
@@ -1748,7 +1800,8 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 if let Some((op, width)) = add_carry(name) {
-                    // The carry arrives as the flags the instruction before wrote.
+                    // The carry arrives as the flags the instruction before
+                    // wrote.
                     let [Operand::Reg(rn), Operand::Reg(rm), ..] = operands.as_slice() else {
                         return Err(format!("{name}: operands are not those of an add with carry"));
                     };
@@ -1863,15 +1916,24 @@ pub fn emit(
         fvalues: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
+        segment: String::new(),
+        cuts: Vec::new(),
+        splits: 0,
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
     }
     emitter.mf.declared.clone_from(&first.declared);
+    // The blocks `F128CSEL` splits make, after the selector's; and where each
+    // split block now ends.
+    let mut joined: Vec<MBlock> = Vec::new();
+    let mut tails: HashMap<String, String> = HashMap::default();
+    let mut phi_counts: Vec<usize> = Vec::new();
     for (at, block) in blocks.iter().enumerate() {
         emitter.dag = &block.dag;
         emitter.values.clear();
         emitter.fvalues.clear();
+        emitter.segment = block_label(name, at);
         for &(reg, vreg) in &block.live_ins {
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
@@ -1899,6 +1961,7 @@ pub fn emit(
             }
             phis.push(Op::Phi { dst, incoming });
         }
+        phi_counts.push(phis.len());
         emitter.ops.splice(0..0, phis);
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
         // The notes of nothing: where they stand does not matter.
@@ -1927,9 +1990,66 @@ pub fn emit(
         }
         let ops = std::mem::take(&mut emitter.ops);
         places.resize(ops.len(), None);
-        let ops: OpList = ops.into_iter().zip(places).collect();
-        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
+        let mut pairs: Vec<(Op, Option<SrcLoc>)> = ops.into_iter().zip(places).collect();
+        let cuts = std::mem::take(&mut emitter.cuts);
+        if cuts.is_empty() {
+            let ops: OpList = pairs.into_iter().collect();
+            emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
+            continue;
+        }
+        // The head keeps the selector's label; each join follows its empty
+        // block, after the function's.
+        let mut head: Vec<(Op, Option<SrcLoc>)> = pairs.drain(..cuts[0].at).collect();
+        let mut rest = pairs;
+        let mut consumed = cuts[0].at;
+        let mut last = block_label(name, at);
+        for (k, cut) in cuts.iter().enumerate() {
+            let next = cuts.get(k + 1).map_or(consumed + rest.len(), |next| next.at);
+            let mut segment: Vec<(Op, Option<SrcLoc>)> = vec![(cut.phi.clone(), None)];
+            segment.extend(rest.drain(..next - consumed));
+            consumed = next;
+            joined.push(MBlock { label: cut.taken.clone(), ops: OpList::default() });
+            if k + 1 == cuts.len() {
+                // What fell through to the next block of the selector now has
+                // to jump.
+                if !matches!(
+                    segment.last().map(|(op, _)| op),
+                    Some(
+                        Op::Return { .. }
+                            | Op::JumpTable { .. }
+                            | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
+                    )
+                ) && at + 1 < blocks.len()
+                {
+                    segment.push((
+                        Op::I(Inst::Branch { link: false, target: Target::Label(block_label(name, at + 1)) }),
+                        None,
+                    ));
+                }
+                last.clone_from(&cut.end);
+            }
+            joined.push(MBlock { label: cut.end.clone(), ops: segment.into_iter().collect() });
+        }
+        emitter
+            .mf
+            .blocks
+            .push(MBlock { label: block_label(name, at), ops: std::mem::take(&mut head).into_iter().collect() });
+        tails.insert(block_label(name, at), last);
     }
+    // A phi of the selector's names the block its value comes from by the label
+    // it had.
+    for (block, &count) in emitter.mf.blocks.iter_mut().zip(&phi_counts) {
+        for op in (&mut block.ops).into_iter().take(count) {
+            if let Op::Phi { incoming, .. } = op {
+                for (_, from) in incoming.iter_mut() {
+                    if let Some(tail) = tails.get(from.as_str()) {
+                        from.clone_from(tail);
+                    }
+                }
+            }
+        }
+    }
+    emitter.mf.blocks.extend(joined);
     emitter.mf.pool = emitter.pool.take();
     emitter.mf.block_ids = first.layout.clone();
     emitter.mf.edge_probs = first.edge_probs.clone();
