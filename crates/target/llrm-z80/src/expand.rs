@@ -2929,8 +2929,14 @@ fn tail_calls(function: &MFunction) -> MFunction {
         let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
         let end = n + usize::from(falls);
         if end >= 2 && (returns || falls) {
-            let at = if bare_adjust(&insts[end - 2]) { end - 3 } else { end - 2 };
-            if at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == end - 2 || at == end - 3) {
+            // a block of only the bare adjust, falling into the return, has no call before it
+            let at = if bare_adjust(&insts[end - 2]) { end.checked_sub(3) } else { Some(end - 2) };
+            if let Some(at) = at
+                && at < n
+                && insts[at].call
+                && insts[at].kind == Kind::Op("CALL")
+                && (at == end - 2 || at == end - 3)
+            {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     // the call's argument registers stay read: the copies that

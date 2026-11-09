@@ -22,24 +22,34 @@ def stack_bytes(path: Path) -> int | None:
     return int(found.group(1)) // 8 if found else None
 
 
-def test_every_target_declares_its_stack_alignment():
-    missing = {target(path) for path in LAYOUTS if stack_bytes(path) is None}
-    assert missing - PENDING == set(), f"datalayout without `S`: {sorted(missing - PENDING)}"
+def unstated(path: Path) -> str | None:
+    """The reason (data in the datalayout.toml) a target has no `S`: its pin's string has none."""
+    return tomllib.loads(path.read_text()).get("stack_alignment_unstated")
+
+
+def test_every_target_declares_its_stack_alignment_or_states_why_not():
+    missing = {target(path) for path in LAYOUTS if stack_bytes(path) is None and unstated(path) is None}
+    assert missing - PENDING == set(), f"datalayout without `S` and no stack_alignment_unstated: {sorted(missing - PENDING)}"
+
+
+def test_a_target_exempt_for_having_no_pin_s_declares_none():
+    both = {target(path) for path in LAYOUTS if stack_bytes(path) is not None and unstated(path) is not None}
+    assert both == set(), f"declares an S though its pin string has none: {sorted(both)}"
 
 
 def test_a_pending_target_that_declared_one_leaves_the_list():
-    declared = {target(path) for path in LAYOUTS if stack_bytes(path) is not None}
+    declared = {target(path) for path in LAYOUTS if stack_bytes(path) is not None or unstated(path) is not None}
     assert PENDING & declared == set(), f"remove from PENDING: {sorted(PENDING & declared)}"
 
 
 # Each target crate checks S against what its frames keep, and against the pin's string where there is one, with one shared helper.
-HELPER = "assert_stack_facts"
+HELPER = "assert_stack_facts"  # or assert_unstated_stack, for a target whose pin string names no S
 # Crates that do not call it yet: the set may not grow (owner and date in the coordinator's list, 2026-11-10 12:00Z).
-UNCHECKED = {"llrm-6502", "llrm-m68k", "llrm-arm64", "llrm-x86-m32", "llrm-x86-m64"}
+UNCHECKED = {"llrm-6502", "llrm-arm64", "llrm-x86-m32", "llrm-x86-m64"}
 
 
 def calls_helper(crate: Path) -> bool:
-    return any(HELPER in file.read_text() for file in (crate / "src").rglob("*.rs"))
+    return any(HELPER in file.read_text() or "assert_unstated_stack" in file.read_text() for file in (crate / "src").rglob("*.rs"))
 
 
 def test_every_target_crate_calls_the_shared_stack_check():
@@ -49,5 +59,6 @@ def test_every_target_crate_calls_the_shared_stack_check():
     assert UNCHECKED & (set(crates) - missing) == set(), f"remove from UNCHECKED: {sorted(UNCHECKED & (set(crates) - missing))}"
 
 
-def test_m16_frames_keep_two_bytes():
-    assert stack_bytes(ROOT / "crates/target/llrm-x86-m16/src/machines/datalayout.toml") == 2
+def test_m16_follows_the_pin_and_names_no_s():
+    path = ROOT / "crates/target/llrm-x86-m16/src/machines/datalayout.toml"
+    assert stack_bytes(path) is None and unstated(path)

@@ -3,13 +3,14 @@
 //!
 //! # How it works
 //! A target describes each operation that can go either way as a
-//! [`Candidate`]: the bytes of the inline expansion at one site, the bytes of
-//! the call at one site, and the runtime routine it calls. A routine is a
-//! [`Member`]: its bytes, and the members it calls. [`choose`] takes the
-//! number of sites of each candidate in the translation unit and returns the
-//! candidates to call: the set whose total (inline bytes of the rest, call
-//! bytes of the chosen, and every member they link, once) is the least. A tie
-//! is inline.
+//! [`Candidate`]: the key and the runtime routine it calls. A routine is a
+//! [`Member`]: its bytes, and the members it calls. The unit measures what
+//! calling would save: per candidate, the bytes of its inline sites less the
+//! bytes of the same sites as calls (a site's inline code varies with what is
+//! known of its operands, so no table column prices it). [`choose`] takes
+//! those savings and returns the candidates to call: the set whose savings,
+//! less every member they link once, are the greatest and positive. A tie is
+//! inline.
 //!
 //! DEVIATE M68K-SIZE-LIBCALL: the pin's `Expand` against `LibCall` is a fact of
 //! the operation's legality (`setOperationAction`) with no accounting of the
@@ -28,10 +29,6 @@ pub struct Candidate<K> {
     pub key: K,
     /// The member it calls.
     pub routine: String,
-    /// Bytes of the expansion at one site.
-    pub inline_bytes: u32,
-    /// Bytes of the call at one site.
-    pub call_bytes: u32,
 }
 
 /// A runtime routine: its bytes, and the members it calls.
@@ -47,8 +44,8 @@ pub struct Costs<K> {
     pub members: HashMap<String, Member>,
 }
 
-/// The most candidates with sites that are searched exhaustively; past it each
-/// candidate is judged alone with its members charged in full.
+/// The most candidates with savings that are searched exhaustively; past it
+/// each candidate is judged alone with its members charged in full.
 const EXHAUSTIVE: usize = 16;
 
 impl<K: Copy + Eq + Hash> Costs<K> {
@@ -70,40 +67,30 @@ impl<K: Copy + Eq + Hash> Costs<K> {
     }
 }
 
-/// The candidates to call, given the sites of each in the unit.
+/// The candidates to call, given the bytes calling each would save in the unit
+/// (inline sites less call sites, members not counted; may be negative).
 pub fn choose<K: Copy + Eq + Hash>(
     costs: &Costs<K>,
-    sites: &HashMap<K, u32>,
+    saved: &HashMap<K, i64>,
 ) -> Vec<K> {
-    let used: Vec<(&Candidate<K>, u32)> = costs
-        .candidates
-        .iter()
-        .filter_map(|one| sites.get(&one.key).map(|&n| (one, n)))
-        .filter(|(_, n)| *n > 0)
-        .collect();
+    let used: Vec<(&Candidate<K>, i64)> =
+        costs.candidates.iter().filter_map(|one| saved.get(&one.key).map(|&bytes| (one, bytes))).collect();
     if used.len() > EXHAUSTIVE {
         return used
             .iter()
-            .filter(|(one, n)| {
-                u64::from(*n) * u64::from(one.call_bytes)
-                    + u64::from(costs.linked(std::iter::once(one.routine.as_str())))
-                    < u64::from(*n) * u64::from(one.inline_bytes)
-            })
+            .filter(|(one, bytes)| *bytes > i64::from(costs.linked(std::iter::once(one.routine.as_str()))))
             .map(|(one, _)| one.key)
             .collect();
     }
-    let total = |mask: u32| -> u64 {
-        let mut bytes = 0u64;
-        for (at, (one, n)) in used.iter().enumerate() {
-            let per = if mask >> at & 1 == 1 { one.call_bytes } else { one.inline_bytes };
-            bytes += u64::from(*n) * u64::from(per);
-        }
+    let benefit = |mask: u32| -> i64 {
+        let kept: i64 =
+            used.iter().enumerate().filter(|(at, _)| mask >> at & 1 == 1).map(|(_, (_, bytes))| bytes).sum();
         let routines =
             used.iter().enumerate().filter(|(at, _)| mask >> at & 1 == 1).map(|(_, (one, _))| one.routine.as_str());
-        bytes + u64::from(costs.linked(routines))
+        kept - i64::from(costs.linked(routines))
     };
-    // fewest bytes, then fewest calls, then the lowest mask
-    let best = (0..1u32 << used.len()).min_by_key(|&mask| (total(mask), mask.count_ones(), mask)).unwrap_or(0);
+    // most bytes saved, then fewest calls, then the lowest mask
+    let best = (0..1u32 << used.len()).min_by_key(|&mask| (-benefit(mask), mask.count_ones(), mask)).unwrap_or(0);
     used.iter().enumerate().filter(|(at, _)| best >> at & 1 == 1).map(|(_, (one, _))| one.key).collect()
 }
 
@@ -113,9 +100,9 @@ mod tests {
 
     fn costs() -> Costs<&'static str> {
         let candidates = vec![
-            Candidate { key: "ctz64", routine: "ctzdi2".into(), inline_bytes: 50, call_bytes: 18 },
-            Candidate { key: "pop64", routine: "popcountdi2".into(), inline_bytes: 124, call_bytes: 18 },
-            Candidate { key: "pop32", routine: "popcountsi2".into(), inline_bytes: 62, call_bytes: 14 },
+            Candidate { key: "ctz64", routine: "ctzdi2".into() },
+            Candidate { key: "pop64", routine: "popcountdi2".into() },
+            Candidate { key: "pop32", routine: "popcountsi2".into() },
         ];
         let members = HashMap::from([
             ("ctzdi2".to_owned(), Member { bytes: 46, needs: vec![] }),
@@ -125,42 +112,45 @@ mod tests {
         Costs { candidates, members }
     }
 
-    fn sites(list: &[(&'static str, u32)]) -> HashMap<&'static str, u32> {
+    fn saved(list: &[(&'static str, i64)]) -> HashMap<&'static str, i64> {
         list.iter().copied().collect()
     }
 
-    /// One use of a 64-bit count is inline (50 B against 18 + 46), the second
-    /// flips it to a call (100 B against 36 + 46): the library is paid once.
+    /// Calling saves 32 B a site (50 inline, 18 call): one site does not pay
+    /// the 46 B member, the second does.
     #[test]
     fn the_second_site_flips_a_count_to_a_call() {
-        assert_eq!(choose(&costs(), &sites(&[("ctz64", 1)])), Vec::<&str>::new());
-        assert_eq!(choose(&costs(), &sites(&[("ctz64", 2)])), vec!["ctz64"]);
-        assert_eq!(choose(&costs(), &sites(&[("ctz64", 3)])), vec!["ctz64"]);
+        assert_eq!(choose(&costs(), &saved(&[("ctz64", 32)])), Vec::<&str>::new());
+        assert_eq!(choose(&costs(), &saved(&[("ctz64", 64)])), vec!["ctz64"]);
+        assert_eq!(choose(&costs(), &saved(&[("ctz64", 96)])), vec!["ctz64"]);
     }
 
-    /// A tie is inline: 2 x 31 = 62 B against 2 x 14 + 34.
+    /// A saving that only equals the member is a tie: inline.
     #[test]
     fn a_tie_stays_inline() {
-        let mut one = costs();
-        one.members.get_mut("ctzdi2").unwrap().bytes = 34;
-        one.candidates[0].inline_bytes = 31;
-        assert_eq!(choose(&one, &sites(&[("ctz64", 2)])), Vec::<&str>::new());
+        assert_eq!(choose(&costs(), &saved(&[("ctz64", 46)])), Vec::<&str>::new());
+        assert_eq!(choose(&costs(), &saved(&[("ctz64", 47)])), vec!["ctz64"]);
     }
 
-    /// The popcount routines share a member: popcount64 alone is 124 B inline
-    /// against 18 + 32 + 70 (a call, by 4 B); popcount32 alone is 62 B against
-    /// 14 + 70 (inline); with popcount64 called, popcount32 is 62 B against
-    /// 14 more (70 is already linked): a call.
+    /// A call that is larger than the inline site never wins, however many.
+    #[test]
+    fn a_negative_saving_is_never_called() {
+        assert!(choose(&costs(), &saved(&[("ctz64", -100)])).is_empty());
+    }
+
+    /// The popcount routines share a member: popcount64 alone saves 106 B
+    /// against 32 + 70 (a call, by 4 B); popcount32 alone saves 48 B against
+    /// 70 (inline); with popcount64 called, popcount32's 48 B pay nothing
+    /// more: a call.
     #[test]
     fn a_member_another_choice_links_is_charged_once() {
-        assert_eq!(choose(&costs(), &sites(&[("pop64", 1)])), vec!["pop64"]);
-        assert_eq!(choose(&costs(), &sites(&[("pop32", 1)])), Vec::<&str>::new());
-        assert_eq!(choose(&costs(), &sites(&[("pop64", 1), ("pop32", 1)])), vec!["pop64", "pop32"]);
+        assert_eq!(choose(&costs(), &saved(&[("pop64", 106)])), vec!["pop64"]);
+        assert_eq!(choose(&costs(), &saved(&[("pop32", 48)])), Vec::<&str>::new());
+        assert_eq!(choose(&costs(), &saved(&[("pop64", 106), ("pop32", 48)])), vec!["pop64", "pop32"]);
     }
 
     #[test]
-    fn no_sites_choose_nothing() {
-        assert!(choose(&costs(), &sites(&[])).is_empty());
-        assert!(choose(&costs(), &sites(&[("ctz64", 0)])).is_empty());
+    fn no_savings_choose_nothing() {
+        assert!(choose(&costs(), &saved(&[])).is_empty());
     }
 }
