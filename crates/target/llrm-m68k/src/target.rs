@@ -308,3 +308,27 @@ impl Target for M68k {
         ObjectFormat::parse(include_str!("machines/object.toml")).expect("m68k object.toml parses")
     }
 }
+
+#[cfg(test)]
+mod stack_facts_tests {
+    /// The pin's string, from its `opt -mtriple=m68k-unknown-linux-gnu`: S16 is two bytes, the frames keep four (M68K-STACK-ALIGN).
+    const PIN: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
+
+    /// An `S` above what the frames keep lets a pass raise an alloca past the frame's alignment: silent misalignment.
+    #[test]
+    fn the_datalayout_states_a_stack_alignment_the_frames_keep_and_the_pin_has() {
+        llrm_target::testing::assert_stack_facts(
+            "m68k",
+            crate::kernels::DATALAYOUT,
+            crate::frame::SHIPPED_STACK_ALIGN as u64,
+            Some(PIN),
+        );
+    }
+
+    #[test]
+    fn the_toml_and_the_driver_state_one_datalayout() {
+        let toml = include_str!("machines/datalayout.toml");
+        let stated = toml.lines().find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"')).unwrap();
+        assert_eq!(stated, crate::kernels::DATALAYOUT);
+    }
+}
