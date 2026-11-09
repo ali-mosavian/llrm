@@ -774,6 +774,10 @@ impl Tti for X86 {
         self.tuning.divide_by_bytes
     }
 
+    fn immediate_forms_at_size(&self) -> bool {
+        self.tuning.immediate_forms_at_size
+    }
+
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
     }

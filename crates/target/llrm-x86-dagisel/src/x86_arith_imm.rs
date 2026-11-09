@@ -66,7 +66,7 @@ pub fn select_arith_register_form<D: AddrDag>(
     // `CurDAG->shouldOptForSize()`. Not at m16 (see `should_opt_for_size`): the
     // pin has no 16-bit target and its 32-bit size model does not describe
     // one.
-    if !hooks.should_opt_for_size() {
+    if !hooks.should_opt_for_size() || !hooks.shared_immediates_in_registers {
         return false;
     }
     let nvt = dag.value_type(SDValue::new(node, 0));

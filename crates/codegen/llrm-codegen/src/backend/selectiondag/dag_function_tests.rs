@@ -258,7 +258,7 @@ fn at_os_a_constant_stored_twice_is_loaded_once() {
 #[test]
 fn at_os_a_large_immediate_used_twice_by_arithmetic_is_loaded_once() {
     // (op, (immediate ops, immediate movs)) at speed and at -Os, for every op
-    // at once.
+    // at once, on m32 and on m64 (`immediate_forms_at_size`).
     let mut got = Vec::new();
     for op in ["and", "or", "xor", "add"] {
         let text = format!(
@@ -274,10 +274,21 @@ define i32 @f(i32 %a, i32 %b) {{
 "
         );
         let module = crate::testing::module(&text).expect("parses");
-        let immediates = |size: bool| {
-            let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
-            cpu.size = size;
-            let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        let m64_text = text.replace("e-p:32:32-i64:32-n8:16:32", "e-p:64:64-i64:64-n8:16:32:64");
+        let m64_module = crate::testing::module(&m64_text).expect("parses");
+        let immediates = |m64: bool, size: bool| {
+            let done = if m64 {
+                let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false)
+                    .expect("a cpu")
+                    .clone();
+                cpu.size = size;
+                selected(&m64_module, "f", &llrm_x86_m64::M64, &cpu, &[])
+            } else {
+                let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+                cpu.size = size;
+                selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[])
+            }
+            .unwrap_or_else(|e| panic!("{}", e.0));
             let insns = done.body.insns();
             let with_imm = |name: &str| {
                 insns
@@ -289,11 +300,11 @@ define i32 @f(i32 %a, i32 %b) {{
             };
             (with_imm(op), with_imm("mov"))
         };
-        got.push((op, immediates(false), immediates(true)));
+        got.push((op, immediates(false, false), immediates(false, true), immediates(true, true)));
     }
-    // Speed: both take the immediate. -Os: the constant is loaded once, both
-    // take the register.
-    let want: Vec<_> = ["and", "or", "xor", "add"].into_iter().map(|op| (op, (2, 0), (0, 1))).collect();
+    // Speed: both take the immediate. m32 -Os: the constant is loaded once,
+    // both take the register. m64 -Os: the immediate forms stay (IMM-1).
+    let want: Vec<_> = ["and", "or", "xor", "add"].into_iter().map(|op| (op, (2, 0), (0, 1), (2, 0))).collect();
     assert_eq!(got, want);
 }
 

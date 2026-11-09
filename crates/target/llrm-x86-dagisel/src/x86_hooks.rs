@@ -79,6 +79,9 @@ impl Options {
 
 pub struct X86Hooks {
     pub options: Options,
+    /// `Tuning::register_form_for_shared_immediates`; the pin's behaviour
+    /// unless a target states otherwise.
+    pub shared_immediates_in_registers: bool,
 }
 
 impl X86Hooks {
@@ -147,7 +150,16 @@ fn bits(
 
 impl X86Hooks {
     pub fn new(options: Options) -> X86Hooks {
-        X86Hooks { options }
+        X86Hooks { options, shared_immediates_in_registers: true }
+    }
+
+    /// The target's `register_form_for_shared_immediates`.
+    pub fn with_shared_immediates_in_registers(
+        mut self,
+        on: bool,
+    ) -> X86Hooks {
+        self.shared_immediates_in_registers = on;
+        self
     }
 
     /// `X86DAGToDAGISel::IsProfitableToFold` ([L692][prof]).

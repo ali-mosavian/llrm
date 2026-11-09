@@ -1173,7 +1173,8 @@ fn selected_in(
             .flatten()
             .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
-    });
+    })
+    .with_shared_immediates_in_registers(!machine.tti().is_some_and(|tti| tti.immediate_forms_at_size()));
     let selector = Selector::new(if m16 {
         x86_m16::TABLE
     } else if m64 {
