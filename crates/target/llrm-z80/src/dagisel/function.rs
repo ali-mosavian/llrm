@@ -46,6 +46,10 @@ pub fn builder_target() -> BuilderTarget {
         // from a third of its range filled, at speed as well as size.
         min_jump_table_density: Some(40),
         preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        // The IR comes from clang's msp430 target, whose ABI aligns a scalar to 2 (the attribute on every int
+        // array): that is no request. Anything above is `_Alignas` or a type the datalayout does not hold, and the
+        // frame keeps no alignment. Frame objects are byte-aligned, so `align 2` is still trusted (row Z80-ALLOCA-ALIGN2).
+        max_alloca_align: Some(2),
         variable_shift_legal: false,
         string_instructions: false,
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`

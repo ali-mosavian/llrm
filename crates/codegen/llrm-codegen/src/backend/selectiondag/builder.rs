@@ -88,6 +88,10 @@ pub struct BuilderTarget {
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
     pub preselection_blocks: Option<&'static str>,
+    /// The highest alignment of an alloca the target keeps: the stack alignment it realigns up to. A
+    /// larger one is refused, not ignored (z80 gave `align 64` a frame at any address and the optimizer
+    /// folded `ptr & 63` to 0). None: the target realigns to what is asked.
+    pub max_alloca_align: Option<u64>,
     /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
     pub variable_shift_legal: bool,
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
@@ -458,6 +462,7 @@ impl BuilderTarget {
             min_jump_table_entries: 4,
             min_jump_table_density: None,
             preselection_blocks: None,
+            max_alloca_align: None,
             variable_shift_legal: true,
             switch_optimize: true,
             trap_unreachable: false,
@@ -3428,9 +3433,15 @@ impl Builder<'_> {
             Opcode::Store { align, volatile } => self.visit_store(inst, &instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
-            Opcode::Alloca { .. }
-                if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
-            Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
+            Opcode::Alloca { allocated, align, .. }
+                if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) =>
+            {
+                self.check_alloca_align(*allocated, *align)?
+            }
+            Opcode::Alloca { allocated, align, .. } => {
+                self.check_alloca_align(*allocated, *align)?;
+                self.visit_alloca(&instruction, *allocated, *align)?
+            }
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
@@ -3886,6 +3897,20 @@ impl Builder<'_> {
         let node = self.dag.get_node_multi(ISD::DynamicStackAlloc, &[pointer, EVT::OTHER], &[root, size, alignment]);
         self.dag.set_root(SDValue { node: node.node, res: 1 });
         self.set_value(instruction.result.ok_or(Refused("an alloca without a result"))?, node);
+        Ok(())
+    }
+
+    /// An alloca aligned above what the target keeps is refused by its numbers.
+    fn check_alloca_align(
+        &self,
+        allocated: TypeId,
+        align: Option<u64>,
+    ) -> Result<(), Refused> {
+        let Some(keeps) = self.target.max_alloca_align else { return Ok(()) };
+        let wanted = self.layout.pref_align(&self.module.context.types, allocated).max(align.unwrap_or(1));
+        if wanted > keeps {
+            return Err(Refused(Box::leak(format!("alloca aligned {wanted}, above the {keeps} this target keeps").into_boxed_str())));
+        }
         Ok(())
     }
 

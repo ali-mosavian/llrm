@@ -2256,3 +2256,17 @@ fn is_constant_is_lowered_at_o0() {
     let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ret"), "{out}");
 }
+
+/// `alloca [64 x i8], align 64` got a frame at any address and the optimizer folded `ptr & 63` to 0 (silent wrong
+/// code). The z80 keeps no alignment above 1: a refusal naming the numbers, static and dynamic.
+#[test]
+fn an_alloca_aligned_above_the_stack_is_refused_not_ignored() {
+    let ir = include_str!("kernels/ir/alloca_over_aligned.ll");
+    for level in [Level::O0, Level::O2] {
+        let why = text(ir, "f", 0, &Request::new(level)).expect_err("a refusal");
+        assert!(why.contains("alloca aligned 64, above the 2 this target keeps"), "{level:?}: {why}");
+    }
+    let dynamic = ir.replace("alloca [64 x i8], align 64", "alloca i8, i16 %n, align 8").replace("define i16 @f()", "define i16 @f(i16 %n)");
+    let why = text(&dynamic, "f", 0, &Request::new(Level::O2)).expect_err("a refusal");
+    assert!(why.contains("alloca aligned 8, above the 2"), "{why}");
+}
