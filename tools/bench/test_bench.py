@@ -407,7 +407,7 @@ class OwnFramesTests(unittest.TestCase):
         from unittest import mock
 
         variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bas")
-        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run:
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.cpulimit, "run") as run:
             run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
             bench.build(variant, "O2", Path(where), "V000")
         command = run.call_args[0][0]
@@ -421,7 +421,7 @@ class OwnFramesTests(unittest.TestCase):
         from unittest import mock
 
         variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bq16")
-        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run, mock.patch.dict(os.environ, {"LLRM_ISEL": "old"}):
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.cpulimit, "run") as run, mock.patch.dict(os.environ, {"LLRM_ISEL": "old"}):
             run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
             bench.build(variant, "O2", Path(where), "V000")
         self.assertIn("--isel=old", run.call_args[0][0])
