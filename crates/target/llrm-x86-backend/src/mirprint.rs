@@ -458,6 +458,9 @@ fn instruction(
         ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
             writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
         }
+        ("cmp", None, [Loc::Mem(m), Loc::Held(a)]) => {
+            writeln!(out, "    CMP{}mr {}, {}, implicit-def $eflags", bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
+        }
         ("cmp", None, [Loc::Held(a), Loc::Mem(m)]) => {
             writeln!(out, "    CMP{}rm {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, cell(m, symbols)?).unwrap()
         }
@@ -1040,6 +1043,20 @@ mod tests {
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("CMP32rm %1, %fixed-stack.0"), "{text}");
         assert!(text.contains("%2 = SETCCr 13, implicit $eflags"), "{text}");
+    }
+
+    /// `cmp [cell], reg` was refused ("`cmp` ... 2 sources"), so
+    /// `_bench_jpeg_fixed` at m32 -Os never reached the pin's greedy and the
+    /// TA-10 spill could not be compared with it.
+    #[test]
+    fn test_a_compare_of_a_cell_with_a_register_prints() {
+        let cell = Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, 8)), 4));
+        let cmp = insn("cmp", Operation::Compare, vec![], vec![cell, held(1)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![cmp, ret]))];
+        let body = LirBody::new("cmpmr", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("CMP32mr %fixed-stack.0, 1, $noreg, 0, $noreg, %1, implicit-def $eflags"), "{text}");
     }
 
     /// `sete [cell]` (a flag read stored straight to memory) was refused, so
