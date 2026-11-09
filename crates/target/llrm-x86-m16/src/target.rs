@@ -350,6 +350,8 @@ impl Machine for Dos {
             // `setcc` pair and an `or` that took `bp` addressing out of the
             // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
             split_merged_conditions: true,
+            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+            lftr_any_stride: true,
             ..llrm_mir::target::Tuning::PIN
         }
         })();
