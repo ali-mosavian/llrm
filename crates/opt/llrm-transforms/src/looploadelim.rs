@@ -648,7 +648,7 @@ fn bit_or_pointer_cast_op(
 }
 
 /// `Function::hasOptSize` (D33).
-fn has_opt_size(function: &Function) -> bool {
+pub(crate) fn has_opt_size(function: &Function) -> bool {
     use llrm_mir::opcode::Attribute;
     function
         .attrs

@@ -191,16 +191,20 @@ impl FunctionPass for CgpAddr {
             unit.function,
             lowering_for(analyses, CgpStep::Branches).as_deref(),
         );
-        // DEVIATE CS1: a dear conversion of a select with a constant arm.
+        // DEVIATE CS1: a dear conversion of a select with a constant arm. A
+        // function optimized for size keeps its selects, as
+        // `optimizeSelectInst` returns for `shouldOptimizeForSize`
+        // ([CodeGenPrepare.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7811)).
         let costs = analyses.outer().target().costs();
-        let converted = crate::cgpselect::casts_branched(
-            unit.context,
-            unit.layout,
-            unit.function,
-            costs.float_to_int,
-            costs.float_compare,
-            costs.branch,
-        );
+        let converted = !crate::looploadelim::has_opt_size(unit.function)
+            && crate::cgpselect::casts_branched(
+                unit.context,
+                unit.layout,
+                unit.function,
+                costs.float_to_int,
+                costs.float_compare,
+                costs.branch,
+            );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
         let switches = match lowering_for(analyses, CgpStep::SwitchType) {
             Some(lowering) => {
