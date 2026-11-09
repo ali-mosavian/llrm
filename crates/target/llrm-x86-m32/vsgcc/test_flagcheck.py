@@ -38,3 +38,30 @@ def test_ours_and_an_external_agree_at_o1_where_only_documented_settings_differ(
 def test_ours_with_a_flag_the_external_lacks_is_refused():
     assert "ffast-math" in f.check_ours("O1", OURS + " -ffast-math", EXT)
     assert "funroll-loops" in f.check_ours("O2", OURS, EXT), "-funroll-loops is documented at -O1 only"
+
+
+def test_a_program_using_wchar_t_is_refused_since_the_columns_disagree_on_its_size():
+    """-fshort-wchar: 2 bytes in ours, 4 in gcc and clang: the same source is two programs."""
+    assert f.uses_wide_chars("wchar_t w[2] = {1, 2};")
+    assert f.uses_wide_chars('const wchar_t *s = L"ab";')
+    assert not f.uses_wide_chars('report(bench_open_read("NOSUCH.FIL"));')
+    assert not f.uses_wide_chars("int FILL = 1; long BULL(void);")
+
+
+def _llrm_lines():
+    return [line.strip() for line in (Path(__file__).parent / "build.sh").read_text().splitlines() if "$LLRM --target=x86_32-wat" in line and " -c -o " in line]
+
+
+def test_every_llrm_compile_of_build_sh_shares_one_flag_set_with_the_parity_check():
+    """flagparity.sh compares ours as `--target=x86_32-wat -mabi=sysv -mlong-double-80 -march=i486`; build.sh's llrm lines (the
+    table's) must be that set at its defaults, or the verdict is about another command."""
+    import re
+
+    lines = _llrm_lines()
+    assert len(lines) >= 5, "premise: build.sh compiles llrm at four levels, the ELF build and the probe"
+    for line in lines:
+        assert re.search(r"--target=x86_32-wat \$\{LLRM_FLAGS:-\} -mabi=\$ABI \$LLRM_LD (-\$?\w+ )?-march=i486", line), line
+    text = (Path(__file__).parent / "build.sh").read_text()
+    assert "ABI=${VSGCC_ABI:-sysv}" in text and "LLRM_LD=${VSGCC_LLRM_LD--mlong-double-80}" in text
+    parity = (Path(__file__).parent / "flagparity.sh").read_text()
+    assert "--target=x86_32-wat -mabi=sysv -mlong-double-80 -$o -march=i486" in parity

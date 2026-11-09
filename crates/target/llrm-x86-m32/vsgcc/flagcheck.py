@@ -2,12 +2,14 @@
 
   flagcheck.py externals gcc|clang LEVEL FLAG...   the external's flags against the program's (build.sh calls this per column)
   flagcheck.py ours LEVEL OURS_CLANG_LINE FLAG...   the clang line llrm-cc ran (logged through a wrapper) against an external's
+  flagcheck.py source FILE                          refuses a program that uses wchar_t or a wide literal
 
 The external column goes through `external_flags.check_gcc_flags`: the program's tokens (-O level, -march) must be in it, and
 beyond the shared list nothing may be (a distro default on one side moved arm64's cells 4..16 B). The llrm-cc line differs from an
 external's by plumbing and by documented front-end settings only (`OURS_ONLY`, `EXTERNAL_ONLY`); a fast-math or excess-precision
 flag on either side is refused. m32 is i486: no SSE, so every column is x87 (-mfpmath=387 is the CPU's only choice).
 """
+import re
 import sys
 from pathlib import Path
 
@@ -20,9 +22,19 @@ STACK = {"gcc": "-mpreferred-stack-boundary=2", "clang": "-mstack-alignment=4"}
 EXTERNAL_ONLY = ("-m32", "-mpreferred-stack-boundary=2", "-mstack-alignment=4", "-Dfar=", "-c")
 # Front-end settings of llrm-cc's clang that are not codegen: the Watcom headers, the DOS ABI spelling, the IR-only run. The
 # one codegen flag is -funroll-loops at -O1 (DEVIATE UNROLL-O1, llrm-cc lib.rs: the pin's -O1 marks every loop unroll.disable).
+# Ours-only front-end settings and what they change: -fshort-wchar makes wchar_t 2 bytes (gcc/clang on Linux: 4), so a program
+# using wchar_t or a wide literal would be a different program per column: `uses_wide_chars` refuses it (none of bench/, tests/run/c
+# or kernels/ does). -std=gnu99 (gcc/clang default gnu17) changes language rules (C11 atomics, _Generic, anonymous-struct details),
+# not codegen of C99 code; -fdeclspec, -fhosted, the Watcom headers (-nostdinc/-isystem) and -fdefault-calling-conv=regcall are the
+# DOS front end: the calling convention of external functions is -mabi=sysv's (stack arguments, as gcc and clang), stamped in
+# $O/abi by build.sh; this guard does not compare conventions.
 OURS_ONLY = ("-fhosted", "-fshort-wchar", "-std=gnu99", "-fdeclspec", "-nostdinc", "-S", "-emit-llvm", "-mlong-double-64")
 PAIRS = ("-o", "-isystem", "-idirafter", "-include", "-Xclang", "-target")
 FP_CODEGEN = ("-ffast-math", "-Ofast", "-ffp-contract", "-fexcess-precision", "-mfpmath", "-mno-sse", "-msse", "-ffinite-math-only", "-funsafe-math")
+
+
+def uses_wide_chars(text):
+    return re.search(r"\bwchar_t\b|(?<![A-Za-z0-9_])L[\"']", text) is not None
 
 
 def shared(level):
@@ -74,6 +86,11 @@ def check_ours(level, line, tokens):
 
 if __name__ == "__main__":
     mode = sys.argv[1]
+    if mode == "source":
+        if uses_wide_chars(Path(sys.argv[2]).read_text()):
+            print(f"flagcheck: {sys.argv[2]} uses wchar_t or a wide literal: ours is 2 bytes, gcc and clang 4 (cell n/a)", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(0)
     why = check_external(sys.argv[2], sys.argv[3], sys.argv[4:]) if mode == "externals" else check_ours(sys.argv[2], sys.argv[3], sys.argv[4:])
     if why:
         print(f"flagcheck: {why}", file=sys.stderr)
