@@ -2020,7 +2020,8 @@ pub fn finish(
     reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
-    push_arguments(&mut function, assignment);
+    let below_ix = layout(&function, slots).below_ix();
+    push_arguments(&mut function, assignment, below_ix);
     let frame = layout(&function, slots);
     let pushed = entry_pushes(&mut function, assignment, &frame);
     let function = &function;
@@ -2855,8 +2856,10 @@ fn flag_and_b_free(text: &str) -> bool {
 fn push_arguments(
     function: &mut MFunction,
     assignment: &Assignment,
+    below_ix: i64,
 ) {
-    for block in &mut function.blocks {
+    let entry = call_bytes_at_entry(function);
+    for (index, block) in function.blocks.iter_mut().enumerate() {
         let mut at = 0;
         while at < block.insts.len() {
             let Kind::Op("ADJCALLSTACKDOWN") = block.insts[at].kind else {
@@ -2869,7 +2872,7 @@ fn push_arguments(
             };
             let stores: Vec<usize> = places.iter().map(|&(store, _)| store).collect();
             let bytes_first = BYTES_FIRST.with(std::cell::Cell::get);
-            if let Some(stored) = crate::spilled_args::store_spilled(&block.insts, at, &stores, assignment, bytes_first) {
+            if let Some(stored) = crate::spilled_args::store_spilled(&block.insts, at, &stores, assignment, bytes_first, below_ix + entry[index].1) {
                 block.insts = stored;
                 at += 1;
                 continue;

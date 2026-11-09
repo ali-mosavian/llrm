@@ -53,13 +53,18 @@ fn add(
 /// The frame at `open` with the spilled words stored in place, when that
 /// costs less than pushing them. `stores` are the frame's `STSP16`, which
 /// `crate::expand::push_places` found pushable. `bytes_first`: bytes decide,
-/// clocks may not grow (-O1, -Os, -Oz); otherwise 1 B = 3 T.
+/// clocks may not grow (-O1, -Os, -Oz); otherwise 1 B = 3 T. `below`: bytes
+/// between IX and SP before the area opens (the frame and the spills pushed
+/// by the blocks before this one); the stores are `(ix)` stores only while the
+/// whole area lies within -128 of IX, else each is `ld iy, #k; add iy, sp`
+/// and two stores (fcmp_all -Oz grew 288 B), so a deeper frame keeps pushes.
 pub(crate) fn store_spilled(
     insts: &[Inst],
     open: usize,
     stores: &[usize],
     assignment: &Assignment,
     bytes_first: bool,
+    below: i64,
 ) -> Option<Vec<Inst>> {
     let physical = |register: Reg| match register {
         Reg::Phys(id) => id,
@@ -116,6 +121,17 @@ pub(crate) fn store_spilled(
         return None;
     }
     let Some(Operand::Imm(bytes)) = insts[open].operands.first() else { return None };
+    let pushed: i64 = insts[..first]
+        .iter()
+        .map(|inst| match inst.kind {
+            Kind::Op("PUSHP") => 2,
+            Kind::Op("POPP") => -2,
+            _ => 0,
+        })
+        .sum();
+    if below + pushed + 2 * ((*bytes + 1) / 2) > 128 {
+        return None;
+    }
     let words = stores.len() as i64;
     let (push, reload, store) =
         (cost(&["push bc"]), cost(&["ld c, -2(ix)", "ld b, -1(ix)"]), cost(&["ld -2(ix), c", "ld -1(ix), b"]));

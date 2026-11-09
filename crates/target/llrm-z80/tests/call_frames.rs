@@ -174,3 +174,40 @@ fn spilled_stack_words_are_stored_in_place_and_held_ones_are_pushed() {
         assert!(pushes(10, level) >= 4, "{level}: a call with few spilled words lost its pushes");
     }
 }
+
+/// With a 200 B local the area lies past -128 of `ix`: each stored word became
+/// `ld iy, #k; add iy, sp` and two stores (fcmp_all -Oz, 18366 B to 18654 B;
+/// here 13 sums where the pushes need one). The pushes stay.
+#[test]
+fn a_frame_deeper_than_ix_reaches_keeps_the_pushes() {
+    let args = 14;
+    let calls = vec!["i16"; args].join(", ");
+    let loads: String = (0..args)
+        .map(|i| {
+            format!(
+                "  %p{i} = getelementptr [{args} x i16], ptr @v, i16 0, i16 {i}\n  %a{i} = load volatile i16, ptr %p{i}\n"
+            )
+        })
+        .collect();
+    let values = (0..args).map(|i| format!("i16 %a{i}")).collect::<Vec<_>>().join(", ");
+    let ir = format!(
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
+         @v = global [{args} x i16] zeroinitializer\ndeclare void @f({calls})\ndeclare void @use(ptr)\n\
+         define void @g() {{\n  %big = alloca [200 x i8]\n  call void @use(ptr %big)\n{loads}  call void @f({values})\n  ret void\n}}\n"
+    );
+    let dir = std::env::temp_dir().join("llrm-call-frames-z80-deep");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("g.ll");
+    std::fs::write(&source, ir).unwrap();
+    for level in ["-O2", "-Os"] {
+        let out = dir.join("g.s");
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
+            .args(["-S", level, "-o", out.to_str().unwrap(), source.to_str().unwrap()])
+            .output()
+            .expect("the driver runs");
+        assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = std::fs::read_to_string(out).unwrap();
+        let sums = text.lines().filter(|line| line.trim() == "add iy, sp").count();
+        assert!(sums <= 2, "{level}: {sums} stack-pointer sums through iy:\n{text}");
+    }
+}
