@@ -2913,8 +2913,14 @@ fn priced_chain(
     use llrm_codegen::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    // -O1 is strict in bytes and clocks: no rate trades one for the other, so
+    // the pin's `combineMul` (above) is all there is and an `imul` stays an
+    // `imul`.
+    if by_clocks && milliclocks_per_byte == 0 {
+        return None;
+    }
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+        arithmetic::chain_by_clocks_then_bytes(c, width, cpu, arch)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }

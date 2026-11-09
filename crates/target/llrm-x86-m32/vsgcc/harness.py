@@ -37,6 +37,7 @@ def expected_file(prog):
     """The `.out` a run must report: tests/run/c/NAME.out for the cell `run_NAME`, else the program's own."""
     return RUN_C / f"{prog[4:]}.out" if prog.startswith("run_") else source_dir(prog) / f"{prog}.out"
 sys.path.insert(0, str(REPO / "tools"))
+import corpus_targets  # noqa: E402
 import llrmbin  # noqa: E402
 import sizes  # noqa: E402
 
@@ -617,9 +618,19 @@ def archive_code(prog, variant):
     return total
 
 
+def check_applies(prog):
+    """A `run_NAME` cell is for m32 only where the program's `// targets:` says so: run_mulconst_i64 (lp64) was built and run at
+    m32 with a 32-bit `long`, its output never matched the 64-bit `.out`, and every compiler's cell read ok=False."""
+    if prog.startswith("run_"):
+        source = (RUN_C / f"{prog[4:]}.c").read_text()
+        if not corpus_targets.applies("x86_32-linux", source):
+            raise SystemExit(f"harness: {prog} is {corpus_targets.reason(source)} at x86_32-linux: not a cell")
+
+
 def main():
     args = [a for a in sys.argv[1:] if a != "--hist"]
     prog, variant = args[0], args[1]
+    check_applies(prog)
     r = run(prog, variant)
     if "--hist" in sys.argv:   # to stderr, so the JSON line stays the one thing on stdout
         for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
