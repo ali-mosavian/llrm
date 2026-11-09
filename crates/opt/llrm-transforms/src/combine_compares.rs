@@ -283,8 +283,13 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: foldICmpInstWithConstantNotInt, the rest of foldICmpCommutative,
-    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
+    // foldICmpInstWithConstantNotInt, the load arm.
+    if let Some(r) = crate::combine_icmp_table::fold_icmp_of_load(c, inst, pred, op0, op1) {
+        return r;
+    }
+    // OWED: the other arms of foldICmpInstWithConstantNotInt, the rest of
+    // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
+    // the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
 }
 

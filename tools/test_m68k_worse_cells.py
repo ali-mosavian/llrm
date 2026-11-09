@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, missing_levels, one_sided, single_input, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, missing_levels, one_sided, single_input, skipped, verdict, verdicts  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -16,6 +16,22 @@ def tsv(*rows):
 
 def cell(target, prog, level, ours, gcc, clang):
     return [(target, prog, level, name, b, k, 1, "") for name, (b, k) in (("ours", ours), ("gcc", gcc), ("clang", clang))]
+
+
+class HeaderRates(unittest.TestCase):
+    def test_a_flat_two_bytes_per_clock_header_is_refused(self):
+        stale = "# m68k matrix; byte_rate: 68000/68020/68040/68060 2 B per clk saved (O2: 1 clk = 2 B)\n"
+        rows = cell("m68k-68000", "partition", "O2", (98, 1264), (92, 1226), (150, 2104))
+        body = stale + COLS + "".join("\t".join(map(str, r)) + "\n" for r in rows)
+        with self.assertRaises(SystemExit) as why:
+            count(io.StringIO(body))
+        self.assertIn("timings.times", str(why.exception))
+
+    def test_the_committed_rates_are_per_cpu(self):
+        from m68k_worse_cells import committed_rates
+
+        rates = committed_rates()
+        self.assertEqual((rates["68000"], round(rates["68020"], 2), rates["68040"]), (0.5, 1.33, 3.2))
 
 
 class WorseCells(unittest.TestCase):
@@ -106,3 +122,40 @@ class WorseCells(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Verdicts(unittest.TestCase):
+    """The O1 per-axis bar and its VIRTUAL-OK exception (oversight, 2026-11-09; fputable.verdict for the m32 FPU table).
+    Cells are (bytes, clocks). No published m68k cell is virtual (gcc is ahead of clang on both axes, or the reverse,
+    everywhere), so the VIRTUAL-OK rows are shaped after fputable's tests."""
+
+    def judge(self, level, ours, gcc, clang, rate=0.5):
+        return verdict(level, rate, ours, {"gcc": gcc, "clang": clang})
+
+    def test_real_cell_at_the_best_on_both_axes_is_ok(self):
+        """sum 68000 O1 (published 2026-11-09): equal to gcc, no clang number."""
+        self.assertEqual(verdict("O1", 0.5, (18, 358), {"gcc": (18, 358)}), "ok")
+
+    def test_real_cell_behind_the_one_compiler_that_has_both_axes_is_worse(self):
+        """crc16 68020 O1 (published 2026-11-09): 78 B against gcc's 84 but 2126 clk against 1816; gcc has the best bytes and clocks."""
+        self.assertEqual(self.judge("O1", (78, 2126), (84, 1816), (152, 3608), rate=1.33), "WORSE")
+
+    def test_a_virtual_cell_passes_when_pareto_optimal_and_not_behind_the_pin(self):
+        """gcc has the best bytes, clang the best clocks; ours is behind gcc on bytes, level with clang on clocks and ahead of it on bytes."""
+        self.assertEqual(self.judge("O1", (100, 100), (80, 200), (120, 100)), "VIRTUAL-OK")
+
+    def test_a_virtual_cell_the_pin_beats_on_an_axis_is_worse(self):
+        self.assertEqual(self.judge("O1", (100, 150), (80, 200), (120, 100)), "WORSE")
+
+    def test_a_dominated_cell_is_worse(self):
+        self.assertEqual(self.judge("O1", (90, 210), (80, 200), (120, 100)), "WORSE")
+
+    def test_other_levels_have_no_virtual_exception(self):
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "ok")  # 20 B over, 50 clk * 0.5 saved
+        self.assertEqual(self.judge("Os", (100, 100), (80, 200), (120, 100)), "WORSE")
+
+    def test_a_virtual_cell_is_not_counted_worse(self):
+        """Counted worse before verdicts() existed: the per-axis bar alone."""
+        rows = cell("m68k-68000", "virt", "O1", (100, 100), (80, 200), (120, 100))
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+        self.assertEqual([v for *_, v, _ in verdicts(tsv(*rows))], ["VIRTUAL-OK"])

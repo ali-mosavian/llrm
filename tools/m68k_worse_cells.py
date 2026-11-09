@@ -9,12 +9,28 @@ listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench 
 what ships) is never judged.
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
+O1 cells follow the VIRTUAL-OK rule of tools/virtual_ok.py (verdict()).
 Usage: m68k_worse_cells.py m68k.tsv [-v] [--allow-one-sided]
 """
+import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from virtual_ok import virtual_ok  # noqa: E402
+
 RATES = re.compile(r"byte_rate: (.*?) B per clk")
+TIMINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates", "target", "llrm-m68k", "src", "timings.times")
+
+
+def committed_rates(path: str = TIMINGS) -> dict[str, float]:
+    """Bytes per clock saved of each CPU, from the committed table (`cache_line` over `line_fill_clocks`)."""
+    rows: dict[str, list[str]] = {}
+    for line in open(path):
+        words = line.split()
+        if words and words[0] in ("march", "cache_line", "line_fill_clocks"):
+            rows[words[0]] = words[1:]
+    return {"68" + cpu[-3:]: int(line) / int(fill) for cpu, line, fill in zip(rows["march"], rows["cache_line"], rows["line_fill_clocks"])}
 
 
 def rates(header: str) -> dict[str, float]:
@@ -26,6 +42,11 @@ def rates(header: str) -> dict[str, float]:
         names, value = part.split()
         for name in names.split("/"):
             table[name if name.startswith("68") else "68" + name] = float(value)
+    # a header that states a rate other than the committed one flips every O2/O3 verdict (11-09: a flat "2 B per clk" read 68000 partition O2 as +82 B, +25 B at the committed 0.5)
+    committed = committed_rates()
+    wrong = {cpu: (value, committed[cpu]) for cpu, value in table.items() if cpu in committed and abs(value - committed[cpu]) > 0.01 * committed[cpu]}
+    if wrong:
+        raise SystemExit(f"byte_rate in the header differs from timings.times (stated, committed): {wrong}")
     return table
 
 
@@ -38,6 +59,20 @@ def excess(level: str, rate: float, ours: tuple[int, int | None], other: tuple[i
     if level == "O1":
         return max(extra, ours[1] - other[1])
     return extra - rate * (other[1] - ours[1])
+
+
+def verdict(level: str, rate: float, ours, refs: dict) -> str:
+    """"ok", "VIRTUAL-OK" or "WORSE" for one cell (oversight, 2026-11-09, as fputable.verdict for the m32 FPU table).
+
+    `ours` and each of `refs` (gcc, clang) are (bytes, clocks). O1 has a per-axis bar and the rule of tools/virtual_ok.py
+    (pin: clang). Other levels, and a cell without both columns or without clocks, are one metric.
+    """
+    if max(excess(level, rate, ours, ref) for ref in refs.values()) <= 0:
+        return "ok"
+    gcc, clang = refs.get("gcc"), refs.get("clang")
+    if level != "O1" or gcc is None or clang is None or None in (*ours, *gcc, *clang):
+        return "WORSE"
+    return "VIRTUAL-OK" if virtual_ok(ours, [gcc, clang], clang) else "WORSE"
 
 
 def _seen(lines):
@@ -71,6 +106,17 @@ def cells(lines):
         if "ours" in by and others:
             rate = table[target.split("-")[1]]
             yield target, prog, level, max(excess(level, rate, by["ours"], other) for other in others)
+
+
+def verdicts(lines):
+    """(target, prog, level, verdict, excess) of every judged cell."""
+    table, seen, _ = _seen(lines)
+    for (target, prog, level), by in seen.items():
+        refs = {name: by[name] for name in ("gcc", "clang") if name in by}
+        if "ours" in by and refs:
+            rate = table[target.split("-")[1]]
+            worst = max(excess(level, rate, by["ours"], ref) for ref in refs.values())
+            yield target, prog, level, verdict(level, rate, by["ours"], refs), worst
 
 
 def skipped(lines) -> list[tuple[str, str, str]]:
@@ -126,15 +172,15 @@ def one_sided(lines) -> list[tuple[str, str, str, str]]:
 
 
 def count(lines) -> tuple[int, int]:
-    results = list(cells(lines))
-    return sum(1 for *_, e in results if e > 0), len(results)
+    results = list(verdicts(lines))
+    return sum(1 for _, _, _, v, _ in results if v == "WORSE"), len(results)
 
 
 if __name__ == "__main__":
     if "-v" in sys.argv:
-        for target, prog, level, e in sorted(cells(open(sys.argv[1])), key=lambda c: -c[3]):
-            if e > 0:
-                print(f"{target} {prog} {level} +{e:.1f} B")
+        for target, prog, level, v, e in sorted(verdicts(open(sys.argv[1])), key=lambda c: -c[4]):
+            if v != "ok":
+                print(f"{target} {prog} {level} +{e:.1f} B {v}")
     lost = missing(open(sys.argv[1]))
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))
