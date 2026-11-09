@@ -50,6 +50,11 @@ impl Selector<'_> {
     ) -> Selected<()> {
         let element = self.layout.alloc_size(self.types(), allocated);
         let align = align.unwrap_or(0).max(self.layout.align(self.types(), allocated)).max(1);
+        if align > 16 {
+            return refuse(format!(
+                "an object aligned to {align} needs stack realignment, not supported yet (keeps 16)"
+            ));
+        }
         if self.is_static_alloca(inst) {
             let count = match instruction.operands.first() {
                 None => 1,
@@ -60,9 +65,6 @@ impl Selector<'_> {
             };
             let slot = self.mf.slot((element * count).max(1), align);
             return self.define(instruction.result, Src::Val(Val::Ptr(AddrExpr::of(Base::Slot(slot)))));
-        }
-        if align > 16 {
-            return refuse("a dynamic alloca aligned past 16");
         }
         // `sp -= (count * size + 15) & -16`, the object at the new `sp`.
         let count = match instruction.operands.first() {
