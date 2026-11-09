@@ -461,6 +461,20 @@ pub trait Machine {
         false
     }
 
+    /// The alignment this target's frames really keep; none: whatever the IR
+    /// asks. An `alloca` of more (up to [`Machine::max_alloca_align`]) is
+    /// clamped to it at pipeline entry, so the optimizer never assumes an
+    /// alignment the frame does not give.
+    fn kept_stack_align(&self) -> Option<u64> {
+        None
+    }
+
+    /// The largest `alloca` alignment this target accepts; none: it realigns
+    /// its stack. A larger one is a named refusal at pipeline entry.
+    fn max_alloca_align(&self) -> Option<u64> {
+        None
+    }
+
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 

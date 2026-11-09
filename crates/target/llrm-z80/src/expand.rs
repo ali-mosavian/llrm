@@ -832,10 +832,33 @@ impl Printer<'_> {
                     return Ok(());
                 }
                 let pushes = (*bytes + 1) / 2;
-                if pushes > 8 {
-                    return Err(format!("{bytes} bytes of stack arguments"));
-                }
                 let down = op == "ADJCALLSTACKDOWN";
+                // The return restores SP from IX: the release before it is dead.
+                if !down && self.frame.active && rest.first().is_some_and(|next| next.kind == Kind::Op("RET")) {
+                    self.call_bytes = 0;
+                    return Ok(());
+                }
+                // A large area moves SP by a sum: `ld hl, #n; add hl, sp; ld sp,
+                // hl` (5 B / 27 T) once the pops are longer and slower, or the
+                // same through IY (8 B / 39 T) where `hl` holds a result. Both
+                // change the flags; the pushes and pops change nothing.
+                let sum = if !self.flags_dead(rest) {
+                    None
+                } else if !down && pushes >= 5 && self.pair_unused_after(reg::HL, rest) {
+                    Some("hl")
+                } else if pushes >= 8 && !self.iy_is_live() {
+                    Some("iy")
+                } else {
+                    None
+                };
+                if let Some(pair) = sum {
+                    let amount = if down { -*bytes } else { *bytes };
+                    self.push(format!("ld {pair}, #{amount}"));
+                    self.push(format!("add {pair}, sp"));
+                    self.push(format!("ld sp, {pair}"));
+                    self.call_bytes = if down { 2 * pushes } else { 0 };
+                    return Ok(());
+                }
                 let discard = if down {
                     Some("bc")
                 } else if let Some(pair) =

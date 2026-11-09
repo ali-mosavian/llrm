@@ -1020,12 +1020,14 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
 
 /// A call with more arguments than registers was refused: "stack arguments are
 /// not expanded yet". 8 functions of the C corpus beyond the 23 rows hit it.
-/// The caller reserves the area, stores through IX and pops it after the call.
+/// The caller reserves the area, stores through IX and pops it after the call;
+/// a call that the return follows leaves it to the `ld sp, ix` of the return.
 #[test]
 fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let ir = include_str!("kernels/ir/stackargs.ll");
     let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("push bc") && out.contains("pop bc") && out.contains("(ix), "), "{out}");
+    assert!(out.contains("push bc") && out.contains("(ix), "), "{out}");
+    assert!(out.contains("pop bc") || out.contains("ld sp, ix"), "{out}");
 }
 
 /// A frame object out of the byte displacement of IX was refused: "frame object
@@ -2255,4 +2257,17 @@ fn is_constant_is_lowered_at_o0() {
     let ir = include_str!("kernels/ir/is_constant_o0.ll");
     let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ret"), "{out}");
+}
+
+/// A call with 18 B of stack arguments was refused ("18 bytes of stack
+/// arguments"; five programs). The area is opened by one sum through IY and
+/// not released before the return that restores SP from IX.
+#[test]
+fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
+    let ir = include_str!("kernels/ir/stack_args_nine_words.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("ld iy, #-18") && out.contains("add iy, sp"), "{level:?}: {out}");
+        assert!(!out.contains("push bc"), "{level:?}: {out}");
+    }
 }
