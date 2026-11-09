@@ -35,7 +35,7 @@ Ours stands in: `prologue.rs` (frame growth, `sub sp,N` and its release),
 Each lands when it builds and passes the gate; the first is a numbered DEVIATE
 until its comparison runs. Owner w-6, plan 10-22, PEI-1 11-06.
 
-## FI-1: frame indices in `frame.rs` (owner w-6, review 2026-11-20)
+## FI-1: frame indices in `frame.rs` (owner object-refactor, review 2026-11-20)
 
 Slot table row 80 is DEVIATE CG7. Today `Frame::slot` returns a displacement
 the spiller writes into the instruction. The pin writes a frame index and

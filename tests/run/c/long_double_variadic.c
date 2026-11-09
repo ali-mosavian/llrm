@@ -1,4 +1,6 @@
 // flags: -O0 -m32 | -O2 -m32
+// targets: !m68k
+// n/a-m68k: M68K-VA-DOUBLE, docs/working/m68k-va-double-row.md: the pin prints 0 here too
 // Variadic long doubles at -m32: each argument takes a 12-byte slot of the stack (gcc's), and is not passed as a double (the
 // convention's variadic_float promotion is for float).
 extern void report(long value);

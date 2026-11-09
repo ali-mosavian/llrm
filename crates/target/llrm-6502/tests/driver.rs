@@ -2897,3 +2897,41 @@ fn is_constant_is_lowered_at_o0() {
     let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "t"), 2, "{text}");
 }
+
+/// A call whose arguments are volatile loads of `g1`, `g2`, `g3` reads them in
+/// source order at every level: every access of `g1` precedes every access of
+/// `g2`, which precedes `g3` (m68k pushed them g3, g2, g1 at every level,
+/// 2026-11-08). Read from the assembly; sim65 has no I/O address that logs
+/// accesses, so this is an asm-order check only.
+#[test]
+fn volatile_arguments_are_read_in_source_order_at_every_level() {
+    for (width, ty) in [("8", "i8"), ("16", "i16"), ("32", "i32")] {
+        let ir = module(&format!(
+            "@g1 = global {ty} 0\n@g2 = global {ty} 0\n@g3 = global {ty} 0\n\
+             declare void @sink({ty}, {ty}, {ty})\n\
+             define void @t() {{\nentry:\n  %a = load volatile {ty}, ptr @g1\n  %b = load volatile {ty}, ptr @g2\n  \
+             %c = load volatile {ty}, ptr @g3\n  call void @sink({ty} %a, {ty} %b, {ty} %c)\n  ret void\n}}"
+        ));
+        for level in [Level::O0, Level::O1, Level::O2, Level::O3, Level::Os] {
+            let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+            let from = text.find("\nt:").unwrap_or_else(|| panic!("no t in\n{text}"));
+            let body = &text[from..];
+            let body = body.split(".export").next().unwrap_or(body);
+            let accesses: Vec<u8> = body
+                .lines()
+                .flat_map(|line| {
+                    (1..=3u8).filter(move |k| {
+                        let name = format!("g{k}");
+                        line.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == name)
+                    })
+                })
+                .collect();
+            let mut sorted = accesses.clone();
+            sorted.sort_unstable();
+            assert!(
+                sorted == accesses && (1..=3u8).all(|k| accesses.contains(&k)),
+                "i{width} at {level:?}: accesses of g1, g2, g3 are {accesses:?}:\n{body}"
+            );
+        }
+    }
+}

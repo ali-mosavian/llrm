@@ -1559,7 +1559,18 @@ fn carry_through_add(
     if !matches!(dag.opcode(carry), x86isd::SETCC | x86isd::SETCC_CARRY) {
         return None;
     }
-    (dag.constant(dag.operand(carry, 0))? == cond::B).then(|| dag.operand(carry, 1))
+    let code = dag.constant(dag.operand(carry, 0))?;
+    let tested = dag.operand(carry, 1);
+    if code == cond::B {
+        return Some(tested);
+    }
+    // A check of the zero flag of an add of 1 (`getX86XALUOOp` tests `COND_E`
+    // for it) is the carry flag of that add: `inc; sete; add al, -1; adc` is
+    // `add 1; adc`.
+    (code == cond::E
+        && dag.opcode(tested) == x86isd::ADD
+        && dag.constant(dag.operand(tested, 1)) == Some(1))
+    .then_some(tested)
 }
 
 /// `needCarryOrOverflowFlag`: whether a reader of the flags result `flags`
@@ -2848,8 +2859,14 @@ fn priced_chain(
     use llrm_codegen::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    // -O1 is strict in bytes and clocks: no rate trades one for the other, so
+    // the pin's `combineMul` (above) is all there is and an `imul` stays an
+    // `imul`.
+    if by_clocks && milliclocks_per_byte == 0 {
+        return None;
+    }
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+        arithmetic::chain_by_clocks_then_bytes(c, width, cpu, arch)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }

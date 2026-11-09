@@ -30,12 +30,16 @@ CPU_OR_ABI = ("-march", "-mcpu", "-mtune", "-mabi", "-mcmodel")  # named by the 
 
 
 def flags_of(source: str, target: str = "x86") -> list[str]:
+    """The first `// flags:` configuration's feature flags, then the target family's `// flags-FAMILY:` line (corpus_targets.flags_for:
+    the same source as the executed sweeps; dropping `-mcmodel=medium` made memcpy_runtime overflow a pc-relative displacement on m68k)."""
+    kept: list[str] = []
     for line in source.splitlines()[:6]:
         if line.startswith("// flags:"):
             first = line.removeprefix("// flags:").split("|")[0].split()
             feature = target.startswith("x86")  # -mlong-double-80 and the like are x87 options; other drivers reject them
-            return [t for t in first if t.startswith(("-D", "-f")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
-    return []
+            kept = [t for t in first if t.startswith(("-D", "-f", "-W")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
+            break
+    return [*kept, *ct.flags_for(target.split("-")[0], source)]
 
 
 def compiler() -> str:

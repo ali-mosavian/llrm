@@ -89,3 +89,17 @@ def test_feature_m_flags_are_given_to_x86_targets_only():
     source = "// flags: -O0 -mlong-double-80 -DX\nint x;\n"
     assert sweep.flags_of(source, "x86_16-wat") == ["-mlong-double-80", "-DX"]
     assert sweep.flags_of(source, "m68k-68020") == ["-DX"]
+
+
+def test_the_family_flags_line_is_given_to_that_family_only():
+    """memcpy_runtime carries `// flags-m68k: -mcmodel=medium`; the sweep dropped it and m68k refused the program (a pc-relative overflow)."""
+    source = "// flags: -O0 -DX\n// flags-m68k: -mcmodel=medium\nint x;\n"
+    assert sweep.flags_of(source, "m68k-68020") == ["-DX", "-mcmodel=medium"]
+    assert sweep.flags_of(source, "arm64-linux") == ["-DX"]
+    real = (sweep.ROOT / "tests/run/c/memcpy_runtime.c").read_text()
+    assert "-mcmodel=medium" in sweep.flags_of(real, "m68k-68000")
+
+
+def test_warning_flags_of_the_program_are_kept():
+    """long_double_union_pun needs -Wno-incompatible-ms-struct; dropping it made the m16 -O0 sweep list a clang error (ms_struct layout) as a refusal."""
+    assert "-Wno-incompatible-ms-struct" in sweep.flags_of("// flags: -O0 -mlong-double-80 -Wno-incompatible-ms-struct\nint x;\n", "x86_16-wat")
