@@ -6515,3 +6515,18 @@ fn test_a_double_slot_copy_in_a_cold_block_stays() {
     input.frequencies = table(1.0);
     assert!(float_copy(&input, false).is_some(), "once a call: the saving repays the bytes");
 }
+
+/// The register copy prices from the target's own `x87_load`, `x87_store`,
+/// `mov_rm` and `mov_mr`: a profile that lists none of them (any target but the
+/// x86 family, which alone has the tune tables with them) never runs the pass.
+#[test]
+fn test_a_float_slot_copy_needs_the_targets_x87_and_move_costs() {
+    let input = float_copy_body((-4, 4), (-8, 4), &[]);
+    let cpu = crate::backend::cpu::tuned("486", false).unwrap();
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    assert!(crate::backend::floatslotcopy::copied(&input, cpu, &saved(), &classes).is_some());
+
+    let mut without = cpu.clone();
+    without._costs = std::sync::Arc::new(cpu._costs.iter().filter(|(name, _)| name != "x87_store").cloned().collect());
+    assert!(crate::backend::floatslotcopy::copied(&input, &without, &saved(), &classes).is_none());
+}

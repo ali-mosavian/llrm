@@ -71,15 +71,12 @@ impl Prices {
         if !cpu.has_speed_goal() || cpu.bytes_strict() {
             return None;
         }
-        let rate = cpu.speed_milliclocks_per_byte();
         let get = |name: &str| cpu.cost(name).ok();
-        (rate > 0).then_some(Self {
-            load: get("x87_load")?,
-            store: get("x87_store")?,
-            mov_load: get("mov_rm")?,
-            mov_store: get("mov_mr")?,
-            rate,
-        })
+        // The costs first: a target that lists none of them has no rate to ask
+        // for either.
+        let (load, store, mov_load, mov_store) = (get("x87_load")?, get("x87_store")?, get("mov_rm")?, get("mov_mr")?);
+        let rate = cpu.speed_milliclocks_per_byte();
+        (rate > 0).then_some(Self { load, store, mov_load, mov_store, rate })
     }
 }
 
