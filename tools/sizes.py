@@ -260,41 +260,16 @@ def lib_bytes(obj: Path) -> int | None:
 
 
 def data_bytes(obj: Path) -> tuple[int, int]:
-    """(initialised, uninitialised) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
-    BC_SEGS): the bytes its LEDATA and LIDATA records carry, and the rest of each SEGDEF. Not the stack, nor debug records."""
+    """(stored, not stored) bytes of the object's data segments in the linked image, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
+    BC_SEGS): the linker stores every segment whose class is not BSS in the executable at its full SEGDEF length and leaves a BSS class
+    to the loader (zero-filled, after the stored ones). The class decides, not how the object holds the bytes: a segment of zeros stored
+    as LEDATA and one declared with none read the same, which is what the linked executables are (byte-identical for BC_DATA). Not the stack,
+    nor debug records."""
     if is_elf(obj):
         return elfsize.data_bytes(obj)
     kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
-    initialised = sum(stored(one) for one in kept)
-    return initialised, sum(one.size for one in kept) - initialised
-
-
-# A zero run this long is left to the linker's zero fill by llrm-omf (write.rs HOLE); the instrument counts it as uninitialised whichever
-# way the object holds it, so a compiler that stores the zeros as LEDATA and one that declares them (bc's BC_DATA) read the same.
-HOLE = 8
-
-
-def stored(one: Segment) -> int:
-    """The bytes of segment `one` that are initialised in the linked image: the nonzero bytes, and the zero runs shorter than HOLE between them (a byte no
-    record covers is zero, so stored zeros and a declared hole read the same). Iterated data and a COMDAT, whose bytes are not all in `pieces`, count as loaded."""
-    placed = [(at, body) for at, body in one.pieces if at is not None]
-    if sum(len(body) for _, body in placed) != one.loaded or one.loaded > one.size:
-        return one.loaded
-    image = bytearray(one.size)
-    for at, body in placed:
-        image[at : at + len(body)] = body
-    kept, at = 0, 0
-    while at < one.size:
-        if image[at]:  # a nonzero byte is stored
-            kept += 1
-            at += 1
-            continue
-        start = at
-        while at < one.size and not image[at]:
-            at += 1
-        if at - start < HOLE and 0 < start and at < one.size:  # a short zero run between data stays, stored or not
-            kept += at - start
-    return kept
+    unstored = sum(one.size for one in kept if "BSS" in one.klass.upper())
+    return sum(one.size for one in kept) - unstored, unstored
 
 
 def selected(command: list[str]) -> list[str]:

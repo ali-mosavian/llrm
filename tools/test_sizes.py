@@ -80,12 +80,12 @@ def lnames(*texts: str) -> bytes:
     return record(0x96, b"".join(name(one) for one in texts))
 
 
-def test_initialised_bytes_are_the_data_records_and_the_rest_of_the_segment_is_uninitialised(tmp_path):
-    """Names 1..: _TEXT CODE _DATA DATA _BSS BSS. A 40-byte data segment loaded with 25 bytes and a 16-byte BSS
-    with none read 40 initialised and 0 uninitialised when the SEGDEF length alone was counted."""
+def test_the_image_stores_every_segment_of_a_class_but_bss(tmp_path):
+    """Names 1..: _TEXT CODE _DATA DATA _BSS BSS. A 40-byte DATA segment loaded with 25 bytes is 40 bytes of the image (the linker fills the rest
+    with zeros), the 16-byte BSS segment is not stored."""
     path = tmp_path / "d.obj"
-    path.write_bytes(record(0x80, name("x")) + lnames("_TEXT", "CODE", "_DATA", "DATA", "_BSS", "BSS") + segdef(10, 1, 2) + segdef(40, 3, 4) + segdef(16, 5, 6) + ledata(1, 10) + stored_data(2, bytes([1]) * 25))
-    assert data_bytes(path) == (25, 31)
+    path.write_bytes(record(0x80, name("x")) + lnames("_TEXT", "CODE", "_DATA", "DATA", "_BSS", "BSS") + segdef(10, 1, 2) + segdef(40, 3, 4) + segdef(16, 5, 6) + ledata(1, 10) + ledata(2, 25))
+    assert data_bytes(path) == (40, 16)
     assert code_bytes(path) == 10
 
 
@@ -93,14 +93,14 @@ def test_a_basic_objects_runtime_cells_are_the_programs_data(tmp_path):
     """BC and llrm-qb put BC_DATA (class BC_VARS) and BC_DS, BC_SA (class BC_SEGS) in the object: the runtime reads
     them, but they are the program's bytes in the image."""
     path = tmp_path / "b.obj"
-    path.write_bytes(record(0x80, name("x")) + lnames("R_CODE", "BC_CODE", "BC_DATA", "BC_VARS", "BC_DS", "BC_SEGS") + segdef(50, 1, 2) + segdef(14, 3, 4) + segdef(3, 5, 6) + stored_data(2, bytes([1]) * 14) + stored_data(3, bytes([1]) * 3))
+    path.write_bytes(record(0x80, name("x")) + lnames("R_CODE", "BC_CODE", "BC_DATA", "BC_VARS", "BC_DS", "BC_SEGS") + segdef(50, 1, 2) + segdef(14, 3, 4) + segdef(3, 5, 6) + ledata(2, 14) + ledata(3, 3))
     assert data_bytes(path) == (17, 0)
 
 
 def test_zeros_stored_or_declared_read_as_the_same_data(tmp_path):
     """The m16 owner table read 240 BASIC cells WORSE on `data` (fib 15 > 7 bc, jpeg_fixed 29191 > 765): llrm-qb stored BC_DATA's and its arrays'
-    zero bytes as LEDATA, bc declares them and stores none, and the linked executables are byte-identical. The same segment with its zero run stored
-    and with a hole there counts the same; a short zero run between data stays."""
+    zero bytes as LEDATA, bc declares them and stores none, and the linked executables are byte-identical. The same segment with its zeros
+    stored and with a hole there is the same image."""
     def made(name, pieces):
         path = tmp_path / name
         path.write_bytes(record(0x80, name_("x")) + lnames("BC_DATA", "BC_VARS") + segdef(40, 1, 2) + b"".join(stored_data(1, body, at) for at, body in pieces))
@@ -109,10 +109,7 @@ def test_zeros_stored_or_declared_read_as_the_same_data(tmp_path):
     one, two = bytes([7, 7]), bytes([9])
     stored_zeros = made("a.obj", [(0, one + bytes(30) + two + bytes(7))])
     with_hole = made("b.obj", [(0, one), (32, two)])
-    assert data_bytes(stored_zeros) == data_bytes(with_hole) == (3, 37)
-    assert data_bytes(made("d.obj", [(0, one + bytes(7) + two + bytes(7))])) == data_bytes(made("e.obj", [(0, one), (9, two)])), "a short zero run at the end is no data either way"
-    short = made("c.obj", [(0, one + bytes(3) + two)])
-    assert data_bytes(short) == (6, 34), "a zero run under HOLE stays stored"
+    assert data_bytes(stored_zeros) == data_bytes(with_hole) == (40, 0)
 
 
 def test_the_stack_and_debug_records_are_not_the_programs_data(tmp_path):
