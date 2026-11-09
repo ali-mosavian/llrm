@@ -8,8 +8,8 @@ Status 2026-11-09, owner arm64-phi. Closes spike rows 5 and 7 (DEVIATE M7).
   alias analysis. `machinesink::may_store` (DEVIATE M7) counts any store; `machinelicm` reuses it.
 - arm64 states the memory lane only. Its `MemOperand` (object, offset, volatile) sits in
   `Lowered.memory_operands`, keyed by `at`; a stage that clones or inserts an instruction loses it.
-- arm64 runs the shared phases only under `LLRM_ARM64_STAGES` (`lir_body::stages::run`, observation);
-  its output does not change with this work.
+- arm64's default path is `lir_view` -> spike-mf `MFunction` -> `tolir` (`with_effects`), which runs the
+  shared `MachineScheduler`; `lir_body::to_lir` is the check/stages converter. Both carry the operand now.
 
 ## Pin (d1106deb71cc)
 
@@ -31,8 +31,9 @@ both must be memory operations; no memory operand means may alias; each (store, 
    only where `may_alias`; without, the single chain as today. `machinesink::hasStoreBetween` asks
    `may_alias` for the load it sinks.
 4. `LirBody.symbols` takes `Lowered.symbols`.
-5. arm64 `to_lir` sets `memory` on a load or store; `from_lir` reads it back. `Lowered.memory_operands`
-   goes. Pairs, atomics and calls state none (they may alias anything).
+5. arm64: `lir_view` sets `Inst::memory` (spike-mf) and `tolir::with_effects` copies it to `Insn.memory`;
+   `lir_body::to_lir` sets it and `from_lir` reads it back (`Lowered.memory_operands` goes). Pairs, atomics
+   and calls state none (they may alias anything).
 
 Not in this change: `Op::DbgValue` into `LirBody::notes`. A note names an SSA value; arm64's names a
 register, so it needs the producer to emit notes after phi elimination. `Lowered.debug_values` stays.
@@ -44,5 +45,6 @@ register, so it needs the producer to emit notes after phi elimination. `Lowered
   load past a store to another object, not past one to its own.
 - A copy made by `Insn::with_what` keeps the operand.
 - x86 identity (named m16/m32/m64 programs, md5s); structural statement for m68k, wasm, z80, 6502.
-- arm64 and x86 A/B: identical objects expected (no default path asks `may_alias` of an access
-  with an operand; x86 states none); measured.
+- A/B at the release/next tip: arm64 O1/O2/O3/Os objects over tests/run/c, bench, tests/programs and
+  kernels; x86 m16/m32/m64 and m68k, 6502, wasm, z80 at O2 over tests/run/c, with counters showing
+  whether the changed passes were reached and that no operand was seen outside arm64.
