@@ -15,9 +15,12 @@
 //!   immediate into becomes `lda #n`: the value is known, and the passes after
 //!   it can drop the load or the compare. A call keeps `rc8`..`rc15`
 //!   (callee-saved); a label forgets everything.
-//! - [`drop_known_loads`]: `ldx #n` of what the register already holds, tracked
-//!   through immediates and transfers, forgotten at a label, a call or an
-//!   instruction not listed.
+//! - [`drop_known_loads`]: `ldx #n` of what the register already holds, and
+//!   `lda m` (likewise `ldx`, `ldy`) of a cell the register was loaded from or
+//!   stored to, tracked through immediates, cell stores and transfers,
+//!   forgotten at a call or an instruction not listed. A cell is forgotten when
+//!   written; an indexed or indirect store forgets every cell. At a label only
+//!   branches here reach, the values every edge agrees on stay.
 //! - [`zero_test_through_an_index`]: `cmp #0` of `a` before a branch on zero or
 //!   sign is `tax` (`tay`) when that register and the carry are dead.
 //! - [`drop_zero_compares`]: `cmp #0` (likewise `cpx`, `cpy`) before a branch
@@ -884,8 +887,31 @@ pub fn fold_known_cells(asm: &mut Asm) {
     }
 }
 
-/// What `a`, `x` and `y` hold: the immediate they were last loaded with.
-type Known<'a> = [Option<&'a str>; 3];
+/// What a register holds: an immediate, or the byte of a cell it was loaded
+/// from or stored to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Value<'a> {
+    Imm(&'a str),
+    Cell(&'a str),
+}
+
+/// What `a`, `x` and `y` hold.
+type Known<'a> = [Option<Value<'a>>; 3];
+
+/// A register that held `cell` (any cell when `None`) no longer does: the cell
+/// was written.
+fn forget_cell(
+    state: &mut Known<'_>,
+    cell: Option<&str>,
+) {
+    for held in state.iter_mut() {
+        if let Some(Value::Cell(name)) = held
+            && cell.is_none_or(|written| written == *name)
+        {
+            *held = None;
+        }
+    }
+}
 
 /// The registers' values at a label, from every branch to it: a value both
 /// edges agree on.
@@ -978,9 +1004,15 @@ fn walk<'a>(
             && (load.op, store.op, pull.op) == (Op::Lda, Op::Sta, Op::Pla)
             && let (Operand::Imm(value), Operand::Direct(_)) = (&load.operand, &store.operand)
             && flags_unread_after(lines, at + 4)
-            && let Some(by) = [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| state[*r] == Some(value.as_str()))
+            && let Some(by) =
+                [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| state[*r] == Some(Value::Imm(value.as_str())))
         {
             stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }));
+            // the shortcut writes the cell the skipped `sta` wrote
+            match &store.operand {
+                Operand::Direct(name) => forget_cell(&mut state, Some(name)),
+                _ => forget_cell(&mut state, None),
+            }
             skip = at + 4;
             known = Some(state);
             continue;
@@ -1000,17 +1032,30 @@ fn walk<'a>(
         }
         // control does not run on past a jump or a return
         let ends = matches!(op, Op::Bra | Op::Jmp | Op::Rts);
+        // a write of memory: a direct one changes its own cell, any other (an
+        // indexed or indirect store, a read-modify-write through a pointer)
+        // may change any
+        if matches!(
+            op,
+            Op::Sta | Op::Stx | Op::Sty | Op::Stz | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror
+        ) && !on_a
+        {
+            match operand {
+                Operand::Direct(name) => forget_cell(&mut state, Some(name)),
+                _ => forget_cell(&mut state, None),
+            }
+        }
         match (op, register, operand) {
             (_, Some(register), Operand::Imm(value)) => {
-                if state[register] == Some(value.as_str()) && flags_unread_after(lines, at + 1) {
+                if state[register] == Some(Value::Imm(value.as_str())) && flags_unread_after(lines, at + 1) {
                     keep[at] = false;
                     known = Some(state);
                     continue;
                 }
                 // `x` and `y` have no transfer between them
                 let from = match register {
-                    0 => [1, 2].into_iter().find(|&from| state[from] == Some(value.as_str())),
-                    _ => (state[0] == Some(value.as_str())).then_some(0),
+                    0 => [1, 2].into_iter().find(|&from| state[from] == Some(Value::Imm(value.as_str()))),
+                    _ => (state[0] == Some(Value::Imm(value.as_str()))).then_some(0),
                 };
                 if let Some(from) = from {
                     let op = match (from, register) {
@@ -1021,7 +1066,34 @@ fn walk<'a>(
                     };
                     transfers.push((at, op));
                 }
-                state[register] = Some(value);
+                state[register] = Some(Value::Imm(value));
+            }
+            // a load of a cell the register holds goes; a transfer from
+            // another register that holds it is left: it would end the chain
+            // folds below (`sta rc7 / ldx rc7` as `tax` hid the copy from them,
+            // +384 instructions in `fill_nest`)
+            (_, Some(register), Operand::Direct(name)) if operand.is_cell() => {
+                let held = Some(Value::Cell(name.as_str()));
+                if state[register] == held && flags_unread_after(lines, at + 1) {
+                    keep[at] = false;
+                    known = Some(state);
+                    continue;
+                }
+                state[register] = held;
+            }
+            // a store leaves the register holding the cell it wrote (unless
+            // it holds an immediate)
+            (Op::Sta | Op::Stx | Op::Sty, _, Operand::Direct(name)) if operand.is_cell() => {
+                let from = match op {
+                    Op::Sta => 0,
+                    Op::Stx => 1,
+                    _ => 2,
+                };
+                // a register holds one fact: an immediate outranks the cell
+                // (the load of a constant is the one that is dropped)
+                if !matches!(state[from], Some(Value::Imm(_))) {
+                    state[from] = Some(Value::Cell(name.as_str()));
+                }
             }
             (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => state[0] = None,
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => state[0] = None,
@@ -1045,16 +1117,24 @@ fn walk<'a>(
     (keep, transfers, stores, carried)
 }
 
+/// DEVIATE 6502-KNOWN-CELLS: the pin's MachineCopyPropagation erases a
+/// redundant copy inside one block; the facts here cross labels (every edge
+/// must agree), which the pin gets from register allocation keeping the value
+/// in the register. Reason: the cells are this target's spill homes. Exit:
+/// 2026-11-30, with the allocator-level fix. Owner: 6502.
+///
 /// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
 /// goes, unless a branch reads the flags it sets. One that another register
 /// holds is the 1-byte transfer (`txa` for `lda #0` when `x` is 0: the same
 /// clocks, and the same `N` and `Z`; llvm-mos's
 /// `MOSLateOptimization::combineLdImm` does the same, bar the 65816-only
-/// `x`/`y` transfers). The values known are the immediates loaded and the
-/// transfers between registers, forgotten at a call or an instruction not
-/// listed. At a label only branches in this text reach, they are the values
-/// every incoming edge agrees on (a loop's back edge is found by walking again
-/// until they hold); at any other label they are forgotten.
+/// `x`/`y` transfers). The values known are the immediates loaded, the cells
+/// loaded or stored and the transfers between registers, forgotten at a call or
+/// an instruction not listed. A load of a cell the register holds goes; one
+/// another register holds stays (a `tax` there hid the copy from the folds
+/// after this pass). At a label only branches in this text reach, they are the
+/// values every incoming edge agrees on (a loop's back edge is found by walking
+/// again until they hold); at any other label they are forgotten.
 pub fn drop_known_loads(asm: &mut Asm) {
     let Some((mut keep, transfers, stores)) = decide_known_loads(&asm.lines) else { return };
     for (at, op) in transfers {
