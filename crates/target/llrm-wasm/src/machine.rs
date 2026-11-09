@@ -185,6 +185,12 @@ impl Tti for Wasm {
         true
     }
 
+    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
+    /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
+    fn inline_trial_groups_sites(&self) -> bool {
+        true
+    }
+
     /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
     fn folds_select_to_cmp(&self) -> bool {
         true

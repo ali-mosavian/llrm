@@ -429,6 +429,7 @@ impl Peephole {
             )),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = pushed_immediates(&body, &self.cpu);
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -440,6 +441,73 @@ impl Peephole {
         }
         gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))
     }
+}
+
+/// `mov r32, imm8` as `push imm8; pop r`: 3 bytes against the `mov`'s 5. A
+/// translation of `ExpandMOVImmSExti8`
+/// ([X86InstrInfo.cpp:6236]), which the pin applies at `minsize`; zero and -1
+/// stay `xor` and `or` (`cleared`). Flags are untouched and the pair is atomic,
+/// so stack-relative cells between instructions keep their offsets; `masm`
+/// states the frame address after each push and pop as for any other.
+///
+/// DEVIATE PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): the same at `-Os` on
+/// a target that says so (`Tuning::push_imm_at_size`). Two clocks on the 486
+/// against the `mov`'s one: `-Os` is bytes-strict.
+///
+/// [X86InstrInfo.cpp:6236]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6236
+pub fn pushed_immediates(
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    let at_size = cpu.size && cpu.target().tti().is_some_and(|tti| tti.push_imm_at_size());
+    if body.bits != 32 || !(body.min_size || cpu.min_size || at_size) {
+        return body.clone();
+    }
+    let regs = body.regs();
+    let sp = Loc::Reg(reg(regs.named(regs.stack, 4), 4));
+    let imm8 = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && one.clobbers.is_empty()
+                && one.symbol != Some(true) =>
+        {
+            match (what.dests.as_slice(), what.sources.as_slice()) {
+                ([Loc::Reg(dest)], [Loc::Imm(Imm { value, width: 4, address: None })])
+                    if dest.width == 4
+                        && (-128..=127).contains(value)
+                        && ![0, -1].contains(value)
+                        && Loc::Reg(dest.clone()) != sp =>
+                {
+                    Some(dest.clone())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns = Vec::with_capacity(block.insns.len());
+            for one in &block.insns {
+                match imm8(one) {
+                    Some(dest) => {
+                        let source = one.what.as_ref().expect("a move").sources[0].clone();
+                        let push = semantics(Operation::Push, "push", vec![], vec![source]);
+                        let pop = semantics(Operation::Pop, "pop", vec![Loc::Reg(dest)], vec![]);
+                        insns.push(Arc::new(with_what(one, push)));
+                        insns.push(Arc::new(with_what(one, pop)));
+                    }
+                    None => insns.push(Arc::clone(one)),
+                }
+            }
+            block.with_insns(insns)
+        })
+        .collect();
+    LirBody { blocks, ..body.clone() }
 }
 
 /// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
