@@ -243,4 +243,37 @@ class RtLib(unittest.TestCase):
             subprocess.run([sys.executable, os.path.join(HERE, "mkrt.py"), CC, lib, os.path.join(tmp, "w")], check=True, capture_output=True, timeout=1200)
             self.assertEqual(self.size(lib) - self.size(None), 3)
 
+RT = os.path.join(HERE, "..", "..", "crates", "target", "llrm-6502", "runtime", "mos_rt.s")
+
+class NoOut(unittest.TestCase):
+    """2026-11-09: tests/run/c holds 8 helper sources with no `.out`; ours_cr died on the first one (FileNotFoundError) and all 12 runs of the
+    #8707 corpus A/B crashed at once. A source without an `.out` is NOT TESTED and counted, never a crash."""
+    def test_a_source_without_an_out_is_counted_as_no_out_not_a_crash(self):
+        import json
+        corpus = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "helper.c").write_text("int f(void) { return 1; }\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", out, "helper"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["helper", "NO-OUT"]])
+        self.assertIn("NO-OUT", done.stdout)
+
+class Runner(unittest.TestCase):
+    """The corpus runner printed "done" after 12 runs that had all crashed: it reads every run's exit status and tsv first."""
+    def go(self, stub_body):
+        work = tempfile.mkdtemp(); stub = os.path.join(work, "stub.py")
+        Path(stub).write_text("import sys\n" + stub_body)
+        env = dict(os.environ, AB_CORPUS_PY=stub, AB_CPUS="6502", AB_LEVELS="O2")
+        return subprocess.run(["bash", os.path.join(HERE, "ab_corpus.sh"), "/nonexistent/llrm-cc", os.path.join(work, "out")],
+                              capture_output=True, text=True, env=env, timeout=60)
+    def test_a_crashing_run_is_failed_and_the_runner_does_not_say_done(self):
+        done = self.go("sys.exit(1)\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("FAILED 6502-O2-off", done.stdout)
+        self.assertNotIn("DONE", done.stdout)
+    def test_runs_that_wrote_their_tables_are_done(self):
+        done = self.go("open(sys.argv[3], 'w').write('p\\tours\\t1\\t1\\n')\n")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "DONE 2 runs"))
+
 if __name__ == "__main__": unittest.main()
