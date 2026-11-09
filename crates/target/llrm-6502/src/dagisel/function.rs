@@ -41,6 +41,12 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
+        // DEVIATE ALLOCA-ALIGN-2 (owner 6502, exit 2026-11-15): the soft stack
+        // is not realigned and frames have odd sizes, so even 2 is not kept:
+        // the mid-end folds `ptr & 1` to 0 for an `align 2` local on an odd
+        // frame (tests/alloca_align.rs). Above 2 is refused by name. Exit:
+        // even frames and argument areas, then refuse above 2 for a reason.
+        max_alloca_align: Some(2),
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the

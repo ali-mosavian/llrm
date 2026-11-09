@@ -1893,7 +1893,7 @@ impl Builder<'_> {
             && name.starts_with("llvm.")
             && self.calling().is_some_and(|calling| !calling.calls_unlowered_intrinsic(&name))
         {
-            return Err(Refused(Box::leak(format!("intrinsic call {name} has no lowering").into_boxed_str())));
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
         }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
