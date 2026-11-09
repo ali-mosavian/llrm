@@ -62,6 +62,8 @@ impl Level {
 pub struct Policy {
     passes: Vec<String>,
     no_inline: Vec<String>,
+    /// `-fsize-libcalls=auto|inline|call` ([`crate::libcalls`]).
+    size_libcalls: crate::libcalls::Mode,
 }
 
 impl Policy {
@@ -75,7 +77,12 @@ impl Policy {
     ) -> bool {
         if let Some(name) = flag.strip_prefix("-fno-inline=") {
             self.no_inline.push(name.to_owned());
-        } else if matches!(flag, "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store") {
+        } else if let Some(mode) = flag.strip_prefix("-fsize-libcalls=").and_then(crate::libcalls::Mode::parse) {
+            self.size_libcalls = mode;
+        } else if matches!(
+            flag,
+            "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store"
+        ) {
         } else if llrm_codegen::driver::flags::apply_pass_flag(&mut MidEnd::default(), flag) {
             self.passes.push(flag.to_owned());
         } else {
@@ -275,6 +282,22 @@ fn function_items(
             names.push(global.name.owned().ok_or("an unnamed function")?);
         }
     }
+    // one scan of the module, not one per function (M68K-SIZE-LIBCALL)
+    let backend = Options {
+        libcalls: backend
+            .libcalls
+            .or_else(
+                || {
+                    let kinds = crate::libcalls::chosen(module, backend.size_libcalls, |one| {
+                        backend.size
+                            || llrm_mir::memory::has(&one.attrs, "optsize")
+                            || llrm_mir::memory::has(&one.attrs, "minsize")
+                    });
+                    Some(crate::libcalls::mask(&kinds))
+                },
+            ),
+        ..backend
+    };
     let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
         names
             .iter()
@@ -286,7 +309,8 @@ fn function_items(
             .collect()
     };
     let near = compile(true)?;
-    let calls = near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
+    let calls =
+        near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
     let bytes: usize = near
         .iter()
         .flat_map(|(_, items)| items)
@@ -317,6 +341,7 @@ pub fn assembly_flagged(
         debug,
         mid_end: false,
         code_model: model,
+        size_libcalls: policy.size_libcalls,
         ..Options::default()
     };
     let mut out = String::new();
@@ -380,6 +405,7 @@ pub fn object_flagged(
         strict: level == Level::O1,
         mid_end: false,
         code_model: model,
+        size_libcalls: policy.size_libcalls,
         ..Options::default()
     };
     let mut items = Vec::new();
