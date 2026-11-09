@@ -5,7 +5,8 @@
 //!
 //! The returning blocks are then found once per body state (#7340, which
 //! allocates a set sized by the body): the first question of a state pays for
-//! it, and every later one allocates nothing for the rest of the body.
+//! it (doubling growth), and every later one allocates nothing for the rest of
+//! the body.
 
 use llrm_analysis::noreturn::all_stranded;
 use llrm_support::alloc_count::{Counting, counted};
@@ -25,21 +26,27 @@ fn body(returns: usize) -> String {
     text
 }
 
-fn allocations(returns: usize) -> usize {
+/// Allocations of the first question of a body state and of the second.
+fn allocations(returns: usize) -> (usize, usize) {
     let module = llrm_mir::parse::module(&body(returns)).unwrap_or_else(|why| panic!("{why:?}"));
     let function = module.named("f").and_then(|id| module.global(id).function()).expect("@f");
     let layout = function.layout();
     let (head, stop) = (llrm_analysis::cfg::id(layout[1]), llrm_analysis::cfg::id(layout[2]));
     let mut starts = IdSet::new();
     starts.insert(stop);
-    assert!(all_stranded(function, head, &starts), "the first question finds the returning blocks");
+    let (first, made_first) = counted(|| all_stranded(function, head, &starts));
+    assert!(first);
     let (stranded, made) = counted(|| all_stranded(function, head, &starts));
     assert!(stranded);
-    made
+    (made_first, made)
 }
 
+/// The first question of a state finds the returning blocks in a set that
+/// grows with the body by doubling (at most log2 of the size ratio, 7 for
+/// 4 -> 400 returns); a repeat allocates nothing for the rest of the body.
 #[test]
-fn test_asking_again_whether_an_exit_is_stranded_allocates_nothing_for_the_rest_of_the_body() {
-    let (small, large) = (allocations(4), allocations(400));
-    assert!(large <= small + 2, "{small} allocations with 4 returns in the body, {large} with 400");
+fn test_the_first_question_grows_by_doubling_and_a_repeat_allocates_nothing_for_the_body() {
+    let ((first_small, again_small), (first_large, again_large)) = (allocations(4), allocations(400));
+    assert!(first_large <= first_small + 8, "first question: {first_small} allocations with 4 returns, {first_large} with 400");
+    assert!(again_large <= again_small + 2, "repeat: {again_small} allocations with 4 returns, {again_large} with 400");
 }
