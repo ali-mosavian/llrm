@@ -234,9 +234,13 @@ impl Tti for M68k {
     ///
     /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
     /// index-versus-pointer cost via Tti (no per-program patch):
-    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`;
-    ///   bintree O1 +0.06/+0.18%, frameless +0.05..+0.13%.
-    /// - M68K-LSR-D2U64-BYTES: double_to_uint64 +8..+26 B.
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
+    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
+    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
+    ///   cost the same clocks.
+    /// - M68K-LSR-D2U64-BYTES: double_to_uint64 +8..+26 B (68000 +10 at
+    ///   O1/O2/Os; 68020 O1 +8, O2 +26, Os +10); executed clocks equal.
     fn frame_address_is_free(&self) -> bool {
         true
     }
