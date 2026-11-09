@@ -28,6 +28,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import corpus_targets  # noqa: E402
 import virtual_ok as shared  # noqa: E402
 
 REQUIRED = ("llvm-mos", "cc65")
@@ -92,8 +93,14 @@ def virtual_notes(cells, graded):
     return lines
 
 
-def corpus_programs(corpus):
-    return {f[:-4] for f in os.listdir(corpus) if f.endswith(".out") and os.path.exists(os.path.join(corpus, f[:-4] + ".c"))}
+TARGET = "6502"
+
+
+def corpus_programs(corpus, target=TARGET):
+    """(the programs that apply to the target, the ones `tools/corpus_targets.applies` drops): the denominator is the first."""
+    names = {f[:-4] for f in os.listdir(corpus) if f.endswith(".out") and os.path.exists(os.path.join(corpus, f[:-4] + ".c"))}
+    dropped = {n for n in names if not corpus_targets.applies(target, open(os.path.join(corpus, n + ".c"), errors="replace").read())}
+    return names - dropped, dropped
 
 
 def coverage(cells, corpus_names):
@@ -112,11 +119,12 @@ def main(argv):
     matrix, out = args[:2]
     rows = [l.rstrip("\n").split("\t") for l in open(matrix) if not l.startswith("#")][1:]
     cells = cells_of(rows)
-    names = corpus_programs(corpus) if corpus else set()
+    names, dropped = corpus_programs(corpus) if corpus else (set(), set())
+    cells = {key: d for key, d in cells.items() if key[0] not in dropped}
     graded, refused = grade(cells, names, "--programs-no-bar" in argv, tuple(ungraded))
     inside, missing = coverage(cells, names) if corpus else (0, [])
     if corpus:
-        print(f"coverage: {inside} corpus programs in the table, {len(missing)} missing")
+        print(f"coverage: {inside} of {len(names)} applicable corpus programs in the table, {len(missing)} missing; {len(dropped)} dropped by corpus_targets.applies")
         print("missing:", " ".join(missing))
     tally = collections.Counter(r[-1] for r in graded)
     print("cells:", dict(tally), f"refused {len(refused)}")

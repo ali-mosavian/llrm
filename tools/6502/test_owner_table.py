@@ -72,13 +72,29 @@ class OwnerTable(unittest.TestCase):
             for n in ("a", "b"):
                 open(os.path.join(d, n + ".c"), "w").close()
                 open(os.path.join(d, n + ".out"), "w").close()
-            names = t.corpus_programs(d)
+            names, _ = t.corpus_programs(d)
         cells = t.cells_of([row("a", "O2", "ours", 5, 50)])
         self.assertEqual(t.coverage(cells, names), (1, ["b"]))
 
 
 def cell(level, **points):
     return [row("k", level, name.replace("_", "-"), b, c) for name, (b, c) in points.items()]
+
+
+class Applies(unittest.TestCase):
+    """A program `corpus_targets.applies` drops for 6502 (a `-m32`-forced one) stayed in the table's denominator and,
+    as a program with no bar, in its cells (2026-11-09: 14 programs)."""
+
+    def corpus(self, files):
+        d = tempfile.mkdtemp()
+        for name, text in files.items():
+            open(os.path.join(d, name), "w").write(text)
+        return d
+
+    def test_a_program_the_target_does_not_take_is_dropped_from_the_denominator(self):
+        d = self.corpus({"a.c": "int main(){}", "a.out": "", "b.c": "// flags: -m32\nint main(){}", "b.out": ""})
+        names, dropped = t.corpus_programs(d)
+        self.assertEqual((names, dropped), ({"a"}, {"b"}))
 
 
 class VirtualOk(unittest.TestCase):
