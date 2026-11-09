@@ -1480,6 +1480,20 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-30): `replaceCongruentIVs`
+    /// maps each wide counter's truncation to the type of the header's last
+    /// phi (`Phis.back()`, ScalarEvolutionExpander.cpp#L1965), which is a
+    /// pointer phi when the loop has one (pointers sort to the back), and
+    /// `isTruncateFree` to a pointer is false: a loop that steps a pointer keeps
+    /// a narrow counter beside the wide one it truncates to. True takes the
+    /// narrowest integer phi. The pin's ordinary p3 modes let LSR share the wide
+    /// counter (GenerateTruncates); the real-mode huge model leaves a bare
+    /// pointer, so no use shares it. m16 huge bq16 -O1: 357 -> about 339 B.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1965
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
     /// the LSR cost): a call clobbers every register, so each register the
     /// loop keeps across one is a frame slot, reloaded each trip and, for a
