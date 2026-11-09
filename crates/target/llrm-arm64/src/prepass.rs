@@ -52,6 +52,12 @@ fn pure(op: &Op) -> bool {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
         }
+        // A load from the GOT: the slot is constant memory, so a store in the loop does not
+        // change it (the pin: `PseudoSourceValue::GOT` is constant, `MachineLICM` hoists it).
+        Op::I(Inst::Load { addr: Addr::PageOffset { got: true, .. }, .. }) => {
+            let (defs, uses) = op.defs_and_uses();
+            defs.iter().chain(&uses).all(|register| register.is_virtual())
+        }
         Op::I(inst) => {
             matches!(
                 inst,
