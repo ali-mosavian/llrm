@@ -1,6 +1,6 @@
 //! A call with stack arguments in a function whose stack pointer moves, on the DAG path alone.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
@@ -11,7 +11,6 @@ const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:
 /// around the call, so the arguments are not stored over the dynamic `alloca`.
 #[test]
 fn a_stack_argument_call_after_a_dynamic_alloca_makes_room_around_the_call() {
-    driver::set_isel_mode(IselMode::Dag);
     let ir = format!(
         "{LAYOUT}declare i64 @many(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64)\ndeclare void @use(ptr)\n\
 define i64 @f(i64 %n) {{\n  %v = alloca i32, i64 %n, align 4\n  call void @use(ptr %v)\n  \

@@ -17,7 +17,6 @@ pub mod facts;
 pub mod flagcse;
 pub mod frame;
 pub mod ipra;
-pub mod isel;
 pub mod jumptable;
 pub mod layout;
 pub mod ldst_update;

@@ -934,6 +934,16 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::push_imm_at_size`.
+    fn push_imm_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_movs_at_size`.
+    fn rep_movs_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
         false
