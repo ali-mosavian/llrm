@@ -294,6 +294,15 @@ impl llrm_target::Target for M32 {
         true
     }
 
+    // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's MachineCSE
+    // shares a branch-opening compare with the same subtract on one side, moving
+    // the subtract in front of the branch and copying the operand the other side
+    // reads. x_isqrt -O2: -7.7% clocks, -10 B (-O1 -5.9%, -Os -4.7%); the other 286
+    // non-m16 kernels at -O1/-O2/-O3/-Os are byte-identical.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
+        true
+    }
+
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
         Some((
             M32::pressure_sets(),
