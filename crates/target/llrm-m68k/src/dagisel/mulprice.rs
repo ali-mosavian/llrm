@@ -15,10 +15,71 @@
 //! Owner m68k. Exit 2026-12-20: the price from the selected instructions (G2,
 //! `synth_mult` for any constant).
 //!
-//! Complexity: O(1) per multiply.
+//!
+//! DEVIATE M68K-MUL-LATE: the per-site answer cannot see what the chain does to
+//! the function (the scheduler hoists independent calls above the chain and
+//! spills their results, 15 B a call in select_of_constants -Os; the shared
+//! `lea __mulsi3, %a6` stops paying; `muls.w` of a halfword is 4 B against an
+//! 8 B chain). A function that used the chain is also built with the multiply
+//! kept (`Mode::Kept`) and the cheaper by the level's price is kept
+//! (`crate::trial`): -Os by bytes, -O2/-O3 by `bytes + 2 * clocks`, a tie keeps
+//! the multiply; -O1 (no worse in bytes and clocks) replaces the chain only
+//! where the multiply is no worse in both, and keeps it where each build wins
+//! one axis. The library routine's clocks come from [`crate::routine`]. Owner
+//! m68k-b. Exit 2026-12-20, with the price above. Cells (68000, against
+//! #8532 alone): select_of_constants -Os, int64_division -Os, matmul -Os,
+//! nbody_fixed -O1 and div_constants_short -Os smaller; none larger, none
+//! slower. The -O1 cells of select_of_constants, int64_division and matmul
+//! keep the chain: bytes above the pin's `__mulsi3` build, clocks far below.
+//!
+//! Complexity: O(1) per multiply; a function that used the chain is compiled
+//! twice (1150 of 12320 corpus functions).
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use super::hooks::Cpu;
 use crate::timing::Price;
+
+/// How a build treats a multiply by a constant.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// The decomposition stands, as the pin's M68k has it.
+    Pin,
+    /// The decomposition stands; a function that used it is also built with
+    /// [`Mode::Kept`], and the cheaper kept.
+    Trial,
+    /// The multiply stays: `muls.l`, or the library call before the 68020.
+    Kept,
+}
+
+/// Whether the combiner may decompose a multiply in this build of a function,
+/// and whether it did: DEVIATE M68K-MUL-LATE builds a function that did also
+/// without, and keeps the cheaper (`crate::trial`).
+#[derive(Clone, Default)]
+pub struct Chain {
+    off: bool,
+    used: Rc<Cell<bool>>,
+}
+
+impl Chain {
+    pub fn of(mode: Mode) -> Chain {
+        Chain { off: mode == Mode::Kept, used: Rc::default() }
+    }
+
+    /// Whether this build decomposed at least one multiply.
+    pub fn used(&self) -> bool {
+        self.used.get()
+    }
+
+    pub(super) fn allows(&self, yes: bool) -> bool {
+        let yes = yes && !self.off;
+        if yes {
+            self.used.set(true);
+        }
+        yes
+    }
+}
 
 /// `(bytes, clocks)` of `text` on `cpu`: `bytes` are the instruction's length.
 fn one(

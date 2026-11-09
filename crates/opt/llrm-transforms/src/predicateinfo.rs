@@ -326,6 +326,7 @@ impl Builder<'_> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
