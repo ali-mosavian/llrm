@@ -19,7 +19,7 @@ use crate::dagisel::lowering::target_lowering;
 use crate::features::Features;
 
 /// The steps of CodeGenPrepare that run on wasm so far (DEVIATE WL1).
-const STEPS: &[CgpStep] = &[CgpStep::SwitchType, CgpStep::ExtPromotion, CgpStep::Compares, CgpStep::CastSinking, CgpStep::OverflowMath];
+const STEPS: &[CgpStep] = &[CgpStep::SwitchType, CgpStep::ExtPromotion, CgpStep::Compares, CgpStep::CastSinking, CgpStep::OverflowMath, CgpStep::Branches];
 
 /// The action table of wasm32, built once.
 fn table() -> &'static TargetLowering {
