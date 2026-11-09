@@ -6599,3 +6599,40 @@ fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
         "a target that does not allow it"
     );
 }
+
+/// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a move into the
+/// stack pointer, zero, -1, a wider immediate and a non-32-bit body stay as they are.
+#[test]
+fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
+    // (destination, value, bits, rewritten)
+    for (dest, value, bits, rewritten) in [
+        (RegId::EAX, 40, 32, true),
+        (RegId::EAX, -5, 32, true),
+        (RegId::ESP, 40, 32, false),
+        (RegId::EAX, 0, 32, false),
+        (RegId::EAX, -1, 32, false),
+        (RegId::EAX, 200, 32, false),
+        (RegId::EAX, 40, 64, false),
+    ] {
+        let set = insn(
+            0,
+            Some((0, 5)),
+            Some(sem(Operation::Move, "mov", vec![rl(dest, 4)], vec![im(value, 4)])),
+            vec![],
+            vec![],
+        );
+        let input = LirBody {
+            bits,
+            min_size: true,
+            ..body("f", 0, vec![block(0, vec![Arc::new(set)], vec![]).into()])
+        };
+        let done = pushed_immediates(&input, &crate::backend::cpu::tuned("486", false).unwrap());
+        let names: Vec<_> = done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
+        let want: &[&str] = if rewritten { &["push", "pop"] } else { &["mov"] };
+        assert_eq!(
+            names.iter().map(|name| name.as_deref().unwrap()).collect::<Vec<_>>(),
+            want,
+            "{dest:?} {value} {bits}"
+        );
+    }
+}
