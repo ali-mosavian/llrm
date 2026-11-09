@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,6 +31,8 @@ sys.path.insert(0, str(HERE))
 import benchlist  # noqa: E402
 import corpus_targets as ct  # noqa: E402
 import external_flags  # noqa: E402
+import m68k_exec_sweep as sweep  # noqa: E402
+import m68k_program_size as program_size  # noqa: E402
 import o0_sweep  # noqa: E402
 
 TIMEOUT = 180
@@ -120,6 +123,7 @@ class Tools:
         self.gcc = f"{self.root}/usr/bin/m68k-linux-gnu-gcc"
         # The unpacked cross gcc ships no compiler headers (stddef.h): M68K_GCC_HEADERS is a directory of target-neutral ones
         self.headers = os.environ.get("M68K_GCC_HEADERS")
+        self.lock = threading.Lock()
         self.as_ = f"{self.root}/usr/bin/m68k-linux-gnu-as"
         self.objdump = f"{self.root}/usr/bin/m68k-linux-gnu-objdump"
         every = external_flags.flags("none", (), 15)
@@ -152,8 +156,26 @@ class Tools:
         """Header text: every column's compile lines, so the next reader sees the setup (the flags hash is in the same header)."""
         return "".join(f"# {c}: " + " ; ".join(" ".join(cmd) for cmd in self.commands(c, "<cpu>", "<level>", "<program.c>", ["<program flags>"], "<out>")) + "\n" for c in ("ours", "gcc", "clang"))
 
-    def build(self, compiler: str, cpu: str, level: str, path: Path, flags: list[str], work: Path) -> tuple[int | None, str, str]:
-        """(code bytes, reason, cause) of one program in one column."""
+    def library(self, cpu: str, level: str, obj: Path, work: Path) -> int | None:
+        """Bytes of the compiler-rt members the object pulls when linked: only the referenced ones link, as in a real link. Every column links
+        OUR archive at the same level (libgcc's m68k routines are not in the gcc root, as tools/m68k_program_size.py): the gcc and clang
+        library numbers are an estimate. Unresolved symbols other than the runtime's (`report`, libc) are ignored."""
+        archive = self.support(cpu, level)
+        mapfile, exe = Path(str(obj) + ".map"), Path(str(obj) + ".exe")
+        link = subprocess.run([f"{self.root}/usr/bin/m68k-linux-gnu-gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding",
+                               "-Wl,--unresolved-symbols=ignore-all", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), archive],
+                              capture_output=True, text=True, env=self.env)
+        if link.returncode != 0 or not mapfile.exists():
+            return None
+        return sum(program_size.members_of(program_size.text_bytes(mapfile.read_text())).values())
+
+    def support(self, cpu: str, level: str) -> str:
+        """The compiler-rt archive of this llrm-cc at CPU and LEVEL (built once, cached by compiler binary)."""
+        with self.lock:
+            return sweep.build_support(self.cc, self.root, cpu, sweep.cache_dir(self.cc), 4, level)[2]
+
+    def build(self, compiler: str, cpu: str, level: str, path: Path, flags: list[str], work: Path) -> tuple[int | None, str, str, int | None]:
+        """(code bytes, reason, cause, library bytes) of one program in one column."""
         stem = f"{path.parent.name}_{path.stem}.{cpu}.{level}.{compiler}"
         out = str(work / stem)
         env = {**os.environ, "LLRM_CC_TARGET": f"m68k-{cpu}"} if compiler == "ours" else None
@@ -168,17 +190,17 @@ class Tools:
         obj = Path(out + ".o")
         if not ok:
             reason, cause = failure(compiler, timed, err)
-            return None, reason, cause
-        return self.size(obj), "ok", ""
+            return None, reason, cause, None
+        return self.size(obj), "ok", "", self.library(cpu, level, obj, work)
 
 
-def cell_rows(tools: Tools, ident: str, path: Path, cpu: str, level: str, work: Path) -> list[tuple[str, int | None, str, str]]:
-    """(compiler, bytes, reason, cause) for the three columns."""
+def cell_rows(tools: Tools, ident: str, path: Path, cpu: str, level: str, work: Path) -> list[tuple[str, int | None, str, str, int | None]]:
+    """(compiler, bytes, reason, cause, library bytes) for the three columns."""
     flags = o0_sweep.flags_of(path.read_text(), f"m68k-{cpu}")
     return [(c, *tools.build(c, cpu, level, path, flags, work)) for c in ("ours", "gcc", "clang")]
 
 
-def verdict(rows: list[tuple[str, int | None, str, str]]) -> str:
+def verdict(rows: list[tuple]) -> str:
     """The cell's reason: ours' failure, or no-reference when ours built and neither gcc nor clang did, else ok."""
     ours = next(r for r in rows if r[0] == "ours")
     if ours[1] is None:
@@ -208,6 +230,9 @@ def main() -> int:
     tools = Tools()
     corpus, same = programs()
     chosen = [(i, p) for i, p in corpus if not args.names or i in args.names or p.stem in args.names]
+    for cpu in cpus:
+        for level in levels:
+            tools.support(cpu, level)  # before the pool: one archive build per CPU and level
     jobs, na = [], []
     for cpu in cpus:
         for ident, path in chosen:
@@ -225,9 +250,9 @@ def main() -> int:
         counts[why] = counts.get(why, 0) + 1
         if why != "ok":
             reasons.append(f"m68k-{cpu}\t{ident}\t{level}\t{why}\t" + "; ".join(c[3] for c in cols if c[3]))
-        for compiler, size, reason, cause in cols:
+        for compiler, size, reason, cause, library in cols:
             note = "" if size is not None else f"n/a: {reason}: {cause}"
-            rows.append(f"m68k-{cpu}\t{ident}\t{level}\t{compiler}\t{'' if size is None else size}\t\t\t{note}")
+            rows.append(f"m68k-{cpu}\t{ident}\t{level}\t{compiler}\t{'' if size is None else size}\t\t\t{note}\t{'' if library is None else library}")
     have = {tuple(r.split("\t")[:3]) for r in rows if r.split("\t")[3] == "ours"}
     skipped = {(f"m68k-{c}", i, lv) for c, i in na for lv in levels}
     missing = holes([i for i, _ in chosen], cpus, levels, have | skipped)
@@ -237,12 +262,12 @@ def main() -> int:
         stddef = Path(hdir) / "stddef.h"
         headers_note = f", gcc headers {hdir} (host gcc 15 include dir, stddef.h md5 {hashlib.md5(stddef.read_bytes()).hexdigest()[:12]})"
     n_bench = sum(1 for i, _ in corpus if i.startswith("bench/"))
-    header = (f"# m68k corpus matrix (size = code + rodata + data of the whole object; NO CLOCKS: no libc is linked, so O2/O3 are judged on bytes alone, an upper bound; gcc -msoft-float like ours{headers_note}; denominator {len(corpus)} programs = "
+    header = (f"# m68k corpus matrix (code_bytes = code + rodata + data of the object alone; lib_bytes = the compiler-rt members it links, OUR archive at the same level for all three columns, so the gcc and clang library numbers are an estimate (libgcc's m68k routines are not in the gcc root); whole program = code_bytes + lib_bytes; NO CLOCKS: no libc is linked, so O2/O3 are judged on bytes alone, an upper bound; gcc -msoft-float like ours{headers_note}; denominator {len(corpus)} programs = "
               f"{len(corpus) - n_bench} tests/run/c + {n_bench} bench, {len(same)} more in both (counted once, same.tsv); "
               f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
               + "; byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved (unused: no clocks)"
               + "; external flags: tools/external_flags.py --target none, hash cd1e12d510e4\n")
-    (out / "m68k-corpus.tsv").write_text(header + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n" + "\n".join(rows) + "\n")
+    (out / "m68k-corpus.tsv").write_text(header + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\tlib_bytes\n" + "\n".join(rows) + "\n")
     (out / "reasons.tsv").write_text("target\tprog\tlevel\treason\tcause\n" + "\n".join(reasons) + "\n" + "".join(f"m68k-{c}\t{i}\t-\tnot-targeted\t\n" for c, i in na))
     (out / "same.tsv").write_text("".join(f"{a}\t{b}\n" for a, b in same))
     print(header.strip())

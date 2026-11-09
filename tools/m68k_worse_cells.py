@@ -9,7 +9,7 @@ listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench 
 what ships) is never judged.
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
-Usage: m68k_worse_cells.py m68k.tsv [-v] [--allow-one-sided]
+Usage: m68k_worse_cells.py m68k.tsv [-v] [--whole]   (--whole: add the corpus table's lib_bytes column to code_bytes) [--allow-one-sided]
 """
 import re
 import sys
@@ -97,6 +97,17 @@ def single_input(lines) -> list[tuple[str, str, str, str]]:
     return found
 
 
+def with_library(lines):
+    """The rows with `lib_bytes` (column 9) added to `code_bytes`: the whole-program sizes of the corpus table. A row without a library
+    number keeps its object bytes."""
+    for line in lines:
+        row = line.rstrip("\n").split("\t")
+        if not line.startswith("#") and len(row) >= 9 and row[4].isdigit() and row[8].isdigit():
+            row[4] = str(int(row[4]) + int(row[8]))
+            line = "\t".join(row) + "\n"
+        yield line
+
+
 def ours_failed(lines) -> set[tuple[str, str, str]]:
     """The cells where `ours` has no number and says why (`n/a: compile-fail: ...`): a failure the table names, not a hole. The corpus
     matrix (tools/m68k_corpus_matrix.py) writes these."""
@@ -144,30 +155,36 @@ def count(lines) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
+    path = next(arg for arg in sys.argv[1:] if not arg.startswith("-"))
+
+    def source():
+        """The table's rows; with --whole their sizes include the library members (corpus tables)."""
+        return with_library(open(path)) if "--whole" in sys.argv else open(path)
+
     if "-v" in sys.argv:
-        for target, prog, level, e in sorted(cells(open(sys.argv[1])), key=lambda c: -c[3]):
+        for target, prog, level, e in sorted(cells(source()), key=lambda c: -c[3]):
             if e > 0:
                 print(f"{target} {prog} {level} +{e:.1f} B")
-    lost = missing(open(sys.argv[1]))
+    lost = missing(source())
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))
         sys.exit(2)
-    gaps = missing_levels(open(sys.argv[1]))
+    gaps = missing_levels(source())
     if gaps:
         print("level not measured (unknown, not clean): " + ", ".join("/".join(key) for key in gaps[:8]))
         sys.exit(2)
-    once = single_input(open(sys.argv[1]))
+    once = single_input(source())
     if once:
         print("order-sensitive program run on fewer inputs than " + str(INPUTS) + ": "
               + ", ".join("/".join(key) for key in once[:6]))
         sys.exit(2)
-    half = one_sided(open(sys.argv[1]))
+    half = one_sided(source())
     if half:
         print("cells with one external column only (the best of gcc and clang is unknown): "
               + ", ".join("/".join(key[:3]) + f" (no {key[3]})" for key in half))
         if "--allow-one-sided" not in sys.argv:
             sys.exit(2)
-    worse, total = count(open(sys.argv[1]))
-    left = skipped(open(sys.argv[1]))
+    worse, total = count(source())
+    left = skipped(source())
     print(f"{worse} worse of {total} judged cells; {len(left)} skipped (no ours or no external number): "
           + ", ".join("/".join(key) for key in left))
