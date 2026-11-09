@@ -668,7 +668,10 @@ impl Info {
         &self,
         register: RegId,
     ) -> bool {
-        self.integer(register) || self.is_segment(register) || self.in_class(register, class::XMM)
+        self.integer(register)
+            || self.is_segment(register)
+            || self.in_class(register, class::XMM)
+            || self.in_class(register, class::FPR)
     }
 
     /// The entries in iced's number order, with their registers.

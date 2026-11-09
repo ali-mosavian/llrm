@@ -400,6 +400,26 @@ fn no_shared_phase_panics_on_the_producers_body() {
     assert!(panicked.is_empty(), "{panicked:?}");
 }
 
+/// Every register the producer names, float ones included, is one the file
+/// describes. The verifier knew integer, segment and XMM registers only, so
+/// the `d`/`s`/`h` views of arm64's float code were "not a register this
+/// target has" in 6 of the 43 functions of the corpus.
+#[test]
+fn the_producer_names_only_registers_the_file_describes() {
+    use llrm_target::Target as _;
+    let float_registers = SIZES.map(|size| {
+        Op::I(Inst::FpBinary { op: FpBinary::Add, size, rd: Vreg(0), rn: Vreg(1), rm: Vreg(2) })
+    });
+    let lowered = to_lir(&function(float_registers.into())).expect("a float add maps");
+    let complaints = llrm_codegen::backend::verify::verify_for(
+        &lowered.body,
+        false,
+        &crate::description::Arm64.layout().spaces.roles,
+    );
+    let unknown: Vec<_> = complaints.iter().filter(|one| one.contains("not a register this target has")).collect();
+    assert!(unknown.is_empty(), "{} of {}: {:?}", unknown.len(), complaints.len(), unknown.first());
+}
+
 /// The operations that are not instructions.
 #[test]
 fn every_pseudo_operation_round_trips() {
