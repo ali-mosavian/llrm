@@ -132,6 +132,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
+        // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+        lftr_any_stride: true,
         rep_stos_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
@@ -290,6 +292,15 @@ impl llrm_target::Target for M32 {
     // leaf stays and costs a `jmp`); at -Os the constant is made in the
     // branching block and the branch goes to the join.
     fn leaf_fold_at_size(&self) -> bool {
+        true
+    }
+
+    // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's MachineCSE
+    // shares a branch-opening compare with the same subtract on one side, moving
+    // the subtract in front of the branch and copying the operand the other side
+    // reads. x_isqrt -O2: -7.7% clocks, -10 B (-O1 -5.9%, -Os -4.7%); the other 286
+    // non-m16 kernels at -O1/-O2/-O3/-Os are byte-identical.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
         true
     }
 
