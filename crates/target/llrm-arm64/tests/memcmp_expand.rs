@@ -2,13 +2,12 @@
 //! loads and compares. Without the hook arm64 kept the call (`bl bcmp`,
 //! `b memcmp`) where the pin expands it.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 const DATALAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
 fn assembly(size: u32, zero_cmp: bool) -> String {
-    driver::set_isel_mode(IselMode::Dag);
     let result = if zero_cmp {
         "  %c = icmp eq i32 %r, 0\n  %z = zext i1 %c to i32\n  ret i32 %z\n"
     } else {

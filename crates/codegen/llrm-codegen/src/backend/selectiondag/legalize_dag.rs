@@ -41,10 +41,37 @@ use llrm_mir::hash::HashSet;
 use llrm_sdag::lowering::ShiftAmount;
 
 use super::actions::{Action, TargetLowering};
-use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
+
+/// `FloatSignAsInt`: a float's sign bit as part of an integer.
+struct FloatSignAsInt {
+    float_vt: EVT,
+    int_value: SDValue,
+    sign_mask: u128,
+    sign_bit: u32,
+    /// Set where the float went through memory.
+    spill: Option<SignSpill>,
+}
+
+/// The stack slot a float's sign byte is read from and written back to.
+struct SignSpill {
+    chain: SDValue,
+    float_ptr: SDValue,
+    float_info: MemInfo,
+    int_ptr: SDValue,
+    int_info: MemInfo,
+}
+
+/// The bits of an integer type, as a mask.
+fn mask_of(vt: EVT) -> u128 {
+    match vt.size_in_bits() {
+        128 => u128::MAX,
+        bits => (1u128 << bits) - 1,
+    }
+}
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -202,7 +229,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 NodeData::ValueType(inner) => inner,
                 _ => self.dag.value_type(node),
             },
-            ISD::SetCC | ISD::Store => {
+            // `SETCCCARRY` is asked of its operands' type, as `SETCC` is
+            // (`LegalizeOp`'s `case ISD::SETCCCARRY`).
+            ISD::SetCC | ISD::SetCCCarry | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
             _ => self.dag.value_type(node),
@@ -702,6 +731,156 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     }
 
     /// `TargetLowering::expandIntMINMAX`: a select on a compare, reusing a
+    /// `getSignAsIntValue`: the sign bit of float `value` as part of an
+    /// integer. An integer of the float's width, where the target has one;
+    /// else the float is stored to a stack slot and the byte with the sign bit
+    /// loaded.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L1640>
+    fn sign_as_int(
+        &mut self,
+        value: SDValue,
+    ) -> FloatSignAsInt {
+        let float_vt = self.dag.value_type(value);
+        let bits = float_vt.size_in_bits();
+        let int_vt = EVT::integer(bits);
+        if self.tli.types.is_type_legal(int_vt) {
+            return FloatSignAsInt {
+                float_vt,
+                int_value: self.dag.get_node(ISD::BitCast, int_vt, &[value]),
+                sign_mask: 1u128 << (bits - 1),
+                sign_bit: bits - 1,
+                spill: None,
+            };
+        }
+        // The register type of `i8`.
+        let load_ty = match self.tli.types.type_conversion(EVT::I8) {
+            (llrm_sdag::lowering::TypeAction::Legal, _) => EVT::I8,
+            (_, wider) => wider,
+        };
+        // DEVIATE FNEG-ALIGN (owner arm64-phi, review 2026-11-20): the slot is
+        // aligned to the float's size up to 16, where the pin asks the
+        // data layout for both types' preferred alignment.
+        let align = (bits / 8).next_power_of_two().clamp(4, 16);
+        let cell = self.dag.create_stack_temporary(bits.div_ceil(8), align);
+        let pointer = self.dag.config().pointer;
+        let float_ptr = self.dag.get_frame_index(pointer, cell);
+        let float_info = MemInfo {
+            mem_vt: float_vt,
+            align,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let chain = self.dag.get_store(entry, value, float_ptr, float_info);
+        let (int_ptr, int_align) = if self.dag.config().big_endian {
+            (float_ptr, align)
+        } else {
+            // The byte that holds the sign bit is the last.
+            let at = self.dag.get_constant(u128::from(bits / 8 - 1), pointer);
+            (self.dag.get_mem_base_plus_offset(float_ptr, at, SDNodeFlags::default()), 1)
+        };
+        let int_info = MemInfo { mem_vt: EVT::I8, align: int_align, ..float_info };
+        let int_value = self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, load_ty, chain, int_ptr, int_info);
+        FloatSignAsInt {
+            float_vt,
+            int_value,
+            sign_mask: 1 << 7,
+            sign_bit: 7,
+            spill: Some(SignSpill { chain, float_ptr, float_info, int_ptr, int_info }),
+        }
+    }
+
+    /// `modifySignAsInt`: the float whose sign part is `new_int`.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L1692>
+    fn modify_sign_as_int(
+        &mut self,
+        state: &FloatSignAsInt,
+        new_int: SDValue,
+    ) -> SDValue {
+        let Some(spill) = &state.spill else { return self.dag.get_node(ISD::BitCast, state.float_vt, &[new_int]) };
+        let chain = self.dag.get_store(spill.chain, new_int, spill.int_ptr, spill.int_info);
+        self.dag.get_load(state.float_vt, chain, spill.float_ptr, spill.float_info)
+    }
+
+    /// `ExpandFNEG`: the sign bit flipped.
+    fn expand_fneg(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let state = self.sign_as_int(self.dag.operand(node, 0));
+        let int_vt = self.dag.value_type(state.int_value);
+        let mask = self.dag.get_constant(state.sign_mask, int_vt);
+        let flipped = self.dag.get_node(ISD::Xor, int_vt, &[state.int_value, mask]);
+        self.modify_sign_as_int(&state, flipped)
+    }
+
+    /// `ExpandFABS`: `FCOPYSIGN(x, 0.0)` where that is legal, else the sign bit
+    /// cleared.
+    fn expand_fabs(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let value = self.dag.operand(node, 0);
+        let float_vt = self.dag.value_type(value);
+        if self.tli.is_operation_legal_or_custom(ISD::FCopySign, float_vt) {
+            let zero = self.dag.get_constant_fp(0, float_vt);
+            return self.dag.get_node(ISD::FCopySign, float_vt, &[value, zero]);
+        }
+        let state = self.sign_as_int(value);
+        let int_vt = self.dag.value_type(state.int_value);
+        let keep = self.dag.get_constant(!state.sign_mask & mask_of(int_vt), int_vt);
+        let cleared = self.dag.get_node(ISD::And, int_vt, &[state.int_value, keep]);
+        self.modify_sign_as_int(&state, cleared)
+    }
+
+    /// `ExpandFCOPYSIGN`: the magnitude's bits with the sign operand's sign bit
+    /// moved into place.
+    fn expand_fcopysign(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let (magnitude, sign) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let sign_state = self.sign_as_int(sign);
+        let int_vt = self.dag.value_type(sign_state.int_value);
+        let mask = self.dag.get_constant(sign_state.sign_mask, int_vt);
+        let mut sign_bit = self.dag.get_node(ISD::And, int_vt, &[sign_state.int_value, mask]);
+        let float_vt = self.dag.value_type(magnitude);
+        if self.tli.is_operation_legal_or_custom(ISD::FAbs, float_vt)
+            && self.tli.is_operation_legal_or_custom(ISD::FNeg, float_vt)
+        {
+            let abs = self.dag.get_node(ISD::FAbs, float_vt, &[magnitude]);
+            let neg = self.dag.get_node(ISD::FNeg, float_vt, &[abs]);
+            let zero = self.dag.get_constant(0, int_vt);
+            let bool_vt = self.tli.types.set_cc_result_type(int_vt);
+            let test = self.dag.get_setcc(bool_vt, sign_bit, zero, CondCode::SetNe);
+            return self.dag.get_select(float_vt, test, neg, abs);
+        }
+        let magnitude_state = self.sign_as_int(magnitude);
+        let mag_vt = self.dag.value_type(magnitude_state.int_value);
+        let keep = self.dag.get_constant(!magnitude_state.sign_mask & mask_of(mag_vt), mag_vt);
+        let cleared = self.dag.get_node(ISD::And, mag_vt, &[magnitude_state.int_value, keep]);
+        // The sign bit at the place of the magnitude's.
+        let by = i64::from(sign_state.sign_bit) - i64::from(magnitude_state.sign_bit);
+        let mut shift_vt = int_vt;
+        if int_vt.size_in_bits() < mag_vt.size_in_bits() {
+            sign_bit = self.dag.get_node(ISD::ZeroExtend, mag_vt, &[sign_bit]);
+            shift_vt = mag_vt;
+        }
+        if by != 0 {
+            let amount = self.dag.get_constant(by.unsigned_abs() as u128, shift_vt);
+            let op = if by > 0 { ISD::Srl } else { ISD::Shl };
+            sign_bit = self.dag.get_node(op, shift_vt, &[sign_bit, amount]);
+        }
+        if self.dag.value_type(sign_bit).size_in_bits() > mag_vt.size_in_bits() {
+            sign_bit = self.dag.get_node(ISD::Truncate, mag_vt, &[sign_bit]);
+        }
+        let copied = self.dag.get_node_flags(ISD::Or, mag_vt, &[cleared, sign_bit], SDNodeFlags::DISJOINT);
+        self.modify_sign_as_int(&magnitude_state, copied)
+    }
+
     /// compare of the same operands when the DAG has one. (This target has no
     /// `USUBSAT`, so the `usubsat` forms are not taken.)
     fn expand_min_max(
@@ -864,6 +1043,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.dag.get_node_flags(ISD::Or, vt, &[low, high], kind)])
             }
             ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
+            ISD::FNeg => Some(vec![self.expand_fneg(node)]),
+            ISD::FAbs => Some(vec![self.expand_fabs(node)]),
+            ISD::FCopySign => Some(vec![self.expand_fcopysign(node)]),
             ISD::ExtractElement => {
                 // 0 is the low half, 1 the high: a truncate, of a shift for the
                 // high.

@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod recurrence;
 pub mod trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
@@ -1406,6 +1407,13 @@ pub(crate) fn compute_unroll_count(
         up.partial |= pinfo.explicit_unroll;
     }
 
+    // DEVIATE RU-REC: the same veto as runtime unrolling, for a known trip
+    // count, unless the user asked for the unroll.
+    if trip_count != 0 && !up.force && !pinfo.explicit_unroll && recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "partial unroll: the loop-carried chain bounds a trip (RU-REC)");
+        return 0;
+    }
+
     // 6th priority is partial unrolling, when the trip count is known.
     if let Some(factor) = should_partial_unroll(loop_size, trip_count, uce, up) {
         return factor;
@@ -1423,6 +1431,10 @@ pub(crate) fn compute_unroll_count(
         return 0;
     }
     if !up.runtime {
+        return 0;
+    }
+    if recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "runtime unroll: the loop-carried chain bounds a trip (RU-REC)");
         return 0;
     }
 
@@ -1787,7 +1799,11 @@ fn try_to_unroll_loop(
     // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
     // loop, made again, is copied out `count` times.
     let mut remade = None;
-    if run.options.target_unrolling && trip_count == 0 {
+    // `UnrollLoop`: a count that reaches the max trip count unrolls the loop
+    // whole, and "there's no point in performing runtime unrolling" then
+    // ([LoopUnroll.cpp#L1019-L1026](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L1019-L1026)).
+    let completely = max_trip_count != 0 && count >= max_trip_count;
+    if run.options.target_unrolling && trip_count == 0 && !completely {
         if trip_multiple % count != 0 {
             // `EpilogProfitability` (LoopUnroll.cpp#L1058): the epilog only
             // where a header phi starts at an integer constant.

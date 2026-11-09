@@ -95,6 +95,11 @@ impl Machine for WasmMachine {
         OperationCosts { load: 3, store: 3, float_load: 3, float_store: 3, branch: 2, call: 6, ..self.costs() }
     }
 
+    /// The wasm triple's default thread model is `Single`.
+    fn single_threaded(&self) -> bool {
+        true
+    }
+
     fn registers(&self) -> i64 {
         REGISTERS
     }
@@ -150,6 +155,12 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
@@ -166,7 +177,17 @@ impl Tti for Wasm {
     /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
     /// The pin's `OptSizeThreshold` 50 allows the growth.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
+    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245), none above.
+    /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
+    /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
+    /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
+    fn inline_trial_groups_sites(&self) -> bool {
         true
     }
 
@@ -339,12 +360,23 @@ impl Tti for Wasm {
         from: Ty,
         _kind: CostKind,
     ) -> Option<Cost> {
-        let legal = matches!(op, CastKind::SExt | CastKind::ZExt)
+        self.ext_load_free(op, to, from).then_some(Cost::FREE)
+    }
+
+    /// The same fact for the inline cost (`visitCastInst` asks the target for
+    /// the `sext` of a load): without it `report(text[0])` cost 10 where the
+    /// pin's 5.
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        to: Ty,
+        from: Ty,
+    ) -> bool {
+        matches!(op, CastKind::SExt | CastKind::ZExt)
             && matches!(
                 (from, to),
                 (Ty::Int(8 | 16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
-            );
-        legal.then_some(Cost::FREE)
+            )
     }
 
     /// `BasicTTIImplBase::getArithmeticInstrCost` answers only the throughput
@@ -399,6 +431,13 @@ impl Tti for Wasm {
 mod tests {
     use super::*;
 
+    /// DEVIATE LFTR1: the pin's step-one rule cost wasm bytes in
+    /// byte_multiply and variadic; the knob must stay on here.
+    #[test]
+    fn lftr_counts_any_constant_stride() {
+        assert!(Wasm.lftr_any_stride());
+    }
+
     /// A `zext` of a loaded byte cost one unit, where the pin prices it at none
     /// (`i32.load8_u` is legal): crc's rolled loop read 387 against the pin's
     /// 378, which with a shift merged early tipped `-O3` into unrolling it.
@@ -409,6 +448,18 @@ mod tests {
         assert_eq!(cost(CastKind::SExt, Ty::Int(64), Ty::Int(32)), Some(Cost::FREE));
         assert_eq!(cost(CastKind::ZExt, Ty::Int(32), Ty::Int(1)), None);
         assert_eq!(cost(CastKind::Trunc, Ty::Int(8), Ty::Int(32)), None);
+    }
+
+    /// The inliner asks `ext_load_free`, not `cast_of_load_cost`: `message`
+    /// (`report(text[0])`, a `sext i8` of a load) cost 10 against the pin's 5
+    /// (switch_header_marker_loop -Os). Cost only: the SZ1 bound still holds
+    /// that inline.
+    #[test]
+    fn the_inliner_sees_the_free_extension_of_a_load() {
+        assert!(Wasm.ext_load_free(CastKind::SExt, Ty::Int(32), Ty::Int(8)));
+        assert!(Wasm.ext_load_free(CastKind::ZExt, Ty::Int(64), Ty::Int(32)));
+        assert!(!Wasm.ext_load_free(CastKind::ZExt, Ty::Int(32), Ty::Int(1)));
+        assert!(!Wasm.ext_load_free(CastKind::Trunc, Ty::Int(8), Ty::Int(32)));
     }
 
     /// `llvm.fmuladd` had no price, so a loop that held one could not be

@@ -9,8 +9,8 @@ use std::process::Command;
 /// and long_double_arguments in tests/run/c were refused at `-O2`.
 #[test]
 fn a_double_result_is_returned_through_a_hidden_pointer() {
-    let dir = std::env::temp_dir().join("llrm-double-return-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,

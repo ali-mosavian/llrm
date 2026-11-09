@@ -20,6 +20,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from virtual_ok import virtual_ok  # noqa: E402
 
 RATES = re.compile(r"byte_rate: (.*?) B per clk")
+TIMINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates", "target", "llrm-m68k", "src", "timings.times")
+
+
+def committed_rates(path: str = TIMINGS) -> dict[str, float]:
+    """Bytes per clock saved of each CPU, from the committed table (`cache_line` over `line_fill_clocks`)."""
+    rows: dict[str, list[str]] = {}
+    for line in open(path):
+        words = line.split()
+        if words and words[0] in ("march", "cache_line", "line_fill_clocks"):
+            rows[words[0]] = words[1:]
+    return {"68" + cpu[-3:]: int(line) / int(fill) for cpu, line, fill in zip(rows["march"], rows["cache_line"], rows["line_fill_clocks"])}
+
+
+def rate_text(path: str = TIMINGS) -> str:
+    """The `byte_rate:` text of a table header, read from the committed `timings.times`, never typed: `68000/010 0.5, 68020 1.33, 030/040/060
+    3.2`. Every table writer prints this, and `rates` reads it back."""
+    groups: list[tuple[list[str], float]] = []
+    for cpu, value in committed_rates(path).items():
+        value = round(value, 2)
+        if groups and groups[-1][1] == value:
+            groups[-1][0].append(cpu)
+        else:
+            groups.append(([cpu], value))
+    return ", ".join("/".join([names[0], *(name[2:] for name in names[1:])]) + f" {value:g}" for names, value in groups)
 
 
 def rates(header: str) -> dict[str, float]:
@@ -31,6 +55,11 @@ def rates(header: str) -> dict[str, float]:
         names, value = part.split()
         for name in names.split("/"):
             table[name if name.startswith("68") else "68" + name] = float(value)
+    # a header that states a rate other than the committed one flips every O2/O3 verdict (11-09: a flat "2 B per clk" read 68000 partition O2 as +82 B, +25 B at the committed 0.5)
+    committed = committed_rates()
+    wrong = {cpu: (value, committed[cpu]) for cpu, value in table.items() if cpu in committed and abs(value - committed[cpu]) > 0.01 * committed[cpu]}
+    if wrong:
+        raise SystemExit(f"byte_rate in the header differs from timings.times (stated, committed): {wrong}")
     return table
 
 

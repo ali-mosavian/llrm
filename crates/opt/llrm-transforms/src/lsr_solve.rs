@@ -300,8 +300,11 @@ impl Collection<'_, '_> {
         let spills = solution_cost.c.num_regs > budget
             && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
+        // DEVIATE LU15: a loop with an address keeps the solution that
+        // reduces it, where the target says so.
+        let spared = self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
         if self.baseline_cost.is_less(self.tti, &solution_cost)
-            && (self.tti.should_drop_lsr_solution_if_less_profitable()
+            && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
                 || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();

@@ -1074,6 +1074,72 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
+/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; the pin's llc
+/// writes `rep movsb` at `minsize`, gcc -Os inlines it too (memory_expansion
+/// 23405 B against 22295 and 22749): +1110 B, half of the 88 cells worse than
+/// the pin at the same rules. DEVIATE REP-MOVS-OS.
+#[test]
+fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+                define void @f(ptr align 1 %d, ptr align 1 %s) optsize {\n\
+                \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 700, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
+}
+
+/// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
+/// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
+/// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.
+#[test]
+fn a_small_immediate_at_m32_os_is_push_pop() {
+    let text = |attrs: &str, value: i32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f() {attrs} {{\n  ret i32 {value}\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str, value: i32| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs, value), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize", 40);
+    assert!(at_os.contains("pushd 40") && at_os.contains("pop eax"), "{at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize", 40);
+    assert!(marked.contains("pushd 40") && marked.contains("pop eax"), "{marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "", 40);
+    assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
+    let wide = listing(&["-mabi=sysv", "-Os"], "optsize", 4000);
+    assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
+}
+
+/// A signed divide by 1024 is `idiv` at m32 -Os and -Oz (a `minsize` function too), the
+/// `sar; shr; add; sar` sequence at -O2: 4 Os cells -131 B (jpeg_fixed -45). The pin keeps the
+/// `idiv` at minsize only (`isIntDivCheap`); -Os is a DEVIATION. DEVIATE SDIV-POW2-OS.
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
+    let text = |attrs: &str| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f(i32 %x) {attrs} {{\n  %q = sdiv i32 %x, 1024\n  ret i32 %q\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize");
+    assert!(at_os.contains("idiv"), "-Os: {at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize");
+    assert!(marked.contains("idiv"), "minsize function: {marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "");
+    assert!(!at_speed.contains("idiv") && at_speed.contains("sar"), "-O2: {at_speed}");
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.
@@ -2517,14 +2583,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// Real mode cannot realign the stack: an over-aligned local is clamped to the
-/// stack alignment (#7706), not refused, and no `and sp` is emitted.
+/// Real mode cannot realign the stack: a local aligned past 32 is refused by name
+/// (#8570), not clamped (#7706); the refusal is the only guard against a wrong
+/// promised alignment, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_clamped_not_refused() {
+fn m16_over_aligned_local_is_refused_by_name() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("and sp,"), "{listing}");
+    let why = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().expect("refused");
+    assert!(why.to_string().contains("an object aligned to 64 needs stack realignment"), "{why}");
 }
 
 /// jwlink turns a far call to the same segment into `push cs; call near` plus
@@ -2631,8 +2697,10 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
-/// it): `lea rdi, [rsp]` is a byte shorter than `[rsp+8]`, so 33 bytes.
+/// add rsp, 32; pop rbx; ret`, but for the local's address: the pin's llc puts
+/// the local at `[rsp+8]` (`lea rdi, [rsp+8]`, 5 bytes, FDE 34 long); ours at
+/// `[rsp]` (FR1, the call pad above it), and the pin's `tryOptimizeLEAtoMOV`
+/// makes that `mov rdi, rsp` (3 bytes, #8601), so 32.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
@@ -2643,7 +2711,7 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     assert_eq!(
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c07089001000\
-             01c0000001c000000000000002100000000410e10440e3083025a0e10410e0800")
+             01c0000001c000000000000002000000000410e10440e308302590e10410e0800")
     );
 }
 

@@ -182,22 +182,12 @@ pub fn folded(body: &LirBody) -> LirBody {
                 }
             }
             new.succ = succ.into();
+            // a branching block can also be the join of another folded leaf
+            new.phis = retargeted(old, &chosen);
             blocks.push(new.into());
         } else if old.phis.iter().any(|phi| phi.incoming.iter().any(|(from, _)| chosen.contains_key(from))) {
             let mut new = LirBlock::clone(old);
-            new.phis = old
-                .phis
-                .iter()
-                .map(|phi| Phi {
-                    result: phi.result,
-                    incoming: phi
-                        .incoming
-                        .iter()
-                        .map(|&(from, value)| (chosen.get(&from).map_or(from, |one| one.0), value))
-                        .collect(),
-                })
-                .collect::<Vec<_>>()
-                .into();
+            new.phis = retargeted(old, &chosen);
             blocks.push(new.into());
         } else {
             blocks.push(old.clone());
@@ -211,6 +201,27 @@ pub fn folded(body: &LirBody) -> LirBody {
         made.odds.taken.retain(|(one, _), _| one != leaf);
     }
     made
+}
+
+/// `block`'s phis with each incoming edge from a folded leaf read from the
+/// branching block that took its place.
+fn retargeted(
+    block: &LirBlock,
+    chosen: &IndexMap<i64, (i64, i64, u32, Semantics)>,
+) -> crate::model::lir::Shared<Phi> {
+    block
+        .phis
+        .iter()
+        .map(|phi| Phi {
+            result: phi.result,
+            incoming: phi
+                .incoming
+                .iter()
+                .map(|&(from, value)| (chosen.get(&from).map_or(from, |one| one.0), value))
+                .collect(),
+        })
+        .collect::<Vec<_>>()
+        .into()
 }
 
 #[cfg(test)]
@@ -341,5 +352,49 @@ mod tests {
         blocks[2] = extra.into();
         body = body.with_blocks(blocks);
         assert!(at(&folded(&body), 1).is_some());
+    }
+
+    /// A block that branches to one leaf and is the join of another keeps its
+    /// phis' predecessors true. The first fold left the join's phi reading from
+    /// the folded-away leaf: -Oz panicked in `machinesink.rs:575` on
+    /// bench/nbody_fixed and stft_fixed (a phi's `from` not in the body).
+    #[test]
+    fn test_a_block_that_is_a_branching_block_and_a_join_keeps_its_phis_predecessors() {
+        let middle = LirBlock {
+            phis: vec![Phi { result: 9, incoming: vec![(1, 11), (2, 12)] }].into(),
+            ..block(5, vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(6)), of("jmp", Operation::Jump, Some(8))], &[6, 8])
+        };
+        let last = LirBlock {
+            phis: vec![Phi { result: 15, incoming: vec![(6, 14), (8, 9)] }].into(),
+            ..block(7, vec![of("ret", Operation::Return, None)], &[])
+        };
+        let body = LirBody::new(
+            "t",
+            0,
+            [
+                block(0, vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(1)), of("jmp", Operation::Jump, Some(2))], &[1, 2]),
+                block(1, vec![make(11, 3), of("jmp", Operation::Jump, Some(5))], &[5]),
+                block(2, vec![make(12, 4), of("jmp", Operation::Jump, Some(5))], &[5]),
+                middle,
+                block(6, vec![make(14, 8), of("jmp", Operation::Jump, Some(7))], &[7]),
+                block(8, vec![of("jmp", Operation::Jump, Some(7))], &[7]),
+                last,
+            ]
+            .into_iter()
+            .map(Block::from)
+            .collect(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let done = folded(&body);
+        assert!(at(&done, 1).is_none() && at(&done, 6).is_none(), "both leaves fold");
+        for join in &done.blocks {
+            for phi in join.phis.iter() {
+                for (from, _) in &phi.incoming {
+                    let pred = at(&done, *from).unwrap_or_else(|| panic!("phi of {} reads from the gone block {from}", join.at));
+                    assert!(pred.succ.contains(&join.at), "{from} is no predecessor of {}", join.at);
+                }
+            }
+        }
     }
 }

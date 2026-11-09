@@ -131,8 +131,27 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "z80"
+    }
+
+    /// DEVIATE z80-lsr-drop (owner z80, exit 2026-12-15): a loop without an
+    /// address keeps its code where LSR's own model rates the rewrite worse
+    /// (`shouldDropLSRSolutionIfLessProfitable`, off in the pin's targets
+    /// but the m16 X86). switch_empty_cases -Os/-O1: a count-down counter and
+    /// the accumulator's old value for the exit took a frame (74 B, now 37 B).
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        true
+    }
+
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        true
     }
 
     /// `long i < 12` compares four bytes a test where a byte would do (`narrowiv`;
