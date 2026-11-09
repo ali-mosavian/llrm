@@ -269,8 +269,7 @@ pub fn items_with(
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: sext_adds {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {}",
-            touched.sext_adds,
+            "[builds] {name} trials: return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {}",
             touched.return_dup,
             touched.class_split,
             touched.compare_destinations,
@@ -287,14 +286,6 @@ pub fn items_with(
             .and_then(|id| module.global(id).function())
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     let price = crate::timing::Price::of(wants_size, options.strict);
-    if touched.sext_adds {
-        let without = Options { sext_adds: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
-        if !crate::trial::keeps(&kept, &plain, cpu, price) {
-            kept = plain;
-            options = without;
-        }
-    }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -357,7 +348,6 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
-    sext_adds: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -372,12 +362,7 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds
-            || self.return_dup
-            || self.class_split
-            || self.compare_destinations
-            || self.carry_chain
-            || self.global_copies
+        self.return_dup || self.class_split || self.compare_destinations || self.carry_chain || self.global_copies
     }
 }
 
@@ -472,12 +457,14 @@ fn items_once(
         if options.compare_destinations {
             touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
         }
+        // priced inside the pass (`Price`), so a function it changed is not
+        // built again
         if options.sext_adds {
-            touched.sext_adds = crate::sextacc::sign_extended_words(
+            crate::sextacc::sign_extended_words(
                 &mut function,
                 cpu,
                 crate::timing::Price::of(wants_size, options.strict),
-            ) > 0;
+            );
         }
         if options.class_split {
             touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
