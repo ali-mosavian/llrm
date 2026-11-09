@@ -670,7 +670,11 @@ thread_local! {
 /// signed shift. The choice is by bytes, so it holds for every shape of
 /// shift, not one multiplier. Owner 6502, exit 2026-11-15: price the in-`a`
 /// run at emission, where the copy and the reload are known, and drop the
-/// pass.
+/// pass. The exit also recovers the whole-function form this region form
+/// gives up (Os: `call_keeps` -11 B vs -8, `overflow_builtins` -18 vs -3,
+/// `div_constants_short` -21 and `sat_builtins` -18 vs 0, `loop_interchange`
+/// -6 vs -4): that needs liveness across blocks, which emission-time pricing
+/// has and a region does not.
 pub fn shift_loop_in_a(asm: &mut Asm) {
     let mut at = 0;
     let mut references = std::collections::HashMap::<String, usize>::new();
