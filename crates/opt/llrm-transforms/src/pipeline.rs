@@ -250,7 +250,6 @@ pub struct Options {
     /// (`OnlyWhenForced`). -Os keeps it on: the unroller's own size threshold
     /// of 0 stops the copies.
     pub loop_unrolling: bool,
-    pub peel: bool,
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
@@ -284,9 +283,7 @@ pub struct Options {
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
-    /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a
-    /// complete copy of a loop may grow the code is `limits.grows`, which
-    /// gcc lets only -O3 do.)
+    /// Code size outranks speed where they conflict: -Os and -Oz.
     pub for_size: bool,
     /// The target's price of a code byte at speed counts
     /// (`Tti::speed_milliclocks_per_byte`): -O2 and -O3. -O1 and -Os gate
@@ -296,8 +293,6 @@ pub struct Options {
     /// header
     /// ([LoopRotation.cpp#L80](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopRotation.cpp#L80)).
     pub has_min_size: bool,
-    /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
-    pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
     /// (`-fallocation-search`; -Omax: gcc and LLVM allocate once).
     pub search: bool,
@@ -340,7 +335,6 @@ impl Default for Options {
             unroll: true,
             second_inline: false,
             loop_unrolling: true,
-            peel: true,
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
@@ -354,7 +348,6 @@ impl Default for Options {
             for_size: false,
             speed_rate: true,
             has_min_size: false,
-            expensive: true,
             switch_conversion: true,
             jump_tables: true,
             lower_switches: true,
@@ -377,42 +370,32 @@ impl Options {
     /// inliner (`getInlineParamsFromOptLevel`: 225 as -O2,
     /// PassBuilderPipelines.cpp L968), no allocation search or second route
     /// (compile -34% on d_faces), value numbering that inserts nothing, and
-    /// no sibling calls, peeling or unswitching. Pattern fill is
+    /// no sibling calls or unswitching. Pattern fill is
     /// on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
     /// PassBuilderPipelines.cpp L562), the user's decision of 2026-10-10
     /// (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
-            limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::default(),
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             pre: false,
-            peel: false,
             loop_unrolling: false,
             unswitch: false,
-            expensive: false,
             switch_conversion: false,
             speed_rate: false,
             ..Self::default()
         }
     }
 
-    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a
-    /// complete copy of a loop still must not grow the code
-    /// (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and
-    /// `-fpeel-loops` only).
+    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill.
+    /// Same as [`Options::default`]: whether a complete copy may grow the code
+    /// is the unroller's own size threshold, not an option here.
     pub fn standard() -> Self {
-        Self {
-            limits: Limits { grows: false, ..Self::default().limits },
-            peel: false,
-            unswitch: false,
-            ..Self::default()
-        }
+        Self::default()
     }
 
-    /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
-    /// code, and the larger inline threshold; the copy budget is LLVM's -O3
+    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the copy budget is LLVM's -O3
     /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
     /// clones: the pin makes none, and they grew recchop 1541 lines against
     /// 171.
@@ -426,13 +409,11 @@ impl Options {
         }
     }
 
-    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the
-    /// target's unroll budget, loops of up to 64 trips copied out completely
-    /// (gcc's `max-completely-peel-times` is 16; clang has no cap) and a 250
+    /// -Omax: every pass the default has on, LLVM's -O3 budgets and a 250
     /// inline threshold.
     pub fn aggressive() -> Self {
         Self {
-            limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
+            limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
             unroll_and_jam: true,
@@ -447,7 +428,7 @@ impl Options {
     /// `inlinehint`, as the pin holds it (audit row 3: mirrored).
     pub fn size() -> Self {
         Self {
-            limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
+            limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default().for_size(),
             for_size: true,
             ..Self::default()
@@ -485,7 +466,6 @@ impl Options {
     pub fn min_size() -> Self {
         Self {
             unroll: false,
-            peel: false,
             has_min_size: true,
             inline: inline::Threshold::default().for_min_size(),
             ..Self::size()
@@ -517,7 +497,6 @@ impl Options {
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
-            "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
@@ -1367,12 +1346,59 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
     Ok(())
 }
 
+/// An `alloca` asking more than the target's frames keep and no more than it
+/// accepts (`Machine::kept_stack_align`, `max_alloca_align`) is clamped to what
+/// they keep; one asking more than it accepts is refused by name. Alignment is
+/// the explicit one, else the type's, as known-bits reads it.
+pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
+    let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
+    if kept.is_none() && max.is_none() {
+        return Ok(());
+    }
+    // The passes that raise an alloca's alignment stop at the datalayout's
+    // stack alignment (`tryEnforceAlignment`); no frame here keeps more.
+    if let Some(kept) = kept {
+        let held = program.layout.stack_align;
+        program.layout.stack_align = Some(held.map_or(kept, |held| held.min(kept)));
+    }
+    let layout = program.layout.clone();
+    for module in &mut program.modules {
+        let names: Vec<String> = module
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration())
+            .filter_map(|(_, global, _)| global.name.as_deref().map(str::to_owned))
+            .collect();
+        for name in names {
+            let (context, function) = module.function_mut(&name).expect("a defined function");
+            for block in function.layout().to_vec() {
+                for inst in function.iter_block(block).collect::<Vec<_>>() {
+                    let llrm_mir::opcode::Opcode::Alloca { allocated, align, .. } = function.instruction(inst).opcode
+                    else {
+                        continue;
+                    };
+                    let wanted = align.unwrap_or_else(|| layout.align(&context.types, allocated));
+                    if let Some(max) = max.filter(|max| wanted > *max) {
+                        return Err(format!(
+                            "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"
+                        ));
+                    }
+                    if let Some(kept) = kept.filter(|kept| wanted > *kept) {
+                        function.set_alloca_align(inst, kept);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
     refuse_vectors(program)?;
+    constrain_allocas(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();

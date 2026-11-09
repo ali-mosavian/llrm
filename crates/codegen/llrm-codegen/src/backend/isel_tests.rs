@@ -3388,6 +3388,8 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 /// A float's bits are an integer's through a stack temporary (SROA turns a
 /// double stored and read as an i32 into `bitcast double to i64`; isel refused
 /// "BitCast to an i64" and "BitCast of a float", 48 of 260 QCport compiles).
+/// Where a register is free the copy into the temporary is dword moves
+/// (`floatslotcopy`), the same bits without the x87 round trip.
 #[test]
 fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
     let text = |from: &str, to: &str| {
@@ -3396,9 +3398,12 @@ fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
         ))
     };
     let single = text("float", "i32");
-    assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
+    let stored = |lines: &[String], x87: &str| {
+        lines.iter().any(|line| line.starts_with(x87) || line.starts_with("mov dword ptr [bp-"))
+    };
+    assert!(stored(&single, "fstp dword ptr [bp-"), "{single:?}");
     let double = text("double", "i64");
-    assert!(double.iter().any(|line| line.starts_with("fstp qword ptr [bp-")), "{double:?}");
+    assert!(stored(&double, "fstp qword ptr [bp-"), "{double:?}");
     let back = text("i32", "float");
     assert!(back.iter().any(|line| line.starts_with("fld dword ptr [bp-")), "{back:?}");
     let back = text("i64", "double");

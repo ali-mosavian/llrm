@@ -760,8 +760,10 @@ pub fn link_command(
     Ok(command)
 }
 
-/// The error for a clang whose datalayout differs from the table's. A row with a `clang_env` takes the fork's clang from that variable, and
-/// falls back to the pin's, which has no 16-bit layout: the message names the variable when it is unset.
+/// The error for a clang whose datalayout differs from the table's. A row with
+/// a `clang_env` takes the fork's clang from that variable, and falls back to
+/// the pin's, which has no 16-bit layout: the message names the variable when
+/// it is unset.
 fn layout_mismatch(
     path: &str,
     printed: &str,
@@ -867,6 +869,28 @@ fn unresolved(target: &Target) -> Option<String> {
         .then(|| missing_ow(&cache_dir()).trim_start_matches("llrm-cc: ").to_owned())
 }
 
+/// Clang's resource dir is `<prefix>/lib/clang/<version>` for the binary at
+/// `<prefix>/bin/clang`; `spawn` (`clang -print-resource-dir`, a process per
+/// compile) runs only when that layout is absent or ambiguous.
+fn resource_include(
+    clang: &Path,
+    spawn: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let derived = || {
+        let prefix = clang.canonicalize().ok()?.parent()?.parent()?.to_owned();
+        let mut versions = std::fs::read_dir(prefix.join("lib/clang"))
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.join("include").is_dir());
+        match (versions.next(), versions.next()) {
+            (Some(only), None) => Some(only),
+            _ => None,
+        }
+    };
+    derived().or_else(spawn)
+}
+
 fn build(
     target: &Target,
     build: &Build,
@@ -886,13 +910,16 @@ fn build(
     // `-nostdinc` drops clang's own freestanding headers (`stdint.h`,
     // `stdarg.h`); they go back after the target's.
     let resource: Vec<String> = if target.clang.iter().any(|word| word == "-nostdinc") {
-        Command::new(&clang)
-            .arg("-print-resource-dir")
-            .output()
-            .ok()
-            .and_then(|out| String::from_utf8(out.stdout).ok())
-            .map(|dir| vec!["-idirafter".to_owned(), format!("{}/include", dir.trim())])
-            .unwrap_or_default()
+        resource_include(&clang, || {
+            Command::new(&clang)
+                .arg("-print-resource-dir")
+                .output()
+                .ok()
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .map(|dir| PathBuf::from(dir.trim()))
+        })
+        .map(|dir| vec!["-idirafter".to_owned(), format!("{}/include", dir.display())])
+        .unwrap_or_default()
     } else {
         Vec::new()
     };

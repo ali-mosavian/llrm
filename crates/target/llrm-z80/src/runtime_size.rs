@@ -34,6 +34,18 @@ fn target(text: &str) -> Option<&str> {
     rest.rsplit(',').next().map(str::trim)
 }
 
+/// `__mulsi3`'s clocks, the call instruction through the return, measured in ucsim by `runtime/clocks.py`: the
+/// routine shifts the multiplier right once per pass until it is spent and adds on each set bit, so the multiplicand
+/// does not matter. A product by 100 (7 bits, 3 set) is 1094.
+const MULSI3_BASE: u32 = 167;
+const MULSI3_PASS: u32 = 120;
+const MULSI3_ADD: u32 = 29;
+
+/// The clocks of `call __mulsi3` whose multiplier is `multiplier`; the loop runs once for a zero multiplier.
+pub fn mulsi3_clocks(multiplier: u32) -> u32 {
+    MULSI3_BASE + MULSI3_PASS * (u32::BITS - multiplier.leading_zeros()).max(1) + MULSI3_ADD * multiplier.count_ones()
+}
+
 /// The bytes of routine `name` alone, if the runtime has it.
 pub fn own_bytes(name: &str) -> Option<u32> {
     TABLE.get(name).map(|routine| routine.bytes)
@@ -68,6 +80,30 @@ pub fn reached(names: &HashSet<String>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clocks measured in ucsim (runtime/clocks.py): 0 -> 287, 1 -> 316, 100 -> 1094, 0xFFFF -> 2551, 0xFFFFFFFF -> 4935.
+    #[test]
+    fn the_long_multiply_clocks_follow_the_multiplier() {
+        assert_eq!(
+            [0, 1, 100, 0xFFFF, 0xFFFF_FFFF].map(mulsi3_clocks),
+            [287, 316, 1094, 2551, 4935]
+        );
+    }
+
+    /// `runtime/clocks.py` measures the routine again and compares the constants above.
+    #[test]
+    fn the_clock_model_is_the_measured_runtime() {
+        let done = std::process::Command::new("python3")
+            .args([concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/clocks.py"), "--check"])
+            .output();
+        if let Ok(done) = done {
+            let stderr = String::from_utf8_lossy(&done.stderr).into_owned();
+            // no sdasz80 or ucsim on the machine: the check cannot run
+            if !stderr.contains("sdasz80") && !stderr.contains("ucsim") {
+                assert!(done.status.success(), "{stderr}");
+            }
+        }
+    }
 
     /// `__mulsi3` assembles to 57 B (sdasz80 listing of `runtime/z80_rt.s`).
     #[test]
