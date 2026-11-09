@@ -143,13 +143,18 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("line_fill_clocks", "set by the CPU table"),
 ];
 
-/// What the lowering adds that no IR operation names (spills, branch relaxation, copies the allocator leaves): the
-/// median over `tests/run/c` of the object function's bytes against this table's estimate was 1.46 at the 68000 and
-/// 1.50 at the 68020 (train split by symbol hash; hold-out median |error| 0.31 and 0.35 against 0.38 and 0.41 at 1.0,
-/// aggregate 0.92 and 0.89 of the objects). The aggregate alone would say 1.7 to 1.8; the many small functions the
-/// decisions are about set the median. Re-measured 2026-11-09 (`tools/m68k_size_fit.py --corpus`, 1962 functions of
-/// tests/run/c, -O2 and -Os): the median is 1.500 at both CPUs, hold-out median |error| 0.17 and 0.15 against 0.33 at 1.0.
-const FUNCTION_SCALE_PERCENT: i64 = 150;
+/// What the lowering adds that no IR operation names (spills, branch relaxation, copies the allocator leaves), as a
+/// scale and a per-function constant: `(operations + function) * scale`, fit to the objects' function sizes over
+/// `tests/run/c` (`tools/m68k_size_fit.py --corpus --dump`, 1950 functions per CPU, -O2 and -Os, 2026-11-09). One median
+/// scale of 1.50 priced small functions right and large ones 30% over (aggregate 1.30 of the objects): the residue is
+/// a constant plus a share of the size, not a share alone. Fit on the train split (crc32 of `file:function`), the same
+/// pair at both CPUs: hold-out median |error| 0.12 at the 68000 and 0.13 at the 68020 against 0.17 and 0.16 at 1.50;
+/// aggregate 0.97 to 1.11 of the objects.
+const FUNCTION_SCALE_PERCENT: i64 = 120;
+
+/// Bytes added to every function's estimate beyond the saved register (see `FUNCTION_SCALE_PERCENT`): the frame and
+/// returns the lowering emits that no operation names.
+pub const FUNCTION_RESIDUE_BYTES: i64 = 3;
 
 /// The bytes of an `i64` product and of the product of two `i32`s into an `i64`, the whole sequence: the object of
 /// `long long f(long long a, long long b) { return a * b; }` and of `(long long)a * b` at -Os (2026-11-09: 152 and 178
@@ -199,7 +204,7 @@ pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
             "float_to_int" => costs.float_to_int = size,
             "float_load" => costs.float_load = size,
             "float_store" => costs.float_store = size,
-            "function" => costs.function = size,
+            "function" => costs.function = size + FUNCTION_RESIDUE_BYTES,
             other => return Err(format!("no field for {other}")),
         }
     }

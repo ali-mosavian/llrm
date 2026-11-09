@@ -20,13 +20,26 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::target::Machine;
 use llrm_transforms::walk::function_bytes;
 
+/// The table alone: the instruction sizes, without the residue (`function_scale` and `FUNCTION_RESIDUE_BYTES`).
+fn table_costs(cpu: Cpu) -> llrm_mir::target::OperationCosts {
+    let mut costs = M68kMachine { cpu }.size_costs();
+    (costs.function_scale, costs.function) = (100, costs.function - llrm_m68k::opcosts::FUNCTION_RESIDUE_BYTES);
+    costs
+}
+
 fn estimate_over(
     module: &llrm_mir::module::Module,
     cpu: Cpu,
 ) -> i64 {
+    estimate_with(module, &M68kMachine { cpu }.size_costs())
+}
+
+fn estimate_with(
+    module: &llrm_mir::module::Module,
+    costs: &llrm_mir::target::OperationCosts,
+) -> i64 {
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-    let costs = M68kMachine { cpu }.size_costs();
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(module, &layout, &costs, function)).sum()
+    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(module, &layout, costs, function)).sum()
 }
 
 /// The size of the `.text` section of a big-endian ELF32 object.
@@ -59,17 +72,13 @@ fn the_estimate_brackets_the_leaf_kernels_at_both_cpus_and_levels() {
                 let Ok(module) = llrm_mir::parse::module(&text) else { continue };
                 let Ok(module) = llrm_m68k::compile::mid_end_for(&module, cpu) else { continue };
                 let Ok(object) = driver::object_in(&text, driver::cpu_of(cpu_name).unwrap(), Level::parse(level).unwrap(), name, CodeModel::Small) else { continue };
-                let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-                let costs = M68kMachine { cpu }.size_costs();
-                estimate += module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(&module, &layout, &costs, function)).sum::<i64>();
+                estimate += estimate_with(&module, &table_costs(cpu));
                 actual += text_bytes(&object) as i64;
             }
-            // The table alone: the estimate with the residue scale taken off again.
-            let scale = M68kMachine { cpu }.size_costs().function_scale as f64 / 100.0;
-            let ratio = estimate as f64 / scale / actual as f64;
+            let ratio = estimate as f64 / actual as f64;
             assert!(actual > 0, "{cpu_name} -O{level}: no kernel compiled");
             if !(0.75..=1.1).contains(&ratio) {
-                failures.push(format!("{cpu_name} -O{level}: estimate {estimate} B (scale {scale}) against objects {actual} B ({ratio:.2} unscaled)"));
+                failures.push(format!("{cpu_name} -O{level}: table {estimate} B against objects {actual} B ({ratio:.2})"));
             }
         }
     }
@@ -78,7 +87,7 @@ fn the_estimate_brackets_the_leaf_kernels_at_both_cpus_and_levels() {
 
 /// The aggregate estimate over the objects of the 22 fixtures, both levels and CPUs. Measured 2026-11-09 with the free
 /// intrinsics: 0.98 to 1.00 at the 68000, 1.11 to 1.17 at the 68020 (the 68020 backend is smaller than its table since the
-/// widening multiply, bitfield and addressing-mode rows; the corpus median still reproduces `function_scale`, 1.50).
+/// widening multiply, bitfield and addressing-mode rows). `function_scale` 1.20 and 3 B a function: `tools/m68k_size_fit.py --corpus`.
 const BAND: std::ops::RangeInclusive<f64> = 0.8..=1.25;
 
 /// One fixture's estimate and object bytes.
@@ -204,11 +213,11 @@ fn wide_products_are_priced_at_what_each_cpu_makes_of_them() {
         for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
             let module = llrm_mir::parse::module(text).unwrap();
             let object = driver::object_in(text, driver::cpu_of(cpu_name).unwrap(), Level::parse("s").unwrap(), name, CodeModel::Small).unwrap();
-            let (estimate, actual) = (estimate_over(&module, cpu), text_bytes(&object) as i64);
-            // The table alone, as the leaf-kernel test: the residue scale is for the population, not one function.
-            let ratio = estimate as f64 / (M68kMachine { cpu }.size_costs().function_scale as f64 / 100.0) / actual as f64;
-            assert!((0.75..=1.4).contains(&ratio), "{name} at the {cpu_name}: table {estimate} B scaled, object {actual} B ({ratio:.2} unscaled)");
-            estimates.push(estimate);
+            let (table, actual) = (estimate_with(&module, &table_costs(cpu)), text_bytes(&object) as i64);
+            // The table alone, as the leaf-kernel test: the residue is for the population, not one function.
+            let ratio = table as f64 / actual as f64;
+            assert!((0.75..=1.4).contains(&ratio), "{name} at the {cpu_name}: table {table} B, object {actual} B ({ratio:.2})");
+            estimates.push(estimate_over(&module, cpu));
         }
         assert!(estimates[0] > estimates[1], "{name}: the 68000 makes more of a product than the 68020 ({estimates:?})");
     }
