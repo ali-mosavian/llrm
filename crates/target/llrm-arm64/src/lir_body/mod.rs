@@ -35,7 +35,7 @@ use llrm_spike_mf::mfunc::Reg as MfReg;
 
 use crate::lir_view::{from_lir as machine_register, to_lir as lir_register};
 use crate::mc::inst::{Gpr, Inst, MemOperand, Shift, Target, Vreg, Width};
-use crate::mc::visit::Reg;
+use crate::mc::visit::{Reg, RegList};
 use crate::mfunc::{MBlock, MFunc, Op, successors_of};
 
 /// An operation the producer has no mapping for yet: its variant.
@@ -497,7 +497,7 @@ fn effects(
     facts: &crate::facts::Facts,
 ) -> (Lanes, Lanes) {
     let registers = Regs(&crate::REGISTER_INFO);
-    let lanes = |list: Vec<Reg>| {
+    let lanes = |list: RegList| {
         list.into_iter()
             .filter_map(|register| match lir_register(register) {
                 // The zero register is no lane: nothing writes it.
@@ -763,7 +763,7 @@ pub fn checked_operations() -> u64 {
 /// operation itself: the oracle for the body's `defines` and `uses`.
 fn oracle(op: &Op) -> (Vec<u32>, Vec<u32>) {
     let (defs, uses) = op.defs_and_uses();
-    let values = |list: Vec<Reg>| {
+    let values = |list: RegList| {
         let mut out: Vec<u32> = list
             .into_iter()
             .filter(|register| register.is_virtual())
