@@ -401,6 +401,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with `getMinimumJumpTableDensity` stated at every level.
+    pub fn with_min_jump_table_density(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.min_jump_table_density = percent;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,
