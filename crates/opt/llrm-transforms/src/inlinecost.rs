@@ -279,6 +279,8 @@ pub struct Site<'a> {
     pub callee_dies: bool,
     /// The caller calls itself (`IsCallerRecursive`).
     pub caller_recursive: bool,
+    /// The callee calls itself from exactly one place (`inline::linear_recursive`).
+    pub callee_linear_recursive: bool,
     pub caller_size: CallerSize,
     /// The site's block frequency over the caller's entry block's (D1).
     pub relative_frequency: Option<f64>,
@@ -2160,7 +2162,7 @@ impl<'a> Analyzer<'a> {
         self.params.allow_recursive_call
             && self.site.tti.is_some_and(|tti| tti.peels_linear_recursion())
             && self.site.caller_id != self.site.callee_id
-            && self_call_sites(&self.site.module.context, self.callee, self.site.callee_id) == 1
+            && self.site.callee_linear_recursive
     }
 
     /// Whether inlining leaves the module's code bigger. A callee that stays
@@ -2712,6 +2714,8 @@ pub fn shadow(
                     callee_calls: counts.get(&callee_id).copied().unwrap_or(0),
                     callee_dies: local_linkage(callee_global.linkage) && !addressed.contains(&callee_id),
                     caller_recursive,
+                    // No target in the shadow: nothing peels.
+                    callee_linear_recursive: false,
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
                     entry_weight: None,
@@ -3041,6 +3045,7 @@ pub fn sites(
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    linear_recursive: &BTreeSet<GlobalId>,
     params: InlineParams,
     size: CallerSize,
     always_only: bool,
@@ -3054,6 +3059,7 @@ pub fn sites(
         counts,
         addressed,
         recursive,
+        linear_recursive,
         params,
         size,
         always_only,
@@ -3075,6 +3081,7 @@ pub fn sites_with_trials(
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    linear_recursive: &BTreeSet<GlobalId>,
     params: InlineParams,
     size: CallerSize,
     always_only: bool,
@@ -3084,7 +3091,7 @@ pub fn sites_with_trials(
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
-    let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
+    let context = DecideContext { counts, addressed, recursive, linear_recursive, params, size, always_only, tti };
     let frequencies = caller_frequencies(module, layout, caller);
     // The calls to each callee here: a private callee all of whose calls are
     // here goes with the last one inlined.
@@ -3148,15 +3155,6 @@ pub fn sites_with_trials(
     out
 }
 
-/// How many direct calls of itself `function` makes.
-fn self_call_sites(
-    context: &llrm_mir::context::Context,
-    function: &Function,
-    id: GlobalId,
-) -> usize {
-    function.walk().filter(|&(_, one)| llrm_mir::memory::callee(context, function, one) == Some(id)).count()
-}
-
 /// What `decide` reads of the module besides the site.
 pub struct DecideContext<'a> {
     /// Direct calls by callee (`inline::call_counts`).
@@ -3164,6 +3162,8 @@ pub struct DecideContext<'a> {
     /// The functions whose address is taken.
     pub addressed: &'a BTreeSet<GlobalId>,
     pub recursive: &'a BTreeSet<GlobalId>,
+    /// Those of `recursive` that call themselves from one place (`inline::linear_recursive`).
+    pub linear_recursive: &'a BTreeSet<GlobalId>,
     pub params: InlineParams,
     pub size: CallerSize,
     /// `-fno-inline-functions`: only `alwaysinline` is inlined.
@@ -3216,6 +3216,7 @@ pub fn decide(
         callee_calls: context.counts.get(&callee_id).copied().unwrap_or(0),
         callee_dies: local_linkage(callee_global.linkage) && !context.addressed.contains(&callee_id),
         caller_recursive: context.recursive.contains(&caller_id),
+        callee_linear_recursive: context.linear_recursive.contains(&callee_id),
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),
         entry_weight: Some(&entry_weight),
