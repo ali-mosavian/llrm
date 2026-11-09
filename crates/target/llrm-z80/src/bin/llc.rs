@@ -8,6 +8,9 @@ use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};
 use llrm_z80::inline_rt::inline_sole_uses;
 
+#[global_allocator]
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
+
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");

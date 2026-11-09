@@ -771,6 +771,10 @@ impl Tti for X86 {
         self.tuning.price_pin_multiplies
     }
 
+    fn lftr_any_stride(&self) -> bool {
+        self.tuning.lftr_any_stride
+    }
+
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
     }
