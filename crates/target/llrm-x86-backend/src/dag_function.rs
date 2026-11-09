@@ -1060,6 +1060,7 @@ fn selected_in(
                 }),
         )
         .with_opt_size(cpu.size || cpu.min_size)
+        .with_bytes_strict(cpu.bytes_strict())
         .with_min_size(cpu.min_size)
         .with_size_trade(size_trade(&*machine))
         .with_tail_calls(tail_calls_on())

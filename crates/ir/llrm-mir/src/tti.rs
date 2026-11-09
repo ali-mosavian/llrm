@@ -1083,6 +1083,13 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-9: whether a linear recursion (one call of itself) called from another function is copied into the caller and peeled
+    /// there, as gcc does, without the pin's `recursive` refusal or the bytes-against-clocks rule (gcc prices no clocks; the peeling's
+    /// own caps bound it). false: REC-1's bounds and the price, as for a tree.
+    fn peels_linear_recursion(&self) -> bool {
+        false
+    }
+
     /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
     /// of `recursive_inlining`.
     fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
