@@ -6385,6 +6385,7 @@ fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
         ["mov", "mov"],
         "a target that does not allow it"
     );
+}
 
 /// `fld dword [from]` then `fstp dword [to]` in the frame, an anchor between,
 /// then a tail that writes (so frees) every general register in `tail_writes`
