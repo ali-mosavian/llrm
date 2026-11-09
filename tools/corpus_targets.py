@@ -92,11 +92,29 @@ def reason(source: str, path: Path | None = None) -> str:
 
 
 def expected_output(source: Path, target: str) -> Path:
-    """The file a program's output is compared with on TARGET: `NAME.FAMILY.out` (FAMILY: the target's first dash-field, `m68k`
-    for `m68k-68020`) where the target's ABI differs from the one `NAME.out` was written for, else `NAME.out`. Each override has a
-    one-line `NAME.FAMILY.why` saying which ABI fact differs; a byte-order difference is fixed in the source, not here."""
-    own = source.with_suffix(f".{target.split('-')[0]}.out")
-    return own if own.exists() else source.with_suffix(".out")
+    """The file a program's output is compared with on TARGET, the first that exists of: `NAME.FAMILY.out` (FAMILY: the target's first
+    dash-field, `m68k` for `m68k-68020`) where that target's ABI differs from the one `NAME.out` was written for; `NAME.lp64.out` on an LP64
+    target (a 64-bit `long`; `NAME.out` is the 32-bit-long text); else `NAME.out`. Each override has a one-line `NAME.KEY.why` saying which
+    ABI fact differs; a byte-order difference is fixed in the source, not here."""
+    keys = [target.split("-")[0]] + (["lp64"] if LP64.match(target) else [])
+    for key in keys:
+        own = source.with_suffix(f".{key}.out")
+        if own.exists():
+            return own
+    return source.with_suffix(".out")
+
+
+def oracle_verdict(want: str, base: str, head: str) -> str:
+    """PASS where HEAD prints WANT, FAIL where only HEAD departs from it, STALE-ORACLE where neither BASE nor HEAD prints it: two
+    compilers that disagree with the file say the file, or the harness (no input fed, CRLF kept), is wrong, not either compiler.
+    Line ends and trailing blanks do not count: a DOS console writes CRLF where the .out has LF."""
+
+    def text(x: str) -> list[str]:
+        return [line.rstrip() for line in x.splitlines()]
+
+    if text(head) == text(want):
+        return "PASS"
+    return "FAIL" if text(base) == text(want) else "STALE-ORACLE"
 
 
 def main(argv: list[str]) -> int:
