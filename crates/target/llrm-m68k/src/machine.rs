@@ -100,6 +100,12 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_byte_gate(&self) -> bool {
         true
     }
@@ -363,5 +369,16 @@ impl Tti for M68k {
             return Cost::EXPENSIVE;
         }
         Basic.arithmetic_cost(op, ty, kind, left, right)
+    }
+}
+
+#[cfg(test)]
+mod lftr_tests {
+    use super::*;
+    /// DEVIATE LFTR1: following the pin's step-one rule left byte-loops of
+    /// stride 2..8 unreduced and cost bytes; the knob must stay on here.
+    #[test]
+    fn lftr_counts_any_constant_stride() {
+        assert!(M68k::default().lftr_any_stride());
     }
 }

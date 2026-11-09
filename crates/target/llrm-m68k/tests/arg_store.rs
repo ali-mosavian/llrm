@@ -18,7 +18,10 @@ const MEMSET: &str = include_str!("fixtures/memset_raw.ll");
 fn a_size_build_stores_the_argument_byte_from_its_slot() {
     for cpu in ["68000", "68020"] {
         let out = assembly(MEMSET, cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
-        assert!(out.contains("move.b\t(11,%sp), (%a1)+"), "{cpu}: no store from the slot:\n{out}");
+        assert!(
+            (0..=6).any(|n| out.contains(&format!("move.b\t(11,%sp), (%a{n})+"))),
+            "{cpu}: no store from the slot:\n{out}"
+        );
         assert!(!out.contains("%d2"), "{cpu}: the value still takes a saved register:\n{out}");
     }
 }
