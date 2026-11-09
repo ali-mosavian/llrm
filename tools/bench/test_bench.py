@@ -1,5 +1,6 @@
 """`uv run --project tools python -m unittest discover -s tools/bench`"""
 
+import io
 import os
 import re
 import sys
@@ -9,6 +10,7 @@ import pytest
 import types
 import unittest
 import unittest.mock
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -304,13 +306,21 @@ class SizeTests(unittest.TestCase):
     def test_a_counter_the_base_lacks_is_not_judged(self):
         self.assertEqual(bench.against("x", dict(SIZED), {"instructions": 100, "memory_operands": 40}), [])
 
-    def test_a_clock_rise_within_the_executed_pad_nops_is_not_raised_without_a_corrected_base(self):
-        """M16-CLOCK-FARCALL-PAD: jpeg_fixed read +172 clocks on #8545 from 171 more executed jwlink pad nops, the code unchanged; a base without
-        layout_clocks cannot say, and a rise of at most the new side's pad nops is explained by the pad alone."""
+    def test_a_real_clock_rise_under_a_base_without_the_column_is_still_raised(self):
+        """A rise of 5 clocks against a base with no layout_clocks, the new side running 10 pad nops: the pad may or may not explain it, so the
+        judge flags it (the excuse hid it until it was made opt-in)."""
+        base = SIZED | {"clocks": 1000}
+        self.assertEqual(len(bench.against("x", SIZED | {"clocks": 1005, "pad_nops": 10}, base)), 1)
+
+    def test_the_pad_excuse_for_a_base_without_the_column_is_opt_in_and_warns(self):
+        """jpeg_fixed read +172 clocks on #8545 from 171 more executed jwlink pad nops, the code unchanged: with LLRM_BENCH_EXCUSE_PAD a rise of at
+        most the new side's pad nops is not raised and the cell prints a warning; one past the pad nops is raised."""
         base = SIZED | {"clocks": 74423823}
         moved = SIZED | {"clocks": 74423995, "pad_nops": 199}
-        self.assertEqual(bench.against("jpeg_fixed", moved, base), [])
-        self.assertEqual(len(bench.against("jpeg_fixed", moved | {"pad_nops": 100}, base)), 1, "a rise past the pad nops is real")
+        with mock.patch.dict(os.environ, {"LLRM_BENCH_EXCUSE_PAD": "1"}), mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(bench.against("jpeg_fixed", moved, base), [])
+            self.assertEqual(len(bench.against("jpeg_fixed", moved | {"pad_nops": 100}, base)), 1)
+        self.assertIn("excused", err.getvalue())
 
     def test_clocks_are_judged_on_the_layout_corrected_column_where_both_sides_have_it(self):
         base = SIZED | {"clocks": 1000, "layout_clocks": 990, "pad_nops": 10}

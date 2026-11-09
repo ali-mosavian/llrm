@@ -962,12 +962,14 @@ def pad_corrected(got: dict, want: dict) -> tuple[dict, dict]:
     """m16 clocks as the judge sees them (M16-CLOCK-FARCALL-PAD): jwlink's far-call pad is a `nop` that runs at even offsets and a free prefix at odd
     ones, so a one-byte shift earlier in a segment moves one clock per executed call between sites (#8545: jpeg_fixed +172, jpeg_single -170 on
     the same code). Both sides with `layout_clocks`: those are compared (raw stays in the row). A base without the column: a rise of at most the
-    new side's executed pad nops is explained by the pad alone (delta = layout delta + new pads - old pads <= new pads), so it is not raised."""
+    new side's executed pad nops can be the pad alone (delta = layout delta + new pads - old pads <= new pads), but so can a real rise of that size:
+    that excuse is off unless LLRM_BENCH_EXCUSE_PAD is set, and each excused cell prints a warning. Bless the bases to end it."""
     if "clocks" not in got or "clocks" not in want:
         return got, want
     if "layout_clocks" in got and "layout_clocks" in want:
         return {**got, "clocks": got["layout_clocks"]}, {**want, "clocks": want["layout_clocks"]}
-    if 0 < got["clocks"] - want["clocks"] <= got.get("pad_nops", 0):
+    if os.environ.get("LLRM_BENCH_EXCUSE_PAD") and 0 < got["clocks"] - want["clocks"] <= got.get("pad_nops", 0):
+        print(f"WARNING: clock rise {got['clocks'] - want['clocks']} excused: the base has no layout_clocks and the new side runs {got['pad_nops']} pad nops", file=sys.stderr)
         return {**got, "clocks": want["clocks"]}, want
     return got, want
 
