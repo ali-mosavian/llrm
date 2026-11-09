@@ -66,3 +66,16 @@ def test_both_columns_link_by_the_same_rule(tmp_path):
     for got in (ours, gcc):
         assert got["whole"] == got["program"] + got["library"]
     assert gcc["library"] > 0 and ours["library"] == 0
+
+
+def test_the_archive_cache_key_follows_the_runtime_sources(tmp_path, monkeypatch):
+    """The cache was keyed by the compiler binary alone: an edited compiler-rt source kept using the archive built from the old one, so a runtime change measured as no change."""
+    runtime = tmp_path / "rt"
+    (runtime / "lib/int").mkdir(parents=True)
+    (runtime / "lib/int/clzsi2.c").write_text("int a;\n")
+    monkeypatch.setattr(sweep, "RUNTIME", runtime)
+    monkeypatch.setenv("M68K_EXEC_CACHE", str(tmp_path / "cache"))
+    cc = str(tmp_path / "bin/llrm-cc")
+    before = sweep.cache_dir(cc)
+    (runtime / "lib/int/clzsi2.c").write_text("int b;\n")
+    assert sweep.cache_dir(cc) != before

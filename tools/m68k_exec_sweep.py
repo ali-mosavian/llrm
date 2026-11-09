@@ -34,6 +34,7 @@ import o0_sweep  # noqa: E402
 TIMEOUT = 180
 RUN_TIMEOUT = 30
 STUBS = HERE / "m68k_exec"
+BUILD_FLAGS = "-include config/m68k/config.h"  # the archive's compile flags beyond the level, part of its cache key
 RUNTIME = ROOT / "runtime/compiler-rt"
 
 
@@ -59,12 +60,15 @@ def first_error(text: str) -> str:
 
 
 def cache_dir(cc: str) -> Path:
-    """One directory per compiler binary: the archive's objects are that compiler's output."""
+    """One directory per compiler binary and runtime source: the archive's objects are that compiler's output for those sources and flags."""
     digest = hashlib.md5()
     for name in ("llrm-cc", "llrm-llc", "llrm-m68k-llc"):
         path = Path(cc).parent / name
         if path.exists():
             digest.update(path.read_bytes())
+    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h")]):
+        digest.update(source.read_bytes())
+    digest.update(BUILD_FLAGS.encode())
     base = Path(os.environ.get("M68K_EXEC_CACHE") or Path.home() / ".cache/llrm-m68k-exec")
     return base / digest.hexdigest()[:12]
 
