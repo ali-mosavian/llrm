@@ -389,6 +389,8 @@ pub struct Asm {
     /// The routines this function calls with an argument in `y` (see
     /// [`Self::x_callees`]).
     pub y_callees: std::collections::BTreeSet<String>,
+    /// The 65C02 subtarget: `stz` exists.
+    pub cmos: bool,
     /// The place the instructions written from now on get.
     pub place: u32,
     /// What was written since the last newline.
@@ -417,6 +419,7 @@ impl Asm {
             no_y_result,
             result_cells,
             y_callees,
+            cmos,
             place,
             pending,
         } = self;
@@ -429,6 +432,7 @@ impl Asm {
             no_y_result: *no_y_result,
             result_cells: result_cells.clone(),
             y_callees: y_callees.clone(),
+            cmos: *cmos,
             place: *place,
             pending: pending.clone(),
         }
