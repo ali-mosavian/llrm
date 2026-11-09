@@ -787,6 +787,12 @@ pub fn zero_test_through_an_index(asm: &mut Asm) {
 /// `cpx m` sets the same flags in a byte less and 2 clocks fewer. The compare
 /// of a value kept in an index register is staged through `a`, the one
 /// register the instruction selection compares in.
+///
+/// DEVIATE (6502-CPX): the pin's compare takes its left side in any register
+/// of the class the allocator gives it (X86 `CMP32rr`); here the left side is
+/// fixed in `a` before allocation, so the register it lives in is known only
+/// afterwards. Owner 6502, exit 2026-11-30: the left side of a compare in
+/// `a`, `x` or `y` at selection.
 pub fn compare_through_an_index(asm: &mut Asm) {
     let mut at = 1;
     while at < asm.lines.len() {
