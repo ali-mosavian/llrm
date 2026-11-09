@@ -63,6 +63,13 @@ fn other_code_sections(listing: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The rewritten listing lost its final newline: gas warned "end of file not at end of a line" on every
+    /// `ours` cell (1056 stderr lines in the 11-09 run), and a warning on our output hides a mis-assembled line.
+    #[test]
+    fn rewritten_listing_ends_in_a_newline() {
+        assert_eq!(super::relaxing_branches("\tbne\tL1\n\trts\n"), "\tjne\tL1\n\trts\n");
+    }
+
     /// The matrix measured O2 and Os only, so O1 (strict: bytes and clocks) and
     /// O3 had no cells and counted as clean.
     #[test]
@@ -195,6 +202,7 @@ fn ours_object(
     std::fs::write(&asm, format!(".text\n{}", relaxing_branches(&text))).map_err(|e| e.to_string())?;
     let status = Command::new(root.join("usr/bin/m68k-linux-gnu-as"))
         .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
+        .arg("--fatal-warnings")
         .arg(format!("-m{cpu}"))
         .arg("-o")
         .arg(object)
@@ -220,8 +228,8 @@ fn relaxing_branches(text: &str) -> String {
                 _ => line.to_owned(),
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|line| line + "\n")
+        .collect()
 }
 
 /// The pin's clang (front end and `-O` pipeline, to IR) into the pin's `llc`:
