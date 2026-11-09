@@ -150,24 +150,33 @@ fn a_member_one_site_links_is_free_to_the_next() {
     assert!(together.contains("__popcountsi2"), "{together}");
 }
 
-/// Variable 64-bit shifts are the second class of the same table: two sites
-/// call `__ashldi3` (2 x 24 + 72 B against 2 x 62 B); a constant amount stays
-/// inline whatever the count.
+/// The shifts of the corpus's `shuttle_value` (masked and zero-extended
+/// operands, about 32 B inline a site) were called through `__ashldi3` (72 B):
+/// 230 B -> 286 B at -Os. Variable 64-bit shifts are not in the table until a
+/// site is priced by its operands (M68K-SIZE-LIBCALL-COVER).
+const SHUTTLE: &str = "define i64 @g(i64 %x, i32 %y, i32 %z) optsize {
+  %yy = zext i32 %y to i64
+  %s = lshr i64 %x, %yy
+  %m = and i64 %s, 4294967295
+  %zm = and i32 %z, 31
+  %zz = zext i32 %zm to i64
+  %w = shl i64 %m, %zz
+  %wm = and i64 %w, 4294967295
+  %z2 = zext i32 %z to i64
+  %w2 = shl i64 %wm, %z2
+  ret i64 %w2
+}\n";
+
 #[test]
-fn variable_wide_shifts_call_the_runtime_from_the_second_site_and_constant_ones_never() {
-    let shifts = |amount: &str, uses: usize| {
-        let mut ir = HEAD.to_owned();
-        for n in 0..uses {
-            ir.push_str(&format!(
-                "define i64 @s{n}(i64 %x, i64 %n) optsize {{ %r = shl i64 %x, {amount} ret i64 %r }}\n"
-            ));
-        }
-        ir
-    };
+fn variable_wide_shifts_stay_inline_whatever_their_number() {
     let options = Options { mid_end: false, ..Options::default() };
-    assert!(!asm(&shifts("%n", 1), "s0", Cpu::M68020, options).contains("__ashldi3"));
-    assert!(asm(&shifts("%n", 2), "s0", Cpu::M68020, options).contains("__ashldi3"));
-    assert!(!asm(&shifts("7", 3), "s0", Cpu::M68020, options).contains("__ashldi3"));
+    let out = asm(&format!("{HEAD}{SHUTTLE}"), "g", Cpu::M68020, options);
+    assert!(!out.contains("jsr"), "{out}");
+    let plain: String = (0..3)
+        .map(|n| format!("define i64 @s{n}(i64 %x, i64 %n) optsize {{ %r = shl i64 %x, %n ret i64 %r }}\n"))
+        .collect();
+    let out = asm(&format!("{HEAD}{plain}"), "s0", Cpu::M68020, options);
+    assert!(!out.contains("jsr"), "{out}");
 }
 
 /// Both ways give the same answers on the hardware: the programs run the
@@ -260,9 +269,10 @@ mod executed {
                 let (text, items) = linked(uses, cpu);
                 // one use of each class stays inline, from the second the sites
                 // call
-                for routine in ["__ctzdi2", "__popcountsi2", "__ashldi3"] {
+                for routine in ["__ctzdi2", "__popcountsi2"] {
                     assert_eq!(text.contains(&format!("jsr\t{routine}")), uses >= 2, "{uses} uses {cpu:?} {routine}");
                 }
+                assert!(!text.contains("jsr\t__ashldi3"), "{uses} uses {cpu:?}: shifts stay inline");
                 let path = support::unique_path("size_libcalls");
                 write_executable(&path, &executable(&items).unwrap()).unwrap();
                 let code = support::run(&qemu, &["-cpu", name], &path);
