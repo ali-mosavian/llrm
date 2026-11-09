@@ -81,6 +81,53 @@ fn the_estimate_brackets_the_leaf_kernels_at_both_cpus_and_levels() {
 /// widening multiply, bitfield and addressing-mode rows; the corpus median still reproduces `function_scale`, 1.50).
 const BAND: std::ops::RangeInclusive<f64> = 0.8..=1.25;
 
+/// One fixture's estimate and object bytes.
+struct Row {
+    name: String,
+    estimate: i64,
+    actual: i64,
+}
+
+/// The ratios an aggregate can hide. The estimate over the objects of all the rows, and of every set of all rows but one
+/// (leave-one-out): a set with one fixture over by x% and another under by x% has an aggregate near 1 and passes it, while
+/// each leave-one-out set is off by x%. Every ratio outside `band`, named.
+fn ratios_outside(
+    rows: &[Row],
+    band: &std::ops::RangeInclusive<f64>,
+) -> Vec<String> {
+    let (estimate, actual): (i64, i64) = rows.iter().fold((0, 0), |sum, row| (sum.0 + row.estimate, sum.1 + row.actual));
+    let mut outside = Vec::new();
+    let all = estimate as f64 / actual as f64;
+    if !band.contains(&all) {
+        outside.push(format!("all {} fixtures: {all:.2}", rows.len()));
+    }
+    for row in rows {
+        let without = (estimate - row.estimate) as f64 / (actual - row.actual) as f64;
+        if !band.contains(&without) {
+            outside.push(format!("without {}: {without:.2}", row.name));
+        }
+    }
+    outside
+}
+
+/// The aggregate alone let one fixture offset the rest (2026-11-09, `-Os`): fixed_point's 64-bit multiplies are 0.54 of
+/// their objects at the 68000 and everything else 1.34, so the aggregate read 1.00. A set of two, one 30% over and one
+/// 30% under, has an aggregate of 1.0 and passes it; the leave-one-out check names both.
+#[test]
+fn one_fixture_over_and_one_under_cannot_offset_each_other() {
+    let rows = [Row { name: "over".into(), estimate: 1300, actual: 1000 }, Row { name: "under".into(), estimate: 700, actual: 1000 }];
+    let (estimate, actual): (i64, i64) = rows.iter().fold((0, 0), |sum, row| (sum.0 + row.estimate, sum.1 + row.actual));
+    assert!(BAND.contains(&(estimate as f64 / actual as f64)), "the aggregate alone passes");
+    assert_eq!(ratios_outside(&rows, &BAND), ["without over: 0.70", "without under: 1.30"]);
+}
+
+/// A set that is within the band everywhere has nothing outside it.
+#[test]
+fn a_set_within_the_band_everywhere_passes() {
+    let rows = [Row { name: "a".into(), estimate: 1100, actual: 1000 }, Row { name: "b".into(), estimate: 950, actual: 1000 }, Row { name: "c".into(), estimate: 1000, actual: 1000 }];
+    assert!(ratios_outside(&rows, &BAND).is_empty());
+}
+
 #[test]
 fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data_size");
@@ -90,7 +137,7 @@ fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
     let mut failures = Vec::new();
     for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
         for level in ["2", "s"] {
-            let (mut estimate, mut actual) = (0, 0);
+            let mut rows = Vec::new();
             for path in &files {
                 let text = std::fs::read_to_string(path).unwrap();
                 let name = path.file_stem().unwrap().to_str().unwrap();
@@ -99,13 +146,12 @@ fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
                 let module = driver::lowered_for(&text, cpu, Level::parse(level).unwrap()).unwrap_or_else(|why| panic!("{name}: {why}"));
                 let object = driver::object_in(&text, driver::cpu_of(cpu_name).unwrap(), Level::parse(level).unwrap(), name, CodeModel::Small)
                     .unwrap_or_else(|why| panic!("{name}: {why}"));
-                estimate += estimate_over(&module, cpu);
-                actual += text_bytes(&object) as i64;
+                rows.push(Row { name: name.to_owned(), estimate: estimate_over(&module, cpu), actual: text_bytes(&object) as i64 });
             }
-            let ratio = estimate as f64 / actual as f64;
-            if !BAND.contains(&ratio) {
+            let outside = ratios_outside(&rows, &BAND);
+            if !outside.is_empty() {
                 failures.push(format!(
-                    "{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2}, band {BAND:?}). The backend got smaller or larger than the table: run tools/m68k_size_fit.py --corpus (its median is `function_scale`, opcosts.rs) before touching the band"
+                    "{cpu_name} -O{level}: {outside:?} against band {BAND:?}. The backend got smaller or larger than the table: run tools/m68k_size_fit.py --corpus (its median is `function_scale`, opcosts.rs) before touching the band"
                 ));
             }
         }
