@@ -16,6 +16,12 @@ matrix has no cc65 65C02 column): they are written as UNGRADED and counted.
 Coverage: the corpus programs (`NAME.out` beside `NAME.c`) against the programs
 the matrix has `ours` for, printed as in / missing / the missing names.
 Os is strict bytes; O2 is clocks + 3 * bytes.
+VIRTUAL_OK (oversight ruling 2026-11-09): the per-axis bar (best bytes, best clocks, possibly from
+different compilers) stays the reported target. A cell where NO single reference attains both axes is
+virtual: it passes when ours is Pareto-optimal among the references (none is at least as good on both
+axes and better on one) and is no worse than the pin-equivalent on both axes (as fputable.verdict, #8509). The pin
+(LLVM d1106deb71) has no MOS target, so the pin-equivalent is the llvm-mos column, the nearest
+reference: an assumption of this tool, stated here and in OUT.virtual.tsv's header.
 """
 import collections
 import os
@@ -60,8 +66,34 @@ def grade(cells, programs, programs_no_bar, ungraded_cpus=()):
         ext = [d[c] for c in REQUIRED + sdcc]
         bb, bc = min(v[0] for v in ext), min(v[1] for v in ext)
         ok = ob <= bb if lv == "Os" else oc + 3 * ob <= min(v[1] + 3 * v[0] for v in ext)
-        rows.append((prog, lv, cpu, ob, oc, bb, bc, "OK" if ok else "WORSE"))
+        verdict = "OK" if ok else ("VIRTUAL_OK" if virtual_ok(d, lv, sdcc) else "WORSE")
+        rows.append((prog, lv, cpu, ob, oc, bb, bc, verdict))
     return rows, refused
+
+
+def virtual_ok(d, lv, sdcc):
+    """The cell is virtual (no reference attains both per-axis bars), ours is Pareto-optimal among the
+    references, and no worse than llvm-mos on both axes (fputable.verdict's rule, #8509; x86-specific, so not imported)."""
+    ob, oc = d["ours"]
+    ext = [d[c] for c in REQUIRED + sdcc]
+    bb, bc = min(v[0] for v in ext), min(v[1] for v in ext)
+    if any(v == (bb, bc) for v in ext):
+        return False
+    if any(v[0] <= ob and v[1] <= oc and (v[0] < ob or v[1] < oc) for v in ext):
+        return False
+    pb, pc = d["llvm-mos"]
+    return ob <= pb and oc <= pc
+
+
+def virtual_notes(cells, graded):
+    """Lines for OUT.virtual.tsv: each VIRTUAL_OK cell with ours and every reference's (bytes, clocks)."""
+    lines = ["# VIRTUAL_OK cells: no single reference attains both per-axis bars; ours is Pareto-optimal and no worse than llvm-mos on both axes (the pin-equivalent, an assumption: the pin has no MOS target)\n",
+             "prog\tlevel\tcpu\tours\tbest_B\tbest_clk\tcolumns (bytes/clocks)\n"]
+    for prog, lv, cpu, ob, oc, bb, bc, verdict in graded:
+        if verdict == "VIRTUAL_OK":
+            cols = " ".join(f"{c}={b}/{k:g}" for c, (b, k) in sorted(cells[(prog, lv, cpu)].items()) if c != "ours")
+            lines.append(f"{prog}\t{lv}\t{cpu}\t{ob}/{oc:g}\t{bb}\t{bc:g}\t{cols}\n")
+    return lines
 
 
 def corpus_programs(corpus):
@@ -98,6 +130,7 @@ def main(argv):
         return 2
     header = "prog\tlevel\tcpu\tours_B\tours_clk\tbest_ext_B\tbest_ext_clk\tverdict\n"
     open(out, "w").write(header + "".join("\t".join(map(str, r)) + "\n" for r in graded))
+    open(out + ".virtual.tsv", "w").write("".join(virtual_notes(cells, graded)))
     return 0
 
 

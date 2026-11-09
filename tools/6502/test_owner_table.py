@@ -77,5 +77,54 @@ class OwnerTable(unittest.TestCase):
         self.assertEqual(t.coverage(cells, names), (1, ["b"]))
 
 
+def cell(level, **points):
+    return [row("k", level, name.replace("_", "-"), b, c) for name, (b, c) in points.items()]
+
+
+class VirtualOk(unittest.TestCase):
+    """2026-11-09 ruling: a cell where no single reference attains both axes passes when ours is Pareto-optimal
+    and at least as good as the pin-equivalent (llvm-mos); it was WORSE against the per-axis minima."""
+
+    def grade(self, rows):
+        graded, refused = t.grade(t.cells_of(rows), set(), False)
+        self.assertEqual(refused, [])
+        return graded[0][-1]
+
+    def refs(self, level, ours, llvm_mos, cc65, size, size_ma, speed=(99, 999), speed_ma=(99, 999)):
+        points = dict(ours=ours, llvm_mos=llvm_mos, cc65=cc65, sdcc_size=size, sdcc_size_ma=size_ma)
+        if level == "O2":
+            points.update(sdcc_speed=speed, sdcc_speed_ma=speed_ma)
+        return cell(level, **points)
+
+    def test_a_virtual_cell_with_ours_pareto_optimal_and_ahead_of_llvm_mos_passes(self):
+        # bytes bar 8 (sdcc-size), clocks bar 70 (cc65): nobody has both; ours (9, 80) is dominated by none, llvm-mos is (12, 90)
+        rows = self.refs("Os", (9, 80), (12, 90), (20, 70), (8, 100), (11, 95))
+        self.assertEqual(self.grade(rows), "VIRTUAL_OK")
+
+    def test_a_virtual_cell_dominated_by_a_reference_is_worse(self):
+        rows = self.refs("Os", (9, 100), (12, 90), (20, 70), (8, 95), (11, 95))  # sdcc-size (8, 95) beats ours on both
+        self.assertEqual(self.grade(rows), "WORSE")
+
+    def test_a_virtual_cell_behind_llvm_mos_is_worse(self):
+        rows = self.refs("Os", (13, 60), (12, 90), (20, 70), (8, 100), (11, 95))  # Pareto-optimal, but more bytes than llvm-mos
+        self.assertEqual(self.grade(rows), "WORSE")
+
+    def test_a_virtual_cell_ahead_of_llvm_mos_on_the_level_metric_but_behind_on_clocks_is_worse(self):
+        rows = self.refs("Os", (9, 100), (12, 90), (20, 70), (8, 110), (11, 95))  # fewer bytes than llvm-mos, more clocks
+        self.assertEqual(self.grade(rows), "WORSE")
+
+    def test_a_cell_where_one_reference_attains_both_bars_stays_worse(self):
+        rows = self.refs("Os", (10, 100), (12, 90), (14, 95), (9, 85), (11, 95))  # sdcc-size has the best bytes and clocks
+        self.assertEqual(self.grade(rows), "WORSE")
+
+    def test_the_virtual_cells_are_listed_with_every_columns_numbers(self):
+        rows = self.refs("Os", (9, 80), (12, 90), (20, 70), (8, 100), (11, 95))
+        cells = t.cells_of(rows)
+        graded, _ = t.grade(cells, set(), False)
+        text = "".join(t.virtual_notes(cells, graded))
+        self.assertIn("k\tOs\t6502\t9/80\t8\t70", text)
+        self.assertIn("llvm-mos=12/90", text)
+
+
 if __name__ == "__main__":
     unittest.main()
