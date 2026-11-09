@@ -610,3 +610,32 @@ fn fast_isel_folds_a_load_compared_with_an_immediate_and_a_commutative_first_ope
         assert!(!asm.lines().any(|line| line.trim_start().starts_with("test")), "{target}: {asm}");
     }
 }
+
+/// FastISel made 0 with `mov r, 0` (`mov edx, 0` before every unsigned `div`, `urem_eq:r5z` 40 B against the
+/// pin's 31 B): the pin's `X86MaterializeInt` makes it with `MOV32r0`, `xor r, r`.
+#[test]
+fn fast_isel_materializes_zero_with_xor() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "unsigned h(unsigned a)\n{\n    return a % 5 == 0;\n}\nint k(int a)\n{\n    return a == 0 ? 0 : a + 7;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        let zeroed = asm.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with("xor") && { let ops: Vec<_> = line["xor".len()..].split(',').map(str::trim).collect(); ops.len() == 2 && ops[0] == ops[1] }
+        });
+        assert!(zeroed, "{target}: no xor r, r: {asm}");
+        assert!(!asm.lines().any(|line| line.trim().replace("  ", " ").ends_with(", 0") && line.trim().starts_with("mov") && !line.contains("ptr")), "{target}: mov r, 0 left: {asm}");
+    }
+}

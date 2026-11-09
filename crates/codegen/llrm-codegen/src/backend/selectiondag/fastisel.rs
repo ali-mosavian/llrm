@@ -219,6 +219,8 @@ struct Names {
     divide: Option<Divide>,
     /// `SUBREG_TO_REG` and `EXTRACT_SUBREG`: widening and narrowing between `r32` and `r64`.
     subreg: Option<(u16, u16)>,
+    /// `MOV32r0`, the pseudo that becomes `xor r, r`.
+    mov32r0: Option<u16>,
     /// m64: `ADJCALLSTACKDOWN64`, `ADJCALLSTACKUP64`, `CALL64pcrel32`, `MOV8ri`.
     calls64: Option<(u16, u16, u16, u16)>,
 }
@@ -311,6 +313,7 @@ impl Names {
                 })
             })(),
             subreg: (|| Some((opcode("SUBREG_TO_REG")?, opcode("EXTRACT_SUBREG")?)))(),
+            mov32r0: opcode("MOV32r0"),
         })
     }
 }
@@ -467,6 +470,17 @@ impl Fast<'_> {
         ]
     }
 
+    /// `X86MaterializeInt` of 0: `MOV32r0` (`xor r, r`), at 64 bits its dword widened by `SUBREG_TO_REG`.
+    fn zero(&mut self, wide: bool) -> Option<SDValue> {
+        let xor = self.node(self.names.mov32r0?, &[EVT::I32, EVT::I32], &[]);
+        if !wide {
+            return Some(xor);
+        }
+        let (to_reg, _) = self.names.subreg?;
+        let index = self.dag.get_constant_with(6, EVT::I32, true, false);
+        Some(self.node(to_reg, &[EVT::I64], &[xor, index]))
+    }
+
     /// The value of `operand` in a register: a computed one, a constant, or a parameter loaded from its cell.
     fn value(&mut self, operand: Operand) -> Option<SDValue> {
         match operand {
@@ -481,9 +495,12 @@ impl Fast<'_> {
                 Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
             }
             Operand::Constant(_) => {
-                // DEVIATE F4: the pin (X86MaterializeInt) makes 0 with `MOV32r0` (xor) and a 64-bit
-                // constant with `getMOVriOpcode`; here every constant is `MOV32ri`. Exit 2026-11-27 with F1.
                 let wide = self.is_wide(operand)?;
+                if (if wide { self.int_signed(operand) } else { self.int(operand) }) == Some(0)
+                    && let Some(zero) = self.zero(wide)
+                {
+                    return Some(zero);
+                }
                 let (_, _, _, mov_ri, _, _, _, _, vt) = self.set(wide)?;
                 if wide && self.int_signed(operand).is_none() {
                     // `X86MaterializeInt`: a 64-bit constant past `imm32` is `movabs`
@@ -665,7 +682,10 @@ impl Fast<'_> {
                         let sign = self.node(sign, &[EVT::GLUE], &[glue]);
                         self.node(idiv, &[EVT::GLUE], &[right, sign])
                     } else {
-                        let zero = self.dag.get_constant_with(0, vt, true, false);
+                        let zero = match self.zero(wide) {
+                            Some(zero) => zero,
+                            None => self.dag.get_constant_with(0, vt, true, false),
+                        };
                         let clear = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), remainder, zero, Some(glue));
                         self.node(div, &[EVT::GLUE], &[right, SDValue { node: clear.node, res: 1 }])
                     };
