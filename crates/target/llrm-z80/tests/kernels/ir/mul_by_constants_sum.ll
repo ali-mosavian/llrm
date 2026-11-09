@@ -1,4 +1,4 @@
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 %struct.tiny = type { i8, i8, i8 }
 define i16 @three(i16 noundef %0, ptr noundef byval(%struct.tiny) align 1 %1, ptr noundef byval(%struct.tiny) align 1 %2, i32 noundef %3) {
   %5 = alloca i16, align 2

@@ -683,9 +683,33 @@ mod tuning_tests {
                 split_merged_conditions: false,
                 inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
+                x87_share_negated_products: false,
+                x87_zero_fill_at_size: false,
+                unroll_promotion_fits_x87_stack: false,
                 ..table
             },
             Tuning::PIN
         );
+    }
+}
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    fn stated(key: &str) -> Option<&'static str> {
+        super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(" = \"")?.strip_suffix('"'))
+    }
+
+    /// S16 made bench/parity/qbsp -Os zero a packed 16-byte local with `rep stosb` x16 where the pin's m16 (no S in its string) raises the
+    /// local and zeroes it with `rep stosw` x8. The datalayout follows the pin: no S, and the reason is data.
+    #[test]
+    fn the_datalayout_follows_the_pin_in_naming_no_stack_alignment() {
+        llrm_target::testing::assert_unstated_stack("x86-m16", stated("datalayout").unwrap(), stated("stack_alignment_unstated"));
+    }
+
+    /// A target that is exempt for having no S in its pin string and declares one anyway is caught by name.
+    #[test]
+    #[should_panic(expected = "declares an S though its pin string has none")]
+    fn an_exempt_target_that_declares_a_stack_alignment_fails() {
+        llrm_target::testing::assert_unstated_stack("x86-m16", "e-p:16:16-S16", Some("the pin's m16 datalayout has no S"));
     }
 }
