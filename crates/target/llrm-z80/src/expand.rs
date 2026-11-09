@@ -2830,20 +2830,26 @@ fn flag_and_b_free(text: &str) -> bool {
 /// The stack arguments of a call, all words in a register pair, are pushed in
 /// place of reserving the area with `push bc` and storing into it: `ld hl, #0;
 /// push hl` is 4 B where `push bc; ld hl, #0; ld -32(ix), l; ld -31(ix), h`
-/// is 10. `X86CallFrameOptimization`, which turns the stores of a reserved
-/// call frame into pushes, for the stores that run from the top word down.
+/// is 10. This is `X86CallFrameOptimization::collectCallInfo` and
+/// `adjustCallSequence`: the stores of one call cover the area once, nothing
+/// else in the sequence stores to the stack or touches it, and the pushes run
+/// from the top word down. SP moves per call here, so there is no reserved
+/// call frame: the pin's `isProfitable` answers true (`CannotReserveFrame`)
+/// and every legal frame converts.
+///
+/// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on virtual registers and puts every push at the
+/// call, bailing when an instruction defines a register an earlier store
+/// read (`classifyInstruction`). This runs after allocation, where the
+/// argument registers are loaded between the stores and the call, so a push
+/// stands at its store, or behind the push above it when that comes later:
+/// the same legality (no def of the stored register in between), the least
+/// motion.
+///
+/// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
 fn push_arguments(
     function: &mut MFunction,
     assignment: &Assignment,
 ) {
-    let pair_of = |operand: Option<&Operand>| {
-        let register = match operand {
-            Some(Operand::Use(Reg::Virt(v))) => assignment.0[*v as usize],
-            Some(Operand::Use(Reg::Phys(id))) => *id,
-            _ => return None,
-        };
-        [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| register == *pair)
-    };
     for block in &mut function.blocks {
         let mut at = 0;
         while at < block.insts.len() {
@@ -2851,43 +2857,88 @@ fn push_arguments(
                 at += 1;
                 continue;
             };
-            let Some(Operand::Imm(bytes @ 2..=16)) = block.insts[at].operands.first().cloned() else {
+            let Some(places) = push_places(&block.insts, at, assignment) else {
                 at += 1;
                 continue;
             };
-            let mut stores = Vec::new();
-            let mut next = bytes - 2;
-            let mut legal = bytes % 2 == 0;
-            let mut end = at + 1;
-            while legal && end < block.insts.len() && !block.insts[end].call {
-                let inst = &block.insts[end];
-                match inst.kind {
-                    Kind::Op("STSP16") => {
-                        legal = matches!(
-                            inst.operands.get(1),
-                            Some(Operand::Imm(offset)) if *offset == next
-                        ) && pair_of(inst.operands.first()).is_some();
-                        stores.push(end);
-                        next -= 2;
-                    }
-                    Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP") => {
-                        legal = false
-                    }
-                    _ => {}
+            let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); block.insts.len()];
+            let mut stores = vec![false; block.insts.len()];
+            for (store, after) in places {
+                let mut push = block.insts[store].clone();
+                push.kind = Kind::Op("PUSHARG");
+                push.operands.truncate(1);
+                stores[store] = true;
+                pushes[after].push(push);
+            }
+            let old = std::mem::take(&mut block.insts);
+            for (index, inst) in old.into_iter().enumerate() {
+                if index != at && !stores[index] {
+                    block.insts.push(inst);
                 }
-                end += 1;
+                block.insts.append(&mut pushes[index]);
             }
-            let called = end < block.insts.len() && block.insts[end].call;
-            if !(legal && called && next == -2) {
-                at += 1;
-                continue;
-            }
-            for &store in &stores {
-                block.insts[store].kind = Kind::Op("PUSHARG");
-            }
-            block.insts.remove(at);
         }
     }
+}
+
+/// For the call frame opened at `open`, the stores that become pushes, top
+/// word first, each with the instruction it goes behind; `None` when the
+/// frame cannot be pushed.
+fn push_places(
+    insts: &[Inst],
+    open: usize,
+    assignment: &Assignment,
+) -> Option<Vec<(usize, usize)>> {
+    let Some(Operand::Imm(bytes @ 2..)) = insts[open].operands.first().cloned() else { return None };
+    let physical = |register: Reg| match register {
+        Reg::Phys(id) => id,
+        Reg::Virt(v) => assignment.0[v as usize],
+    };
+    let source = |inst: &Inst| match inst.operands.first() {
+        Some(Operand::Use(register)) => {
+            let register = physical(*register);
+            [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| register == *pair)
+        }
+        _ => None,
+    };
+    // stores by word, `(instruction, pair)`
+    let mut words: Vec<Option<(usize, RegId)>> = vec![None; usize::try_from(bytes / 2).ok()?];
+    let mut end = open + 1;
+    while end < insts.len() && !insts[end].call {
+        let inst = &insts[end];
+        match inst.kind {
+            Kind::Op("STSP16") => {
+                let Some(Operand::Imm(offset)) = inst.operands.get(1) else { return None };
+                let word = usize::try_from(offset / 2).ok().filter(|_| offset % 2 == 0)?;
+                let slot = words.get_mut(word)?;
+                if slot.is_some() {
+                    return None;
+                }
+                *slot = Some((end, source(inst)?));
+            }
+            Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP") => return None,
+            _ => {}
+        }
+        end += 1;
+    }
+    if bytes % 2 != 0 || end >= insts.len() {
+        return None;
+    }
+    let mut places = Vec::with_capacity(words.len());
+    let mut behind = 0;
+    for word in words.into_iter().rev() {
+        let (store, pair) = word?;
+        behind = behind.max(store);
+        let (lo, hi) = lanes(pair).ok()?;
+        let clobbered = insts[store + 1..=behind].iter().any(|inst| {
+            inst.operands.iter().any(|operand| matches!(operand, Operand::Def(r) if [pair, lo, hi].contains(&physical(*r))))
+        });
+        if clobbered {
+            return None;
+        }
+        places.push((store, behind));
+    }
+    Some(places)
 }
 
 /// `call f; ret` is `jp f`: the callee returns to our caller with its result
@@ -2958,6 +3009,81 @@ fn tail_calls(function: &MFunction) -> MFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn op(
+        name: &'static str,
+        operands: Vec<Operand>,
+    ) -> Inst {
+        Inst::new(Kind::Op(name), operands)
+    }
+
+    fn area(bytes: i64) -> Inst {
+        op("ADJCALLSTACKDOWN", vec![Operand::Imm(bytes)])
+    }
+
+    fn store(
+        pair: RegId,
+        offset: i64,
+    ) -> Inst {
+        op("STSP16", vec![Operand::Use(Reg::Phys(pair)), Operand::Imm(offset)])
+    }
+
+    fn load(pair: RegId) -> Inst {
+        op("LD16ri", vec![Operand::Def(Reg::Phys(pair)), Operand::Imm(7)])
+    }
+
+    fn call() -> Inst {
+        let mut call = op("CALL", vec![Operand::Symbol("f".to_owned(), 0)]);
+        call.call = true;
+        call
+    }
+
+    /// A call with more than 16 B of stack arguments kept its reserve and
+    /// its `ld (ix)` stores (`os_locals_between_pushes` at -Os: 9 B / 31 T a
+    /// word where a push is 1 B / 11 T).
+    #[test]
+    fn an_area_over_sixteen_bytes_is_pushed() {
+        let mut insts = vec![area(20)];
+        for word in (0..10).rev() {
+            insts.push(load(reg::BC));
+            insts.push(store(reg::BC, 2 * word));
+        }
+        insts.push(call());
+        let places = push_places(&insts, 0, &Assignment::default()).expect("pushed");
+        assert_eq!(places.len(), 10);
+        assert!(places.iter().all(|(store, behind)| store == behind));
+    }
+
+    /// Stores that arrive low word first push the high word first, behind the
+    /// last of the two stores: the pin's pushes all stand at the call.
+    #[test]
+    fn stores_out_of_order_are_pushed_top_word_first() {
+        let insts = vec![area(4), store(reg::BC, 0), store(reg::DE, 2), call()];
+        assert_eq!(push_places(&insts, 0, &Assignment::default()), Some(vec![(2, 2), (1, 2)]));
+    }
+
+    /// Moving the low word's push behind the high word's would push the `bc`
+    /// the load in between made, not the one stored.
+    #[test]
+    fn a_register_defined_before_its_push_keeps_the_stores() {
+        let insts = vec![area(4), store(reg::BC, 0), load(reg::BC), store(reg::DE, 2), call()];
+        assert_eq!(push_places(&insts, 0, &Assignment::default()), None);
+        // in order, each push stands at its store and the load after it is harmless
+        let insts = vec![area(4), store(reg::DE, 2), store(reg::BC, 0), load(reg::BC), call()];
+        assert_eq!(push_places(&insts, 0, &Assignment::default()), Some(vec![(1, 1), (2, 2)]));
+    }
+
+    /// A word nothing stores, one stored twice, a byte store and a nested
+    /// call frame leave the reserve as it is.
+    #[test]
+    fn a_frame_that_is_not_filled_once_keeps_the_stores() {
+        let a = Assignment::default();
+        assert_eq!(push_places(&[area(4), store(reg::BC, 2), call()], 0, &a), None);
+        assert_eq!(push_places(&[area(4), store(reg::BC, 2), store(reg::DE, 2), store(reg::HL, 0), call()], 0, &a), None);
+        let byte = op("STSP8", vec![Operand::Use(Reg::Phys(reg::A)), Operand::Imm(0)]);
+        assert_eq!(push_places(&[area(2), byte, call()], 0, &a), None);
+        assert_eq!(push_places(&[area(2), store(reg::BC, 0)], 0, &a), None);
+    }
 
     /// `form` spelled a register copy `ld b;b`, a key the table lacks, so
     /// every copy was priced as an unknown form (2 B, 8 T) instead of
