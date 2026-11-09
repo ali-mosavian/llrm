@@ -392,6 +392,20 @@ impl LegalizeHooks for Aarch64Lowering {
                 super::lowering::lower_xalu(dag, node)
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
+            // `LowerShiftParts`
+            // ([L13980](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L13980)).
+            ISD::ShlParts | ISD::SrlParts | ISD::SraParts => {
+                let (lo, hi) = llrm_codegen::backend::selectiondag::expand_funnel::expand_shift_parts(dag, node, EVT::I32);
+                let vt = dag.value_type(lo);
+                Some(dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi]))
+            }
+            // `LowerLOAD` and `LowerSTORE`: an `i128` access is the pin's own
+            // only when it is volatile or atomic (`ldxp`/`stxp`, `LowerStore128`);
+            // every other is declined, and the legalizer splits it.
+            ISD::Load | ISD::Store => match dag.node(node).data {
+                NodeData::Mem(info) if info.volatile || info.ordering.is_some() => None,
+                _ => return None,
+            },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
