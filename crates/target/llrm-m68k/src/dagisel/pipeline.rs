@@ -260,6 +260,7 @@ impl DagTarget for M68kTarget<'_> {
         &mut self,
         dag: &mut SelectionDAG,
     ) {
+        super::btst::immediate_bit_numbers(dag);
         if self.short {
             super::short::narrow(dag);
         }
