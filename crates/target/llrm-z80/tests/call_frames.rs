@@ -13,7 +13,7 @@ fn a_call_has_only_its_own_stack_arguments_pushed() {
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\ntarget triple = \"z80-unknown-none\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
          @x = global double 1.5\n@z = global double 5.5\n\
          define i16 @main() {\n\
            %1 = load volatile double, ptr @x\n  %2 = fmul double %1, 4.0\n  %3 = fptosi double %2 to i32\n\
