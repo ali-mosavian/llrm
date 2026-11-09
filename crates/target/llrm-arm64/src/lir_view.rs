@@ -145,7 +145,17 @@ pub fn content(op: &Op) -> i64 {
 /// one `add` of the same symbol in the same block. By block: the index of the
 /// `add` and of its `adrp`. As one instruction the allocator can make the
 /// address again where it is needed instead of spilling it.
+thread_local! {
+    static PAIR_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has looked for fused address pairs.
+pub fn address_pair_runs() -> usize {
+    PAIR_RUNS.with(std::cell::Cell::get)
+}
+
 fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
+    PAIR_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut seen: HashMap<Reg, (u32, u32)> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         let mut op = op.clone();
@@ -192,6 +202,14 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
 /// The allocator's function for `function`, registers of both classes numbered
 /// from zero.
 pub fn view(function: &MFunc) -> MFunction<Class> {
+    view_with(function, &address_pairs(function))
+}
+
+/// [`view`] with the address pairs of `function` already found.
+fn view_with(
+    function: &MFunc,
+    pairs: &[HashMap<usize, usize>],
+) -> MFunction<Class> {
     let mut lir = MFunction::<Class>::new(&function.name);
     lir.odds = function.alloc_odds.clone();
     lir.classes = vec![Class::Gpr; (function.next_register - Gpr::FIRST_VIRTUAL) as usize];
@@ -201,7 +219,6 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
-    let pairs = address_pairs(function);
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
         let first_halves: Vec<usize> = pairs[at].values().copied().collect();
@@ -360,14 +377,26 @@ pub fn rebuild(
     assignment: &Assignment,
     spill_slots: &[(i32, Class)],
 ) {
+    let pairs = address_pairs(function);
+    rebuild_with(function, lir, &pairs, assignment, spill_slots);
+}
+
+/// [`rebuild`] with the address pairs `view` used: `function` has not changed
+/// since.
+fn rebuild_with(
+    function: &mut MFunc,
+    lir: &MFunction<Class>,
+    pairs: &[HashMap<usize, usize>],
+    assignment: &Assignment,
+    spill_slots: &[(i32, Class)],
+) {
     let mut originals: HashMap<i64, Op> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
     }
     // The fused `MOVaddr`s stand under the content `view` gave them.
-    let pairs = address_pairs(function);
     let mut fused: HashMap<i64, Op> = HashMap::default();
-    for (block, pairs) in function.blocks.iter().zip(&pairs) {
+    for (block, pairs) in function.blocks.iter().zip(pairs) {
         for &add in pairs.keys() {
             fused.entry(content(&block.ops[add]).wrapping_add(1)).or_insert_with(|| block.ops[add].clone());
         }
@@ -611,10 +640,11 @@ pub fn allocate(
     function: &mut MFunc,
     size: bool,
 ) -> Result<Allocation, String> {
-    let mut lir = view(function);
+    let pairs = address_pairs(function);
+    let mut lir = view_with(function, &pairs);
     crate::licm::hoist(&mut lir);
     let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
-    rebuild(function, &lir, &assignment, &slots);
+    rebuild_with(function, &lir, &pairs, &assignment, &slots);
     Ok(written_callee_saved(function))
 }
 
@@ -879,6 +909,17 @@ mod tests {
         let odds: Odds = [((0, 1), (llrm_mir::blockfrequency::BranchProbability::new(5, 8), 0))].into_iter().collect();
         function.alloc_odds = Some(odds.clone());
         assert_eq!(view(&function).odds, Some(odds));
+    }
+
+    /// `view` and `rebuild` each looked for the fused address pairs of the
+    /// function (a pass over every operation, 0.4 M each on shellsort's two
+    /// functions): `allocate` finds them once, for both.
+    #[test]
+    fn allocate_finds_the_address_pairs_once() {
+        let mut function = sample();
+        let before = address_pair_runs();
+        allocate(&mut function, false).expect("allocates");
+        assert_eq!(address_pair_runs() - before, 1);
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a
