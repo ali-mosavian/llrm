@@ -129,9 +129,45 @@ def _stale_dirs(tmp_path, programs):
     return ["--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src")]
 
 
+ROW_LINE = "| {} | p (z80) | Oz | bytes | 1 | 2 | +1 | estimator gap | z80 | {} | #1 |\n"
+
+
+def _rows_file(tmp_path, exit_="2026-12-15"):
+    rows = tmp_path / "rows.md"
+    rows.write_text("| id | program/module | level | metric | main | parity | delta | cause | owner | exit | PR |\n|---|---|---|---|--:|--:|--:|---|---|---|---|\n"
+                    + ROW_LINE.format("Z80-OZ-1", exit_) + ROW_LINE.format("Z80-OZ-2", exit_))
+    return ["--rows", str(rows)]
+
+
+def test_a_known_gap_row_that_is_not_in_the_rows_table_is_refused(tmp_path):
+    """The row id was an unchecked string: `--known-oz-gap a=NOPE` wrote the table with a row nobody owns."""
+    out = tmp_path / "out.tsv"
+    args = _stale_dirs(tmp_path, ["a"]) + _rows_file(tmp_path)
+    for named in ("a=NOPE", "a=Z80-OZ-9"):
+        try:
+            t.main([str(out), *args, "--known-oz-gap", named])
+            raised = False
+        except SystemExit as stop:
+            raised = stop.code == 1
+        assert raised and not out.exists()
+    t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
+    assert out.exists()
+
+
+def test_a_known_gap_row_without_an_exit_is_refused(tmp_path):
+    out = tmp_path / "out.tsv"
+    args = _stale_dirs(tmp_path, ["a"]) + _rows_file(tmp_path, exit_="")
+    try:
+        t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
+        raised = False
+    except SystemExit as stop:
+        raised = stop.code == 1
+    assert raised and not out.exists()
+
+
 def test_a_gap_named_with_its_row_is_written_and_listed_and_any_other_still_refuses(tmp_path):
     out = tmp_path / "out.tsv"
-    args = _stale_dirs(tmp_path, ["a", "b"])
+    args = _stale_dirs(tmp_path, ["a", "b"]) + _rows_file(tmp_path)
     try:
         t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
         raised = False
@@ -139,4 +175,4 @@ def test_a_gap_named_with_its_row_is_written_and_listed_and_any_other_still_refu
         raised = stop.code == 1
     assert raised and not out.exists()  # b is not named
     t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1", "--known-oz-gap", "b=Z80-OZ-2"])
-    assert "# OZ>OS KNOWN: a=Z80-OZ-1 b=Z80-OZ-2" in out.read_text().splitlines()
+    assert "# OZ>OS ESTIMATOR GAP (oz_best_of): a=Z80-OZ-1 b=Z80-OZ-2" in out.read_text().splitlines()

@@ -73,9 +73,10 @@ def stale_oz(ours):
     bigger than Os. A row that is was measured by another binary, or before the best-of: loop_fusion Oz read 953 B
     against Os 907 B in the 2026-11-09 table, when the binary gives 907 for both.
 
-    The choice is made on the module's estimated bytes, the table measures linked bytes: a few programs differ by
-    design (memmove_overlap, switch_peeled_table: Z80-OZ-1/-2). The caller names those with `--known-oz-gap PROG=ROW`,
-    each a numbered row; any other program is stale.
+    The choice is made on the module's estimated bytes, the table measures linked bytes: where the estimate is wrong
+    (memmove_overlap, switch_peeled_table: Z80-OZ-1/-2) Oz is bigger. That is an estimator gap, not a stale row. The
+    caller names it with `--known-oz-gap PROG=ROW`; ROW must be a row of docs/working/above-main-rows.md with an owner
+    and an exit. Remove the flag when `oz_best_of` is fixed. Any other program is stale.
 
     `oz_best_of` chooses per module (`compile::effective`), and a module is one corpus program, so the invariant holds
     per program, not per function.
@@ -116,6 +117,19 @@ def rows(ours, sdcc, sources):
     return out
 
 
+ROWS = Path(__file__).resolve().parent.parent / "docs" / "working" / "above-main-rows.md"
+
+
+def open_rows(table):
+    """Ids of the rows of the above-main table that have an owner and an exit."""
+    found = set()
+    for line in Path(table).read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.startswith("| ") and len(cells) >= 10 and cells[8] and cells[9] and cells[0] != "id":
+            found.add(cells[0])
+    return found
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
@@ -124,7 +138,9 @@ def main(argv):
     ap.add_argument("--programs", required=True)
     ap.add_argument("--header-line", action="append", default=[])
     ap.add_argument("--known-oz-gap", action="append", default=[], metavar="PROG=ROW",
-                    help="a program whose Oz bytes exceed Os by design, with the row that records it")
+                    help="a program whose Oz bytes exceed Os through an oz_best_of estimator gap, with its row in "
+                         "above-main-rows.md (owner and exit); remove when oz_best_of is fixed")
+    ap.add_argument("--rows", default=str(ROWS), help="the rows table that --known-oz-gap rows must be in")
     ap.add_argument("--allow-stale-oz", action="store_true", help="write the table although an Oz row is bigger than its Os row")
     a = ap.parse_args(argv)
     ours, sdcc = {}, {}
@@ -138,10 +154,14 @@ def main(argv):
                             into.setdefault(lv, {}).setdefault(prog, {}).update(
                                 {k: x for k, x in v.items() if (k == "ours") == (into is ours)})
     known = dict(item.split("=", 1) for item in a.known_oz_gap)
+    missing = sorted(row for row in known.values() if row not in open_rows(a.rows))
+    if missing:
+        print(f"--known-oz-gap rows not in {a.rows} with an owner and an exit: {' '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
     stale = [row for row in stale_oz(ours) if row[0] not in known]
     gaps = [row for row in stale_oz(ours) if row[0] in known]
     if gaps:
-        a.header_line.append("OZ>OS KNOWN: " + " ".join(f"{prog}={known[prog]}" for prog, _, _ in gaps))
+        a.header_line.append("OZ>OS ESTIMATOR GAP (oz_best_of): " + " ".join(f"{prog}={known[prog]}" for prog, _, _ in gaps))
     if stale and a.allow_stale_oz:
         a.header_line.append("STALE-OZ ALLOWED: " + " ".join(prog for prog, _, _ in stale))
     elif stale:
