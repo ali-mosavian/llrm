@@ -325,6 +325,13 @@ mod stack_facts_tests {
         );
     }
 
+    /// The check itself: an `S` above the kept alignment must be refused, so a green run above means something.
+    #[test]
+    #[should_panic(expected = "S above what the frames keep")]
+    fn a_stack_alignment_above_what_the_frames_keep_is_refused() {
+        llrm_target::testing::assert_stack_facts("m68k", crate::kernels::DATALAYOUT, 1, Some(PIN));
+    }
+
     #[test]
     fn the_toml_and_the_driver_state_one_datalayout() {
         let toml = include_str!("machines/datalayout.toml");
