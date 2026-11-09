@@ -31,6 +31,13 @@ static LAYOUT: std::sync::LazyLock<llrm_target::layout::Layout> = std::sync::Laz
     llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("real mode's datalayout.toml parses")
 });
 
+/// `kept_stack_align` and `max_alloca_align` of `DATALAYOUT_TOML`, in bytes.
+pub fn stack_keeps() -> (Option<u64>, Option<u64>) {
+    let table: toml::Table = DATALAYOUT_TOML.parse().expect("real mode's datalayout.toml parses");
+    let read = |key: &str| table.get(key).and_then(|one| one.as_integer()).and_then(|one| u64::try_from(one).ok());
+    (read("kept_stack_align"), read("max_alloca_align"))
+}
+
 /// `DATALAYOUT_TOML`, parsed.
 pub fn layout() -> llrm_target::layout::Layout {
     LAYOUT.clone()
@@ -668,6 +675,8 @@ mod tuning_tests {
                 multiply_by_clocks: false,
                 divide_by_bytes: false,
                 price_pin_multiplies: false,
+                // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
+                lftr_any_stride: false,
                 imul_at_size: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,
