@@ -801,6 +801,32 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
+/// For each instruction of each block, whether it lies inside the stack arguments of a call: after an
+/// `ADJCALLSTACKDOWN` of bytes and before the matching `ADJCALLSTACKUP`.
+fn call_areas(function: &MFunction) -> Vec<Vec<bool>> {
+    let entry = expand::call_bytes_at_entry(function);
+    function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(b, block)| {
+            let mut area = entry[b].0 != 0;
+            block
+                .insts
+                .iter()
+                .map(|inst| {
+                    match (inst.kind, inst.operands.first()) {
+                        (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => area = true,
+                        (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => area = false,
+                        _ => {}
+                    }
+                    area
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The pass the push-and-pop conversion was before `stack_slots`, the start
 /// the other forms must beat. Spill slots that nothing else needs a frame for
 /// become `push` and `pop`, and the frame goes: `digits` kept a counter across
@@ -845,13 +871,19 @@ pub fn frameless_slots_are_a_stack(
     if !any {
         return false;
     }
+    // a `push` or `pop` between the pushes of a call's stack arguments moves them; such a spill stays a slot
+    // (x87_arguments -O2: "a pushed spill inside the stack arguments of a call")
+    let areas = call_areas(function);
     let succs = llrm_spike_mf::regalloc::successors(function);
     let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
     entry[0] = Some(Vec::new());
     let mut work = vec![0usize];
     while let Some(b) = work.pop() {
         let mut stack = entry[b].clone().expect("a block on the list has a stack");
-        for inst in &function.blocks[b].insts {
+        for (at, inst) in function.blocks[b].insts.iter().enumerate() {
+            if areas[b][at] && spill(inst).is_some() {
+                return false;
+            }
             match spill(inst) {
                 Some((true, slot, _)) if !stack.contains(&slot) => stack.push(slot),
                 Some((false, slot, _)) if stack.last() == Some(&slot) => {
@@ -1013,15 +1045,10 @@ pub fn stack_slot_report_by(
     let mut barred: std::collections::BTreeMap<i32, StackRefusal> = std::collections::BTreeMap::new();
     let mut accesses: std::collections::BTreeMap<i32, (usize, usize)> = std::collections::BTreeMap::new();
     let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
-    let call_bytes = expand::call_bytes_at_entry(function);
+    let areas = call_areas(function);
     for (b, block) in function.blocks.iter().enumerate() {
-        let mut area = call_bytes[b].0 != 0;
-        for inst in &block.insts {
-            match (inst.kind, inst.operands.first()) {
-                (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => area = true,
-                (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => area = false,
-                _ => {}
-            }
+        for (at, inst) in block.insts.iter().enumerate() {
+            let area = areas[b][at];
             if let Some((store, slot, register)) = spill(inst) {
                 chosen.insert(slot);
                 let counts = accesses.entry(slot).or_default();

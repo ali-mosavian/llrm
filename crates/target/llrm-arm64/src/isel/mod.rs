@@ -30,14 +30,13 @@ mod shifted;
 mod val;
 mod widemul;
 
-use llrm_support::hash::{HashMap, HashSet};
-
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::{
     BlockId, ConstantId, ConstantKind, Function, GlobalId, InstId, Module, Opcode, Operand, Type, TypeId, ValueDef,
     ValueId,
 };
+use llrm_support::hash::{HashMap, HashSet};
 use val::{AddrExpr, Base, G, Known, Val};
 
 use crate::cc::Scalar;
@@ -108,6 +107,16 @@ pub struct Selector<'a> {
     /// A variadic function's register save areas and where its unnamed
     /// arguments begin.
     pub(crate) va: Option<call::VaInfo>,
+    /// The registers each block's phis define, in order: the block's index in
+    /// `order` and the register (one for each member of an aggregate).
+    phi_heads: Vec<(usize, Reg)>,
+    /// What each predecessor gives a phi register, by the register: the value's
+    /// register and the label of the block that branches (the phi's incoming
+    /// pair).
+    phi_incoming: HashMap<Reg, Vec<(Reg, String)>>,
+    /// The edges whose phi values are recorded: (the branching block's label,
+    /// the block index it goes to).
+    phi_edges: HashSet<(String, usize)>,
 }
 
 /// `function` of `module` selected for `platform`.
@@ -208,6 +217,9 @@ impl<'a> Selector<'a> {
             global_pages: HashMap::default(),
             global_needs_address: HashSet::default(),
             va: None,
+            phi_heads: Vec::new(),
+            phi_incoming: HashMap::default(),
+            phi_edges: HashSet::default(),
         }
     }
 
@@ -258,6 +270,18 @@ impl<'a> Selector<'a> {
     }
 
     fn finish(mut self) -> MFunc {
+        // The phis come first in their block (`PHI` as the pin's ISel makes
+        // it); `mfunc::lower_phis` turns them into copies.
+        let mut heads: Vec<Vec<Op>> = vec![Vec::new(); self.order.len()];
+        for (at, dst) in std::mem::take(&mut self.phi_heads) {
+            let incoming = self.phi_incoming.remove(&dst).unwrap_or_default();
+            heads[at].push(Op::Phi { dst, incoming });
+        }
+        for (at, phis) in heads.into_iter().enumerate() {
+            for (place, phi) in phis.into_iter().enumerate() {
+                self.mf.blocks[at].ops.insert_at(place, phi, None);
+            }
+        }
         self.mf.declared = self
             .function
             .debug_records()
@@ -359,6 +383,11 @@ impl<'a> Selector<'a> {
                 }
                 let result = instruction.result.expect("a phi has a result");
                 let value = self.fresh(instruction.ty)?;
+                let at = self.index[&block];
+                for leaf in value.leaves() {
+                    let dst = self.reg_of(leaf).ok_or("a phi with no register")?;
+                    self.phi_heads.push((at, dst));
+                }
                 self.vals.insert(result, value);
             }
         }
@@ -808,13 +837,15 @@ impl Selector<'_> {
         &self.order
     }
 
-    /// Whether `label` is a block made for an edge: those come after the blocks
-    /// of the function.
-    pub(crate) fn is_edge_label(
+    /// Whether `block` starts with a phi.
+    pub(crate) fn has_phis(
         &self,
-        label: &str,
+        block: BlockId,
     ) -> bool {
-        self.mf.blocks.iter().skip(self.order.len()).any(|one| one.label == label)
+        self.function
+            .iter_block(block)
+            .next()
+            .is_some_and(|first| self.function.instruction(first).opcode == Opcode::Phi)
     }
 
     pub(crate) fn reg_of(
@@ -856,8 +887,9 @@ pub(crate) fn global_needs_got(
     // module's "PIC Level" flag) goes through the GOT for what is not defined
     // here, as the pin's `shouldAssumeDSOLocal` (clang -fPIE marks a definition
     // `dso_local`).
-    // A hidden or protected declaration binds inside the module: the pin loads it
-    // directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux PIE.
+    // A hidden or protected declaration binds inside the module: the pin loads
+    // it directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux
+    // PIE.
     let bound_here = global.visibility != llrm_mir::module::Visibility::Default;
     (platform == Platform::Darwin || (flagged_pic(module) && !bound_here)) && !local && !defined
 }

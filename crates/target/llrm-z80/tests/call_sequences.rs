@@ -9,8 +9,8 @@ use std::process::Command;
 /// call must see only its own frame on the stack.
 #[test]
 fn libcall_frames_do_not_nest() {
-    let dir = std::env::temp_dir().join("llrm-call-sequences-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("m.ll");
     std::fs::write(
         &source,
