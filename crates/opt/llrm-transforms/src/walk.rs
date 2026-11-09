@@ -1370,6 +1370,15 @@ pub fn function_bytes(
                 Opcode::Select => costs.branch + costs.r#move,
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
+                // `llvm.lifetime.*`, `llvm.assume` and the rest the cost model calls free emit no instruction: priced as
+                // calls they were 60 B of 267 in stack_arrays_copy (object 94).
+                Opcode::Call(_) | Opcode::Invoke(_)
+                    if llrm_mir::memory::callee(&module.context, function, inst)
+                        .and_then(|global| module.global(global).name.as_deref())
+                        .is_some_and(llrm_mir::tti::is_free_intrinsic) =>
+                {
+                    0
+                }
                 Opcode::Call(_) | Opcode::Invoke(_) => {
                     costs.call + costs.argument * operation.operands.len().saturating_sub(1) as i64
                 }

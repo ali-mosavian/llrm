@@ -1,4 +1,4 @@
-//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O<n>] [-f[no-]PASS] [-fno-inline=NAME] [--dump DIR] [-o OUT]
+//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O<n>] [-f[no-]PASS] [-fno-inline=NAME] [--dump DIR] [--size-estimate=FILE] [-o OUT]
 //! FILE.ll`: LLVM IR from clang's front end alone through the mid-end and the
 //! m68k backend to assembly text with `-S`, else to an ELF32 relocatable
 //! object (`-c` is the same).
@@ -24,10 +24,12 @@ fn run() -> i32 {
     let mut dump = None;
     let mut model = CodeModel::Small;
     let mut policy = Policy::default();
+    let mut estimates = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
+            other if other.starts_with("--size-estimate=") => estimates = Some(other["--size-estimate=".len()..].to_owned()),
             "-c" => assembly = false,
             "-g" => debug = true,
             "-o" => output = arguments.next(),
@@ -70,7 +72,7 @@ fn run() -> i32 {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: llrm-m68k-llc [-S|-c] [-g] [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O0|-O1|-O2|-O3|-Os|-Oz] [-f[no-]PASS] [-fno-inline=NAME] [--dump DIR] [-o OUT] FILE.ll"
+            "usage: llrm-m68k-llc [-S|-c] [-g] [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O0|-O1|-O2|-O3|-Os|-Oz] [-f[no-]PASS] [-fno-inline=NAME] [--dump DIR] [--size-estimate=FILE] [-o OUT] FILE.ll"
         );
         return 2;
     };
@@ -81,6 +83,15 @@ fn run() -> i32 {
             return 1;
         }
     };
+    if let Some(path) = &estimates {
+        let lines = driver::cpu_of(&cpu)
+            .and_then(|cpu| driver::size_estimates(&text, cpu, level))
+            .map(|rows| rows.iter().map(|(name, bytes)| format!("{name}\t{bytes}\n")).collect::<String>());
+        if let Err(why) = lines.and_then(|lines| std::fs::write(path, lines).map_err(|error| format!("{path}: {error}"))) {
+            eprintln!("llrm-m68k-llc: {why}");
+            return 1;
+        }
+    }
     let env = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
     let result: Result<Vec<u8>, String> = driver::cpu_of(&cpu).and_then(|cpu| {
         if assembly {
