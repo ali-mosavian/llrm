@@ -138,10 +138,12 @@ pub struct TargetLowering {
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
-    /// The function is built for size: an `i64` divide calls the target's size routine.
+    /// The function is built for size: an `i64` divide calls the target's size
+    /// routine.
     small_divide: bool,
-    /// The function is built for size alone (-Os), not -O1 where clocks are strict too: an `i64` divide by a
-    /// dword takes the size form that always does two `div`s.
+    /// The function is built for size alone (-Os), not -O1 where clocks are
+    /// strict too: an `i64` divide by a dword takes the size form that
+    /// always does two `div`s.
     size_only: bool,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
@@ -168,6 +170,9 @@ pub struct TargetLowering {
     /// (a call's result, an argument), and the shift is seven instructions on
     /// an 8-bit machine.
     assert_sext_keeps_high: bool,
+    /// `getMinStackArgumentAlignment`: a `va_arg` rounds the list pointer
+    /// only to an alignment above it. The pin's default is 1.
+    min_stack_argument_alignment: u32,
 }
 
 impl TargetLowering {
@@ -190,6 +195,7 @@ impl TargetLowering {
             sdiv_pow2_cmov: None,
             byte_equality: false,
             assert_sext_keeps_high: false,
+            min_stack_argument_alignment: 1,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -218,12 +224,16 @@ impl TargetLowering {
                 self.set_libcall_name(op, vt, name);
             }
         }
-        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names clz and popcount at i32, i64 and
-        // i128, no cttz and no i16. DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a zero-poison
-        // cttz, and libgcc's `__clzhi2`, `__ctzhi2`, `__popcounthi2` for the 8-bit targets' i16. A name is
-        // only called where the target's action for the op and type is `LibCall`.
-        // Upstream check: at each pin bump, grep RuntimeLibcalls.td for CTTZ and an i16 count; where the pin names
-        // one, take its name and drop the row. Exit: 2026-11-30 (decide: keep as a recorded deviation or drop).
+        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names
+        // clz and popcount at i32, i64 and i128, no cttz and no i16.
+        // DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a
+        // zero-poison cttz, and libgcc's `__clzhi2`, `__ctzhi2`,
+        // `__popcounthi2` for the 8-bit targets' i16. A name is
+        // only called where the target's action for the op and type is
+        // `LibCall`. Upstream check: at each pin bump, grep
+        // RuntimeLibcalls.td for CTTZ and an i16 count; where the pin names
+        // one, take its name and drop the row. Exit: 2026-11-30 (decide: keep
+        // as a recorded deviation or drop).
         let counts: [(MVT, [&'static str; 3]); 4] = [
             (MVT::I16, ["__clzhi2", "__popcounthi2", "__ctzhi2"]),
             (MVT::I32, ["__clzsi2", "__popcountsi2", "__ctzsi2"]),
@@ -278,6 +288,18 @@ impl TargetLowering {
     /// A shift by a constant of a `bits`-wide value is a call to the shift
     /// routine in a function tuned for size where the granules still shifted
     /// times the bits beyond whole granules reach `least`.
+    pub fn set_min_stack_argument_alignment(
+        &mut self,
+        align: u32,
+    ) {
+        self.min_stack_argument_alignment = align;
+    }
+
+    /// `getMinStackArgumentAlignment`, in bytes.
+    pub fn min_stack_argument_alignment(&self) -> u32 {
+        self.min_stack_argument_alignment
+    }
+
     pub fn set_size_shift_call(
         &mut self,
         granule: u128,
@@ -314,7 +336,10 @@ impl TargetLowering {
     /// The routine `name` is spelled `symbol` in the object.
     /// Both tables are the same allocations: neither has been written since
     /// one was copied from the other.
-    pub fn shares_maps_with(&self, other: &TargetLowering) -> bool {
+    pub fn shares_maps_with(
+        &self,
+        other: &TargetLowering,
+    ) -> bool {
         std::sync::Arc::ptr_eq(&self.maps, &other.maps)
     }
 
@@ -705,7 +730,11 @@ impl TargetLowering {
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(
+                &[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE],
+                &[vt],
+                Action::Expand,
+            );
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -1053,7 +1082,11 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry], native, Custom);
+        t.set_ops(
+            &[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry],
+            native,
+            Custom,
+        );
         t
     }
 }
