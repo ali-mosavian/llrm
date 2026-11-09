@@ -205,6 +205,25 @@ impl Target for Arm64 {
         8
     }
 
+    /// Issue width and ordering from the pin's scheduling models: `generic` is
+    /// Cortex-A510's, in order and three wide
+    /// ([AArch64SchedA510.td#L19](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64SchedA510.td#L19)),
+    /// `apple-m1` is Cyclone's, out of order and six wide
+    /// ([AArch64SchedCyclone.td#L15](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64SchedCyclone.td#L15)).
+    /// No clocks: arm64 prices through `cost_model` (tti.rs), so a pass that
+    /// asks the profile for a form's clocks is told it has none.
+    fn cpu_table(
+        &self,
+        name: &str,
+    ) -> Option<llrm_target::timings::CpuTable> {
+        let (issue, in_order) = match name {
+            "generic" => (3, true),
+            "apple-m1" => (6, false),
+            _ => return None,
+        };
+        Some(llrm_target::timings::CpuTable { issue, in_order, ..Default::default() })
+    }
+
     fn default_cpu(&self) -> &'static str {
         Platform::Linux.cpu()
     }
@@ -361,25 +380,36 @@ mod tests {
         assert_eq!((Arm64.float_width(4), Arm64.float_width(8)), (4, 8));
     }
 
-    /// First fact of `flow::machine_with` (cpu.rs `_profile`): the CPU profile
-    /// the stages read is built from the target's `cpu_table`, whose columns
-    /// and form clocks are x86's. arm64 has none, so no profile exists.
-    /// Goes red when arm64 states a table: replace it with that test.
+    /// `flow::machine_with` stopped at its CPU profile (no `cpu_table`:
+    /// "unknown CPU target"), then at `cost("movzx")`, then at
+    /// `Segments::of` asking a flat machine for a data segment. The
+    /// pipeline is now built from arm64's own inputs; a profile without
+    /// clocks says so by name.
     #[test]
-    #[should_panic(expected = "unknown CPU target: generic")]
-    fn the_cpu_profile_needs_a_cpu_table() {
-        let _ = llrm_codegen::backend::cpu::tuned_for(&Arm64, "generic", false);
-    }
-
-    /// Second fact of `machine_with`'s inputs: even a flat machine's
-    /// `Segments::of` asks the register file for `data` (DS, "what string
-    /// operations read"); arm64 names no data segment, so it panics.
-    /// Goes red when `Segments` allows none: replace with the flat test.
-    #[test]
-    #[should_panic(expected = "names no data segment")]
-    fn the_segments_of_a_flat_machine_ask_for_a_data_segment() {
+    fn machine_with_builds_for_arm64_and_a_missing_clock_is_named() {
+        use llrm_codegen::backend::{classes::RegisterClasses, cpu::tuned_for, peep::Rules, target::Segments};
+        let profile = tuned_for(&Arm64, "generic", false).expect("generic has a profile");
+        assert_eq!((profile.issue_width, profile.in_order), (3, true));
+        assert!(profile.cost("movzx").unwrap_err().contains("has no cost for movzx"));
         let regs = llrm_lir::registers::Regs(Arm64.registers());
-        let _ = llrm_codegen::backend::target::Segments::of(&Arm64.machine(), regs, Arm64.operand_bytes());
+        let segments = Segments::of(&Arm64.machine(), regs, Arm64.operand_bytes());
+        assert_eq!(segments.data, None);
+        let phases = llrm_codegen::flow::machine_with(
+            &Default::default(),
+            None,
+            None,
+            None,
+            false,
+            profile,
+            &segments,
+            &std::rc::Rc::new(RegisterClasses::of(&Arm64)),
+            &Rules::NONE,
+            &Arm64.frame_registers(),
+            llrm_codegen::backend::shadow::Selector::Old,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
+        println!("{} phases: {}", names.len(), names.join(" "));
     }
 
     /// The shared passes' prices are the private driver's: one `Arm64Machine`.

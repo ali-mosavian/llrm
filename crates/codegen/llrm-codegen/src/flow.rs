@@ -225,7 +225,9 @@ pub fn machine_with<'a>(
         // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
         // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
-            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
+            // A profile that states neither clock (the target prices through its cost
+            // model) gets no pass, not a free one.
+            clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
@@ -346,8 +348,10 @@ pub fn machine_with<'a>(
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw {
             size: target.size,
-            widens_byte: target.widens_load(1)?,
-            widens_word: target.widens_load(2)?,
+            // A CPU that states no clocks widens nothing: the rewrite is priced
+            // against the load it replaces, and there is no price.
+            widens_byte: target.widens_load(1).unwrap_or(false),
+            widens_word: target.widens_load(2).unwrap_or(false),
             strict_bytes: target.size || target.min_size || !target.speed_rate,
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
