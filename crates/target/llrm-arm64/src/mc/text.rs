@@ -271,6 +271,15 @@ impl fmt::Display for Inst {
                     gpr(*rm, *width, false)
                 )
             }
+            Inst::AddCarry { op, width, rd, rn, rm } => {
+                let name = match (op.subtract, op.set_flags) {
+                    (false, false) => "adc",
+                    (false, true) => "adcs",
+                    (true, false) => "sbc",
+                    (true, true) => "sbcs",
+                };
+                write!(out, "{name} {}, {}, {}", gpr(*rd, *width, false), gpr(*rn, *width, false), gpr(*rm, *width, false))
+            }
             Inst::CondCompare { negate, width, rn, rm_or_imm, nzcv, cond } => {
                 let name = if *negate { "ccmn" } else { "ccmp" };
                 let second = match rm_or_imm {

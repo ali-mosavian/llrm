@@ -632,6 +632,7 @@ pub fn lower(
                     _ => return Err("a copy between register classes".into()),
                 },
                 Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
+                Op::Phi { .. } => return Err("a phi after phi elimination".into()),
                 Op::DbgValue { variable, reg } => {
                     let reg = match reg {
                         Some(Reg::Gpr(gpr)) => Some(*gpr),
