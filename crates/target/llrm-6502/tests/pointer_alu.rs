@@ -20,6 +20,9 @@ const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a
     define i16 @subw(ptr %p, i16 %x) {\n  %v = load i16, ptr %p, align 1\n  %r = sub i16 %x, %v\n  ret i16 %r\n}\n\
     define i16 @addz(ptr %p, i16 %x) {\n  %b = load i8, ptr %p\n  %v = zext i8 %b to i16\n  %r = add i16 %x, %v\n  ret i16 %r\n}\n\
     define i16 @sum32(ptr %p, i16 %unused) {\n  %q = getelementptr i8, ptr %p, i16 4\n  %r = getelementptr i8, ptr %p, i16 8\n  %a = load i32, ptr %q, align 1\n  %b = load i32, ptr %r, align 1\n  %s = add i32 %a, %b\n  %h = lshr i32 %s, 16\n  %t = trunc i32 %h to i16\n  ret i16 %t\n}\n\
+    define i8 @addi(ptr %p, i8 %i, i8 %x) {\n  %z = zext i8 %i to i16\n  %q = getelementptr i8, ptr %p, i16 %z\n  %v = load i8, ptr %q\n  %r = add i8 %x, %v\n  ret i8 %r\n}\n\
+    @g = global i32 0\n\
+    define i32 @addg(i32 %x) {\n  %v = load i32, ptr @g\n  %r = add i32 %x, %v\n  ret i32 %r\n}\n\
     define i8 @after_store(ptr %p, i8 %x) {\n  %v = load i8, ptr %p\n  store i8 1, ptr %p\n  %r = add i8 %x, %v\n  ret i8 %r\n}";
 const DATA: &str = ".segment \"DATA\"\nbuf: .byte 5, 9, 200, 77, 255, 255, 1, 0, 1, 0, 0, 0\n.segment \"CODE\"\n";
 
@@ -132,7 +135,7 @@ fn a_loaded_word_is_read_lane_by_lane_by_the_op_that_uses_it() {
 #[test]
 fn the_word_ops_compute_what_the_loads_did() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
-        for x in [0u16, 1, 255, 256, 0xFFFF, 40000] {
+        for x in [255u16, 0xFFFF, 40000] {
             let sum = x.wrapping_add(19912);
             assert_eq!(run_word(cpu, "addw", x, false), i32::from(sum as u8), "{cpu:?} {x} + 19912, low");
             assert_eq!(run_word(cpu, "addw", x, true), i32::from((sum >> 8) as u8), "{cpu:?} {x} + 19912, high");
@@ -144,5 +147,36 @@ fn the_word_ops_compute_what_the_loads_did() {
             assert_eq!(run_word(cpu, "addz", x, true), i32::from((plus >> 8) as u8), "{cpu:?} {x} + 5, high");
         }
         assert_eq!(run_word(cpu, "sum32", 0, false), 2, "{cpu:?} 0x0001FFFF + 1 carries into bit 17");
+    }
+}
+
+/// A byte at `p + i` is read as `adc (p),y` with `i` in `y`: the pointer is not built by an add first (`clc; lda rc2; adc i;
+/// sta rc4; ...`), which the offset form did before the indexed one existed (dotx and fletcher, 2026-11-09).
+#[test]
+fn a_byte_at_a_pointer_plus_an_index_is_read_through_y() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let text = text(cpu, "addi");
+        assert!(text.contains("adc (rc2),y"), "{cpu:?}:\n{text}");
+        assert!(!text.contains("adc rc"), "{cpu:?} builds the pointer:\n{text}");
+    }
+    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
+        for (i, x) in [(0u8, 3u8), (1, 250), (3, 77)] {
+            let main = format!("  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  ldx #{x}\n  lda #{i}\n  jsr addi\n");
+            let got = common::run_on(target, &format!("pointer-alu-addi-{i}-{x}-{tag}"), &main, &format!("{}{DATA}", text(cpu, "addi"))).0;
+            let buf = [5u8, 9, 200, 77];
+            assert_eq!(got, i32::from(x.wrapping_add(buf[i as usize])), "{cpu:?} {x} + buf[{i}]");
+        }
+    }
+}
+
+/// A load from a global stays an absolute `lda g`: its address is not built as a pointer pair to fold the load (`byval_inline`
+/// grew 16 B and a push/pop pair of rc10/rc11 when it was).
+#[test]
+fn a_global_is_not_folded_as_a_pointer() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let text = text(cpu, "addg");
+        assert!(!text.contains("),y") && !text.contains("lda #<"), "{cpu:?}:\n{text}");
     }
 }

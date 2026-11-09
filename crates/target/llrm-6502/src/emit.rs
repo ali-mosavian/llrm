@@ -244,7 +244,7 @@ pub fn expand(
         // an op reading its second operand through a pointer: `ldy #off; op (p),y`, a lane at a time
         code if crate::pointer_alu::pointer_alu(code).is_some() => {
             let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
-            let ((lo, hi), off) = (word(&o[fold.ptr])?, imm(&o[fold.ptr + 1])?);
+            let ((lo, hi), off) = (word(&o[fold.ptr])?, if fold.indexed { 0 } else { imm(&o[fold.ptr + 1])? });
             let lo = zero_page_pointer(&mut out, &lo, &hi);
             let (mnemonic, lanes) = (fold.mnemonic.to_lowercase(), if fold.word { 2 } else { 1 });
             if let Some(carry) = fold.carry {
@@ -257,7 +257,8 @@ pub fn expand(
                 } else {
                     (reg(&o[0])?.to_owned(), reg(&o[fold.a])?.to_owned())
                 };
-                writeln!(out, "  ldy #{}\n  lda {from}\n  {mnemonic} ({lo}),y\n  sta {dest}", off + lane).unwrap();
+                let y = if fold.indexed { reg(&o[fold.ptr + 1])?.to_owned() } else { format!("#{}", off + lane) };
+                writeln!(out, "  ldy {y}\n  lda {from}\n  {mnemonic} ({lo}),y\n  sta {dest}").unwrap();
             }
         }
         op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {

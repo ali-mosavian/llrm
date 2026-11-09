@@ -1189,6 +1189,38 @@ impl Builder {
         Ok(())
     }
 
+    /// `d := a op *(p + index)`: the index byte goes to `y`, the op reads `(p),y`.
+    fn alu_pointer_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        self.define(d);
+        let (d, a, index) = (self.byte(d)?, self.byte(a)?, self.byte(index)?);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(y, index);
+        self.copy(acc, a);
+        let kind = Kind::Op(match mnemonic {
+            "ADC" => "ADCPX",
+            "SBC" => "SBCPX",
+            "AND" => "ANDPX",
+            "ORA" => "ORAPX",
+            _ => "EORPX",
+        });
+        self.push(Inst::new(kind, vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+        self.copy(d, acc);
+        Ok(())
+    }
+
     /// The same on a word: the carry runs from the low byte to the high, the high byte of the second operand being at
     /// `off + 1`.
     fn alu16_pointer(
@@ -1830,12 +1862,14 @@ pub fn build_with_places(
             // a byte op reading `(p),y` (or the 65C02's `(p)`): the load folded into it
             code if crate::pointer_alu::pointer_alu(code).is_some() => {
                 let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
-                let offset = immediate(&o[fold.ptr + 1])?;
                 let (d, a, pointer) = (name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?);
-                if fold.word {
+                if fold.indexed {
+                    b.alu_pointer_indexed(fold.mnemonic, fold.carry, d, a, pointer, name(&o[fold.ptr + 1])?)?
+                } else if fold.word {
+                    let offset = immediate(&o[fold.ptr + 1])?;
                     b.alu16_pointer(&fold, d, a, pointer, offset)?
                 } else {
-                    b.alu_pointer(fold.mnemonic, fold.carry, d, a, pointer, offset)?
+                    b.alu_pointer(fold.mnemonic, fold.carry, d, a, pointer, immediate(&o[fold.ptr + 1])?)?
                 }
             }
             op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
@@ -3763,6 +3797,9 @@ fn emit_with<const STACK: bool>(
                     } else {
                         writeln!(out, "  ldy #{off}\n  {op} ({p}),y").unwrap()
                     }
+                }
+                (Kind::Op(step @ ("ADCPX" | "SBCPX" | "ANDPX" | "ORAPX" | "EORPX")), _) => {
+                    writeln!(out, "  {} ({}),y", step[..3].to_lowercase(), register_name(lane(regs[2], 0))).unwrap()
                 }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),

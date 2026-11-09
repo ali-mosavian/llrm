@@ -41,6 +41,8 @@ def MOSAddr : ComplexPattern<i16, 2, "SelectIndirect", [], []>;
 def MOSIdx : ComplexPattern<i16, 2, "SelectIndexed", [], []>;
 // A pointer with no offset to add (and no frame object, which the frame code turns into an offset).
 def MOSPtr : ComplexPattern<i16, 1, "SelectPlain", [], []>;
+// `MOSAddr` for an address that is a pointer: not a global or a constant, which the absolute forms take.
+def MOSPointer : ComplexPattern<i16, 2, "SelectPointer", [], []>;
 
 // The pin's tblgen has no nodes for the overflow forms the type legalizer expands into.
 def SDTOverflowOp : SDTypeProfile<2, 2, [SDTCisSameAs<0, 2>, SDTCisSameAs<0, 3>, SDTCisInt<0>, SDTCisVT<1, i1>]>;
@@ -208,40 +210,46 @@ let mayLoad = 1, AddedComplexity = 30 in {
 // folds under the global forms' rule: its one use, no store between. Below those forms (30): a global's address is also a pointer,
 // and `and bad` beats five instructions to build it. The carry forms take the carry operand before the address, so the address is
 // always the last two operands.
-let mayLoad = 1, AddedComplexity = 10 in {
+multiclass PtrAlu8<string sfx, DAGOperand po, ComplexPattern cp> {
   let Defs = [P] in {
-    def ADD8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "add8p $d, $a, ($p)", [(set i8:$d, (add i8:$a, (load MOSAddr:$p)))]>;
-    def SUB8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "sub8p $d, $a, ($p)", [(set i8:$d, (sub i8:$a, (load MOSAddr:$p)))]>;
-    def AND8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "and8p $d, $a, ($p)", [(set i8:$d, (and i8:$a, (load MOSAddr:$p)))]>;
-    def OR8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "or8p $d, $a, ($p)", [(set i8:$d, (or i8:$a, (load MOSAddr:$p)))]>;
-    def XOR8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "xor8p $d, $a, ($p)", [(set i8:$d, (xor i8:$a, (load MOSAddr:$p)))]>;
+    def ADD8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "add8p $d, $a, ($p)", [(set i8:$d, (add i8:$a, (load cp:$p)))]>;
+    def SUB8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "sub8p $d, $a, ($p)", [(set i8:$d, (sub i8:$a, (load cp:$p)))]>;
+    def AND8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "and8p $d, $a, ($p)", [(set i8:$d, (and i8:$a, (load cp:$p)))]>;
+    def OR8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "or8p $d, $a, ($p)", [(set i8:$d, (or i8:$a, (load cp:$p)))]>;
+    def XOR8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "xor8p $d, $a, ($p)", [(set i8:$d, (xor i8:$a, (load cp:$p)))]>;
   }
-  def ADDO8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, memri:$p), "addo8p $d, $co, $a, ($p)",
-                       [(set i8:$d, i1:$co, (uaddo i8:$a, (load MOSAddr:$p)))]>;
-  def SUBO8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, memri:$p), "subo8p $d, $co, $a, ($p)",
-                       [(set i8:$d, i1:$co, (usubo i8:$a, (load MOSAddr:$p)))]>;
-  def ADDOC8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, memri:$p), "addoc8p $d, $co, $a, $ci, ($p)",
-                        [(set i8:$d, i1:$co, (uaddo_carry i8:$a, (load MOSAddr:$p), i1:$ci))]>;
-  def SUBOC8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, memri:$p), "suboc8p $d, $co, $a, $ci, ($p)",
-                        [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load MOSAddr:$p), i1:$ci))]>;
+  def ADDO8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, po:$p), "addo8p $d, $co, $a, ($p)",
+                          [(set i8:$d, i1:$co, (uaddo i8:$a, (load cp:$p)))]>;
+  def SUBO8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, po:$p), "subo8p $d, $co, $a, ($p)",
+                          [(set i8:$d, i1:$co, (usubo i8:$a, (load cp:$p)))]>;
+  def ADDOC8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, po:$p), "addoc8p $d, $co, $a, $ci, ($p)",
+                           [(set i8:$d, i1:$co, (uaddo_carry i8:$a, (load cp:$p), i1:$ci))]>;
+  def SUBOC8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, po:$p), "suboc8p $d, $co, $a, $ci, ($p)",
+                           [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load cp:$p), i1:$ci))]>;
 }
+// `(p),y` with a constant offset, or with a byte index in y (the index form wins where the address is a pointer plus a byte: without it
+// the pointer would be built by an add).
+let mayLoad = 1, AddedComplexity = 10 in
+  defm "" : PtrAlu8<"P", memri, MOSPointer>;
+let mayLoad = 1, AddedComplexity = 20 in
+  defm "" : PtrAlu8<"PI", memrr, MOSIdx>;
 // The same on a word: LDY #off; LDA alo; ADC (p),Y; STA dlo; LDY #off+1; LDA ahi; ADC (p),Y; STA dhi.
 let mayLoad = 1, AddedComplexity = 10 in {
   let Defs = [P] in {
-    def ADD16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "add16p $d, $a, ($p)", [(set i16:$d, (add i16:$a, (load MOSAddr:$p)))]>;
-    def SUB16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "sub16p $d, $a, ($p)", [(set i16:$d, (sub i16:$a, (load MOSAddr:$p)))]>;
-    def AND16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "and16p $d, $a, ($p)", [(set i16:$d, (and i16:$a, (load MOSAddr:$p)))]>;
-    def OR16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "or16p $d, $a, ($p)", [(set i16:$d, (or i16:$a, (load MOSAddr:$p)))]>;
-    def XOR16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "xor16p $d, $a, ($p)", [(set i16:$d, (xor i16:$a, (load MOSAddr:$p)))]>;
+    def ADD16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "add16p $d, $a, ($p)", [(set i16:$d, (add i16:$a, (load MOSPointer:$p)))]>;
+    def SUB16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "sub16p $d, $a, ($p)", [(set i16:$d, (sub i16:$a, (load MOSPointer:$p)))]>;
+    def AND16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "and16p $d, $a, ($p)", [(set i16:$d, (and i16:$a, (load MOSPointer:$p)))]>;
+    def OR16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "or16p $d, $a, ($p)", [(set i16:$d, (or i16:$a, (load MOSPointer:$p)))]>;
+    def XOR16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "xor16p $d, $a, ($p)", [(set i16:$d, (xor i16:$a, (load MOSPointer:$p)))]>;
   }
   def ADDO16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, memri:$p), "addo16p $d, $co, $a, ($p)",
-                        [(set i16:$d, i1:$co, (uaddo i16:$a, (load MOSAddr:$p)))]>;
+                        [(set i16:$d, i1:$co, (uaddo i16:$a, (load MOSPointer:$p)))]>;
   def SUBO16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, memri:$p), "subo16p $d, $co, $a, ($p)",
-                        [(set i16:$d, i1:$co, (usubo i16:$a, (load MOSAddr:$p)))]>;
+                        [(set i16:$d, i1:$co, (usubo i16:$a, (load MOSPointer:$p)))]>;
   def ADDOC16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, memri:$p), "addoc16p $d, $co, $a, $ci, ($p)",
-                         [(set i16:$d, i1:$co, (uaddo_carry i16:$a, (load MOSAddr:$p), i1:$ci))]>;
+                         [(set i16:$d, i1:$co, (uaddo_carry i16:$a, (load MOSPointer:$p), i1:$ci))]>;
   def SUBOC16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, memri:$p), "suboc16p $d, $co, $a, $ci, ($p)",
-                         [(set i16:$d, i1:$co, (usubo_carry i16:$a, (load MOSAddr:$p), i1:$ci))]>;
+                         [(set i16:$d, i1:$co, (usubo_carry i16:$a, (load MOSPointer:$p), i1:$ci))]>;
 }
 // The same with a global indexed by a byte: LDX i; LDA a; ADC g,x.
 let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {

@@ -80,6 +80,23 @@ fn select_indirect<D: AddrDag>(
     results.push((offset, None));
 }
 
+/// `SelectPointer`: `SelectIndirect` for an address that is a pointer. A global's address (or a constant) is left to the absolute
+/// forms: `lda g+36` is one instruction where a pointer pair is four to build, and the folds into an ALU op have no absolute form
+/// for every carry op.
+fn select_pointer<D: AddrDag>(
+    dag: &mut D,
+    value: SDValue,
+    results: &mut Vec<(SDValue, Option<u32>)>,
+) -> bool {
+    let base = if dag.opcode(value.node) == isd::ADD { dag.operand(value.node, 0) } else { value };
+    let fixed = |dag: &D, v: SDValue| dag.opcode(v.node) == own::WRAPPER || dag.constant(v).is_some();
+    if fixed(dag, value) || fixed(dag, base) {
+        return false;
+    }
+    select_indirect(dag, value, results);
+    true
+}
+
 /// `SelectPlain`: a pointer with no constant to add and no frame object, as
 /// itself.
 fn select_plain<D: AddrDag>(
@@ -259,6 +276,7 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
                 select_indirect(dag, value, results);
                 true
             }
+            Some("SelectPointer") => select_pointer(dag, value, results),
             Some("SelectPlain") => select_plain(dag, value, results),
             Some("SelectAbs") => select_abs(dag, value, results),
             Some("SelectAbsX") => select_absx(dag, value, results),
