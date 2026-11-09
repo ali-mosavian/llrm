@@ -20,11 +20,22 @@ fn the_early_exit_runs_before_the_frame() {
 
 /// A block that is one jump (the edge out of a branch whose target has other
 /// predecessors) is no place for a copy: the pin has no such block, and the
-/// copy sunk into ours cost a `b` back (switch -Os: +4 B).
+/// copy sunk into ours cost a `b` back (switch -Os: +4 B). No register copy
+/// is followed by a jump; the jump count (7, then 6 after #7394 shortened a
+/// spill) only bounds it.
 #[test]
 fn a_copy_is_not_sunk_into_an_edge_block() {
-    let asm =
-        driver::assembly(include_str!("data/post_ra_sink_edge.ll"), Platform::Linux, Level::Os).expect("lowers");
-    let jumps = asm.lines().filter(|line| line.starts_with("\tb ")).count();
-    assert_eq!(jumps, 7, "{asm}");
+    let asm = driver::assembly(include_str!("data/post_ra_sink_edge.ll"), Platform::Linux, Level::Os).expect("lowers");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let jumps = lines.iter().filter(|line| line.starts_with("b ")).count();
+    assert!(jumps <= 7, "{asm}");
+    let copy_then_jump = lines
+        .windows(2)
+        .any(
+            |pair| {
+                let copy = pair[0].starts_with("orr ") && pair[0].contains(", xzr, x") && !pair[0].contains("xzr, xzr");
+                copy && pair[1].starts_with("b ")
+            },
+        );
+    assert!(!copy_then_jump, "{asm}");
 }
