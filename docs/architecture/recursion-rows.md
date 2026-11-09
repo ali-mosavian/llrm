@@ -111,4 +111,11 @@ Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not cl
 
 ## REC-8 (2026-11-09, x86-m32): -O3 copies a recursion as -O2 does
 
-`recursive_tre_first` is (false, false) and `recursive_inlining_depth` (2, 2) for x86-m32; -O3 had (true) and 8 (REC-2, REC-7 as priced before depth 2 existed at -O2). 12 recursion programs, native `instructions:u` net of an empty program: -O2 3930 B / 2.349 M; the old -O3 9486 B / 3.473 M; the -O2 policy at -O3 6291 B / 2.334 M. vsgcc harness, 15 programs, 486 clocks: -O3 8,069,135 -> 6,303,617 clk, 10769 -> 7392 B. Better: fib and x_fib -208,908 clk each, frames -1,209,876, rectwo -145,543 (-825 B), quicksort -1,884. Worse, owner x86-m32: bintree +4,527 clk (-224 B), x_hanoi2 +4,868 (-370 B), recchop +206 (-554 B); a priced depth (`priced_copy_depth`, REC-1) could keep their wins. -O1, -Os and -O2 objects are byte-identical (196 of 196 each).
+`recursive_tre_first` is (false, false) and `recursive_inlining_depth` (2, 2) for x86-m32; -O3 had (true) and 8 (REC-2, REC-7 as priced before depth 2 existed at -O2). 12 recursion programs, native `instructions:u` net of an empty program: -O2 3930 B / 2.349 M; the old -O3 9486 B / 3.473 M; the -O2 policy at -O3 6291 B / 2.334 M. vsgcc harness, 15 programs, 486 clocks: -O3 8,069,135 -> 6,303,617 clk, 10769 -> 7392 B. Better: fib and x_fib -208,908 clk each, frames -1,209,876, rectwo -145,543 (-825 B), quicksort -1,884. Worse than before at -O3, at the 0.3125 clk/B rate (net of the bytes saved):
+
+- **O3-REC-BINTREE, owner x86-m32, exit 2026-11-14:** bintree +4,457 clk-equivalent (+4,527 clk, -224 B).
+- **O3-REC-HANOI2, owner x86-m32, exit 2026-11-14:** x_hanoi2 +4,752 (+4,868 clk, -370 B).
+- **O3-REC-RECCHOP, owner x86-m32, exit 2026-11-14:** recchop +33 (+206 clk, -554 B).
+
+Cause of all three: a fixed depth. Fix: the priced copy depth (`priced_copy_depth`, REC-1) at m32 -O3, a table-driven price. Fix-forward on release/next, not a waiver for main.
+ -O1, -Os and -O2 objects are byte-identical (196 of 196 each).
