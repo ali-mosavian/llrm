@@ -50,26 +50,36 @@
 //! each cell is at or under the pin llc, over the previous MIR expansion;
 //! bytes before -> after, release/next only):
 //! - I64SEL-1, exit 2026-11-12: m32 `select_of_constants` .text +32 (-O1, -O2)
-//!   and +64 (-O3), 12 of 420 functions grow by 1..7 B. Cause: the scheduler
-//!   puts the CMOV diamond before the SETCC (`f409`, 32 B; pin 28 B), so
-//!   FixupSetCC cannot fire and MaskByAnd emits `and eax,255`. General
+//!   and +64 (-O3), 12 of 420 functions grow by 1..7 B. Harness (run_, cycle
+//!   model) clocks base -> head: O1 270645 -> 273325 (+1.0%), O2 267647 ->
+//!   270127 (+0.9%), O3 266972 -> 270147 (+1.2%), Os 455460 -> 458620 (+0.7%);
+//!   code without padding is smaller (O1 -108, O2 -100, O3 -118, Os -118 B),
+//!   the +32/+32/+64 is alignment padding (+140/+132/+182). Cause: the
+//!   scheduler puts the CMOV diamond before the SETCC (`f409`, 32 B; pin 28
+//!   B), so FixupSetCC cannot fire and MaskByAnd emits `and eax,255`. General
 //!   scheduling cause (SD31, NodeNum), filed with sdag-d; not patched here.
-//! - I64SEL-2, exit tied to the m64 `x*257` decomposition PR (owner w12, by
-//!   2026-11-12): m64 `word_compares` -O1/-O2/-O3 295 -> 309 B, `main` 167 ->
-//!   173 B (pin 175 B). Cause: `x*257` stays `imul` at m64 (pin: `(x<<8)+x`),
-//!   so the ADC takes `2*setbe` as an `add` before it, the flags are
-//!   clobbered, the `cmp` is repeated with its load unfolded, and one more
-//!   value is live (R15D).
+//! - I64SEL-2, owner x86-m64 SD447 (oversight to rule the tie rule; w12 until
+//!   then), exit 2026-11-20: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
+//!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
+//!   (O1, +0.28%), 139968 -> 140365 (O2), 139969 -> 140364 (O3); cycles within
+//!   noise, output equal; m32 `word_compares` identical. Cause: SD447 keeps
+//!   `x*257` as `imul` on a tie, so the ADC takes `2*setbe` as an `add`
+//!   before it, the flags are clobbered, the `cmp` is repeated with its load
+//!   unfolded and one more value is live (R15D). Without the multiply the pin
+//!   emits our shape. Evidence: ~/scratch/handoff/m64-mul257-adc-flags-2026-11-09.md.
 //! - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8 B, -Os +10 B
 //!   (only `__divsf3`: 493 -> 503 B, pin 560 B; register naming and one
-//!   `mov`).
+//!   `mov`). Native instructions equal within 1 at O1 and Os (sfm16_float_add
+//!   O1 128138 -> 128139, Os 128548 -> 128548), output equal.
 //! - I64SEL-4, exit 2026-11-10 18:00Z: m32 `x_sf_cmp64` -Os +1302 executed
-//!   instructions at equal bytes (`test; js` became `test; jns`, a branch
-//!   layout flip).
-//! - I64SEL-5, exit 2026-11-12: z80-sdcc `call_clobbers_flags` -O2/-Os .text
-//!   602 -> 618 B. Cause: the shared `add (sext i1 c), x` -> `sub x, (zext c)`
-//!   fold (pin `visitADDLikeCommutative`) now fires; z80 prices the `sbc hl,bc`
-//!   form eight bytes above `add hl,de` (z80 owner).
+//!   instructions (+1.1% clocks) at equal bytes (`test; js` became
+//!   `test; jns`, a branch layout flip).
+//! - I64SEL-5, owner z80, exit 2026-11-12: z80-sdcc `call_clobbers_flags`
+//!   -O2/-Os .text 602 -> 618 B. Cause: the shared `add (sext i1 c), x` ->
+//!   `sub x, (zext c)` fold (pin `visitADDLikeCommutative`) now fires; `add
+//!   hl,de` (11 T) becomes `ex de,hl; or a,a; sbc hl,bc` (23 T), +12 T per
+//!   execution of the site (static; ucsim run PASS, T not measured by the
+//!   runner).
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
