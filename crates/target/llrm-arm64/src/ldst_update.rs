@@ -17,6 +17,14 @@
 //! pre-index never moves over an access.
 //! DEVIATE LU3: a call ends the forward scan; the pin goes on over one when
 //! the base survives it (callee-saved). Exit: none, a missed merge.
+//! DEVIATE LU4: `tryToMergeIndexLdSt` is refused when the load's base is its
+//! index register (`ldr w0, [x8, x8]`); the pin would add to a register whose
+//! constant it just erased. Unreachable: `c + c` of a constant is folded
+//! before selection, so no address is two equal constant registers. Exit: none.
+//! DEVIATE LU5: the `movz` of the pair must shift by 0; the pin reads its
+//! immediate without the shift. Unreachable: the immediate expansion puts the
+//! lowest nonzero chunk in the `movz`, so a pair of two chunks has it at 0.
+//! Exit: none.
 
 use llrm_object::assembler::Cfi;
 use llrm_support::hash::HashMap;
