@@ -204,30 +204,27 @@ let mayLoad = 1, AddedComplexity = 30 in {
   def CMP8M : MOSInst<(outs Flags:$f), (ins Imag8:$a, absaddr:$m), "cmp8m $f, $a, $m", [(set i8:$f, (MOScmp i8:$a, (load MOSAbs:$m)))]>;
   def CMP16M : MOSInst<(outs Flags:$f), (ins Imag16:$a, absaddr:$m), "cmp16m $f, $a, $m", [(set i8:$f, (MOScmp i16:$a, (load MOSAbs:$m)))]>;
 }
-// A byte op whose second operand is loaded through a pointer: LDY #off; LDA a; ADC (p),Y; the 65C02 with an offset of 0 has ADC (p).
-// The load folds under the global forms' rule: its one use, no store between. The carry forms take the carry operand before the
-// address, so a Y form's address is its last two operands.
-multiclass PtrAlu<string sfx, DAGOperand po, ComplexPattern cp> {
+// A byte op whose second operand is loaded through a pointer: LDY #off; LDA a; ADC (p),Y (a 65C02 with off 0 prints ADC (p)). The load
+// folds under the global forms' rule: its one use, no store between. Below those forms (30): a global's address is also a pointer,
+// and `and bad` beats five instructions to build it. The carry forms take the carry operand before the address, so the address is
+// always the last two operands.
+let mayLoad = 1, AddedComplexity = 10 in {
   let Defs = [P] in {
-    def ADD8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "add8p $d, $a, ($p)", [(set i8:$d, (add i8:$a, (load cp:$p)))]>;
-    def SUB8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "sub8p $d, $a, ($p)", [(set i8:$d, (sub i8:$a, (load cp:$p)))]>;
-    def AND8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "and8p $d, $a, ($p)", [(set i8:$d, (and i8:$a, (load cp:$p)))]>;
-    def OR8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "or8p $d, $a, ($p)", [(set i8:$d, (or i8:$a, (load cp:$p)))]>;
-    def XOR8#sfx : MOSInst<(outs Imag8:$d), (ins Imag8:$a, po:$p), "xor8p $d, $a, ($p)", [(set i8:$d, (xor i8:$a, (load cp:$p)))]>;
+    def ADD8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "add8p $d, $a, ($p)", [(set i8:$d, (add i8:$a, (load MOSAddr:$p)))]>;
+    def SUB8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "sub8p $d, $a, ($p)", [(set i8:$d, (sub i8:$a, (load MOSAddr:$p)))]>;
+    def AND8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "and8p $d, $a, ($p)", [(set i8:$d, (and i8:$a, (load MOSAddr:$p)))]>;
+    def OR8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "or8p $d, $a, ($p)", [(set i8:$d, (or i8:$a, (load MOSAddr:$p)))]>;
+    def XOR8P : MOSInst<(outs Imag8:$d), (ins Imag8:$a, memri:$p), "xor8p $d, $a, ($p)", [(set i8:$d, (xor i8:$a, (load MOSAddr:$p)))]>;
   }
-  def ADDO8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, po:$p), "addo8p $d, $co, $a, ($p)",
-                          [(set i8:$d, i1:$co, (uaddo i8:$a, (load cp:$p)))]>;
-  def SUBO8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, po:$p), "subo8p $d, $co, $a, ($p)",
-                          [(set i8:$d, i1:$co, (usubo i8:$a, (load cp:$p)))]>;
-  def ADDOC8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, po:$p), "addoc8p $d, $co, $a, $ci, ($p)",
-                           [(set i8:$d, i1:$co, (uaddo_carry i8:$a, (load cp:$p), i1:$ci))]>;
-  def SUBOC8#sfx : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, po:$p), "suboc8p $d, $co, $a, $ci, ($p)",
-                           [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load cp:$p), i1:$ci))]>;
+  def ADDO8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, memri:$p), "addo8p $d, $co, $a, ($p)",
+                       [(set i8:$d, i1:$co, (uaddo i8:$a, (load MOSAddr:$p)))]>;
+  def SUBO8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, memri:$p), "subo8p $d, $co, $a, ($p)",
+                       [(set i8:$d, i1:$co, (usubo i8:$a, (load MOSAddr:$p)))]>;
+  def ADDOC8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, memri:$p), "addoc8p $d, $co, $a, $ci, ($p)",
+                        [(set i8:$d, i1:$co, (uaddo_carry i8:$a, (load MOSAddr:$p), i1:$ci))]>;
+  def SUBOC8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, memri:$p), "suboc8p $d, $co, $a, $ci, ($p)",
+                        [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load MOSAddr:$p), i1:$ci))]>;
 }
-let mayLoad = 1, AddedComplexity = 30 in
-  defm "" : PtrAlu<"P", memri, MOSAddr>;
-let mayLoad = 1, AddedComplexity = 40, Predicates = [HasCMOS] in
-  defm "" : PtrAlu<"PZ", Imag16, MOSPtr>;
 // The same with a global indexed by a byte: LDX i; LDA a; ADC g,x.
 let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def ADD8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "add8mx $d, $a, $m", [(set i8:$d, (add i8:$a, (load MOSAbsX:$m)))]>;

@@ -1164,7 +1164,7 @@ impl Builder {
         Ok(())
     }
 
-    /// `d := a op *(p + off)`: `ldy #off; op (p),y`, or `op (p)` on a 65C02 (`off` is `None`).
+    /// `d := a op *(p + off)`: `ldy #off; op (p),y`. `y` is written even where a 65C02 prints `op (p)` for an offset of 0.
     fn alu_pointer(
         &mut self,
         mnemonic: &'static str,
@@ -1172,7 +1172,7 @@ impl Builder {
         d: &str,
         a: &str,
         pointer: &str,
-        off: Option<i64>,
+        off: i64,
     ) -> Result<(), Unsupported> {
         let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
         let ptr = self.pointer(pointer)?;
@@ -1183,14 +1183,8 @@ impl Builder {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         self.copy(acc, a);
-        let kind = Kind::Op(pointer_kind(mnemonic, off.is_some()));
-        let mut operands = vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr)];
-        if let Some(off) = off {
-            operands.extend([Operand::Imm(off), Operand::Def(y)]);
-        }
-        let mut inst = Inst::new(kind, operands);
-        inst.commutable = false;
-        self.push(inst);
+        let operands = vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
+        self.push(Inst::new(Kind::Op(pointer_kind(mnemonic)), operands));
         self.copy(d, acc);
         Ok(())
     }
@@ -1484,22 +1478,14 @@ fn accumulate(
     inst
 }
 
-/// The kind of an ALU op reading `(p),y` (`y`) or the 65C02's `(p)`.
-fn pointer_kind(
-    mnemonic: &str,
-    y: bool,
-) -> &'static str {
-    match (mnemonic, y) {
-        ("ADC", true) => "ADCPY",
-        ("SBC", true) => "SBCPY",
-        ("AND", true) => "ANDPY",
-        ("ORA", true) => "ORAPY",
-        ("EOR", true) => "EORPY",
-        ("ADC", false) => "ADCP0",
-        ("SBC", false) => "SBCP0",
-        ("AND", false) => "ANDP0",
-        ("ORA", false) => "ORAP0",
-        _ => "EORP0",
+/// The kind of an ALU op reading `(p),y`.
+fn pointer_kind(mnemonic: &str) -> &'static str {
+    match mnemonic {
+        "ADC" => "ADCPY",
+        "SBC" => "SBCPY",
+        "AND" => "ANDPY",
+        "ORA" => "ORAPY",
+        _ => "EORPY",
     }
 }
 
@@ -1816,7 +1802,7 @@ pub fn build_with_places(
             // a byte op reading `(p),y` (or the 65C02's `(p)`): the load folded into it
             code if crate::pointer_alu::pointer_alu(code).is_some() => {
                 let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
-                let offset = if fold.y_form { Some(immediate(&o[fold.ptr + 1])?) } else { None };
+                let offset = immediate(&o[fold.ptr + 1])?;
                 b.alu_pointer(fold.mnemonic, fold.carry, name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?, offset)?
             }
             op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
@@ -3738,10 +3724,12 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "  inc {}", register_name(lane(d, 1))).unwrap();
                 }
                 (Kind::Op(step @ ("ADCPY" | "SBCPY" | "ANDPY" | "ORAPY" | "EORPY")), [_, _, _, Operand::Imm(off), _]) => {
-                    writeln!(out, "  ldy #{off}\n  {} ({}),y", step[..3].to_lowercase(), register_name(lane(regs[2], 0))).unwrap()
-                }
-                (Kind::Op(step @ ("ADCP0" | "SBCP0" | "ANDP0" | "ORAP0" | "EORP0")), _) => {
-                    writeln!(out, "  {} ({})", step[..3].to_lowercase(), register_name(lane(regs[2], 0))).unwrap()
+                    let (op, p) = (step[..3].to_lowercase(), register_name(lane(regs[2], 0)));
+                    if cmos && *off == 0 {
+                        writeln!(out, "  {op} ({p})").unwrap()
+                    } else {
+                        writeln!(out, "  ldy #{off}\n  {op} ({p}),y").unwrap()
+                    }
                 }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
