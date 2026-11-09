@@ -141,6 +141,20 @@ class VirtualOk(unittest.TestCase):
         self.assertIn("k\tOs\t6502\t9/80\t8\t70", text)
         self.assertIn("llvm-mos=12/90", text)
 
+    def test_a_kernel_hand_asm_beats_is_not_ok_on_the_hand_axis(self):
+        """lz4 read OK (32,046 cy) beside a hand column of 12,870 cy: best_ext left hand asm out, so the goal 'match or beat
+        hand asm' went unchecked."""
+        at_o2 = [row("k", "O2", c, b, k) for c, b, k in
+                 (("ours", 10, 1000), ("llvm-mos", 12, 1100), ("cc65", 14, 1200), ("sdcc-size", 12, 1100),
+                  ("sdcc-speed", 12, 1100), ("sdcc-size-ma", 12, 1100), ("sdcc-speed-ma", 12, 1100))]
+        cells = t.cells_of(at_o2 + [row("k", "O2", "hand", 9, 300)])
+        rows, _ = t.grade(cells, set(), False)
+        self.assertEqual(rows[0][-1], "OK")
+        self.assertEqual(t.hand_verdict(cells[("k", "O2", "6502")], "O2"), "HAND_WORSE")
+        self.assertEqual(t.hand_verdict(t.cells_of(at_o2)[("k", "O2", "6502")], "O2"), "")
+        at_os = t.cells_of(FULL + [row("k", "Os", "hand", 10, 5)])
+        self.assertEqual(t.hand_verdict(at_os[("k", "Os", "6502")], "Os"), "HAND_OK")  # Os is bytes only
+
 
 if __name__ == "__main__":
     unittest.main()

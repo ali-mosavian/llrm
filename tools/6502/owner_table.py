@@ -75,6 +75,17 @@ def grade(cells, programs, programs_no_bar, ungraded_cpus=()):
     return rows, refused
 
 
+def hand_verdict(d, lv):
+    """Ours against the hand-written column of the same cell, its own axis (the goal: match or beat hand asm, user 2026-11-01):
+    '' when the cell has no hand column, HAND_OK when ours is no worse by the level's rule, else HAND_WORSE. The hand column
+    is never part of best_ext, so a kernel hand asm beats could read OK there."""
+    if "hand" not in d or "ours" not in d:
+        return ""
+    (ob, oc), (hb, hc) = d["ours"], d["hand"]
+    ok = ob <= hb if lv == "Os" else oc + 3 * ob <= hc + 3 * hb
+    return "HAND_OK" if ok else "HAND_WORSE"
+
+
 def virtual_ok(d, lv, sdcc):
     """The cell is virtual and ours passes `tools/virtual_ok.py`'s rule; the pin-equivalent is llvm-mos."""
     return shared.virtual_ok(
@@ -127,13 +138,19 @@ def main(argv):
         print(f"coverage: {inside} of {len(names)} applicable corpus programs in the table, {len(missing)} missing; {len(dropped)} dropped by corpus_targets.applies")
         print("missing:", " ".join(missing))
     tally = collections.Counter(r[-1] for r in graded)
+    hands = collections.Counter(hand_verdict(cells[r[:3]], r[1]) for r in graded)
+    hands.pop("", None)
+    with_hand = {r[0] for r in graded if "hand" in cells[r[:3]]}
+    flips = [r for r in graded if r[-1] == "OK" and hand_verdict(cells[r[:3]], r[1]) == "HAND_WORSE"]
+    print(f"hand column: {len(with_hand)} programs, cells {dict(hands)}; OK cells that hand asm beats: {len(flips)}")
     print("cells:", dict(tally), f"refused {len(refused)}")
     if refused:
         for prog, lv, cpu, absent in refused:
             print(f"REFUSED {prog} {lv} {cpu}: no {', '.join(absent)}", file=sys.stderr)
         return 2
-    header = "prog\tlevel\tcpu\tours_B\tours_clk\tbest_ext_B\tbest_ext_clk\tverdict\n"
-    open(out, "w").write(header + "".join("\t".join(map(str, r)) + "\n" for r in graded))
+    header = "prog\tlevel\tcpu\tours_B\tours_clk\tbest_ext_B\tbest_ext_clk\tverdict\thand_B\thand_clk\thand_verdict\n"
+    hand_of = lambda r: (cells[r[:3]].get("hand", ("", ""))) + (hand_verdict(cells[r[:3]], r[1]),)
+    open(out, "w").write(header + "".join("\t".join(map(str, (*r, *hand_of(r)))) + "\n" for r in graded))
     open(out + ".virtual.tsv", "w").write("".join(virtual_notes(cells, graded)))
     return 0
 
