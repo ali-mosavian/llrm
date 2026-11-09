@@ -241,15 +241,13 @@ pub trait TargetInstrInfo {
 }
 
 /// `X86InstrInfo` at the width and register classes of one compile.
-/// DEVIATE RA-CLK: see `X86InstrInfo::reference_weight`. Weights 3, 4 and 6
-/// give the same m16 code on the 14-program sample; 2.5 and below differ.
-const ADDRESS_REFERENCE_WEIGHT: f32 = 3.0;
-
 pub struct X86InstrInfo<'a> {
     pub bits: u32,
     pub classes: &'a RegisterClasses,
     /// The module is BASIC's (`Target::basic`).
     pub basic_semantics: bool,
+    /// `Tuning::address_reference_milliweight`.
+    pub address_reference_milliweight: u32,
 }
 
 impl TargetInstrInfo for X86InstrInfo<'_> {
@@ -302,10 +300,10 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         entering || !address
     }
 
-    /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that
-    /// is an address component (the base, index or selector of a memory
-    /// operand) weighs `ADDRESS_REFERENCE_WEIGHT` times a reference in the
-    /// spill weight. Spilled, it must be reloaded into one of the few
+    /// DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29; the A/B is on
+    /// `Tuning::address_reference_milliweight`): a value that is an address
+    /// component (the base, index or selector of a memory operand) weighs that
+    /// many thousandths of a reference in the spill weight. Spilled, it must be reloaded into one of the few
     /// registers 16-bit addressing allows (bx, bp, si, di) before the access,
     /// where any other value is folded (`add r, [slot]`) or moves through
     /// any register: eviction leaves the others in memory first. The pin
@@ -331,7 +329,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
                     Loc::Mem(m) if held(&m.base) || held(&m.index) || held(&m.selector)
                 ),
             );
-        if component { ADDRESS_REFERENCE_WEIGHT } else { 1.0 }
+        if component { self.address_reference_milliweight as f32 / 1000.0 } else { 1.0 }
     }
 
     fn encoding_bytes(
@@ -905,13 +903,34 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
-        let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
-        let flat = X86InstrInfo { bits: 32, classes: &RegisterClasses::of(&llrm_x86_m32::M32), basic_semantics: false };
+        let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
+        let flat = X86InstrInfo { bits: 32, classes: &RegisterClasses::of(&llrm_x86_m32::M32), basic_semantics: false, address_reference_milliweight: 3000 };
         assert!(m16.reference_weight(&insn, 7) > 1.0, "the base of the cell");
         assert_eq!(m16.reference_weight(&insn, 8), 1.0, "the loaded value");
         assert_eq!(flat.reference_weight(&insn, 7), 1.0, "flat code weighs the pin's way");
-        let long = X86InstrInfo { bits: 64, classes: &RegisterClasses::of(&llrm_x86_m64::M64), basic_semantics: false };
+        let long = X86InstrInfo { bits: 64, classes: &RegisterClasses::of(&llrm_x86_m64::M64), basic_semantics: false, address_reference_milliweight: 3000 };
         assert_eq!(long.reference_weight(&insn, 7), 1.0, "long mode weighs the pin's way");
+    }
+
+    /// The m16 weight of an address component was a literal in this file; it
+    /// is the target table's `address_reference_milliweight`. With the pin's
+    /// 1000 every reference weighs alike, whatever a literal says.
+    #[test]
+    fn test_an_address_component_weighs_the_tables_milliweight() {
+        let held = |value: u32| Held { value, width: 2, offset: 0 };
+        let cell = Mem { base: Some(held(7)), ..Mem::new(Some(Addr::new(Space::Frame, 0)), 2) };
+        let load = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(held(8))],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
+        let weight = |milli| {
+            X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: milli }
+                .reference_weight(&insn, 7)
+        };
+        assert_eq!((weight(1000), weight(3000), weight(4500)), (1.0, 3.0, 4.5));
     }
 
     fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
@@ -969,7 +988,7 @@ mod tests {
     /// lives is a load the allocator makes again.
     #[test]
     fn test_an_x87_load_of_a_global_nothing_writes_is_made_again() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -983,7 +1002,7 @@ mod tests {
     /// value: the load stays.
     #[test]
     fn test_an_x87_load_of_a_global_written_while_it_lives_is_kept() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -998,7 +1017,7 @@ mod tests {
     #[test]
     fn test_a_basic_module_keeps_its_x87_loads() {
         let body = x87_body(vec![fld(0, 1, global(0, 0)), fstp(2, 1, frame(-4))]);
-        let plain = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let plain = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
         let basic = X86InstrInfo { basic_semantics: true, ..plain };
         assert_eq!(plain.argument_loads(&body), BTreeSet::from([1]));
         assert!(basic.argument_loads(&body).is_empty());
