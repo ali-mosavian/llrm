@@ -28,7 +28,7 @@ fn asking_for_a_pin_register_builds_no_table() {
 /// function of many blocks builds it once, and a second compile builds none.
 #[test]
 fn the_action_table_is_built_once_however_many_blocks_are_selected() {
-    use llrm_arm64::driver::{self, IselMode};
+    use llrm_arm64::driver;
     use llrm_arm64::machine::Platform;
 
     let blocks: String = (0..12)
@@ -38,7 +38,6 @@ fn the_action_table_is_built_once_however_many_blocks_are_selected() {
         "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
 define i32 @f(ptr %p, i32 %a) {{\nentry:\n  br label %b0\n{blocks}b12:\n  br label %done\ndone:\n  ret i32 %a\n}}\n"
     );
-    driver::set_isel_mode(IselMode::Dag);
     driver::assembly(&ir, Platform::Linux, true).expect("lowers");
     let first = llrm_arm64::dag::pipeline::action_tables_built();
     assert_eq!(first, 1, "{first} tables for the blocks of one function");
