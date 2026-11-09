@@ -126,3 +126,13 @@ fn the_routines_replace_long_shifts_and_multiplies_at_o1_and_not_at_o2() {
     assert!(o1.0 > 0 && o1.1 > 0, "O1 calls the routines: {o1:?}");
     assert_eq!(o2.0, 0, "O2 keeps the shifts inline: {o2:?}");
 }
+
+/// div_constants_long -O1 took `call __ashlsi3` for xorshift steps (-14 B, +10% T measured): the module's static
+/// clocks were a hot loop elsewhere, so each step's 500 T of routine were nothing and the routine, linked once for the
+/// steps, paid its bytes. The module price keeps the calls here; each step's own bytes and clocks inline it.
+#[test]
+fn small_long_shift_functions_beside_a_hot_loop_stay_inline_at_o1() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n".to_owned() + include_str!("data/shift_steps_beside_hot_loop.ll");
+    let asm = llrm_z80::compile::text(&ir, "step1", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O1)).expect("compiles");
+    assert!(!asm.contains("call __ashlsi3") && !asm.contains("call __lshrsi3"), "{asm}");
+}

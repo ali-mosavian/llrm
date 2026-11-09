@@ -37,6 +37,71 @@ class Harness(unittest.TestCase):
             self.assertGreater(matrix_kb.kernel_bytes(os.path.join(out, "fib.2.clang.o")), 0)
             self.assertTrue(os.path.exists(os.path.join(out, "fib.2.clang.elf")))
 
+    def test_a_source_reads_bench_io_h_from_the_repo_not_from_a_shared_copy(self):
+        # Parallel A/B jobs rewrote one copy of bench_io.h beside the output while others compiled: 2 builds
+        # in 40 failed with "call to undeclared function 'bench_read'" (stft_fixed O1, jpeg_fixed O3).
+        tools = [os.path.join(LLVM_BIN, "clang"), os.path.join(LLVM_BIN, "ld.lld")]
+        if not all(os.path.exists(t) for t in tools) or not shutil.which("aarch64-linux-gnu-nm"):
+            self.skipTest("clang/ld.lld (LLVM_BIN) or aarch64 binutils missing")
+        with tempfile.TemporaryDirectory() as out:
+            done = subprocess.run(
+                ["bash", os.path.join(HERE, "build2.sh"), "jpeg_fixed", "2", "clang"],
+                env={**os.environ, "OUT": out, "LLVM_BIN": LLVM_BIN}, capture_output=True, text=True,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertFalse(os.path.exists(os.path.join(out, "bench_io.h")), "a shared copy of the header")
+            self.assertNotIn("../bench_io.h", open(os.path.join(out, "src", "jpeg_fixed.c")).read())
+
+
+class Table(unittest.TestCase):
+    ROWS = "a\tO2\tours\t10\t100\t{m}\tok\na\tO2\tclang\t10\t90\t{m}\tok\na\tO2\tgcc\t10\t120\t{m}\texception\n"
+
+    def run_table(self, rows_metric, flag):
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as rows:
+            rows.write(self.ROWS.format(m=rows_metric))
+        try:
+            return subprocess.run(
+                [sys.executable, os.path.join(HERE, "table.py"), rows.name, "--metric", flag, "--count-commit", "abc123"], capture_output=True, text=True
+            )
+        finally:
+            os.unlink(rows.name)
+
+    def test_rows_counted_whole_are_refused_under_a_kernel_header(self):
+        # A table headed "kernel" held whole-program counts (count.py without the kernel flag).
+        done = self.run_table("whole", "kernel")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("counted as 'whole'", done.stderr)
+
+    def test_matching_metric_gives_verdicts_and_a_header_naming_it(self):
+        done = self.run_table("kernel", "kernel")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("# instrs metric: kernel (count.py --kernel; range [first function, report) minus main); count.py commit abc123", done.stdout)
+        self.assertIn("# value check: 2 of 3 measured cells value == .out; 1 of 3: value != .out on all columns", done.stdout)
+        self.assertIn("a\tO2\tworse", done.stdout)  # 130 net against clang's 120
+        self.assertIn("# O2: better 0, same 0, worse 1", done.stdout)
+
+
+    def test_an_unmeasured_cell_is_a_hard_line_not_a_gap(self):
+        # A build that failed once left its cell out of the table: no row, no verdict, no trace.
+        rows = (
+            "a\tO2\tours\t10\t100\tkernel\tok\na\tO2\tclang\t10\t90\tkernel\tok\na\tO2\tgcc\t\t\tkernel\tunmeasured:build failed\n"
+            "b\tO2\tours\t10\t100\tkernel\tok\nb\tO2\tclang\t10\t90\tkernel\tok\nb\tO2\tgcc\t10\t120\tkernel\tok\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
+            handle.write(rows)
+        try:
+            done = subprocess.run(
+                [sys.executable, os.path.join(HERE, "table.py"), handle.name, "--metric", "kernel", "--count-commit", "abc"],
+                capture_output=True, text=True,
+            )
+        finally:
+            os.unlink(handle.name)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("# UNMEASURED: 1 of 6 cells (listed below", done.stdout)
+        self.assertIn("a\tO2\tUNMEASURED\tgcc\tunmeasured:build failed", done.stdout)
+        self.assertNotIn("a\tO2\tworse", done.stdout)
+        self.assertIn("b\tO2\tworse", done.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
