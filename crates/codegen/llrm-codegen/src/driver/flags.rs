@@ -78,6 +78,11 @@ pub fn apply_pass_flag(
     options: &mut pipeline::Options,
     flag: &str,
 ) -> bool {
+    // gcc's `-fno-peel-loops` turns off what this pipeline never had as a switch (the translated LoopUnrollPass peels by the
+    // pin's rules): accepted, so a gcc command line still builds. `-fpeel-loops` asks for it and is refused by name.
+    if flag == "-fno-peel-loops" {
+        return true;
+    }
     let Some(name) = flag.strip_prefix("-f") else { return false };
     let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
     PASSES
@@ -99,7 +104,6 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
         options.unroll = on;
         options.loop_unrolling = on;
     }),
-    ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
     ("inline-functions", |options, on| {
         options.inline = if !on {
