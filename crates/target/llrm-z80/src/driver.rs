@@ -54,6 +54,7 @@ impl Level {
 }
 
 /// Everything a compile is told besides the IR.
+#[derive(Clone)]
 pub struct Request {
     pub cpu: Cpu,
     pub level: Level,
@@ -71,11 +72,20 @@ pub struct Request {
     /// The pin's block frequencies as they are, a loop of 10 trips weighing as
     /// a loop of 41 (DEVIATE Z80-BFI-TRIPS, `frequency.rs`, is the default).
     pub flat_loop_trips: bool,
+    /// DEVIATE z80-oz-best-of (owner z80, exit 2026-12-15): at -Oz the module is compiled as -Oz and as -Os and the
+    /// smaller one is kept (module bytes, the runtime it reaches included; a tie keeps -Oz). The pin's -Oz is not
+    /// smaller than its -Os here: 41 of 109 corpus rows grow (+4681 B), because header duplication is off at -Oz
+    /// (LoopRotation.cpp#L80) and the inline threshold is 5 (inlinecost.rs `OPT_MIN_SIZE_THRESHOLD`), and the
+    /// pin has no Z80 byte cost to say where either pays. The rotation that wins depends on what LSR and the unroll
+    /// do after it, which no local price sees (three single-compile rules measured, none without regressions).
+    /// Cost: -Oz compiles twice (median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
+    /// rotation/LSR interplay; the exit date is the revisit.
+    pub oz_best_of: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true }
     }
 }
 
