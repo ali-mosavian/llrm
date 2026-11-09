@@ -457,6 +457,8 @@ pub struct AAQueryInfo {
     answers: HashMap<u64, Answer>,
     /// `NumAssumptionUses`: the uses of an assumption still in force.
     assumption_uses: i32,
+    /// `AAQI.Depth`: the queries open, one inside another.
+    pub(crate) depth: u32,
     /// `AssumptionBasedResults`: the pairs whose answer rests on an assumption
     /// of a query not yet decided.
     assumption_based: Vec<u64>,
@@ -508,6 +510,7 @@ impl Default for AAQueryInfo {
             locations: HashMap::default(),
             answers: HashMap::default(),
             assumption_uses: 0,
+            depth: 0,
             assumption_based: Vec::new(),
             capture: Box::<crate::captureanalysis::SimpleCaptureAnalysis>::default(),
             classes: HashMap::default(),
