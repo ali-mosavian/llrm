@@ -277,3 +277,44 @@ fn a_register_list_ending_at_the_frame_pointer_is_priced() {
         clocks(Cpu::M68020, "movem.l (%sp)+, %d2-%d7/%a2-%a6")
     );
 }
+
+/// M68020UM Table 8.2.17 (p. 8-39): `TRAP #n` 20 clocks, the cache case. The
+/// harness's `trap #0` was not in the 68020 tables, so every program that
+/// exits that way read UNMEASURED.
+#[test]
+fn a_68020_trap_is_the_exception_table_row() {
+    assert_eq!(clocks(Cpu::M68020, "trap #0"), 20);
+}
+
+/// M68020UM Table 8.2.8 (p. 8-30) `MUL.L EA,Dn` 43 and Table 8.2.2 (p. 8-14)
+/// `#<data>.W,#<data>.L` 6 (the extension word and the 32-bit operand); the
+/// same for `DIVS.L` 90 + 6. `mulu.l #imm` was UNMEASURED.
+#[test]
+fn a_68020_long_multiply_by_an_immediate_adds_the_immediate_fetch() {
+    assert_eq!(clocks(Cpu::M68020, "mulu.l #1000, %d0"), 43 + 6);
+    assert_eq!(clocks(Cpu::M68020, "muls.l #1000, %d1"), 43 + 6);
+    assert_eq!(clocks(Cpu::M68020, "divs.l #10, %d1"), 90 + 6);
+}
+
+/// Table 8.2.9 `CMPI #<data>,EA` 2 plus Table 8.2.2 `#<data>.L,(bd,An)` 7;
+/// the PC form is the address-register form, as in 8.2.1 and 8.2.3 where the
+/// manual prints one row for both.
+#[test]
+fn a_68020_compare_immediate_to_a_pc_relative_operand_is_priced() {
+    assert_eq!(clocks(Cpu::M68020, "cmpi.l #5, (0,%pc)"), 2 + 7);
+    assert_eq!(clocks(Cpu::M68020, "cmpi.l #5, (0,%pc)"), clocks(Cpu::M68020, "cmpi.l #5, (0,%a0)"));
+}
+
+/// Table 8.2.3 (p. 8-15): `LEA` 2 plus calculate `(d8,An,Xn)` 4, `(d16,An,Xn)`
+/// 6, `(B)` 6, `(d32,B)` 12. A base displacement past 8 bits was priced as the
+/// brief format's `(d8,An,Xn)` (6 clocks for the 16-bit one, 8 right), and
+/// `(%a0,%d1.l*4)` was UNMEASURED. Scale and size of Xn do not affect timing.
+#[test]
+fn a_68020_full_format_index_is_priced_by_its_base_displacement() {
+    assert_eq!(clocks(Cpu::M68020, "lea (100,%a0,%d1.l*4), %a1"), 2 + 4);
+    assert_eq!(clocks(Cpu::M68020, "lea (1000,%a0,%d1.l*4), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68020, "lea (-1000,%a0,%d1.w), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68020, "lea (%a0,%d1.l*4), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68020, "lea (100000,%a0,%d1.l*4), %a1"), 2 + 12);
+    assert_eq!(clocks(Cpu::M68020, "lea (0x12345,%a0,%d1.l), %a1"), 2 + 12);
+}
