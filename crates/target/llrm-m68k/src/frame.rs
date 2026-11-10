@@ -44,6 +44,11 @@ const STACK_ALIGN: i64 = 8;
 /// no more than 4.
 pub const SHIPPED_STACK_ALIGN: i64 = 4;
 
+/// An object aligned beyond this realigns the stack. Up to it the frame keeps
+/// what it can (a `double` slot at the shipped 4): realigning for 8 grew
+/// nbody 42 B and bitcount_u64 40 B at -O1.
+pub const REALIGN_ABOVE: i64 = 8;
+
 /// What the frame depends on: `MachineFrameInfo` and the function's attributes.
 #[derive(Clone, Debug, Default)]
 pub struct Function {
@@ -134,7 +139,7 @@ pub fn layout(function: &Function) -> Layout {
     let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
     // `hasFPImpl`: a realigned stack needs the frame pointer; the locals are
     // addressed from the stack pointer and the arguments from the frame pointer
-    let has_fp = has_fp(function) || max_align > stack_align;
+    let has_fp = has_fp(function) || max_align > stack_align.max(REALIGN_ABOVE);
     let mut objects = function.objects.clone();
     let mut fixed = function.fixed;
     if has_fp {
@@ -151,7 +156,7 @@ pub fn layout(function: &Function) -> Layout {
     }
     let max_align = objects.iter().map(|one| one.align).max().unwrap_or(1);
     let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
-    let realigned = max_align > stack_align;
+    let realigned = max_align > stack_align.max(REALIGN_ABOVE);
     let frame = Frame {
         local_area: SLOT,
         max_align,

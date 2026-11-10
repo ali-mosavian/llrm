@@ -58,3 +58,14 @@ fn the_object_is_16_aligned_whatever_the_stack_pointer_was() {
         assert_eq!(code, Some(0), "{pushed} words pushed before the call: the address mod 16");
     }
 }
+
+/// Realigning for an 8-aligned slot (a `double` spill) put a `link`, a rounded
+/// `%sp` and register saves below the frame pointer into every function that
+/// holds one: nbody +42 B and bitcount_u64 +40 B at -O1 68000. The frame keeps
+/// 4 there, as it did.
+#[test]
+fn an_object_aligned_to_8_does_not_realign_the_shipped_frame() {
+    let options = Options { short: true, ..options() };
+    let out = text_with(&module(8), "f", Cpu::M68000, options).expect("compiles");
+    assert!(!out.contains("link") && !out.contains("and.l\t#-"), "an 8-aligned object realigned:\n{out}");
+}

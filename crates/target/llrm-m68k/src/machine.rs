@@ -59,7 +59,7 @@ impl Machine for M68kMachine {
     }
 
     fn realigned_above(&self) -> Option<u64> {
-        Some(8)
+        Some(crate::frame::REALIGN_ABOVE as u64)
     }
 
     fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
