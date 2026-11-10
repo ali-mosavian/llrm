@@ -26,6 +26,8 @@ class LinkVerdict(unittest.TestCase):
         why = run.link_detail(["___adddf3"], extra="")
         self.assertIn("Z80_LIBC_EXTRA unset", why)
         self.assertIn("___adddf3", why)
+        long = [f"__symbol_number_{i}" for i in range(30)]
+        self.assertTrue(run.link_detail(long, extra="").endswith("Z80_LIBC_EXTRA unset"))
         self.assertNotIn("unset", run.link_detail(["___adddf3"], extra="/some/dir"))
 
 
