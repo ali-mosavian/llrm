@@ -298,3 +298,42 @@ def test_a_table_moved_from_data_to_bss_is_not_worse_but_extra_bss_is(tmp_path):
     assert (initialised.data, initialised.bss, zeroed.data, zeroed.bss) == (40, 0, 0, 40)
     assert cells.worse(zeroed, initialised) == []
     assert cells.worse(larger, initialised) == ["static 60 vs 40"]
+
+
+def test_an_m32_cell_is_built_with_the_programs_flags_the_external_flag_set_and_only_where_it_applies():
+    """m32cells built ours and the pin with no program flags (mul_constants' `-fno-inline-functions`, int_compared_with_float's
+    `-fexcess-precision=standard` were not in the cell), the pin with its own flag list instead of tools/external_flags.py, and every program in the
+    tree, DOS-only ones included (rep_tails +739 B read worse at x86_32-linux)."""
+    cells = load("m32cells")
+    sys.path.insert(0, str(HERE.parent))
+    import external_flags
+
+    header = "// flags: -O2 -fno-inline-functions -fexcess-precision=standard -march=pentium -mabi=sysv -m32 | -Os\nint f(void);\n"
+    assert cells.program_flags(header) == ["-fno-inline-functions", "-fexcess-precision=standard"]
+    assert cells.program_flags("int f(void);\n") == []
+    ours, matched, linux = cells.columns()
+    wanted = list(external_flags.flags("x86", ("-fno-pic",)))
+    for column in (matched, linux):
+        taken = cells.pin_flags(column)
+        assert all(token in taken for token in wanted), (column, taken)
+    stems = {s.stem for s in cells.sources([])}
+    assert "rep_tails" not in stems and "mul_constants" in stems, "a DOS-only program is no cell"
+    assert [s.stem for s in cells.sources(["mul_constants"])] == ["mul_constants"]
+
+
+def test_m32cells_passes_the_programs_flags_to_ours_and_to_the_pin(monkeypatch, tmp_path):
+    """The flags were read but not given to either compile: the commands `one` runs are what the cell measures."""
+    cells = load("m32cells")
+    ran = []
+
+    def fake(command, **kwargs):
+        ran.append([str(part) for part in command])
+        return subprocess.CompletedProcess(command, 0, stdout="/pin/clang\n", stderr="")
+
+    monkeypatch.setattr(cells.subprocess, "run", fake)
+    monkeypatch.setattr(cells, "footprint", lambda obj: cells.object_bytes.Footprint(1, 0, 0))
+    source = cells.ROOT / "tests/run/c/mul_constants.c"
+    name, sizes, why = cells.one(source, tmp_path, "O2", cells.columns())
+    compiles = [c for c in ran if "-c" in c]
+    assert len(compiles) == 3 and sizes is not None, (compiles, why)
+    assert all("-fno-inline-functions" in c for c in compiles), compiles
