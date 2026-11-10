@@ -51,11 +51,15 @@ impl Machine for M68kMachine {
     }
 
     /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
-    /// preferred one, so locals of those are accepted (and clamped); an
-    /// object aligned further needs the realignment the pin does and this
-    /// target does not translate yet, and is refused by name.
+    /// preferred one, so locals of those are accepted (and clamped to what the
+    /// frame keeps). An object aligned further is kept: the frame realigns
+    /// the stack pointer for it (`frame::Layout`).
     fn max_alloca_align(&self) -> Option<u64> {
-        Some(8)
+        None
+    }
+
+    fn realigned_above(&self) -> Option<u64> {
+        Some(crate::frame::REALIGN_ABOVE as u64)
     }
 
     fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
@@ -223,6 +227,49 @@ impl Tti for M68k {
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
     fn lftr_any_stride(&self) -> bool {
         true
+    }
+
+    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k runs:
+    /// legal 1, custom 2, expanded `SingleCallCost`, by the table the lowering itself
+    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An intrinsic
+    /// that translation does not reach keeps the trait's price.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        _: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        if let Some(Ty::Int(bits)) = ret {
+            thread_local! {
+                static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+                    const { std::cell::RefCell::new(Vec::new()) };
+            }
+            let lowering = LOWERING.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some((_, one)) = cache.iter().find(|(cpu, _)| *cpu == self.cpu) {
+                    return one.clone();
+                }
+                let made = Rc::new(crate::dagisel::lowering::target_lowering_with(self.cpu, true));
+                cache.push((self.cpu, made.clone()));
+                made
+            });
+            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review 2026-12-20): the pin
+            // prices an expansion at 1 under `TCK_CodeSize` (one call); the loop unroller asks
+            // that kind, so a `smul.fix.sat` that expands to dozens of instructions read as
+            // one and the 3x3 loops of `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
+            // Here an expansion costs the same under every kind.
+            let _ = kind;
+            let code_size = false;
+            if let Some(cost) = llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size) {
+                return Cost::of(cost);
+            }
+        }
+        if llrm_mir::tti::is_free_intrinsic(name) {
+            Cost::FREE
+        } else {
+            llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID)
+        }
     }
 
     fn opt_size_inline_byte_gate(&self) -> bool {

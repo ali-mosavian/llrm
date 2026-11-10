@@ -280,6 +280,13 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
+    /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
+    /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
+    /// loads the constant once and takes the register form. The pin's form is
+    /// larger where the immediate encodes short (m64 `-Os`: `and r64, imm`
+    /// of a 32-bit mask, `movzx` masks). false: the pin's.
+    pub immediate_forms_at_size: bool,
     /// The inliner's D11 bound holds a caller optimized for size on this target
     /// (the real-mode description's `inline_size_guard` is the same bound
     /// at m16): a callee that stays is copied only if it does not grow the
@@ -468,6 +475,7 @@ impl Tuning {
         inline_threshold: None,
         min_jump_table_density: None,
         split_merged_conditions: false,
+        immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
@@ -541,6 +549,13 @@ pub trait Machine {
     /// clamped to it at pipeline entry, so the optimizer never assumes an
     /// alignment the frame does not give.
     fn kept_stack_align(&self) -> Option<u64> {
+        None
+    }
+
+    /// An `alloca` aligned beyond this is kept at its alignment, the frame
+    /// realigning the stack pointer for it, instead of clamped to
+    /// [`Machine::kept_stack_align`]; none: every excess is clamped.
+    fn realigned_above(&self) -> Option<u64> {
         None
     }
 
