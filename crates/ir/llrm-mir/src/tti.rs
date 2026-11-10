@@ -84,6 +84,23 @@ impl AddressingMode {
     }
 }
 
+/// A fixed-width vector as the vector cost hooks see it: `count` lanes of a
+/// scalar type. The scalar [`Ty`] stays scalar (T1); a target that prices
+/// vectors answers the `vector_*` hooks of [`Tti`], the others keep their
+/// defaults ("no vectors").
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VectorTy {
+    pub lane: Ty,
+    pub count: u32,
+}
+
+/// `TargetTransformInfo::RegisterClass`, by the pin's class id: 0 scalar, 1 vector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum RegisterClass {
+    Scalar,
+    Vector,
+}
+
 /// A scalar type as the cost model sees it (T1: vectors are not modelled).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ty {
@@ -473,6 +490,52 @@ pub trait Tti {
     /// register, 0 where the target has none (and the SLP vectorizer is off).
     fn vector_register_bits(&self) -> u32 {
         0
+    }
+
+    /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
+    /// registers.
+    fn number_of_registers(
+        &self,
+        _class: RegisterClass,
+    ) -> u32 {
+        0
+    }
+
+    /// `getMaxInterleaveFactor(VF, HasUnorderedReductions)`.
+    fn max_interleave_factor(
+        &self,
+        _vf: u32,
+        _has_unordered_reductions: bool,
+    ) -> u32 {
+        1
+    }
+
+    /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: size the widest
+    /// VF by the smallest type in the loop, not the widest.
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        false
+    }
+
+    /// `getMemoryOpCost` of a vector access of `align` bytes. `None`: the
+    /// target does not price (so does not take) vector accesses of this type.
+    fn vector_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        _ty: VectorTy,
+        _align: u64,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getArithmeticInstrCost` of a vector operation. `None`: not priced.
+    fn vector_arithmetic_cost(
+        &self,
+        _op: ArithOp,
+        _ty: VectorTy,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        None
     }
 
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
