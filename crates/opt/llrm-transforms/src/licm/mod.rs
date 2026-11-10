@@ -111,6 +111,10 @@ pub struct State {
     /// The products it put a factor into, and the operand slot of that factor:
     /// a later product of the loop reads them as invariant-factor products.
     pub factored: std::cell::RefCell<IdMap<InstId, usize>>,
+    /// `hoistBOAssociation` edits `bo` in place to `lv op (c1 op c2)`: the
+    /// instruction it replaced, and the `lv` and wrap flags of what took its
+    /// place, which the next link of an add chain reassociates again.
+    pub chained: std::cell::RefCell<IdMap<InstId, (Operand, llrm_mir::opcode::Flags)>>,
 }
 
 /// One loop, as `hoistRegion` sees it: its blocks, the loops in it, and where

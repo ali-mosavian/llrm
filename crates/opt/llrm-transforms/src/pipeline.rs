@@ -1033,6 +1033,7 @@ pub(crate) fn llvm_order(
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
+                    inliner_follows: true,
                     created: Default::default(),
                     decided: Default::default(),
                 }),
@@ -1144,6 +1145,7 @@ pub(crate) fn llvm_order(
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
+                    inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
                     created: std::rc::Rc::clone(&created),
                     decided: std::rc::Rc::clone(&decided),
                 })

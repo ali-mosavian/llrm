@@ -10,9 +10,10 @@
 //!   fixed bytes`; the addend already holds the correction for a byte inside
 //!   the opcode word (`encodePCRelImm`).
 //!
-//! DEVIATE: `encodeFPSYSSelect`, `encodeScale` and `encodeIndexSuppress` (FPU
-//! and 68020 index modes) are not translated. Reason: the slice does not reach
-//! them. Exit: M7.
+//! `encodeScale` and `encodeIndexSuppress` are the pin's, for the full
+//! extension word of the PC-relative indexed forms (`PCIBD`). DEVIATE:
+//! `encodeFPSYSSelect` (FPU control registers) is not translated. Reason: the
+//! slice does not reach it. Exit: M7.
 //!
 //! # See also
 //! `llvm/lib/Target/M68k/MCTargetDesc/M68kMCCodeEmitter.cpp`, pin d1106deb71cc.
@@ -135,6 +136,12 @@ fn operand_value(
             Ok(0)
         }
         (Enc::InverseMoveMask, Operand::Imm(mask)) => Ok((*mask as u16).reverse_bits() as u64),
+        // `encodeScale`: log2 of a scale of 1, 2, 4 or 8.
+        (Enc::Scale, Operand::Imm(scale)) if matches!(scale, 1 | 2 | 4 | 8) => Ok(u64::from(scale.trailing_zeros())),
+        (Enc::Scale, Operand::Imm(scale)) => Err(format!("{}: scale {scale} is not 1, 2, 4 or 8", inst.opcode)),
+        // `encodeIndexSuppress`: bit 4 is set when there is no index register;
+        // every operand here names one.
+        (Enc::IndexSuppress, Operand::Reg(_)) => Ok(0),
         _ => Err(format!("{}: operand {index} is not encodable as {enc:?}", inst.opcode)),
     }
 }
