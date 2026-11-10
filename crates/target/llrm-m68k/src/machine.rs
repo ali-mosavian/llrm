@@ -51,10 +51,14 @@ impl Machine for M68kMachine {
     }
 
     /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
-    /// preferred one, so locals of those are accepted (and clamped); an
-    /// object aligned further needs the realignment the pin does and this
-    /// target does not translate yet, and is refused by name.
+    /// preferred one, so locals of those are accepted (and clamped to what the
+    /// frame keeps). An object aligned further is kept: the frame realigns
+    /// the stack pointer for it (`frame::Layout`).
     fn max_alloca_align(&self) -> Option<u64> {
+        None
+    }
+
+    fn realigned_above(&self) -> Option<u64> {
         Some(8)
     }
 

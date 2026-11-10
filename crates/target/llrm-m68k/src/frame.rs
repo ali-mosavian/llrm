@@ -86,6 +86,8 @@ pub enum FrameOp {
     Save { registers: Vec<RegId>, base: Base, offset: i64 },
     /// `movem.l (offset, base), regs`
     Restore { registers: Vec<RegId>, base: Base, offset: i64 },
+    /// `BuildStackAlignAND`: `move.l %sp, %d0; and.l #-align, %d0; move.l %d0, %sp`
+    AlignSp(i64),
     /// `move.l reg, -(%sp)` for one register, else `movem.l regs, -(%sp)`
     Push { registers: Vec<RegId> },
     /// `move.l (%sp)+, reg` for one register, else `movem.l (%sp)+, regs`
@@ -109,6 +111,14 @@ pub struct Layout {
     saved: Vec<RegId>,
     /// The index of the saved-register slot with the lowest address.
     lowest_save: Option<usize>,
+    /// The frame realigns the stack pointer (`hasStackRealignment`): to
+    /// `max_align`.
+    realigned: bool,
+    max_align: i64,
+    /// `objects[first_local..first_save]` are the locals: with a realigned
+    /// stack they are addressed from the aligned `%sp`, the rest from `%a6`.
+    first_local: usize,
+    first_save: usize,
 }
 
 /// `hasFPImpl`.
@@ -120,7 +130,11 @@ fn has_fp(function: &Function) -> bool {
 /// M68k's hooks: with a frame pointer the saved `%a6` is a fixed object just
 /// below the return address (`assignCalleeSavedSpillSlots`).
 pub fn layout(function: &Function) -> Layout {
-    let has_fp = has_fp(function);
+    let max_align = function.objects.iter().map(|one| one.align).max().unwrap_or(1);
+    let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
+    // `hasFPImpl`: a realigned stack needs the frame pointer; the locals are
+    // addressed from the stack pointer and the arguments from the frame pointer
+    let has_fp = has_fp(function) || max_align > stack_align;
     let mut objects = function.objects.clone();
     let mut fixed = function.fixed;
     if has_fp {
@@ -136,32 +150,52 @@ pub fn layout(function: &Function) -> Layout {
         objects.push(Object { size: SLOT, align: SLOT, offset: 0, callee_saved: true, dead: false });
     }
     let max_align = objects.iter().map(|one| one.align).max().unwrap_or(1);
+    let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
+    let realigned = max_align > stack_align;
     let frame = Frame {
         local_area: SLOT,
         max_align,
-        stack_align: if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align },
+        stack_align,
         transient_align: 1,
         adjusts_stack: function.adjusts_stack,
         has_var_sized: function.has_var_sized,
-        realigned: false,
+        realigned,
         reserved_call_frame: !function.has_var_sized,
         max_call_frame_size: function.max_call_frame,
     };
     let stack_size = calculate_frame_object_offsets(&mut objects, fixed, frame);
     let lowest_save = (first_save..objects.len()).min_by_key(|&index| objects[index].offset);
-    Layout { stack_size, has_fp, objects, saved, lowest_save }
+    Layout { stack_size, has_fp, objects, saved, lowest_save, realigned, max_align, first_local: fixed, first_save }
 }
 
 impl Layout {
     /// `getFrameIndexReference`: the register and displacement of object
-    /// `index` (as numbered in [`Function::objects`], plus the frame pointer's
-    /// slot when there is one).
+    /// `index`, as numbered in [`Function::objects`] (the frame pointer's slot,
+    /// when there is one, is not counted).
     pub fn address(
         &self,
         index: usize,
     ) -> (Base, i64) {
+        // the frame pointer's slot sits between the fixed objects and the locals
+        let index = if self.has_fp && index >= self.first_local - 1 { index + 1 } else { index };
+        self.address_of(index)
+    }
+
+    /// [`Layout::address`] of an object by its place in [`Layout::objects`].
+    fn address_of(
+        &self,
+        index: usize,
+    ) -> (Base, i64) {
         let offset = self.objects[index].offset + SLOT;
-        if self.has_fp { (Base::Fp, offset + SLOT) } else { (Base::Sp, offset + self.stack_size) }
+        let local = (self.first_local..self.first_save).contains(&index);
+        // with a realigned stack the locals are `StackSize` above the aligned
+        // stack pointer; the fixed objects and the saved registers are below
+        // the frame pointer as ever
+        if self.has_fp && !(self.realigned && local) {
+            (Base::Fp, offset + SLOT)
+        } else {
+            (Base::Sp, offset + self.stack_size)
+        }
     }
 
     /// The bytes the prologue takes off the stack pointer or `link` reserves:
@@ -173,7 +207,7 @@ impl Layout {
 
     /// Where the `movem` base is: the lowest saved slot's address.
     fn save_base(&self) -> Option<(Base, i64)> {
-        self.lowest_save.map(|index| self.address(index))
+        self.lowest_save.map(|index| self.address_of(index))
     }
 
     /// `emitPrologue` with `spillCalleeSavedRegisters`: the frame is opened,
@@ -188,6 +222,10 @@ impl Layout {
         }
         if let Some((base, offset)) = self.save_base() {
             ops.push(FrameOp::Save { registers: self.saved.clone(), base, offset });
+        }
+        // `emitPrologue`: the stack is realigned after the registers are saved
+        if self.realigned {
+            ops.push(FrameOp::AlignSp(self.max_align));
         }
         ops
     }

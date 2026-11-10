@@ -93,12 +93,20 @@ fn frame_op(
             }
             return;
         }
+        // `BuildStackAlignAND`: `and` takes no address register, so through `%d0`
+        FrameOp::AlignSp(align) => {
+            out.push(mc::Inst { opcode: "MOV32rr", operands: vec![R(reg::D0), R(reg::SP)] });
+            out.push(mc::Inst { opcode: "AND32di", operands: vec![R(reg::D0), R(reg::D0), Imm(-align)] });
+            out.push(mc::Inst { opcode: "MOV32rr", operands: vec![R(reg::SP), R(reg::D0)] });
+            return;
+        }
         _ => {}
     }
     out.push(match op {
         FrameOp::PushEach { .. } | FrameOp::PopEach { .. } => unreachable!("handled above"),
         FrameOp::Link { bytes } => mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(-bytes)] },
         FrameOp::Unlink => mc::Inst { opcode: "UNLK", operands: vec![R(reg::A6)] },
+        FrameOp::AlignSp(_) => unreachable!("handled above"),
         FrameOp::SubSp(bytes) => sp_adjust(-bytes, short),
         FrameOp::AddSp(bytes) => sp_adjust(*bytes, short),
         FrameOp::Save { registers, base: at, offset } => {
