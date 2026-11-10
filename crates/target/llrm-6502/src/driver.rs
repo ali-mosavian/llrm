@@ -380,7 +380,7 @@ fn trial_unrolled(
         return Ok(tail(built, request, false)?.text);
     };
     let (eligible, units) = trial::take();
-    if !matches!(request.level, Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
+    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
         return Ok(tail(built, request, false)?.text);
     }
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
@@ -438,7 +438,12 @@ pub fn trial_pays(
     if added > TRIAL_GROWTH_LIMIT {
         return false;
     }
-    if level == Level::Os { added < 0 || (added == 0 && saved >= 0) } else { saved * 1000 >= added * rate }
+    match level {
+        Level::Os => added < 0 || (added == 0 && saved >= 0),
+        // strict: no more bytes and no more clocks (6502-UNROLL-O1)
+        Level::O1 => added <= 0 && saved >= 0,
+        _ => saved * 1000 >= added * rate,
+    }
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
