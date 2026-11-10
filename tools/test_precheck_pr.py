@@ -208,6 +208,22 @@ def test_a_docs_only_branch_is_told_of_a_scanner_it_turns_red(tmp_path, monkeypa
     assert pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: {"integration docs_links::test_every_markdown_link_resolves"}) == []
 
 
+def test_a_binary_that_no_longer_compiles_is_named():
+    """#8829 added a field to loopunrollpass::Options; `src/bin/llrm-mir.rs` built it without the field, `cargo build --bins` failed and left stale
+    llrm-cc/llrm-llc. The crate checks passed: no check built the root package's binaries."""
+    seen = {}
+
+    def run(command, **kwargs):
+        seen["command"] = command
+        return SimpleNamespace(returncode=101, stdout="", stderr="error[E0063]: missing field `inliner_follows` in initializer of `Options`\nerror: could not compile `llrm`\n")
+
+    why = pc.bin_failures(Path("."), ["llrm-transforms"], run, {})
+    assert "--bins" in seen["command"] and why and "missing field `inliner_follows`" in why[0]
+    clean = lambda command, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr="")  # noqa: E731
+    assert pc.bin_failures(Path("."), ["llrm-transforms"], clean, {}) == []
+    assert pc.bin_failures(Path("."), [], clean, {}) == []
+
+
 def test_a_pr_touching_llrm_c_is_checked_and_tested_with_the_toolchain_feature():
     """llrm-cc's lib tests are a compile_error without `--features toolchain`: the precheck's cargo check and lib run failed ("did-not-run") for any PR touching llrm-cc, for a reason that was not the PR's."""
 

@@ -39,7 +39,7 @@ for pl in "$@"; do p=${pl%%:*}; L=${pl##*:}; LA=${L%%/*}; LB=${L##*/}; ctlmax=0;
  for k in a b; do d=$A; lv=$LA; [ $k = b ] && { d=$B; lv=$LB; }
   (cd $REPO/bench/$p; LLRM_CC_TARGET=x86_64-linux $d/llrm-cc -m64 -$lv -c -Dmain=bench_main_ -I $REPO/bench -I $R -o $t/o.$k.o $p.c) >/dev/null 2>&1 || { echo "$p $L compile-fail $k" >> $OUT; continue 2; }
  done
- bytesA=$(python3 $here/ab/object_bytes.py x86_64-linux $t/o.a.o | awk '{print $1 + $2}'); bytesB=$(python3 $here/ab/object_bytes.py x86_64-linux $t/o.b.o | awk '{print $1 + $2}')
+ bytesA=$(uv run -q --project $here python $here/ab/object_bytes.py x86_64-linux $t/o.a.o | awk '{print $1 + $2}'); bytesB=$(uv run -q --project $here python $here/ab/object_bytes.py x86_64-linux $t/o.b.o | awk '{print $1 + $2}')
  for pd in 0 16 32 48; do
   for k in a b; do gcc -static -no-pie -o $t/x.$k $t/pad$pd.o $t/o.$k.o $TOOLS/instrcount_driver.c $R/os.c -lm >/dev/null 2>&1; done
   cp $t/x.a $t/x.ctl; [ -n "$CMP_AB_BREAK" ] && cp $t/x.a $t/x.b
