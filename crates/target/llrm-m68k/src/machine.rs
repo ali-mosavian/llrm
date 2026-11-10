@@ -229,7 +229,7 @@ impl Tti for M68k {
         true
     }
 
-    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17): crc16's `crc` lives
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20): crc16's `crc` lives
     /// in a word and is carried in a long; a word `add` or `eor` is 4 clk
     /// against 8 on the 68000.
     fn narrows_demanded_cycles(&self) -> bool {

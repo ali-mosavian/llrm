@@ -1700,7 +1700,7 @@ pub trait Tti {
     /// `TruncInstCombine` starts from a `trunc` and wants every value of its
     /// graph unused outside it; a phi cycle read by a mask and a compare of
     /// masked bits has neither. Off by default.
-    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17).
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20).
     fn narrows_demanded_cycles(&self) -> bool {
         false
     }
@@ -1726,7 +1726,7 @@ pub trait Tti {
     /// (narrow_bits - 1)`): the shift leaves the bit in the carry at that
     /// width only, so the target reads it there and drops the copy and the
     /// test (m68k `cmpcarry`). Zero where the target has no such flag.
-    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17).
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20).
     fn shift_out_test_gain(
         &self,
         _narrow_bits: u32,

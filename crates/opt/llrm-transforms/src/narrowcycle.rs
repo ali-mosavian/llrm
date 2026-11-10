@@ -5,7 +5,7 @@
 //! phi cycle read by `and` masks and compares of masked bits has no `trunc`
 //! and has users outside any graph.
 //!
-//! DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17): the gap is named by
+//! DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20): the gap is named by
 //! `TruncInstCombine.cpp`'s header (graphs "post-dominated by TruncInst" whose
 //! instructions "must not have users outside the graph") and by
 //! [`crate::narrowiv`], which narrows a counter and not a data cycle. Reason:
