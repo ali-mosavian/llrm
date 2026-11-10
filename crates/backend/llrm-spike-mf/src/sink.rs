@@ -659,12 +659,13 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
 
     /// `PerformTrivialForwardCoalescing`.
     ///
-    /// DEVIATE: both registers must have one definition. Reason: the pin runs
-    /// this on SSA, where `replaceRegWith` of the copy's destination by its
-    /// source is the whole meaning of the destination; with a second
-    /// definition of the destination (a select's other arm) the reads of
-    /// it are rewritten to a value only one path made. Exit: a target
-    /// that gives this pass SSA.
+    /// DEVIATE SINK-SSA-1: both registers must have one definition. Reason: the
+    /// pin runs this on SSA, where `replaceRegWith` of the copy's
+    /// destination by its source is the whole meaning of the destination;
+    /// with a second definition of the destination (a select's other arm)
+    /// the reads of it are rewritten to a value only one path made. Exit: a
+    /// target that gives this pass SSA (row SINK-SSA-1,
+    /// above-main-rows.md).
     fn forward_coalesce(
         &mut self,
         block: usize,
