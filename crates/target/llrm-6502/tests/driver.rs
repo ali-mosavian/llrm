@@ -1438,6 +1438,15 @@ fn an_add_of_a_sign_extended_compare_stays_an_add() {
     assert!(text.contains("adc #2") && !text.contains("sbc"), "the add of a sign-extended compare:\n{text}");
 }
 
+/// Wider than 16 bits the add of a sign-extended compare read its sign bytes from a cell (`adc rc22`, 3 clk each); the
+/// pin's `sub x, (zext c)` ends in `sbc #0` (2 clk). `compare_to_int64` O1 read 48 clocks slower with the add.
+#[test]
+fn a_wide_add_of_a_sign_extended_compare_takes_the_pins_subtract() {
+    let ir = module("define i64 @f(i64 %x, i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i64\n  %r = add i64 %s, %x\n  ret i64 %r\n}");
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap();
+    assert!(text.contains("sbc #0"), "the wide add of a sign-extended compare:\n{text}");
+}
+
 /// A softened `double` bitcast to `i64` takes the halves of its softened
 /// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
 /// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.

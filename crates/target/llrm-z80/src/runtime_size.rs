@@ -158,6 +158,13 @@ pub fn routine_clocks(
     before: &[&str],
 ) -> u32 {
     const CALL: u32 = 17;
+    // a tail call `jp __r` runs the routine as `call __r` does; the table prices the jump 7 T under the call
+    if let Some(routine) = text.strip_prefix("jp ").map(str::trim).filter(|routine| routine.starts_with("__")) {
+        return match routine_clocks(&format!("call {routine}"), before) {
+            0 => 0,
+            clocks => clocks + (CALL - 10),
+        };
+    }
     // the nearest instruction that touches the register decides: a constant only if it loads one, else unknown
     let immediate = |register: &str| {
         let prefix = format!("ld {register}, #");
@@ -295,6 +302,10 @@ mod tests {
         assert_eq!(routine_clocks("call __ashlqi3", &["ld c, a"]), 55 + 17 * 8 - 17);
         assert_eq!(routine_clocks("call __memcpy", &["ld bc, #100"]), 62 + 21 * 100 - 17);
         assert_eq!(routine_clocks("call __memseta", &["ld de, #10"]), 95 + 21 * 10 - 17);
+        // `jp __memseta` (a fill in tail position) was priced as a bare jump: 5.4k T of a 256-byte fill read as free,
+        // and pattern_fill -O1 kept the call over the inline fill that is faster and links no routine
+        assert_eq!(routine_clocks("jp __memseta", &["ld de, #10"]), 95 + 21 * 10 - 10);
+        assert_eq!(routine_clocks("jp nz, __memseta", &["ld de, #10"]), 0);
         // an inline `ldir` is 21 T a pass and 16 on the last; the table's 21 is the first: an inline fill of
         // 128 bytes was priced 21 T against the call's 2.8k, and chosen at -O1 for +3 B a site (idioms +6 B)
         assert_eq!(routine_clocks("ldir", &["ld bc, #127", "ld (hl), #0", "ld e, l", "ld d, h", "inc de"]), 21 * 127 - 26);
