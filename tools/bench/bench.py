@@ -385,6 +385,17 @@ def note_lines(measured: dict) -> list[str]:
     return [f"NOTE {why} ({notes.count(why)} cells)" for why in sorted(set(notes))]
 
 
+def reference_job(key: tuple[str, str, str], stem: str, built: tuple[Path, Path], region: str | None, want: list[str], obj: Path, files: tuple, source: Path) -> tuple:
+    """The job `measure` takes for one reference cell: the helpers are counted only where the reference's map names them."""
+    return (stem, built[0], built[1], region, want, obj, files, links_helpers(key[1]), source)
+
+
+def links_helpers(reference: str) -> bool:
+    """Whether a reference's linker map names the library modules its program pulls in: a C reference's does (`Module: LIB(NAME)`). BC's is Microsoft's, its
+    runtime is linked whole, and counting helpers refused every BASIC reference cell (`helper $AC is called and not in the map`, 31 programs x 3 compilers)."""
+    return reference in REFERENCES["c"]
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
@@ -544,7 +555,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             plain[key] = built[0]
         else:
             files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
-            owned.append((key, (stem, built[0], built[1], variant.region if counted else None, want, obj, files, True, variant.source)))
+            owned.append((key, reference_job(key, stem, built, variant.region if counted else None, want, obj, files, variant.source)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]

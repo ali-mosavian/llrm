@@ -59,8 +59,9 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin turns `add (sext i1 c), x` into
         // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is an `sbc` chain; a word compared with its bound
-        // gained an `ldx #255` and a swapped `cmp` from it (`a_compare_against_a_word_boundary_...`). The add stays.
-        dag: DagConfig { sext_bool_add_preferred: true, ..BuilderTarget::for_pointer_bits(16).dag },
+        // gained an `ldx #255` and a swapped `cmp` from it (`a_compare_against_a_word_boundary_...`). The add stays up to
+        // 16 bits; wider, the sign bytes of the add read a cell (`adc rc22`, 3 clk) where the pin's `sbc #0` is 2.
+        dag: DagConfig { sext_bool_add_max_bits: 16, ..BuilderTarget::for_pointer_bits(16).dag },
         ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)
