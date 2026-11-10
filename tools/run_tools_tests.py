@@ -2,7 +2,7 @@
 """Run tools/**/test_*.py with the standard library: python3 -I tools/run_tools_tests.py [--root DIR] [FILE...]
 
 unittest cases and plain `def test_x():` functions run in-process. A file that uses pytest (fixtures, raises, parametrize, skip) runs through
-`uv run --with pytest`; with no uv it is a FAIL named NEEDS-PYTEST, never a skip. An import error is a FAIL. Exit 1 on any FAIL."""
+`uv run --offline --with pytest` (cached packages only, no fetch); with no uv it is a FAIL named NEEDS-PYTEST, never a skip. An import error is a FAIL. Exit 1 on any FAIL."""
 
 import ast
 import importlib.util
@@ -74,7 +74,7 @@ def pytest_file(path: Path) -> tuple[int, int, list[str]]:
     uv = shutil.which("uv")
     if not uv:
         return 0, 1, ["NEEDS-PYTEST: uses pytest features and `uv` is not on PATH"]
-    done = subprocess.run([uv, "run", "--with", "pytest", "--with", "iced-x86", "python", "-m", "pytest", "-q", "-p", "no:cacheprovider", str(path)], capture_output=True, text=True, cwd=path.parent)
+    done = subprocess.run([uv, "run", "--offline", "--with", "pytest", "--with", "iced-x86", "python", "-m", "pytest", "-q", "-p", "no:cacheprovider", str(path)], capture_output=True, text=True, cwd=path.parent)
     tail = (done.stdout + done.stderr).strip().splitlines()[-1:] or [""]
     if done.returncode == 0:
         found = re.search(r"(\d+) passed", tail[0])
