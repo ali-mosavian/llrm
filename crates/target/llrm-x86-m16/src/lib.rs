@@ -664,6 +664,7 @@ mod tuning_tests {
         assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
         assert_eq!(table.address_reference_milliweight, 3000, "DEVIATE RA-CLK: an address component weighs three references");
         assert_eq!(table.unswitch_threshold, Some(0));
+        assert_eq!(table.min_jump_table_density, Some(40), "DEVIATE M16-JT-DENSITY: a table pays from 40% at every level");
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -690,6 +691,7 @@ mod tuning_tests {
                 address_reference_milliweight: 1000,
                 rotation_header_priced_at_size: false,
                 unswitch_threshold: None,
+                min_jump_table_density: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
                 inline_size_guard_at_size: false,

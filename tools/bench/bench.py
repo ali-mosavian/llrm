@@ -346,7 +346,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
     stem, exe, listing, region, want, obj, *more = job
     if region is None:  # timed only: its output is checked where it is timed
-        data, bss = sizes.data_bytes(obj)
+        data, bss = sizes.data_bytes(obj, exe, listing)
         return {**code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
@@ -364,7 +364,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"error": result.error}
     if got != want:
         return {"error": f"prints {got}, want {want}"}
-    data, bss = sizes.data_bytes(obj)
+    data, bss = sizes.data_bytes(obj, exe, listing)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
         return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     if result.region.instructions < FOLDED_BELOW:
