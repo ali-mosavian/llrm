@@ -5055,3 +5055,30 @@ fn a_hidden_or_internal_callee_at_pic_is_resolved_and_a_weak_one_never_is() {
         "a strong definition elsewhere wins at link time"
     );
 }
+
+/// A 16-trip loop of calls in an internal function that nothing will inline
+/// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
+/// early unroll leaves an internal function's loops to be priced at each
+/// inlined site, and no site came. huffman_decode -O3 at m64: `decode` copied
+/// 17 calls of `getbit`, 443 B against gcc's 137, 2099 B in all against 1184
+/// and 27% over gcc in clocks plus bytes.
+#[test]
+fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o3() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @h()\n\
+                define internal i32 @f(i32 %x) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i32 [ 1, %entry ], [ %j, %loop ]\n  %c = phi i32 [ %x, %entry ], [ %d, %loop ]\n\
+                  %b = call i32 @h()\n  %s = shl i32 %c, 1\n  %d = add i32 %s, %b\n  %j = add i32 %i, 1\n\
+                  %t = icmp ult i32 %j, 17\n  br i1 %t, label %loop, label %done\n\
+                done:\n  ret i32 %d\n}\n\
+                define i32 @g(i32 %x) {\n  %r = call i32 @f(i32 %x)\n  ret i32 %r\n}\n";
+    let calls_of_h = |arguments: &[&str]| {
+        let (built, _) = compiled(&flags(arguments), text, "g").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().matches("call h").count()
+    };
+    let off = ["-m64", "-O3", "--isel=dag", "-fno-inline-functions", "-fno-inline-functions-called-once"];
+    assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
+    let on = ["-m64", "-O3", "--isel=dag"];
+    assert!(calls_of_h(&on) >= 1);
+}

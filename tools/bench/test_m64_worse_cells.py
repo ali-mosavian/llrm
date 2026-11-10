@@ -171,3 +171,19 @@ def test_a_table_without_a_compiler_stamp_is_refused(tmp_path):
     table.write_text("# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE; bench=abcdef1\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
     done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
     assert done.returncode != 0 and "compiler=" in done.stderr
+
+
+def test_allow_stale_lists_an_aged_table_and_prints_its_age(tmp_path):
+    """The guard refused a 95-landing-old table outright, which also hid its gaps from a reader who only wanted to judge them; it must stop the quoting, not the listing."""
+    import subprocess
+
+    built = _bench_repo(tmp_path)
+    for i in range(worse_cells.MAX_LANDINGS + 1):
+        _landing(tmp_path, f"c{i}")
+    table = tmp_path / "t.tsv"
+    table.write_text(f"# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE; bench={built}; compiler={built}\n" + row("p", "ours", 300) + row("p", "gcc", 250) + row("p", "clang", 280))
+    cmd = [sys.executable, str(Path(worse_cells.__file__)), str(table), "--repo", str(tmp_path)]
+    refused = subprocess.run(cmd, capture_output=True, text=True)
+    assert refused.returncode != 0 and "--allow-stale" in refused.stderr and "code\tp\tO1" not in refused.stdout
+    listed = subprocess.run([*cmd, "--allow-stale"], capture_output=True, text=True)
+    assert listed.returncode == 0 and "code\tp\tO1\t300\t250" in listed.stdout and f"{worse_cells.MAX_LANDINGS + 1} landings behind" in listed.stderr
