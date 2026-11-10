@@ -46,6 +46,16 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// `-fpeel-loops` was refused by name once `Options::peel` was deleted, which
+/// broke a command line that gcc and clang take: it is the backend's, accepted
+/// and ignored, like `-fno-peel-loops`.
+#[test]
+fn fpeel_loops_and_fno_peel_loops_compile() {
+    for flag in ["-fpeel-loops", "-fno-peel-loops"] {
+        assert_eq!(built(&format!("{flag} -O2 -c x.c")).llc, words(flag), "{flag}");
+    }
+}
+
 /// `-fsanitize=stack` and `bounds` were refused with "not translated yet",
 /// so stackover.c, stackdeep.c, es_across_copy.c and idioms.c (8 configs)
 /// could not compile under llrm-cc; the backend takes them.
@@ -439,6 +449,27 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     );
     let (clang, _) = flags("x86_16-dos", "-O1 -c x.c");
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
+}
+
+/// The pin's -O1 pipeline has no JumpThreadingPass (JUMPTHREAD-O1), so clang's
+/// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
+/// clk against gcc's 614). The m68k rows give their backend `-fthread-jumps`
+/// at -O1, unless the command line states either spelling; no other row, and
+/// no other level, does.
+#[test]
+fn m68k_rows_thread_jumps_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
+    for row in table.keys().filter(|row| row.starts_with("m68k-")) {
+        assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
+    }
+    for row in table.keys().filter(|row| !row.starts_with("m68k-")) {
+        assert!(!has(&llc(row, "-O1 -c x.c")), "{row} as before");
+    }
 }
 
 /// A dist read the description files from the checkout it was built in, so

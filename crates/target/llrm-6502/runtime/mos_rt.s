@@ -54,16 +54,16 @@ __crest:
 .export __mulqi3
 __mulqi3:                       ; rc2 * rc3 -> A
   lda #0
-  ldx #8
-@next:
-  lsr rc3
-  bcc @skip
+  beq @test
+@add:
   clc
   adc rc2
-@skip:
+@shift:
   asl rc2
-  dex
-  bne @next
+@test:
+  lsr rc3                       ; carry: the bit; zero: no multiplier bits are left
+  bcs @add
+  bne @shift
   rts
 
 .export __umulqihi3
@@ -344,6 +344,35 @@ __modhi3:                       ; rs1 % rs2 -> A:X
   ldy rc3
   jsr abs16_pair
   jsr udivmod16
+  cpy #0
+  bpl @done
+  neg16 rc6, rc7
+@done:
+  lda rc6
+  ldx rc7
+  rts
+
+; the compact signed variants, called at size: the same sign handling over the bit loop alone (no short-divisor path)
+.export __divhi3c
+__divhi3c:                       ; rs1 / rs2 -> A:X, compact
+  lda rc3
+  eor rc5
+  tay
+  jsr abs16_pair
+  jsr udivmod16c
+  cpy #0
+  bpl @done
+  neg16 rc2, rc3
+@done:
+  lda rc2
+  ldx rc3
+  rts
+
+.export __modhi3c
+__modhi3c:                       ; rs1 % rs2 -> A:X, compact
+  ldy rc3
+  jsr abs16_pair
+  jsr udivmod16c
   cpy #0
   bpl @done
   neg16 rc6, rc7

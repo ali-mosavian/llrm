@@ -21,7 +21,7 @@ fn assembly(
     )
     .unwrap();
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .args(["-S", "-O2", "-o"])
         .arg(&output)
         .arg(&input)
         .output()

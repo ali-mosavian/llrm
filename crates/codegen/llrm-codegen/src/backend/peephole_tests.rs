@@ -6558,9 +6558,81 @@ fn test_a_float_slot_copy_is_skipped_on_a_register_file_without_x87() {
         cache: Default::default(),
         views: base.views,
         byte_lanes: base.byte_lanes,
+        ties_by_row: base.ties_by_row,
     })));
     let mut input = float_copy_body((-4, 4), (-8, 4), &[]);
     assert!(float_copy(&input, false).is_some(), "with the x86 register file the pair is copied");
     input.registers = Some(bare);
     assert!(float_copy(&input, false).is_none(), "without x87 registers it is not");
+}
+
+/// nbody -O1 kept 24 `mov dword ptr [m], imm` stores of its f64 constants (7 B
+/// each, +82 B against gcc with 3.8% fewer clocks): -Os shared one register for
+/// them. At -O1, where bytes decide, a target that allows sharing
+/// (`share_literal_stores`) shares a run outside any cycle, and not in a loop.
+#[test]
+fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
+    let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
+    cpu.share_literal_stores = true;
+    cpu.speed_rate = false;
+    assert!(cpu.bytes_strict(), "-O1");
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    let shared = |looped: bool| {
+        let stores: Vec<Arc<Insn>> =
+            [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
+        let next = after_stores(false, &[]);
+        let first = block(0, stores, if looped { vec![0, 1] } else { vec![1] });
+        let input = body("stores", 0, vec![first.into(), block(1, next, vec![]).into()]);
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns)
+    };
+    assert_eq!(shared(false), ["xor", "mov", "mov"], "outside a loop: one zero, two register stores");
+    assert_eq!(shared(true), ["mov", "mov"], "in a loop the load is a clock every trip");
+
+    cpu.share_literal_stores = false;
+    let stores: Vec<Arc<Insn>> =
+        [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
+    let input =
+        body("stores", 0, vec![block(0, stores, vec![1]).into(), block(1, after_stores(false, &[]), vec![]).into()]);
+    assert_eq!(
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns),
+        ["mov", "mov"],
+        "a target that does not allow it"
+    );
+}
+
+/// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a move into the
+/// stack pointer, zero, -1, a wider immediate and a non-32-bit body stay as they are.
+#[test]
+fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
+    // (destination, value, bits, rewritten)
+    for (dest, value, bits, rewritten) in [
+        (RegId::EAX, 40, 32, true),
+        (RegId::EAX, -5, 32, true),
+        (RegId::ESP, 40, 32, false),
+        (RegId::EAX, 0, 32, false),
+        (RegId::EAX, -1, 32, false),
+        (RegId::EAX, 200, 32, false),
+        (RegId::EAX, 40, 64, false),
+    ] {
+        let set = insn(
+            0,
+            Some((0, 5)),
+            Some(sem(Operation::Move, "mov", vec![rl(dest, 4)], vec![im(value, 4)])),
+            vec![],
+            vec![],
+        );
+        let input = LirBody {
+            bits,
+            min_size: true,
+            ..body("f", 0, vec![block(0, vec![Arc::new(set)], vec![]).into()])
+        };
+        let done = pushed_immediates(&input, &crate::backend::cpu::tuned("486", false).unwrap());
+        let names: Vec<_> = done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
+        let want: &[&str] = if rewritten { &["push", "pop"] } else { &["mov"] };
+        assert_eq!(
+            names.iter().map(|name| name.as_deref().unwrap()).collect::<Vec<_>>(),
+            want,
+            "{dest:?} {value} {bits}"
+        );
+    }
 }

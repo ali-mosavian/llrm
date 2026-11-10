@@ -7,12 +7,12 @@ description = "The arm64 (AArch64) target: its descriptions, translated from LLV
 
 [dependencies]
 rustc-hash = { workspace = true }
+llrm-alloc = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
-llrm-alloc = { workspace = true }
 llrm-codegen = { workspace = true }
 llrm-support = { workspace = true }
 llrm-env = { workspace = true }
@@ -31,7 +31,6 @@ llrm-target = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-llrm-iselgen = { workspace = true }
 
 [[bin]]
 name = "llrm-arm64-llc"

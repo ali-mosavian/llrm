@@ -8,8 +8,8 @@ use std::process::Command;
 #[test]
 fn a_single_register_first_push_does_not_take_the_pairs_range() {
     for level in ["-O1", "-O2", "-Os"] {
-        let out = std::env::temp_dir().join("llrm-single-push-bump.o");
-        let _ = std::fs::remove_file(&out);
+        let scratch = tempfile::tempdir().unwrap();
+        let out = scratch.path().join("f.o");
         let done = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
             .args([level, "-o", out.to_str().unwrap(), concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/store_merge_interleaved.ll")])
             .output()
@@ -23,8 +23,8 @@ fn a_single_register_first_push_does_not_take_the_pairs_range() {
 /// stops at 255) failed to encode.
 #[test]
 fn a_frame_of_256_bytes_is_not_folded_into_a_single_load() {
-    let dir = std::env::temp_dir().join("llrm-single-push-bump-256");
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
     let (source, out) = (dir.join("f.ll"), dir.join("f.o"));
     let _ = std::fs::remove_file(&out);
     std::fs::write(

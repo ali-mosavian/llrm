@@ -46,6 +46,7 @@ pub fn object_max_trip_count(
         dom_conditions: None,
         cond_context: None,
         cxt: None,
+        pending_intrinsics: &[],
     };
     let opts = ObjectSizeOpts { round_to_align: false, null_is_unknown_size: true };
     let mut best: Option<i128> = None;

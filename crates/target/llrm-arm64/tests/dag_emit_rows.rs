@@ -20,7 +20,7 @@ fn dag_at(
     std::fs::write(&input, format!("{HEADER}{body}")).unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", level, "--isel=dag", "-o"])
+        .args(["-S", level, "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -40,7 +40,7 @@ fn full_greedy(text: &str) -> Result<String, String> {
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
         .env("LLRM_ARM64_GREEDY", "1")
-        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .args(["-S", "--no-opt", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -59,7 +59,7 @@ fn full(text: &str) -> Result<String, String> {
     std::fs::write(&input, text).unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .args(["-S", "--no-opt", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -193,7 +193,7 @@ fn every_branch_of_a_split_condition_carries_the_phi_copies() {
     let dir = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
         .env("LLRM_ARM64_VERIFY", "1")
-        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .args(["-S", "--no-opt", "-o"])
         .arg(dir.path().join("t.s"))
         .arg("tests/data/queens_place.ll")
         .output()
@@ -388,7 +388,7 @@ fn linux_dag(body: &str) -> Result<String, String> {
     std::fs::write(&input, format!("{LINUX_HEADER}{body}")).unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .args(["-S", "-O2", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
