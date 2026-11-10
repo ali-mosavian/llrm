@@ -533,7 +533,7 @@ pub mod hashrecognize;
 pub mod pass;
 pub mod popcount;
 pub mod process;
-pub mod shifttest;
+pub mod shiftbit;
 pub mod shiftzero;
 pub mod strlen;
 

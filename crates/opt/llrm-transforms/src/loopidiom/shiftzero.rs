@@ -35,6 +35,7 @@ use llrm_mir::tti::{CostKind, Ty};
 
 use super::LoopIdiomRecognize;
 use super::common::{defining_instruction, emit, int, uses_outside};
+use super::countdown::wrap;
 use super::ffs::incoming_value;
 use super::process::{Run, cx};
 
@@ -50,21 +51,6 @@ struct ShiftUntilZero {
     /// `-off`, the offset the shift amount adds to `iv`, negated.
     extra_offset: Scev,
     inverted_cond: bool,
-}
-
-/// `nuw` and `nsw` as asked.
-fn wrap(
-    nuw: bool,
-    nsw: bool,
-) -> Flags {
-    let mut flags = Flags::default();
-    if nuw {
-        flags = flags.union(Flags::NUW);
-    }
-    if nsw {
-        flags = flags.union(Flags::NSW);
-    }
-    flags
 }
 
 impl LoopIdiomRecognize {

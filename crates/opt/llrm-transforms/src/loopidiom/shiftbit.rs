@@ -36,6 +36,7 @@ use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison;
 
 use super::LoopIdiomRecognize;
 use super::common::{defining_instruction, emit, int, uses_outside};
+use super::countdown::wrap;
 use super::ffs::{incoming_value, query};
 use super::process::{Run, cx};
 
@@ -49,21 +50,6 @@ struct ShiftUntilBitTest {
     curr_x: Operand,
     /// `x.next = x.curr << 1`.
     next_x: InstId,
-}
-
-/// `nuw` and `nsw` as asked.
-fn wrap(
-    nuw: bool,
-    nsw: bool,
-) -> Flags {
-    let mut flags = Flags::default();
-    if nuw {
-        flags = flags.union(Flags::NUW);
-    }
-    if nsw {
-        flags = flags.union(Flags::NSW);
-    }
-    flags
 }
 
 impl LoopIdiomRecognize {

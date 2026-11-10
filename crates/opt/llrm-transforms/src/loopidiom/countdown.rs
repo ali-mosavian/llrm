@@ -47,3 +47,18 @@ pub(super) fn count_down_loop(
     run.function.set_operand(lb_cond, 0, tc_dec);
     run.function.set_operand(lb_cond, 1, int(run.context, ty, 0));
 }
+
+/// `nuw` and `nsw` as asked.
+pub(super) fn wrap(
+    nuw: bool,
+    nsw: bool,
+) -> Flags {
+    let mut flags = Flags::default();
+    if nuw {
+        flags = flags.union(Flags::NUW);
+    }
+    if nsw {
+        flags = flags.union(Flags::NSW);
+    }
+    flags
+}
