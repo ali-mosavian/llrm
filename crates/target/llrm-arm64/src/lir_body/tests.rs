@@ -799,3 +799,70 @@ fn the_body_carries_the_edge_odds_by_block_position() {
     assert_eq!(lowered.body.odds.probability(0, 1), Some(0.375));
     assert_eq!(lowered.body.odds.probability(1, 0), None);
 }
+
+/// A constant made in the entry and read only by a phi of the join goes onto
+/// the entry's edge to the join, in a block of its own. `from_lir` zipped the
+/// body's blocks with the template's and dropped the phis, so a body that
+/// gained a block came back without it (the block's operations lost, the phi
+/// gone).
+#[test]
+fn a_block_made_by_the_shared_sink_and_the_phi_naming_it_come_back() {
+    let r = |n| Gpr(Gpr::FIRST_VIRTUAL + n);
+    let (condition, constant, other, joined) = (r(1), r(2), r(3), r(4));
+    let wide = |rd, imm16| Op::I(Inst::MoveWide { op: Wide::Zero, width: WIDTHS[1], rd, imm16, lsl: 0 });
+    let mut function = MFunc::new("t");
+    function.next_register = Gpr::FIRST_VIRTUAL + 16;
+    let block =
+        |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    function.blocks = vec![
+        block(
+            "entry",
+            vec![
+                wide(condition, 1),
+                wide(constant, 7),
+                Op::I(Inst::CompareBranch { nonzero: true, width: Width::X, rt: condition, target: label("join") }),
+            ],
+        ),
+        block("cold", vec![wide(other, 9), Op::I(Inst::Branch { link: false, target: label("join") })]),
+        block(
+            "join",
+            vec![
+                Op::Phi {
+                    dst: Reg::Gpr(joined),
+                    incoming: vec![(Reg::Gpr(constant), "entry".into()), (Reg::Gpr(other), "cold".into())],
+                },
+                Op::Return { uses: vec![], tail: None },
+            ],
+        ),
+    ];
+    // entry -> join is taken 37.5% of the time: the pin's split threshold is
+    // 40%.
+    let odds = |n, of| llrm_mir::blockfrequency::BranchProbability::new(n, of);
+    function.alloc_odds =
+        Some([((0, 2), (odds(3, 8), 0)), ((0, 1), (odds(5, 8), 1)), ((1, 2), (odds(1, 1), 0))].into_iter().collect());
+    let before = function.blocks.len();
+    let after = stages::sink(&function).expect("the sink runs and the body comes back");
+    assert_eq!(
+        after.blocks.len(),
+        before + 1,
+        "no block on the split edge: {:?}",
+        after.blocks.iter().map(|b| &b.label).collect::<Vec<_>>()
+    );
+    let made =
+        after.blocks.iter().find(|b| !function.blocks.iter().any(|old| old.label == b.label)).expect("a new block");
+    assert!(
+        made.ops.iter().any(|op| matches!(op, Op::I(Inst::MoveWide { imm16: 7, .. }))),
+        "the constant is not in the new block: {:?}",
+        made.ops.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        made.ops
+            .iter()
+            .any(|op| matches!(op, Op::I(Inst::Branch { link: false, target: Target::Label(to) }) if to == "join")),
+        "the new block does not go on to the join"
+    );
+    let join = after.blocks.iter().find(|b| b.label == "join").expect("the join");
+    let Some(Op::Phi { incoming, .. }) = join.ops.iter().next() else { panic!("the join lost its phi") };
+    assert!(incoming.iter().any(|(_, from)| *from == made.label), "the phi does not name the new block: {incoming:?}");
+    assert!(!incoming.iter().any(|(_, from)| from == "entry"), "the phi still names the entry: {incoming:?}");
+}

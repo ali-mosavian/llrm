@@ -270,6 +270,16 @@ pub fn run(
     function: &mut MFunc,
     optsize: bool,
 ) {
+    run_with(function, optsize, true);
+}
+
+/// [`run`], with the private sink only when `sink` (the shared `MachineSink`
+/// phase ran before phi elimination instead).
+pub fn run_with(
+    function: &mut MFunc,
+    optsize: bool,
+    sink_here: bool,
+) {
     dead_code(function);
     unsplit_edges(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
@@ -281,7 +291,9 @@ pub fn run(
     hoist(function, &graph);
     // What was hoisted from several blocks is one value in the preheader.
     cse(function, &graph, optsize);
-    sink(function, &graph);
+    if sink_here {
+        sink(function, &graph);
+    }
     crate::sinkfold::run(function, &graph);
     dead_definitions(function);
     non_flag_setting(function);

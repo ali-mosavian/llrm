@@ -178,6 +178,44 @@ pub fn observe(function: &crate::mfunc::MFunc) -> Result<(), String> {
     Ok(())
 }
 
+/// `function` after the shared `MachineSink` phase, which runs on the
+/// selector's body with its phis (the pin runs it before `PhiElimination`),
+/// fed the edge odds in `function.alloc_odds`. A phase that refuses leaves an
+/// error, not a silently unsunk body.
+pub fn sink(function: &crate::mfunc::MFunc) -> Result<crate::mfunc::MFunc, String> {
+    let lowered = super::to_lir(function).map_err(|super::Unmapped(form)| format!("unmapped form {form}"))?;
+    let arch = Arm64;
+    let profile = tuned_for(&arch, "generic", false)?;
+    let regs = Regs(arch.registers());
+    let segments = Segments::of(&arch.machine(), regs, arch.operand_bytes());
+    let classes = Rc::new(RegisterClasses::of(&arch));
+    let omitted: Vec<&str> = arch.omitted_phases().iter().map(|(name, _)| *name).collect();
+    let phases = flow::machine_with(
+        &Default::default(),
+        None,
+        None,
+        None,
+        false,
+        profile,
+        &segments,
+        &classes,
+        &Rules::NONE,
+        &arch.frame_registers(),
+        Selector::Old,
+        &omitted,
+    )?;
+    let mut phase = phases
+        .into_iter()
+        .find(|phase| phase.class_name() == "MachineSink")
+        .ok_or("the shared phase list has no MachineSink")?;
+    // The lane table is per thread: without it the phase reads x86's.
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    let body = flow::checked(lowered.body.clone(), phase.as_mut(), true, None, &classes, &segments, &arch)
+        .map_err(|why| format!("MachineSink: {why:?}"))?;
+    let after = super::Lowered { body, debug_values: lowered.debug_values, tied: lowered.tied };
+    super::from_lir(&after, function).map_err(|super::Unmapped(form)| format!("no way back for {form}"))
+}
+
 /// The verifier's complaints about `body`, each without its position (an
 /// instruction's place moves between phases; the complaint stays).
 fn complaints(

@@ -299,14 +299,24 @@ struct Back<'a> {
     template: &'a MFunc,
     symbols: &'a [String],
     mmo: Option<&'a MemOperand>,
+    /// The label of each block of the body, by `at`: the template's for a block
+    /// it had, a fresh one for a block a phase made (an edge split).
+    labels: &'a HashMap<i64, String>,
 }
 
 impl Back<'_> {
+    fn label(
+        &self,
+        at: i64,
+    ) -> String {
+        self.labels.get(&at).cloned().unwrap_or_else(|| panic!("a branch to block {at}, which the body has not"))
+    }
+
     fn block(
         &self,
         at: i64,
     ) -> Target {
-        Target::Label(self.template.blocks[at as usize].label.clone())
+        Target::Label(self.label(at))
     }
 
     fn target(
@@ -729,16 +739,82 @@ pub fn text(lowered: &Lowered) -> String {
     out
 }
 
+/// The label of each block of the body, by `at`. A block the template had keeps
+/// its label (the body numbers those by position); a block a phase made gets
+/// one derived from the block before it, which is the block whose edge it
+/// splits.
+fn labels_of(
+    body: &LirBody,
+    template: &MFunc,
+) -> HashMap<i64, String> {
+    let mut labels: HashMap<i64, String> = HashMap::new();
+    let mut taken: std::collections::HashSet<&str> = template.blocks.iter().map(|block| block.label.as_str()).collect();
+    let mut made = Vec::new();
+    for (index, block) in body.blocks.iter().enumerate() {
+        match usize::try_from(block.at).ok().and_then(|at| template.blocks.get(at)) {
+            Some(original) => {
+                labels.insert(block.at, original.label.clone());
+            }
+            None => made.push((index, block.at)),
+        }
+    }
+    for (count, (index, at)) in made.into_iter().enumerate() {
+        let before =
+            index.checked_sub(1).map_or("", |before| labels.get(&body.blocks[before].at).map_or("", String::as_str));
+        let mut name = format!("{before}.split{count}");
+        while taken.contains(name.as_str()) {
+            name.push('_');
+        }
+        labels.insert(at, name);
+    }
+    labels
+}
+
 /// `template` with its blocks' operations replaced by the body's: everything
-/// that is not an operation (labels, frame objects, pool) is the template's.
+/// that is not an operation (frame objects, pool) is the template's. A block
+/// the body made is new; the phis come back as the template's, with the
+/// predecessors the body names.
 pub fn from_lir(
     lowered: &Lowered,
     template: &MFunc,
 ) -> Result<MFunc, Unmapped> {
     let mut function = template.clone();
     function.blocks = Vec::new();
-    for (block, original) in lowered.body.blocks.iter().zip(&template.blocks) {
-        let mut rebuilt = MBlock { label: original.label.clone(), ops: Default::default() };
+    let labels = labels_of(&lowered.body, template);
+    for block in lowered.body.blocks.iter() {
+        let original = usize::try_from(block.at).ok().and_then(|at| template.blocks.get(at));
+        let mut rebuilt = MBlock { label: labels[&block.at].clone(), ops: Default::default() };
+        let template_phis: Vec<(usize, &Op)> = original
+            .map(|original| {
+                original.ops.iter().enumerate().take_while(|(_, op)| matches!(op, Op::Phi { .. })).collect()
+            })
+            .unwrap_or_default();
+        if template_phis.len() != block.phis.len() {
+            return Err(Unmapped(format!(
+                "block {} has {} phis, was {}",
+                block.at,
+                block.phis.len(),
+                template_phis.len()
+            )));
+        }
+        for ((place, op), phi) in template_phis.into_iter().zip(block.phis.iter()) {
+            let Op::Phi { dst, incoming } = op else { unreachable!("filtered to phis") };
+            if incoming.len() != phi.incoming.len() {
+                return Err(Unmapped(format!("a phi of block {} changed its predecessor count", block.at)));
+            }
+            let mut again = Vec::with_capacity(incoming.len());
+            for ((value, _), (from, held)) in incoming.iter().zip(phi.incoming.iter()) {
+                if lir_register(*value) != MfReg::Virt(*held) {
+                    return Err(Unmapped(format!("a phi of block {} changed an incoming value", block.at)));
+                }
+                let label = labels
+                    .get(from)
+                    .ok_or_else(|| Unmapped(format!("a phi from block {from}, which the body has not")))?;
+                again.push((*value, label.clone()));
+            }
+            let line = original.and_then(|original| original.ops.loc(place));
+            rebuilt.ops.push_at(Op::Phi { dst: *dst, incoming: again }, line);
+        }
         for insn in block.insns.iter() {
             let what = insn.what.as_ref().expect("a selected instruction");
             if what.name.as_deref() == Some("DBG_VALUE") {
@@ -747,7 +823,7 @@ pub fn from_lir(
                 continue;
             }
             let mmo = mmo_of(insn, &lowered.body.symbols);
-            let cx = Back { template, symbols: &lowered.body.symbols, mmo: mmo.as_ref() };
+            let cx = Back { template, symbols: &lowered.body.symbols, mmo: mmo.as_ref(), labels: &labels };
             let mut again;
             let what = if lowered.tied.is_empty() {
                 what

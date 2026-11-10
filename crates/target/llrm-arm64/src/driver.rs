@@ -237,6 +237,17 @@ fn lower_function(
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
         crate::lir_body::stages::observe(&machine)?;
     }
+    // The pin's `MachineSink` runs here, on the SSA body, with the edge odds
+    // (`MachineBranchProbabilityInfo`); it replaces the sink of `prepass`.
+    let sink_stage = llrm_support::env_flag!("LLRM_ARM64_SINK_STAGE");
+    if sink_stage {
+        // Position-keyed: valid for the body that goes in; recomputed after, as
+        // the sink adds blocks.
+        machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
+        machine = crate::lir_body::stages::sink(&machine).map_err(|why| format!("@{name}: {why}"))?;
+        machine.alloc_odds = None;
+        dump("MachineSink", &machine);
+    }
     crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
@@ -256,7 +267,7 @@ fn lower_function(
                 llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
             ),
         );
-    crate::prepass::run(&mut machine, optsize);
+    crate::prepass::run_with(&mut machine, optsize, !sink_stage);
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
         crate::combine::run(&mut machine, optsize);
