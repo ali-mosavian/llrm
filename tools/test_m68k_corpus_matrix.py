@@ -95,6 +95,16 @@ class CorpusMatrix(unittest.TestCase):
         for needle in ("# ours:", "# gcc:", "# clang:", "-msoft-float", "-fomit-frame-pointer", "--fatal-warnings", "-relocation-model=static"):
             self.assertIn(needle, lines)
 
+    def test_the_size_only_runtime_is_not_refused_for_calling_itself(self):
+        """The corpus links the compiler-rt archive for bytes and never runs it, but asked for a runnable one: at -O1 the guard refused
+        (`__udivsi3 -> udivmod`) and the whole corpus run died after six minutes with no rows."""
+        from unittest import mock
+        tools = mx.Tools.__new__(mx.Tools)
+        tools.cc, tools.root, tools.lock = "/x/llrm-cc", "/x", __import__("threading").Lock()
+        with mock.patch.object(mx.sweep, "cache_dir", return_value=Path("/x")), mock.patch.object(mx.sweep, "build_support", return_value=["a", "b", "archive"]) as built:
+            self.assertEqual(tools.support("68020", "O1"), "archive")
+        self.assertIs(built.call_args.kwargs.get("runnable"), False)
+
     def test_a_helper_the_archive_lacks_is_named(self):
         """gcc's 96-bit long double calls __addxf3, which our compiler-rt does not define: ld --unresolved-symbols=ignore-all drops it from
         the executable, so `nm -u exe` listed nothing, the library read 0 B and whole-program 'worse' was 43 KB for three programs."""
