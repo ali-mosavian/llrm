@@ -207,6 +207,14 @@ impl Machine for Dos {
         })
     }
 
+    fn kept_stack_align(&self) -> Option<u64> {
+        crate::stack_keeps().0
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        crate::stack_keeps().1
+    }
+
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
         Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
     }
@@ -317,6 +325,8 @@ impl Machine for Dos {
             slots_loop_width_rule: true,
             // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see Tuning.
             carry_slot_indexes: false,
+            // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
+            address_reference_milliweight: 3000,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -350,6 +360,8 @@ impl Machine for Dos {
             // `setcc` pair and an `or` that took `bp` addressing out of the
             // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
             split_merged_conditions: true,
+            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+            lftr_any_stride: true,
             ..llrm_mir::target::Tuning::PIN
         }
         })();

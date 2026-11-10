@@ -4,6 +4,8 @@ SDCC : mcs51/z80/z180/r2k/r2ka/r3ka/sm83/tlcs90/ez80_z80/z80n/r800/ds390/TININat
 published under GNU General Public License (GPL)
 ucsim_z80: 0.8.15 (Z80), sz80
 
+Flag parity: UNVERIFIED. SDCC flags are `bench/bench_sdcc.py` BASE (`-mz80 --no-std-crt0 --code-loc 0x100 --data-loc 0x8000`) plus a variant (`--opt-code-size` / `--opt-code-speed`, `+ma` = `--max-allocs-per-node 100000`; the owner table's are `--fsigned-char` and 200000). This file does not record them and the kernels' ours side is a fixed IR, so `tools/z80_flag_check.py` cannot check a cell here: do not quote these columns as a bar next to the owner table's.
+
 Cost = run with the call minus run without it (argument set-up, call, return and the result store included). Bytes = linked code incl. library routines. T-states from ucsim `clks`; instructions from its `Inst` (exact without breakpoints, checked on 10 NOPs + HALT).
 
 | kernel | size B / T / insn | size+ma B / T / insn | speed B / T / insn | speed+ma B / T / insn |

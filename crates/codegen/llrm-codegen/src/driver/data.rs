@@ -190,6 +190,10 @@ impl Placed {
                 built.data.push((name, part));
             }
         }
+        // The rule of the llc path, `getKindForGlobal`: a variable of zeros in the data space is
+        // uninitialised data (a frontend's `[0] * N` is `zeroinitializer` all the same).
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/TargetLoweringObjectFile.cpp#L246-L285
+        zero_to_bss(built, module, data_space, false);
         match constants {
             Some(segment) if !pool.is_empty() => built.data.push((segment.to_owned(), pool)),
             _ => built.data[0].1.extend(pool),
@@ -229,6 +233,11 @@ pub fn zero_to_bss(
 ) {
     let bss = zeros_out(built, module, 0, |space| space == data_space);
     if bss.is_empty() {
+        return;
+    }
+    // A frontend's own `_BSS` (a variable it declared there) takes them too: one segment.
+    if let Some(at) = built.data.iter().position(|(segment, _)| segment == "_BSS") {
+        built.data[at].1.extend(bss);
         return;
     }
     if bss_begin {
@@ -465,6 +474,7 @@ mod tests {
             externs: Vec::new(),
             publics: Vec::new(),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: vec![("_DATA".into(), Vec::new())],
             procedures: Vec::new(),

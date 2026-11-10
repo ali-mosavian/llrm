@@ -72,6 +72,7 @@ pub fn query<'a>(
         assumptions: Some(c.env.analyses.assumption_cache()),
         dom_conditions: if c.without_dom_conditions { None } else { c.env.analyses.dom_conditions() },
         cxt,
+        pending_intrinsics: &c.pending_intrinsics,
         ..Query::bare(c.context, c.function, c.env.layout)
     }
 }

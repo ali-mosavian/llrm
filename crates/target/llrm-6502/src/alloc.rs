@@ -16,6 +16,7 @@ use std::fmt::Write;
 use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
+use llrm_spike_mf::commute_accumulator;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
@@ -197,6 +198,14 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// The second source of a byte op on the accumulator is a zero-page cell.
+    fn operand_class(
+        name: &str,
+        index: usize,
+    ) -> Option<Class> {
+        (index == 2 && matches!(name, "ADC" | "AND" | "ORA" | "EOR")).then_some(Class::MEM)
+    }
+
     /// A copy is priced as the load of a cell into a register, `ldx rc2`: the
     /// join of a value with its argument cell removes that copy.
     fn copy_cost() -> u32 {
@@ -1150,8 +1159,168 @@ impl Builder {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         self.copy(acc, a);
-        self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]));
+        self.push(accumulate(mnemonic, second));
         self.copy(d, acc);
+        Ok(())
+    }
+
+    /// `d := a op *(p + off)`: `ldy #off; op (p),y`. `y` is written even where
+    /// a 65C02 prints `op (p)` for an offset of 0.
+    fn alu_pointer(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        off: i64,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        self.define(d);
+        let (d, a) = (self.byte(d)?, self.byte(a)?);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(acc, a);
+        let operands =
+            vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
+        self.push(Inst::new(Kind::Op(pointer_kind(mnemonic)), operands));
+        self.copy(d, acc);
+        Ok(())
+    }
+
+    /// A folded op whose first operand has a constant (half): the constant has
+    /// its own forms (`x & 255`, `n - 1`, an `adc #0`), which an operand in
+    /// memory would hide, so the load is made into a cell and the ordinary op
+    /// runs on it.
+    fn pointer_op_with_constant(
+        &mut self,
+        fold: &crate::pointer_alu::PointerAlu,
+        at: usize,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        place: Place,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        // the loaded cell is the left operand, as the ordinary form has it,
+        // except in a subtraction
+        let sub = fold.mnemonic == "SBC";
+        if fold.word {
+            let cell = format!("w___p{at}");
+            let Place::Offset(off) = place else { return Err(Unsupported("an indexed word".into())) };
+            let (low, high) = self.write_word(&cell)?;
+            for (lane, to) in [low, high].into_iter().enumerate() {
+                let operands =
+                    vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
+                self.push(Inst::new(Kind::Op("LDPYZ"), operands));
+                self.copy(to, acc);
+            }
+            let (left, right) = if sub { (a, cell.as_str()) } else { (cell.as_str(), a) };
+            if fold.a == 1 && self.word_step(fold.mnemonic, d, left, right)? {
+                return Ok(());
+            }
+            return self.alu16(fold.mnemonic, fold.carry, d, left, right);
+        }
+        let cell = format!("v___p{at}");
+        self.define(&cell);
+        let loaded = self.byte(&cell)?;
+        match place {
+            Place::Offset(off) => {
+                let operands = vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
+                self.push(Inst::new(Kind::Op("LDPYZ"), operands));
+            }
+            Place::Index(index) => {
+                let index = self.byte(index)?;
+                self.copy(y, index);
+                self.push(Inst::new(Kind::Op("LDPX"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
+            }
+        }
+        self.copy(loaded, acc);
+        // `*p + 1` and `*p - 1` step in place, as `INC8` and `DEC8` do
+        let step = match self.constants.get(a).map(|value| *value & 0xFF) {
+            Some(1) if fold.mnemonic == "ADC" && fold.a == 1 => Some("INC"),
+            Some(255) if fold.mnemonic == "ADC" && fold.a == 1 => Some("DEC"),
+            _ => None,
+        };
+        if let Some(step) = step {
+            self.define(d);
+            let d = self.byte(d)?;
+            self.copy(d, loaded);
+            self.push(Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(d)]));
+            return Ok(());
+        }
+        let (left, right) = if sub { (a, cell.as_str()) } else { (cell.as_str(), a) };
+        self.alu(fold.mnemonic, fold.carry, d, left, right)
+    }
+
+    /// `d := a op *(p + index)`: the index byte goes to `y`, the op reads
+    /// `(p),y`.
+    fn alu_pointer_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        self.define(d);
+        let (d, a, index) = (self.byte(d)?, self.byte(a)?, self.byte(index)?);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(y, index);
+        self.copy(acc, a);
+        let kind = Kind::Op(match mnemonic {
+            "ADC" => "ADCPX",
+            "SBC" => "SBCPX",
+            "AND" => "ANDPX",
+            "ORA" => "ORAPX",
+            _ => "EORPX",
+        });
+        self.push(Inst::new(kind, vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+        self.copy(d, acc);
+        Ok(())
+    }
+
+    /// The same on a word: the carry runs from the low byte to the high, the
+    /// high byte of the second operand being at `off + 1`.
+    fn alu16_pointer(
+        &mut self,
+        fold: &crate::pointer_alu::PointerAlu,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        off: i64,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        if let Some(carry) = fold.carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        for (lane, (to, from)) in [(dl, al), (dh, ah)].into_iter().enumerate() {
+            self.copy(acc, from);
+            let operands = vec![
+                Operand::Def(acc),
+                Operand::Use(acc),
+                Operand::Use(ptr),
+                Operand::Imm(off + lane as i64),
+                Operand::Def(y),
+            ];
+            self.push(Inst::new(Kind::Op(pointer_kind(fold.mnemonic)), operands));
+            self.copy(to, acc);
+        }
         Ok(())
     }
 
@@ -1253,7 +1422,7 @@ impl Builder {
         }
         for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.push(accumulate(mnemonic, b));
             self.copy(d, acc);
         }
         Ok(())
@@ -1386,7 +1555,7 @@ impl Builder {
                 self.push(Inst::new(Kind::Op(carry), vec![]));
             }
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.push(accumulate(mnemonic, b));
             self.copy(d, acc);
         }
         Ok(())
@@ -1430,6 +1599,36 @@ fn memory_holds_until_flags_are_read(
                 _ => true,
             },
         )
+}
+
+/// `mnemonic a, a, second`: the byte op on the accumulator. `ADC`, `AND`, `ORA`
+/// and `EOR` may swap their sources (`isCommutable`).
+fn accumulate(
+    mnemonic: &'static str,
+    second: Operand,
+) -> Inst {
+    let acc = Reg::Phys(reg::A);
+    let mut inst = Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]);
+    inst.commutable = matches!(mnemonic, "ADC" | "AND" | "ORA" | "EOR");
+    inst
+}
+
+/// Where a folded op's operand lies from its pointer: a constant offset, or a
+/// byte index register.
+enum Place<'a> {
+    Offset(i64),
+    Index(&'a str),
+}
+
+/// The kind of an ALU op reading `(p),y`.
+fn pointer_kind(mnemonic: &str) -> &'static str {
+    match mnemonic {
+        "ADC" => "ADCPY",
+        "SBC" => "SBCPY",
+        "AND" => "ANDPY",
+        "ORA" => "ORAPY",
+        _ => "EORPY",
+    }
 }
 
 /// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
@@ -1507,6 +1706,7 @@ fn pointer_cells(
                     op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => {
                         at == 1
                     }
+                    code if crate::pointer_alu::pointer_alu(code).is_some_and(|fold| at == fold.ptr) => true,
                     op::STZP | op::LEASP16 | op::JSRI => at == 0,
                     _ => false,
                 };
@@ -1545,6 +1745,9 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
         let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let at = match *opcode {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => 1,
+            code if crate::pointer_alu::pointer_alu(code).is_some() => {
+                crate::pointer_alu::pointer_alu(code).expect("guarded").ptr
+            }
             op::STZP | op::LEASP16 | op::JSRI => 0,
             _ => continue,
         };
@@ -1740,6 +1943,28 @@ pub fn build_with_places(
                 let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
             }
+            // a byte op reading `(p),y` (or the 65C02's `(p)`): the load folded
+            // into it
+            code if crate::pointer_alu::pointer_alu(code).is_some() => {
+                let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
+                let (d, a, pointer) = (name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?);
+                let constant_first = if fold.word { b.has_known_half(a) } else { b.constants.contains_key(a) };
+                if constant_first {
+                    let place = if fold.indexed {
+                        Place::Index(name(&o[fold.ptr + 1])?)
+                    } else {
+                        Place::Offset(immediate(&o[fold.ptr + 1])?)
+                    };
+                    b.pointer_op_with_constant(&fold, at, d, a, pointer, place)?
+                } else if fold.indexed {
+                    b.alu_pointer_indexed(fold.mnemonic, fold.carry, d, a, pointer, name(&o[fold.ptr + 1])?)?
+                } else if fold.word {
+                    let offset = immediate(&o[fold.ptr + 1])?;
+                    b.alu16_pointer(&fold, d, a, pointer, offset)?
+                } else {
+                    b.alu_pointer(fold.mnemonic, fold.carry, d, a, pointer, immediate(&o[fold.ptr + 1])?)?
+                }
+            }
             op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
                 let (mnemonic, carry) = match inst.opcode {
                     op::ADD8MX => ("ADC", Some("CLC")),
@@ -1822,6 +2047,15 @@ pub fn build_with_places(
                 let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
                 b.copy(acc, a);
                 b.shift_a(step, immediate(&o[2])?);
+                b.copy(d, acc);
+            }
+            // `lsr a` leaves the bit that left in the carry; the operands are `d`, `co`, `a`
+            op::SRL1C8 => {
+                let acc = Reg::Phys(reg::A);
+                b.define(name(&o[0])?);
+                let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[2])?)?);
+                b.copy(acc, a);
+                b.shift_a("LSR", 1);
                 b.copy(d, acc);
             }
             op::STZABS => {
@@ -2622,6 +2856,60 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
     }
 }
 
+/// `a := cc ? t : f` copied into the register of `t` or `f` (`lo = v < lo ? v
+/// : lo`) is the tied conditional move: that value is in place, and the
+/// branch skips the one move to it, where the form through `a` loads both and
+/// stores one back. The pair `CMOV` and the copy out of `a` is one `CMOVT`
+/// (which still writes `a`: its move goes through it) when `a` is dead after
+/// the copy.
+///
+/// DEVIATE (6502-TIED-CMOV): the pin's x86 `CMOV` is two-address (`$dst =
+/// $src1`, `X86InstrCMovSetCC.td`), tied before allocation, so the coalescer
+/// joins the destination with `$src1`. A byte select is written in `a` here
+/// (the only register an ALU result is made in), and the register of the
+/// destination is known after allocation only. Exit: 2026-11-30, with the
+/// select tied before allocation (as `CMOV16` is).
+pub fn tie_conditional_moves(
+    function: &mut MFunction<Class>,
+    at: &dyn Fn(Reg) -> RegId,
+) {
+    let after = live_after(function, at);
+    for (b, block) in function.blocks.iter_mut().enumerate() {
+        // from the end: the liveness is of the block as it was, and a pair
+        // joined removes a copy after the ones still to see
+        for i in (0..block.insts.len().saturating_sub(1)).rev() {
+            let tied = match (&block.insts[i], &block.insts[i + 1]) {
+                (select, copy) if select.kind == Kind::Op("CMOV") && copy.kind == Kind::Copy => {
+                    match (&select.operands[..], &copy.operands[..]) {
+                        ([_, if_false, if_true, code, flags], [Operand::Def(to), Operand::Use(from)])
+                            if at(*from) == reg::A && !after[b][i + 1].contains(&reg::A) =>
+                        {
+                            let kept = |value: &Operand| matches!(value, Operand::Use(r) if at(*r) == at(*to));
+                            (kept(if_false) || kept(if_true)).then(|| {
+                                vec![
+                                    Operand::Def(*to),
+                                    Operand::Def(Reg::Phys(reg::A)),
+                                    if_false.clone(),
+                                    if_true.clone(),
+                                    code.clone(),
+                                    flags.clone(),
+                                ]
+                            })
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(operands) = tied {
+                block.insts[i].kind = Kind::Op("CMOVT");
+                block.insts[i].operands = operands;
+                block.insts.remove(i + 1);
+            }
+        }
+    }
+}
+
 /// A flag compare of the old value of a word, made after the step that
 /// replaced it, is made before the step: `inx; bne; iny` and `inc m; bne; inc
 /// m+1` leave the carry as it was (they set N and Z), and a branch on the
@@ -3378,6 +3666,7 @@ fn emit_with<const STACK: bool>(
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
+    commute_accumulator::<Mos<STACK>>(&mut function);
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
@@ -3403,6 +3692,7 @@ fn emit_with<const STACK: bool>(
         Reg::Phys(p) => p,
     };
     compare_before_step(&mut function, &at);
+    tie_conditional_moves(&mut function, &at);
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     // a reload of a slot whose register nothing has written is that register; x
@@ -3593,8 +3883,30 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live);
                     writeln!(out, "  inc {}", register_name(lane(d, 1))).unwrap();
                 }
+                (
+                    Kind::Op(step @ ("ADCPY" | "SBCPY" | "ANDPY" | "ORAPY" | "EORPY")),
+                    [_, _, _, Operand::Imm(off), _],
+                ) => {
+                    let (op, p) = (step[..3].to_lowercase(), register_name(lane(regs[2], 0)));
+                    if cmos && *off == 0 {
+                        writeln!(out, "  {op} ({p})").unwrap()
+                    } else {
+                        writeln!(out, "  ldy #{off}\n  {op} ({p}),y").unwrap()
+                    }
+                }
+                (Kind::Op(step @ ("ADCPX" | "SBCPX" | "ANDPX" | "ORAPX" | "EORPX")), _) => {
+                    writeln!(out, "  {} ({}),y", step[..3].to_lowercase(), register_name(lane(regs[2], 0))).unwrap()
+                }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
+                (Kind::Op("LDPYZ"), [_, _, Operand::Imm(off), _]) => {
+                    let p = register_name(lane(regs[1], 0));
+                    if cmos && *off == 0 {
+                        writeln!(out, "  lda ({p})").unwrap()
+                    } else {
+                        writeln!(out, "  ldy #{off}\n  lda ({p}),y").unwrap()
+                    }
+                }
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
@@ -3889,6 +4201,36 @@ fn emit_with<const STACK: bool>(
                         writeln!(out, "  {} {}", jump.to_lowercase(), target(to)).unwrap();
                     }
                 }
+                // d := cc ? if_true : if_false, d the register of one of them
+                // (`tie_conditional_moves`): the branch skips the move of the
+                // other
+                (Kind::Op("CMOVT"), [_, _, if_false, if_true, Operand::Imm(code), _]) => {
+                    made += 1;
+                    let done = format!("_cmd{made}");
+                    let to = regs[0];
+                    let mut read =
+                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
+                    let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
+                    let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
+                    let (skip, moved, moved_at) = if Some(to) == false_at {
+                        (["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize], if_true, true_at)
+                    } else {
+                        (["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize], if_false, false_at)
+                    };
+                    writeln!(out, "  {skip} {done}").unwrap();
+                    match (moved, moved_at) {
+                        (Operand::Imm(v), _) if to == reg::A || to == reg::X || to == reg::Y => {
+                            writeln!(out, "  ld{} #{v}", register_name(to)).unwrap()
+                        }
+                        (Operand::Imm(0), _) if cmos => writeln!(out, "  stz {}", register_name(to)).unwrap(),
+                        (Operand::Imm(v), _) => {
+                            through_a(&mut out, false, spare, &format!("  lda #{v}\n  sta {}\n", register_name(to)))
+                        }
+                        (_, Some(from)) => move_byte(&mut out, to, from, false, spare),
+                        (_, None) => unreachable!(),
+                    }
+                    writeln!(out, "{done}:").unwrap();
+                }
                 // a := cc ? if_true : if_false, the branch first: loads set N
                 // and Z
                 (Kind::Op("CMOV"), [_, if_false, if_true, Operand::Imm(code), _]) => {
@@ -4153,6 +4495,7 @@ fn emit_with<const STACK: bool>(
         }
     }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
+    out.cmos = cmos;
     let tails = (
         (!returns_a, a_callees),
         (!returns_x, x_callees),

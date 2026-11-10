@@ -9,7 +9,8 @@ fn llc(args: &[&str]) -> std::process::Output {
 #[test]
 fn a_kernel_is_written_as_sdasz80_text() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let out = std::env::temp_dir().join("llrm-z80-llc-add16.s");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("llrm-z80-llc-add16.s");
     let done = llc(&["-S", "-O2", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/add16.ll")]);
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(&out).expect("the output file");
@@ -20,11 +21,12 @@ fn a_kernel_is_written_as_sdasz80_text() {
 #[test]
 fn a_refused_function_fails_the_exit_status() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let source = std::env::temp_dir().join("llrm-z80-llc-refused.ll");
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("llrm-z80-llc-refused.ll");
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i128 @g(i128 %a, i128 %b) {\n  %r = mul i128 %a, %b\n  ret i128 %r\n}\n";
     std::fs::write(&source, ir).unwrap();
-    let out = std::env::temp_dir().join("llrm-z80-llc-refused.s");
+    let out = tmp.path().join("llrm-z80-llc-refused.s");
     let done = llc(&["-S", "-o", out.to_str().unwrap(), source.to_str().unwrap()]);
     assert_eq!(done.status.code(), Some(1), "{dir}");
     assert!(String::from_utf8_lossy(&done.stderr).contains("REFUSED @g"));
@@ -34,7 +36,8 @@ fn a_refused_function_fails_the_exit_status() {
 /// pointer into one produced code that named `_tab` and no `_tab` to link.
 #[test]
 fn defined_variables_are_written_as_data() {
-    let source = std::env::temp_dir().join("llrm-z80-llc-data.ll");
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("llrm-z80-llc-data.ll");
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @tab = constant [4 x i8] c\"\\01\\02\\03\\04\"\n\
               @.str.1 = private constant [3 x i8] c\"ab\\00\"\n\
@@ -42,7 +45,7 @@ fn defined_variables_are_written_as_data() {
               @z = global [20 x i8] zeroinitializer\n\
               define i8 @f() {\n  %v = load i8, ptr @tab\n  ret i8 %v\n}\n";
     std::fs::write(&source, ir).unwrap();
-    let out = std::env::temp_dir().join("llrm-z80-llc-data.s");
+    let out = tmp.path().join("llrm-z80-llc-data.s");
     let done = llc(&["-S", "-O0", "-o", out.to_str().unwrap(), source.to_str().unwrap()]);
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(&out).expect("the output file");
@@ -66,7 +69,8 @@ fn defined_variables_are_written_as_data() {
 #[test]
 fn a_pair_built_from_two_bytes_and_returned_has_its_bytes_in_the_return_pair() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let out = std::env::temp_dir().join("llrm-z80-llc-fletcher.s");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("llrm-z80-llc-fletcher.s");
     let done = llc(&["-S", "-O2", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/fletcher.ll")]);
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(&out).expect("the output file");
@@ -80,7 +84,8 @@ fn a_pair_built_from_two_bytes_and_returned_has_its_bytes_in_the_return_pair() {
 #[test]
 fn a_pair_built_from_bytes_and_spilled_is_reloaded_into_a_pair() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let out = std::env::temp_dir().join("llrm-z80-llc-lz4c-oz.s");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("llrm-z80-llc-lz4c-oz.s");
     let done = llc(&["-S", "-Oz", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/lz4c.ll")]);
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
 }
@@ -90,12 +95,19 @@ fn a_pair_built_from_bytes_and_spilled_is_reloaded_into_a_pair() {
 #[test]
 fn a_byte_read_of_a_reloaded_pair_names_the_byte() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let out = std::env::temp_dir().join("llrm-z80-llc-lz4c-oz-bytes.s");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("llrm-z80-llc-lz4c-oz-bytes.s");
     let done = llc(&["-S", "-Oz", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/lz4c.ll")]);
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(&out).expect("the output file");
-    let bad: Vec<&str> =
-        text.lines().filter(|line| ["add a, ", "sub a, ", "xor a, ", "or a, ", "and a, "].iter().any(|op| line.trim().strip_prefix(op).is_some_and(|rest| matches!(rest, "bc" | "de" | "hl")))).collect();
+    let bad: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            ["add a, ", "sub a, ", "xor a, ", "or a, ", "and a, "]
+                .iter()
+                .any(|op| line.trim().strip_prefix(op).is_some_and(|rest| matches!(rest, "bc" | "de" | "hl")))
+        })
+        .collect();
     assert!(bad.is_empty(), "{bad:?}");
 }
 
@@ -103,7 +115,8 @@ fn a_byte_read_of_a_reloaded_pair_names_the_byte() {
 /// `llrm-cc -g` z80 row: it writes SDCC's `C$file$line` symbols.
 #[test]
 fn g_writes_the_line_symbols() {
-    let source = std::env::temp_dir().join("llrm-z80-llc-g.ll");
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("llrm-z80-llc-g.ll");
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %a, i16 %b) !dbg !5 {\n  %c = add i16 %a, %b, !dbg !7\n  ret i16 %c, !dbg !7\n}\n\
               !llvm.dbg.cu = !{!0}\n!llvm.module.flags = !{!2}\n\
@@ -112,7 +125,7 @@ fn g_writes_the_line_symbols() {
               !5 = distinct !DISubprogram(name: \"f\", scope: !1, file: !1, line: 1, type: !6, scopeLine: 2, spFlags: DISPFlagDefinition, unit: !0)\n\
               !6 = !DISubroutineType(types: !{null})\n!7 = !DILocation(line: 3, column: 5, scope: !5)\n";
     std::fs::write(&source, ir).unwrap();
-    let out = std::env::temp_dir().join("llrm-z80-llc-g.s");
+    let out = tmp.path().join("llrm-z80-llc-g.s");
     let done = llc(&["-S", "-g", "-o", out.to_str().unwrap(), source.to_str().unwrap()]);
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(&out).expect("the output file");

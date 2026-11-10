@@ -796,6 +796,31 @@ impl<B: BlockNumber> LoopInfo<B> {
         found
     }
 
+    /// The order the legacy loop pass manager visits the loops in, which the
+    /// code generator's `loop-reduce` runs under: the queue takes each loop
+    /// before its sub-loops (last sub-loop first), the top-level loops last
+    /// first, and the manager pops from the back
+    /// ([LoopPass.cpp#L109](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopPass.cpp#L109),
+    /// [#L163](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopPass.cpp#L163)).
+    /// Inner loops come before their parents and siblings in program order.
+    pub fn get_loops_in_legacy_visit_order(&self) -> Vec<Loop<'_, B>> {
+        fn queue<'a, B: BlockNumber>(
+            one: Loop<'a, B>,
+            found: &mut Vec<Loop<'a, B>>,
+        ) {
+            found.push(one);
+            for sub in one.get_sub_loops().collect::<Vec<_>>().into_iter().rev() {
+                queue(sub, found);
+            }
+        }
+        let mut found = Vec::new();
+        for root in self.top_level_loops().collect::<Vec<_>>().into_iter().rev() {
+            queue(root, &mut found);
+        }
+        found.reverse();
+        found
+    }
+
     /// `getSmallestCommonLoop`.
     pub fn get_smallest_common_loop<'a>(
         &'a self,
