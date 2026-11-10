@@ -17,6 +17,7 @@
 use llrm_object::assembler::Cfi;
 use rustc_hash::FxHashSet as HashSet;
 
+use crate::cfi::Unwind;
 use crate::mc::inst::*;
 use crate::mc::unwind;
 use crate::mc::visit::Reg;
@@ -484,11 +485,14 @@ struct Emitter {
     /// (`AArch64EpilogueEmitter::finalizeEpilogue`:
     /// `emitCalleeSavedGPRRestores` at `getFirstTerminator`).
     restored: Vec<Cfi>,
+    /// Which `.cfi_*` the frame states: all of them (`Async`), or the frame
+    /// as the prologue leaves it and nothing for the epilogues (`Sync`).
+    unwind: Unwind,
 }
 
 impl Emitter {
-    fn new() -> Self {
-        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new(), restored: Vec::new() }
+    fn new(unwind: Unwind) -> Self {
+        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new(), restored: Vec::new(), unwind }
     }
 
     /// The instructions made since the last call are from `loc`.
@@ -501,11 +505,16 @@ impl Emitter {
 }
 
 impl Emitter {
+    /// A step of the frame's construction or removal, stated where it
+    /// happens: only an asynchronous table has them
+    /// (`AArch64FunctionInfo::needsAsyncDwarfUnwindInfo`).
     fn cfi(
         &mut self,
         cfi: Cfi,
     ) {
-        self.insts.push(Inst::Cfi(cfi));
+        if self.unwind == Unwind::Async {
+            self.insts.push(Inst::Cfi(cfi));
+        }
     }
 
     /// `sp = sp + delta` (a multiple of 16).
@@ -597,7 +606,7 @@ pub fn lower(
     let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
-        let mut emitter = Emitter::new();
+        let mut emitter = Emitter::new(function.unwind);
         if index == save {
             prologue(&frame, &mut emitter);
         }
@@ -683,7 +692,7 @@ pub fn lower(
                     )
                 })
                 .map_or(0, |i| i + 1);
-            let mut tail = Emitter::new();
+            let mut tail = Emitter::new(function.unwind);
             epilogue(&frame, &mut tail);
             emitter.locs.splice(at..at, vec![None; tail.insts.len()]);
             emitter.insts.splice(at..at, tail.insts);
@@ -695,6 +704,33 @@ pub fn lower(
 }
 
 fn prologue(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    build_frame(frame, emitter);
+    state_frame(frame, emitter);
+}
+
+/// A synchronous table states the finished frame once, after the prologue's
+/// last instruction (`AArch64PrologueEmitter::emitPrologue`, `EmitCFI &&
+/// !EmitAsyncCFI`): the frame address, then the saves.
+fn state_frame(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    if emitter.unwind != Unwind::Sync {
+        return;
+    }
+    let cfa = match frame.frame_record {
+        Some(at) => Some(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 }),
+        None if frame.size > 0 => Some(Cfi::DefCfaOffset { offset: frame.size as i64 }),
+        None => None,
+    };
+    let saves = sorted_saves(emitter);
+    emitter.insts.extend(cfa.into_iter().chain(saves).map(Inst::Cfi));
+}
+
+fn build_frame(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
@@ -728,13 +764,22 @@ fn prologue(
 
 /// The saves' `.cfi_offset`s, highest address first: the order of the pin's
 /// frame indices.
-fn flush_saved(emitter: &mut Emitter) {
+fn sorted_saves(emitter: &mut Emitter) -> Vec<Cfi> {
     let mut saved = std::mem::take(&mut emitter.saved);
     saved.sort_by_key(|cfi| match cfi {
         Cfi::Offset { offset, .. } => std::cmp::Reverse(*offset),
         _ => std::cmp::Reverse(0),
     });
-    for cfi in saved {
+    saved
+}
+
+/// The saves, stated as the frame register is set up; a synchronous table
+/// states them with the finished frame ([`state_frame`]).
+fn flush_saved(emitter: &mut Emitter) {
+    if emitter.unwind == Unwind::Sync {
+        return;
+    }
+    for cfi in sorted_saves(emitter) {
         emitter.cfi(cfi);
     }
 }
