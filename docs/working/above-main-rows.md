@@ -217,3 +217,4 @@ Design only; no code before the coordinator's go.
 3. Backend: `NoteValue::Expr(vreg, ops)` in isel `noted`, and the DWARF writer emits `DW_OP_bregN 0; ops; DW_OP_stack_value` (CodeView keeps the plain value).
 
 **Cost** (estimate, not measured): about 700 lines and 3 PRs; compile time unchanged without `-g` (records exist only then); objects identical with and without `-g` (the `g_leaves_*` tests guard it). Done when `a_variable_reads_the_same_at_o2_as_at_o0...` passes at floor 18 and loses its `ignore`.
+| 6502-PATTERN-STEP | pattern_fill (6502, 65C02) | O1,O2,Os | bytes | 822 / 814 / 829 / 821 | 865 / 863 / 872 / 870 | +43 / +49 / +43 / +49 (+5%) | the stepping loop sets up an end pointer (`asl`/`rol` of the count, 16-bit add) and steps by `clc; adc #2` where the indexed loop stepped `inc`: about +11 B per fill site; clocks fall 8% (166391 -> 153123). Also idioms O2 +2 / +9 B, loop_fusion O2 6502 +8 B. | 6502 | 2026-11-24 | |
