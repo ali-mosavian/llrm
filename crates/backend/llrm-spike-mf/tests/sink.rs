@@ -73,6 +73,32 @@ fn a_value_read_on_both_paths_does_not_move() {
     assert_eq!(names(&function.blocks[0]), ["arg", "add", "branch"]);
 }
 
+/// A select made as blocks writes its result on both paths:
+/// `b0: d = f; branch b2`, `b1: d = t`, `b2: ret d`. Forward coalescing of
+/// the head's copy rewrote the read of `d` to `f` and left the arm's `d = t`
+/// dead: 6502 `ispunct` returned 0 for 1 (2026-11-09).
+#[test]
+fn a_register_written_on_both_paths_is_not_forwarded_to_one_copy() {
+    let mut function = MFunction::new("f");
+    function.classes = vec![(); 4];
+    let head = vec![
+        op("arg", vec![Operand::Def(v(0))]),
+        op("arg", vec![Operand::Def(v(1))]),
+        Inst::copy(v(2), v(0)),
+        branch(2),
+    ];
+    function.blocks.push(Block { id: 0, insts: head, phis: vec![] });
+    function.blocks.push(Block { id: 1, insts: vec![Inst::copy(v(2), v(1))], phis: vec![] });
+    function.blocks.push(Block { id: 2, insts: vec![op("ret", vec![Operand::Use(v(2))])], phis: vec![] });
+    machine_sink::<Two>(&mut function);
+    let ret = function.blocks[2].insts.last().unwrap();
+    assert_eq!(ret.operands, [Operand::Use(v(2))], "the read of the select's result names one arm's value");
+    assert!(
+        function.blocks[0].insts.iter().any(|inst| inst.kind == Kind::Copy),
+        "the head's copy of the false arm went"
+    );
+}
+
 /// A target with room for every register, so no sink is refused for pressure.
 struct Wide;
 

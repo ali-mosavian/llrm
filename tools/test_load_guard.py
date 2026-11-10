@@ -46,6 +46,14 @@ def descendants(root):
     return found
 
 
+# The mechanism tests run on the thresholds they were written for; the shipped defaults are asserted once, in Defaults.
+PROFILE = {
+    "LG_STOP_5M": "28", "LG_STOP_1M": "38", "LG_RESUME_5M": "26", "LG_RESUME_1M": "20", "LG_START_1M": "25", "LG_SLOTS": "3", "LG_SLOTS_HIGH": "5",
+    "LG_SLOTS_MAX": "7", "LG_SLOTS_WIDEST": "10", "LG_WIDEST_1M": "17", "LG_WIDEN_1M": "20", "LG_NARROW_1M": "22", "LG_SETTLE": "60", "LG_SETTLE_FAST": "15",
+    "LG_FAST_1M": "22", "LG_WIDE_1M": "22", "LG_AGE_STEP": "1200", "LG_TIER": "4",
+}
+
+
 class Env:
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -76,7 +84,7 @@ class Env:
     def start(self, *command, **env):
         guard = subprocess.Popen(
             [GUARD, *command],
-            env={**os.environ, "LG_LOAD_FILE": self.load, "LG_POLL": "0.1", "LG_SLOT_DIR": self.slots, "LG_MEMINFO": self.meminfo, **env},
+            env={**os.environ, "LG_LOAD_FILE": self.load, "LG_POLL": "0.1", "LG_SLOT_DIR": self.slots, "LG_MEMINFO": self.meminfo, **PROFILE, **env},
             stderr=subprocess.PIPE, text=True,
         )
         self.guards.append(guard)
@@ -334,6 +342,113 @@ class TermInsideTheQueue(Env, unittest.TestCase):
                 except OSError:
                     return False
         return True
+
+
+class Cancel(Env, unittest.TestCase):
+    """--cancel JOBID kills exactly the recorded process group. Pattern kills (pgrep -f / pkill -f) took out three sessions' builds on 2026-11-10."""
+
+    def job(self, *command):
+        guard = self.start(*command, LG_SLOTS="5", LG_SLOTS_HIGH="5", LG_SETTLE="0")
+        record = os.path.join(self.slots, "jobs", str(guard.pid))
+        self.assertTrue(until(lambda: os.path.exists(record)), "no job record written")
+        return guard
+
+    def cancel(self, ident):
+        return subprocess.run([GUARD, "--cancel", str(ident)], env={**os.environ, "LG_SLOT_DIR": self.slots}, capture_output=True, text=True)
+
+    def test_cancel_kills_the_recorded_job_and_leaves_one_with_the_same_command_line(self):
+        first, second = self.job("sleep", "300"), self.job("sleep", "300")
+        done = self.cancel(first.pid)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("cancelled job", done.stdout)
+        self.assertTrue(until(lambda: first.poll() is not None), "the cancelled job kept running")
+        self.assertIsNone(second.poll(), "the job with the same command line was killed")
+        self.assertTrue(any(descendants(second.pid)), "the second job's command is gone")
+        self.assertFalse(os.path.exists(os.path.join(self.slots, "jobs", str(first.pid))), "the record outlived the job")
+
+    def test_an_unknown_id_exits_nonzero_and_kills_nothing(self):
+        job = self.job("sleep", "300")
+        done = self.cancel(999999)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("no recorded job", done.stderr)
+        self.assertIsNone(job.poll())
+
+    def test_a_finished_job_is_refused(self):
+        job = self.job("sleep", "300")
+        record = os.path.join(self.slots, "jobs", str(job.pid))
+        saved = open(record).read()
+        job.terminate()
+        job.wait(timeout=5)
+        open(record, "w").write(saved)  # a record left behind by a wrapper that was SIGKILLed
+        self.assertNotEqual(self.cancel(job.pid).returncode, 0)
+        self.assertFalse(os.path.exists(record), "the stale record was kept")
+
+    def test_a_record_naming_a_pgid_that_is_not_the_wrappers_child_is_refused(self):
+        bystander = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        holder = subprocess.Popen(["sleep", "300"])
+        try:
+            os.makedirs(os.path.join(self.slots, "jobs"), exist_ok=True)
+            open(os.path.join(self.slots, "jobs", "4242"), "w").write(f"{holder.pid} {bystander.pid} forged\n")
+            self.assertNotEqual(self.cancel(4242).returncode, 0)
+            self.assertIsNone(bystander.poll(), "a forged record killed an unrecorded group")
+        finally:
+            bystander.kill(); holder.kill(); bystander.wait(); holder.wait()
+
+
+HOLDER = "import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\nfcntl.flock(fd, fcntl.LOCK_EX)\nif len(sys.argv) > 2:\n    fd2 = os.open(sys.argv[2], os.O_RDWR | os.O_CREAT)\n    fcntl.flock(fd2, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(300)\n"
+
+
+class ActiveHolders(Env, unittest.TestCase):
+    """Admission counted locked slot files. A stopped cargo test held slot.3 for 28.8 h; a pid holding two files read as two jobs."""
+
+    def holder(self, *slots):
+        os.makedirs(self.slots, exist_ok=True)
+        proc = subprocess.Popen(["python3", "-c", HOLDER, *[os.path.join(self.slots, f"slot.{n}") for n in slots]], stdout=subprocess.PIPE, text=True)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        self.addCleanup(lambda: (proc.kill(), proc.wait()))
+        return proc
+
+    def admitted(self, slots):
+        env = {"LG_SLOTS": str(slots), "LG_SLOTS_HIGH": str(slots), "LG_SLOTS_MAX": str(slots), "LG_SLOTS_WIDEST": "6", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
+        return self.start("true", **env).wait(timeout=10) == 0
+
+    def test_a_running_holder_takes_the_only_slot(self):
+        self.holder(1)
+        self.assertFalse(self.admitted(1))
+
+    def test_a_stopped_holder_does_not_take_a_slot(self):
+        holder = self.holder(1)
+        os.kill(holder.pid, signal.SIGSTOP)
+        self.assertTrue(until(lambda: state(holder.pid).startswith("T")))
+        self.assertTrue(self.admitted(1), "a stopped holder blocked admission")
+
+    def test_one_pid_holding_two_slot_files_counts_once(self):
+        self.holder(1, 2)
+        self.assertTrue(self.admitted(2), "one job on two slot files ate two slots")
+        self.assertFalse(self.admitted(1))
+
+    def test_a_waiter_probing_a_free_slot_is_not_a_holder(self):
+        probe = self.holder(1)
+        os.makedirs(self.slots, exist_ok=True)
+        open(os.path.join(self.slots, "prio"), "w").write(f"4 {time.time()} {probe.pid} 25\n")
+        self.assertTrue(self.admitted(1), "a polling waiter's probe counted as a job")
+
+
+class Defaults(unittest.TestCase):
+    """The shipped thresholds (oversight 11-10): start 48, stop 5m 50 / 1m 60, resume 5m 44 / 1m 40, 20 slots (24 widest). The repo copy had drifted to the pre-11-08 numbers."""
+
+    def test_the_default_thresholds_and_slot_counts(self):
+        text = open(GUARD).read()
+        for name, value in (("LG_START_1M", 48), ("LG_STOP_5M", 50), ("LG_STOP_1M", 60), ("LG_RESUME_5M", 44), ("LG_RESUME_1M", 40), ("LG_SLOTS", 20), ("LG_SLOTS_MAX", 20), ("LG_SLOTS_WIDEST", 24)):
+            self.assertIn("${%s:-%d}" % (name, value), text, name)
+
+    def test_a_job_starts_at_load_47_and_not_at_49_with_no_env(self):
+        for load, code in ((47.0, 0), (49.0, 75)):
+            with tempfile.TemporaryDirectory() as d:
+                open(os.path.join(d, "load"), "w").write(f"{load} 1.0 1.0 1/1 1\n")
+                env = {k: v for k, v in os.environ.items() if not k.startswith("LG_")}
+                env.update(LG_LOAD_FILE=os.path.join(d, "load"), LG_SLOT_DIR=os.path.join(d, "slots"), LG_NO_WAIT="1", LG_SETTLE="0", LG_TIER="4")
+                self.assertEqual(subprocess.run([GUARD, "true"], env=env, capture_output=True).returncode, code, load)
 
 
 if __name__ == "__main__":

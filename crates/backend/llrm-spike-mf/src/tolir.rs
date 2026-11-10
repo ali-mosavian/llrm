@@ -229,12 +229,12 @@ impl<T: Target> Converted<T> {
     /// (`machinesched::scheduled`): each value counts against the pressure set
     /// of its class, whose limit is the registers the class may take.
     ///
-    /// DEVIATE MS6: memory is one lane, a load reads it and a store writes it,
-    /// so no access moves past a store (the pin asks alias analysis).
+    /// Memory is ordered by what each access says it reaches (`Inst::memory`,
+    /// `Insn::may_alias`); an access that says nothing stays ordered with all
+    /// (was DEVIATE MS6, retired 2026-11-09).
     /// DEVIATE MS7: the graph's latencies are the shared defaults, not the
     /// CPU's scheduling model (the pin's generic scheduler reads
-    /// `SchedModel`). Exit for both: an arm64 `SchedModel` and alias queries
-    /// on the spike function.
+    /// `SchedModel`). Exit: an arm64 `SchedModel`.
     pub fn schedule(
         &mut self,
         function: &MFunction<T::Class>,
@@ -291,7 +291,7 @@ impl<T: Target> Converted<T> {
     /// and writes the registers its pinned values stand for, the status flags
     /// (one lane) where it reads or sets them, and memory (one more lane)
     /// where it loads or stores; one with side effects is a barrier.
-    fn with_effects(
+    pub fn with_effects(
         &self,
         function: &MFunction<T::Class>,
         registers: Regs,
@@ -341,6 +341,7 @@ impl<T: Target> Converted<T> {
                         }
                         let mut made = (**one).clone().standing_for(one);
                         made.volatile = made.volatile || inst.side_effects;
+                        made.memory = inst.memory;
                         if let Some(what) = made.what.as_mut() {
                             if what.op == Operation::Nothing && inst.may_store {
                                 what.op = Operation::Binary;

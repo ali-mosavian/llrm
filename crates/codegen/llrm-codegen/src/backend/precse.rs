@@ -208,8 +208,11 @@ fn expression(what: &Semantics) -> Semantics {
 }
 
 /// `TII->isAsCheapAsAMove`.
-fn cheap(one: &Insn) -> bool {
-    crate::backend::machinesink::as_cheap_as_a_move(one)
+fn cheap(
+    one: &Insn,
+    classes: &RegisterClasses,
+) -> bool {
+    crate::backend::machinesink::as_cheap_as_a_move(one, classes.cheap_move_immediate)
 }
 
 /// The commutative operations: `add`, `and`, `or`, `xor`, `imul`.
@@ -251,6 +254,8 @@ struct Walk<'a> {
     /// Each block's predecessors, as block numbers.
     preds: Vec<Vec<usize>>,
     constrain: Option<&'a dyn Fn(u32, u32) -> bool>,
+    /// `Target::cheap_move_immediate`.
+    cheap_immediate: fn(u8, i64) -> bool,
 }
 
 impl Walk<'_> {
@@ -431,7 +436,8 @@ impl Walk<'_> {
         // at any distance and its allocator splits the long range; ours spilled
         // (x_life -O3 +2.6% clk: `lea eax, _g[ecx]` shared across a loop held a
         // register and reloaded the bound each trip; x_transpose +14 B).
-        if (cheap(one) || one.what.as_ref().is_some_and(|what| what.op == Operation::Address))
+        if (crate::backend::machinesink::as_cheap_as_a_move(one, self.cheap_immediate)
+            || one.what.as_ref().is_some_and(|what| what.op == Operation::Address))
             && shared_block != block
             && !self.body.blocks[shared_block].succ.contains(&self.body.blocks[block].at)
         {
@@ -700,7 +706,7 @@ fn pre_candidate(
 ) -> bool {
     candidate(one, classes)
         && !one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))))
-        && !cheap(one)
+        && !cheap(one, classes)
         && !sets_flags(regs, bits, one)
 }
 
@@ -936,6 +942,7 @@ pub fn shared_constrained(
         table: HashMap::default(),
         regs,
         constrain,
+        cheap_immediate: classes.cheap_move_immediate,
     };
     // Depth first over the dominator tree; an entry is `(block, keys to drop)`
     // once its subtree is done.
