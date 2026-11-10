@@ -193,12 +193,24 @@ def test_the_pin_is_told_our_stack_alignment_and_pushes_a_one_argument_call():
     assert "pushl\t$2000" in done.stdout and "subl\t$12, %esp" not in done.stdout, done.stdout
 
 
+def compile_lines(script, compiler):
+    """The lines of a shell script that run `compiler` (`gcc` or `$CLANG`) to compile (` -c `)."""
+    return [line for line in script.splitlines() if line.lstrip().startswith(compiler + " ") and " -c " in line]
+
+
 def test_the_pins_clang_and_gcc_are_built_at_our_stack_alignment():
-    """The reference objects of the rows (build.sh) and pinclocks.sh took the Linux 16-byte stack: a reserved call frame where our m32 target (S32) pushes."""
+    """The reference objects of the rows (build.sh) and pinclocks.sh took the Linux 16-byte stack: a reserved call frame where our m32 target (S32) pushes.
+    Every compile line of each external carries the flag, wherever it sits among the others: the check was a substring of one spelling (`$CLANG $F -mstack-alignment=4`)
+    and went red on release/next when #8718 put `$NV_CLANG` before the flag, though both compilers were still built at 4."""
     build = (HERE.parents[1] / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
-    assert "$CLANG $F -mstack-alignment=4" in build and "gcc $F -mpreferred-stack-boundary=2" in build
-    assert build.count("-mstack-alignment=4") == 1
-    assert "$CLANG $F -mstack-alignment=4" in (HERE / "pinclocks.sh").read_text()
+    clang, gcc = compile_lines(build, "$CLANG"), compile_lines(build, "gcc")
+    assert len(clang) >= 2 and len(gcc) >= 2, (clang, gcc)
+    assert all("-mstack-alignment=4" in line for line in clang), clang
+    assert all("-mpreferred-stack-boundary=2" in line for line in gcc), gcc
+    pinclocks = compile_lines((HERE / "pinclocks.sh").read_text(), "$CLANG")
+    assert pinclocks and all("-mstack-alignment=4" in line for line in pinclocks), pinclocks
+    dropped = build.replace("$NV_CLANG -mstack-alignment=4", "$NV_CLANG", 1)  # the check must see a compile line without it
+    assert not all("-mstack-alignment=4" in line for line in compile_lines(dropped, "$CLANG"))
 
 
 def test_pair_builds_the_binaries_its_rows_and_sizes_steps_run():
