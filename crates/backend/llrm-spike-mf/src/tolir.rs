@@ -407,7 +407,7 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
-    convert(function, registers)
+    convert(function, registers, false)
 }
 
 /// [`to_lir`] for a function still in SSA form, phis kept: what the shared
@@ -417,12 +417,18 @@ pub fn to_ssa_lir<T: Target>(
     function: &MFunction<T::Class>,
     registers: Regs,
 ) -> Result<Converted<T>, String> {
-    convert(function, registers)
+    convert(function, registers, true)
 }
 
+/// `ssa_pins`: each write of a physical register makes a value of its own,
+/// pinned to it, and a read takes the last write in its block (the value the
+/// function enters with, in the entry block): the body is SSA, as the pin's
+/// is, whose physical registers live only between a copy and its user. A
+/// physical register read in a block that did not write it is refused.
 fn convert<T: Target>(
     function: &MFunction<T::Class>,
     registers: Regs,
+    ssa_pins: bool,
 ) -> Result<Converted<T>, String> {
     // A class's width once, not once per register of it.
     let mut width_of: Vec<(T::Class, u32)> = Vec::new();
@@ -450,6 +456,12 @@ fn convert<T: Target>(
         origin: Vec::new(),
         symbols: Vec::new(),
         block_at: block_positions(function),
+        ssa_pins,
+        block: 0,
+        current: IndexMap::default(),
+        inputs: IndexMap::default(),
+        named: Vec::new(),
+        crossed: None,
         marker: PhantomData::<T>,
     };
     // every physical register is a value before the first instruction, so a
@@ -457,7 +469,11 @@ fn convert<T: Target>(
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         let (reads, writes) = physical::<T>(inst);
         for register in reads.chain(writes) {
-            made.pinned(register);
+            if !ssa_pins {
+                made.pinned(register);
+            } else if !made.named.contains(&register) {
+                made.named.push(register);
+            }
         }
     }
     let whole_homes = whole_homes::<T>(function);
@@ -468,6 +484,8 @@ fn convert<T: Target>(
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
+        made.block = at;
+        made.current.clear();
         // DEVIATE 2b: greedy is not given a block no path reaches (LLVM
         // removes them first); `from_lir` returns it as it was.
         let mut position = 0;
@@ -552,6 +570,9 @@ fn convert<T: Target>(
         }
         blocks.push(LirBlockRef::from(lir));
     }
+    if let Some(why) = made.crossed.take() {
+        return Err(why);
+    }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
@@ -560,7 +581,11 @@ fn convert<T: Target>(
         Some(odds) => stated_odds(&mut body, function, odds),
         None => loop_branch_odds(&mut body),
     }
-    body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
+    body.inputs = if ssa_pins {
+        made.inputs.values().copied().collect()
+    } else {
+        entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect()
+    };
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
         orders.insert(v as u32 + 1, orders_by_class.of(*class).clone());
@@ -717,6 +742,15 @@ struct Made<'f, T: Target> {
     next: u32,
     pins: IndexMap<u32, RegId>,
     values: IndexMap<RegId, u32>,
+    /// See [`convert`]'s `ssa_pins`: the mode, the block being converted, the
+    /// value each register holds in it, the values the entry block starts
+    /// with, the registers the function names, and the first read refused.
+    ssa_pins: bool,
+    block: usize,
+    current: IndexMap<RegId, u32>,
+    inputs: IndexMap<RegId, u32>,
+    named: Vec<RegId>,
+    crossed: Option<String>,
     origin: Vec<(usize, usize)>,
     /// The symbols the function's operands name, in order of first use: the
     /// number a symbol's `Imm` carries as its address.
@@ -761,6 +795,53 @@ impl<T: Target> Made<'_, T> {
                 },
             );
         (value, self.registers.bytes(register).map_or(1, |bytes| bytes as u32))
+    }
+
+    /// The value a read of `register` sees (see [`convert`]'s `ssa_pins`).
+    fn pinned_read(
+        &mut self,
+        register: RegId,
+    ) -> (u32, u32) {
+        if !self.ssa_pins {
+            return self.pinned(register);
+        }
+        let width = self.registers.bytes(register).map_or(1, |bytes| bytes as u32);
+        if let Some(value) = self.current.get(&register) {
+            return (*value, width);
+        }
+        if self.block != 0 && self.crossed.is_none() {
+            self.crossed = Some(format!(
+                "{}: physical register {} is read in block {} without a write in it",
+                self.function.name, register.index(), self.block
+            ));
+        }
+        let value = self.fresh(register);
+        self.inputs.insert(register, value);
+        self.current.insert(register, value);
+        (value, width)
+    }
+
+    /// The value a write of `register` makes (see [`convert`]'s `ssa_pins`).
+    fn pinned_write(
+        &mut self,
+        register: RegId,
+    ) -> (u32, u32) {
+        if !self.ssa_pins {
+            return self.pinned(register);
+        }
+        let value = self.fresh(register);
+        self.current.insert(register, value);
+        (value, self.registers.bytes(register).map_or(1, |bytes| bytes as u32))
+    }
+
+    fn fresh(
+        &mut self,
+        register: RegId,
+    ) -> u32 {
+        let value = self.next;
+        self.next += 1;
+        self.pins.insert(value, register);
+        value
     }
 
     /// Whether `next` reads no virtual register `first` sets: one instruction
@@ -891,7 +972,7 @@ impl<T: Target> Made<'_, T> {
                     if T::reserved(T::root(*register)) {
                         continue;
                     }
-                    let value = self.pinned(*register).0;
+                    let value = self.pinned_read(*register).0;
                     let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
                     let held = Held { value, width, offset: 0 };
                     uses.push(value);
@@ -936,7 +1017,7 @@ impl<T: Target> Made<'_, T> {
                     if T::reserved(T::root(*register)) {
                         continue;
                     }
-                    let (value, width) = self.pinned(*register);
+                    let (value, width) = self.pinned_write(*register);
                     let held = Held { value, width, offset: 0 };
                     defines.push(value);
                     delivers.push((held, *register));
@@ -997,6 +1078,17 @@ impl<T: Target> Made<'_, T> {
             // The call writes each clobbered register it names: a value that
             // lives across it cannot be the register, and a read after it
             // sees what the call left.
+            if self.ssa_pins {
+                let written: Vec<RegId> = physical::<T>(inst).1.collect();
+                for register in self.named.clone() {
+                    let clobbered =
+                        insn.clobbers.contains(&register) || insn.clobbers.contains(&self.registers.root(register));
+                    if clobbered && !written.contains(&register) {
+                        let value = self.pinned_write(register).0;
+                        insn.defines.push(value);
+                    }
+                }
+            }
             for (register, value) in &self.values {
                 let clobbered =
                     insn.clobbers.contains(register) || insn.clobbers.contains(&self.registers.root(*register));

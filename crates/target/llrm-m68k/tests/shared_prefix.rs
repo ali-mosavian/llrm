@@ -9,7 +9,6 @@ use std::rc::Rc;
 
 use llrm_codegen::backend::{classes::RegisterClasses, cpu::tuned_for, peep::Rules, target::Segments};
 use llrm_codegen::model::lir::LirBody;
-use llrm_codegen::model::passes::LIRTransform;
 use llrm_lir::registers::Regs;
 use llrm_m68k::dagisel::function::select_function;
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -96,43 +95,63 @@ fn only_the_phases_m68k_has_a_use_for_change_a_function() {
 }
 
 /// The converted body through the verifier (`flow::checked`, as `assemble::phased`
-/// runs each phase) is refused at the first phase: a physical register is one
-/// value for the whole function (`Made::pinned`), defined at every write, so the
-/// body is not SSA. Hosted stages skip the verifier today (`host_ssa` calls
-/// `transform`). Step 4 turns this test round: the body must pass.
+/// runs each phase). A physical register was one value for the whole function
+/// (`Made::pinned`), defined at every write, so the verifier refused every body
+/// at its first phase: "value#N is defined 2 times in a body that should be in
+/// SSA". Each write is now a value of its own; a function that reads a physical
+/// register in a block that did not write it is refused by the converter, by
+/// name, and counted.
 #[test]
-fn the_converted_body_is_not_ssa_for_the_verifier() {
+fn the_converted_body_is_ssa_for_the_verifier() {
     llrm_support::debug::require_verification();
     let profile = tuned_for(&M68k, "m68000", false).unwrap_or_else(|why| panic!("{why}"));
     let regs = Regs(M68k.registers());
     let segments = Segments::of(&M68k.machine(), regs, M68k.operand_bytes());
     let classes = Rc::new(RegisterClasses::of(&M68k));
-    let mut module = llrm_mir::parse::module(include_str!("fixtures/sieve_pin_o2.ll")).expect("parses");
-    llrm_mir::parse::upgrade_lifetimes(&mut module);
-    let blocks = select_function(&module, "bench_sieve", Cpu::M68000).expect("selects");
-    let mut function = emit_with("bench_sieve", &blocks, true).expect("emits");
-    expand_cmov(&mut function).expect("expands");
-    let mut phases = llrm_codegen::flow::machine_with(
-        &Default::default(),
-        None,
-        None,
-        None,
-        false,
-        profile,
-        &segments,
-        &classes,
-        &Rules::NONE,
-        &M68k.frame_registers(),
-        llrm_codegen::backend::shadow::Selector::Old,
-        &[],
-    )
-    .unwrap_or_else(|why| panic!("{why}"));
-    let converted = llrm_spike_mf::tolir::to_ssa_lir::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO)).expect("converts");
-    let _lanes = llrm_codegen::backend::lanes::enter(Regs(&llrm_m68k::REGISTER_INFO));
-    let refused = llrm_codegen::flow::checked(converted.body.clone(), phases[0].as_mut(), true, None, &classes, &segments, &M68k);
-    let Err(llrm_codegen::flow::Checked::Malformed(malformed)) = refused else { panic!("the verifier took the body") };
-    assert!(malformed.0.contains("defined 2 times"), "{}", malformed.0);
-    // the value it names is a pinned register, not a virtual one
-    let named: u32 = malformed.0.split("value#").nth(1).and_then(|rest| rest.split(' ').next()).and_then(|n| n.parse().ok()).expect("a value is named");
-    assert!(converted.body.pins.contains_key(&named), "value {named} is not pinned: {}", malformed.0);
+    let (mut checked, mut refused) = (0, Vec::new());
+    for (file, text) in FIXTURES {
+        let mut module = llrm_mir::parse::module(text).unwrap_or_else(|why| panic!("{file}: {why}"));
+        llrm_mir::parse::upgrade_lifetimes(&mut module);
+        let names: Vec<String> = module
+            .functions()
+            .filter(|(_, _, one)| !one.is_declaration())
+            .map(|(id, _, _)| module.global(id).name.as_ref().expect("a name").clone())
+            .collect();
+        for name in names {
+            let blocks = select_function(&module, &name, Cpu::M68000).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
+            let mut function = emit_with(&name, &blocks, true).expect("emits");
+            expand_cmov(&mut function).expect("expands");
+            let converted = match llrm_spike_mf::tolir::to_ssa_lir::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO)) {
+                Ok(converted) => converted,
+                Err(why) => {
+                    refused.push(why);
+                    continue;
+                }
+            };
+            let mut phases = llrm_codegen::flow::machine_with(
+                &Default::default(),
+                None,
+                None,
+                None,
+                false,
+                profile,
+                &segments,
+                &classes,
+                &Rules::NONE,
+                &M68k.frame_registers(),
+                llrm_codegen::backend::shadow::Selector::Old,
+                &[],
+            )
+            .unwrap_or_else(|why| panic!("{why}"));
+            let _lanes = llrm_codegen::backend::lanes::enter(Regs(&llrm_m68k::REGISTER_INFO));
+            match llrm_codegen::flow::checked(converted.body.clone(), phases[0].as_mut(), true, None, &classes, &segments, &M68k) {
+                Ok(_) => checked += 1,
+                Err(llrm_codegen::flow::Checked::Malformed(malformed)) => panic!("{file} @{name}: {}", malformed.0),
+                Err(_) => panic!("{file} @{name}: the first phase refuses"),
+            }
+        }
+    }
+    println!("{checked} accepted, refused: {refused:?}");
+    assert!(refused.iter().all(|why| why.contains("without a write in it")), "{refused:?}");
+    assert!(checked >= 12, "only {checked} functions reached the verifier");
 }
