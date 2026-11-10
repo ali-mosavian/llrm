@@ -51,10 +51,14 @@ impl Machine for M68kMachine {
     }
 
     /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
-    /// preferred one, so locals of those are accepted (and clamped); an
-    /// object aligned further needs the realignment the pin does and this
-    /// target does not translate yet, and is refused by name.
+    /// preferred one, so locals of those are accepted (and clamped to what the
+    /// frame keeps). An object aligned further is kept: the frame realigns
+    /// the stack pointer for it (`frame::Layout`).
     fn max_alloca_align(&self) -> Option<u64> {
+        None
+    }
+
+    fn realigned_above(&self) -> Option<u64> {
         Some(8)
     }
 
@@ -127,8 +131,10 @@ impl M68k {
 }
 
 impl Tti for M68k {
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
-    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it):
+    /// `va_list` is `char *`, so `va_start` is a store of the first
+    /// variadic argument's address and the list lives in a register, as gcc has
+    /// it.
     fn promote_va_list(&self) -> bool {
         true
     }
@@ -249,19 +255,19 @@ impl Tti for M68k {
     ///
     /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
     /// index-versus-pointer cost via Tti (no per-program patch):
-    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
-    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
-    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
-    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
-    ///   cost the same clocks.
-    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12): pin-faithful.
-    ///   The pin's LSR picks the single IV with a compare for double_to_uint64's
-    ///   loops (`llc -print-after=loop-reduce`); our earlier two-IV
-    ///   end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os, 68020 O1
-    ///   +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B against
-    ///   gcc 330 and clang 386, so below the bar. Closes through the LSR size
-    ///   model (the exit compare's `moveq`+`cmp` is in `insns`, which the
-    ///   registers-first order ignores).
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`. O1
+    ///   cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000 +68
+    ///   (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless cost the
+    ///   same clocks.
+    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12):
+    ///   pin-faithful. The pin's LSR picks the single IV with a compare for
+    ///   double_to_uint64's loops (`llc -print-after=loop-reduce`); our earlier
+    ///   two-IV end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os,
+    ///   68020 O1 +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B
+    ///   against gcc 330 and clang 386, so below the bar. Closes through the
+    ///   LSR size model (the exit compare's `moveq`+`cmp` is in `insns`, which
+    ///   the registers-first order ignores).
     fn frame_address_is_free(&self) -> bool {
         true
     }

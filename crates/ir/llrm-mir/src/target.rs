@@ -40,9 +40,10 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
-    /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
-    /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
-    /// (`hardware_divide_wins`); false: the clocks and margin alone.
+    /// DEVIATE SD446: a divide by a constant is chosen against the
+    /// multiply-high sequence by clocks plus bytes at
+    /// `speed_milliclocks_per_byte` (`hardware_divide_wins`); false: the
+    /// clocks and margin alone.
     pub divide_by_bytes: bool,
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): at -Os a divide by a
     /// constant of a type narrower than a word keeps its `div` (DIV-OPTSIZE-1)
@@ -166,18 +167,20 @@ pub struct Tuning {
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
     /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
-    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
-    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
-    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
-    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
-    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
-    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
-    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
-    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
-    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
-    /// it is off at `-O2` and `-O3`.
+    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at
+    /// `minsize` only, so the pin keeps the `idiv` at `-Oz` and expands at
+    /// `-Os`; clang `-Os` does not set `minsize`). DEVIATE SDIV-POW2-OS
+    /// (owner x86-m32, exit 2026-11-30): at `-Os` this is a DEVIATION from
+    /// the pin's optsize. 4 m32 cells, -131 B, none worse (jpeg_fixed 3149
+    /// -> 3104, stft_fixed 980 -> 929, nbody_fixed 416 -> 395, sat_builtins
+    /// 520 -> 506). Clocks on a 486: `idiv` ~40 against ~6 for `sar; shr;
+    /// add; sar`; jpeg_fixed +60% clocks (measured by x87), nbody_fixed
+    /// ~2.4M clk (72000 executed divides x ~34, estimated), stft_fixed and
+    /// sat_builtins unmeasured. The level is bytes-strict, so it is off at
+    /// `-O2` and `-O3`.
     ///
-    /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    /// [X86ISelLowering.cpp#L65389]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
     /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
     /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`). DEVIATE
@@ -229,12 +232,13 @@ pub struct Tuning {
     /// which shares any two slots whose ranges do not overlap.
     pub slots_loop_width_rule: bool,
     /// DEVIATE CARRY-SI (x86 m16, m32, m64: owners the three x86 sessions, exit
-    /// 2026-11-21): the coalescer's slot indexes reach the allocator through the
-    /// pre-RA scheduler with the entries its erased and moved instructions left
-    /// empty (the pin's one `SlotIndexes`), so range sizes, and the dequeue and
-    /// spill weights that divide by them, are the pin's. false: the function
-    /// is numbered afresh after the scheduler, as the x86 numbers were tuned
-    /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
+    /// 2026-11-21): the coalescer's slot indexes reach the allocator through
+    /// the pre-RA scheduler with the entries its erased and moved
+    /// instructions left empty (the pin's one `SlotIndexes`), so range
+    /// sizes, and the dequeue and spill weights that divide by them, are
+    /// the pin's. false: the function is numbered afresh after the
+    /// scheduler, as the x86 numbers were tuned (A/B 2026-11-07: x86_32 O1
+    /// 14 cells +704 B worse).
     pub carry_slot_indexes: bool,
     /// DEVIATE RA-CLK (x86 m16; owner x86-m16, exit 2026-11-29): the spill
     /// weight of a value that is an address component (the base, index or
@@ -260,10 +264,10 @@ pub struct Tuning {
     /// 261/303228. Open Os row M16-OS-MATMUL-DIVISOR (owner x86-m16, exit
     /// 2026-11-20): matmul -Os 289 B/23807 clk against 284/23679 at 1000.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
-    /// latency exceeds its issue-bound time is not unrolled at run time
-    /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
-    /// the loop. false: the pin's.
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose
+    /// loop-carried latency exceeds its issue-bound time is not unrolled at
+    /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
+    /// nothing of the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
@@ -287,9 +291,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
-    /// An -Os caller's SZ2 trial also inlines the sites its splice brings, priced by the
-    /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
-    /// meet the constants together, as the pin's callee-first order gives. One round.
+    /// An -Os caller's SZ2 trial also inlines the sites its splice brings,
+    /// priced by the ordinary rules, before it measures: `foo` into `main`
+    /// and then `bar` into that copy meet the constants together, as the
+    /// pin's callee-first order gives. One round.
     pub inline_chain_trial: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
@@ -367,11 +372,12 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
-    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
-    /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
-    /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
-    /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
-    /// None: the pin's pieces.
+    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541:
+    /// tuned for size, a constant `memcpy`/`memmove` whose load and store
+    /// pieces take more bytes than the call of the library routine (`mov
+    /// edx, n` and the call) is the call, at the target's `CopyPrice`. The pin
+    /// counts pieces (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B
+    /// (mv64 10 B against the pin's 31). None: the pin's pieces.
     pub size_copy_price: Option<CopyPrice>,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
@@ -383,8 +389,10 @@ pub struct Tuning {
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
 /// triple is [frame object, global]: a short displacement against an absolute
 /// address.
-/// The bytes a constant copy tuned for size is priced in (`Tuning::size_copy_price`): the library call
-/// (`mov edx, n` and the call) against the load and store pieces, a wide one (16 or 8 bytes) or a narrower one.
+/// The bytes a constant copy tuned for size is priced in
+/// (`Tuning::size_copy_price`): the library call (`mov edx, n` and the call)
+/// against the load and store pieces, a wide one (16 or 8 bytes) or a narrower
+/// one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CopyPrice {
     pub call: u64,
@@ -541,6 +549,13 @@ pub trait Machine {
         None
     }
 
+    /// An `alloca` aligned beyond this is kept at its alignment, the frame
+    /// realigning the stack pointer for it, instead of clamped to
+    /// [`Machine::kept_stack_align`]; none: every excess is clamped.
+    fn realigned_above(&self) -> Option<u64> {
+        None
+    }
+
     /// The largest `alloca` alignment this target accepts; none: it realigns
     /// its stack. A larger one is a named refusal at pipeline entry.
     fn max_alloca_align(&self) -> Option<u64> {
@@ -577,9 +592,9 @@ pub trait Machine {
         false
     }
 
-    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide value by a variable
-    /// count is an instruction, not a call or a loop. False: a switch builds no bit tests
-    /// (`1 << x` and a mask).
+    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide
+    /// value by a variable count is an instruction, not a call or a loop.
+    /// False: a switch builds no bit tests (`1 << x` and a mask).
     fn variable_shift_legal(&self) -> bool {
         true
     }
@@ -945,9 +960,11 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
-    /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
-    /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
-    /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
+    /// Whether a call to an intrinsic the cost model calls free
+    /// (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a function's
+    /// estimate. False: priced as a call, which is what the inlining bars of
+    /// the targets fit before this field were calibrated on (x86 m16: a
+    /// stack-record call stopped being inlined when it was 0).
     pub free_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).

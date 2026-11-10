@@ -199,9 +199,9 @@ pub struct Options {
     /// switch, with its `unreachable` default, as the pin's passes leave it).
     pub lower_switches: bool,
     /// `loopidioms::Merge` also makes adjacent stores wider ones (LLVM's
-    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm, exit 2026-11-20); off for a
-    /// target whose backend merges them, so the inliner and the passes after
-    /// it price the stores the pin's IR has.
+    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm,
+    /// exit 2026-11-20); off for a target whose backend merges them, so the
+    /// inliner and the passes after it price the stores the pin's IR has.
     pub merge_stores: bool,
     /// After `PromoteMemToReg` the write-through `Promote` forwards a global's
     /// store to the loads after it, across blocks with phis, where there is no
@@ -213,7 +213,8 @@ pub struct Options {
     pub sink: bool,
     /// `Spares`: a fixed-cell load rematerialized past the writes alias proves
     /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
-    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
+    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit
+    /// 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
     /// A CFG simplification ahead of loop strength reduction, to tidy the
     /// compare-and-branch that follows a `cmpxchg`: the pin's
@@ -223,7 +224,8 @@ pub struct Options {
     pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
-    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.4 M Ir at d_faces.
+    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers),
+    /// 8.4 M Ir at d_faces.
     pub stored_homes: bool,
     /// The spiller makes a load of a cell nothing writes again where it is read
     /// (D-I). llrm only; off by default, `-fllrm-stable-loads`. Read by the
@@ -241,7 +243,9 @@ pub struct Options {
     /// has it (`isLoadExtLegal`); off for a target that has not, where the
     /// wider compare costs more than the extension saved.
     pub extload: bool,
-    /// `zeromerge`: zeroed locals that follow each other in the entry block share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
+    /// `zeromerge`: zeroed locals that follow each other in the entry block
+    /// share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit
+    /// 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
     pub zero_merge: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
@@ -268,9 +272,9 @@ pub struct Options {
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
     /// `-floop-unroll-and-jam`: LLVM's `LoopUnrollAndJamPass`, in the Late
-    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default pipelines have it off
-    /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
-    /// particle row gains from it.
+    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default
+    /// pipelines have it off (`enable-unroll-and-jam`); it is on at -O3 and
+    /// -Omax, where the particle row gains from it.
     pub unroll_and_jam: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
@@ -408,10 +412,10 @@ impl Options {
         Self::default()
     }
 
-    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the copy budget is LLVM's -O3
-    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
-    /// clones: the pin makes none, and they grew recchop 1541 lines against
-    /// 171.
+    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the
+    /// copy budget is LLVM's -O3 (`UnrollThresholdAggressive`, twice the
+    /// target's), not gcc's. No ipa-cp clones: the pin makes none, and they
+    /// grew recchop 1541 lines against 171.
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold::new(250),
@@ -477,12 +481,7 @@ impl Options {
 
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
-        Self {
-            unroll: false,
-            has_min_size: true,
-            inline: inline::Threshold::default().for_min_size(),
-            ..Self::size()
-        }
+        Self { unroll: false, has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -503,7 +502,9 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => {
+                self.strength && self.lsr
+            }
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -869,8 +870,8 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
-    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`), and where `write_through` is
-    // on: the write-through `Promote`
+    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`),
+    // and where `write_through` is on: the write-through `Promote`
     // after PromoteMemToReg forwards a store of a global to the load after it,
     // which LLVM's InstCombine does in `visitLoadInst`
     // (FindAvailableLoadedValue, not translated); GVN does it at the other
@@ -931,7 +932,8 @@ pub(crate) fn llvm_order(
                         },
                     }),
                 ),
-                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a one-pointer `va_list` is a slot SROA can promote.
+                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a
+                // one-pointer `va_list` is a slot SROA can promote.
                 slot("vastart@1178", Box::new(crate::vastart::VaStart)),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
@@ -1296,8 +1298,8 @@ fn unroll_level(options: &Options) -> u32 {
     }
 }
 
-/// The `-O<text>` words every driver takes. A driver maps each to its own mid-end `Options`;
-/// `Omax` is `Options::aggressive()` there.
+/// The `-O<text>` words every driver takes. A driver maps each to its own
+/// mid-end `Options`; `Omax` is `Options::aggressive()` there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LevelName {
     O0,
@@ -1320,7 +1322,11 @@ impl LevelName {
             "max" => Self::Omax,
             "s" => Self::Os,
             "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz")),
+            _ => {
+                return Err(format!(
+                    "unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz"
+                ));
+            }
         })
     }
 }
@@ -1377,6 +1383,7 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
 /// the explicit one, else the type's, as known-bits reads it.
 pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
     let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
+    let realigned_above = program.target.realigned_above();
     if kept.is_none() && max.is_none() {
         return Ok(());
     }
@@ -1407,7 +1414,8 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                             "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"
                         ));
                     }
-                    if let Some(kept) = kept.filter(|kept| wanted > *kept) {
+                    let realigned = realigned_above.is_some_and(|above| wanted > above);
+                    if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
                     }
                 }
@@ -1470,8 +1478,8 @@ pub fn recorded(
             manager.compute::<GlobalsAA>();
             manager.compute::<GlobalsModRefAnalysis>();
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
-            // `Tti::inline_trial_light_simplify`: the SZ2 trial's copy goes through the
-            // cleanup list, not the whole one.
+            // `Tti::inline_trial_light_simplify`: the SZ2 trial's copy goes
+            // through the cleanup list, not the whole one.
             let mut light = Fixed::linear(&walked("walk"), Phase::Cleanup);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
@@ -1531,7 +1539,8 @@ pub fn recorded(
         pipeline: Box::new(move |module, analyses, id, stage| {
             // The pin runs nothing over a body `DeadArgumentEliminationPass`
             // changed: the late function pipeline, which every body goes
-            // through, finds what the lost argument leaves (PassBuilderPipelines.cpp,
+            // through, finds what the lost argument leaves
+            // (PassBuilderPipelines.cpp,
             // `buildModuleOptimizationPipeline` follows the module pass).
             if stage == "ipa-deadargs." {
                 return;
@@ -1607,8 +1616,9 @@ pub fn recorded(
         manager.add(stage);
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
-    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not held, as GlobalDCE, which
-    // LLVM runs after this point, abandoned it here.
+    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not
+    // held, as GlobalDCE, which LLVM runs after this point, abandoned it
+    // here.
     manager.recompute::<GlobalsAA>();
     manager.recompute::<GlobalsModRefAnalysis>();
     // The summaries are made. The passes below move and rewrite what a function
@@ -1634,8 +1644,9 @@ pub fn recorded(
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
-    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
-    // proven to run is entered at its body at -Oz (target opt-in). Owner z80, exit 2026-11-30.
+    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a
+    // counted loop proven to run is entered at its body at -Oz (target
+    // opt-in). Owner z80, exit 2026-11-30.
     if applied.options.has_min_size {
         manager.add(looprotate::LoopRotate {
             duplicate_headers: false,
@@ -1674,7 +1685,8 @@ pub fn recorded(
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
     }
-    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and loop idioms made the fills.
+    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and
+    // loop idioms made the fills.
     if applied.options.wanted("zeromerge") {
         manager.add(zeromerge::ZeroMerge);
     }

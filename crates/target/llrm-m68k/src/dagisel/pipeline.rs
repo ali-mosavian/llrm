@@ -184,7 +184,19 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, false, true, Default::default(), Default::default(), &[], &mut Temporaries::new(0))
+    select_block_with(
+        dag,
+        cpu,
+        false,
+        false,
+        false,
+        false,
+        true,
+        Default::default(),
+        Default::default(),
+        &[],
+        &mut Temporaries::new(0),
+    )
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
