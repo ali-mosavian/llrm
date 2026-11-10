@@ -11,6 +11,7 @@ PIE, -fPIE; -fno-pie faked +10.6% on hanoi2). The target's owner passes it with 
 """
 
 import argparse
+import collections
 import hashlib
 
 COMMON = (
@@ -47,6 +48,20 @@ def gcc_program_flags(tokens):
         if token.startswith(CLANG_ONLY):
             raise ValueError(f"gcc has no {token}: this cell has no gcc column")
     return [GCC_PROGRAM_FLAGS.get(token, token) for token in tokens]
+
+
+def check_gcc_flags(program_tokens, gcc_tokens, allowed_extra=()):
+    """Refuses a gcc flag list that differs from the test's own flags by anything but `GCC_PROGRAM_FLAGS` (and `allowed_extra`).
+
+    A column built with a flag set nobody compared moves its cells silently (arm64: ours without -fomit-frame-pointer against
+    externals with it, 24 of 72 cells -4..-16 B). ValueError names every difference, or that the cell has no gcc column.
+    The lists are compared as multisets: a flag missing, added or repeated is refused, but ORDER is not checked, so a pair whose
+    meaning depends on order (`-O2 -O0`, `-fno-inline -finline-functions`) passes when both lists hold the same tokens."""
+    want = collections.Counter([*gcc_program_flags(program_tokens), *allowed_extra])
+    have = collections.Counter(gcc_tokens)
+    missing, extra = sorted((want - have).elements()), sorted((have - want).elements())
+    if missing or extra:
+        raise ValueError(f"gcc's flags differ from the test's beyond GCC_PROGRAM_FLAGS: missing {missing}, extra {extra}")
 
 
 def config_hash():

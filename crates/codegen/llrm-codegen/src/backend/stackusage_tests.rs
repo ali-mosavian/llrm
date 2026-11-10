@@ -66,6 +66,7 @@ fn module(procedures: Vec<Procedure>) -> Module {
         externs: Vec::new(),
         publics: Vec::new(),
         visibility: Default::default(),
+        preemptible: Default::default(),
         aliases: Vec::new(),
         data: Vec::new(),
         procedures,

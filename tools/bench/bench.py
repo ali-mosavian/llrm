@@ -346,7 +346,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
     stem, exe, listing, region, want, obj, *more = job
     if region is None:  # timed only: its output is checked where it is timed
-        data, bss = sizes.data_bytes(obj)
+        data, bss = sizes.data_bytes(obj, exe, listing)
         return {**code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
@@ -364,7 +364,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"error": result.error}
     if got != want:
         return {"error": f"prints {got}, want {want}"}
-    data, bss = sizes.data_bytes(obj)
+    data, bss = sizes.data_bytes(obj, exe, listing)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
         return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     if result.region.instructions < FOLDED_BELOW:
@@ -1361,6 +1361,9 @@ def main() -> int:
             (args.json / f"shard-{index}.json").write_text(json.dumps({"measured": {"/".join(key): value for key, value in measured.items()}, "programs": args.select}))
         return 0
     if args.references:
+        import flag_parity
+
+        flag_parity.check()  # a reference whose codegen flags differ from ours is refused before it is built, as tools/wasm_flag_check.py does for wasm
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))

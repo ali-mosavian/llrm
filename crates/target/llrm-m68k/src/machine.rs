@@ -127,6 +127,16 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(crate::dagisel::lowering::VA_SLOT)
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
     fn lftr_any_stride(&self) -> bool {
