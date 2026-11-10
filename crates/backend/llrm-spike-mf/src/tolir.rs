@@ -2276,7 +2276,7 @@ pub fn from_lir<T: Target>(
                     // A zero stored from the zero register
                     // (`fold_memory_operand`).
                     let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
-                    insts.push(made);
+                    place_spill(&mut insts, made)?;
                     if !slots.iter().any(|(one, _)| *one == slot) {
                         slots.push((slot, T::any()));
                     }
@@ -2316,7 +2316,7 @@ pub fn from_lir<T: Target>(
                 } else {
                     T::spill_load(class, register, slot)
                 };
-                insts.push(made.ok_or("the target states no spill form")?);
+                place_spill(&mut insts, made.ok_or("the target states no spill form")?)?;
                 // a lane store says nothing of the slot's size
                 if lane.is_none() && !slots.iter().any(|(one, _)| *one == slot) {
                     slots.push((slot, class));
@@ -2588,4 +2588,23 @@ mod palette_tests {
         assert_eq!(palettes[&1].iter().copied().collect::<Vec<_>>(), first);
         assert_eq!(palettes[&100].iter().copied().collect::<Vec<_>>(), second);
     }
+}
+
+/// A spill goes in before the terminators the block has so far. A def that
+/// shares a bundle with its terminator (`LDI` and the `BEQ` that reads its
+/// flags) is one instruction to greedy, which stores it after the bundle; the
+/// pin stores after the def inside the bundle, before the terminator
+/// (`InlineSpiller::insertSpill`, `std::next(MI)`; SplitKit
+/// `findInsertLocation` likewise stays before the first terminator).
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1277-L1299>
+fn place_spill(
+    insts: &mut Vec<Inst>,
+    spill: Inst,
+) -> Result<(), String> {
+    let at = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+    if at < insts.len() && spill.sets_flags && insts[at..].iter().any(|inst| inst.reads_flags) {
+        return Err("a spill between a flag setter and the terminator that reads the flags".into());
+    }
+    insts.insert(at, spill);
+    Ok(())
 }
