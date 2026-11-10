@@ -2,6 +2,7 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};
+use llrm_x86::tti::X86;
 
 use crate::simplifycfg::{Options, simplified_with};
 use crate::testing::{parsed, printed, results};
@@ -271,4 +272,77 @@ b3:
     assert!(simplified_with(&branching(true), context, &spec, &mut declared, function));
     assert_eq!(printed(&module).matches("inttoptr").count(), 1, "{}", printed(&module));
     assert!(!llrm_analysis::forging::forges_selector(&module, spaces), "{}", printed(&module));
+}
+
+/// `text`'s `@f` after SimplifyCFG with hoisting on, priced by `tti`.
+fn hoisted_with(
+    tti: &dyn llrm_mir::tti::Tti,
+    text: &str,
+) -> String {
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified_with(&branching(true), context, &spec, &mut declared, function);
+    printed(&module)
+}
+
+/// The arms read the same word and differ in what they do with it.
+fn arms_reading_a_word(
+    left: &str,
+    right: &str,
+) -> String {
+    format!(
+        "define i32 @f(i32 %x, ptr %p, i1 %c) {{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %l = load i32, ptr %p
+  %a = {left}
+  br label %b3
+
+b2:
+  %r = load i32, ptr %p
+  %b = {right}
+  br label %b3
+
+b3:
+  %v = phi i32 [ %a, %b1 ], [ %b, %b2 ]
+  ret i32 %v
+}}
+"
+    )
+}
+
+/// x_cordic -O1 (m32): `atn[k]` was read once before the branch and taken by
+/// `sub` and `add` as a register, so the inner loop needed a 7th register and
+/// the outer loop spilled twice (+397 clk, +8 B). On x86 each arm keeps the
+/// load its own `sub`/`add` takes as a memory operand.
+#[test]
+fn test_a_load_each_arm_folds_stays_in_its_arm_on_x86() {
+    let text = arms_reading_a_word("sub i32 %x, %l", "add i32 %x, %r");
+    let x86 = X86::of_cpu("i486").expect("a cpu");
+    let on_x86 = hoisted_with(&x86, &text);
+    assert_eq!(on_x86.matches("load i32").count(), 2, "{on_x86}");
+    let pin = hoisted_with(&llrm_mir::tti::Basic, &text);
+    assert_eq!(pin.matches("load i32").count(), 1, "the base answer hoists it: {pin}");
+}
+
+/// A shift count is not a memory operand: nothing is lost by sharing the load.
+#[test]
+fn test_a_load_that_cannot_fold_is_still_hoisted_on_x86() {
+    let text = arms_reading_a_word("shl i32 %x, %l", "lshr i32 %x, %r");
+    let on_x86 = hoisted_with(&X86::of_cpu("i486").expect("a cpu"), &text);
+    assert_eq!(on_x86.matches("load i32").count(), 1, "{on_x86}");
+}
+
+/// `sub` takes memory as its second operand only.
+#[test]
+fn test_a_load_that_is_the_first_operand_of_a_sub_is_still_hoisted_on_x86() {
+    let text = arms_reading_a_word("sub i32 %l, %x", "sub i32 %r, %x");
+    let on_x86 = hoisted_with(&X86::of_cpu("i486").expect("a cpu"), &text);
+    assert_eq!(on_x86.matches("load i32").count(), 1, "{on_x86}");
 }
