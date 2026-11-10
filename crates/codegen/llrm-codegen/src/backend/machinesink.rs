@@ -257,33 +257,25 @@ pub(crate) fn ordered_access(one: &Insn) -> bool {
     one.volatile() || one.call.is_some() || matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape)
 }
 
-/// `TII->isAsCheapAsAMove`: a copy or a move of a constant. Not the 64-bit
-/// immediate that neither a sign-extended nor a zero-extended dword makes:
-/// `MOV64ri` (`movabs`) is rematerializable but not `isAsCheapAsAMove`
-/// (X86InstrMisc.td, outside the `MOV8ri`..`MOV64ri32` block).
-pub(crate) fn as_cheap_as_a_move(one: &Insn) -> bool {
+/// `TII->isAsCheapAsAMove`: a copy or a move of a constant, the constant as
+/// the target judges it (`Target::cheap_move_immediate`; x86's refuses the
+/// `movabs`, AArch64's a constant of more than two instructions).
+pub(crate) fn as_cheap_as_a_move(
+    one: &Insn,
+    cheap_immediate: fn(u8, i64) -> bool,
+) -> bool {
     one.what
         .as_ref()
         .is_some_and(
             |what| what.op == Operation::Move
-                && matches!(
-                    (what.dests.as_slice(), what.sources.as_slice()),
-                    ([Loc::Held(dest)], [Loc::Held(_)])
-                        | ([Loc::Held(dest)], [Loc::Imm(Imm { address: None, .. })]) if !wide_immediate(dest, &what.sources[0])
-                ),
+                && match (what.dests.as_slice(), what.sources.as_slice()) {
+                    ([Loc::Held(_)], [Loc::Held(_)]) => true,
+                    ([Loc::Held(dest)], [Loc::Imm(Imm { value, address: None, .. })]) => {
+                        cheap_immediate(dest.width as u8, *value)
+                    }
+                    _ => false,
+                },
         )
-}
-
-/// A `movabs`: an immediate into a qword that does not fit `MOV64ri32` or
-/// `MOV32ri`.
-fn wide_immediate(
-    dest: &Held,
-    source: &Loc,
-) -> bool {
-    matches!(
-        source,
-        Loc::Imm(Imm { value, address: None, .. }) if dest.width == 8 && !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(value)
-    )
 }
 
 thread_local! {
@@ -414,6 +406,8 @@ struct Sinker {
     limit: usize,
     /// DEVIATE SINK-EXT.
     spare_ranges: bool,
+    /// `Target::cheap_move_immediate`.
+    cheap_immediate: fn(u8, i64) -> bool,
     /// Instructions with an operand the encoding pins to a register (DEVIATE
     /// M7).
     pinned: HashSet<usize>,
@@ -555,6 +549,7 @@ impl Sinker {
             flags_live_in: Vec::new(),
             limit: usize::MAX,
             spare_ranges: false,
+            cheap_immediate: llrm_target::x86_cheap_move_immediate,
             pinned: HashSet::default(),
             stack: None,
             phi_blocks,
@@ -997,7 +992,7 @@ impl Sinker {
         if !self.considered.insert((from, to)) {
             return true;
         }
-        if !as_cheap_as_a_move(one) {
+        if !as_cheap_as_a_move(one, self.cheap_immediate) {
             return true;
         }
         for &value in &one.defines {
@@ -1274,6 +1269,7 @@ pub fn sunk_within_ranges(
         sinker.limit = limit;
         sinker.spare_ranges = spare_ranges;
         if let Some(classes) = classes {
+            sinker.cheap_immediate = classes.cheap_move_immediate;
             sinker.pinned = body
                 .blocks
                 .iter()
@@ -2159,6 +2155,89 @@ mod tests {
         let odds = edge_probabilities(&body, &MachineBranchProbabilityInfo::of(&body));
         assert!(odds[&(1, 2)] <= SPLIT_EDGE_PROBABILITY_THRESHOLD, "the exit");
         assert!(odds[&(1, 1)] > SPLIT_EDGE_PROBABILITY_THRESHOLD, "the back edge");
+    }
+
+    /// The `if (a > 0) r = g(b)` shape: the entry makes the constant 7 that
+    /// only the join's phi reads on the edge past the arm. `edge` is the
+    /// odds of that edge. At most the pin's 40 percent (it is 37.5 for
+    /// `icmp sgt a, 0`: `llc -O2 -stop-after=machine-sink`, the constant in
+    /// a block of its own) the cheap constant is made on the edge; at 50 it
+    /// stays in the entry.
+    fn constant_past_an_arm(edge: f64) -> LirBody {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let entry = block(
+            0,
+            vec![1, 2],
+            vec![
+                insn(0, Operation::Move, "mov", vec![held(3)], vec![imm(7)], vec![3], vec![]),
+                insn(1, Operation::Compare, "cmp", vec![], vec![held(1), imm(0)], vec![], vec![1]),
+                insn(2, Operation::Branch, "jle", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        let arm =
+            block(1, vec![2], vec![insn(3, Operation::Move, "mov", vec![held(4)], vec![held(1)], vec![4], vec![1])]);
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 5, incoming: vec![(0, 3), (1, 4)] }].into(),
+            ..block(2, vec![], vec![insn(4, Operation::Return, "ret", vec![], vec![held(5)], vec![], vec![5])])
+        };
+        let mut body = LirBody::new(
+            "past",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let certain = crate::model::lir::BlockOdds::CERTAIN;
+        body.odds.taken.insert((0, 2), (edge * certain) as u32);
+        body.odds.taken.insert((0, 1), ((1.0 - edge) * certain) as u32);
+        body
+    }
+
+    fn made_in_entry(body: &LirBody) -> bool {
+        body.blocks[0].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov")))
+    }
+
+    #[test]
+    fn test_a_constant_made_in_the_entry_goes_onto_a_split_edge_of_at_most_40_percent() {
+        let moved = sunk(&constant_past_an_arm(0.375), false);
+        assert!(!made_in_entry(&moved), "the constant is made before the branch that skips its use");
+        assert_eq!(moved.blocks.len(), 4, "a block on the edge to the join");
+        let edge = moved.blocks.iter().find(|block| ![0, 1, 2].contains(&block.at)).expect("the edge block");
+        assert!(edge.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov"))));
+    }
+
+    /// The control: at 50 percent the edge is not worth a block for a constant.
+    #[test]
+    fn test_a_constant_made_in_the_entry_stays_when_its_edge_is_over_40_percent() {
+        let moved = sunk(&constant_past_an_arm(0.5), false);
+        assert!(made_in_entry(&moved));
+        assert_eq!(moved.blocks.len(), 3);
+    }
+
+    /// `as_cheap_as_a_move` asked x86's rule of every target: `movabs` was
+    /// never cheap, so AArch64's `movz x0, #1, lsl #32` (one instruction)
+    /// was split out at any probability. The target's rule decides now.
+    #[test]
+    fn test_the_target_decides_whether_a_constant_is_cheap() {
+        let wide = |value: i64| {
+            insn(
+                0,
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(Held { value: 1, width: 8, offset: 0 })],
+                vec![Loc::Imm(crate::model::ir::Imm { value, width: 8, address: None })],
+                vec![1],
+                vec![],
+            )
+        };
+        let one_move = wide(0x1_0000_0000);
+        assert!(!as_cheap_as_a_move(&one_move, llrm_target::x86_cheap_move_immediate), "x86: a movabs");
+        assert!(as_cheap_as_a_move(&one_move, |_, _| true), "a target whose constant is one instruction");
+        assert!(as_cheap_as_a_move(&wide(7), llrm_target::x86_cheap_move_immediate));
     }
 
     /// The sink asked a graph of the body for its frequencies, another for its

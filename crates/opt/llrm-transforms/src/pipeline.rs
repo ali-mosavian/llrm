@@ -856,7 +856,10 @@ pub(crate) fn llvm_order(
             Box::new(Together {
                 name,
                 parts: vec![
-                    Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }),
+                    Box::new(crate::combine_pass::Combine {
+                        enabled: applied.options.combine,
+                        phi_constant_users: applied.options.prices_bytes(),
+                    }),
                     Box::new(crate::simplifylibcalls::SimplifyLibCalls::with_routines(applied.options.library.clone())),
                 ],
             }),
