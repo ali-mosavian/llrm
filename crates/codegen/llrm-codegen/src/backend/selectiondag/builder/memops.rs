@@ -1415,8 +1415,17 @@ impl Builder<'_> {
                     }
                     _ => None,
                 };
+                // a target with no string instructions fills what is left past the inline limit
+                // with its own node (`EmitTargetCodeForMemset`), where the pin would call `memset`
+                let hooked = match &inline {
+                    None if !strings_exist => self
+                        .calling()
+                        .and_then(|calling| calling.emit_memset(&mut self.dag, root, dst, other, size)),
+                    _ => None,
+                };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
+                    (None, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Some(bytes))
                         if strings_exist
                             && (self.has_min_size()
