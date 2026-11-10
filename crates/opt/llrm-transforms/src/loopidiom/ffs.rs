@@ -13,6 +13,8 @@
 //! start does not run once.
 //!
 //! # Deviations
+//! - D18: formed only where the target's `Tti` says `shift_loop_counts` (see
+//!   `run_on_noncountable_loop`); the pin forms it everywhere.
 //! - The pin prices the intrinsic with `getIntrinsicInstrCost` at
 //!   `TCK_SizeAndLatency` against `TCC_Basic`; here that is [`Tti::tcc_basic`]
 //!   (the pin's constant 1 on a target that says nothing), and a compile
@@ -559,4 +561,43 @@ fn transform_loop_to_countable(
     //   loop. The loop would otherwise not be deleted even if it becomes empty.
     let cx = cx!(run);
     run.se.forget_loop(&cx, run.cur_loop.get_header());
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::loopidiom::pass::LoopIdiom;
+    use crate::testing::{parsed, printed};
+
+    /// `while (x >>= 1) n++`, counting from the shifted value.
+    const LOG2: &str = "define i32 @log2(i32 %x) {
+entry:
+  br label %loop
+
+loop:
+  %x1 = phi i32 [ %x, %entry ], [ %x2, %loop ]
+  %n1 = phi i32 [ 0, %entry ], [ %n2, %loop ]
+  %x2 = lshr i32 %x1, 1
+  %done = icmp eq i32 %x2, 0
+  %n2 = add nuw nsw i32 %n1, 1
+  br i1 %done, label %exit, label %loop
+
+exit:
+  %n = phi i32 [ %n1, %loop ]
+  ret i32 %n
+}
+";
+
+    /// A target whose `Tti` does not opt in (z80: the 32-bit `ctlz` expands to
+    /// 89 more lines than the loop) keeps its shift loop. The identity A/B had
+    /// every target but wasm form the count.
+    #[test]
+    fn a_target_that_does_not_count_shift_loops_keeps_the_loop() {
+        let mut module = parsed(LOG2);
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(LoopIdiom::default());
+        passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+        let after = printed(&module);
+        assert!(!after.contains("ctlz"), "{after}");
+        assert!(after.contains("%x2 = lshr i32 %x1, 1"), "{after}");
+    }
 }

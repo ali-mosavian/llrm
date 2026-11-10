@@ -155,6 +155,11 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    /// `i32.clz`, `i32.ctz` and their `i64` forms are one instruction.
+    fn shift_loop_counts(&self) -> bool {
+        true
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyTargetTransformInfo.cpp#L26
     /// `getPopcntSupport`: `PSK_FastHardware` at every width.
     fn popcnt_support_fast(

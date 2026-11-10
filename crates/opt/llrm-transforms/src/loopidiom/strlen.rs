@@ -59,11 +59,17 @@ impl LoopIdiomRecognize {
         &mut self,
         run: &mut Run,
     ) -> bool {
+        // DEVIATE 18 (2026-11-10, review 2026-11-24, owner: each target's
+        // session; exit: its `Tti` prices `ctlz`/`cttz` and says
+        // `shift_loop_counts`): the pin forms the count idioms on every
+        // target; here a target opts in, since one whose backend expands them
+        // (z80: +89 lines) or that weighs bytes (x86_16 `-Os`) would grow.
+        let counts = run.tti.is_some_and(|tti| tti.shift_loop_counts());
         self.recognize_popcount(run)
-            || self.recognize_and_insert_ffs(run)
-            || self.recognize_shift_until_bit_test(run)
-            || self.recognize_shift_until_zero(run)
-            || self.recognize_shift_until_less_than(run)
+            || (counts && self.recognize_and_insert_ffs(run))
+            || (counts && self.recognize_shift_until_bit_test(run))
+            || (counts && self.recognize_shift_until_zero(run))
+            || (counts && self.recognize_shift_until_less_than(run))
             || self.recognize_and_insert_str_len(run)
     }
 
