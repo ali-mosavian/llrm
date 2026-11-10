@@ -5,7 +5,7 @@
 
 use llrm_6502::driver::{Level, Request, assembly};
 
-const FRAMEADDRESS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+const FRAMEADDRESS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"
 
 declare ptr @llvm.frameaddress.p0(i32)
 
@@ -26,7 +26,7 @@ fn an_intrinsic_nothing_lowers_is_refused_by_name_at_every_level() {
 
 #[test]
 fn a_lowered_intrinsic_still_compiles() {
-    let text = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+    let text = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"
 
 declare i8 @llvm.ctpop.i8(i8)
 

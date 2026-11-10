@@ -4,7 +4,7 @@
 
 use llrm_6502::driver::{Level, Request, assembly};
 
-const OVER_ALIGNED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+const OVER_ALIGNED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"
 
 declare void @use(ptr)
 
