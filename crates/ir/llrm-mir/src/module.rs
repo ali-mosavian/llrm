@@ -586,6 +586,15 @@ impl PartialEq for NameIndex {
 }
 
 impl Function {
+    /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
+    /// MIR spells as a `!noalias.scope.decl` attachment.
+    pub fn is_noalias_scope_decl(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        self.instruction(inst).metadata.iter().any(|(kind, _)| kind == crate::print::SCOPE_DECL_KIND)
+    }
+
     pub(crate) fn new(
         ty: TypeId,
         void: TypeId,
