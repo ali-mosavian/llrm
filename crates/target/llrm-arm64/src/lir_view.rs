@@ -219,6 +219,8 @@ fn view_with(
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
+    // The names the memory operands of this function refer to, by index.
+    let mut symbols: Vec<String> = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
         let first_halves: Vec<usize> = pairs[at].values().copied().collect();
@@ -350,6 +352,10 @@ fn view_with(
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
+            if let Op::I(access @ (Inst::Load { mem, mmo, .. } | Inst::Store { mem, mmo, .. })) = &op {
+                inst.memory =
+                    Some(crate::lir_body::memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
+            }
             inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
