@@ -160,6 +160,30 @@ pub struct Tuning {
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
+    /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, any size),
+    /// not the library call: the setup is a few bytes against the call's push
+    /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
+    /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
+    pub rep_movs_at_size: bool,
+    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
+    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
+    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
+    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
+    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
+    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
+    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
+    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
+    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
+    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
+    /// it is off at `-O2` and `-O3`.
+    ///
+    /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    pub sdiv_pow2_stays_at_size: bool,
+    /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
+    /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`). DEVIATE
+    /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
+    /// against the `mov`'s one; the level is bytes-strict.
+    pub push_imm_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -212,12 +236,44 @@ pub struct Tuning {
     /// is numbered afresh after the scheduler, as the x86 numbers were tuned
     /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
     pub carry_slot_indexes: bool,
+    /// DEVIATE RA-CLK (x86 m16; owner x86-m16, exit 2026-11-29): the spill
+    /// weight of a value that is an address component (the base, index or
+    /// selector of a memory operand) is this many thousandths of a reference
+    /// alike; 1000: the pin's `getSpillWeight`, which weighs every reference
+    /// alike. Spilled, such a value is reloaded into one of the few registers
+    /// 16-bit addressing allows (bx, bp, si, di) before the access, where any
+    /// other value is folded or moves through any register. Applies only where
+    /// fewer registers address than hold a value. A/B 2026-11-09 vs 1000, 141
+    /// bench cells at -O1/-O2/-Os, outputs identical: -Os +235 B, -O2 +80 B
+    /// (12 worse, 5 better), -O1 as below (strict on both axes). Weights 3000,
+    /// 4000 and 6000 give the same code on the 14-program sample.
+    /// -O1 cells (bytes, clocks; 3000 -> 1000): w1000 better 8: sfm16_float
+    /// 2248/176044 -> 2236/174044, sfm16_float_{add,div,f2i,i2f,mul,sub}
+    /// 1893/16016 -> 1888/16016, 1905/44772 -> 1900/44772, 1920/17338 ->
+    /// 1915/17338, 1868/11229 -> 1863/11229, 1898/19595 -> 1893/19595,
+    /// 1898/17195 -> 1893/17195, stft_fixed 1074/48760 -> 1064/48760; worse 7:
+    /// jpeg_fixed 2967/74028620 -> 2973/74062036, jpeg_single 2817/86293387
+    /// -> 2823/86326803, matmul 293/23467 -> 299/23531, recchop 177/11429 ->
+    /// 183/11556, sfm16_float_cmp 1993/44039 -> 1994/45240, shellsort
+    /// 172/11672 -> 176/11993, stft_single 842/49421 -> 844/49421;
+    /// trades 2: grep 497/49952 -> 523/49865, quicksort 252/319777 ->
+    /// 261/303228. Open Os row M16-OS-MATMUL-DIVISOR (owner x86-m16, exit
+    /// 2026-11-20): matmul -Os 289 B/23807 clk against 284/23679 at 1000.
+    pub address_reference_milliweight: u32,
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
+    /// latency exceeds its issue-bound time is not unrolled at run time
+    /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
+    /// the loop. false: the pin's.
+    pub unroll_recurrence_veto: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
+    /// pin's 10 (40 when tuned for size).
+    pub min_jump_table_density: Option<u64>,
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
@@ -388,6 +444,9 @@ impl Tuning {
         lftr_any_stride: false,
         imul_at_size: false,
         rep_stos_at_size: false,
+        rep_movs_at_size: false,
+        sdiv_pow2_stays_at_size: false,
+        push_imm_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -400,8 +459,11 @@ impl Tuning {
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
         carry_slot_indexes: true,
+        address_reference_milliweight: 1000,
+        unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
+        min_jump_table_density: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
@@ -469,6 +531,20 @@ pub trait Machine {
     /// refused before the mid-end, which assumes scalars.
     fn has_vector_mir(&self) -> bool {
         false
+    }
+
+    /// The alignment this target's frames really keep; none: whatever the IR
+    /// asks. An `alloca` of more (up to [`Machine::max_alloca_align`]) is
+    /// clamped to it at pipeline entry, so the optimizer never assumes an
+    /// alignment the frame does not give.
+    fn kept_stack_align(&self) -> Option<u64> {
+        None
+    }
+
+    /// The largest `alloca` alignment this target accepts; none: it realigns
+    /// its stack. A larger one is a named refusal at pipeline entry.
+    fn max_alloca_align(&self) -> Option<u64> {
+        None
     }
 
     /// What each operation costs on this target, for profitability.
@@ -670,6 +746,14 @@ pub trait Machine {
         true
     }
 
+    /// Whether the module is single-threaded, so every object is thread-local
+    /// ([`Triple::getDefaultThreadModel`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/TargetParser/Triple.cpp#L2546)
+    /// is `Single` for wasm, `POSIX` for every other triple here). LICM's
+    /// `isThreadLocalObject` reads it.
+    fn single_threaded(&self) -> bool {
+        false
+    }
+
     /// Where `Intrinsic::Window` makes a huge pointer far: the far pointers'
     /// space, and the bytes from the one it makes that no displacement
     /// carries out of. None where the target has no such window.
@@ -861,6 +945,10 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
+    /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
+    /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
+    pub free_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -1015,6 +1103,7 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            free_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }
@@ -1236,6 +1325,7 @@ mod tests {
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
         assert!(pin.carry_slot_indexes);
+        assert_eq!(pin.address_reference_milliweight, 1000);
         assert_eq!(pin.inline_threshold, None);
     }
 }

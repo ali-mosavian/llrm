@@ -45,7 +45,7 @@ define hidden i32 @getbit() {
   ret i32 %18
 }
 
-define internal i32 @next() {
+define internal i32 @next() alwaysinline {
   %1 = alloca i32, align 4
   %2 = load i32, ptr @inpos, align 4
   %3 = load i32, ptr @inlen, align 4

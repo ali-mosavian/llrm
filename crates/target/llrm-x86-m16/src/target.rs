@@ -207,6 +207,14 @@ impl Machine for Dos {
         })
     }
 
+    fn kept_stack_align(&self) -> Option<u64> {
+        crate::stack_keeps().0
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        crate::stack_keeps().1
+    }
+
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
         Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
     }
@@ -317,6 +325,8 @@ impl Machine for Dos {
             slots_loop_width_rule: true,
             // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see Tuning.
             carry_slot_indexes: false,
+            // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
+            address_reference_milliweight: 3000,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -340,6 +350,14 @@ impl Machine for Dos {
             // it), and frame reloads in sum_three. Exit 2026-11-30: the
             // bytes those rows hold above main recovered by the register
             // allocator, then re-price the chain.
+            // DEVIATE M16-JT-DENSITY (owner llrm-m16-c, exit 2026-11-23): a
+            // jump table pays from 40% of its range filled at every level,
+            // as the pin asks only tuned for size (10% otherwise): an entry is
+            // 2 B and a compare-and-branch about as many, so a table 14% full
+            // is bytes lost for no clock won. jpeg_fixed and jpeg_single -O1:
+            // four cases over 28 values, a 56 B table, data +58 B and +60 B
+            // over bcc.
+            min_jump_table_density: Some(40),
             // DEVIATE: a constant offset is a displacement of the access at
             // m16; behind a sunk phi it costs an add and a register
             // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index

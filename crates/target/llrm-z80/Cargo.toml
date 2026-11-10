@@ -8,6 +8,7 @@ description = "The Z80 target: its descriptions and DAG selector tables, generat
 [dependencies]
 llrm-support = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-alloc = { workspace = true }
 llrm-codegen = { workspace = true }
 llrm-target = { workspace = true }
 llrm-object = { workspace = true }
@@ -17,6 +18,9 @@ llrm-analysis = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-spike-mf = { workspace = true }
 llrm-transforms = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [build-dependencies]
 llrm-target = { workspace = true }

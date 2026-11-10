@@ -49,7 +49,7 @@ impl Globals {
                 id.0,
                 Global {
                     name: crate::data::symbol_name(platform, &name),
-                    got: crate::isel::global_needs_got(module, platform, id),
+                    got: global_needs_got(module, platform, id),
                     align,
                     size,
                 },
@@ -80,4 +80,36 @@ impl Globals {
     ) -> Option<&Global> {
         self.0.get(&id)
     }
+}
+
+/// Whether the module states "PIC Level" itself: a module with no flags at all
+/// (the frontends', hand-written) is static code here, though
+/// `Module::position_independent` takes it as position independent.
+fn flagged_pic(module: &Module) -> bool {
+    module.named_metadata.iter().any(|(name, _)| name == "llvm.module.flags") && module.position_independent()
+}
+
+/// Whether an access to `global` goes through the GOT.
+pub(crate) fn global_needs_got(
+    module: &Module,
+    platform: Platform,
+    global: GlobalId,
+) -> bool {
+    use llrm_mir::{GlobalKind, Linkage};
+    let global = module.global(global);
+    let defined = match &global.kind {
+        GlobalKind::Function(function) => !function.is_declaration(),
+        GlobalKind::Variable(variable) => variable.initializer.is_some(),
+    };
+    let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+    // Darwin reaches anything not defined here through the GOT; Linux static
+    // code reaches all of it directly, and position-independent code (the
+    // module's "PIC Level" flag) goes through the GOT for what is not defined
+    // here, as the pin's `shouldAssumeDSOLocal` (clang -fPIE marks a definition
+    // `dso_local`).
+    // A hidden or protected declaration binds inside the module: the pin loads
+    // it directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux
+    // PIE.
+    let bound_here = global.visibility != llrm_mir::module::Visibility::Default;
+    (platform == Platform::Darwin || (flagged_pic(module) && !bound_here)) && !local && !defined
 }
