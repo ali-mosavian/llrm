@@ -472,13 +472,13 @@ fn items_once(
         }
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
-        crate::addrarith::address_adds(&mut function, cpu, wants_size);
+        crate::addrroles::address_roles(&mut function);
+        crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
         crate::foldload::fold_loads(&mut function);
         crate::divrem::remainders_from_quotients(&mut function);
         if wants_size {
             crate::foldarg::fold_argument_loads(&mut function);
         }
-        crate::addrroles::address_roles(&mut function);
         if options.compare_destinations {
             touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
         }
