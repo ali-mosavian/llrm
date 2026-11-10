@@ -248,6 +248,101 @@ fn at_os_a_constant_stored_twice_is_loaded_once() {
     assert_eq!(moves(false), 2, "speed: both stores take the immediate");
     assert_eq!(moves(true), 3, "-Os: the constant is loaded once and both stores take the register");
 }
+/// `and`, `or`, `xor` and `add` of a large constant on two values that are
+/// also used elsewhere (so their loads do not fold), in one block at `-Os`: the
+/// pin's `Select` (`ISD::ADD`..`ISD::XOR`, "avoid folding immediates with
+/// multiple uses") picks the register form directly, so the constant is loaded
+/// once. Ours had only the table's predicate, which that path never reaches,
+/// and kept `and r, imm32` twice: sfm16 `add_bits` m32 `-Os` spent 3 B more per
+/// extra use and a register pair more on the masks.
+#[test]
+fn at_os_a_large_immediate_used_twice_by_arithmetic_is_loaded_once() {
+    // (op, (immediate ops, immediate movs)) at speed and at -Os, for every op
+    // at once, on m32 and on m64 (`immediate_forms_at_size`).
+    let mut got = Vec::new();
+    for op in ["and", "or", "xor", "add"] {
+        let text = format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {{
+  %x = {op} i32 %a, 2147483647
+  %y = {op} i32 %b, 2147483647
+  %t = mul i32 %x, %y
+  %s = add i32 %a, %b
+  %r = sub i32 %t, %s
+  ret i32 %r
+}}
+"
+        );
+        let module = crate::testing::module(&text).expect("parses");
+        let m64_text = text.replace("e-p:32:32-i64:32-n8:16:32", "e-p:64:64-i64:64-n8:16:32:64");
+        let m64_module = crate::testing::module(&m64_text).expect("parses");
+        let immediates = |m64: bool, size: bool| {
+            let done = if m64 {
+                let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false)
+                    .expect("a cpu")
+                    .clone();
+                cpu.size = size;
+                selected(&m64_module, "f", &llrm_x86_m64::M64, &cpu, &[])
+            } else {
+                let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+                cpu.size = size;
+                selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[])
+            }
+            .unwrap_or_else(|e| panic!("{}", e.0));
+            let insns = done.body.insns();
+            let with_imm = |name: &str| {
+                insns
+                    .iter()
+                    .filter_map(|i| i.what.as_ref())
+                    .filter(|w| w.name.as_deref() == Some(name))
+                    .filter(|w| w.sources.iter().any(|l| matches!(l, crate::model::ir::Loc::Imm(_))))
+                    .count()
+            };
+            (with_imm(op), with_imm("mov"))
+        };
+        got.push((op, immediates(false, false), immediates(false, true), immediates(true, true)));
+    }
+    // Speed: both take the immediate. m32 -Os: the constant is loaded once,
+    // both take the register. m64 -Os: the immediate forms stay (IMM-1).
+    let want: Vec<_> = ["and", "or", "xor", "add"].into_iter().map(|op| (op, (2, 0), (0, 1), (2, 0))).collect();
+    assert_eq!(got, want);
+}
+
+/// m32 `-Os`, two `and x, 0xffff` of different values: each is `movzx r, r16`
+/// (3 B). Keeping 65535 in a register (`mov r, 65535; mov d, x; and d, r`)
+/// took 5 B once and 4 B a use: parity/loop +5 B, sfm16_dbg `__mulsf3` +22 B.
+#[test]
+fn at_os_a_word_mask_is_a_movzx_not_a_register_constant() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+  %x = and i32 %a, 65535
+  %y = and i32 %b, 65535
+  %t = mul i32 %x, %y
+  %s = add i32 %a, %b
+  %r = sub i32 %t, %s
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let named = |name: &str| {
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count()
+    };
+    let loaded = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter(|w| w.sources.iter().any(|l| matches!(l, crate::model::ir::Loc::Imm(imm) if imm.value == 65535)))
+        .count();
+    assert_eq!((loaded, named("movzx")), (0, 2), "65535 was loaded into a register");
+}
+
 const TIMES_SEVEN_PLUS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %y) {
   %b = xor i32 %a, %y
@@ -1229,9 +1324,9 @@ define i32 @f(float %x) {
     assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
 }
 
-/// `bitcast (xor (bitcast double %x to i64), signbit) to double` (`__negdf2`) kept
-/// the integer xor: 20 B on wasm against the pin's `f64.neg`, 7 B. It is `fneg`
-/// (`fchs` on x87), as `foldBitcastedFPLogic` has it.
+/// `bitcast (xor (bitcast double %x to i64), signbit) to double` (`__negdf2`)
+/// kept the integer xor: 20 B on wasm against the pin's `f64.neg`, 7 B. It is
+/// `fneg` (`fchs` on x87), as `foldBitcastedFPLogic` has it.
 #[test]
 fn a_sign_bit_xor_of_a_double_bits_is_fneg() {
     let ir = "target datalayout = \"@m32-datalayout@\"
@@ -1659,8 +1754,9 @@ fn four_byte_loads_combined_high_byte_first_are_one_load_and_a_bswap() {
 /// work. An edge looks in its own piece.
 #[test]
 fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
-    use crate::model::lir::{LirBlock, LirBody};
     use llrm_mir::module::BlockId;
+
+    use crate::model::lir::{LirBlock, LirBody};
     let odds = |count: i64| {
         let blocks = (0..count)
             .map(|at| LirBlock { succ: vec![(at + 1) % count, (at + 2) % count].into(), ..LirBlock::new(at, vec![]) })
@@ -1715,7 +1811,10 @@ out:
     let (derived, trips) = derivations(looped);
     // The mid-end's `Registers` is empty by design; a fixed point over the
     // body for the trips (33.6 M, memory_expansion -O2 m64) bought nothing.
-    assert!(derived == 0 && trips == 1, "the loop lost its trips or derived the facts: {derived} derivations, {trips} counts");
+    assert!(
+        derived == 0 && trips == 1,
+        "the loop lost its trips or derived the facts: {derived} derivations, {trips} counts"
+    );
 }
 
 /// A function's branch probabilities were calculated twice in a selection, once
@@ -1862,13 +1961,14 @@ fn at_os_a_multiply_that_ties_in_bytes_takes_the_chain_on_m32() {
     let module = crate::testing::module(&TIMES_ELEVEN.replace("11", "5")).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    let imuls =
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
     assert_eq!(imuls, 0, "a tie in bytes is the chain's");
 }
 
-/// `t[3 * i]` on `int` is `mul i, 12` feeding an add: the `shl 2` folds into the
-/// address scale, so the chain is one `lea` (bintree -Os: `imul` kept, 0 B saved,
-/// +40k clk): the chain wins.
+/// `t[3 * i]` on `int` is `mul i, 12` feeding an add: the `shl 2` folds into
+/// the address scale, so the chain is one `lea` (bintree -Os: `imul` kept, 0 B
+/// saved, +40k clk): the chain wins.
 #[test]
 fn at_os_a_multiply_whose_shift_folds_into_an_address_takes_the_chain_on_m32() {
     let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1882,6 +1982,7 @@ define i32 @f(ptr %t, i32 %a) {
     let module = crate::testing::module(ir).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    let imuls =
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
     assert_eq!(imuls, 0, "the scale folds, so the chain ties the imul");
 }

@@ -1012,8 +1012,106 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     .and_then(|done| done)
     .expect("the pipeline runs");
     let text = llrm_mir::print::module(&module);
-    assert!(text.contains("chop.constprop"), "no clone of chop for its constants:\n{text}");
+    // The chain of clones is whole before the walk, which inlines each into the
+    // one before it: no clone is left to name, and no call passes the whole range.
+    assert!(!text.contains("@chop(i32 0, i32 64)"), "chop was not cloned for its constants:\n{text}");
     assert!(!text.contains(crate::tailcallelim::DEFERRED), "a function still waits:\n{text}");
+}
+
+const ROW_RECURSION: &str = "@q = global [8 x i32] zeroinitializer
+
+define internal i32 @safe(i32 %row, i32 %col) {
+b0:
+  br label %head
+
+head:
+  %r = phi i32 [ 0, %b0 ], [ %r1, %next ]
+  %c = icmp slt i32 %r, %row
+  br i1 %c, label %body, label %yes
+
+body:
+  %p = getelementptr inbounds i32, ptr @q, i32 %r
+  %v = load i32, ptr %p
+  %d = sub i32 %v, %col
+  %z = icmp eq i32 %d, 0
+  br i1 %z, label %no, label %next
+
+next:
+  %r1 = add nsw i32 %r, 1
+  br label %head
+
+yes:
+  ret i32 1
+
+no:
+  ret i32 0
+}
+
+define internal i32 @place(i32 %row, i32 %n) {
+b0:
+  %done = icmp eq i32 %row, %n
+  br i1 %done, label %one, label %loop
+
+one:
+  ret i32 1
+
+loop:
+  %col = phi i32 [ 0, %b0 ], [ %col1, %latch ]
+  %found = phi i32 [ 0, %b0 ], [ %found2, %latch ]
+  %c = icmp slt i32 %col, %n
+  br i1 %c, label %test, label %exit
+
+test:
+  %ok = call i32 @safe(i32 %row, i32 %col)
+  %t = icmp ne i32 %ok, 0
+  br i1 %t, label %put, label %latch
+
+put:
+  %p = getelementptr inbounds i32, ptr @q, i32 %row
+  store i32 %col, ptr %p
+  %r1 = add nsw i32 %row, 1
+  %sub = call i32 @place(i32 %r1, i32 %n)
+  %f = add i32 %found, %sub
+  br label %latch
+
+latch:
+  %found2 = phi i32 [ %found, %test ], [ %f, %put ]
+  %col1 = add nsw i32 %col, 1
+  br label %loop
+
+exit:
+  ret i32 %found
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @place(i32 0, i32 %n)
+  ret i32 %r
+}
+";
+
+/// A recursion whose argument advances by a constant (`f(row + 1)`) is cloned
+/// in a chain before the walk, as gcc runs all of ipa-cp before ipa-inline: the
+/// clone for row names the clone for row + 1 and each is inlined into the one
+/// before it. Cloned after the walk, seven clones stood, none inlined (m32
+/// queens -O3: 160,324 clocks against gcc's 94,851).
+#[test]
+fn test_a_recursion_with_an_advancing_constant_is_cloned_in_a_chain_before_the_walk() {
+    let mut module = parsed(ROW_RECURSION);
+    let options = crate::pipeline::Options::aggressive();
+    let applied = crate::pipeline::Applied { options, ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let clones = text.lines().filter(|line| line.starts_with("define") && line.contains("@place.constprop")).count();
+    // The chain is eight long (`MAX_CLONES`); the links the walk's threshold
+    // stops at stand. Cloned after the walk, all seven stood.
+    assert!(clones <= 2, "{clones} clones of place stand, the chain was not inlined link by link:\n{text}");
 }
 
 /// The module `text` after the walk alone (no simplifier), `top`'s body.
@@ -1540,7 +1638,7 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2112,6 +2210,96 @@ out:
     assert!(!top.contains("@leaf"), "the last call stayed a call:\n{top}");
 }
 
+/// A flat x86 target: the neutral machine with the CPU's cost model.
+struct FlatX86(&'static str);
+
+impl llrm_mir::target::Machine for FlatX86 {
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        llrm_mir::target::Neutral.foreign_span(selectors, offsets, width)
+    }
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        llrm_mir::target::Neutral.spaces()
+    }
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::Neutral.costs()
+    }
+    fn registers(&self) -> i64 {
+        llrm_mir::target::Neutral.registers()
+    }
+    fn call_registers(&self) -> i64 {
+        llrm_mir::target::Neutral.call_registers()
+    }
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu(self.0).expect("a cpu")))
+    }
+}
+
+/// tests/run/c/shrink_wrapped_frame.c at m32 -O1: `f` (a 64-byte array) is
+/// priced to inline into the recursive `g` (cost 40, threshold 225, as the
+/// pin's `-Rpass=inline` says) and is also called from `main`, so it is not a
+/// last call. `fits_with` refused every allocating callee in a recursive
+/// caller, so `f` stayed a 60-byte call where the pin has the copy (+19 B).
+/// The pin allows up to 1024 bytes (`TotalAllocaSizeRecursiveCaller`); a
+/// platform that states otherwise (real mode) keeps the refusal.
+#[test]
+fn test_a_flat_target_inlines_a_small_frame_into_a_recursive_caller_as_the_pin_does() {
+    let text = "declare void @sink(ptr)
+
+define internal void @leaf(i32 %v) {
+b0:
+  %buf = alloca [16 x i32]
+  store i32 %v, ptr %buf
+  call void @sink(ptr %buf)
+  ret void
+}
+
+define i32 @rec(i32 %n) {
+b0:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %go, label %out
+
+go:
+  call void @leaf(i32 %n)
+  %m = sub i32 %n, 1
+  %r = call i32 @rec(i32 %m)
+  %s = add i32 %r, %n
+  ret i32 %s
+
+out:
+  ret i32 0
+}
+
+define i32 @other() {
+b0:
+  call void @leaf(i32 3)
+  ret i32 0
+}
+";
+    let run = |target: std::rc::Rc<dyn llrm_mir::target::Machine>| {
+        let mut module = parsed(text);
+        let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
+        llrm_mir::program::Program::lend(&mut module, target, |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        let printed = llrm_mir::print::module(&module);
+        printed.split("define").find(|one| one.contains("@rec(")).expect("the function").to_owned()
+    };
+    let flat = run(std::rc::Rc::new(FlatX86("i486")));
+    assert!(!flat.contains("@leaf"), "the small frame stayed a call in the recursive caller:\n{flat}");
+    let real = run(std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()));
+    assert!(real.contains("@leaf"), "real mode copied a frame into a recursion:\n{real}");
+}
+
 /// The pin's `GlobalOpt` runs between IPSCCP and the walk (pass 20 of
 /// `default<O2>` on sum_three): a static a norecurse function writes before it
 /// reads is a register when the loop passes run. Ours split and localized after
@@ -2136,7 +2324,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2177,7 +2365,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2224,7 +2412,7 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
             ipo.run(program, &mut Default::default())
         },
     )

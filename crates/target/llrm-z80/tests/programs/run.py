@@ -6,6 +6,7 @@
 Each `report(long)` call stores its four bytes in a log the harness reads back and compares with the .out lines.
 Verdicts: PASS, WRONG (output differs), REFUSED (backend), SLOW (llc timed out), CLANG, ASM, LINK (undefined symbols named), HALT.
 """
+import signal
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -69,6 +70,18 @@ def sh(cmd, cwd, inp=None, timeout=300):
     return subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, text=True, timeout=timeout)
 
 
+# The status of a process stopped by `ulimit -t`: SIGXCPU.
+CPU_LIMIT = -signal.SIGXCPU
+
+
+def llc_limited(llc_command, cwd, cpu_seconds):
+    """`llc_command` under 16 GB of address space and `cpu_seconds` of CPU time. The limit is CPU time, not the wall clock: the
+    load guard stops a job's process group while the machine is busy, and an llc that takes 3 s alone read as `SLOW llc over 120 s`
+    (fixed_point -O3, 2026-11-10). The wall timeout, 20 times the CPU one, is only for a process that hangs: it raises
+    `subprocess.TimeoutExpired`. A CPU overrun is a return code of `CPU_LIMIT`."""
+    return sh(["bash", "-c", f'ulimit -v 16777216; ulimit -S -t {int(cpu_seconds)}; exec "$@"', "llc", *llc_command], cwd, timeout=cpu_seconds * 20)
+
+
 def libc_library(work):
     """The library directory of LIBC's objects and those of the `Z80_LIBC_EXTRA` directories (the soft-float helpers): sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
     lib = Path(work) / "lib"
@@ -127,11 +140,12 @@ def one(job):
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
     ll.write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
     try:
-        # a compile that runs away is stopped at 16 GB of address space, not the machine's memory
-        p = sh(["bash", "-c", 'ulimit -v 16777216; exec "$@"', "llc", args.llc, "-S", f"-O{args.llc_level or args.level}",
-                "-o", str(w / "p.s"), str(ll)], w, timeout=args.compile_timeout)
+        # a compile that runs away is stopped at 16 GB of address space and at the CPU time limit, not the machine's memory
+        p = llc_limited([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w, args.compile_timeout)
     except subprocess.TimeoutExpired:
-        return name, "SLOW", f"llc over {args.compile_timeout} s"
+        return name, "HUNG", f"llc made no progress for {args.compile_timeout * 20} s"
+    if p.returncode == CPU_LIMIT:
+        return name, "SLOW", f"llc over {args.compile_timeout} s of cpu"
     if p.returncode:
         why = [l for l in p.stderr.splitlines() if "REFUSED" in l or "llrm-z80-llc" in l]
         return name, "REFUSED", (why or [p.stderr.strip()[-100:]])[0][:140]

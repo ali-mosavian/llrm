@@ -72,7 +72,7 @@ pub fn builder_target() -> BuilderTarget {
         // the symbol's linkage (`isOffsetFoldingLegal`)
         dag: DagConfig {
             dso_local_symbols: true,
-            sext_bool_add_preferred: true,
+            sext_bool_add_max_bits: u32::MAX,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
         // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
