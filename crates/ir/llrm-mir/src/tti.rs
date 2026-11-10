@@ -961,6 +961,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::merge_functions_at_size`.
+    fn merge_functions_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::push_imm_at_size`.
     fn push_imm_at_size(&self) -> bool {
         false

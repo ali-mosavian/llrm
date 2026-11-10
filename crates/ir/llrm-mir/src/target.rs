@@ -184,6 +184,10 @@ pub struct Tuning {
     /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
     /// against the `mov`'s one; the level is bytes-strict.
     pub push_imm_at_size: bool,
+    /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
+    /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
+    /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
+    pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -450,6 +454,7 @@ impl Tuning {
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
         push_imm_at_size: false,
+        merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,

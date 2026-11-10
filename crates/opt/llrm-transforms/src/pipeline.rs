@@ -1698,6 +1698,13 @@ pub fn recorded(
     }
     // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
     // body is final.
+    // `MergeFunctions`: off in the pin's pipeline; a target that wants it at -Os says so (DEVIATE MERGEFUNC-OS).
+    if applied.options.optimize
+        && applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_functions_at_size())
+    {
+        manager.add_program(crate::mergefunc::MergeFunctions);
+    }
     if applied.options.optimize {
         manager.add_program(constmerge::ConstantMerge);
     }
