@@ -503,6 +503,15 @@ pub trait Tti {
         }
     }
 
+    /// Whether a callee that allocates may be copied into a recursive caller,
+    /// as the pin's `getInlineCost` allows up to 1024 bytes of it
+    /// (`TotalAllocaSizeRecursiveCaller`). DEVIATE (default no): a recursion's
+    /// depth times the callee's frame overflows a small platform's stack.
+    /// Exit: a target that says yes.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        false
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its
