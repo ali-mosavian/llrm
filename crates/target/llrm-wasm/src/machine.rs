@@ -155,6 +155,20 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    /// `i32.clz`, `i32.ctz` and their `i64` forms are one instruction.
+    fn shift_loop_counts(&self) -> bool {
+        true
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyTargetTransformInfo.cpp#L26
+    /// `getPopcntSupport`: `PSK_FastHardware` at every width.
+    fn popcnt_support_fast(
+        &self,
+        _bits: u32,
+    ) -> bool {
+        true
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
     fn lftr_any_stride(&self) -> bool {
@@ -191,6 +205,13 @@ impl Tti for Wasm {
     /// counts the inline as shrinking the caller (uint64_to_float -O1: six
     /// `classify` calls kept at cost -15..-5, 241 B against the pin's 96).
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        true
+    }
+
+    /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
+    /// caller comes out smaller: the pin's `inline_cost` shrinks a caller whose inlined copy
+    /// folds, which the bound's static size cannot see (`call_keeps`, `switch_header_marker_loop`).
+    fn inline_trials_at_o1(&self) -> bool {
         true
     }
 

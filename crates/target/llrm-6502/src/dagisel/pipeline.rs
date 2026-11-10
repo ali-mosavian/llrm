@@ -123,11 +123,14 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     sized: bool,
+    synthesize: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering();
     let mut lowering = MosLowering;
     let arch = Mos;
-    DagCombiner::new(dag, &mut MosCombines { sized }, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut MosCombines { sized, synthesize }, CombineLevel::BeforeLegalizeTypes)
+        .with_tli(&tli)
+        .run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)

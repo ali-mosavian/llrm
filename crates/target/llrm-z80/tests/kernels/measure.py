@@ -247,4 +247,5 @@ def main():
         print(f"| {name} | {size} | {t1 - t0} | {i1 - i0} | {b} | {t} | {n} | {verdict(size, b)} | {verdict(t1 - t0, t)} | {verdict(i1 - i0, n)} |")
 
 
-main()
+if __name__ == "__main__":
+    main()
