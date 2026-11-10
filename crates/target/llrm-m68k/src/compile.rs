@@ -12,7 +12,7 @@ use crate::expand::{Line, finish_with};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
-use crate::mfunc::{emit_with, expand_cmov};
+use crate::mfunc::{Shape, emit_with, expand_cmov};
 use crate::regalloc::{
     branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink, remove_identity_copies,
     remove_redundant_copies, two_address,
@@ -472,7 +472,15 @@ fn items_once(
         &chain,
         &libcalls,
     )?;
-    let mut function = emit_with(name, &blocks, options.direct_copies)?;
+    let mut function = emit_with(
+        name,
+        &blocks,
+        Shape {
+            direct_copies: options.direct_copies,
+            // what the hosted stages read: a result is defined in its copy's register
+            copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+        },
+    )?;
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
     touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();

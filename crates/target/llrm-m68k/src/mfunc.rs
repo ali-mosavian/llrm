@@ -183,9 +183,8 @@ struct Emitter<'a> {
     save: llrm_support::hash::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
-    /// `CopyFromReg` of a virtual register is that register, as the pin's
-    /// `InstrEmitter` has it (see [`emit_with`]).
-    direct_copies: bool,
+    /// Which of the pin's `InstrEmitter` shapes this emission takes.
+    shape: Shape,
 }
 
 impl Emitter<'_> {
@@ -208,6 +207,9 @@ impl Emitter<'_> {
         res: u8,
         class: Class,
     ) -> Option<Reg> {
+        if !self.shape.copy_destinations {
+            return None;
+        }
         let value = SDValue { node, res };
         let dag = self.dag;
         let users: Vec<SDValue> = dag
@@ -477,7 +479,7 @@ impl Emitter<'_> {
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
                     return Err("CopyToReg of a value that is no register".to_owned());
                 };
-                if src != dst {
+                if !self.shape.copy_destinations || src != dst {
                     into.push(Inst::copy(dst, src));
                 }
             }
@@ -487,7 +489,7 @@ impl Emitter<'_> {
                 // "just used directly"; only a physical one is copied. A copy
                 // here puts a value of an earlier block in a register defined
                 // inside the loop, where it is not loop-invariant.
-                if self.direct_copies && matches!(src, Reg::Virt(_)) {
+                if self.shape.direct_copies && matches!(src, Reg::Virt(_)) {
                     self.values.insert((node, 0), src);
                     return Ok(());
                 }
@@ -614,18 +616,32 @@ pub fn emit(
     name: &str,
     blocks: &[Selected],
 ) -> Result<MFunction, String> {
-    emit_with(name, blocks, false)
+    emit_with(name, blocks, Shape::default())
 }
 
-/// [`emit`], where `direct_copies` reads a virtual register a block takes from
-/// an earlier one directly, as the pin does; otherwise it is copied first. The
-/// private passes after the emitter were tuned on the copies (the corpus is
-/// +394 B at 68000 -O2 without them, 11-09), so the pin's shape is opt-in until
-/// the shared coalescer and allocator replace them.
+/// Which of the pin's `InstrEmitter` shapes an emission takes. The private
+/// passes after the emitter were tuned on the copies, so each shape is opt-in
+/// until the shared coalescer and allocator replace them (corpus 11-09/10:
+/// `direct_copies` +394 B at 68000 -O2; `copy_destinations` changes 63 cells).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shape {
+    /// `EmitCopyFromReg`: a virtual register is read where it is defined.
+    pub direct_copies: bool,
+    /// `CreateVirtualRegisters`: a result that a `CopyToReg` copies is defined
+    /// in that copy's register, and the copy is not made.
+    pub copy_destinations: bool,
+}
+
+impl Shape {
+    /// Both shapes: the pin's.
+    pub const PIN: Shape = Shape { direct_copies: true, copy_destinations: true };
+}
+
+/// [`emit`], in the given [`Shape`].
 pub fn emit_with(
     name: &str,
     blocks: &[Selected],
-    direct_copies: bool,
+    shape: Shape,
 ) -> Result<MFunction, String> {
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter = Emitter {
@@ -636,7 +652,7 @@ pub fn emit_with(
         flags_from: None,
         save: Default::default(),
         saved: HashMap::default(),
-        direct_copies,
+        shape,
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();

@@ -12,7 +12,7 @@ use llrm_codegen::model::lir::LirBody;
 use llrm_lir::registers::Regs;
 use llrm_m68k::dagisel::function::select_function;
 use llrm_m68k::dagisel::hooks::Cpu;
-use llrm_m68k::mfunc::{emit_with, expand_cmov};
+use llrm_m68k::mfunc::{Shape, emit_with, expand_cmov};
 use llrm_m68k::regalloc::M68kRegisters;
 use llrm_m68k::target::M68k;
 use llrm_target::Target;
@@ -55,7 +55,7 @@ fn only_the_phases_m68k_has_a_use_for_change_a_function() {
             .collect();
         for name in names {
             let blocks = select_function(&module, &name, Cpu::M68000).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
-            let mut function = emit_with(&name, &blocks, true).expect("emits");
+            let mut function = emit_with(&name, &blocks, Shape::PIN).expect("emits");
             expand_cmov(&mut function).expect("expands");
             let mut phases = llrm_codegen::flow::machine_with(
                 &Default::default(),
@@ -119,7 +119,7 @@ fn the_converted_body_is_ssa_for_the_verifier() {
             .collect();
         for name in names {
             let blocks = select_function(&module, &name, Cpu::M68000).unwrap_or_else(|why| panic!("{file} @{name}: {why}"));
-            let mut function = emit_with(&name, &blocks, true).expect("emits");
+            let mut function = emit_with(&name, &blocks, Shape::PIN).expect("emits");
             expand_cmov(&mut function).expect("expands");
             let converted = match llrm_spike_mf::tolir::to_ssa_lir::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO)) {
                 Ok(converted) => converted,
