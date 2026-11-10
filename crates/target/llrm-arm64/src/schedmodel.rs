@@ -71,9 +71,6 @@ impl Arm64Model {
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
         let name = insn.what.as_ref()?.name.as_deref()?;
-        if std::env::var_os("LLRM_NO_CLASS").is_some() {
-            return None;
-        }
         let llvm = *llvm_names(name).first()?;
         let opcode = *opcode_numbers().get(llvm)?;
         let shifted = shift_amount(insn).is_some_and(|amount| amount != 0);
@@ -154,9 +151,6 @@ impl SchedulingModel for Arm64Model {
 
     /// `AArch64Subtarget::overrideSchedPolicy`.
     fn policy(&self) -> RegionPolicy {
-        if std::env::var_os("LLRM_SCHED_BOTTOM_UP").is_some() {
-            return RegionPolicy::bottom_up();
-        }
         RegionPolicy::bidirectional(self.disable_latency)
     }
 
@@ -167,9 +161,6 @@ impl SchedulingModel for Arm64Model {
         &self,
         insn: &Insn,
     ) -> Unit {
-        if std::env::var_os("LLRM_NO_UNIT").is_some() {
-            return Unit { micro_ops: 1, ..Unit::default() };
-        }
         let Some(class) = self.class(insn) else { return Unit { micro_ops: 1, ..Unit::default() } };
         let mut unit = Unit {
             micro_ops: u32::from(class.num_micro_ops),
@@ -197,9 +188,6 @@ impl SchedulingModel for Arm64Model {
         &self,
         insn: &Insn,
     ) -> u32 {
-        if std::env::var_os("LLRM_NO_LAT").is_some() {
-            return default_def_latency(insn, self.model.load_latency);
-        }
         match self.class(insn).and_then(|class| class.write_latency.first().copied()) {
             // `capLatency`: a variable latency (-1) is 1000.
             Some(entry) => u32::try_from(entry.cycles).unwrap_or(1000),

@@ -1414,12 +1414,8 @@ pub fn scheduled(
                         let held: Vec<_> = deps.exit_latency.iter().enumerate().filter(|(_, l)| **l > 0).collect();
                         eprintln!("machinesched exit edges {held:?}");
                     }
-                    if std::env::var_os("LLRM_NO_COPYC").is_none() {
-                        copy_constrain(slice, &mut deps, &|value| now.contains(&value));
-                    }
-                    if std::env::var_os("LLRM_NO_CLUSTER").is_none() {
-                        cluster_mem_ops(slice, &mut deps, sched);
-                    }
+                    copy_constrain(slice, &mut deps, &|value| now.contains(&value));
+                    cluster_mem_ops(slice, &mut deps, sched);
                     let order = order_region(slice, &deps, tracking.as_ref(), sched);
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
                         for (place, &node) in order.iter().enumerate() {

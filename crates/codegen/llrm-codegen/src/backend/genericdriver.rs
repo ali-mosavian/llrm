@@ -292,7 +292,7 @@ impl<'a> Scheduler<'a> {
                 best = try_cand;
             }
         }
-        if std::env::var_os("LLRM_MS_CANDS").is_some() {
+        if llrm_support::env_flag!("LLRM_MS_TRACE") {
             eprintln!(
                 "MSC top={at_top} available={} pending={} best={} reason={:?} excess={:?} critical={:?} current={:?}",
                 zone.available.len(),
