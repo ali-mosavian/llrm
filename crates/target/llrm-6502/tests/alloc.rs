@@ -183,7 +183,7 @@ fn a_word_select_returns_the_larger_word() {
     let text = compile(ir, "max16");
     // the result starts as one operand and the other is moved in on one path:
     // no jump over arms
-    assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cmd")), "{text}");
+    assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cm")), "{text}");
     for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
         let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
         let run = |after: &str| common::run_with("alloc-max16", &format!("{setup}  jsr max16\n{after}"), &text);
@@ -1206,9 +1206,18 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
 #[test]
 fn a_zero_or_sign_test_does_not_compare_again() {
     for (name, ir) in [
-        ("isz", "define i8 @isz(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp eq i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
-        ("nz", "define i8 @nz(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp ne i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
-        ("neg", "define i8 @neg(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp slt i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        (
+            "isz",
+            "define i8 @isz(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp eq i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}",
+        ),
+        (
+            "nz",
+            "define i8 @nz(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp ne i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}",
+        ),
+        (
+            "neg",
+            "define i8 @neg(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp slt i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}",
+        ),
         (
             "sum",
             "define i8 @sum(i8 %x, i8 %y) {\n  %s = add i8 %x, %y\n  %c = icmp eq i8 %s, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}",
@@ -1216,7 +1225,8 @@ fn a_zero_or_sign_test_does_not_compare_again() {
     ] {
         let text = compile(ir, name);
         assert!(!text.contains("cmp #0"), "{name}: {text}");
-        // the first three load x from $0300; `a` arriving with no flags set needs its own test
+        // the first three load x from $0300; `a` arriving with no flags set
+        // needs its own test
         let run = |x: u16, y: u16| {
             let setup = match name {
                 "sum" => bytes(&[x, y]),
@@ -1364,7 +1374,7 @@ fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry()
     for (name, ir, no_jump, f) in cases {
         let text = compile(&ir, name);
         if no_jump {
-            assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cmd")), "{name}: {text}");
+            assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cm")), "{name}: {text}");
         }
         for (x, y) in [(0u8, 0u8), (1, 2), (2, 1), (200, 100), (100, 200), (255, 255), (7, 7)] {
             let main = format!("{}  jsr {name}\n", bytes(&[u16::from(x), u16::from(y)]));
@@ -1377,11 +1387,13 @@ fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry()
     }
 }
 
-/// Two selects on one compare with a subtraction between them compared twice
-/// (`lda b; cmp a` again, 4 bytes, in gcd's loop), because the subtraction sets
-/// the carry. The second select now follows the first and reads its carry.
+/// Two selects on one compare with a subtraction between them are right.
+/// Each select is a branch over a block with its own compare
+/// (`select::expand_selects`): the compare is made twice, which
+/// `sharecmp` (the second select moved up to the first's carry) avoided while a
+/// select was one instruction. 6502-SELECT-SHARE, 2026-11-12.
 #[test]
-fn two_selects_on_one_carry_compare_make_the_compare_once() {
+fn two_selects_on_one_carry_compare_are_right() {
     let ir = "define i8 @split(i8 %a, i8 %b) {
   %gt = icmp ugt i8 %a, %b
   %x = select i1 %gt, i8 %b, i8 0
@@ -1392,7 +1404,6 @@ fn two_selects_on_one_carry_compare_make_the_compare_once() {
   ret i8 %r
 }";
     let text = compile(ir, "split");
-    assert_eq!(text.matches("cmp ").count(), 1, "the compare is made twice:\n{text}");
     for (a, b) in [(5u8, 3u8), (3, 5), (4, 4), (200, 7), (0, 9), (255, 0)] {
         let (x, y) = if a > b { (b, 0) } else { (0, a) };
         let want = (a - x) ^ (b - y);
@@ -1494,7 +1505,19 @@ fn only_zero_extended_bytes_take_the_unsigned_widening_multiply() {
     let signed = "define i16 @sw(i8 %a, i8 %b) {\n  %x = sext i8 %a to i16\n  %y = sext i8 %b to i16\n  %p = mul i16 %x, %y\n  ret i16 %p\n}";
     let text = compile(signed, "sw");
     assert!(text.contains("__mulqihi3") && !text.contains("__umulqihi3") && !text.contains("__mulhi3"), "{text}");
-    for (a, b) in [(-1i16, 2i16), (-128, -128), (127, 127), (-128, 127), (127, -128), (0, -5), (-7, 0), (-1, -1), (100, -3), (-3, 100), (1, -128)] {
+    for (a, b) in [
+        (-1i16, 2i16),
+        (-128, -128),
+        (127, 127),
+        (-128, 127),
+        (127, -128),
+        (0, -5),
+        (-7, 0),
+        (-1, -1),
+        (100, -3),
+        (-3, 100),
+        (1, -128),
+    ] {
         let setup = bytes(&[a as u16 & 0xFF, b as u16 & 0xFF]);
         let lo = common::run_with(&format!("alloc-sw-lo-{a}-{b}"), &format!("{setup}  jsr sw\n"), &text);
         let hi = common::run_with(&format!("alloc-sw-hi-{a}-{b}"), &format!("{setup}  jsr sw\n  txa\n"), &text);
@@ -1749,8 +1772,8 @@ done:
 /// bytes that takes 5 more clocks a bit. The level decides: at size (12 clocks
 /// a byte) a shift of 5 to 7 bits is the loop (the shorter ones are decided by
 /// the final size, see `a_short_word_shift_stays_in_a_where_that_is_shorter`);
-/// at speed (1 clock a byte) none is. Both bytes of each result are checked, the shifted word added
-/// to the word so that the shift stays in cells.
+/// at speed (1 clock a byte) none is. Both bytes of each result are checked,
+/// the shifted word added to the word so that the shift stays in cells.
 #[test]
 fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
     for (op, k) in [("shl", 5u32), ("shl", 7), ("lshr", 6)] {
@@ -2865,8 +2888,8 @@ fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
 
 /// `lda` of a reload or a copy overwrites the zero and negative flags, so the
 /// allocator may put nothing between a compare and what reads its flags: the
-/// branches and every conditional move (`CMOV16` was missed, and a reload
-/// between its `CMP` and it chose the wrong side: differential seeds 192, 283).
+/// branches (a conditional move was one too, and a reload between its `CMP` and
+/// it chose the wrong side: differential seeds 192, 283).
 #[test]
 fn every_reader_of_the_flags_is_kept_with_the_compare_before_it() {
     use llrm_spike_mf::regalloc::Target;
@@ -2878,9 +2901,6 @@ fn every_reader_of_the_flags_is_kept_with_the_compare_before_it() {
         inst
     };
     type M = llrm_6502::alloc::Mos<false>;
-    for kind in ["CMOV", "CMOV16"] {
-        assert!(M::reads_flags_set_just_before(&reader(kind, false)), "{kind}");
-    }
     assert!(M::reads_flags_set_just_before(&reader("BEQ", true)));
     assert!(!M::reads_flags_set_just_before(&Inst::new(Kind::Op("ADC"), vec![])));
 }
@@ -2932,7 +2952,8 @@ done:
 fn a_hot_count_takes_x_from_a_count_held_for_later() {
     let text = compile(TWO_COPIES, "two");
     let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
-    // the count's high byte steps in x (`dex` on a borrow, once `adc #255; tax`)
+    // the count's high byte steps in x (`dex` on a borrow, once `adc #255;
+    // tax`)
     assert!(first.contains("  dex\n"), "the first loop's count is not in x:\n{text}");
 }
 
@@ -3040,14 +3061,12 @@ fn every_block_has_a_label_whatever_order_the_folding_laid_its_new_ones() {
 }
 
 /// `lda #0; sta rc5; lda rc5; sta rc6; jmp` (x16basic-c mathlib): the reload
-/// stayed because the scan for who reads its flags stopped at the jump's target.
+/// stayed because the scan for who reads its flags stopped at the jump's
+/// target.
 #[test]
 fn a_reload_before_a_jump_goes() {
     use llrm_6502::peephole::drop_reloads;
-    assert_eq!(
-        pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"),
-        "  sta rc5\n  sta rc6\n  jmp L\n"
-    );
+    assert_eq!(pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"), "  sta rc5\n  sta rc6\n  jmp L\n");
 }
 
 /// x16basic-c `fp_fin`: a zero word live across a call took `rc8`/`rc9`, for a
@@ -3112,7 +3131,8 @@ fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() 
     );
 }
 
-/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
+/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne
+/// l; tya; cmp rc3`.
 #[test]
 fn a_high_half_loaded_into_y_and_moved_to_a_is_loaded_into_a() {
     use llrm_6502::peephole::load_straight_into_a;
@@ -3320,11 +3340,11 @@ mod post_ra {
     }
 }
 
-/// `x * 9` at the size level was `lda lo; sta t; ...; ldx #3; loop; ...; lda t`:
-/// a copy of the shifted byte and its reload, 30 bytes and 100 clocks, against
-/// 26 and 69 for the shifts kept in `a` (k_mulax9; the loop was larger and
-/// slower than the speed level's code). `shift_loop_in_a` takes the run in `a`
-/// where the final text is shorter; a shift where it is not stays the loop.
+/// `x * 9` at the size level was `lda lo; sta t; ...; ldx #3; loop; ...; lda
+/// t`: a copy of the shifted byte and its reload, 30 bytes and 100 clocks,
+/// against 26 and 69 for the shifts kept in `a` (k_mulax9; the loop was larger
+/// and slower than the speed level's code). `shift_loop_in_a` takes the run in
+/// `a` where the final text is shorter; a shift where it is not stays the loop.
 #[test]
 fn a_short_word_shift_stays_in_a_where_that_is_shorter() {
     let ir = "define i16 @m9(i16 %x) {\n  %p = mul i16 %x, 9\n  ret i16 %p\n}";
@@ -3488,7 +3508,9 @@ fn counted_shift_loops_are_chosen_by_final_size_for_other_shapes_too() {
                 _ => x << 4,
             };
             let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8);
-            let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), &size);
+            let run = |after: &str| {
+                common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), &size)
+            };
             assert_eq!(run(""), i32::from(want & 0xFF), "{name} {x:#x}, low byte");
             assert_eq!(run("  txa\n"), i32::from(want >> 8), "{name} {x:#x}, high byte");
         }
