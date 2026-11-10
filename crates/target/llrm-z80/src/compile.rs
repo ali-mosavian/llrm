@@ -2854,7 +2854,7 @@ const TAIL_DUPLICATION_SIZE: usize = 4;
 /// bytes) and the phi copy ahead of it become a `ret`. A predecessor that
 /// branches to it conditionally keeps the original, with that edge's phi
 /// inputs.
-fn tail_duplicate_returns(function: &mut MFunction) {
+pub fn tail_duplicate_returns(function: &mut MFunction) {
     let mut j = 1;
     while j < function.blocks.len() {
         let block = &function.blocks[j];
@@ -2897,7 +2897,8 @@ fn tail_duplicate_returns(function: &mut MFunction) {
             continue;
         }
         let tail = function.blocks[j].insts.clone();
-        for &p in &copy_into {
+        // highest first: a split below a predecessor moves only the blocks after it
+        for &p in copy_into.iter().rev() {
             // the phi inputs for this edge, as copies
             let mut moves = Vec::new();
             for phi in &mut function.blocks[j].phis {
@@ -2910,6 +2911,26 @@ fn tail_duplicate_returns(function: &mut MFunction) {
             if insts.last().is_some_and(|inst| inst.barrier) {
                 insts.pop();
             }
+            // a conditional branch elsewhere ahead of the copy ends the block (the pin's `analyzeBranch` reads
+            // only the terminators at its end): the copy is the block it falls into
+            let split = insts.iter().any(|inst| inst.terminator);
+            if split {
+                let id = function.blocks.iter().map(|block| block.id).max().map_or(0, |id| id + 1);
+                function.blocks.insert(p + 1, Block { id, insts: Vec::new(), phis: Vec::new() });
+                for block in &mut function.blocks {
+                    for phi in &mut block.phis {
+                        for (pred, _) in &mut phi.incoming {
+                            if *pred > p {
+                                *pred += 1;
+                            }
+                        }
+                    }
+                }
+                if j > p {
+                    j += 1;
+                }
+            }
+            let insts = &mut function.blocks[if split { p + 1 } else { p }].insts;
             insts.extend(moves);
             insts.extend(tail.iter().cloned());
         }
