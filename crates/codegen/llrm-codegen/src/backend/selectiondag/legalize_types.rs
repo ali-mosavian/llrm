@@ -2131,7 +2131,7 @@ impl<'a> TypeLegalizer<'a> {
             // moves cost more than the call (z80 lshl5: 60 B, the call 5).
             // Exit: none; a size policy the pin lacks.
             if self.tli.has_size_libcall_name(op, vt)
-                && self.tli.calls_for_size_shift(amt, u128::from(vt.size_in_bits()))
+                && self.tli.calls_for_size_shift(op, amt, u128::from(vt.size_in_bits()))
             {
                 let amount = self.dag.get_constant(amt, self.libcall_shift_amount_type(half));
                 if let Some(pair) = self.expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount]) {

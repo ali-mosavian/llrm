@@ -148,6 +148,20 @@ pub const UNPRICED: [(&str, &str); 11] = [
 const TYPICAL_DIVIDEND_BITS: u32 = 24;
 const TYPICAL_DIVISOR_BITS: u32 = 8;
 
+/// The clocks of `call __ashlsi3`, `__lshrsi3` or `__ashrsi3` for a count of `amount`, the call instruction
+/// through the return.
+pub fn shift_routine_clocks(
+    op: llrm_codegen::backend::selectiondag::isd::ISD,
+    amount: u32,
+) -> u32 {
+    use llrm_codegen::backend::selectiondag::isd::ISD;
+    match op {
+        ISD::Shl => ASHLSI3_BASE + ASHLSI3_PER * amount,
+        ISD::Srl => LSHRSI3_BASE + LSHRSI3_PER * amount,
+        _ => ASHRSI3_BASE + ASHRSI3_PER * amount,
+    }
+}
+
 /// The clocks a `call` adds beyond the call instruction itself: the routine's body, where the runtime has a model
 /// for it. `before` are the instruction texts that precede the call in its function, nearest last. `__mulsi3`
 /// takes the multiplier from the last write of `bc` before the call when that is `ld bc, #n` (the high word is

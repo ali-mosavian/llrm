@@ -18,6 +18,7 @@ pub mod narrow;
 pub mod prepare;
 pub mod regalloc;
 pub mod runtime_size;
+pub mod site_price;
 pub mod spilled_args;
 pub mod step;
 pub mod target;
