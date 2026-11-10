@@ -3,6 +3,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
@@ -20,6 +21,12 @@ Idx Name          Size      VMA       LMA       File off  Algn
 
 
 class CorpusMatrix(unittest.TestCase):
+    def setUp(self):
+        # Several tests set LLRM_PIN_CLANG=/x/c and friends; left in os.environ they broke test_m68k_program_size run after them.
+        env = mock.patch.dict("os.environ")
+        env.start()
+        self.addCleanup(env.stop)
+
     def test_code_bytes_sums_every_code_section(self):
         """Counting `.text` alone dropped main's `.text.startup` (the kernel matrix had the same trap)."""
         self.assertEqual(mx.sections(LISTING)[0], 0x18)
@@ -215,3 +222,14 @@ class CorpusMatrix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EnvironmentIsLeftAlone(unittest.TestCase):
+    def test_the_matrix_tests_restore_os_environ(self):
+        """`pytest tools/test_m68k_*.py` failed two test_m68k_program_size tests ("llrm-cc: /x/c: No such file"): the corpus tests left
+        LLRM_PIN_CLANG=/x/c and three more variables in os.environ, so a later real compile read them."""
+        import os
+        before = dict(os.environ)
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(CorpusMatrix)
+        unittest.TextTestRunner(stream=open(os.devnull, "w")).run(suite)
+        self.assertEqual(dict(os.environ), before)
