@@ -1068,6 +1068,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::SCmp | ISD::UCmp => Some(vec![super::expand_fixed::expand_cmp(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
+            ISD::Parity => Some(vec![self.expand_parity(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::CtLz | ISD::CtLzZeroPoison => self.expand_ctlz(node).map(|result| vec![result]),
             ISD::CtTz | ISD::CtTzZeroPoison => self.expand_cttz(node).map(|result| vec![result]),
@@ -1220,6 +1221,38 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let sign = self.dag.get_node(ISD::Sra, vt, &[x, amount]);
         let flipped = self.dag.get_node(ISD::Xor, vt, &[x, sign]);
         self.dag.get_node(ISD::Sub, vt, &[flipped, sign])
+    }
+
+    /// `SelectionDAGLegalize::ExpandPARITY` ([L3148][pin]): the population
+    /// count's low bit when `CTPOP` is legal or promoted, else the value xored
+    /// with itself shifted by half, a quarter, ... down to one bit.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L3148
+    fn expand_parity(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let x = self.dag.operand(node, 0);
+        let counted = self.tli.types.is_type_legal(vt)
+            && matches!(
+                self.tli.operation_action(ISD::CtPop, vt),
+                Action::Legal | Action::Promote
+            );
+        let result = if counted {
+            self.dag.get_node(ISD::CtPop, vt, &[x])
+        } else {
+            let mut result = x;
+            for shift in (0..vt.size_in_bits().next_power_of_two().trailing_zeros()).rev() {
+                let amount = self.dag.get_constant(1 << shift, EVT::I8);
+                let shifted = self.dag.get_node(ISD::Srl, vt, &[result, amount]);
+                result = self.dag.get_node(ISD::Xor, vt, &[result, shifted]);
+            }
+            result
+        };
+        let one = self.dag.get_constant(1, vt);
+        self.dag.get_node(ISD::And, vt, &[result, one])
     }
 
     /// `TargetLowering::expandCTPOP` ([L10830][pin]), scalar: the parallel

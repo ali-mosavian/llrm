@@ -16,7 +16,7 @@ use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::{DagConfig, SelectionDAG};
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
@@ -57,6 +57,10 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
+        // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin turns `add (sext i1 c), x` into
+        // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is an `sbc` chain; a word compared with its bound
+        // gained an `ldx #255` and a swapped `cmp` from it (`a_compare_against_a_word_boundary_...`). The add stays.
+        dag: DagConfig { sext_bool_add_preferred: true, ..BuilderTarget::for_pointer_bits(16).dag },
         ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)

@@ -1429,6 +1429,15 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
+/// `side = a < b ? 1 : 2` reaches the DAG as `add (sext c), 2`. The pin turns it into `sub 2, (zext c)`, which the 6502
+/// builds as a borrow chain: `phi_slot_unknown_arm` O1 read 5 bytes longer and 0.9% slower with it. The add stays.
+#[test]
+fn an_add_of_a_sign_extended_compare_stays_an_add() {
+    let ir = module("define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i8\n  %r = add i8 %s, 2\n  ret i8 %r\n}");
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap();
+    assert!(text.contains("adc #2") && !text.contains("sbc"), "the add of a sign-extended compare:\n{text}");
+}
+
 /// A softened `double` bitcast to `i64` takes the halves of its softened
 /// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
 /// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.
