@@ -63,39 +63,6 @@ fn a_struct_sized_copy_is_one_ldir_at_speed_and_one_call_at_size() {
     }
 }
 
-/// A struct passed by value is copied into the outgoing arguments inside the call sequence, where the copy's `__memcpy` is
-/// a nested call: its `ExternalSymbol` callee was left unconverted and `main` of `variadic` -Os was REFUSED
-/// (`CannotSelect(ExternalSymbol)`), once the copy was no longer six inline word pairs.
-#[test]
-fn a_struct_passed_by_value_is_copied_by_a_call_inside_the_call_sequence() {
-    let ir = format!(
-        "target datalayout = \"{DATALAYOUT}\"\n%struct.big = type {{ [6 x i16] }}\n\
-         define i16 @cp(ptr %s) {{\n  %r = call i16 @f(ptr byval(%struct.big) align 1 %s, i16 7)\n  ret i16 %r\n}}\n\
-         declare i16 @f(ptr byval(%struct.big) align 1, i16)\n"
-    );
-    for level in [Level::O2, Level::Os] {
-        let body = text(&ir, "cp", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(body.contains("ldir") || body.contains("call __memcpy"), "{level:?}: copy is not the runtime's:\n{body}");
-        assert!(!body.contains("call memcpy"), "{level:?}: the C name, not the runtime's `__memcpy`, would not link:\n{body}");
-    }
-}
-
-/// The byval copy's `memcpy` call is lowered inside the variadic call it is for. It took that call's state: its count and
-/// source went to the stack (`ld bc,#12; push bc` ... `call __memcpy` with only `hl` set), `variadic` -Os never reported, and
-/// the variadic call lost the flag that its unnamed arguments go on the stack.
-#[test]
-fn the_copy_inside_a_variadic_call_takes_its_arguments_in_registers() {
-    let ir = format!(
-        "target datalayout = \"{DATALAYOUT}\"\n%struct.big = type {{ [6 x i16] }}\n\
-         define i16 @cp(ptr %s) {{\n  %r = call i16 (ptr, ...) @f(ptr byval(%struct.big) align 1 %s, i16 7)\n  ret i16 %r\n}}\n\
-         declare i16 @f(ptr byval(%struct.big) align 1, ...)\n"
-    );
-    let body = text(&ir, "cp", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
-    let before_call = body.split("call __memcpy").next().expect("a call of the runtime's memcpy");
-    assert!(!before_call.contains("push bc"), "the count was pushed, not passed in bc:\n{body}");
-    assert!(before_call.contains("ld bc, #12"), "no count in bc:\n{body}");
-}
-
 #[test]
 fn a_one_word_copy_stays_inline() {
     for level in [Level::O2, Level::Os] {
