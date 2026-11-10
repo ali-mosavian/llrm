@@ -126,3 +126,33 @@ def test_a_32_bit_elf_object_is_read_and_its_padding_counted_apart(tmp_path):
     assert elfsize.code_bytes(obj) == 17
     got = sizes.code_size(obj)
     assert (got.code, got.align) == (7, 10)
+
+
+def big_endian_m68k_object(tmp_path, text):
+    """A minimal ELF32 big-endian m68k relocatable object whose only code is `.text` = `text`."""
+    import struct
+
+    names = b"\0.text\0.shstrtab\0"
+    text_at = 52
+    names_at = text_at + len(text)
+    headers_at = (names_at + len(names) + 3) & ~3
+    ident = b"\x7fELF" + bytes([1, 2, 1]) + bytes(9)  # ELFCLASS32, ELFDATA2MSB, EV_CURRENT
+    header = ident + struct.pack(">HHIIIIIHHHHHH", 1, 4, 1, 0, 0, headers_at, 0, 52, 0, 0, 40, 3, 2)
+    null = bytes(40)
+    text_header = struct.pack(">IIIIIIIIII", 1, 1, 0x6, 0, text_at, len(text), 0, 0, 2, 0)  # SHF_ALLOC | SHF_EXECINSTR
+    names_header = struct.pack(">IIIIIIIIII", 7, 3, 0, 0, names_at, len(names), 0, 0, 1, 0)
+    body = header + text + names + bytes(headers_at - names_at - len(names)) + null + text_header + names_header
+    obj = tmp_path / "m68k.o"
+    obj.write_bytes(body)
+    return obj
+
+
+def test_a_big_endian_m68k_object_is_read_and_its_code_is_not_decoded_as_x86(tmp_path):
+    """elfsize read every header little-endian, so an m68k object raised struct.error (a 939 MB section-header offset), and sizes would
+    have found x86 "padding" in its code: eight bytes `4e71 4e75 9090 9090` are 8 bytes of code, not 4 and 4 of padding."""
+    import sizes
+
+    obj = big_endian_m68k_object(tmp_path, bytes.fromhex("4e714e7590909090"))
+    assert elfsize.code_bytes(obj) == 8
+    got = sizes.code_size(obj)
+    assert (got.code, got.align, got.unread) == (8, 0, 0)
