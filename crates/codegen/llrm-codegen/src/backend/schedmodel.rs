@@ -18,10 +18,34 @@
 //! # Used by
 //! [`machinesched`](super::machinesched).
 
+use llrm_lir::registers::RegId;
+
 use crate::backend::genericdriver::RegionPolicy;
 use crate::backend::machinesched::default_def_latency;
 use crate::backend::schedboundary::{Machine, ProcResource, Unit};
 use crate::model::lir::Insn;
+
+/// What `TargetInstrInfo::getMemOperandsWithOffsetWidth` reports of a load or
+/// store: the one base operand, the byte offset from it and the bytes
+/// accessed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemOp {
+    pub base: MemBase,
+    pub offset: i64,
+    pub width: u32,
+    /// `mayLoad` (else `mayStore`).
+    pub load: bool,
+}
+
+/// The base operand of a [`MemOp`]: a machine register (`sp`), a virtual one
+/// (by value) or a frame index. They order as the pin's register numbers do
+/// (machine before virtual) and then the frame indices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemBase {
+    Phys(RegId),
+    Virtual(u32),
+    Frame(i64),
+}
 
 /// `TargetSchedModel` for one subtarget.
 pub trait SchedulingModel {
@@ -42,6 +66,28 @@ pub trait SchedulingModel {
         &self,
         insn: &Insn,
     ) -> u32;
+
+    /// `getMemOperandsWithOffsetWidth`: the access of `insn`, or `None` where
+    /// the target does not say (no clustering for it).
+    fn mem_op(
+        &self,
+        _insn: &Insn,
+    ) -> Option<MemOp> {
+        None
+    }
+
+    /// `shouldClusterMemOps`: whether the two accesses, ordered by base and
+    /// offset, should stay together (`cluster_size` and `bytes` of the cluster
+    /// with the second). A target that clusters nothing says no.
+    fn should_cluster(
+        &self,
+        _first: (&Insn, &MemOp),
+        _second: (&Insn, &MemOp),
+        _cluster_size: u32,
+        _bytes: u32,
+    ) -> bool {
+        false
+    }
 }
 
 /// X86.td's `GenericModel`: issue width 4, a micro-op buffer of 32, no

@@ -48,7 +48,7 @@ use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
 use crate::backend::regpressure::{Delta, Model, PressureChange, Region, TopTracker, Tracker};
 use crate::backend::schedboundary::Unit;
-use crate::backend::schedmodel::SchedulingModel;
+use crate::backend::schedmodel::{MemBase, MemOp, SchedulingModel};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -252,6 +252,9 @@ pub struct Graph {
     /// `tryCandidate` only prefers the one with fewer left.
     pub weak_preds: Vec<Vec<usize>>,
     pub weak_succs: Vec<Vec<usize>>,
+    /// For each instruction, the cluster of memory accesses it belongs to
+    /// (`SUnit::ParentClusterIdx`, [`cluster_mem_ops`]).
+    pub parent_cluster: Vec<Option<u32>>,
     topo: Topo,
 }
 
@@ -301,6 +304,7 @@ impl Graph {
             latencies: vec![Vec::new(); n],
             weak_preds: vec![Vec::new(); n],
             weak_succs: vec![Vec::new(); n],
+            parent_cluster: vec![None; n],
             topo: Topo::new(n),
         };
         for &(from, to, latency) in edges {
@@ -398,6 +402,29 @@ impl Graph {
             self.weak_succs[before].push(after);
             self.reorder(before, after);
         }
+    }
+
+    /// An `Artificial` edge `before -> after` (`ScheduleDAGMI::addEdge`): it
+    /// holds `after` back like a data edge, with no latency. False, and no
+    /// edge, where `before` already follows `after`.
+    fn add_artificial(
+        &mut self,
+        before: usize,
+        after: usize,
+    ) -> bool {
+        if self.reaches(after, before) {
+            return false;
+        }
+        if let Some(at) = self.preds[after].iter().position(|&earlier| earlier == before)
+            && self.latencies[after][at] == 0
+        {
+            return true;
+        }
+        self.preds[after].push(before);
+        self.latencies[after].push(0);
+        self.succs[before].push(after);
+        self.reorder(before, after);
+        true
     }
 }
 
@@ -648,6 +675,7 @@ pub fn graph(
         latencies,
         weak_preds: vec![Vec::new(); n],
         weak_succs: vec![Vec::new(); n],
+        parent_cluster: vec![None; n],
         topo: Topo::new(n),
     }
 }
@@ -853,6 +881,117 @@ fn constrain_local_copy(
     for user in global_uses {
         graph.add_weak(user, first_local);
     }
+}
+
+/// `-fast-cluster-threshold`: a region whose accesses times instructions pass
+/// this per thousand is clustered by chain predecessor in the pin. DEVIATE SB5b:
+/// such a region is not clustered at all.
+const FAST_CLUSTER_THRESHOLD: usize = 1000;
+
+/// `MemOpInfo::operator<`: by base operand (registers before frame indices; a
+/// frame index of a stack that grows down, highest first), then offset, then
+/// instruction number.
+fn memop_order(
+    a: &(usize, MemOp),
+    b: &(usize, MemOp),
+) -> std::cmp::Ordering {
+    let base = match (a.1.base, b.1.base) {
+        (MemBase::Frame(x), MemBase::Frame(y)) => y.cmp(&x),
+        (x, y) => x.cmp(&y),
+    };
+    base.then(a.1.offset.cmp(&b.1.offset)).then(a.0.cmp(&b.0))
+}
+
+/// `BaseMemOpClusterMutation::apply` (MachineScheduler.cpp#L2264), run for the
+/// loads and then the stores of the region: neighbouring accesses the model
+/// would `should_cluster` get a weak edge, so the scheduler keeps them
+/// together for the load/store optimizer, and the pin's artificial edges that
+/// keep other work from separating them.
+pub fn cluster_mem_ops(
+    insns: &[Arc<Insn>],
+    graph: &mut Graph,
+    model: &dyn SchedulingModel,
+) {
+    let ops: Vec<Option<MemOp>> = insns.iter().map(|one| model.mem_op(one)).collect();
+    let mut next_cluster = graph.parent_cluster.iter().flatten().max().map_or(0, |last| last + 1);
+    for loads in [true, false] {
+        let mut records: Vec<(usize, MemOp)> = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(node, op)| op.filter(|op| op.load == loads).map(|op| (node, op)))
+            .collect();
+        if records.len() < 2 || records.len() * insns.len() / 1000 > FAST_CLUSTER_THRESHOLD {
+            continue;
+        }
+        records.sort_by(memop_order);
+        // The length and bytes of the cluster each second member ends.
+        let mut ending: HashMap<usize, (u32, u32)> = HashMap::default();
+        let mut leader: Vec<usize> = (0..insns.len()).collect();
+        let mut members: Vec<usize> = Vec::new();
+        for at in 0..records.len() - 1 {
+            let (a_node, a_op) = records[at];
+            let Some(&(b_node, b_op)) = records[at + 1..].iter().find(|(node, _)| {
+                !ending.contains_key(node) && !graph.reaches(*node, a_node) && !graph.reaches(a_node, *node)
+            }) else {
+                continue;
+            };
+            let (mut length, mut bytes) = (2, a_op.width + b_op.width);
+            if let Some(&(len, so_far)) = ending.get(&a_node) {
+                (length, bytes) = (len + 1, so_far + b_op.width);
+            }
+            if !model.should_cluster((&insns[a_node], &a_op), (&insns[b_node], &b_op), length, bytes) {
+                continue;
+            }
+            let (first, second) = if a_node > b_node { (b_node, a_node) } else { (a_node, b_node) };
+            // `addEdge` refuses where the first already follows the second.
+            if graph.reaches(second, first) {
+                continue;
+            }
+            graph.add_weak(first, second);
+            let (x, y) = (find(&mut leader, first), find(&mut leader, second));
+            leader[x] = y;
+            members.extend([first, second]);
+            if loads {
+                // Work that reads the first access's value would otherwise
+                // run between the two: it follows the second as well.
+                let after: Vec<usize> = graph.succs[first].iter().chain(&graph.weak_succs[first]).copied().collect();
+                for succ in after.into_iter().filter(|&succ| succ != second) {
+                    graph.add_artificial(second, succ);
+                }
+            } else {
+                // What the second store waits for comes before the first.
+                let before: Vec<usize> =
+                    graph.preds[second].iter().chain(&graph.weak_preds[second]).copied().collect();
+                for pred in before.into_iter().filter(|&pred| pred != first) {
+                    graph.add_artificial(pred, first);
+                }
+            }
+            ending.insert(b_node, (length, bytes));
+        }
+        members.sort_unstable();
+        members.dedup();
+        let mut ids: HashMap<usize, u32> = HashMap::default();
+        for node in members {
+            let top = find(&mut leader, node);
+            let id = *ids.entry(top).or_insert_with(|| {
+                next_cluster += 1;
+                next_cluster - 1
+            });
+            graph.parent_cluster[node] = Some(id);
+        }
+    }
+}
+
+/// The root of `node` in the union-find `leader`.
+fn find(
+    leader: &mut [usize],
+    mut node: usize,
+) -> usize {
+    while leader[node] != node {
+        leader[node] = leader[leader[node]];
+        node = leader[node];
+    }
+    node
 }
 
 /// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
@@ -1204,6 +1343,7 @@ pub fn scheduled(
                     });
                     let mut deps = graph(slice, regs, bits, sched);
                     copy_constrain(slice, &mut deps, &|value| now.contains(&value));
+                    cluster_mem_ops(slice, &mut deps, sched);
                     let order = order_region(slice, &deps, tracking.as_ref(), sched);
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
                         for (place, &node) in order.iter().enumerate() {

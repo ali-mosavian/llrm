@@ -35,7 +35,7 @@ use std::sync::OnceLock;
 use llrm_codegen::backend::genericdriver::RegionPolicy;
 use llrm_codegen::backend::machinesched::default_def_latency;
 use llrm_codegen::backend::schedboundary::{Machine, ProcResource, Unit, WriteRes};
-use llrm_codegen::backend::schedmodel::SchedulingModel;
+use llrm_codegen::backend::schedmodel::{MemBase, MemOp, SchedulingModel};
 use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
@@ -153,6 +153,123 @@ impl SchedulingModel for Arm64Model {
             Some(entry) => u32::try_from(entry.cycles).unwrap_or(1000),
             None => default_def_latency(insn, self.model.load_latency),
         }
+    }
+
+    /// `AArch64InstrInfo::getMemOperandsWithOffsetWidth` for the base plus
+    /// immediate forms (`ui` and a frame slot). SB9: a pre/post-indexed form
+    /// reports none (it only exists after `ldst_update`).
+    fn mem_op(
+        &self,
+        insn: &Insn,
+    ) -> Option<MemOp> {
+        let what = insn.what.as_ref()?;
+        let (access, form) = what.name.as_deref()?.split_once('.')?;
+        let load = match access.get(..3)? {
+            "LDR" => true,
+            "STR" => false,
+            _ => return None,
+        };
+        let width = access_bytes(access.get(3..)?)?;
+        let Some(Loc::Mem(cell)) = what.sources.last() else { return None };
+        let (base, offset) = match form {
+            "ui" => (
+                match cell.base {
+                    Some(held) => MemBase::Virtual(held.value),
+                    None => MemBase::Phys(cell.through),
+                },
+                cell.offset,
+            ),
+            "fi" => {
+                let at = cell.addr?;
+                (MemBase::Frame(at.slot_home()?), at.disp)
+            }
+            _ => return None,
+        };
+        Some(MemOp { base, offset, width, load })
+    }
+
+    /// `AArch64InstrInfo::shouldClusterMemOps`: two accesses that the load
+    /// and store optimizer can make a pair.
+    fn should_cluster(
+        &self,
+        (first, a): (&Insn, &MemOp),
+        (second, b): (&Insn, &MemOp),
+        cluster_size: u32,
+        _bytes: u32,
+    ) -> bool {
+        if std::mem::discriminant(&a.base) != std::mem::discriminant(&b.base) {
+            return false;
+        }
+        if !matches!(a.base, MemBase::Frame(_)) && a.base != b.base {
+            return false;
+        }
+        // Only up to a single pair.
+        if cluster_size > 2 {
+            return false;
+        }
+        let (Some(kind_a), Some(kind_b)) = (pair_kind(first), pair_kind(second)) else { return false };
+        if !can_pair(kind_a, kind_b) || !candidate_to_pair(first, a) || !candidate_to_pair(second, b) {
+            return false;
+        }
+        // The offsets in units of the access; an unscaled form needs a
+        // multiple.
+        if a.offset % i64::from(a.width) != 0 || b.offset % i64::from(b.width) != 0 {
+            return false;
+        }
+        let (scaled_a, scaled_b) = (a.offset / i64::from(a.width), b.offset / i64::from(b.width));
+        // The pair instructions have a 7-bit signed offset.
+        if !(-64..=63).contains(&scaled_a) {
+            return false;
+        }
+        match a.base {
+            MemBase::Frame(slot) => matches!(b.base, MemBase::Frame(other) if other == slot),
+            _ => scaled_a + 1 == scaled_b,
+        }
+    }
+}
+
+/// The bytes a load or store form moves: its name after `LDR`/`STR`.
+fn access_bytes(kind: &str) -> Option<u32> {
+    Some(match kind {
+        "B" | "SB" | "SBW" | "SBX" => 1,
+        "H" | "SH" | "SHW" | "SHX" => 2,
+        "W" | "SW" | "F4" => 4,
+        "X" | "F8" => 8,
+        "F16" => 16,
+        _ => return None,
+    })
+}
+
+/// `isPairableLdStInst`: the form's access kind, if a pair can hold it.
+fn pair_kind(insn: &Insn) -> Option<&str> {
+    let name = insn.what.as_ref()?.name.as_deref()?;
+    let (access, form) = name.split_once('.')?;
+    let kind = access.get(3..)?;
+    (matches!(form, "ui" | "fi") && matches!(kind, "W" | "X" | "F4" | "F8" | "F16" | "SW")
+        && (kind != "SW" || access.starts_with("LDR")))
+    .then_some(kind)
+}
+
+/// `canPairLdStOpc`: the same kind, or a word with a sign-extended word.
+fn can_pair(
+    a: &str,
+    b: &str,
+) -> bool {
+    a == b || matches!((a, b), ("W", "SW") | ("SW", "W"))
+}
+
+/// `isCandidateToMergeOrPair`: not volatile, and a load does not write its
+/// own base register.
+fn candidate_to_pair(
+    insn: &Insn,
+    op: &MemOp,
+) -> bool {
+    if insn.volatile() {
+        return false;
+    }
+    match op.base {
+        MemBase::Virtual(value) => !insn.defines.contains(&value),
+        _ => true,
     }
 }
 

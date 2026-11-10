@@ -21,7 +21,7 @@
 //! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
 //!   is only asked of a model with a micro-op buffer (Cyclone), not the
 //!   in-order A510.
-//! - SB5: clusters and macro fusion (`ParentClusterIdx`), and
+//! - SB5: macro fusion, and
 //!   `tryBiasPhysRegs`/`reschedulePhysReg` (no region holds a physical
 //!   register, MS4).
 //!
@@ -95,6 +95,10 @@ pub struct Scheduler<'a> {
     succs_left: Vec<usize>,
     weak_preds_left: Vec<usize>,
     weak_succs_left: Vec<usize>,
+    /// `TopClusterID` and `BotClusterID`: the cluster of the node each zone
+    /// scheduled last.
+    top_cluster: Option<u32>,
+    bot_cluster: Option<u32>,
     scheduled: Vec<bool>,
     top_cand: Cand,
     bot_cand: Cand,
@@ -143,6 +147,8 @@ impl<'a> Scheduler<'a> {
             succs_left: graph.succs.iter().map(Vec::len).collect(),
             weak_preds_left: graph.weak_preds.iter().map(Vec::len).collect(),
             weak_succs_left: graph.weak_succs.iter().map(Vec::len).collect(),
+            top_cluster: None,
+            bot_cluster: None,
             scheduled: vec![false; n],
             succ_edges,
             units,
@@ -232,6 +238,9 @@ impl<'a> Scheduler<'a> {
             cand.pressure = pressure.delta(node, at_top);
         }
         cand.stall = zone.latency_stall_cycles(unit);
+        // `isTheSameCluster(ZoneCluster, SU->ParentClusterIdx)`.
+        let zone_cluster = if at_top { self.top_cluster } else { self.bot_cluster };
+        cand.cluster_succ = zone_cluster.is_some() && zone_cluster == self.graph.parent_cluster[node];
         cand.weak_left = if at_top { self.weak_preds_left[node] } else { self.weak_succs_left[node] };
         cand.depth = unit.depth;
         cand.height = unit.height;
@@ -349,6 +358,11 @@ impl<'a> Scheduler<'a> {
         at_top: bool,
     ) {
         self.scheduled[node] = true;
+        if at_top {
+            self.top_cluster = self.graph.parent_cluster[node];
+        } else {
+            self.bot_cluster = self.graph.parent_cluster[node];
+        }
         if at_top {
             let cycle = self.top.curr_cycle();
             self.units[node].top_ready_cycle = self.units[node].top_ready_cycle.max(cycle);
