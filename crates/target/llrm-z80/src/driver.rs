@@ -138,6 +138,7 @@ pub fn program(
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
+        program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
     }
     // The pin lowers `llvm.is.constant` at every level; -O0 reaches here with the call.
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
@@ -200,21 +201,39 @@ pub fn selections_with_alternatives(
             })
         })
     };
+    // A function with a constant-count `memset` (`prepare::mark_constant_fills`) is also selected with each such
+    // fill an inline `ldir` fill (`INLINE_FILLS`); the caller prices the two with the routine linked once.
+    let has_fills = |name: &str| -> bool {
+        module.globals.iter().any(|global| {
+            global.function().is_some_and(|one| {
+                global.name.as_deref() == Some(name) && llrm_mir::memory::has(&one.attrs, crate::prepare::CONSTANT_FILL)
+            })
+        })
+    };
     let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
-            let sized = calls_the_routine(name)?;
             // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
             // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
             // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
-            if !sized && request.level != Level::O1 {
+            let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
+            let fills = has_fills(name);
+            if muls.is_none() && !fills {
                 return None;
             }
-            let switch = if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS };
-            switch.with(|one| one.set(true));
+            let switch = muls.map(|sized| {
+                if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS }
+            });
+            if let Some(switch) = switch {
+                switch.with(|one| one.set(true));
+            }
+            crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
             let selected = (name.clone(), select(name, false), select(name, true));
-            switch.with(|one| one.set(false));
+            crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
+            if let Some(switch) = switch {
+                switch.with(|one| one.set(false));
+            }
             Some(selected)
         })
         .collect();
@@ -286,7 +305,25 @@ impl llrm_mir::target::Machine for Z80Machine {
     fn max_alloca_align(&self) -> Option<u64> {
         Some(crate::MAX_ALLOCA_ALIGN)
     }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        llrm_mir::target::Tuning {
+            max_stores_per_memcpy: MEMCPY_STORES,
+            max_stores_per_memcpy_opt_size: MEMCPY_STORES,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
 }
+
+/// `MaxStoresPerMemcpy` (and `...OptSize`): the word copies a constant `memcpy` may be before it is an `ldir`.
+///
+/// DEVIATE Z80-MEMCPY-LIMIT (owner z80-argpush, exit 2026-11-30): the pin's x86 default is 8 at speed and 4 at size
+/// (`Tuning::PIN`, `TargetLoweringBase`), where a copied word is a load and a store with a displacement. Here a word
+/// is 8 B / 52 T through `hl` and `de` and 12 B / 76 T between frame slots, against an `ldir` block of 11 B to 20 B
+/// and 21 T a byte: one word is cheaper in both bytes and clocks, two are dearer in both (`tests/memcpy_limit.rs`
+/// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word pairs, 72 B each. Exit: none; the number
+/// is the target's price, as m16's `Dos::tuning` is.
+const MEMCPY_STORES: usize = 1;
 
 thread_local! {
     /// Parses of a module's text for its source file since the last

@@ -49,7 +49,10 @@
 use llrm_analysis::cfg::{self, loops_of};
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{
+    BlockId, Function, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module, Operand, ValueDef,
+    ValueId,
+};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
 
@@ -71,6 +74,20 @@ struct Walker {
     after: Vec<(InstId, usize)>,
     /// The one-armed phis outside the loop that read it.
     exits: Vec<InstId>,
+    /// The arms of phis outside the loop that read it: a loop-closed phi with
+    /// other ways in.
+    lands: Vec<Landing>,
+}
+
+/// An arm of a phi outside the loop that reads a pointer of the loop.
+struct Landing {
+    phi: InstId,
+    /// The operand of the phi: its value; the block is the next operand.
+    at: usize,
+    /// The block of the loop the arm comes from.
+    from: BlockId,
+    /// Whether it is the pointer's next value, one step past its last access.
+    onward: bool,
 }
 
 /// Every loop of `module`'s functions that can walk by page; the names of the
@@ -80,6 +97,7 @@ pub fn indexed(
     index_bits: u32,
 ) -> Result<Vec<String>, String> {
     let context = &mut module.context;
+    let metadata = &mut module.metadata;
     let mut changed = Vec::new();
     for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -94,8 +112,15 @@ pub fn indexed(
             .iter()
             .filter(|one| one.body.iter().filter(|at| **at != one.header && headers.contains(at)).count() == 0)
         {
-            done |=
-                rewrite(context, function, one.header, one.latches.iter().copied().collect(), &one.body, index_bits)?;
+            done |= rewrite(
+                context,
+                metadata,
+                function,
+                one.header,
+                one.latches.iter().copied().collect(),
+                &one.body,
+                index_bits,
+            )?;
         }
         if let (true, Some(name)) = (done, global.name.as_deref()) {
             changed.push(name.to_owned());
@@ -191,6 +216,7 @@ fn walkers(
         // the next pointer is read by this phi and by loads and stores after
         // it in the latch (a loop rotated to read the next element ahead)
         let mut ahead = Vec::new();
+        let mut lands = Vec::new();
         let mut kept = true;
         for one in function.users(next_value) {
             let user = function.instruction(one.user);
@@ -204,6 +230,12 @@ fn walkers(
                         && function.parent(one.user) == Some(latch) =>
                 {
                     ahead.push((one.user, 1))
+                }
+                (Opcode::Phi, at)
+                    if function.parent(one.user).is_some_and(|block| !in_loop(block))
+                        && user.operands.get(at as usize + 1) == Some(&Operand::Block(latch)) =>
+                {
+                    lands.push(Landing { phi: one.user, at: at as usize, from: latch, onward: true })
                 }
                 _ => kept = false,
             }
@@ -227,6 +259,16 @@ fn walkers(
                 (Opcode::Phi, _) if at.is_some_and(|at| !in_loop(at)) && user.operands.len() == 2 => {
                     exits.push(one.user)
                 }
+                (Opcode::Phi, arm)
+                    if at.is_some_and(|at| !in_loop(at))
+                        && matches!(
+                            user.operands.get(arm as usize + 1),
+                            Some(Operand::Block(from)) if in_loop(*from)
+                        ) =>
+                {
+                    let Some(Operand::Block(from)) = user.operands.get(arm as usize + 1) else { unreachable!() };
+                    lands.push(Landing { phi: one.user, at: arm as usize, from: *from, onward: false })
+                }
                 (opcode, _) if *opcode != Opcode::Phi && at.is_some_and(|at| !in_loop(at)) => {
                     after.push((one.user, one.index as usize))
                 }
@@ -234,7 +276,7 @@ fn walkers(
             }
         }
         if plain && !(accesses.is_empty() && ahead.is_empty()) {
-            found.push(Walker { phi, value, start, next, step, offset, accesses, ahead, after, exits });
+            found.push(Walker { phi, value, start, next, step, offset, accesses, ahead, after, exits, lands });
         }
     }
     found
@@ -242,6 +284,7 @@ fn walkers(
 
 fn rewrite(
     context: &mut Context,
+    metadata: &mut Vec<MetadataNode>,
     function: &mut Function,
     header_at: i64,
     latches: Vec<i64>,
@@ -264,6 +307,18 @@ fn rewrite(
     // one step for all: the first walker's
     let Some((step, word)) = found.first().map(|one| (one.step, one.offset)) else { return Ok(false) };
     found.retain(|one| one.step == step);
+
+    // the pointers past the last access are made on the exit edge, not in the
+    // loop: a block of its own for each exit block that reads one
+    let mut bridges: Vec<((BlockId, BlockId), BlockId)> = Vec::new();
+    for one in found.iter().flat_map(|one| &one.lands) {
+        let exit = function.parent(one.phi).ok_or("a placed phi")?;
+        if !bridges.iter().any(|(edge, _)| *edge == (one.from, exit)) {
+            let bridge = crate::edges::split_edge(function, one.from, exit);
+            function.set_block_name(bridge, "page-exit");
+            bridges.push(((one.from, exit), bridge));
+        }
+    }
 
     let others: Vec<InstId> = crate::edges::phis(function, header)
         .into_iter()
@@ -373,7 +428,7 @@ fn rewrite(
             Flags::default(),
         )?
     };
-    new(
+    let wrap = new(
         function,
         Position::End(stepper),
         Opcode::Br,
@@ -381,6 +436,17 @@ fn rewrite(
         vec![value_of(function, wrapped), Operand::Block(bump), Operand::Block(join)],
         Flags::default(),
     )?;
+    // the index wraps once every `2^bits / step` trips: the bump block runs
+    // that often less than the stepper (`!prof`, as LLVM's loop passes state
+    // the frequency of a block they make)
+    let trips = u32::try_from((1u128 << index_bits) / step).map_err(|_| "a page of trips")?;
+    let weight_ty = context.types.int(32);
+    let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
+    for weight in [1, trips.saturating_sub(1).max(1)] {
+        operands.push(MetadataOperand::Constant(context.int(weight_ty, i128::from(weight))));
+    }
+    metadata.push(MetadataNode { distinct: false, operands });
+    function.annotate(wrap, "prof", MetadataId(u32::try_from(metadata.len() - 1).map_err(|_| "metadata ids")?));
     let page = int(context, word, 1 << index_bits);
     let mut moved = Vec::new();
     for (walker, base) in found.iter().zip(&bases) {
@@ -469,6 +535,20 @@ fn rewrite(
             let result = function.instruction(phi).result.ok_or("a phi result")?;
             function.replace_all_uses_with(result, made);
             function.erase(phi).map_err(|why| why.to_string())?;
+        }
+        // the pointer where the exit edge leaves the loop, made on the edge:
+        // the index's place, or one step on from it
+        for one in &walker.lands {
+            let exit = function.parent(one.phi).ok_or("a placed phi")?;
+            let bridge = bridges.iter().find(|(edge, _)| *edge == (one.from, exit)).ok_or("a bridge")?.1;
+            let before = Position::Before(function.terminator(bridge).ok_or("a terminated bridge")?);
+            let mut made = sum(function, before, *base, index)?;
+            if one.onward {
+                let by = int(context, walker.offset, walker.step);
+                let onward = new(function, before, gep.clone(), ty, vec![made, by], Flags::default())?;
+                made = value_of(function, onward);
+            }
+            function.set_operand(one.phi, one.at, made);
         }
         // the step reads the pointer and the pointer reads the step: the
         // phi lets go of it first

@@ -40,6 +40,17 @@ class T(unittest.TestCase):
         r = self.run_summary(tsv(BASE + DATA + a4, target="x86_64-linux", gcc_code=None, pin_clang_a4_code=None))
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_a_dos_only_program_is_no_cell_not_a_worse_one(self):
+        """rep_tails is `targets: dos`: the matrix compiled it at x86_32-linux O1 anyway and the summary counted it worse (+739 B), and os_execute
+        (no ours cell) as MISSING. 13 of 176 rows were n/a; the totals read 55/90/91/85 against 48/82/83/78."""
+        r = self.run_summary(tsv(BASE + DATA, program="tests_run_c_rep_tails", ours_code=1344, pin_clang_code=605, gcc_code=605, pin_llc_code=605))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("n/a\tO1\tx86_32-linux\t1 programs, not cells: tests_run_c_rep_tails", r.stdout)
+        row = [l for l in r.stdout.splitlines() if l.split("\t")[:2] == ["O1", "x86_32-linux"]][0].split("\t")
+        self.assertEqual((row[2], row[6], row[9], row[10]), ("0", "0", "0", "0"))  # no rows, nothing worse
+        blank = self.run_summary(tsv(BASE + DATA, program="tests_run_c_os_execute", ours_code=None, pin_clang_code=None, gcc_code=None))
+        self.assertEqual(blank.returncode, 0, blank.stderr)
+
     def test_complete_row_passes(self):
         self.assertEqual(self.run_summary(tsv(BASE + DATA)).returncode, 0)
 
