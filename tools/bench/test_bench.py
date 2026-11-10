@@ -1554,3 +1554,60 @@ def test_a_timed_out_borland_job_says_so_not_no_object(tmp_path, monkeypatch):
 def test_the_module_keeps_bench_main_from_re_running_under_load_guard():
     """bench.main waits at the load guard unless LG_GUARDED=1; at load above its limit the whole file hung 70 minutes at its first test that calls main."""
     assert os.environ.get("LG_GUARDED") == "1"
+
+
+def _twin_program(tmp_path, semantics=("init",)):
+    """A benchmark directory `p` with a plain C source, a Nib one and a C twin for each of `semantics`."""
+    directory = tmp_path / "p"
+    (directory / "twin").mkdir(parents=True)
+    (directory / "bench.toml").write_text('[region]\nc = "bench_p"\nnib = "bench_p"\n')
+    (directory / "p.c").write_text("int bench_p(void) { return 1; }\n")
+    (directory / "p.nib").write_text("fn bench_p() -> i16:\n    return 1\n")
+    (directory / "p.out").write_text("1\n")
+    for semantic in semantics:
+        (directory / "twin" / f"{semantic}.c").write_text("int bench_p(void) { return 1; }\n")
+    return directory
+
+
+def test_a_twin_source_is_a_c_variant_of_its_own_program(tmp_path):
+    """The init twin of matmul (the Nib program zero-initialises what the C source does not) was a column no table could hold: the C
+    compilers had only the uninitialised source, and Nib was judged 41 B over a bar (bcc 298) that never saw the init (bcc 352 with it)."""
+    found = {one.name: one for one in bench.variants(_twin_program(tmp_path))}
+    assert sorted(found) == ["p", "p~init"], sorted(found)
+    twin = found["p~init"]
+    assert (twin.language, twin.source.name, twin.region) == ("c", "init.c", "bench_p")
+
+
+def test_a_twin_is_measured_and_not_judged(tmp_path, monkeypatch):
+    """A twin has no expected.toml rows: judged, it would be compared with its program's."""
+    directory = _twin_program(tmp_path)
+    labels = []
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    monkeypatch.setattr(bench, "ONLY", None)  # an earlier test's `--lang` leaves it set
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [directory])
+    monkeypatch.setattr(bench, "against", lambda label, *rest: labels.append(label) or [])
+    monkeypatch.setattr(bench, "read_expected", lambda one: {})
+    monkeypatch.setattr(bench, "stale_corpus", lambda one: None)
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root: [])
+    counts = {"instructions": 1}
+    measured = {(name, language, "O1"): counts for name in ("p", "p~init") for language in ("c", "nib")}
+    bench.judge(measured, [], ["O1"])
+    assert sorted(labels) == ["p c -O1", "p nib -O1"], labels
+
+
+def test_the_nib_bar_is_its_c_twin_with_the_nib_semantics():
+    present = {"m", "m~init", "g", "g~bounds", "b", "b~init", "b~bounds"}
+    assert bench.bar_program("m", "nib", present) == "m~init"
+    assert bench.bar_program("g", "nib", present) == "g~bounds"
+    assert bench.bar_program("b", "nib", present) == "b~init", "init before bounds"
+    assert bench.bar_program("x", "nib", present) == "x", "no twin: the plain C source"
+    assert bench.bar_program("m", "c", present) == "m", "the twin is a bar for Nib only"
+
+
+def test_every_twin_in_the_tree_prints_what_its_program_prints():
+    """A twin is a variant like any other: it runs and its output is compared with NAME.out. A directory with a twin has that file."""
+    for directory in bench.benchlist.directories(bench.BENCH):
+        for twin in (directory / "twin").glob("*.c"):
+            assert twin.stem in bench.TWINS, f"{twin}: not a semantic of TWINS"
+            assert (directory / f"{directory.name}.out").exists(), directory
+            assert (directory / f"{directory.name}.nib").exists(), f"{twin}: a twin is the bar of a Nib program"

@@ -49,7 +49,7 @@ class Rows(unittest.TestCase):
             return path
         a = with_layouts([("p", 100, 1050, [1000, 1100])])
         b = with_layouts([("p", 100, 1100, [1000, 1200])])
-        self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1"]), 1)
+        self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1"]), 3)  # 2 layouts: the mean's failure is UNCONFIRMED (class Residues)
         self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1", "--clocks", "min"]), 0)
 
 class Void(unittest.TestCase):
@@ -105,6 +105,41 @@ class Void(unittest.TestCase):
             json.dump([["p", "PASS", {}], ["helper", "NO-OUT", "no .out"]], open(path + ".json", "w"))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ab_rows.main(["x", a, b, "--level", "Os"]), 0)
+
+class Residues(unittest.TestCase):
+    """2026-11-10: the 16-pad mean (pads 0,16..240: 16 of the 256 address residues a page crossing depends on) called 8 cells worse that
+    all 256 residues show better (6502 O1 mul_constants -5 B, +8888 cy on 16, -2000 cy on 256). A clocks-only failure read from fewer
+    than 256 layouts is UNCONFIRMED, not FAIL, and says how to confirm it; bytes do not depend on the layout and still fail."""
+    def table(self, rows, layouts):
+        import json
+        path = tsv([(n, b, c) for n, b, c in rows])
+        json.dump([[n, "PASS", {"layouts": [c] * layouts}] for n, b, c in rows], open(path + ".json", "w"))
+        return path
+    def go(self, base, new, layouts, level="O1"):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = ab_rows.main(["x", self.table(base, layouts), self.table(new, layouts), "--level", level])
+        return status, out.getvalue()
+
+    def test_a_clocks_only_failure_on_16_layouts_is_unconfirmed_not_failing(self):
+        status, text = self.go([("p", 100, 1000)], [("p", 99, 1010)], 16)
+        self.assertEqual(status, 3)
+        self.assertIn("UNCONFIRMED p", text)
+        self.assertNotIn("FAIL", text)
+        self.assertIn("seq -s, 0 255", text)
+    def test_the_same_failure_on_all_256_layouts_fails(self):
+        status, text = self.go([("p", 100, 1000)], [("p", 99, 1010)], 256)
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL", text)
+    def test_a_cell_better_on_all_256_layouts_passes(self):
+        self.assertEqual(self.go([("p", 100, 1010)], [("p", 99, 1000)], 256)[0], 0)
+    def test_bytes_added_fail_whatever_the_layout_count(self):
+        status, text = self.go([("p", 100, 1000)], [("p", 101, 1000)], 16, "Os")
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL", text)
+    def test_a_table_without_layouts_keeps_its_old_verdict(self):
+        self.assertEqual(run("O1", [("p", 100, 1000)], [("p", 99, 1010)]), 1)
 
 if __name__ == "__main__":
     unittest.main()
