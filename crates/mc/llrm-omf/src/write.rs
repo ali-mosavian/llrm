@@ -482,16 +482,24 @@ fn linsym(
         .collect()
 }
 
-/// Zero runs of at least `HOLE` bytes in initialised data are left out of the LEDATA: the linker zero-fills the segment, and the file then
-/// holds only what is initialised. BC declares its BC_DATA and its zeroed arrays and stores none of them; ours stored 8 B in every BASIC
-/// object and 29 KB in jpeg_fixed (`data 29191 > 765 (bc)`). A run under `HOLE` is cheaper stored than split (a record costs about that),
-/// and a run touching a fixup field stays.
-const HOLE: usize = 8;
+/// Zero runs in initialised data are left out of the LEDATA when that makes the object smaller: the linker zero-fills the segment, and the file
+/// then holds only what is initialised. BC declares its BC_DATA and its zeroed arrays and stores none of them; ours stored 8 B in every BASIC
+/// object and 29 KB in jpeg_fixed (`data 29191 > 765 (bc)`). A hole costs the LEDATA record that starts the next piece (`split_cost`), and
+/// a FIXUPP record header more where fixups sit on both sides; a run no longer than that is cheaper stored (at m32 a 10-byte run next to
+/// a fixup made sfm16_float 20 B larger). A run touching a fixup field stays.
+fn split_cost(bits: u32) -> usize {
+    // type, length, segment index, offset (2 or 4 bytes), checksum.
+    if bits == 32 { 9 } else { 7 }
+}
+
+/// The FIXUPP record header: type, length, checksum.
+const FIXUPP_HEADER: usize = 4;
 
 fn stored_spans(
     spans: &[[usize; 2]],
     image: &[u8],
     covered: &[[usize; 2]],
+    bits: u32,
 ) -> Vec<[usize; 2]> {
     let mut out = Vec::new();
     for &[start, end] in spans {
@@ -505,7 +513,9 @@ fn stored_spans(
             while at < end && image[at] == 0 {
                 at += 1;
             }
-            if at - run >= HOLE && !covered.iter().any(|[from, to]| *from < at && run < *to) {
+            let fixups = |low: usize, high: usize| covered.iter().any(|[from, to]| low <= *from && *to <= high);
+            let cost = split_cost(bits) + if fixups(from, run) && fixups(at, end) { FIXUPP_HEADER } else { 0 };
+            if at - run > cost && !covered.iter().any(|[from, to]| *from < at && run < *to) {
                 if run > from {
                     out.push([from, run]);
                 }
@@ -561,7 +571,7 @@ fn ledata(
         object.omf_groups.iter().position(|group| group.members.contains(&index)).map_or(0, |one| one as i64 + 1);
     let spans = if named.is_none() && section.role == Role::Data {
         let covered: Vec<[usize; 2]> = at_sorted.iter().map(|&at| [at, at + subrecords[&at].2]).collect();
-        stored_spans(&section.spans, &image, &covered)
+        stored_spans(&section.spans, &image, &covered, bits)
     } else {
         section.spans.clone()
     };
@@ -1058,6 +1068,19 @@ mod tests {
         assert_eq!(stored([vec![1], vec![0; 8], vec![2]].concat()), vec![(0, 1), (9, 1)], "a long run in the middle is a hole");
         assert_eq!(stored(vec![1, 0, 0, 2, 0]), vec![(0, 5)], "a short run stays");
         assert_eq!(stored(vec![0; 64]), Vec::<(usize, usize)>::new(), "an all-zero segment has no LEDATA");
+    }
+
+    /// A hole costs the LEDATA record that starts the next piece: 7 bytes at 16 bits, 9 at 32. At 32 bits a 9-byte run was split all the same
+    /// (the old fixed 8), so m32 sfm16_float objects grew 20 B; a run is a hole only where it is longer than the record that replaces it.
+    #[test]
+    fn a_zero_run_is_a_hole_only_when_it_is_longer_than_the_record_that_splits_it() {
+        let ledatas = |bits: u8, run: usize| -> usize {
+            let image = [vec![1], vec![0; run], vec![2]].concat();
+            let made = object(bits, vec![Section { role: Role::Data, ..section("D", image, Vec::new()) }], Vec::new());
+            crate::omf::parse(&write(&made).unwrap()).unwrap().iter().filter(|one| one.r#type & 0xFE == omf::LEDATA).count()
+        };
+        assert_eq!((ledatas(16, 7), ledatas(16, 8)), (1, 2), "16 bits: a record costs 7");
+        assert_eq!((ledatas(32, 9), ledatas(32, 10)), (1, 2), "32 bits: a record costs 9");
     }
 
     /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was
