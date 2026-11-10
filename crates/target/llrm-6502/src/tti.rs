@@ -211,8 +211,15 @@ impl Tti for Mos6502 {
     /// multiply per trip, 56k of its 64k clocks). Not 16: with it the
     /// switch_* and byval_inline cells grew on both axes (DEVIATE LSR-N,
     /// exit 2026-11-20).
+    ///
+    /// 16 since 2026-11-10: `n8` made LSR leave every `p16` pointer and index,
+    /// so `g[i]` over 54-byte rows called `__mulhi3` each trip (rep_count at
+    /// -O1: 148,120 clocks, 133,418 now). A pointer alone is not enough: the
+    /// walk starts at the 16-bit index phi. Open: the switch_* , function_table
+    /// and byval_inline cells that grew (see the PR); owner 6502-d, exit
+    /// 2026-11-24.
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
-        &[32]
+        &[16, 32]
     }
 
     /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).
@@ -323,7 +330,14 @@ impl Tti for Mos6502 {
         base: bool,
         scale: i64,
     ) -> bool {
-        Basic.is_legal_addressing_mode(gv, offset, base, scale)
+        // `(zp),y` with a constant `y` (a pointer cell and 0..=255), or an
+        // absolute `lda g+k`; no scaled index (a 16-bit add is not an address).
+        match (gv, base) {
+            _ if scale != 0 => false,
+            (false, true) => (0..=255).contains(&offset),
+            (true, true) => false,
+            _ => (0..=0xFFFF).contains(&offset),
+        }
     }
 
     // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
