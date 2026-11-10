@@ -563,6 +563,49 @@ class Drain(Env, unittest.TestCase):
             job.wait(timeout=15)
         self.assertEqual(open(log).read().split()[0], "2")
 
+    def seed_prio(self, tier, stamp, pid):
+        os.makedirs(self.slots, exist_ok=True)
+        with open(os.path.join(self.slots, "prio"), "a") as prio:
+            prio.write(f"{tier} {stamp} {pid} 48\n")
+
+    def test_a_fresh_tier_1_waiter_is_not_admitted_while_an_older_tier_2_entry_of_another_copy_is_alive(self):
+        """The prio file is shared by every copy of the script alive at once (a running bash keeps its old inode after a deploy). An entry written by another copy, here a live
+        old tier-2 one, ranks by its stamp: the new copy's tier-1 waiter must wait for it."""
+        self.set_load(1.0, 1.0)
+        older = subprocess.Popen(["sleep", "300"])
+        self.addCleanup(older.kill)
+        self.seed_prio(2, time.time() - 4200, older.pid)
+        marker = os.path.join(self.dir.name, "ran")
+        job = self.start("touch", marker, LG_TIER="1", LG_SETTLE="0", LG_POLL="0.05")
+        time.sleep(1.5)
+        self.assertFalse(os.path.exists(marker), "a fresh tier-1 job went before a 70-minute-old tier-2 entry")
+        older.kill()
+        older.wait()
+        self.assertEqual(job.wait(timeout=10), 0)
+
+    def test_a_resubmitted_job_keeps_its_place_with_LG_QUEUED_AT(self):
+        """--cancel and resubmit lost the queue place (a 2 h 20 min wait restarted at zero)."""
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        first = self.start("bash", "-c", f"echo fresh >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05")
+        time.sleep(0.5)
+        resubmitted = self.start("bash", "-c", f"echo resubmitted >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_QUEUED_AT=str(time.time() - 4200))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in (first, resubmitted):
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["resubmitted", "fresh"])
+
+    def test_a_queued_at_in_the_future_or_not_a_number_is_the_time_now(self):
+        self.set_load(30.0, 30.0)
+        for bad in (str(time.time() + 99999), "abc"):
+            job = self.start("true", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_QUEUED_AT=bad)
+            self.assertTrue(until(lambda: os.path.exists(os.path.join(self.slots, "prio")) and str(job.pid) in open(os.path.join(self.slots, "prio")).read()))
+            stamp = [line.split()[1] for line in open(os.path.join(self.slots, "prio")) if line.split()[2] == str(job.pid)][0]
+            self.assertLess(abs(float(stamp) - time.time()), 5, bad)
+            job.terminate()
+            job.wait(timeout=5)
+
     def test_an_aged_tier_4_waiter_never_passes_a_tier_2(self):
         self.set_load(30.0, 30.0)
         log = os.path.join(self.dir.name, "order")
