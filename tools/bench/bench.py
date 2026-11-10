@@ -74,6 +74,11 @@ BENCH = ROOT / "bench"
 # `bas` is BASIC on the Microsoft runtime (MS LINK, in DOSBox: only where QB45 and the others are installed); `bq16` the same source on
 # our runtime, real mode, linked by jwlink: always available.
 LANGUAGES = {"bas": ".bas", "bq16": ".bas", "bq32": ".bas", "c": ".c", "nib": ".nib"}
+# Reference twins: a C source for a Nib semantic the C twin lacks (`init`: locals zero-initialised, `bounds`: indices checked), in
+# `bench/NAME/twin/SEMANTIC.c`. It is a variant of the program named `NAME~SEMANTIC`, measured and given to the reference compilers as any
+# C program, and not judged or ratcheted: the C compilers' bytes on it are the bar a Nib program with that semantic is held to
+# (`bar_program`). It must print what the program prints (`NAME.out`), as every variant does.
+TWINS = ("init", "bounds")
 BASIC_LANGUAGES = ("bas",)
 OURS_BASIC = ("bq16", "bq32")
 # The flat target is counted by the emulator the program runs in (guest instructions, on virtual time), net of its empty start-up
@@ -169,7 +174,27 @@ def variants(directory: Path, every_language: bool = False) -> list[Variant]:
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
                               bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)),
                               bool(settings.get("emulated"))))
+    for semantic in TWINS:
+        source = directory / "twin" / f"{semantic}.c"
+        if source.exists() and (every_language or ONLY is None or "c" in ONLY):
+            head = run_tests.header(source)
+            out.append(Variant(f"{name}~{semantic}", "c", source, settings["region"]["c"], head.get("known"), "qb45", bool(settings.get("timed_only")),
+                              tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)), bool(settings.get("emulated"))))
     return out
+
+
+def is_twin(variant: Variant) -> bool:
+    """A reference twin (TWINS): measured, not judged."""
+    return "~" in variant.name
+
+
+def bar_program(name: str, language: str, present: set[str]) -> str:
+    """The program whose C reference compilers are the bar for `name` in `language`, among the programs `present` in a table: a Nib program
+    is held to its C twin with the Nib semantics (`NAME~init`, then `NAME~bounds`) where the program has one, and to `NAME` otherwise;
+    the plain twin stays a column of its own."""
+    if language != "nib":
+        return name
+    return next((f"{name}~{semantic}" for semantic in TWINS if f"{name}~{semantic}" in present), name)
 
 
 def expected_output(directory: Path) -> list[str]:
@@ -1046,6 +1071,8 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
         if stale:
             problems.append(stale)
         for variant in variants(directory):
+            if is_twin(variant):
+                continue
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
                 label = f"{name} {variant.language} -{opt}"
