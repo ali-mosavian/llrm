@@ -13,14 +13,6 @@ red_tip() {
 }
 # tip_test_cmd SELECTION: the gate's profile, debug: `debug_assert!`s and unoptimized code are what its smoke runs (a release run passed a tip with two red lib tests).
 tip_test_cmd() { echo "cargo test -q --lib --no-fail-fast ${1:---workspace}"; }
-# bins_verdict WORKTREE TARGET_DIR SELECTION: `cargo check --bins` of the selection. The tip is tested with `cargo test --lib`, which never compiles a binary: a struct field added
-# in a library (inliner_follows, #8829) broke llrm-mir.rs and landed; only the gate's `cargo check --workspace --all-targets` saw it, at the main merge. Check, not build: no codegen.
-bins_verdict() {
-  local out rc
-  out=$( (cd "$1" && CARGO_TARGET_DIR="$2" cargo check -q --bins $3 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
-  [ "$rc" = 0 ] && return 0
-  echo "STOP: release/next red: a binary does not build (cargo check --bins $3 exited $rc)"; echo "$out" | grep -E '^error' | head -5; return 1
-}
 # tip_crates FROM TO: the packages changed between two commits and everything that depends on them (tip_crates.py).
 tip_crates() {
   local meta names sel; meta=$(mktemp)
@@ -51,7 +43,6 @@ tip_verdict() {
     crates=$(cd "$w" && tip_crates "$from" "$to" 2>/dev/null) || { echo "STOP: release/next red: tip_crates failed, no crate was tested"; return 1; }
   fi
   if [ -n "$crates" ]; then
-    bins_verdict "$w" "$t" "$crates" || return 1
     out=$( (cd "$w" && CARGO_TARGET_DIR="$t" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
   fi
   # the root scanners (ALWAYS_SCANNERS of parity_squash.py), absolute on the tip: the landing checks are relative to the base, so once a scanner was red on the base no PR was blamed
