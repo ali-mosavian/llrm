@@ -961,6 +961,17 @@ impl Analyses<'_> {
     pub const NONE: Analyses<'static> = Analyses { demanded: None, value_tracking: false };
 }
 
+/// `DB->getDemandedBits(Exit).getActiveBits()`: how many low bits of `exit`'s
+/// result are read; none above are.
+pub fn demanded_width(
+    demanded: &DemandedBits,
+    environment: &Environment,
+    function: &Function,
+    exit: InstId,
+) -> u32 {
+    u128::BITS - demanded.demanded_bits(environment, function, exit).leading_zeros()
+}
+
 /// `computeRecurrenceType`: the smallest type (a power of two bits wide) the
 /// reduction whose exit instruction is `exit` can be truncated to, and whether
 /// it is restored with `sext`.
@@ -978,8 +989,7 @@ fn compute_recurrence_type(
         // The bits live out of the exit instruction, rounded up to a power of
         // two below: a smaller width means the value is positive, since a
         // negative one would have demanded its sign bit.
-        let mask = demanded.demanded_bits(environment, c.function(), exit);
-        max_bit_width = u128::BITS - mask.leading_zeros();
+        max_bit_width = demanded_width(demanded, environment, c.function(), exit);
     }
     if max_bit_width == type_bits && analyses.value_tracking {
         // Demanded bits did not limit the width (for instance a value that may
