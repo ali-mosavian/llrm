@@ -340,7 +340,7 @@ pub fn select_block(
     // them to pay for the routine (`prepare::mark_long_multiplies`), at every
     // level: four word multiplies inline cost more bytes and more T-states
     let all_calls = CALL_MULS.with(std::cell::Cell::get);
-    tli.set_force_shift_calls(all_calls && !sized);
+    tli.set_force_shift_calls((all_calls || std::env::var_os("LLRM_Z80_FS").is_some()) && !sized);
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
         if !sized {
