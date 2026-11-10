@@ -459,7 +459,14 @@ fn cheaper(
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
-        let priced = crate::timing::estimate_calling(request.cpu, &text, &routines, Some(&depth_of)).ok()?;
+        // loop depth guesses ten trips a level; a branch with weights (the
+        // page walk's wrap) says how often a block runs against its loop
+        let function = module.global(module.named(name)?).function()?;
+        let mut weights: Vec<u64> =
+            (0..function.block_capacity() as u32).map(|block| 10u64.pow(depth_of(block).min(3))).collect();
+        crate::weights::by_branch_weights(module, function, &mut weights);
+        let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
+        let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
         Some(priced.cycles + byte * u64::from(priced.bytes))
     };
     Ok(matches!(
