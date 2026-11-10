@@ -147,6 +147,47 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17): crc16's `crc` lives
+    /// in a word and is carried in a long; a word `add` or `eor` is 4 clk
+    /// against 8 on the 68000.
+    fn narrows_demanded_cycles(&self) -> bool {
+        true
+    }
+
+    /// The register-to-register form of `op` at each size, from the timing
+    /// tables.
+    fn narrowing_gain(
+        &self,
+        op: llrm_mir::opcode::BinaryOp,
+        wide_bits: u32,
+        narrow_bits: u32,
+        amount: Option<u64>,
+    ) -> i32 {
+        use llrm_mir::opcode::BinaryOp;
+        let size = |bits| match bits {
+            8 => Some('b'),
+            16 => Some('w'),
+            32 => Some('l'),
+            _ => None,
+        };
+        let clocks = |size: char| {
+            let text = match op {
+                BinaryOp::And => format!("and.{size} %d0, %d1"),
+                BinaryOp::Or => format!("or.{size} %d0, %d1"),
+                BinaryOp::Xor => format!("eor.{size} %d1, %d0"),
+                BinaryOp::Add => format!("add.{size} %d0, %d1"),
+                BinaryOp::Sub => format!("sub.{size} %d0, %d1"),
+                BinaryOp::Shl => format!("lsl.{size} #{}, %d0", amount.filter(|a| (1..=8).contains(a))?),
+                _ => return None,
+            };
+            crate::timing::cost(self.cpu, &text, 2, false).ok().map(|one| i32::try_from(one.clocks).unwrap_or(0))
+        };
+        let (Some(wide), Some(narrow)) = (size(wide_bits).and_then(clocks), size(narrow_bits).and_then(clocks)) else {
+            return 0;
+        };
+        wide - narrow
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the

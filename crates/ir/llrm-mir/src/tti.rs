@@ -1638,6 +1638,31 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: whether a cycle through a phi whose values only matter
+    /// at a narrower native width (read through `and` masks, `trunc`s and
+    /// values known zero above it) is carried at that width (`narrowcycle`),
+    /// when [`Tti::narrowing_gain`] prices every operation of it no dearer and
+    /// one cheaper. `TruncInstCombine` starts from a `trunc` and wants every
+    /// value of its graph unused outside it; a phi cycle read by a mask and a
+    /// compare of masked bits has neither. Off by default.
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17).
+    fn narrows_demanded_cycles(&self) -> bool {
+        false
+    }
+
+    /// Clocks saved by `op` at `narrow_bits` against `wide_bits` (negative:
+    /// dearer); `amount` is a constant shift amount. Zero where the target
+    /// does not price it apart.
+    fn narrowing_gain(
+        &self,
+        _op: crate::opcode::BinaryOp,
+        _wide_bits: u32,
+        _narrow_bits: u32,
+        _amount: Option<u64>,
+    ) -> i32 {
+        0
+    }
+
     /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
     /// on every target.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default;
