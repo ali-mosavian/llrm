@@ -45,7 +45,8 @@ fn a_subtraction_keeps_its_order() {
 /// A word sum over bytes loaded in a loop stored the loaded byte to a cell to
 /// read it back as the second source (`lda (rc2),y; sta rc6; clc; lda rc4; adc
 /// rc6`, 2 bytes and 3 clocks a trip over `clc; adc rc4`): the byte that
-/// arrives in `a` from a load goes first, not only an argument (2026-11-08).
+/// arrives in `a` from a load goes first, not only an argument (2026-11-08). The check is the symptom, not the shape: the byte
+/// folded into `adc (rc2),y` (zero-extended byte fold, 2026-11-10) is as good and is not stored aside.
 #[test]
 fn a_byte_loaded_into_a_is_added_from_a_not_stored_aside() {
     let lines = body(
@@ -56,6 +57,36 @@ fn a_byte_loaded_into_a_is_added_from_a_not_stored_aside() {
          x:\n  %r = phi i16 [0, %entry], [%s1, %l]\n  ret i16 %r\n}\n",
         "f",
     );
-    let load = lines.iter().position(|l| l == "lda (rc2),y").expect("the load");
-    assert_eq!(&lines[load + 1..load + 3], ["clc", "adc rc4"], "{lines:?}");
+    assert_eq!(loaded_byte_problem(&lines), None, "{lines:?}");
+}
+
+/// What is wrong with how a loop adds a byte it loaded: the byte is stored to a cell to be read back
+/// as the second source. `adc (rc2),y` (the load folded into the add) and `lda (rc2),y; clc; adc rc4`
+/// (the byte in A) are both fine.
+fn loaded_byte_problem(lines: &[String]) -> Option<&'static str> {
+    let Some(add) = lines.iter().position(|l| l.starts_with("adc") && l != "adc #0") else {
+        return Some("no add of the byte");
+    };
+    if !["adc (rc2),y", "adc rc4"].contains(&lines[add].as_str()) {
+        return Some("the loaded byte is added from a cell it was stored to");
+    }
+    lines
+        .windows(2)
+        .any(|w| w[0] == "lda (rc2),y" && w[1].starts_with("sta "))
+        .then_some("the loaded byte is stored aside")
+}
+
+/// The shape #8368 removed (`lda (rc2),y; sta rc6; clc; lda rc4; adc rc6`) is refused by the check above,
+/// and the two good shapes are not: the check is not vacuous.
+#[test]
+fn the_check_refuses_a_loaded_byte_stored_aside() {
+    let lines = |text: &str| text.split(';').map(|l| l.trim().to_owned()).collect::<Vec<_>>();
+    let aside = lines("lda (rc2),y; sta rc6; clc; lda rc4; adc rc6; sta rc4");
+    assert_eq!(loaded_byte_problem(&aside), Some("the loaded byte is added from a cell it was stored to"));
+    let in_a = lines("lda (rc2),y; clc; adc rc4; sta rc4");
+    assert_eq!(loaded_byte_problem(&in_a), None);
+    let folded = lines("clc; adc (rc2),y; sta rc5");
+    assert_eq!(loaded_byte_problem(&folded), None);
+    let stored = lines("lda (rc2),y; sta rc6; clc; adc rc4");
+    assert_eq!(loaded_byte_problem(&stored), Some("the loaded byte is stored aside"));
 }

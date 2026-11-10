@@ -201,7 +201,8 @@ fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
@@ -459,7 +460,14 @@ fn cheaper(
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
-        let priced = crate::timing::estimate_calling(request.cpu, &text, &routines, Some(&depth_of)).ok()?;
+        // loop depth guesses ten trips a level; a branch with weights (the
+        // page walk's wrap) says how often a block runs against its loop
+        let function = module.global(module.named(name)?).function()?;
+        let mut weights: Vec<u64> =
+            (0..function.block_capacity() as u32).map(|block| 10u64.pow(depth_of(block).min(3))).collect();
+        crate::weights::by_branch_weights(module, function, &mut weights);
+        let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
+        let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
         Some(priced.cycles + byte * u64::from(priced.bytes))
     };
     Ok(matches!(

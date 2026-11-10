@@ -575,6 +575,24 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
+/// Those of `recursive` that call themselves from exactly one place (a linear
+/// recursion), found in one walk of their bodies: the question REC-9 asks at
+/// every call site is a set lookup.
+pub fn linear_recursive(
+    module: &Module,
+    recursive: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    recursive
+        .iter()
+        .copied()
+        .filter(|&id| {
+            body(module, id).is_some_and(|function| {
+                function.walk().filter(|&(_, one)| callee(&module.context, function, one) == Some(id)).count() == 1
+            })
+        })
+        .collect()
+}
+
 /// Whether `body` may be copied as a function of its own (a recursive one
 /// included): it returns, `splice` carries it, and it is not to be inlined or
 /// `setjmp`-like.

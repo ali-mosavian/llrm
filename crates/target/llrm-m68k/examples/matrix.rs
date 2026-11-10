@@ -355,12 +355,15 @@ fn main() {
                         if status != Some(*expected) {
                             return (None, None, format!("wrong result: {status:?}, want {expected}"));
                         }
-                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        let total = cycles::price(&gcc_root, &exe, &[model], false, &["k".to_owned()]);
+                        if total.truncated {
+                            return (None, None, "trace cut short: raise CYCLES_TIMEOUT".to_owned());
+                        }
                         if total.insns == 0 {
                             return (None, None, "priced no instruction".to_owned());
                         }
-                        if total.unknown > 0 {
-                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        if total.unknown_of(0) > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown_of(0));
                         } else if total.partial && notes.is_empty() {
                             notes = "data-dependent term at its bound".to_owned();
                         }
