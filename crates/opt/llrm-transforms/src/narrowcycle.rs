@@ -46,10 +46,9 @@
 //! # See also
 //! [`crate::narrowiv`], [`crate::trunc_inst_combine`].
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use llrm_mir::context::{Constant, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -177,7 +176,7 @@ fn zero_above(
     function: &Function,
     operand: Operand,
     bits: u32,
-    asking: &mut BTreeSet<InstId>,
+    asking: &mut IdSet<InstId>,
 ) -> bool {
     if let Some(value) = constant_of(context, operand) {
         return value >> bits == 0;
@@ -227,7 +226,7 @@ fn outside_use_ok(
         }
         _ => {}
     }
-    zero_above(context, function, value, bits, &mut BTreeSet::new())
+    zero_above(context, function, value, bits, &mut IdSet::new())
 }
 
 /// The next piece to narrow at `bits`, if there is one.
@@ -237,13 +236,13 @@ fn plan(
     tti: &dyn Tti,
     bits: u32,
 ) -> Option<Plan> {
-    let mut members: BTreeSet<InstId> =
+    let mut members: IdSet<InstId> =
         function.walk().map(|(_, inst)| inst).filter(|&inst| member_shape(context, function, inst, bits)).collect();
     // The greatest fixpoint: drop a member with a use that is none of the
     // reads above, until none is left to drop.
     loop {
         let mut dropped = Vec::new();
-        for &inst in &members {
+        for inst in members.iter() {
             let Some(result) = function.instruction(inst).result else {
                 dropped.push(inst);
                 continue;
@@ -268,12 +267,12 @@ fn plan(
         }
     }
     // Connected pieces of members, through operands and users.
-    let mut seen: BTreeSet<InstId> = BTreeSet::new();
-    for &start in &members {
+    let mut seen: IdSet<InstId> = IdSet::new();
+    for start in members.iter() {
         if seen.contains(&start) {
             continue;
         }
-        let mut piece = BTreeSet::new();
+        let mut piece = IdSet::new();
         let mut work = vec![start];
         while let Some(inst) = work.pop() {
             if !members.contains(&inst) || !piece.insert(inst) {
@@ -288,8 +287,8 @@ fn plan(
                 work.extend(function.users(result).iter().map(|used| used.user));
             }
         }
-        seen.extend(piece.iter().copied());
-        let has_phi = piece.iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        seen.extend(piece.iter());
+        let has_phi = piece.iter().any(|inst| function.instruction(inst).opcode == Opcode::Phi);
         if has_phi && pays(context, function, tti, &piece, bits) {
             return Some(Plan { members: ordered(function, &piece), bits });
         }
@@ -306,12 +305,12 @@ fn pays(
     context: &Context,
     function: &Function,
     tti: &dyn Tti,
-    piece: &BTreeSet<InstId>,
+    piece: &IdSet<InstId>,
     bits: u32,
 ) -> bool {
     let mut total = Saving::default();
     let mut wide_bits = bits;
-    for &inst in piece {
+    for inst in piece.iter() {
         let instruction = function.instruction(inst);
         let Some(wide) = context.types.int_bits(instruction.ty) else { return false };
         wide_bits = wide_bits.max(wide);
@@ -332,7 +331,7 @@ fn pays(
     }
     // A doubling whose old top bit the piece tests: the carry reads it.
     let top = 1u64 << (bits - 1);
-    for &inst in piece {
+    for inst in piece.iter() {
         let instruction = function.instruction(inst);
         if instruction.opcode != Opcode::Binary(BinaryOp::Shl)
             || constant_of(context, instruction.operands[1]) != Some(1)
@@ -355,7 +354,7 @@ fn pays(
         }
     }
     let extension = tti.extension_cost(bits, wide_bits);
-    for &inst in piece {
+    for inst in piece.iter() {
         let Some(result) = function.instruction(inst).result else { continue };
         for used in function.users(result) {
             if !piece.contains(&used.user) && !masks_or_cuts(context, function, used.user, result, bits) {
@@ -401,11 +400,11 @@ fn masks_or_cuts(
 /// cycles) wherever they fall.
 fn ordered(
     function: &Function,
-    piece: &BTreeSet<InstId>,
+    piece: &IdSet<InstId>,
 ) -> Vec<InstId> {
     let mut order = Vec::new();
-    let mut done = BTreeSet::new();
-    for &inst in piece {
+    let mut done = IdSet::new();
+    for inst in piece.iter() {
         visit(function, piece, inst, &mut done, &mut order);
     }
     order
@@ -413,9 +412,9 @@ fn ordered(
 
 fn visit(
     function: &Function,
-    piece: &BTreeSet<InstId>,
+    piece: &IdSet<InstId>,
     inst: InstId,
-    done: &mut BTreeSet<InstId>,
+    done: &mut IdSet<InstId>,
     order: &mut Vec<InstId>,
 ) {
     if !done.insert(inst) {
@@ -436,7 +435,7 @@ struct Builder<'a> {
     function: &'a mut Function,
     narrow: TypeId,
     bits: u32,
-    made: BTreeMap<InstId, Operand>,
+    made: IdMap<InstId, Operand>,
 }
 
 impl Builder<'_> {
@@ -487,8 +486,8 @@ fn apply(
     plan: &Plan,
 ) {
     let narrow = context.types.int(plan.bits);
-    let mut build = Builder { context, function, narrow, bits: plan.bits, made: BTreeMap::new() };
-    let members: BTreeSet<InstId> = plan.members.iter().copied().collect();
+    let mut build = Builder { context, function, narrow, bits: plan.bits, made: IdMap::new() };
+    let members: IdSet<InstId> = plan.members.iter().copied().collect();
     // The phis first, empty, so an operand before its phi in the order finds
     // one.
     let mut phis = Vec::new();
@@ -527,11 +526,11 @@ fn apply(
         build.function.set_operands(new, from_arms(&incoming));
     }
     // The uses outside the members.
-    let mut consumed: BTreeSet<InstId> = BTreeSet::new();
+    let mut consumed: IdSet<InstId> = IdSet::new();
     for &inst in &plan.members {
         let result = build.function.instruction(inst).result.expect("a member has a value");
         let wide = build.function.instruction(inst).ty;
-        let new = build.made[&inst];
+        let new = build.made.get(&inst).copied().expect("made");
         let uses: Vec<_> = build.function.users(result).iter().copied().collect();
         for used in uses {
             if members.contains(&used.user) || consumed.contains(&used.user) {
@@ -581,7 +580,7 @@ fn apply(
             build.function.set_operands(used.user, operands);
         }
     }
-    for inst in consumed {
+    for inst in consumed.iter() {
         build.function.erase(inst).expect("its uses were replaced");
     }
     // The old members: the phis first, so the cycle's uses are poisoned.
