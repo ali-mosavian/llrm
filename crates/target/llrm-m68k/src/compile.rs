@@ -128,6 +128,11 @@ pub struct Options {
     /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
     /// loop-invariant only where `direct_copies` made no copy of it.
     pub shared_licm: bool,
+    /// The shared flow's `PhiElimination` and `TwoAddress` take the function
+    /// from SSA to the allocator, in place of the private `eliminate_phis`,
+    /// `commute_tied` and `two_address` ([`crate::regalloc::shared_prelude`]).
+    /// Off: the private passes are what the corpus was tuned on.
+    pub shared_prelude: bool,
     /// A small conditional block is copied into the predecessors that jump to
     /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
     pub tail_duplicate: bool,
@@ -203,6 +208,7 @@ impl Options {
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
+        shared_prelude: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
@@ -240,6 +246,7 @@ impl Default for Options {
             shared_cse: false,
             direct_copies: false,
             shared_licm: false,
+        shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
@@ -530,25 +537,30 @@ fn items_once(
     }
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);
-    eliminate_phis_with(&mut function, false);
+    if !options.shared_prelude {
+        eliminate_phis_with(&mut function, false);
+    }
     fold_reserved_copies(&mut function);
     if options.short {
         crate::commutative::mark_commutative(&mut function, wants_size);
     }
-    commute_tied(&mut function);
-    two_address(&mut function);
+    if !options.shared_prelude {
+        commute_tied(&mut function);
+        two_address(&mut function);
+    }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(
+        crate::regalloc::allocate_greedy_after(
             &mut function,
             wants_size,
             options.indexed,
             options.rematerialize_arguments,
             options.global_copies,
             options.loop_carried_first,
+            options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
         )?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();

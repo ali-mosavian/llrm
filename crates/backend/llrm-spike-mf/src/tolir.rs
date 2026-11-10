@@ -2620,7 +2620,15 @@ pub fn from_lir<T: Target>(
             }
             let (mut from, mut inst) =
                 *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
-            let name = what.name.as_deref();
+            // `PhiElimination` and `TwoAddress` name their copies `mov`, and place
+            // them beside an instruction claiming none of its bytes: copies, as
+            // a split's are. A move of a literal is a definition made again, found
+            // below as a rematerialized one is.
+            let shared_copy = what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && matches!(what.sources.as_slice(), [Loc::Held(_)])
+                && insn.covers.is_some_and(|(from, to)| from == to);
+            let name = if shared_copy { Some(COPY) } else { what.name.as_deref() };
             let agrees = match original.blocks[from].insts[inst].kind {
                 Kind::Copy => name == Some(COPY),
                 Kind::Op(op) => name == Some(op),
@@ -2654,7 +2662,7 @@ pub fn from_lir<T: Target>(
             if name == Some(COPY) && (source.kind != Kind::Copy || made_by_split) {
                 let (Some(to), Some(from)) = (held(&what.dests).first().copied(), held(&what.sources).first().copied())
                 else {
-                    return Err("a copy that does not move a value".into());
+                    return Err(format!("a copy that does not move a value: {what:?} covers {:?} of {:?}", insn.covers, source.kind));
                 };
                 insts.push(Inst::new(
                     Kind::Copy,
@@ -2722,11 +2730,29 @@ pub fn allocate_greedy<T: Target>(
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    allocate_greedy_after::<T>(function, registers, size, None)
+}
+
+/// The shared phases that stand between the SSA function and the allocator
+/// (`PhiElimination`, `TwoAddress`): the body in, the body out.
+pub type Prelude<'a> = &'a dyn Fn(LirBody) -> Result<LirBody, String>;
+
+/// [`allocate_greedy`], where `prelude` takes the function still in SSA form
+/// ([`to_ssa_lir`]) to the body greedy reads, in place of the private phi
+/// elimination and two-address passes the caller then leaves out. The copies
+/// it makes stand on their neighbour's `at` and claim no bytes
+/// (`covers == (x, x)`), which `from_lir` rebuilds as plain copies.
+pub fn allocate_greedy_after<T: Target>(
+    function: &mut MFunction<T::Class>,
+    registers: Regs,
+    size: bool,
+    prelude: Option<Prelude>,
+) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let name = function.name.clone();
-    let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
+    let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies(), prelude);
     let result = match first {
         Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
-            let second = allocate_greedy_pinned::<T>(function, registers, size, false);
+            let second = allocate_greedy_pinned::<T>(function, registers, size, false, prelude);
             if second.is_ok() {
                 record_refusal(&name, &why, true);
             }
@@ -2775,9 +2801,19 @@ fn allocate_greedy_pinned<T: Target>(
     registers: Regs,
     size: bool,
     joins_pinned: bool,
+    prelude: Option<Prelude>,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
-    let mut converted = to_lir::<T>(function, registers)?;
+    let mut converted = match prelude {
+        None => to_lir::<T>(function, registers)?,
+        Some(prelude) => {
+            let mut converted = to_ssa_lir::<T>(function, registers)?;
+            let _lanes = llrm_codegen::backend::lanes::enter(registers);
+            let input = converted.with_effects(function, registers);
+            converted.body = prelude(input)?;
+            converted
+        }
+    };
     if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce_pinned(registers, size, joins_pinned);
     }

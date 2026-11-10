@@ -71,6 +71,7 @@ const SOURCE_ORDER: Options = Options {
     shared_cse: false,
     direct_copies: false,
     shared_licm: false,
+    shared_prelude: false,
     tail_duplicate: false,
     rematerialize_arguments: false,
     loop_top_by_jumps: false,
