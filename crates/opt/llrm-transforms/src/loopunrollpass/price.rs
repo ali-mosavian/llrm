@@ -377,13 +377,16 @@ fn priced_verdict(
     // constants and the callee folds on them, work the trip's own instructions do not show (dot -O3 m64: the
     // 40-trip loop around `dot(a, b)` saved "0 clk", and rolled left the callee's 48 products unfolded, +306 B
     // and 87 -> 170 clocks a call). Such a trip is priced serially.
-    let sees_trip = !blocks.iter().any(|&block| {
-        run.function.iter_block(block).any(|inst| {
-            matches!(run.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
-                && call_inlined_next(run, inst)
+    // Only a target with the model asks: the other targets' pricing is untouched.
+    let sees_trip = |_: &_| {
+        !blocks.iter().any(|&block| {
+            run.function.iter_block(block).any(|inst| {
+                matches!(run.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+                    && call_inlined_next(run, inst)
+            })
         })
-    });
-    let (saved, bound) = match run.outer.target().throughput().filter(|_| sees_trip) {
+    };
+    let (saved, bound) = match run.outer.target().throughput().filter(sees_trip) {
         None => ((saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs, (0, 0)),
         Some(tp) => {
             let weight = |block: BlockId| projection.map_or(1, |projection| projection.of(block));
@@ -1329,7 +1332,8 @@ fn call_may_fold_arguments(
     inst: InstId,
 ) -> bool {
     let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
-    let global = &run.globals[id.0 as usize];
+    // A callee declared after the pass's snapshot of the module is past `run.globals`.
+    let Some(global) = run.globals.get(id.0 as usize) else { return false };
     if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.")) {
         return true;
     }
@@ -1342,7 +1346,7 @@ fn call_inlined_next(
     inst: InstId,
 ) -> bool {
     let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
-    let global = &run.globals[id.0 as usize];
+    let Some(global) = run.globals.get(id.0 as usize) else { return false };
     let llrm_mir::module::GlobalKind::Function(callee) = &global.kind else { return false };
     // The late pass runs after the inliner took what it would take of this function's calls.
     run.options.inliner_follows

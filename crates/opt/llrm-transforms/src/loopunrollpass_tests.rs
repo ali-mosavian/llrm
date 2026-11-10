@@ -1466,9 +1466,16 @@ done:
 }}
 "
     ));
+    unroll_on_core(&mut module, throughput, !call);
+    !printed(&module).contains("%i = phi")
+}
+
+/// The unroll pass on `@f` of `module` for x86-64 at 600 milliclocks a byte (the test's knob), with or without
+/// the SandyBridge throughput model.
+fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool) {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::testing::closed(&mut module).expect("closes");
+    crate::testing::closed(module).expect("closes");
     let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, ..llrm_mir::target::Tuning::PIN };
     let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
     let options = Options {
@@ -1477,7 +1484,7 @@ done:
         min_size: false,
         only_when_forced: false,
         prepare_for_lto: false,
-        target_unrolling: !call,
+        target_unrolling,
         inliner_follows: true,
     };
     let target = throughput.then(|| {
@@ -1499,8 +1506,7 @@ done:
         };
         llrm_target::described_throughput(&prices, None, None, None, Some(sandy_bridge_throughput()))
     });
-    unroll_function_on(&mut module, "f", &tti, options, target).expect("unrolls");
-    !printed(&module).contains("%i = phi")
+    unroll_function_on(module, "f", &tti, options, target).expect("unrolls");
 }
 
 /// huffman_decode -O2 at m64: a 16-trip fill of folded constants was priced "saves 97 clk" at one clock a
@@ -1520,4 +1526,46 @@ fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_is_priced_ser
 fn test_a_loop_calling_a_function_the_inliner_takes_is_priced_serially_on_a_core_with_resources() {
     assert!(fill_unrolled(false, true), "premise: priced serially, the unroll pays");
     assert!(fill_unrolled(true, true), "the callee folds on the copies' constants: not a trip the resources show");
+}
+
+/// memfuncs_runtime arm64 -O2/-O3: a call in a loop named a callee the pipeline had declared after the pass's snapshot
+/// of the module (an id past `run.globals`); pricing the trip indexed it and the compiler panicked ("the len is 14
+/// but the index is 14"), where the parent compiled it. The trip is priced, not a crash.
+#[test]
+fn test_a_loop_calling_a_callee_declared_after_the_snapshot_is_priced_not_a_crash() {
+    let mut module = parsed(
+        "define void @f(ptr %p) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %q = getelementptr i8, ptr %p, i32 %i
+  call void @late(ptr %q)
+  %next = add i32 %i, 1
+  %more = icmp ne i32 %next, 4
+  br i1 %more, label %loop, label %done
+
+done:
+  ret void
+}
+
+declare void @late(ptr)
+",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, ..llrm_mir::target::Tuning::PIN };
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+    };
+    super::unroll_function_hiding(&mut module, "f", &tti, options, None, 1).expect("unrolls without a panic");
 }
