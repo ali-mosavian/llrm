@@ -17,6 +17,18 @@ fn visit(
     if matches!(c.function.instruction(inst).opcode, Opcode::ICmp(_)) { visit_icmp(c, inst) } else { Visit::None }
 }
 
+/// `visitICmpInst` and `visitSelectInst`, through the driver.
+fn visit_both(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    match c.function.instruction(inst).opcode {
+        Opcode::ICmp(_) => visit_icmp(c, inst),
+        Opcode::Select => crate::combine::visit(c, inst),
+        _ => Visit::None,
+    }
+}
+
 /// `@f(params)` returning i1 after `visitICmpInst` alone, with `decls` the
 /// intrinsics `body` calls.
 fn folded(
@@ -376,4 +388,22 @@ fn rotates_by_different_amounts_compared_for_equality_are_one_rotate() {
     );
     assert!(out.contains("call i32 @llvm.fshl.i32(i32 %a, i32 %a, i32 -2)"), "{out}");
     assert!(out.contains("icmp eq i32 %b,"), "{out}");
+}
+
+/// The count guarded against zero (`x == 0 ? 0 : ctpop(x)`, what the popcount
+/// loop idiom leaves) is the count alone: the first head of this fold compared
+/// `x` instead of the count and the select stayed (wasm `ones32` +3 B).
+#[test]
+fn a_ctpop_guarded_against_zero_is_the_count_alone() {
+    for (cmp, arms) in [("eq", "i32 0, i32 %c"), ("ne", "i32 %c, i32 0")] {
+        let mut module = parsed(&format!(
+            "{CTPOP}\ndefine i32 @f(i32 %x) {{\nb0:\n  %c = call i32 @llvm.ctpop.i32(i32 %x)\n  %z = icmp {cmp} i32 %x, 0\n  %r = select i1 %z, {arms}\n  ret i32 %r\n}}\n"
+        ));
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let (context, function) = module.function_mut("f").expect("@f");
+        combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit_both);
+        let out = printed(&module);
+        assert!(!out.contains("select"), "{cmp}: the select is left\n{out}");
+    }
 }
