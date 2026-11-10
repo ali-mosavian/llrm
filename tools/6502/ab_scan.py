@@ -65,6 +65,23 @@ def cell(dist, level, name, out):
     return verdict, data
 
 
+def delta(bd, nd):
+    """(dBytes, dMeanClk, dMedianClk, dInsns, flag) of one program, base `bd` to new `nd`. The mean over the pads is one unlucky pad's
+    page-crossing penalty away from a false row: mul_constants O2 read +42,846 clk with 224 fewer executed instructions and three of four
+    pads faster (2026-11-10). `LAYOUT` marks a cell whose bytes and executed instructions did not rise and whose clocks rose only in the
+    mean or the median: a hot loop crossing a page, not code. `WORSE` is a rise in bytes or instructions."""
+    db, dc, di = nd["bytes"] - bd["bytes"], nd["clks"] - bd["clks"], nd["insns"] - bd["insns"]
+    med = lambda d: sorted(d["layouts"])[len(d["layouts"]) // 2 - 1: len(d["layouts"]) // 2 + 1]
+    dm = (sum(med(nd)) - sum(med(bd))) // 2
+    if db > 0 or di > 0:
+        flag = "WORSE"
+    elif dc > 0 or dm > 0:
+        flag = "LAYOUT"
+    else:
+        flag = ""
+    return db, dc, dm, di, flag
+
+
 def stamp(new, base):
     def commit(d):
         f = Path(d) / "COMMIT"
@@ -93,9 +110,9 @@ def main(argv):
             if bv != "PASS" or nv != "PASS":
                 print(f"  {name:32} base {bv} new {nv}")
                 continue
-            db, dc = nd["bytes"] - bd["bytes"], nd["clks"] - bd["clks"]
+            db, dc, dm, di, flag = delta(bd, nd)
             tb += db; tc += dc
-            print(f"  {name:32} {bd['bytes']:>6} {bd['clks']:>10} -> {nd['bytes']:>6} {nd['clks']:>10}  dB {db:+d} dClk {dc:+d}")
+            print(f"  {name:32} {bd['bytes']:>6} {bd['clks']:>10} -> {nd['bytes']:>6} {nd['clks']:>10}  dB {db:+d} dClk {dc:+d} dMed {dm:+d} dInsn {di:+d} {flag}")
         print(f"  total dB {tb:+d} dClk {tc:+d}")
 
 

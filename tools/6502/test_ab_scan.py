@@ -29,6 +29,25 @@ class Flags(unittest.TestCase):
         self.assertEqual(ab_scan.CORPUS_COMMON, flagset.CORPUS_COMMON)
 
 
+class Delta(unittest.TestCase):
+    def cell(self, bytes_, insns, layouts):
+        return {"bytes": bytes_, "insns": insns, "clks": sum(layouts) // len(layouts), "layouts": layouts}
+
+    def test_one_unlucky_pad_is_layout_not_worse(self):
+        """mul_constants O2: pads 20735549 x3 + 20971148 (base) against 20734844 x3 + 21144643 (new), 224 fewer instructions."""
+        base = self.cell(14386, 4816876, [20735549, 20735548, 20735549, 20971148])
+        new = self.cell(14002, 4816652, [20734844, 21144643, 20734844, 20734843])
+        db, dc, dm, di, flag = ab_scan.delta(base, new)
+        self.assertGreater(dc, 0)
+        self.assertEqual((db, di, flag), (-384, -224, "LAYOUT"))
+        self.assertLess(dm, 0)
+
+    def test_more_executed_instructions_is_worse(self):
+        base = self.cell(100, 1000, [5000] * 4)
+        new = self.cell(98, 1003, [5007] * 4)
+        self.assertEqual(ab_scan.delta(base, new)[4], "WORSE")
+
+
 class ArgsAx(unittest.TestCase):
     def test_the_report_glue_is_chosen_per_dist(self):
         with tempfile.TemporaryDirectory() as old, tempfile.TemporaryDirectory() as new:
