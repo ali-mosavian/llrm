@@ -66,6 +66,8 @@ impl Analysis for LastRunTracking {
 pub struct Combine {
     /// `Options::combine`: off, the pass changes nothing.
     pub enabled: bool,
+    /// DEVIATE PHICONST: where bytes are priced (-O2, -O3).
+    pub phi_constant_users: bool,
 }
 
 impl FunctionPass for Combine {
@@ -100,6 +102,7 @@ impl FunctionPass for Combine {
             combine::TargetHooks {
                 fixed_shift_count: outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
                 select_to_cmp: outer.target().tti().is_some_and(|tti| tti.folds_select_to_cmp()),
+                phi_constant_users: self.phi_constant_users,
             },
         );
         last.instcombine.set(true);

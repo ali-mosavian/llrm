@@ -23,14 +23,14 @@ fn run(pass: impl FunctionPass + 'static) -> String {
 /// The pass combines: a GEP over `i32` becomes the canonical `[4 x i8]` one.
 #[test]
 fn the_pass_runs_the_translated_families() {
-    let out = run(Combine { enabled: true });
+    let out = run(Combine { enabled: true, phi_constant_users: false });
     assert!(out.contains("getelementptr [4 x i8], ptr %b, i64 %i"), "{out}");
 }
 
 /// Off (`LLRM_NO_COMBINE`), it leaves the body alone.
 #[test]
 fn off_it_changes_nothing() {
-    assert_eq!(run(Combine { enabled: false }), printed(&parsed(TEXT)));
+    assert_eq!(run(Combine { enabled: false, phi_constant_users: false }), printed(&parsed(TEXT)));
 }
 
 /// `TEXT` through the whole pipeline with `Options::combine` as given.
@@ -109,9 +109,9 @@ b0:
 fn combine_spoil_combine(reports_a_change: bool) -> String {
     let mut module = parsed(ADD);
     let mut manager = PassManager::default();
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.add(Spoil { reports_a_change });
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     printed(&module)
 }
@@ -147,7 +147,7 @@ impl FunctionPass for Recording {
         unit: &mut llrm_mir::passes::Unit,
         analyses: &mut llrm_mir::passes::Analyses,
     ) -> llrm_mir::passes::PreservedAnalyses {
-        let preserved = Combine { enabled: true }.run(unit, analyses);
+        let preserved = Combine { enabled: true, phi_constant_users: false }.run(unit, analyses);
         self.0.set(Some(preserved.cfg_preserved()));
         preserved
     }
