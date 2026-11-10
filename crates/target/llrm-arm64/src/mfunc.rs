@@ -399,17 +399,24 @@ pub struct MFunc {
     pub dynamic: bool,
     /// The function's `"frame-pointer"` attribute (`all`, `non-leaf`, ...).
     pub frame_pointer: Option<String>,
+    /// The unwind table the function gets.
+    pub unwind: crate::cfi::Unwind,
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
     /// The constants the function loads from memory (`MachineConstantPool`),
     /// each under the label its address is taken from.
     pub pool: Vec<PoolEntry>,
-    /// The selector's block ids in label order, and the branch probabilities
-    /// it kept for the edges it split (`(from, to, numerator / 2^31)`); empty
+    /// The selector's block id of each block it made, by label (a block a
+    /// later pass made has none; a label, unlike a position, survives the
+    /// passes that remove and insert blocks), and the branch probabilities it
+    /// kept for the edges it split (`(from, to, numerator / 2^31)`); empty
     /// when the selector kept none.
-    pub block_ids: Vec<u32>,
+    pub block_ids: HashMap<String, u32>,
     pub edge_probs: Vec<(u32, u32, u32)>,
+    /// The critical edges `lower_phis` split: `(from, to, the block made)`, by
+    /// label. The block odds of the edge it replaced are the new block's.
+    pub split_edges: Vec<(String, String, String)>,
     /// The IR's edge odds the allocator reads (`MachineBranchProbabilityInfo`);
     /// set just before allocation.
     pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
@@ -466,6 +473,23 @@ pub fn branch_to(label: &str) -> Op {
     Op::I(Inst::Branch { link: false, target: Target::Label(label.to_owned()) })
 }
 
+/// Whether control leaves `block` by running into the block after it: nothing
+/// in it jumps unconditionally, returns, indexes a table or traps.
+pub fn falls_through(block: &MBlock) -> bool {
+    !block
+        .ops
+        .iter()
+        .any(
+            |op| matches!(
+                op,
+                Op::I(Inst::Branch { link: false, target: Target::Label(_) })
+                    | Op::Return { .. }
+                    | Op::JumpTable { .. }
+                    | Op::I(Inst::Brk { .. })
+            ),
+        )
+}
+
 /// The blocks `block` (the `at`th of `count`) can go to, from the labels its
 /// branches name and its fall-through.
 pub fn successors_of(
@@ -475,28 +499,23 @@ pub fn successors_of(
     labels: &HashMap<&str, usize>,
 ) -> Vec<usize> {
     let mut out = Vec::new();
-    let mut falls_through = true;
     for op in &block.ops {
         match op {
             Op::I(Inst::Branch { link: false, target: Target::Label(label) }) => {
                 out.extend(labels.get(label.as_str()).copied());
-                falls_through = false;
             }
             Op::I(Inst::BranchCond { target: Target::Label(label), .. })
             | Op::I(Inst::CompareBranch { target: Target::Label(label), .. })
             | Op::I(Inst::TestBranch { target: Target::Label(label), .. }) => {
                 out.extend(labels.get(label.as_str()).copied());
             }
-            Op::Return { .. } => falls_through = false,
             Op::JumpTable { targets, .. } => {
                 out.extend(targets.iter().filter_map(|label| labels.get(label.as_str()).copied()));
-                falls_through = false;
             }
-            Op::I(Inst::Brk { .. }) => falls_through = false,
             _ => {}
         }
     }
-    if falls_through && at + 1 < count {
+    if falls_through(block) && at + 1 < count {
         out.push(at + 1);
     }
     out
@@ -563,11 +582,6 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
         at += 1;
         reached[at - 1]
     });
-    let mut at = 0;
-    function.block_ids.retain(|_| {
-        at += 1;
-        reached[at - 1]
-    });
     for block in &mut function.blocks {
         for op in &mut block.ops {
             if let Op::Phi { incoming, .. } = op {
@@ -582,11 +596,11 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
 /// register `i` of its own; `i = COPY v` goes at the end of each predecessor
 /// `p`, before its branches, and `d = COPY i` at the top of the phi's block. A
 /// predecessor with several successors gets a block on the edge for its copies
-/// (laid out after the function's), so a copy never runs on a path that does
-/// not take the phi.
+/// (laid out right after its source, as `SplitCriticalEdge` does), so a copy
+/// never runs on a path that does not take the phi.
 ///
-/// DEVIATE ARM64-PHI-SHAPE (owner arm64-phi, exit 2026-11-17 with the shared
-/// pass, gap 3 of docs/architecture/arm64-spike.md): every such edge is split,
+/// DEVIATE ARM64-PHI-SPLIT (owner arm64-phi, exit 2026-11-24, gap 3 of
+/// docs/architecture/arm64-spike.md): every such edge is split,
 /// where the pin splits by liveness (`SplitPHIEdges`). Selection used to split
 /// the same edges, so the code is the same. The registers of the phis' edges
 /// are numbered here, after selection, in the pin's order (`LowerPHINode`:
@@ -657,7 +671,7 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
             Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
         )
     };
-    let mut edges = Vec::new();
+    let mut edges: Vec<(usize, MBlock)> = Vec::new();
     for (from, targets) in successors.iter().enumerate() {
         let carrying: Vec<usize> =
             targets.iter().copied().filter(|to| edge_copies.contains_key(&(from, *to))).collect();
@@ -680,7 +694,8 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
             let edge = format!(".L{}.e{}", function.name, edges.len());
             let mut body = copies(to);
             body.push(branch_to(&label));
-            edges.push(MBlock { label: edge.clone(), ops: body.into() });
+            edges.push((from, MBlock { label: edge.clone(), ops: body.into() }));
+            function.split_edges.push((function.blocks[from].label.clone(), label.clone(), edge.clone()));
             // Retarget the branches to `to`; a fall-through becomes a branch.
             let mut retargeted = false;
             for op in &mut function.blocks[from].ops {
@@ -708,7 +723,26 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
             }
         }
     }
-    function.blocks.extend(edges);
+    // Each block lies right after its source (`SplitCriticalEdge` inserts it
+    // at `std::next(this)`, MachineBasicBlock.cpp#L1217): the later split of a
+    // source is nearer to it.
+    let originals = std::mem::take(&mut function.blocks);
+    let mut placed = Vec::with_capacity(originals.len() + edges.len());
+    let next_labels: Vec<Option<String>> =
+        (0..originals.len()).map(|at| originals.get(at + 1).map(|next| next.label.clone())).collect();
+    for (at, mut block) in originals.into_iter().enumerate() {
+        // The blocks put after it come between it and the block it ran into.
+        if edges.iter().any(|(from, _)| *from == at) && falls_through(&block) {
+            if let Some(next) = &next_labels[at] {
+                block.ops.push(branch_to(next));
+            }
+        }
+        placed.push(block);
+        for (_, edge) in edges.iter().filter(|(from, _)| *from == at).rev() {
+            placed.push(edge.clone());
+        }
+    }
+    function.blocks = placed;
     Ok(())
 }
 
