@@ -65,3 +65,27 @@ fn a_word_compared_with_a_constant_of_a_zero_low_byte_tests_the_high_byte_only()
     assert!(!text.contains("sub a, #0"), "{text}");
     assert!(text.contains("sub a, #129") || text.contains("sub a, #1\n"), "{text}");
 }
+
+/// A word compared for equality with a constant that has a byte 1 or 255
+/// subtracted that byte (`sub a, #1`, 2 B and 7 T) where only the zero flag is
+/// read: sibling_call_callees' `g` was 1 B over SDCC's `dec a`.
+#[test]
+fn an_equality_test_steps_a_byte_by_one_instead_of_subtracting_it() {
+    let one = |constant: &str| {
+        assembly(
+            "step",
+            &format!(
+                "declare void @f()\n\
+                 define void @g(i16 %a) {{\n  %c = icmp eq i16 %a, {constant}\n  br i1 %c, label %t, label %e\n\
+                 t:\n  call void @f()\n  ret void\n\
+                 e:\n  ret void\n}}\n"
+            ),
+        )
+    };
+    let low = one("1");
+    assert!(low.contains("dec a") && !low.contains("sub a, #1"), "{low}");
+    let high = one("256");
+    assert!(high.contains("dec a") && !high.contains("sub a, #1"), "{high}");
+    let ones = one("-1");
+    assert!(ones.contains("inc a") && !ones.contains("sub a, #255"), "{ones}");
+}

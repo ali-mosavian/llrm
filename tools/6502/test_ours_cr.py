@@ -111,11 +111,24 @@ class Members(unittest.TestCase):
     def test_a_shift_program_links_only_shifts(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "o.tsv")
-            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "Os", out, "shift_int64_variable"],
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O1", out, "shift_int64_variable"],
                                capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
             self.assertEqual(r.returncode, 0, r.stderr[-300:])
             size = int(open(out).read().split("\t")[2])
+        self.assertGreater(size, 1000, f"{size} B: the program folded, nothing was linked (shift_int64_variable folds at -Os and -O2; -O1 links 2686 B)")
         self.assertLess(size, 4000, f"{size} B: the link carried routines the program does not call")
+
+    def test_the_f64_mul_hook_links_at_O1(self):
+        """float_in_place_update at -O1 failed to link on both CPUs: __muldf3 calls the hand-written __mul32x32, which no member defined
+        (Unresolved external '__mul32x32'); -O2 folds the float code away and linked, so the sweeps never saw it (2026-11-10)."""
+        for cpu in ("6502", "65c02"):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "o.tsv")
+                r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O1", out, "float_in_place_update"],
+                                   capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0", "OURS_CPU": cpu}, timeout=600)
+                self.assertEqual(r.returncode, 0, r.stderr[-300:])
+                rows = open(out).read().splitlines()
+            self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
 
     def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
@@ -137,7 +150,7 @@ class Archive(unittest.TestCase):
         subprocess.run([sys.executable, os.path.join(HERE, "mkrt.py"), CC, os.path.join(cls.tmp, "rt.lib"), os.path.join(cls.tmp, "w")],
                        check=True, capture_output=True, timeout=1200)
 
-    def link(self, program):
+    def link(self, program, level="-Os"):
         sys.path.insert(0, HERE)
         import mkrt
         src = Path(HERE).resolve().parents[1] / "tests" / "run" / "c" / f"{program}.c"
@@ -145,14 +158,15 @@ class Archive(unittest.TestCase):
         driver = subprocess.run([sys.executable, "-c", "import ours_cr; print(ours_cr.driver())"], cwd=HERE, env=env, capture_output=True, text=True, check=True).stdout
         tmp = self.tmp
         Path(tmp, "d.s").write_text(driver)
-        subprocess.run([CC, "--target=6502-sim65", "-Os", "-S", "-w", "-fsigned-char", "-I", os.path.join(HERE, "inc"), str(src), "-o", os.path.join(tmp, "o.s")], check=True)
+        subprocess.run([CC, "--target=6502-sim65", level, "-S", "-w", "-fsigned-char", "-I", os.path.join(HERE, "inc"), str(src), "-o", os.path.join(tmp, "o.s")], check=True)
         Path(tmp, "f.s").write_text(".autoimport +\n" + Path(tmp, "o.s").read_text())
         r = subprocess.run(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", "rt.lib"], cwd=tmp, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr[-300:])
         return mkrt.pulled(Path(tmp, "x.map").read_text())
 
     def test_a_shift_program_links_the_shifts_and_no_divide(self):
-        got = self.link("shift_int64_variable")
+        got = self.link("shift_int64_variable", "-O1")
+        self.assertTrue(re.search(r"jsr __ashldi3", Path(self.tmp, "o.s").read_text()), "the program must call the shifts: folded at -Os/-O2 it links none")
         names = " ".join(got)
         for shift in ("ashldi3", "lshrdi3", "ashrdi3"):
             self.assertIn(shift, names)
