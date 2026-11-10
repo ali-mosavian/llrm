@@ -115,7 +115,7 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
 
 def support(cc: str, root: str, cpu: str, level: str, cache: Path) -> tuple[str, str]:
     """The crt object and the compiler-rt archive at LEVEL: the only objects a program is linked with here (no memcpy or OS stubs)."""
-    args = sweep.build_support(cc, root, cpu, cache, int(os.environ.get("JOBS", "4")), level)
+    args = sweep.build_support(cc, root, cpu, cache, int(os.environ.get("JOBS", "4")), level, runnable=False)
     return args[0], args[2]
 
 

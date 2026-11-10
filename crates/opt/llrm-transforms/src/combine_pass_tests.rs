@@ -23,14 +23,14 @@ fn run(pass: impl FunctionPass + 'static) -> String {
 /// The pass combines: a GEP over `i32` becomes the canonical `[4 x i8]` one.
 #[test]
 fn the_pass_runs_the_translated_families() {
-    let out = run(Combine { enabled: true });
+    let out = run(Combine { enabled: true, phi_constant_users: false });
     assert!(out.contains("getelementptr [4 x i8], ptr %b, i64 %i"), "{out}");
 }
 
 /// Off (`LLRM_NO_COMBINE`), it leaves the body alone.
 #[test]
 fn off_it_changes_nothing() {
-    assert_eq!(run(Combine { enabled: false }), printed(&parsed(TEXT)));
+    assert_eq!(run(Combine { enabled: false, phi_constant_users: false }), printed(&parsed(TEXT)));
 }
 
 /// `TEXT` through the whole pipeline with `Options::combine` as given.
@@ -109,9 +109,9 @@ b0:
 fn combine_spoil_combine(reports_a_change: bool) -> String {
     let mut module = parsed(ADD);
     let mut manager = PassManager::default();
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.add(Spoil { reports_a_change });
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     printed(&module)
 }
@@ -147,7 +147,7 @@ impl FunctionPass for Recording {
         unit: &mut llrm_mir::passes::Unit,
         analyses: &mut llrm_mir::passes::Analyses,
     ) -> llrm_mir::passes::PreservedAnalyses {
-        let preserved = Combine { enabled: true }.run(unit, analyses);
+        let preserved = Combine { enabled: true, phi_constant_users: false }.run(unit, analyses);
         self.0.set(Some(preserved.cfg_preserved()));
         preserved
     }
@@ -166,4 +166,35 @@ fn a_run_that_changed_the_function_preserves_the_cfg_analyses() {
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert!(printed(&module).contains("[4 x i8]"), "the run changed the body");
     assert_eq!(seen.get(), Some(true));
+}
+
+/// DEVIATE PHICONST needs a target that trades bytes for clocks: with none (the
+/// neutral target, as wasm) the pass leaves a phi of constants with two users
+/// alone even where the level prices bytes (wasm known_loads_walks -O2 +7 B).
+#[test]
+fn phiconst_is_inert_on_a_target_with_no_byte_rate() {
+    const TWO_USERS: &str = "define i32 @f(i1 %c) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %j
+
+b:
+  br label %j
+
+j:
+  %p = phi i32 [ -39797, %a ], [ 39797, %b ]
+  %s = ashr i32 %p, 1
+  %t = add i32 %p, 19898
+  %r = add i32 %s, %t
+  ret i32 %r
+}
+";
+    let mut module = parsed(TWO_USERS);
+    let mut manager = PassManager::default();
+    manager.add(Combine { enabled: true, phi_constant_users: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("ashr"), "{out}");
 }

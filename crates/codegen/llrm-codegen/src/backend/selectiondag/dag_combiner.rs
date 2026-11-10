@@ -1578,6 +1578,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
         let amount_vt = self.hooks.shift_amount_type(vt);
+        let register_wide = self.tli.is_some_and(|tli| tli.types.is_type_legal(vt));
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -1590,6 +1591,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
         }
         if c1.wrapping_sub(1) & mask == c2 {
+            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, review 2026-12-20; ends
+            // if the pin's M68k lowers a select of constants itself or
+            // `convertSelectOfConstantsToMath` is answered per target): where
+            // a true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
+            // and `sext (not c)` is the inverted `Scc` with no mask:
+            // `c ? C : C-1` is `C + sext (!c)`. The pin's own forms: the sext
+            // arm ([L13102][sext]) and `or (sext (not c)), C` ([L13122][not]).
+            //
+            // [sext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13102
+            // [not]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13122
+            // Only in a register-wide type: an expanded one pays the sext's
+            // high half (`add` with carry of `zext` is cheaper there).
+            if dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne && register_wide {
+                let not = dag.get_not(cond, EVT::I1);
+                let not = dag.get_sext_or_trunc(not, vt);
+                return Some(dag.get_node(ISD::Add, vt, &[not, then]));
+            }
             let cond = dag.get_zext_or_trunc(cond, vt);
             return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
         }
@@ -1906,12 +1924,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
         let NodeData::Mem(info) = self.dag.node(load).data.clone() else { return None };
         let wide = self.dag.value_type(load);
+        // `isLegalNarrowLdSt`: an extending load narrows to a plain load of
+        // the truncated width when its memory is that wide or wider
+        // (`trunc (zextload i8)` to a byte is the byte load); one whose memory is
+        // narrower than the result stays an extending load.
+        let stored = if info.ext.is_some() { info.mem_vt } else { wide };
         if info.volatile
-            || info.ext.is_some()
             || !self.dag.has_one_use(load.node)
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
+            || stored.size_in_bits() < vt.size_in_bits()
         {
             return None;
         }
@@ -1923,7 +1946,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `AdjustBigEndianShift`: the low bytes of a big-endian value are its
         // last bytes
         let offset =
-            if self.dag.config().big_endian { i64::from((wide.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
+            if self.dag.config().big_endian { i64::from((stored.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
         let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
         let base = match info.base {
             super::dag::MemBase::Stack(at) => super::dag::MemBase::Stack(at + offset as i32),
@@ -1931,7 +1954,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             other => other,
         };
         let align = if offset == 0 { info.align } else { info.align.min(1 << (offset as u32).trailing_zeros()) };
-        let narrow = super::dag::MemInfo { mem_vt: vt, align, base, ..info };
+        let narrow = super::dag::MemInfo { mem_vt: vt, ext: None, align, base, ..info };
         let new = self.dag.get_load(vt, chain, ptr, narrow);
         if self.dag.invariant_loads.contains(&load.node) {
             self.dag.invariant_loads.insert(new.node);

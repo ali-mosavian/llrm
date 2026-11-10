@@ -139,11 +139,16 @@ fn cell(
     }
 }
 
-fn immediate(imm: &Imm) -> Result<i64, String> {
+/// An immediate operand as MIR prints it: the number, or a data segment symbol
+/// and its displacement (`@seg0 + 4`, a global address operand).
+fn immediate(
+    imm: &Imm,
+    symbols: &mut BTreeSet<i64>,
+) -> Result<String, String> {
     if imm.address.is_some() {
-        return Err("a symbolic immediate".to_owned());
+        return symbolic(imm, symbols);
     }
-    Ok(imm.value)
+    Ok(imm.value.to_string())
 }
 
 /// The address a `mov` loads: a data segment symbol and its displacement.
@@ -248,23 +253,23 @@ fn instruction(
         ("call_frame_setup", None, [Loc::Imm(size), Loc::Imm(adjust), Loc::Imm(more)]) => writeln!(
             out,
             "    ADJCALLSTACKDOWN32 {}, {}, {}, implicit-def dead $esp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $esp, implicit $ssp",
-            immediate(size)?,
-            immediate(adjust)?,
-            immediate(more)?
+            immediate(size, symbols)?,
+            immediate(adjust, symbols)?,
+            immediate(more, symbols)?
         )
         .unwrap(),
         ("call_frame_destroy", None, [Loc::Imm(size), Loc::Imm(adjust)]) => writeln!(
             out,
             "    ADJCALLSTACKUP32 {}, {}, implicit-def dead $esp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $esp, implicit $ssp",
-            immediate(size)?,
-            immediate(adjust)?
+            immediate(size, symbols)?,
+            immediate(adjust, symbols)?
         )
         .unwrap(),
         ("push", None, [Loc::Held(s)]) if matches!(s.width, 2 | 4) => {
             writeln!(out, "    PUSH{}r {}, implicit-def $esp, implicit $esp", bits(s.width)?, vreg(s)?).unwrap()
         }
         ("push", None, [Loc::Imm(i)]) if i.address.is_none() => {
-            writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", immediate(i)?).unwrap()
+            writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", immediate(i, symbols)?).unwrap()
         }
         ("push", None, [Loc::Imm(i)]) => {
             writeln!(out, "    PUSH32i {}, implicit-def $esp, implicit $esp", symbolic(i, symbols)?).unwrap()
@@ -320,7 +325,7 @@ fn instruction(
         (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
             let (form, right) = match rhs {
                 Loc::Held(b) => ("mr", vreg(b)?),
-                Loc::Imm(i) => ("mi", immediate(i)?.to_string()),
+                Loc::Imm(i) => ("mi", immediate(i, symbols)?),
                 _ => return Err(format!("{op} to a cell from that source")),
             };
             writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
@@ -410,7 +415,7 @@ fn instruction(
             writeln!(out, "    {} = MOV32ri {}", vreg(d)?, symbolic(i, symbols)?).unwrap()
         }
         ("mov", Some(Loc::Held(d)), [Loc::Imm(i)]) => {
-            writeln!(out, "    {} = MOV{}ri {}", vreg(d)?, bits(d.width)?, immediate(i)?).unwrap()
+            writeln!(out, "    {} = MOV{}ri {}", vreg(d)?, bits(d.width)?, immediate(i, symbols)?).unwrap()
         }
         ("mov", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
             let from = cell(m, symbols)?;
@@ -426,7 +431,7 @@ fn instruction(
             writeln!(out, "    MOV{}mr {}, {}", bits(s.width)?, cell(m, symbols)?, vreg(s)?).unwrap()
         }
         ("mov", Some(Loc::Mem(m)), [Loc::Imm(i)]) => {
-            writeln!(out, "    MOV{}mi {}, {}", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
+            writeln!(out, "    MOV{}mi {}, {}", bits(m.width)?, cell(m, symbols)?, immediate(i, symbols)?).unwrap()
         }
         ("lea", Some(Loc::Held(d)), [Loc::Mem(m)]) => {
             writeln!(out, "    {} = LEA{}r {}", vreg(d)?, bits(d.width)?, cell(m, symbols)?).unwrap()
@@ -458,7 +463,7 @@ fn instruction(
             writeln!(out, "    SETCCm {}, {code}, implicit $eflags", cell(m, symbols)?).unwrap()
         }
         ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
+            writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i, symbols)?).unwrap()
         }
         ("cmp", None, [Loc::Mem(m), Loc::Held(a)]) => {
             writeln!(out, "    CMP{}mr {}, {}, implicit-def $eflags", bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
@@ -477,7 +482,7 @@ fn instruction(
                 op.to_uppercase(),
                 bits(a.width)?,
                 vreg(a)?,
-                immediate(i)?
+                immediate(i, symbols)?
             )
             .unwrap()
         }
@@ -485,7 +490,7 @@ fn instruction(
             let upper = op.to_uppercase();
             let (form, right) = match rhs {
                 Loc::Held(b) => ("rr", vreg(b)?),
-                Loc::Imm(i) => ("ri", immediate(i)?.to_string()),
+                Loc::Imm(i) => ("ri", immediate(i, symbols)?),
                 Loc::Mem(m) => ("rm", cell(m, symbols)?),
                 _ => return Err(format!("{op} with that source")),
             };
@@ -498,7 +503,7 @@ fn instruction(
             op.to_uppercase(),
             bits(d.width)?,
             vreg(a)?,
-            immediate(i)?
+            immediate(i, symbols)?
         )
         .unwrap(),
         // The widening multiply: the low operand arrives in eax (a `requires`
@@ -520,7 +525,7 @@ fn instruction(
             }
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if what.dests.len() == 1 => {
-            writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?)
+            writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i, symbols)?)
                 .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Mem(m)]) if what.dests.len() == 1 => {
@@ -528,7 +533,7 @@ fn instruction(
                 .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Mem(m), Loc::Imm(i)]) if what.dests.len() == 1 => {
-            writeln!(out, "    {} = IMUL{}rmi {}, {}, {eflags}", vreg(d)?, bits(d.width)?, cell(m, symbols)?, immediate(i)?)
+            writeln!(out, "    {} = IMUL{}rmi {}, {}, {eflags}", vreg(d)?, bits(d.width)?, cell(m, symbols)?, immediate(i, symbols)?)
                 .unwrap()
         }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
@@ -544,7 +549,7 @@ fn instruction(
             bits(d.width)?,
             vreg(a)?,
             vreg(b)?,
-            immediate(count)?
+            immediate(count, symbols)?
         )
         .unwrap(),
         (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
@@ -1332,6 +1337,22 @@ mod tests {
         let body = LirBody::new("shld", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("%2 = SHLD32rri8 %2, %1, 1, implicit-def dead $eflags"), "{text}");
+    }
+
+    /// `add r, offset sym` was refused ("a symbolic immediate"; only a `mov`
+    /// of an address printed), so `_bench_jpeg_single` at m32 -Os never reached
+    /// the pin's greedy.
+    #[test]
+    fn test_an_add_of_a_segment_address_prints_as_a_global_operand() {
+        use llrm_lir::{Addr, Space};
+        let address = Loc::Imm(Imm { value: 4, width: 4, address: Some(Addr { index: 3, ..Addr::new(Space::Segment, 0) }) });
+        let add = insn("add", Operation::Binary, vec![held(2)], vec![held(1), address]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![add, ret]))];
+        let body = LirBody::new("sym", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("%2 = ADD32ri %1, @seg3 + 4"), "{text}");
+        assert!(text.contains("@seg3 = global"), "{text}");
     }
 
     #[test]

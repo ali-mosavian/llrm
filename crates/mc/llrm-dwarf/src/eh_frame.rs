@@ -38,6 +38,10 @@ pub struct EhTarget<'a> {
     pub return_saved: bool,
     /// The bytes an advance of the location is counted in.
     pub code_alignment: u64,
+    /// The bytes a save's offset from the frame address is counted in
+    /// (`MCAsmInfo::getCalleeSaveStackSlotSize`; the CIE's data alignment is
+    /// its negative).
+    pub slot: usize,
     /// The rule at a function's entry: the frame address and where the return
     /// address is.
     pub entry: FrameRow,
@@ -68,7 +72,7 @@ pub fn expanded_as(
         (target.register)(name)
             .ok_or_else(|| Unsupported(format!("DWARF: register {name} has no number, which a frame rule names")))
     };
-    let alignment = -(target.address as i64);
+    let alignment = -(target.slot as i64);
     let mut buf = Buf::default();
     buf.u32(0);
     buf.u32(0);

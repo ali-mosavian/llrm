@@ -655,7 +655,7 @@ impl Printer<'_> {
                     self.push(format!("ld {}, (hl)", name(lo)));
                     self.push("inc hl");
                     self.push(format!("ld {}, (hl)", name(hi)));
-                    self.push("dec hl");
+                    self.restore_pointer(rest);
                 }
             }
             "LD16mr" => {
@@ -667,7 +667,16 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), {}", name(lo)));
                 self.push("inc hl");
                 self.push(format!("ld (hl), {}", name(hi)));
-                self.push("dec hl");
+                self.restore_pointer(rest);
+            }
+            "LD16mi" => {
+                let Some(Operand::Imm(value)) = inst.operands.first() else {
+                    return Err("LD16mi without a constant".to_owned());
+                };
+                self.push(format!("ld (hl), #{}", value & 0xFF));
+                self.push("inc hl");
+                self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
+                self.restore_pointer(rest);
             }
             "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
@@ -933,7 +942,7 @@ impl Printer<'_> {
                 self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes + self.spill_bytes));
                 self.push("add hl, sp");
             }
-            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
+            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" | "LD16fi" => {
                 // register first for a load, the stored value first for a
                 // store; the frame object and its offset last
                 let load = op.ends_with("rf");
@@ -943,7 +952,14 @@ impl Printer<'_> {
                     Some(Operand::Imm(extra)) => *extra,
                     other => return Err(format!("a frame offset that is {other:?}")),
                 };
-                if op == "LD8fi" {
+                if op == "LD16fi" {
+                    let Some(Operand::Imm(value)) = inst.operands.first() else {
+                        return Err("LD16fi without a constant".to_owned());
+                    };
+                    for (byte, slot) in [value & 0xFF, (value >> 8) & 0xFF].into_iter().zip(self.frame_slots(index, extra, 2)?) {
+                        self.push(format!("ld {slot}, #{byte}"));
+                    }
+                } else if op == "LD8fi" {
                     let value = self.immediate(inst, 0, 0xFF)?;
                     let slot = self.frame_slots(index, extra, 1)?.remove(0);
                     self.push(format!("ld {slot}, {value}"));
@@ -1217,6 +1233,16 @@ impl Printer<'_> {
         }
     }
 
+    /// The `dec hl` that puts a pointer back after a word through it, unless nothing reads `hl` after.
+    fn restore_pointer(
+        &mut self,
+        rest: &[Inst],
+    ) {
+        if !self.pair_dead_after(reg::HL, rest) {
+            self.push("dec hl");
+        }
+    }
+
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
     fn pair_dead_after(
         &self,
@@ -1419,12 +1445,12 @@ impl Printer<'_> {
             // equality (no scratch register for two nonzero bytes)
             (false, true) if bh == "#0" && bl.starts_with('#') => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("or a, {}", name(ah)));
             }
             (false, true) if bl == "#0" && bh.starts_with('#') => {
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.push(format!("or a, {}", name(al)));
             }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
@@ -1443,15 +1469,37 @@ impl Printer<'_> {
             }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("jr nz, {skip}"));
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.out.push(Line::Label(skip));
             }
             (false, false) => unreachable!("a reader was found"),
         }
         Ok(())
+    }
+
+    /// `a` left zero exactly when it equalled `operand`, for a reader of the
+    /// zero flag alone: `sub a, #1` and `sub a, #255` are `dec a` and `inc a`,
+    /// 1 B and 3 T less (the carry they set is not read).
+    ///
+    /// DEVIATE Z80-ZTEST-1: no pin pass at this stage. The pin's counterpart
+    /// is an isel pattern, `X86sub_flag_nocf x, -1` (a flag-setting subtract
+    /// whose carry is not read) selecting `INC`
+    /// ([`X86InstrCompiler.td`][td]). Owner z80. Exit: the flag-use
+    /// predicate in the generated selector.
+    ///
+    /// [td]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L2324
+    fn push_zero_test_against(
+        &mut self,
+        operand: &str,
+    ) {
+        match operand {
+            "#1" => self.push("dec a"),
+            "#255" | "#-1" => self.push("inc a"),
+            _ => self.push(format!("sub a, {operand}")),
+        }
     }
 
     /// The byte operand `at` of an ALU or compare as printed: the frame cell a
@@ -2438,7 +2486,8 @@ fn form(text: &str) -> String {
             }
             "de" if mnemonic == "ex" => "de".to_owned(),
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
-            "a" | "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
+            "a" => "a".to_owned(),
+            "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
             "bc" | "de" | "af" => "bc".to_owned(),
             "hl" | "ix" | "iy" | "sp" => one.to_owned(),
             "(hl)" => "(hl)".to_owned(),
@@ -2481,15 +2530,30 @@ fn form(text: &str) -> String {
     key
 }
 
-/// The table's cost of a form as `form` writes it. Every byte register is `b`
-/// there, so a copy between two of them is `ld b;b`, which the table spells
-/// `ld b;c`.
+/// The table's cost of a form as `form` writes it. The accumulator is `a` where the table has the form for it alone
+/// (`ld a;(bc)`, `ld (nn);a`), else every byte register is `b` there, so a copy between two of them is `ld b;b`, which
+/// the table spells `ld b;c`.
 fn table_cost(key: &str) -> Option<crate::timing::Cost> {
-    crate::timing::cost(key)
-        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
-        .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+    let generic = key.split_once(' ').map_or_else(
+        || key.to_owned(),
+        |(mnemonic, operands)| {
+            // `add a;b`, `adc a;b`, `sbc a;b` name the accumulator in the table
+            let named = usize::from(matches!(mnemonic, "add" | "adc" | "sbc"));
+            let operands: Vec<&str> = operands
+                .split(';')
+                .enumerate()
+                .map(|(at, one)| if one == "a" && at >= named { "b" } else { one })
+                .collect();
+            format!("{mnemonic} {}", operands.join(";"))
+        },
+    );
+    [key, generic.as_str()].into_iter().find_map(|key| {
+        crate::timing::cost(key)
+            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
+            .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+    })
 }
 
 /// Bytes and T-states of the lines, summed over every instruction (a loop body
@@ -2499,11 +2563,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     let (mut bytes, mut clocks) = (0, 0);
     for line in lines {
         let Line::Inst(text) = line else { continue };
-        let key = form(text);
-        let cost = crate::timing::cost(&key)
-            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")));
-        match cost {
+        match table_cost(&form(text)) {
             Some(cost) => {
                 bytes += cost.bytes;
                 clocks += cost.taken;

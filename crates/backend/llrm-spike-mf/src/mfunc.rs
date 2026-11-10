@@ -63,6 +63,9 @@ pub struct Inst {
     /// A load of memory nothing writes (`isDereferenceableInvariantLoad`):
     /// loop-invariant when its address is.
     pub invariant_load: bool,
+    /// What its load or store reaches (`MachineMemOperand`), where the target
+    /// knows; none: it may reach anything.
+    pub memory: Option<llrm_codegen::model::memref::MemRef>,
     /// The spiller may run it again at each use instead of keeping its result
     /// (`isTriviallyReMaterializable`).
     pub rematerializable: bool,
@@ -98,6 +101,7 @@ impl Inst {
             side_effects: false,
             cheap_as_move: false,
             invariant_load: false,
+            memory: None,
             rematerializable: false,
             early_clobber: false,
             commutable: false,

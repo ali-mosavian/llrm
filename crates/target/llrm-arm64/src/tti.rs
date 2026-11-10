@@ -51,7 +51,7 @@
 //! # See also
 //! `llrm_mir::tti`, the interface; `llrm_x86::tti`, the x86 model.
 
-use llrm_mir::lowering::{ExtUser, Lowering};
+use llrm_mir::lowering::{ExtUser, Isd, LoadExt, Lowering};
 use llrm_mir::tti::*;
 
 use crate::expand_imm::mov_imm;
@@ -490,6 +490,13 @@ impl Tti for AArch64 {
     /// 8 of 37, which copies grew +97k, +126k and more).
     fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
         Some((3, 5))
+    }
+
+    /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear recursion called from another function is peeled into
+    /// the caller to gcc's caps. recpow -O2: 67,475 instructions / 260 B to 42,666 / 920 B (gcc 44,084 / 1,244); the other 71 cells of the
+    /// corpus are identical. Pin: none.
+    fn peels_linear_recursion(&self) -> bool {
+        true
     }
 
     /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save
@@ -1166,13 +1173,62 @@ impl Lowering for AArch64Lowering {
         true
     }
 
-    // AArch64ISelLowering.h, `isSExtCheaperThanZExt`: `w` to `x` is one `sxtw`.
-    fn is_sext_cheaper_than_zext(
+    // `isOperationLegalOrCustom`, read from the table the DAG legalizer uses
+    // (`TargetLowering::aarch64`, AArch64ISelLowering.cpp#L481): one table, so the IR-level
+    // answer cannot drift from the legalizer's.
+    fn is_operation_legal_or_custom(
         &self,
-        from_bits: u32,
-        to_bits: u32,
+        op: Isd,
+        bits: u32,
     ) -> bool {
-        from_bits == 32 && to_bits == 64
+        use llrm_sdag::actions::{Aarch64Features, TargetLowering};
+        use llrm_sdag::isd::ISD;
+        use llrm_sdag::mvt::EVT;
+        let node = match op {
+            Isd::Add => ISD::Add,
+            Isd::Sub => ISD::Sub,
+            Isd::Mul => ISD::Mul,
+            Isd::UDiv => ISD::UDiv,
+            Isd::SDiv => ISD::SDiv,
+            Isd::URem => ISD::URem,
+            Isd::SRem => ISD::SRem,
+            Isd::Shl => ISD::Shl,
+            Isd::Srl => ISD::Srl,
+            Isd::Sra => ISD::Sra,
+            Isd::And => ISD::And,
+            Isd::Or => ISD::Or,
+            Isd::Xor => ISD::Xor,
+            Isd::Select => ISD::Select,
+            Isd::SetCc => ISD::SetCC,
+            Isd::Truncate => ISD::Truncate,
+            Isd::ZeroExtend => ISD::ZeroExtend,
+            Isd::SignExtend => ISD::SignExtend,
+        };
+        thread_local! {
+            static TABLE: TargetLowering = TargetLowering::aarch64(Aarch64Features::default());
+        }
+        TABLE.with(|table| table.is_operation_legal_or_custom(node, EVT::integer(bits)))
+    }
+
+    // AArch64ISelLowering.cpp#L1274, `EnableExtLdPromotion = true`: CodeGenPrepare promotes the
+    // operands of an extension towards the load that feeds them (CodeGenPrepare.cpp#L6747):
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1274
+    fn enable_ext_ld_promotion(&self) -> bool {
+        true
+    }
+
+    // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1, Expand)` for every
+    // integer type; the rest is the base class's `Legal`:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1141
+    fn is_load_ext_legal(
+        &self,
+        ext: LoadExt,
+        value_bits: u32,
+        memory_bits: u32,
+    ) -> bool {
+        !(ext == LoadExt::Sign && memory_bits == 1)
+            && llrm_mir::lowering::simple_int(value_bits)
+            && llrm_mir::lowering::simple_int(memory_bits)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942

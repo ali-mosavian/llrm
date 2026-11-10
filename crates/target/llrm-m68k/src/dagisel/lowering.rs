@@ -182,6 +182,12 @@ pub fn target_lowering_with(
     // `RTLIB::MUL_I64`: what `forceExpandWideMUL` calls for the product of two
     // `i32`s (a `smul.fix` with no `MULHS`, as the 68000's and the pin's)
     tl.set_libcall_name(Mul, MVT::I64, "__muldi3");
+    // `setMinStackArgumentAlignment`: the pin's M68k leaves it at 1, so its
+    // `va_arg` rounds the list to the type's alignment (2 for an `i32`) with
+    // `addq #1; and #-2`. Every stack argument takes a 4-byte slot (gcc's
+    // `PARM_BOUNDARY`), the 68000's stack stays even; no round is owed. Owner
+    // m68k. DEVIATE M68K-VA-MIN-ALIGN, review 2026-12-20.
+    tl.set_min_stack_argument_alignment(VA_SLOT);
     // `RTLIB::SDIV_I64` and the others: no CPU divides 64 bits
     for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
         tl.set_libcall_name(op, MVT::I64, name);
@@ -203,6 +209,7 @@ pub struct M68kLowering {
     /// The CPU and the level's price, which [`super::mulprice`] reads.
     pub cpu: Cpu,
     pub price: crate::timing::Price,
+    pub mul: super::mulprice::Chain,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -227,7 +234,7 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         vt: EVT,
         c: u128,
     ) -> bool {
-        super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c)
+        self.mul.allows(super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c))
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
@@ -636,6 +643,10 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
+/// The bytes every stack argument takes, which is also the most a `va_arg` aligns its list pointer to (gcc packs each
+/// in a 4-byte slot; the pin's M68k sets neither `getMinStackArgumentAlignment` nor a cap).
+pub const VA_SLOT: u32 = 4;
+
 /// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`
 /// (`EQ` or `NE`); `BTST` sets `Z` when the bit is clear, as an `and` does.
 fn bit_test(
@@ -673,6 +684,51 @@ pub fn btst_beats_and_immediate(cpu: Cpu) -> bool {
         })
     });
     BEATS[cpu as usize]
+}
+
+/// Whether `tst.w`/`tst.b Dn` takes no more bytes and no more clocks than
+/// `btst #k,Dn` on `cpu`, read from the timing tables (2 B against 4).
+fn tst_beats_btst(cpu: Cpu) -> bool {
+    use crate::timing::cost;
+    static BEATS: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
+            let btst = clocks("btst #15, %d0", 4);
+            clocks("tst.w %d0", 2) <= btst && clocks("tst.b %d0", 2) <= btst
+        })
+    });
+    BEATS[cpu as usize]
+}
+
+/// DEVIATE M68K-BTST-SIGN (owner m68k-lsr-addressing, exit 2026-11-30): the
+/// pin has no counterpart (its `LowerAndToBTST` leaves a constant mask that
+/// fits a `TEST` alone). A mask that is the sign bit of the low byte or word,
+/// `(x & 0x80) != 0` or `(x & 0x8000) != 0` of an `i32`, is the sign of that
+/// part: `tst.b`/`tst.w Dn` (2 B, no copy) and a sign condition, where
+/// `btst #k,Dn` is 4 B and `and.l #imm` 6 B and a copy. Priced from the
+/// tables. Any other single bit stays [`lower_and_to_btst`]'s.
+fn lower_and_to_narrow_sign_test(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+    cpu: Cpu,
+) -> Option<SDValue> {
+    if dag.value_type(and) != EVT::I32 || !tst_beats_btst(cpu) {
+        return None;
+    }
+    let mask = dag.constant(dag.operand(and, 1))?;
+    let vt = match mask {
+        0x80 => EVT::I8,
+        0x8000 => EVT::I16,
+        _ => return None,
+    };
+    // `x & sign == 0` is `part >= 0`; `!= 0` is `part < 0`
+    let part = dag.get_node(ISD::Truncate, vt, &[dag.operand(and, 0)]);
+    let mut zero = dag.get_constant(0, vt);
+    let code = translate_cc(dag, if cc == CondCode::SetEq { CondCode::SetGe } else { CondCode::SetLt }, &mut zero);
+    let flags = emit_cmp(dag, part, zero, code);
+    let code = cc_operand(dag, code);
+    Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
 }
 
 /// `LowerAndToBTST`: `(1 << n) & x` and `(x >> n) & 1` against zero are a bit
@@ -732,7 +788,8 @@ fn lower_setcc(
         && dag.is_null_constant(op1)
         && dag.opcode(op0) == ISD::And
         && dag.has_one_use(op0.node)
-        && let Some(test) = lower_and_to_btst(dag, op0, cc, cpu)
+        && let Some(test) =
+            lower_and_to_narrow_sign_test(dag, op0, cc, cpu).or_else(|| lower_and_to_btst(dag, op0, cc, cpu))
     {
         return Some(test);
     }

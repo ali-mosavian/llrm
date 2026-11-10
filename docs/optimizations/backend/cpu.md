@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/cpu.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/cpu.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/cpu.rs sha256:0e506eefb0c9853bb8802b9e7f9b952c6e840411a6d994255717fa00cb3622c6 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/cpu.rs sha256:1ad34b5b038f827e00938237944211ad9027290f55f82293e21fb1fad5f3731f -->
 
 # cpu
 
@@ -55,7 +55,7 @@ that depend on the prices live here: `Profile::doubling` (`add r,r`
 or `shl r,1`), `Profile::clears_before_byte_load` (`xor r,r; mov rl,m`
 or `movzx`) and `Profile::pops_arguments` (pops against `add sp`).
 `MultiplyChains` caches the constant-multiply chains found under this
-profile's prices (GCC's `alg_hash`); a clone starts with an empty cache.
+profile's prices; a clone starts with an empty cache.
 
 ## Example
 Facts the profiles state (from the target's timing tables):
