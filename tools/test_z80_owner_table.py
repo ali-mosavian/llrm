@@ -176,3 +176,32 @@ def test_a_gap_named_with_its_row_is_written_and_listed_and_any_other_still_refu
     assert raised and not out.exists()  # b is not named
     t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1", "--known-oz-gap", "b=Z80-OZ-2"])
     assert "# OZ>OS ESTIMATOR GAP (oz_best_of): a=Z80-OZ-1 b=Z80-OZ-2" in out.read_text().splitlines()
+
+
+VOLATILE_BITFIELD = "struct S { unsigned a : 3; unsigned f : 15; };\nvolatile struct S v;\n"
+
+
+def test_a_volatile_bitfield_cell_is_not_like_for_like_never_worse_or_dropped():
+    """volatile_bitfield read B-worse T-worse (519 B against 289): SDCC reads one byte, the pin keeps the 32-bit container."""
+    assert t.is_volatile_bitfield(VOLATILE_BITFIELD)
+    assert t.verdict("O2", (519, 2783), SDCC, volatile_bitfield=True) == t.NOT_LIKE
+    got = {r[1]: r[10] for r in t.rows({"2": {"p": {"ours": (519, 2783)}}}, {"2": {"p": {"sdcc-size": (289, 1956)}}}, {"p": VOLATILE_BITFIELD})}
+    assert got["O2"] == t.NOT_LIKE
+
+
+def test_a_plain_volatile_beside_a_plain_bitfield_stays_ranked():
+    """The first predicate fired on any bit-field in a source that mentioned volatile anywhere: this program would have
+    been exempted silently."""
+    mixed = "struct S { unsigned a : 3; };\nstruct S plain;\nvolatile int flag;\n"
+    assert not t.is_volatile_bitfield(mixed)
+    assert t.is_volatile_bitfield("struct S { unsigned a : 3; };\nstruct S volatile v;\n")
+    assert t.is_volatile_bitfield("struct S { volatile unsigned a : 3; };\nstruct S v;\n")
+    nested = "struct S { unsigned a : 3; };\nunion U { long whole; struct S s; };\nvolatile union U u;\n"
+    assert t.is_volatile_bitfield(nested)
+
+
+def test_other_volatile_and_colon_sources_stay_ranked():
+    """A ternary, a case label and a plain volatile are not bit-fields."""
+    for source in ("volatile int z;\nint f(int x) { return x ? 1 : 64; }\n", "volatile long z;\nint g(int x) { switch (x) { case 1: return 2; } return 0; }\n",
+                   "struct S { unsigned a : 3; };\nint plain;\n"):
+        assert not t.is_volatile_bitfield(source), source
