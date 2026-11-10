@@ -285,7 +285,7 @@ fn find_counter(
 }
 
 /// `getIncomingValueForBlock`.
-fn incoming_value(
+pub(super) fn incoming_value(
     function: &llrm_mir::module::Function,
     phi: InstId,
     block: BlockId,
@@ -294,7 +294,7 @@ fn incoming_value(
 }
 
 /// A `Query` asked at `at`, with the dominator tree and assumptions.
-fn query<'a>(
+pub(super) fn query<'a>(
     run: &'a Run,
     at: InstId,
 ) -> Query<'a> {

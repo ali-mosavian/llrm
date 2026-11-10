@@ -533,6 +533,8 @@ pub mod hashrecognize;
 pub mod pass;
 pub mod popcount;
 pub mod process;
+pub mod shifttest;
+pub mod shiftzero;
 pub mod strlen;
 
 #[cfg(test)]

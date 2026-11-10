@@ -27,8 +27,6 @@
 //!   library facts (`getWCharSize`). Exit with D11.
 //! - Calls count as side effects in the body scan, where LLVM lets a call that
 //!   does not write, always returns and does not unwind through.
-//! - `runOnNoncountableLoop`'s `recognizeShiftUntilBitTest` and
-//!   `recognizeShiftUntilZero` are owed.
 //!
 //! # Example
 //! ```text
@@ -61,10 +59,10 @@ impl LoopIdiomRecognize {
         &mut self,
         run: &mut Run,
     ) -> bool {
-        // OWED: recognizeShiftUntilBitTest and recognizeShiftUntilZero, in this
-        // order, between the FFS and the less-than.
         self.recognize_popcount(run)
             || self.recognize_and_insert_ffs(run)
+            || self.recognize_shift_until_bit_test(run)
+            || self.recognize_shift_until_zero(run)
             || self.recognize_shift_until_less_than(run)
             || self.recognize_and_insert_str_len(run)
     }
