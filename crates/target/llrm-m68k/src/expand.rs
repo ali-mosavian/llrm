@@ -403,8 +403,9 @@ pub fn finish_with(
     pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
     if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
-        // the fold proved its range for the stack depth it could foresee; call cleanups left owed
-        // grow the depth, which only emission knows: a function that overflows keeps its `lea`s
+        // the fold proved its range for the stack depth it could foresee; call
+        // cleanups left owed grow the depth, which only emission knows:
+        // a function that overflows keeps its `lea`s
         match finish_with(&folded, assignment, number, slots, cpu, push_frame, short, pushes) {
             Err(why) if why == crate::frameindexed::OUT_OF_RANGE => {}
             done => return done,
@@ -486,7 +487,8 @@ pub fn finish_with(
                         let (base, disp) = layout.address(at);
                         it.next();
                         let shown = value + disp + if base == Base::Sp { pushed } else { 0 };
-                        // the displacement of an indexed operand is 8 bits; `pushed` is known only here
+                        // the displacement of an indexed operand is 8 bits;
+                        // `pushed` is known only here
                         if indexed_base == Some(position + 1) && i8::try_from(shown).is_err() {
                             return Err(crate::frameindexed::OUT_OF_RANGE.to_owned());
                         }
