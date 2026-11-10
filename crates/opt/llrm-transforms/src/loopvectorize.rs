@@ -405,9 +405,21 @@ impl FunctionPass for LoopVectorize {
                 aa.add_aa_result(TypeBasedAA::new(&memory_unit));
                 let max_width = tti.vector_register_bits() * 2;
                 let lai = LoopAccessInfo::new(se, &cx, header, &mut aa, false, max_width);
-                let Ok(legality) = can_vectorize(&cx, se, &lai, found) else { continue };
+                let legality = match can_vectorize(&cx, se, &lai, found) {
+                    Ok(legality) => legality,
+                    Err(refusal) => {
+                        why(unit, &outer, header, &format!("legality: {refusal:?}"));
+                        continue;
+                    }
+                };
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
-                let Ok((recipes, widening)) = extract(&cx, se, found, &legality, trip_count) else { continue };
+                let (recipes, widening) = match extract(&cx, se, found, &legality, trip_count) {
+                    Ok(found) => found,
+                    Err(Skipped(reason)) => {
+                        why(unit, &outer, header, &format!("recipes: {reason}"));
+                        continue;
+                    }
+                };
                 let dep = lai.dep_checker();
                 let facts = LoopFacts {
                     recipes,
@@ -419,15 +431,36 @@ impl FunctionPass for LoopVectorize {
                     widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                     opt_size,
                 };
-                plan(&*tti, &facts).ok().map(|chosen| (chosen, widening))
+                match plan(&*tti, &facts) {
+                    Ok(chosen) => Some((chosen, widening)),
+                    Err(not) => {
+                        why(unit, &outer, header, &format!("plan: {not:?}"));
+                        None
+                    }
+                }
             };
             let Some((chosen, widening)) = planned else { continue };
+            why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
             execute(unit.context, unit.function, &widening, chosen);
             changed = true;
             // The loop's body is new: the expressions are stale.
             session = ScevSession::of(unit.context, unit.function, &outer);
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// `LLVM_DEBUG` of LoopVectorize (D3), on `LLRM_DEBUG=loop-vectorize`: the verdict on the loop.
+fn why(
+    unit: &passes::Unit,
+    outer: &passes::Outer,
+    header: BlockId,
+    verdict: &str,
+) {
+    if llrm_support::debug::enabled("loop-vectorize") {
+        let owner = unit.id.and_then(|id| (*outer.globals[id.0 as usize].name).clone()).unwrap_or_default();
+        let labels = llrm_mir::print::block_labels(unit.function);
+        eprintln!("LV: @{owner} %{}: {verdict}", labels[&header]);
     }
 }
 
