@@ -240,6 +240,21 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }
 
+/// `__builtin_parity(unsigned short)` at m32 -O1 was the whole popcount
+/// expansion (21 instructions, 66 B) while m64 had `xor cl, dil; setnp`: the
+/// m32 `expand` list expanded `ctpop` in MIR before selection, so the DAG
+/// combiner never saw a CTPOP to fold to PARITY. The pin keeps it through the
+/// combiner.
+#[test]
+fn the_parity_of_a_word_is_the_parity_flag_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i386-unknown-linux-gnu\"\n\
+                declare i32 @llvm.ctpop.i32(i32)\n\
+                define i32 @f(i16 zeroext %x) {\n  %z = zext i16 %x to i32\n  %c = call i32 @llvm.ctpop.i32(i32 %z)\n  %b = and i32 %c, 1\n  ret i32 %b\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("setnp") && !listing.contains("sub "), "{listing}");
+}
+
 /// An add of a constant to a dword that stays live is a three-address `lea` at
 /// m64 (`LEA64_32r`). It was off there, so each such add cost a `mov` and an
 /// `add`.
@@ -5075,4 +5090,30 @@ fn a_swap_of_two_64_bit_arguments_for_a_call_is_one_xchg_at_m64_os() {
     assert_eq!(size, 1, "{listing}");
     let (speed, listing) = xchgs("-O2");
     assert_eq!(speed, 0, "{listing}");
+
+/// A 16-trip loop of calls in an internal function that nothing will inline
+/// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
+/// early unroll leaves an internal function's loops to be priced at each
+/// inlined site, and no site came. huffman_decode -O3 at m64: `decode` copied
+/// 17 calls of `getbit`, 443 B against gcc's 137, 2099 B in all against 1184
+/// and 27% over gcc in clocks plus bytes.
+#[test]
+fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o3() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @h()\n\
+                define internal i32 @f(i32 %x) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i32 [ 1, %entry ], [ %j, %loop ]\n  %c = phi i32 [ %x, %entry ], [ %d, %loop ]\n\
+                  %b = call i32 @h()\n  %s = shl i32 %c, 1\n  %d = add i32 %s, %b\n  %j = add i32 %i, 1\n\
+                  %t = icmp ult i32 %j, 17\n  br i1 %t, label %loop, label %done\n\
+                done:\n  ret i32 %d\n}\n\
+                define i32 @g(i32 %x) {\n  %r = call i32 @f(i32 %x)\n  ret i32 %r\n}\n";
+    let calls_of_h = |arguments: &[&str]| {
+        let (built, _) = compiled(&flags(arguments), text, "g").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().matches("call h").count()
+    };
+    let off = ["-m64", "-O3", "--isel=dag", "-fno-inline-functions", "-fno-inline-functions-called-once"];
+    assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
+    let on = ["-m64", "-O3", "--isel=dag"];
+    assert!(calls_of_h(&on) >= 1);
 }

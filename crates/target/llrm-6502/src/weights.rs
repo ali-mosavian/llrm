@@ -52,7 +52,50 @@ pub fn block_weights(
             *weight = (*weight * trips).min(MOST);
         }
     }
+    by_branch_weights(module, function, &mut weights);
     weights
+}
+
+/// `weights` with each block that one branch with `!prof` weights decides
+/// scaled by its share of the branch: the block a loop's counter wraps into
+/// runs once per page, not once per trip. A block weighs at least one.
+pub fn by_branch_weights(
+    module: &Module,
+    function: &Function,
+    weights: &mut [u64],
+) {
+    use llrm_mir::module::{MetadataOperand, Operand};
+    use llrm_mir::opcode::Opcode;
+    for block in function.layout() {
+        let [from] = function.predecessors(*block)[..] else { continue };
+        let Some(jump) = function.terminator(from) else { continue };
+        let branch = function.instruction(jump);
+        if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
+            continue;
+        }
+        let Some((_, node)) = branch.metadata.iter().find(|(kind, _)| kind == "prof") else { continue };
+        let Some(node) = module.metadata.get(node.0 as usize) else { continue };
+        if node.operands.first() != Some(&MetadataOperand::String("branch_weights".to_owned())) {
+            continue;
+        }
+        let shares: Vec<u64> = node.operands[1..]
+            .iter()
+            .filter_map(|one| match one {
+                MetadataOperand::Constant(id) => match module.context.get(*id).kind {
+                    llrm_mir::context::ConstantKind::Int(bits) => Some(bits as u64),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let targets = &branch.operands[1..];
+        let Some(at) = targets.iter().position(|one| *one == Operand::Block(*block)) else { continue };
+        let total: u64 = shares.iter().sum();
+        if shares.len() == 2 && total > 0 && at < 2 && targets[0] != targets[1] {
+            let weight = &mut weights[block.0 as usize];
+            *weight = (*weight * shares[at] / total).max(1);
+        }
+    }
 }
 
 /// The clocks and bytes of a program from the text of its functions: the

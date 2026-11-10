@@ -1445,12 +1445,12 @@ impl Printer<'_> {
             // equality (no scratch register for two nonzero bytes)
             (false, true) if bh == "#0" && bl.starts_with('#') => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("or a, {}", name(ah)));
             }
             (false, true) if bl == "#0" && bh.starts_with('#') => {
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.push(format!("or a, {}", name(al)));
             }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
@@ -1469,15 +1469,37 @@ impl Printer<'_> {
             }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("jr nz, {skip}"));
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.out.push(Line::Label(skip));
             }
             (false, false) => unreachable!("a reader was found"),
         }
         Ok(())
+    }
+
+    /// `a` left zero exactly when it equalled `operand`, for a reader of the
+    /// zero flag alone: `sub a, #1` and `sub a, #255` are `dec a` and `inc a`,
+    /// 1 B and 3 T less (the carry they set is not read).
+    ///
+    /// DEVIATE Z80-ZTEST-1: no pin pass at this stage. The pin's counterpart
+    /// is an isel pattern, `X86sub_flag_nocf x, -1` (a flag-setting subtract
+    /// whose carry is not read) selecting `INC`
+    /// ([`X86InstrCompiler.td`][td]). Owner z80. Exit: the flag-use
+    /// predicate in the generated selector.
+    ///
+    /// [td]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L2324
+    fn push_zero_test_against(
+        &mut self,
+        operand: &str,
+    ) {
+        match operand {
+            "#1" => self.push("dec a"),
+            "#255" | "#-1" => self.push("inc a"),
+            _ => self.push(format!("sub a, {operand}")),
+        }
     }
 
     /// The byte operand `at` of an ALU or compare as printed: the frame cell a
