@@ -240,7 +240,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it
         // is `rep movsd` inline, as gcc's `rep_prefix_4_byte`. x_mergesort -O3:
         // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
-        // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
+        // (gcc 60026: row MEM-1-R1). -O1 and size keep the call (`bytes_strict`:
+        // no byte rate pays for the ~17 B; x_jpeg_single -O1 inlined it twice).
+        // Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
         // see `Tuning::ipsccp_widen_keeps_sign`.
