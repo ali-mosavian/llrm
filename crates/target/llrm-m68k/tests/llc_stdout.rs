@@ -5,7 +5,8 @@ use std::process::Command;
 
 #[test]
 fn an_output_path_of_dash_is_stdout_not_a_file_named_dash() {
-    let dir = std::env::temp_dir().join("llrm-llc-stdout-m68k");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(&dir).unwrap();
     let _ = std::fs::remove_file(dir.join("-"));
     let source = dir.join("g.ll");
