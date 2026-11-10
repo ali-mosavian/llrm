@@ -447,7 +447,7 @@ fn hoist_gep(
 
 /// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
 /// `(LV op C1) op C2` and its commuted forms, the integer `add`, `mul`, `and`,
-/// `or` and `xor`. The pin edits `bo` in place (`LICM.cpp#L2726`-`L2758`), so
+/// `or` and `xor`. The pin edits `bo` in place ([`LICM.cpp#L2718`-`L2740`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2718-L2740)), so
 /// the next link of a chain reads `lv op (c1 op c2)`: `State::chained`
 /// carries that edit to it. DEVIATE: an instruction another kind of
 /// reassociation of the loop has replaced, or one reading a value it erased,
