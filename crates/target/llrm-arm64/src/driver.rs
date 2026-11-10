@@ -328,7 +328,10 @@ fn lower_function(
     let blocks = crate::layout::fold(
         blocks,
         &mut tables,
-        &crate::layout::edge_odds(module, function, &program.layout, &machine),
+        &crate::layout::odds_by_label_number(
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            &machine,
+        ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
     );
