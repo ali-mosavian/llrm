@@ -469,6 +469,7 @@ impl CombineHooks for X86Lowering<'_> {
             || op == ISD::Select
             || op == ISD::Add
             || op == ISD::Or
+            || op == ISD::Xor
             || op == ISD::And
             || op == ISD::Sub
             || op == x86isd::ADD
@@ -513,7 +514,10 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
-            ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free).or_else(|| combine_or(dag, node)),
+            ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free)
+                .or_else(|| combine_or_xor_with_setcc(dag, node))
+                .or_else(|| combine_or(dag, node)),
+            ISD::Xor => combine_or_xor_with_setcc(dag, node),
             ISD::And => combine_compare_equal(dag, node, self.sse2, self.zext_free),
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
@@ -1747,6 +1751,56 @@ fn combine_or(
     super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
 }
 
+/// `combineOrXorWithSETCC`: `(xor (zext setcc), imm)` with an odd `imm` is a
+/// subtract, and `(or (zext setcc), imm)` with an even one an add, of the
+/// compare result, which `combineAddOrSubToADCOrSBB` turns into `adc`/`sbb`.
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L54095
+fn combine_or_xor_with_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    if !vt.is_integer() || dag.opcode(n0) != ISD::ZeroExtend || !dag.has_one_use(n0.node) {
+        return None;
+    }
+    if dag.opcode(dag.operand(n0, 0)) != x86isd::SETCC {
+        return None;
+    }
+    let odd = dag.constant(n1)? & 1 == 1;
+    let is_sub = dag.opcode(node) == ISD::Xor;
+    if is_sub != odd {
+        return None;
+    }
+    super::x86_carry::add_or_sub_to_adc_or_sbb(dag, is_sub, vt, n1, n0, false)
+}
+
+/// `combineAdd`'s `ADD(ADC(Y,0,W),X)` is `ADC(X,Y,W)`, and `ADD(SBB(Y,0,W),C)`
+/// is `SBB(Y,-C,W)` (the flags result of either must be dead).
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60754
+fn combine_add_of_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let flags_dead = |dag: &SelectionDAG, n: SDValue| !dag.has_users(SDValue { node: n.node, res: 1 });
+    let zero_second = |dag: &SelectionDAG, n: SDValue| dag.constant(dag.operand(n, 1)) == Some(0);
+    if dag.opcode(op0) == x86isd::ADC && dag.has_one_use(op0.node) && zero_second(dag, op0) && flags_dead(dag, op0) {
+        let vts = dag.node(op0).values.clone();
+        let (y, w) = (dag.operand(op0, 0), dag.operand(op0, 2));
+        return Some(dag.get_node_multi(x86isd::ADC, &vts, &[op1, y, w]));
+    }
+    let (sbb, c) = if dag.opcode(op0) == x86isd::SBB { (op0, op1) } else { (op1, op0) };
+    if dag.opcode(sbb) == x86isd::SBB && dag.has_one_use(sbb.node) && zero_second(dag, sbb) && flags_dead(dag, sbb) {
+        let vts = dag.node(sbb).values.clone();
+        let vt = dag.value_type(node);
+        let (y, w) = (dag.operand(sbb, 0), dag.operand(sbb, 2));
+        let negated = dag.get_negative(c, vt);
+        return Some(dag.get_node_multi(x86isd::SBB, &vts, &[y, negated, w]));
+    }
+    None
+}
+
 /// `combineAdd`, the hidden LEA pattern: `(add (sub (shl x, c), y), z)` with
 /// `c < 4` is `(sub (add (shl x, c), z), y)`, so the `shl` and the `add` are
 /// one `lea` (`y * 7 + z` is `lea z + y*8; sub y`). (The vector, `cmov`,
@@ -1757,7 +1811,7 @@ fn combine_add(
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 && vt != EVT::I64 {
-        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
+        return combine_add_of_carry(dag, node).or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node));
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
@@ -1772,7 +1826,7 @@ fn combine_add(
     };
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
     let Some((shift, y, z)) = hidden_lea(a, b).or_else(|| hidden_lea(b, a)) else {
-        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
+        return combine_add_of_carry(dag, node).or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node));
     };
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
@@ -1898,20 +1952,52 @@ fn combine_sub_carry(
     None
 }
 
-/// `combineSub`: the `SUB(X, ADC(Y,0,W))`, `SUB(X, SBB(Y,Z,W))` and `~A - ~B`
-/// folds ([`combine_sub_carry`]), `combineAddOrSubToADCOrSBB`
-/// ([`super::x86_carry`]), then `combineSubSetcc`.
+/// `combineSub` ([L60916][pin]): `sub C1, (xor X, C2)` is `add (xor X, ~C2),
+/// C1 + 1` ([`combine_sub_xor_constant`]), the `SUB(X, ADC(Y,0,W))`,
+/// `SUB(X, SBB(Y,Z,W))` and `~A - ~B` folds ([`combine_sub_carry`]),
+/// `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then `combineSubSetcc`.
 ///
-/// DEVIATE SD448: then, where `lea_adds`, [`combine_masked_xor_difference`].
+/// DEVIATE SD448: where `lea_adds`, [`combine_masked_xor_difference`] runs
+/// before the pin's first fold, not after it as the pin has no such fold: for a
+/// low-bit mask the pin's `xor`+`add` is two instructions where it is one.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60916
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
     lea_adds: bool,
 ) -> Option<SDValue> {
-    combine_sub_carry(dag, node)
+    lea_adds
+        .then(|| combine_masked_xor_difference(dag, node))
+        .flatten()
+        .or_else(|| combine_sub_xor_constant(dag, node))
+        .or_else(|| combine_sub_carry(dag, node))
         .or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node))
         .or_else(|| combine_sub_setcc(dag, node))
-        .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
+}
+
+/// The first fold of `combineSub`: x86 cannot encode an immediate left side of
+/// a `sub`, so `sub C1, (xor X, C2)` (the `xor` used once, `C1` not zero: that
+/// is a `neg`) becomes `add (xor X, ~C2), C1 + 1`, which saves a register.
+/// `100 - (n ^ 0xF0)` is then `(n ^ -241) + 101`.
+fn combine_sub_xor_constant(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (minuend, xor) = (dag.operand(node, 0), dag.operand(node, 1));
+    let c1 = dag.constant(minuend).filter(|&c| c != 0 && !dag.is_opaque(minuend))?;
+    if dag.opcode(xor) != ISD::Xor || !dag.has_one_use(xor.node) {
+        return None;
+    }
+    let mask = dag.operand(xor, 1);
+    let c2 = dag.constant(mask).filter(|_| !dag.is_opaque(mask))?;
+    let bits = llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
+    let inverted = dag.get_constant(!c2 & bits, vt);
+    let new_xor = dag.get_node(ISD::Xor, vt, &[dag.operand(xor, 0), inverted]);
+    let bumped = dag.get_constant(c1.wrapping_add(1) & bits, vt);
+    Some(dag.get_node(ISD::Add, vt, &[new_xor, bumped]))
 }
 
 /// DEVIATE SD448 (owner x87; recheck 2026-11-20 and at every pin bump,
@@ -2843,9 +2929,7 @@ fn combine_mul(
 /// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
 /// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
 /// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
-/// GCC's `synth_mult`
-/// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
-/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
 /// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
 /// frequency is the IR `BlockFrequencies` (the machine one does not exist at
 /// DAG time). Exit: none while the clocks decide. Owner sdag-d.
@@ -2859,8 +2943,14 @@ fn priced_chain(
     use llrm_codegen::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    // -O1 is strict in bytes and clocks: no rate trades one for the other, so
+    // the pin's `combineMul` (above) is all there is and an `imul` stays an
+    // `imul`.
+    if by_clocks && milliclocks_per_byte == 0 {
+        return None;
+    }
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+        arithmetic::chain_by_clocks_then_bytes(c, width, cpu, arch)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }
@@ -3099,7 +3189,12 @@ fn lower_fcopysign(
 /// The stack pointer a pointer of type `vt` is saved from and restored to
 /// (`getStackPointerRegisterToSaveRestore`): `rsp` at 64 bits.
 fn stack_register(vt: EVT) -> llrm_lir::registers::RegId {
-    if vt == EVT::I64 { llrm_lir::registers::RegId::RSP } else { llrm_lir::registers::RegId::SP }
+    use llrm_lir::registers::RegId;
+    match vt {
+        EVT::I64 => RegId::RSP,
+        EVT::I32 => RegId::ESP,
+        _ => RegId::SP,
+    }
 }
 
 /// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer

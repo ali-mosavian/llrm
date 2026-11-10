@@ -95,6 +95,7 @@ pub const MAX_DATA_FLOW_EDGE: usize = 10;
 /// make them follow.
 pub struct BodyFacts {
     state: std::cell::RefCell<State>,
+    regs: Option<llrm_lir::registers::Regs>,
 }
 
 struct Slot {
@@ -322,7 +323,15 @@ impl BodyFacts {
             }
             state.blocks.push(kept);
         }
-        Self { state: std::cell::RefCell::new(state) }
+        Self { state: std::cell::RefCell::new(state), regs: body.registers }
+    }
+
+    /// Whether `what` is tied here: the rule of the body's target.
+    fn ties(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        crate::backend::twoaddr::ties_in(self.regs, what)
     }
 
     /// The instructions that define or read `value`, and whether each defines
@@ -969,7 +978,7 @@ impl<'a> Commuter<'a> {
             return Some((one, true, Mapped::Value(dst.value)));
         }
         // A tied use: the result is the first source's register.
-        if let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))
+        if let Some(what) = one.what.as_ref().filter(|what| self.facts.ties(what))
             && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
             && first.value == reg
         {
@@ -1154,7 +1163,7 @@ impl<'a> Commuter<'a> {
         def: u32,
     ) -> Option<u32> {
         let one = self.facts.insn(key);
-        let what = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
+        let what = one.what.as_ref().filter(|what| self.facts.ties(what))?;
         match (&what.dests[0], &what.sources[0]) {
             (Loc::Held(dst), Loc::Held(src)) if dst.value == def => Some(src.value),
             _ => None,
@@ -1400,7 +1409,7 @@ impl<'a> Commuter<'a> {
         let mi = Arc::clone(&work[at]);
         // Only an instruction the pass would untie: tied, and writing another
         // value than it reads.
-        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let Some(what) = mi.what.as_ref().filter(|what| self.facts.ties(what)) else { return false };
         let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
             return false;
         };
@@ -1424,7 +1433,7 @@ impl<'a> Commuter<'a> {
         }
         // `isTwoAddrUse`: a kill that ties `reg` itself stays.
         if let Some(what) = kill.what.as_ref()
-            && crate::backend::twoaddr::ties(what)
+            && self.facts.ties(what)
             && matches!(
                 what.sources.first(),
                 Some(Loc::Held(held)) if held.value == reg
@@ -1562,7 +1571,7 @@ impl<'a> Commuter<'a> {
         only_x87_load: bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
-        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let Some(what) = mi.what.as_ref().filter(|what| self.facts.ties(what)) else { return false };
         let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
             return false;
         };
@@ -1586,7 +1595,7 @@ impl<'a> Commuter<'a> {
             return false;
         }
         if let Some(what) = kill.what.as_ref()
-            && crate::backend::twoaddr::ties(what)
+            && self.facts.ties(what)
             && matches!(
                 what.sources.first(),
                 Some(Loc::Held(held)) if held.value == reg

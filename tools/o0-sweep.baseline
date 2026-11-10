@@ -1,36 +1,25 @@
 # -O0 compile refusals known on 2026-11-08 (tools/o0_sweep.py). TARGET PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR. Ratchet: only shrinks.
-x86_16-wat bitfield_overhang_init | w9 (corpus tag or header) | EXIT 2026-11-12 | bitfield_overhang_init.c:7:27: error: width of bit-field 'b' (24 bits) exceeds the width of its type (16 bits)
-x86_16-wat long_double_union_pun | w9 (corpus tag or header) | EXIT 2026-11-12 | long_double_union_pun.c:15:21: error: ms_struct may not produce Microsoft-compatible layouts with fundamental 
-x86_16-wat memcpy_runtime | w9 (corpus tag or header) | EXIT 2026-11-12 | llrm-llc: segment `_BSS` is 140032 bytes: a 16-bit segment holds 65536
-x86_16-wat memfuncs_runtime | w9 (corpus tag or header) | EXIT 2026-11-12 | llrm-llc: segment `_BSS` is 140200 bytes: a 16-bit segment holds 65536
 x86_32-wat os_execute | x86-m32 DOS owner (Watcom llrm_os.h) | EXIT 2026-11-20 | os_execute.c:36:5: error: call to undeclared function 'llrm_os_block_resize'; ISO C99 and later do not support
 arm64-linux int_compared_with_float | owner of the target (arm64), driver flag pass-through | EXIT 2026-11-20 | llrm-arm64-llc: unrecognized argument -fexcess-precision=standard
 arm64-linux tail_calls_edges | owner of the target (arm64), driver flag pass-through | EXIT 2026-11-20 | llrm-arm64-llc: unrecognized argument -fno-inline=sum5
 wasm32 builtins_table | owner of the target (wasm32), llvm.is.constant PR | EXIT 2026-11-12 | llrm-wasm-llc: @classify: intrinsic call llvm.is.constant.i32
 wasm32 tail_calls_edges | owner of the target (wasm32), driver flag pass-through | EXIT 2026-11-20 | llrm-wasm-llc: unrecognized argument -fno-inline=sum5
-wasm32 widening_multiply | w9 (corpus tag or header) | EXIT 2026-11-12 | widening_multiply.c:3:10: fatal error: 'stdio.h' file not found
-6502-sim65 bitfield_overhang_init | w9 (corpus tag or header) | EXIT 2026-11-12 | bitfield_overhang_init.c:7:27: error: width of bit-field 'b' (24 bits) exceeds the width of its type (16 bits)
 6502-sim65 builtins_table | owner of the target (6502), llvm.is.constant PR | EXIT 2026-11-12 | llrm-6502-llc: intrinsic call llvm.is.constant.i16
 6502-sim65 fixed_point | z80/6502 owners | EXIT 2026-11-20 | llrm-6502-llc: Legalize("Unsupported { op: SMulFixSat, ty: Simple(I32), what: \"expand operand\" }")
 6502-sim65 long_double_variadic | z80/6502 owners | EXIT 2026-11-20 | llrm-6502-llc: CannotSelect("CannotSelect(\"VAStart\")")
-6502-sim65 memcpy_runtime | w9 (corpus tag or header) | EXIT 2026-11-12 | memcpy_runtime.c:9:27: error: array is too large (70'016 elements)
-6502-sim65 memfuncs_runtime | w9 (corpus tag or header) | EXIT 2026-11-12 | memfuncs_runtime.c:11:26: error: array is too large (70'100 elements)
 6502-sim65 tail_calls_edges | z80/6502 owners | EXIT 2026-11-20 | llrm-6502-llc: CannotSelect("CannotSelect(\"VAStart\")")
 6502-sim65 variadic | z80/6502 owners | EXIT 2026-11-20 | llrm-6502-llc: CannotSelect("CannotSelect(\"VAStart\")")
-6502-sim65 widening_multiply | w9 (corpus tag or header) | EXIT 2026-11-12 | widening_multiply.c:3:10: fatal error: 'stdio.h' file not found
-z80-sdcc bitfield_overhang_init | w9 (corpus tag or header) | EXIT 2026-11-12 | bitfield_overhang_init.c:7:27: error: width of bit-field 'b' (24 bits) exceeds the width of its type (16 bits)
 z80-sdcc builtins_table | owner of the target (z80), llvm.is.constant PR | EXIT 2026-11-12 | llrm-z80-llc: REFUSED @classify: intrinsic call llvm.is.constant.i16
 z80-sdcc fixed_point | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @main: Legalize("Unsupported { op: SMulFixSat, ty: Simple(I32), what: \"expand operand\"
 z80-sdcc long_double_arguments | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @main: 18 bytes of stack arguments
 z80-sdcc long_double_variadic | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @sum: CannotSelect("CannotSelect(\"VAStart\")")
-z80-sdcc memcpy_runtime | w9 (corpus tag or header) | EXIT 2026-11-12 | memcpy_runtime.c:9:27: error: array is too large (70'016 elements)
-z80-sdcc memfuncs_runtime | w9 (corpus tag or header) | EXIT 2026-11-12 | memfuncs_runtime.c:11:26: error: array is too large (70'100 elements)
 z80-sdcc os_locals_between_pushes | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @probe: 26 bytes of stack arguments
 z80-sdcc over_aligned_local_after_even_pushes | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @main: 18 bytes of stack arguments
 z80-sdcc shrink_wrapped_saves | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @f: 22 bytes of stack arguments
 z80-sdcc tail_calls_edges | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @vsum: CannotSelect("CannotSelect(\"VAStart\")")
 z80-sdcc variadic | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @sum: CannotSelect("CannotSelect(\"VAStart\")")
-z80-sdcc widening_multiply | w9 (corpus tag or header) | EXIT 2026-11-12 | widening_multiply.c:3:10: fatal error: 'stdio.h' file not found
 z80-sdcc x87_arguments | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @main: 20 bytes of stack arguments
+m68k-68000 over_aligned_local_after_even_pushes | m68k owner | EXIT 2026-11-14 | llrm-m68k-llc: @five: an object aligned to 16 needs stack realignment, not supported yet (accepts 8)
+m68k-68020 over_aligned_local_after_even_pushes | m68k owner | EXIT 2026-11-14 | llrm-m68k-llc: @five: an object aligned to 16 needs stack realignment, not supported yet (accepts 8)
 m68k-68020 memcpy_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70016 does not fit its 2-byte field (with -mcmodel=medium; 68000 compiles)
 m68k-68020 memfuncs_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70100 does not fit its 2-byte field (with -mcmodel=medium; 68000 compiles)

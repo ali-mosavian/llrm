@@ -980,6 +980,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::UAddO => self.visit_uaddo(node),
             ISD::UMulO | ISD::SMulO => self.visit_mulo(node),
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
+            ISD::USubO => self.visit_usubo(node),
+            ISD::USubOCarry => self.visit_usubo_carry(node),
+            ISD::SetCCCarry => self.visit_setcc_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
@@ -1442,6 +1445,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let vt = self.dag.value_type(node);
         let NodeData::CondCode(cond) = self.dag.node(ops[4]).data else { return None };
         let compare = self.dag.get_setcc(EVT::I1, ops[0], ops[1], cond);
+        // `SimplifySelectCC`: a compare that folded to a constant names the arm.
+        if self.dag.opcode(compare) != ISD::SetCC {
+            return self.dag.constant(compare).map(|value| if value != 0 { ops[2] } else { ops[3] });
+        }
         let simpler = self.visit_setcc(compare)?;
         if self.dag.opcode(simpler) != ISD::SetCC {
             return None;
@@ -1571,6 +1578,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
         let amount_vt = self.hooks.shift_amount_type(vt);
+        let register_wide = self.tli.is_some_and(|tli| tli.types.is_type_legal(vt));
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -1583,6 +1591,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
         }
         if c1.wrapping_sub(1) & mask == c2 {
+            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, review 2026-12-20; ends
+            // if the pin's M68k lowers a select of constants itself or
+            // `convertSelectOfConstantsToMath` is answered per target): where
+            // a true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
+            // and `sext (not c)` is the inverted `Scc` with no mask:
+            // `c ? C : C-1` is `C + sext (!c)`. The pin's own forms: the sext
+            // arm ([L13102][sext]) and `or (sext (not c)), C` ([L13122][not]).
+            //
+            // [sext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13102
+            // [not]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13122
+            // Only in a register-wide type: an expanded one pays the sext's
+            // high half (`add` with carry of `zext` is cheaper there).
+            if dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne && register_wide {
+                let not = dag.get_not(cond, EVT::I1);
+                let not = dag.get_sext_or_trunc(not, vt);
+                return Some(dag.get_node(ISD::Add, vt, &[not, then]));
+            }
             let cond = dag.get_zext_or_trunc(cond, vt);
             return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
         }
@@ -2482,6 +2507,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
         }
+        // `visitADDLike`: `add (sext i1 X), 1` is `zext (not i1 X)`; the pin
+        // does not make `add (zext i1 X), -1` a `sext` ("most targets
+        // generate better code for the zext form").
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2991
+        if self.dag.opcode(n0) == ISD::SignExtend
+            && self.dag.has_one_use(n0.node)
+            && self.dag.constant(n1) == Some(1)
+            && self.dag.value_type(self.dag.operand(n0, 0)) == EVT::I1
+            && (!self.legal_operations() || (self.fp_op_legal(ISD::Xor, EVT::I1) && self.fp_op_legal(ISD::ZeroExtend, vt)))
+        {
+            let not = self.dag.get_not(self.dag.operand(n0, 0), EVT::I1);
+            return Some(self.dag.get_node(ISD::ZeroExtend, vt, &[not]));
+        }
+        // `visitADDLikeCommutative`: where booleans are 0/1, `add (sext i1
+        // Y), X` is `sub X, (zext i1 Y)`.
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3534
+        if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne
+            && !self.dag.config().sext_bool_add_preferred
+        {
+            for (sext, other) in [(n0, n1), (n1, n0)] {
+                if self.dag.opcode(sext) == ISD::SignExtend && self.dag.value_type(self.dag.operand(sext, 0)) == EVT::I1 {
+                    let zext = self.dag.get_node(ISD::ZeroExtend, vt, &[self.dag.operand(sext, 0)]);
+                    return Some(self.dag.get_node(ISD::Sub, vt, &[other, zext]));
+                }
+            }
+        }
         let is_neg =
             |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Sub && dag.constant(dag.operand(v, 0)) == Some(0);
         // `(add (sub 0, a), b)` is `(sub b, a)`; likewise on the right.
@@ -3257,7 +3308,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> bool {
         let (ka, kb) = (super::known_bits::known_bits(self.dag, a), super::known_bits::known_bits(self.dag, b));
         let all = super::fold::mask(ka.width);
-        (!ka.zero & all) + (!kb.zero & all) <= all
+        // At 128 bits the sum of the two maxima wraps in a `u128`, which read as "fits".
+        (!ka.zero & all).checked_add(!kb.zero & all).is_some_and(|sum| sum <= all)
     }
 
     /// `visitUADDO_CARRY`
@@ -3299,6 +3351,106 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         None
+    }
+
+    /// `visitSUBO` for `usubo`
+    /// ([L4793](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4793)):
+    /// a dead borrow is a `sub`, `x - x` and `x - 0` do not borrow, a
+    /// difference that cannot borrow is a `sub`, and `usubo -1, x` is `~x`.
+    /// DEVIATE USUBO1: `willNotOverflowSub` reads the operand ranges from the
+    /// known bits only (the pin intersects a `ConstantRange` too); signed
+    /// `ssubo` is not dispatched (no cell). Exit: with `ssubo`, 2026-11-20.
+    fn visit_usubo(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let carry_vt = self.dag.node(node).values[1];
+        let borrow = SDValue { node: node.node, res: 1 };
+        if !self.dag.has_users(borrow) {
+            let diff = self.dag.get_node(ISD::Sub, vt, &[n0, n1]);
+            let undef = self.dag.get_undef(carry_vt);
+            self.dag.combine_to(node, diff);
+            self.dag.combine_to(borrow, undef);
+            return None;
+        }
+        let no_borrow = self.dag.get_constant(0, carry_vt);
+        if n0 == n1 {
+            let zero = self.dag.get_constant(0, vt);
+            self.dag.combine_to(node, zero);
+            self.dag.combine_to(borrow, no_borrow);
+            return None;
+        }
+        if self.dag.is_null_constant(n1) {
+            self.dag.combine_to(node, n0);
+            self.dag.combine_to(borrow, no_borrow);
+            return None;
+        }
+        let (k0, k1) = (super::known_bits::known_bits(self.dag, n0), super::known_bits::known_bits(self.dag, n1));
+        let all = super::fold::mask(k0.width);
+        if k0.one >= (!k1.zero & all) {
+            let diff = self.dag.get_node(ISD::Sub, vt, &[n0, n1]);
+            self.dag.combine_to(node, diff);
+            self.dag.combine_to(borrow, no_borrow);
+            return None;
+        }
+        if self.dag.constant(n0) == Some(all) {
+            let not = self.dag.get_node(ISD::Xor, vt, &[n1, n0]);
+            self.dag.combine_to(node, not);
+            self.dag.combine_to(borrow, no_borrow);
+            return None;
+        }
+        None
+    }
+
+    /// `visitUSUBO_CARRY`
+    /// ([L4847](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4847)):
+    /// a zero borrow in is a `usubo`, and with the borrow out dead
+    /// `(usubo_carry (sub X, Y), 0, c)` is `(usubo_carry X, Y, c)`.
+    fn visit_usubo_carry(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1, carry) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let values = self.dag.node(node).values.clone();
+        if self.dag.is_null_constant(carry) {
+            let legal = match self.tli {
+                Some(tli) if self.level >= CombineLevel::AfterLegalizeDag => {
+                    tli.is_operation_legal_or_custom(ISD::USubO, values[0])
+                }
+                _ => true,
+            };
+            if legal {
+                return Some(self.dag.get_node_multi(ISD::USubO, &values, &[n0, n1]));
+            }
+        }
+        if self.dag.opcode(n0) == ISD::Sub
+            && self.dag.is_null_constant(n1)
+            && !self.dag.has_users(SDValue { node: node.node, res: 1 })
+        {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            return Some(self.dag.get_node_multi(ISD::USubOCarry, &values, &[a, b, carry]));
+        }
+        None
+    }
+
+    /// `visitSETCCCARRY`
+    /// ([L15188](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15188)):
+    /// with no borrow in, the node is a plain `setcc` of its operands. The low
+    /// words' `usubo x, 0` folds to a zero borrow, so a compare of a long with
+    /// a constant whose low words are zero reaches here.
+    fn visit_setcc_carry(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (lhs, rhs, carry, cond) =
+            (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+        if !self.dag.is_null_constant(carry) {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        Some(self.dag.get_node(ISD::SetCC, vt, &[lhs, rhs, cond]))
     }
 
     /// The algebraic folds of `visitSUB`

@@ -18,6 +18,7 @@ pub mod routines;
 pub mod runtime;
 pub mod timings;
 pub mod tune;
+pub mod testing;
 
 use std::rc::Rc;
 
@@ -473,6 +474,17 @@ pub enum Allocator {
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
+/// x86's `isAsCheapAsAMove` of a constant: `MOV64ri` (`movabs`), an immediate
+/// that neither a sign-extended nor a zero-extended dword makes, is
+/// rematerializable but not cheap (X86InstrMisc.td, outside the `MOV8ri`..
+/// `MOV64ri32` block).
+pub fn x86_cheap_move_immediate(
+    bytes: u8,
+    value: i64,
+) -> bool {
+    !(bytes == 8 && !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&value))
+}
+
 pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
@@ -524,17 +536,24 @@ pub trait Target {
         self.layout().expands(operation)
     }
 
-    /// The processors this target prices, as a platform description names them.
-    fn cpus(&self) -> &'static [&'static str];
+    /// The processors this target prices, as a platform description names them;
+    /// none: any `-mcpu` is refused.
+    fn cpus(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// The CPU gcc's `-march=NAME` names, from the target's `timings.times`.
     fn march(
         &self,
-        name: &str,
-    ) -> Option<&'static str>;
+        _name: &str,
+    ) -> Option<&'static str> {
+        None
+    }
 
-    /// The names `-march` and `-mtune` take.
-    fn marches(&self) -> Vec<&'static str>;
+    /// The names `-march` and `-mtune` take; none where it has no table.
+    fn marches(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 
     /// The data layout programs are built under and the address spaces a
     /// frontend's addresses are.
@@ -575,6 +594,14 @@ pub trait Target {
         false
     }
 
+    /// The machine phases (`flow::machine_with`'s class names) this target does
+    /// not run, each with why. The pin's `TargetPassConfig` adds each target's
+    /// own passes while the phase list here is x86's, so a target names what
+    /// its pin has no pass for. An unknown name is an error in `machine_with`.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
@@ -582,6 +609,24 @@ pub trait Target {
     /// (LEAF-FOLD-OS).
     fn leaf_fold_at_size(&self) -> bool {
         false
+    }
+
+    /// MachineCSE keeps a compare whose difference nothing reads apart from the
+    /// same difference made in a later block, when that difference overwrites
+    /// an operand still live (CSE-CMP): sharing them moves the subtract in
+    /// front of the branch and adds a copy of the operand. The pin shares.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
+        false
+    }
+
+    /// `TargetInstrInfo::isAsCheapAsAMove` for a constant: whether a
+    /// `bytes`-wide register can be given `value` by one move that is as
+    /// cheap as a copy (MachineSink, MachineCSE and MachineLICM leave it
+    /// where it is). The default is x86's: every immediate but a `movabs`.
+    /// AArch64 asks whether the constant takes two instructions or fewer
+    /// (`AArch64InstrInfo.cpp#L1385`).
+    fn cheap_move_immediate(&self) -> fn(u8, i64) -> bool {
+        x86_cheap_move_immediate
     }
 
     /// The pressure sets of the register classes and each set's limit, for a
@@ -664,8 +709,10 @@ pub trait Target {
     /// target prices it.
     fn cpu_table(
         &self,
-        name: &str,
-    ) -> Option<timings::CpuTable>;
+        _name: &str,
+    ) -> Option<timings::CpuTable> {
+        None
+    }
 
     /// The target's register file, in `registers.regs`'s format.
     fn registers_text(&self) -> String;
@@ -683,15 +730,19 @@ pub trait Target {
     /// The inline routine that fills `cell`-byte cells through a huge pointer.
     fn huge_fill_routine(
         &self,
-        cell: u32,
-    ) -> Result<routines::HugeString, String>;
+        _cell: u32,
+    ) -> Result<routines::HugeString, String> {
+        Err(format!("{}: huge_fill_routine: the target has no huge pointers", self.name()))
+    }
 
     /// The inline routine that copies through huge pointers, upward or, `down`,
     /// from the last byte.
     fn huge_copy_routine(
         &self,
-        down: bool,
-    ) -> Result<routines::HugeString, String>;
+        _down: bool,
+    ) -> Result<routines::HugeString, String> {
+        Err(format!("{}: huge_copy_routine: the target has no huge pointers", self.name()))
+    }
 
     /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
     /// has none: the natural logarithm and the exponentials are x87
@@ -704,9 +755,11 @@ pub trait Target {
     /// one.
     fn divide_routine(
         &self,
-        signed: bool,
-        wide_divisor: bool,
-    ) -> Result<routines::Divide, String>;
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<routines::Divide, String> {
+        Err(format!("{}: divide_routine: the target states no inline divide", self.name()))
+    }
 
     /// `divide_routine` for a caller that reads only `used` of the results: a
     /// target may have a shorter routine that leaves the rest unfixed.
@@ -741,7 +794,9 @@ pub trait Target {
     fn float_width(
         &self,
         bytes: u32,
-    ) -> u32;
+    ) -> u32 {
+        bytes
+    }
 
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(

@@ -737,6 +737,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 known_bits(self.dag, op)
             }
+            // `SimplifyDemandedBits` of `CTPOP` (TargetLowering.cpp#L2478): one
+            // demanded bit is the parity, taken before operation legalization (this
+            // DAG has no vector types: the pin's scalar-only limit holds).
+            ISD::CtPop if demanded == 1 && !legal_operations => {
+                let new = self.dag.get_node(ISD::Parity, vt, &[self.dag.operand(op, 0)]);
+                return Self::combine_to(tlo, op, new);
+            }
             _ => known_bits(self.dag, op),
         };
         known.width = width;

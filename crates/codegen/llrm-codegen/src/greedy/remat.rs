@@ -423,7 +423,12 @@ mod tests {
             values(
                 &body,
                 &BTreeSet::new(),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             ),
             BTreeSet::from([1])
         );
@@ -560,7 +565,12 @@ mod tests {
             values(
                 &body,
                 &flagged_loads(&body),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             ),
             BTreeSet::from([1])
         );
@@ -568,7 +578,12 @@ mod tests {
             values(
                 &body,
                 &BTreeSet::new(),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             )
             .is_empty(),
             "the flag is what takes the load"

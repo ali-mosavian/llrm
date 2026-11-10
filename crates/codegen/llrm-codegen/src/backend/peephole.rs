@@ -365,6 +365,7 @@ impl Peephole {
             Some(merged) => self.released(merged),
             None => body,
         };
+        let body = crate::backend::floatslotcopy::copied(&body, &self.cpu, &self.saved, &self.classes).unwrap_or(body);
         let body = forwarded_reloads(self.rules, &body);
         let body = forwarded_float_reloads(self.rules, &body);
         let body = forwarded_copies(self.rules, &body);
@@ -428,6 +429,7 @@ impl Peephole {
             )),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = pushed_immediates(&body, &self.cpu);
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -439,6 +441,73 @@ impl Peephole {
         }
         gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))
     }
+}
+
+/// `mov r32, imm8` as `push imm8; pop r`: 3 bytes against the `mov`'s 5. A
+/// translation of `ExpandMOVImmSExti8`
+/// ([X86InstrInfo.cpp:6236]), which the pin applies at `minsize`; zero and -1
+/// stay `xor` and `or` (`cleared`). Flags are untouched and the pair is atomic,
+/// so stack-relative cells between instructions keep their offsets; `masm`
+/// states the frame address after each push and pop as for any other.
+///
+/// DEVIATE PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): the same at `-Os` on
+/// a target that says so (`Tuning::push_imm_at_size`). Two clocks on the 486
+/// against the `mov`'s one: `-Os` is bytes-strict.
+///
+/// [X86InstrInfo.cpp:6236]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6236
+pub fn pushed_immediates(
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    let at_size = cpu.size && cpu.target().tti().is_some_and(|tti| tti.push_imm_at_size());
+    if body.bits != 32 || !(body.min_size || cpu.min_size || at_size) {
+        return body.clone();
+    }
+    let regs = body.regs();
+    let sp = Loc::Reg(reg(regs.named(regs.stack, 4), 4));
+    let imm8 = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && one.clobbers.is_empty()
+                && one.symbol != Some(true) =>
+        {
+            match (what.dests.as_slice(), what.sources.as_slice()) {
+                ([Loc::Reg(dest)], [Loc::Imm(Imm { value, width: 4, address: None })])
+                    if dest.width == 4
+                        && (-128..=127).contains(value)
+                        && ![0, -1].contains(value)
+                        && Loc::Reg(dest.clone()) != sp =>
+                {
+                    Some(dest.clone())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns = Vec::with_capacity(block.insns.len());
+            for one in &block.insns {
+                match imm8(one) {
+                    Some(dest) => {
+                        let source = one.what.as_ref().expect("a move").sources[0].clone();
+                        let push = semantics(Operation::Push, "push", vec![], vec![source]);
+                        let pop = semantics(Operation::Pop, "pop", vec![Loc::Reg(dest)], vec![]);
+                        insns.push(Arc::new(with_what(one, push)));
+                        insns.push(Arc::new(with_what(one, pop)));
+                    }
+                    None => insns.push(Arc::clone(one)),
+                }
+            }
+            block.with_insns(insns)
+        })
+        .collect();
+    LirBody { blocks, ..body.clone() }
 }
 
 /// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
@@ -529,7 +598,7 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner w1, w2 for the DAG path; permanent target tuning): the
+/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent target tuning): the
 /// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
 /// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
 /// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
@@ -613,7 +682,9 @@ pub fn _lanes(
         return Lanes::new();
     }
     let start = regs.get(register).map_or(0, |one| one.lane / 8);
-    Lanes::span(full, start, register.size() as u32)
+    // The file's width; `iced`'s only for a register the file does not list.
+    let bytes = regs.bytes(register).map_or_else(|| register.size() as u32, |bytes| bytes as u32);
+    Lanes::span(full, start, bytes)
 }
 
 /// Write only the live low word of a register-only dword move
@@ -1337,6 +1408,15 @@ pub fn _moved_by(
     Some((moved, _lanes(regs, destination).or(&source.map(|one| _lanes(regs, one)).unwrap_or_default())))
 }
 
+/// The x87 control-word save and load. They are barriers so that nothing moves
+/// across a rounding-mode switch, but they touch one memory cell and no
+/// register: as unknown instructions they made every register live before them,
+/// so no register was free anywhere a function converts a float to an integer.
+fn control_word(what: &Semantics) -> bool {
+    matches!(what.name.as_deref(), Some("fnstcw" | "fldcw"))
+        && what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::Mem(_)))
+}
+
 /// `_register_effects` of an instruction that says only what it does: no
 /// required or delivered register, no clobber and no symbol. Asked of a
 /// proposed rewrite of one, which needs no instruction made of it to ask (copy
@@ -1351,7 +1431,7 @@ pub fn _register_effects_of_what(
     if what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty) {
         return Some((Lanes::new(), Lanes::new()));
     }
-    if what.op == Operation::Barrier {
+    if what.op == Operation::Barrier && !control_word(what) {
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
@@ -1407,7 +1487,7 @@ fn _register_effects_worked(
         return None;
     }
     let what = match &one.what {
-        Some(what) if what.op != Operation::Barrier => what,
+        Some(what) if what.op != Operation::Barrier || control_word(what) => what,
         // `getattr(one.op, "node", None)`: a `mir.Op` has no `node`, so the
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,

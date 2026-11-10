@@ -98,3 +98,18 @@ def test_the_family_flags_line_is_given_to_that_family_only():
     assert sweep.flags_of(source, "arm64-linux") == ["-DX"]
     real = (sweep.ROOT / "tests/run/c/memcpy_runtime.c").read_text()
     assert "-mcmodel=medium" in sweep.flags_of(real, "m68k-68000")
+
+
+def test_warning_flags_of_the_program_are_kept():
+    """long_double_union_pun needs -Wno-incompatible-ms-struct; dropping it made the m16 -O0 sweep list a clang error (ms_struct layout) as a refusal."""
+    assert "-Wno-incompatible-ms-struct" in sweep.flags_of("// flags: -O0 -mlong-double-80 -Wno-incompatible-ms-struct\nint x;\n", "x86_16-wat")
+
+
+def test_a_program_with_two_flag_configurations_builds_the_one_of_its_targets_word_size():
+    """os_execute reads `-DREAL_MODE | -m32`: x86_32-wat took the first, built the 16-bit configuration and was refused for an undeclared `llrm_os_block_resize`."""
+    source = "// flags: -O2 -march=i486 -DREAL_MODE | -O2 -march=i486 -m32 -DPROTECTED\nint x;\n"
+    assert sweep.flags_of(source, "x86_32-wat") == ["-DPROTECTED"]
+    assert sweep.flags_of(source, "x86_16-wat") == ["-DREAL_MODE"]
+    assert sweep.flags_of(source, "x86_64-linux") == ["-DREAL_MODE"]
+    assert sweep.flags_of(source, "m68k-68020") == ["-DREAL_MODE"], "a target with no word-size flag takes the first"
+    assert "-DREAL_MODE" not in sweep.flags_of((sweep.ROOT / "tests/run/c/os_execute.c").read_text(), "x86_32-wat")

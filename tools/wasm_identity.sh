@@ -10,7 +10,7 @@ set -u
 . "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 base=${1:?base dir}; new=${2:?head dir}; out=${3:?out dir}
 root=$(cd "$(dirname "$0")/.." && pwd)
-python3 -c "import sys; sys.path.insert(0, '$root/tools'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1] + '/llrm-cc', sys.argv[2] + '/llrm-cc', bool(sys.argv[3]), ('llrm-llc', 'llrm-wasm-llc'), True)" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2
+python3 -c "import sys; sys.path.insert(0, '$root/tools'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1] + '/llrm-cc', sys.argv[2] + '/llrm-cc', bool(sys.argv[3]), llrmbin.backends_of('wasm32'), True)" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2
 mkdir -p "$out"; rm -f "$out/rows.txt"
 export LLRM_CLANG_WASM=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang} LLRM_CC_TARGET=wasm32 base new out root
 cd "$root" || exit 2

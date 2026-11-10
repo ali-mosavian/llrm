@@ -15,9 +15,9 @@
 //! [`crate::shrinkwrap`]'s.
 
 use llrm_object::assembler::Cfi;
-
 use rustc_hash::FxHashSet as HashSet;
 
+use crate::cfi::Unwind;
 use crate::mc::inst::*;
 use crate::mc::unwind;
 use crate::mc::visit::Reg;
@@ -75,6 +75,7 @@ enum Csr {
 fn saved_list(
     allocation: &Allocation,
     record: bool,
+    link: bool,
     darwin: bool,
 ) -> Vec<Csr> {
     let pad = |list: &[u32], base: u32| -> Vec<u32> {
@@ -86,7 +87,7 @@ fn saved_list(
         all.dedup();
         all
     };
-    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X);
+    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X).chain(link.then_some(Csr::X(30)));
     let fprs = pad(&allocation.saved_fprs, 8).into_iter().map(Csr::D);
     let frame = [Csr::Lr, Csr::Fp].into_iter().filter(|_| record);
     if darwin { frame.chain(gprs).chain(fprs).collect() } else { gprs.chain(frame).chain(fprs).collect() }
@@ -339,6 +340,9 @@ fn pairs_at(
     count
 }
 
+/// The pin's `DefaultSafeSPDisplacement`.
+pub const SAFE_SP_DISPLACEMENT: u64 = 255;
+
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
@@ -346,12 +350,25 @@ fn layout(
 ) -> Layout {
     let (mut slots, locals_end) = place_objects(function);
     // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
-    // or a variable-sized object keeps the frame record; so does a call, which
-    // saves the link register beside it.
+    // or a variable-sized object keeps the frame record. A call without one
+    // saves the link register alone, with its neighbours in the list.
     let keeps =
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
-    let record = function.calls || function.dynamic || keeps;
-    let pairs = paired(&saved_list(allocation, record, darwin));
+    // `hasFP` also holds for a call frame over `DefaultSafeSPDisplacement`
+    // (255 bytes): the scavenger's emergency slot is reached from the frame
+    // pointer. DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins
+    // the allocation pool when no record is kept. stft_fixed -O1/-O2
+    // (bench), +1 executed insn in a 78M run, -4 B: the greedy gives x29 to
+    // one global's base and rematerializes another global (`adrp`/`add`
+    // into x20) at the outer loop head, where the old code folded the
+    // address into x9; read from both assemblies.
+    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's
+    // `producePairRegisters` (Mach-O compact unwind) saves the frame
+    // pointer beside the link register on Darwin whatever `hasFP` says,
+    // without setting it up; here a Darwin call keeps the whole record.
+    // Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
+    let record = function.dynamic || keeps || function.outgoing > SAFE_SP_DISPLACEMENT || (darwin && function.calls);
+    let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);
     // Filled from the top; where the area has a spare word, the first single
@@ -370,7 +387,8 @@ fn layout(
         && function.outgoing == 0
         && locals_end > 0
         && area > 0
-        && locals_end + area <= 512;
+        // Below 512: from there `split_locals` pushes the saves before the locals, as the pin.
+        && locals_end + area < 512;
     let shift = if record_low { 0 } else { locals_end };
     let mut saves = Vec::new();
     let mut frame_record = None;
@@ -405,12 +423,25 @@ fn layout(
 }
 
 impl Layout {
-    /// The bytes the first saved pair's store takes off the stack pointer
-    /// (`stp [sp, #-N]!`) where the frame is only saved registers and fits the
-    /// pair's offset (`AArch64FrameLowering`, the first CSR push).
-    fn folded_bump(&self) -> Option<i64> {
-        let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
-        (first == 0 && self.size <= 512).then_some(self.size as i64)
+    /// The bytes the first save takes off the stack pointer (`stp [sp, #-N]!`)
+    /// where the frame is only saved registers and `N` is in range of the
+    /// access (`convertCalleeSaveRestoreToSPPrePostIncDec`: the pin checks the
+    /// offset against the opcode's, -512..504 for a pair and -256..255 for a
+    /// single register, and makes a separate `sub`/`add` when it is out). The
+    /// prologue subtracts and the epilogue adds, so one frame can fold in one
+    /// and not the other.
+    fn folded_bump(
+        &self,
+        store: bool,
+    ) -> Option<i64> {
+        let (first, pair) = match self.saves.first() {
+            Some((Save::GprPair(_, second) | Save::FprPair(_, second), at)) => (*at, second.is_some()),
+            Some((Save::Record, at)) => (*at, true),
+            None => (self.frame_record?, true),
+        };
+        let (least, most) = if pair { (-512, 504) } else { (-256, 255) };
+        let by = self.size as i64;
+        (first == 0 && (least..=most).contains(&if store { -by } else { by })).then_some(by)
     }
 
     /// The locals' bytes where the saved registers are pushed first and the
@@ -451,14 +482,17 @@ struct Emitter {
     /// follows `emitFramePointerSetup`).
     saved: Vec<Cfi>,
     /// The restores' `.cfi_restore`s, stated together before the terminator
-    /// (`AArch64EpilogueEmitter::finalizeEpilogue`: `emitCalleeSavedGPRRestores`
-    /// at `getFirstTerminator`).
+    /// (`AArch64EpilogueEmitter::finalizeEpilogue`:
+    /// `emitCalleeSavedGPRRestores` at `getFirstTerminator`).
     restored: Vec<Cfi>,
+    /// Which `.cfi_*` the frame states: all of them (`Async`), or the frame
+    /// as the prologue leaves it and nothing for the epilogues (`Sync`).
+    unwind: Unwind,
 }
 
 impl Emitter {
-    fn new() -> Self {
-        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new(), restored: Vec::new() }
+    fn new(unwind: Unwind) -> Self {
+        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new(), restored: Vec::new(), unwind }
     }
 
     /// The instructions made since the last call are from `loc`.
@@ -471,11 +505,16 @@ impl Emitter {
 }
 
 impl Emitter {
+    /// A step of the frame's construction or removal, stated where it
+    /// happens: only an asynchronous table has them
+    /// (`AArch64FunctionInfo::needsAsyncDwarfUnwindInfo`).
     fn cfi(
         &mut self,
         cfi: Cfi,
     ) {
-        self.insts.push(Inst::Cfi(cfi));
+        if self.unwind == Unwind::Async {
+            self.insts.push(Inst::Cfi(cfi));
+        }
     }
 
     /// `sp = sp + delta` (a multiple of 16).
@@ -567,7 +606,7 @@ pub fn lower(
     let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
-        let mut emitter = Emitter::new();
+        let mut emitter = Emitter::new(function.unwind);
         if index == save {
             prologue(&frame, &mut emitter);
         }
@@ -602,6 +641,7 @@ pub fn lower(
                     _ => return Err("a copy between register classes".into()),
                 },
                 Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
+                Op::Phi { .. } => return Err("a phi after phi elimination".into()),
                 Op::DbgValue { variable, reg } => {
                     let reg = match reg {
                         Some(Reg::Gpr(gpr)) => Some(*gpr),
@@ -652,7 +692,7 @@ pub fn lower(
                     )
                 })
                 .map_or(0, |i| i + 1);
-            let mut tail = Emitter::new();
+            let mut tail = Emitter::new(function.unwind);
             epilogue(&frame, &mut tail);
             emitter.locs.splice(at..at, vec![None; tail.insts.len()]);
             emitter.insts.splice(at..at, tail.insts);
@@ -664,6 +704,33 @@ pub fn lower(
 }
 
 fn prologue(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    build_frame(frame, emitter);
+    state_frame(frame, emitter);
+}
+
+/// A synchronous table states the finished frame once, after the prologue's
+/// last instruction (`AArch64PrologueEmitter::emitPrologue`, `EmitCFI &&
+/// !EmitAsyncCFI`): the frame address, then the saves.
+fn state_frame(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    if emitter.unwind != Unwind::Sync {
+        return;
+    }
+    let cfa = match frame.frame_record {
+        Some(at) => Some(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 }),
+        None if frame.size > 0 => Some(Cfi::DefCfaOffset { offset: frame.size as i64 }),
+        None => None,
+    };
+    let saves = sorted_saves(emitter);
+    emitter.insts.extend(cfa.into_iter().chain(saves).map(Inst::Cfi));
+}
+
+fn build_frame(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
@@ -682,7 +749,7 @@ fn prologue(
         }
         return;
     }
-    let bump = frame.folded_bump();
+    let bump = frame.folded_bump(true);
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(-(frame.size as i64));
         emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
@@ -697,13 +764,22 @@ fn prologue(
 
 /// The saves' `.cfi_offset`s, highest address first: the order of the pin's
 /// frame indices.
-fn flush_saved(emitter: &mut Emitter) {
+fn sorted_saves(emitter: &mut Emitter) -> Vec<Cfi> {
     let mut saved = std::mem::take(&mut emitter.saved);
     saved.sort_by_key(|cfi| match cfi {
         Cfi::Offset { offset, .. } => std::cmp::Reverse(*offset),
         _ => std::cmp::Reverse(0),
     });
-    for cfi in saved {
+    saved
+}
+
+/// The saves, stated as the frame register is set up; a synchronous table
+/// states them with the finished frame ([`state_frame`]).
+fn flush_saved(emitter: &mut Emitter) {
+    if emitter.unwind == Unwind::Sync {
+        return;
+    }
+    for cfi in sorted_saves(emitter) {
         emitter.cfi(cfi);
     }
 }
@@ -758,7 +834,7 @@ fn take_down(
     if frame.frame_record.is_some() {
         emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: frame.size as i64 });
     }
-    let bump = frame.folded_bump();
+    let bump = frame.folded_bump(false);
     save_registers(frame, emitter, false, bump, 0);
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(frame.size as i64);
@@ -897,4 +973,39 @@ fn lower_inst(
     }
     emitter.insts.push(inst);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(
+        size: u64,
+        save: Save,
+    ) -> Layout {
+        Layout { size, dynamic: false, slots: Vec::new(), saves: vec![(save, 0)], frame_record: None, locals: 0 }
+    }
+
+    /// A pair's pre-index reaches -512 and its post-index 504: a 512 byte
+    /// frame folds the prologue's update and not the epilogue's, as the pin's
+    /// range check per opcode. One rule for both made the epilogue's `ldp
+    /// [sp], #512` fail to encode.
+    #[test]
+    fn a_pair_folds_512_bytes_going_down_and_not_coming_up() {
+        let pair = frame(512, Save::GprPair(19, Some(20)));
+        assert_eq!((pair.folded_bump(true), pair.folded_bump(false)), (Some(512), None));
+        let near = frame(496, Save::GprPair(19, Some(20)));
+        assert_eq!((near.folded_bump(true), near.folded_bump(false)), (Some(496), Some(496)));
+    }
+
+    /// A single register reaches -256 and 255.
+    #[test]
+    fn a_single_register_folds_at_most_255_bytes_coming_up() {
+        let single = frame(256, Save::GprPair(30, None));
+        assert_eq!((single.folded_bump(true), single.folded_bump(false)), (Some(256), None));
+        assert_eq!(frame(272, Save::GprPair(30, None)).folded_bump(true), None);
+        // A lone `d8` is a single access too (`ldr d8, [sp], #256`).
+        let float = frame(256, Save::FprPair(8, None));
+        assert_eq!((float.folded_bump(true), float.folded_bump(false)), (Some(256), None));
+    }
 }

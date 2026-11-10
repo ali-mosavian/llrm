@@ -54,6 +54,10 @@ def strip_exports(path):  # llrm-cc exports statics, which collide across object
 def code_size(obj):
     return int(re.search(r'CODE:\s+(\d+)', sh('od65', '--dump-segsize', obj).stdout).group(1))
 
+def data_size(obj):
+    """RODATA + DATA + BSS + ZEROPAGE of one object: the static cells and tables the code-only column leaves out."""
+    return sum(int(m.group(1)) for m in re.finditer(r'(?:RODATA|DATA|BSS|ZEROPAGE):\s+(\d+)', sh('od65', '--dump-segsize', obj).stdout))
+
 def mos_rt_bytes(libs_s, labels, mapfile):
     """Bytes of the mos_rt.s routines the reduced library calls, with the routines they call in turn (label to next label)."""
     text = open(MOS_RT).read().split('\n'); lab = {}
@@ -146,8 +150,9 @@ def ours(op, opt):
     assert fails == 0, f'{op} {opt}: {fails} of {N} records fail'
     assert min(deltas) > 0
     lib = sum(code_size(o) for o in objs)
+    data = sum(data_size(o) for o in objs)
     mrt, names = mos_rt_bytes([f'{d}/r/{opt}_{f}.s' for f in LIBS], f'{d}/r.lbl', f'{d}/r.map')
-    return sum(deltas) / N, max(deltas), lib + mrt, base, names
+    return sum(deltas) / N, max(deltas), lib + mrt, base, names, data
 
 def mos(op):
     e = {'add': 'x.d + y.d', 'sub': 'x.d - y.d', 'mul': 'x.d * y.d', 'div': 'x.d / y.d'}[op]
@@ -175,12 +180,12 @@ def mos(op):
     return (s - sb) / N, mx - mb, out[0] - out[1]
 
 print('llrm-cc md5', subprocess.run(['md5sum', CC], capture_output=True, text=True).stdout[:12], f'N={N} dir={T}')
-print('op   | ' + ' | '.join(f'ours -{o} mean/worst clk, B' for o in OPTS) + ' | llvm-mos mean/worst clk, B')
+print('op   | ' + ' | '.join(f'ours -{o} mean/worst clk, code B (library + mos_rt), data B (RODATA+DATA+BSS+ZEROPAGE of the library objects)' for o in OPTS) + ' | llvm-mos mean/worst clk, B')
 for opt in OPTS: compile_libs(opt)
 for op in OPS:
     cols = []
     for opt in OPTS:
-        m, w, b, base, names = ours(op, opt)
-        cols.append(f'{m:.0f} / {w}, {b} (base {base}, mos_rt {",".join(names)})')
+        m, w, b, base, names, data = ours(op, opt)
+        cols.append(f'{m:.0f} / {w}, code {b} B, data {data} B (base {base}, mos_rt {",".join(names)})')
     a, b, sz = mos(op)
     print(f'{op} | ' + ' | '.join(cols) + f' | {a:.0f} / {b}, {sz}', flush=True)

@@ -1,12 +1,10 @@
-//! Every `tests/darwin` fixture through `--isel=shadow`, linked and run
-//! natively: it must print and exit as recorded wherever the hand selector can
-//! compile it. Shadow mode falls back per function, so this is the check that
-//! what the DAG path does take is right: it once passed 9 of 27 (variadic
-//! arguments in registers, `sret` as a pointer in `x0`).
+//! Every `tests/darwin` fixture, linked and run natively: it must print and exit as
+//! recorded. It once passed 9 of 27 (variadic arguments in registers, `sret` as a
+//! pointer in `x0`).
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
-fn the_darwin_fixtures_run_as_recorded_under_shadow() {
+fn the_darwin_fixtures_run_as_recorded() {
     use std::process::Command;
 
     let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/darwin");
@@ -19,26 +17,14 @@ fn the_darwin_fixtures_run_as_recorded_under_shadow() {
     for ir in fixtures.iter().filter(|p| p.extension().is_some_and(|e| e == "ll")) {
         let name = ir.file_stem().unwrap().to_str().unwrap();
         for level in ["--no-opt", "-O2"] {
-            let object = |mode: &str| scratch.path().join(format!("{name}{level}{mode}.o"));
-            let compile = |mode: &str| {
-                Command::new(llc)
-                    .args([level, &format!("--isel={mode}"), "-o"])
-                    .arg(object(mode))
-                    .arg(ir)
-                    .output()
-                    .unwrap()
-            };
-            // What the hand selector cannot compile is no test of the DAG path.
-            if !compile("hand").status.success() {
-                continue;
-            }
-            let said = compile("shadow");
+            let object = scratch.path().join(format!("{name}{level}.o"));
+            let said = Command::new(llc).args([level, "-o"]).arg(&object).arg(ir).output().unwrap();
             if !said.status.success() {
                 failures.push(format!("{name} {level}: llc failed: {}", String::from_utf8_lossy(&said.stderr)));
                 continue;
             }
             let exe = scratch.path().join(format!("{name}{level}"));
-            let linked = Command::new("cc").arg(object("shadow")).arg("-o").arg(&exe).output().unwrap();
+            let linked = Command::new("cc").arg(&object).arg("-o").arg(&exe).output().unwrap();
             assert!(linked.status.success(), "{name}: {}", String::from_utf8_lossy(&linked.stderr));
             let ran = Command::new(&exe).output().unwrap();
             let want_out = std::fs::read(here.join(format!("{name}.out"))).unwrap_or_default();

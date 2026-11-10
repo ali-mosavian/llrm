@@ -86,6 +86,7 @@ pub fn hoist_region(
                 .or_else(|| hoist_sub_add_association(unit, ctx, inst))
             {
                 ctx.state.gone.borrow_mut().extend([one.inst()].into_iter().chain(one.erased()));
+                one.forward(unit.function, ctx);
                 // The preheader gets it where the visit reached it, after the
                 // hoists found so far.
                 reassociated.push((found.len(), one));
@@ -170,6 +171,10 @@ pub enum Reassociation {
         c2: Operand,
         /// The flags both the new instructions get (`OverflowTracking`).
         flags: Wrap,
+        /// `bo0` is what an earlier reassociation of the loop put in place of
+        /// the `bo` it replaced: `lv` stands for its variant operand and `c1`
+        /// is read from it when this one is applied.
+        chained: bool,
     },
     /// [`hoist_sub_add_association`]: `i` becomes `lv result_op (c1 inv_op
     /// c2)`, the inner one made in the preheader, and `bo` goes.
@@ -221,6 +226,27 @@ impl Reassociation {
             Self::MinMax { logic, .. } => logic,
             Self::SubAdd { i, .. } | Self::MulAdd { i, .. } => i,
             Self::IcmpAddSub { dead, .. } => dead,
+        }
+    }
+
+    /// What the next decisions of the loop read of this one, as the pin's
+    /// in-place edit leaves it (`hoistMulAddAssociation`).
+    fn forward(
+        &self,
+        function: &Function,
+        ctx: &LoopCtx,
+    ) {
+        if let Self::BinaryOp { bo, lv, flags, .. } = self {
+            ctx.state.chained.borrow_mut().insert(*bo, (*lv, *flags));
+            return;
+        }
+        let Self::MulAdd { i, variant, changes, .. } = self else { return };
+        if let Some(result) = function.instruction(*i).result {
+            ctx.state.forwarded.borrow_mut().insert(result, *variant);
+        }
+        let mut factored = ctx.state.factored.borrow_mut();
+        for &(ins, slot, _) in changes {
+            factored.insert(ins, slot);
         }
     }
 
@@ -324,6 +350,7 @@ fn hoist_min_max(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(inst),
+        pending_intrinsics: &[],
     };
     use llrm_mir::valuetracking::pattern;
     let (inverse, (cond1, cond2)) = if let Some(operands) = pattern::logical_or(&query, Operand::Value(result)) {
@@ -408,6 +435,7 @@ fn hoist_gep(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(inst),
+        pending_intrinsics: &[],
     };
     let non_negative = |operand: &Operand| llrm_mir::valuetracking::known::is_known_non_negative(&query, *operand, 0);
     let in_bounds = src.flags.contains(Wrap::INBOUNDS)
@@ -419,10 +447,13 @@ fn hoist_gep(
 
 /// [`hoistBOAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2686):
 /// `(LV op C1) op C2` and its commuted forms, the integer `add`, `mul`, `and`,
-/// `or` and `xor`. DEVIATE: an instruction another reassociation of the loop
-/// has replaced, or one reading a value it erased, is left alone, where LLVM
-/// would reassociate the new one in turn (the next round of the pipeline
-/// does).
+/// `or` and `xor`. The pin edits `bo` in place ([`LICM.cpp#L2718`-`L2740`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2718-L2740)), so
+/// the next link of a chain reads `lv op (c1 op c2)`: `State::chained`
+/// carries that edit to it. DEVIATE: an instruction another kind of
+/// reassociation of the loop has replaced, or one reading a value it erased,
+/// is left alone, where LLVM would reassociate the new one in turn (a later
+/// round of the pipeline does; `hoist_mul_add_association` follows its edits
+/// too). Exit: 2026-11-20, x86-m32-bytes.
 fn hoist_bo_association(
     unit: &passes::Unit,
     ctx: &LoopCtx,
@@ -442,18 +473,30 @@ fn hoist_bo_association(
     let ValueDef::Instruction(bo0_inst) = function.value(inner).def else { return None };
     let bo0 = function.instruction(bo0_inst);
     // `hasNUsesOrMore(2)` for an integer: `bo` is its only user.
-    if bo0.opcode != bo.opcode
-        || function.users(inner).iter().count() >= 2
-        || ctx.state.gone.borrow().contains(&bo0_inst)
-    {
+    if bo0.opcode != bo.opcode || function.users(inner).iter().count() >= 2 {
         return None;
     }
-    let (mut lv, mut c1) = (bo0.operands[0], bo0.operands[1]);
-    let c2 = bo.operands[usize::from(!in_rhs)];
-    if ctx.is_loop_invariant(lv) && !ctx.is_loop_invariant(c1) {
-        std::mem::swap(&mut lv, &mut c1);
+    // The pin edits `bo0` in place when it reassociates it, so the next link
+    // of a chain reads `lv op (c1 op c2)`: `c1` is the invariant made then.
+    let prior = ctx.state.chained.borrow().get(&bo0_inst).copied();
+    if prior.is_none() && ctx.state.gone.borrow().contains(&bo0_inst) {
+        return None;
     }
-    if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) || !ctx.is_loop_invariant(c2) {
+    let c2 = bo.operands[usize::from(!in_rhs)];
+    let (lv, c1, bo0_flags) = match prior {
+        Some((lv, flags)) => (lv, lv, flags),
+        None => {
+            let (mut lv, mut c1) = (bo0.operands[0], bo0.operands[1]);
+            if ctx.is_loop_invariant(lv) && !ctx.is_loop_invariant(c1) {
+                std::mem::swap(&mut lv, &mut c1);
+            }
+            if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) {
+                return None;
+            }
+            (lv, c1, bo0.flags)
+        }
+    };
+    if !ctx.is_loop_invariant(c2) {
         return None;
     }
     // A value an earlier reassociation of the loop has erased is not read.
@@ -464,12 +507,12 @@ fn hoist_bo_association(
         },
         _ => false,
     };
-    if erased(lv) || erased(c1) || erased(c2) {
+    if erased(lv) || (prior.is_none() && erased(c1)) || erased(c2) {
         return None;
     }
     // `OverflowTracking` with `AllKnownNonNegative` and `AllKnownNonZero` off,
     // `applyFlags` after `dropPoisonGeneratingFlags`.
-    let both = |flag: Wrap| bo.flags.contains(flag) && bo0.flags.contains(flag);
+    let both = |flag: Wrap| bo.flags.contains(flag) && bo0_flags.contains(flag);
     let mut flags = Wrap::default();
     match op {
         BinaryOp::Add if both(Wrap::NUW) => {
@@ -481,7 +524,7 @@ fn hoist_bo_association(
         BinaryOp::Or if both(Wrap::DISJOINT) => flags.insert(Wrap::DISJOINT),
         _ => {}
     }
-    Some(Reassociation::BinaryOp { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags })
+    Some(Reassociation::BinaryOp { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags, chained: prior.is_some() })
 }
 
 /// [`hoistAddSub`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2538)
@@ -555,6 +598,7 @@ fn hoist_add_sub(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(inst),
+        pending_intrinsics: &[],
     };
     let (new_op, a, b, overflow) = match (op, subtracted) {
         // LV + C1 < C2: LV < C2 - C1.
@@ -612,9 +656,11 @@ fn hoist_add_sub(
 /// for integers: `((A1 * B1) + (A2 * B2) + ...) * C` with `A1`, `A2`, ... and
 /// `C` invariant becomes `((A1 * C) * B1) + ((A2 * C) * B2) + ...`, the
 /// invariant products made in the preheader. At most 5 of them
-/// (`licm-max-num-int-reassociations`). DEVIATE: as for
-/// [`hoist_bo_association`], an instruction another reassociation of the loop
-/// has replaced is left alone.
+/// (`licm-max-num-int-reassociations`). The pin edits in place, so a later
+/// product of the loop reads the product it replaced as its variant and a
+/// leaf it changed as a product with an invariant factor (`State::forwarded`
+/// and `State::factored` say so); the sum a long unrolled chain builds is
+/// multiplied once.
 fn hoist_mul_add_association(
     unit: &passes::Unit,
     ctx: &LoopCtx,
@@ -634,19 +680,30 @@ fn hoist_mul_add_association(
         return None;
     }
     let factor = invariant;
-    let binary_def = |operand: Operand| -> Option<InstId> {
+    // The instruction `operand` is after the earlier edits of the loop, and
+    // how many users it has: a replaced product's users are its variant's.
+    let binary_def = |operand: Operand| -> Option<(InstId, Option<usize>)> {
+        let mut users = None;
+        let mut operand = operand;
+        while let Operand::Value(value) = operand
+            && let Some(&to) = ctx.state.forwarded.borrow().get(&value)
+        {
+            users = Some(function.users(value).iter().count());
+            operand = to;
+        }
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(value).def else { return None };
-        matches!(function.instruction(def).opcode, Opcode::Binary(_)).then_some(def)
+        matches!(function.instruction(def).opcode, Opcode::Binary(_)).then_some((def, users))
     };
     let gone = |def: InstId| ctx.state.gone.borrow().contains(&def);
     let mut changes = Vec::new();
     let mut adds = Vec::new();
-    let mut worklist: Vec<InstId> = binary_def(variant).into_iter().collect();
-    while let Some(bo) = worklist.pop() {
+    let mut worklist: Vec<(InstId, Option<usize>)> = binary_def(variant).into_iter().collect();
+    while let Some((bo, users)) = worklist.pop() {
         let instruction = function.instruction(bo);
         let result = instruction.result?;
-        if function.users(result).iter().count() != 1 || gone(bo) {
+        let factored = ctx.state.factored.borrow().get(&bo).copied();
+        if users.unwrap_or_else(|| function.users(result).iter().count()) != 1 || (gone(bo) && factored.is_none()) {
             return None;
         }
         if instruction.opcode == Opcode::Binary(BinaryOp::Add)
@@ -659,7 +716,9 @@ fn hoist_mul_add_association(
         if instruction.opcode != Opcode::Binary(BinaryOp::Mul) || !ctx.contains(bo) {
             return None;
         }
-        let slot = if ctx.is_loop_invariant(instruction.operands[0]) {
+        let slot = if let Some(slot) = factored {
+            slot
+        } else if ctx.is_loop_invariant(instruction.operands[0]) {
             0
         } else if ctx.is_loop_invariant(instruction.operands[1]) {
             1

@@ -645,3 +645,23 @@ fn an_absolute_address_lea_is_priced_at_040_and_060() {
     assert_eq!(m68040("lea 0, %a0"), 1);
     assert_eq!(m68060("lea 0, %a0"), 1);
 }
+
+/// A price that leaves out a data-dependent term says so (`Cost::partial`):
+/// the 68020 flagged bit fields and `cas` (the "< 5 bytes" and successful
+/// rows) but the 68030 and 68040 took the 68000's rule, so a bit field priced
+/// from the same bound, or from a table that omits the long-word-boundary
+/// term (68040 notes c, d), read as exact. (The 68040 tables have no `cas`.)
+#[test]
+fn bit_fields_and_cas_are_partial_on_every_cpu_that_bounds_them() {
+    for (cpu, texts) in [
+        (Cpu::M68020, vec!["bfextu (%a0){4:8}, %d0", "cas.l %d0, %d1, (%a0)"]),
+        (Cpu::M68030, vec!["bfextu (%a0){4:8}, %d0", "cas.l %d0, %d1, (%a0)"]),
+        (Cpu::M68040, vec!["bfextu (%a0){4:8}, %d0"]),
+        (Cpu::M68060, vec!["bfextu (%a0){0:8}, %d0"]),
+    ] {
+        for text in texts {
+            let cost = cost_on(cpu, text, 4, false).unwrap_or_else(|why| panic!("{cpu:?} {text}: {why}"));
+            assert!(cost.partial, "{cpu:?} `{text}` is priced as exact");
+        }
+    }
+}
