@@ -405,11 +405,12 @@ pub struct MFunc {
     /// The constants the function loads from memory (`MachineConstantPool`),
     /// each under the label its address is taken from.
     pub pool: Vec<PoolEntry>,
-    /// The selector's block id of each block, in the function's order
-    /// ([`NO_BLOCK_ID`] for a block the selector did not make), and the branch
-    /// probabilities it kept for the edges it split (`(from, to, numerator /
-    /// 2^31)`); empty when the selector kept none.
-    pub block_ids: Vec<u32>,
+    /// The selector's block id of each block it made, by label (a block a
+    /// later pass made has none; a label, unlike a position, survives the
+    /// passes that remove and insert blocks), and the branch probabilities it
+    /// kept for the edges it split (`(from, to, numerator / 2^31)`); empty
+    /// when the selector kept none.
+    pub block_ids: HashMap<String, u32>,
     pub edge_probs: Vec<(u32, u32, u32)>,
     /// The critical edges `lower_phis` split: `(from, to, the block made)`, by
     /// label. The block odds of the edge it replaced are the new block's.
@@ -418,10 +419,6 @@ pub struct MFunc {
     /// set just before allocation.
     pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
 }
-
-/// The id of a block that is not one of the selector's (an edge block made by
-/// `lower_phis`).
-pub const NO_BLOCK_ID: u32 = u32::MAX;
 
 /// A constant pool entry: `bytes` at `align`, under `label`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -580,11 +577,6 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
         at += 1;
         reached[at - 1]
     });
-    let mut at = 0;
-    function.block_ids.retain(|_| {
-        at += 1;
-        reached[at - 1]
-    });
     for block in &mut function.blocks {
         for op in &mut block.ops {
             if let Op::Phi { incoming, .. } = op {
@@ -729,11 +721,8 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
     // Each block lies right after its source (`SplitCriticalEdge` inserts it
     // at `std::next(this)`, MachineBasicBlock.cpp#L1217): the later split of a
     // source is nearer to it.
-    let keep_ids = !function.block_ids.is_empty();
     let originals = std::mem::take(&mut function.blocks);
-    let ids = std::mem::take(&mut function.block_ids);
     let mut placed = Vec::with_capacity(originals.len() + edges.len());
-    let mut placed_ids = Vec::new();
     let next_labels: Vec<Option<String>> = (0..originals.len()).map(|at| originals.get(at + 1).map(|next| next.label.clone())).collect();
     for (at, mut block) in originals.into_iter().enumerate() {
         // The blocks put after it come between it and the block it ran into.
@@ -743,18 +732,11 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
             }
         }
         placed.push(block);
-        if keep_ids {
-            placed_ids.push(ids.get(at).copied().unwrap_or(NO_BLOCK_ID));
-        }
         for (_, edge) in edges.iter().filter(|(from, _)| *from == at).rev() {
             placed.push(edge.clone());
-            if keep_ids {
-                placed_ids.push(NO_BLOCK_ID);
-            }
         }
     }
     function.blocks = placed;
-    function.block_ids = placed_ids;
     Ok(())
 }
 

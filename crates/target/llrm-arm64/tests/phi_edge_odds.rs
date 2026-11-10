@@ -96,3 +96,36 @@ fn a_split_edge_keeps_its_probability_and_the_odds_follow_the_blocks() {
         }
     }
 }
+
+/// The prepass merges a loop's back-edge block into its latch, so every block
+/// after it moved up one place. The selector's ids were a list in block order
+/// that the pass did not shorten: each later block took its neighbour's id,
+/// and bench `jpeg_single` -O1 allocated with the wrong block frequencies
+/// (143 stack reloads in one function against 69 before the placement
+/// change and the pin's 50).
+#[test]
+fn the_odds_still_follow_the_blocks_after_the_prepass_removes_an_edge_block() {
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let mut machine = emit("f", &select_function(&module, "f").expect("selects"), false).expect("emits");
+    let before = by_label(&machine, &module);
+    lower_phis(&mut machine).expect("lowers");
+    let split = machine.blocks.len();
+    llrm_arm64::prepass::run(&mut machine, false);
+    assert!(machine.blocks.len() < split, "the premise: the prepass removed an edge block ({split} blocks)");
+    let after = by_label(&machine, &module);
+    // The odds an edge has by the original blocks it joins: through an edge
+    // block they are the first half's, the second half's is certain.
+    let through = |label: &str| -> Option<String> {
+        let block = machine.blocks.iter().find(|block| block.label == label)?;
+        let [target] = &branches(block)[..] else { return None };
+        (!before.keys().any(|(from, _)| from == label)).then(|| target.clone())
+    };
+    for ((from, to), probability) in &after {
+        let expected = match (through(from), through(to)) {
+            (Some(_), _) => BranchProbability::get_one(),
+            (None, Some(onward)) => *before.get(&(from.clone(), onward.clone())).expect("the edge it replaced"),
+            (None, None) => *before.get(&(from.clone(), to.clone())).expect("an edge of the IR"),
+        };
+        assert_eq!(*probability, expected, "{from} -> {to}: {after:?}");
+    }
+}

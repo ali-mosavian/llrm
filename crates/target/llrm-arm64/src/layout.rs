@@ -122,7 +122,12 @@ pub fn edge_odds(
         let places = (0..machine.blocks.len()).filter(|&at| !edges.contains(machine.blocks[at].label.as_str()));
         function.layout().iter().map(|block| block.0).zip(places.map(|at| at as u32)).collect()
     } else {
-        machine.block_ids.iter().enumerate().map(|(at, &id)| (id, at as u32)).collect()
+        machine
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(at, block)| machine.block_ids.get(&block.label).map(|&id| (id, at as u32)))
+            .collect()
     };
     let mut odds = Odds::default();
     for &block in function.layout() {
