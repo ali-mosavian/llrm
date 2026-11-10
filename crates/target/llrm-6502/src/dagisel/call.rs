@@ -305,6 +305,14 @@ impl TargetCalling for MosCalling {
         true
     }
 
+    // The runtime has no routine named `llvm.*`: a call left would bind to nothing.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
+    ) -> bool {
+        false
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
