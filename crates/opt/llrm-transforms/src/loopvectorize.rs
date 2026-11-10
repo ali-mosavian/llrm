@@ -30,11 +30,13 @@
 //!   trip count VF x IC divides, the pin's output after SimplifyCFG is this
 //!   loop. Exit: the epilogue (VP3).
 //! - LVP2 a loop whose induction value is used after the loop, or whose exit
-//!   test is not `icmp eq`/`ne` of the stepped induction against the trip
-//!   count, is left alone. Exit: the vector trip count and the middle block.
+//!   test is not `icmp eq`/`ne` of the stepped induction against a
+//!   loop-invariant bound, is left alone (the induction may start anywhere: the
+//!   pin's VPlan makes its own canonical IV). Exit: the vector trip count and the middle block.
 //! - LVP3 recipes are loads and stores of consecutive addresses and the loop
-//!   control (VP2 of the planner): a stored value is a loaded value. Exit:
-//!   splat (the DAG's `BUILD_VECTOR`), binary operations, reverse accesses.
+//!   control (VP2 of the planner): a stored value is a loaded value or a
+//!   loop-invariant one (broadcast in the preheader, as the pin's
+//!   `broadcast.splat`). Exit: binary operations, reverse accesses.
 //! - LVP4 the new instructions carry no metadata (`!tbaa`, `!alias.scope`).
 //!
 //! # Runs
@@ -168,6 +170,11 @@ fn extract(
             Opcode::Phi => {
                 if inst != primary {
                     return Err(Skipped("A header phi other than the induction"));
+                }
+                // The widened loop leaves the last vector iteration's value:
+                // the pin's middle block fixes it (LVP5: not translated).
+                if used_outside(inst) {
+                    return Err(Skipped("The induction variable is used after the loop"));
                 }
             }
             Opcode::GetElementPtr { .. } => {
@@ -484,6 +491,9 @@ impl FunctionPass for LoopVectorize {
         let Some(tti) = target.tti() else { return PreservedAnalyses::all() };
         if tti.vector_register_bits() == 0 {
             return PreservedAnalyses::all();
+        }
+        if llrm_support::debug::enabled("loop-vectorize-ir") {
+            eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         let opt_size = has_opt_size(unit.function);
         let mut changed = crate::loopsimplify::simplified(unit.function);

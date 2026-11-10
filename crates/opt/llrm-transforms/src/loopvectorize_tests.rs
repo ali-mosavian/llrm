@@ -86,3 +86,12 @@ fn a_fill_with_a_constant_stores_a_constant_splat() {
     assert_eq!(count(&text, "store <8 x i16> <i16 7,"), 2, "{text}");
     assert_eq!(count(&text, "insertelement"), 0, "{text}");
 }
+
+/// A loop returning its last index (`ret %i` through an exit phi) would return
+/// the last vector iteration's index (1904, not 1919) once widened; the pin
+/// fixes it up in the middle block. Left scalar until that is translated (LVP5).
+#[test]
+fn an_induction_used_after_the_loop_is_left_scalar() {
+    let text = run(include_str!("../tests/lv/exit_value.ll"));
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+}

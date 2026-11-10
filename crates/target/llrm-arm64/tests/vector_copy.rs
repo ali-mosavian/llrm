@@ -62,3 +62,27 @@ fn an_overlapping_copy_loop_runs_on_q_registers() {
     assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
     assert!(!text.contains("ldrh"), "{text}");
 }
+
+/// The splat the vectorizer makes for a fill (`insertelement` + `shufflevector`
+/// of an argument, or a constant vector) was refused by instruction selection;
+/// it is a `dup`/`movi` into a q register and one `str q`. Hand IR: the
+/// pipeline's loop-idiom turns a word fill into a `memset.pattern` call (a
+/// DEVIATE of the pin) before the vectorizer sees it.
+#[test]
+fn a_splat_store_is_a_q_register_store() {
+    let argument = assembly(
+        "define void @f(ptr %d, i16 %x) {\n\
+         \x20 %h = insertelement <8 x i16> poison, i16 %x, i64 0\n\
+         \x20 %s = shufflevector <8 x i16> %h, <8 x i16> poison, <8 x i32> zeroinitializer\n\
+         \x20 store <8 x i16> %s, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(argument.contains("dup") && (argument.contains("str\tq") || argument.contains("str q")), "{argument}");
+    let constant = assembly(
+        "define void @g(ptr %d) {\n\
+         \x20 store <8 x i16> <i16 7, i16 7, i16 7, i16 7, i16 7, i16 7, i16 7, i16 7>, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(constant.contains("movi") && (constant.contains("str\tq") || constant.contains("str q")), "{constant}");
+    assert!(!constant.contains("strh"), "{constant}");
+}
