@@ -10,7 +10,7 @@
 //! decline, goes to the generated table through [`Selector`].
 //!
 //! Numbered deviation: **SD301** the pin's `Select` has more hand cases than
-//! these four (`AND`/`OR`/ `XOR` immediate shrinking, `MUL_LOHI`, the 64-bit
+//! these (`AND`/`OR`/ `XOR` immediate shrinking, `MUL_LOHI`, the 64-bit
 //! forms, `INTRINSIC`s, atomics, `ADD` to `LEA` for flag-less adds); each is
 //! added with the pattern that needs it. Owner sdag-c. Exit: C3 follow-ups.
 //! Review 2026-12-10.
@@ -26,6 +26,7 @@ use llrm_dagisel::addr::AddrDag;
 use llrm_dagisel::generated::ids::{isd, x86isd};
 use llrm_dagisel::interp::{Outcome, Selector};
 
+use crate::x86_arith_imm::select_arith_register_form;
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::{select_fcmp, select_fist16, select_pop_from_x87, select_setcc_carry};
 use crate::x86_fplogic::select_fp_logic;
@@ -134,6 +135,11 @@ pub fn select_node<D: AddrDag>(
         }
         x86isd::SMUL => {
             if select_mul_flags(dag, hooks, node, true) {
+                return Outcome::Selected;
+            }
+        }
+        isd::ADD | isd::SUB | isd::AND | isd::OR | isd::XOR => {
+            if select_arith_register_form(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }
