@@ -2270,7 +2270,7 @@ impl Selector<'_, '_, '_> {
         // or where the function keeps the stack, which is wider: a local
         // `double[4]` at 4 mod 8 costs a 486 3 clocks an access (nbody -O2:
         // 18,404), and so does a `long[8]` at 2 mod 4.
-        let kept = self.callee_facts.stack_alignment(self.arch, name);
+        let kept = self.callee_facts.object_alignment(self.arch, name);
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {

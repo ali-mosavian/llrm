@@ -7,8 +7,7 @@ import flagcheck as f  # noqa: E402
 import external_flags  # noqa: E402
 
 BASE = [*external_flags.flags("x86", ("-fno-pic",)), "-m32", "-march=i486", "-Dfar=", "-O1"]
-GCC = [*BASE, "-mpreferred-stack-boundary=2"]
-CLANG = [*BASE, "-mstack-alignment=4"]
+GCC = CLANG = BASE
 # What llrm-cc's clang ran for an m32 -O1 cell (logged through a clang wrapper, 2026-11-09, x_fir).
 OURS = ("-target i486-unknown-linux-gnu -fhosted -fshort-wchar -mlong-double-64 -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables "
         "-std=gnu99 -Xclang -fdefault-calling-conv=regcall -fdeclspec -Wno-unknown-attributes -nostdinc -isystem /h -idirafter /i "
