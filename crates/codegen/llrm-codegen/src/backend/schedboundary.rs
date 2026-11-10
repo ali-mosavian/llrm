@@ -213,6 +213,11 @@ impl Boundary {
         self.zone_crit_res_idx
     }
 
+    /// `getDependentLatency`.
+    pub fn dependent_latency(&self) -> u32 {
+        self.dependent_latency
+    }
+
     /// `getScheduledLatency`.
     pub fn scheduled_latency(&self) -> u32 {
         self.expected_latency.max(self.curr_cycle)

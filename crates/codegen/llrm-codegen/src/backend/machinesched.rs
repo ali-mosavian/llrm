@@ -284,6 +284,26 @@ impl PartialEq for Topo {
 impl Eq for Topo {}
 
 impl Graph {
+    /// A graph of `n` instructions with the given `(earlier, later, latency)`
+    /// edges, for a scheduler test.
+    #[cfg(test)]
+    pub(crate) fn from_edges(n: usize, edges: &[(usize, usize, u32)]) -> Graph {
+        let mut graph = Graph {
+            preds: vec![Vec::new(); n],
+            succs: vec![Vec::new(); n],
+            latencies: vec![Vec::new(); n],
+            weak_preds: vec![Vec::new(); n],
+            weak_succs: vec![Vec::new(); n],
+            topo: Topo::new(n),
+        };
+        for &(from, to, latency) in edges {
+            graph.preds[to].push(from);
+            graph.latencies[to].push(latency);
+            graph.succs[from].push(to);
+        }
+        graph
+    }
+
     /// Whether `to` follows `from` through the edges, weak ones too
     /// (`ScheduleDAGTopologicalSort::IsReachable`).
     fn reaches(

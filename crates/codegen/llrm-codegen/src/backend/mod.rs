@@ -178,6 +178,7 @@ pub mod framefree;
 pub mod framelowering;
 pub mod frameobjects;
 pub mod funnel;
+pub mod genericdriver;
 pub mod genericsched;
 pub mod globals;
 pub mod isel;
