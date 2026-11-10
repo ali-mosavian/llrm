@@ -427,6 +427,15 @@ class ActiveHolders(Env, unittest.TestCase):
         self.assertTrue(self.admitted(2), "one job on two slot files ate two slots")
         self.assertFalse(self.admitted(1))
 
+    def test_a_guard_process_holding_a_slot_file_without_a_job_is_a_probe_and_does_not_count(self):
+        """The 1-in-4 flake of the suite: twelve LG_NO_WAIT starters arriving together saw each other's probe lock (no prio line for them) as running jobs and all refused (0 of 12 admitted)."""
+        os.makedirs(self.slots, exist_ok=True)
+        probe = HOLDER.replace("if len(sys.argv) > 2:", "if False:")  # argv[2] is only a name: the cmdline says load_guard.sh
+        proc = subprocess.Popen(["python3", "-c", probe, os.path.join(self.slots, "slot.1"), "load_guard.sh"], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (proc.kill(), proc.wait()))
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        self.assertTrue(self.admitted(1), "a probing guard counted as a running job")
+
     def test_a_waiter_probing_a_free_slot_is_not_a_holder(self):
         probe = self.holder(1)
         os.makedirs(self.slots, exist_ok=True)

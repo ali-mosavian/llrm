@@ -104,13 +104,24 @@ prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter pr
 # probing a free slot (its pid is in the prio file) or this shell; a child of another holder is the same job (the watchdog), and one pid holding two
 # slot files counts once. A locked slot nobody is seen holding counts (the lock was taken after the scan). The old count was the number of locked
 # files: a stopped cargo test held slot.3 for 28.8 h and a polling waiter's probe of a free slot read as a second holder.
-declare -A slot_pids ppid_of is_stopped is_waiting counted
+declare -A slot_pids ppid_of is_stopped is_waiting counted is_probing
+scanned_at=0
 scan_holders() {
-  local line slot pid
+  local line slot pid now
+  now=$(date +%s)  # the /proc walk is not free: reuse a scan younger than LG_SCAN_EVERY seconds (2), a 0.05 s test poll walked /proc 20 times a second
+  [ $((now - ${scanned_at:-0})) -ge "${LG_SCAN_EVERY:-2}" ] || { counted=(); return; }
+  scanned_at=$now
   slot_pids=(); ppid_of=(); is_stopped=(); is_waiting=(); counted=()
   while read -r slot pid; do slot_pids[$slot]="${slot_pids[$slot]:-} $pid"; done < <(find /proc -maxdepth 3 -path '/proc/[0-9]*/fd/*' -lname "$slot_dir/slot.*" -printf '%l %p\n' 2>/dev/null | awk '{ split($1, t, /\/slot\./); split($2, q, "/"); print t[2], q[3] }' | sort -u)
   while read -r pid ppid st; do ppid_of[$pid]=$ppid; case $st in T*) is_stopped[$pid]=1 ;; esac; done < <(ps -eo pid=,ppid=,stat= 2>/dev/null)
   [ -r "$prio" ] && while read -r _ _ pid _; do is_waiting[$pid]=1; done < "$prio"
+  # A guard process holding a slot file with no job record and no child is probing a free slot (a LG_NO_WAIT starter is in no prio file): N starters
+  # arriving together counted each other as holders and all refused (the flake: 0 admitted of 12). A running job has a record or a child.
+  is_probing=()
+  for pid in $(printf '%s\n' "${slot_pids[@]}" | tr ' ' '\n' | sort -un); do
+    case "$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)" in *load_guard.sh*) ;; *) continue ;; esac
+    [ -f "$slot_dir/jobs/$pid" ] || [ -n "$(ps -o pid= --ppid "$pid" 2>/dev/null)" ] || is_probing[$pid]=1
+  done
 }
 # slot_busy N [note]: succeeds when slot N is held by a job that counts and was not counted through another slot file; the caller adds 1 per success.
 slot_busy() {
@@ -119,6 +130,7 @@ slot_busy() {
   for p in $pids; do
     [ "$p" = "$$" ] && continue
     [ -n "${is_waiting[$p]:-}" ] && continue
+    [ -n "${is_probing[$p]:-}" ] && continue
     if [ -n "${is_stopped[$p]:-}" ]; then [ "${2:-}" = note ] && log "not counting slot holder $p: stopped (state T)"; continue; fi
     top=$p; case " ${pids} " in *" ${ppid_of[$p]:-0} "*) top=${ppid_of[$p]} ;; esac
     if [ -z "${counted[$top]:-}" ]; then counted[$top]=1; return 0; fi
