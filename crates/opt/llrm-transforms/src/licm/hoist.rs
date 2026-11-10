@@ -171,6 +171,10 @@ pub enum Reassociation {
         c2: Operand,
         /// The flags both the new instructions get (`OverflowTracking`).
         flags: Wrap,
+        /// `bo0` is what an earlier reassociation of the loop put in place of
+        /// the `bo` it replaced: `lv` stands for its variant operand and `c1`
+        /// is read from it when this one is applied.
+        chained: bool,
     },
     /// [`hoist_sub_add_association`]: `i` becomes `lv result_op (c1 inv_op
     /// c2)`, the inner one made in the preheader, and `bo` goes.
@@ -232,6 +236,10 @@ impl Reassociation {
         function: &Function,
         ctx: &LoopCtx,
     ) {
+        if let Self::BinaryOp { bo, lv, flags, .. } = self {
+            ctx.state.chained.borrow_mut().insert(*bo, (*lv, *flags));
+            return;
+        }
         let Self::MulAdd { i, variant, changes, .. } = self else { return };
         if let Some(result) = function.instruction(*i).result {
             ctx.state.forwarded.borrow_mut().insert(result, *variant);
@@ -463,18 +471,30 @@ fn hoist_bo_association(
     let ValueDef::Instruction(bo0_inst) = function.value(inner).def else { return None };
     let bo0 = function.instruction(bo0_inst);
     // `hasNUsesOrMore(2)` for an integer: `bo` is its only user.
-    if bo0.opcode != bo.opcode
-        || function.users(inner).iter().count() >= 2
-        || ctx.state.gone.borrow().contains(&bo0_inst)
-    {
+    if bo0.opcode != bo.opcode || function.users(inner).iter().count() >= 2 {
         return None;
     }
-    let (mut lv, mut c1) = (bo0.operands[0], bo0.operands[1]);
-    let c2 = bo.operands[usize::from(!in_rhs)];
-    if ctx.is_loop_invariant(lv) && !ctx.is_loop_invariant(c1) {
-        std::mem::swap(&mut lv, &mut c1);
+    // The pin edits `bo0` in place when it reassociates it, so the next link
+    // of a chain reads `lv op (c1 op c2)`: `c1` is the invariant made then.
+    let prior = ctx.state.chained.borrow().get(&bo0_inst).copied();
+    if prior.is_none() && ctx.state.gone.borrow().contains(&bo0_inst) {
+        return None;
     }
-    if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) || !ctx.is_loop_invariant(c2) {
+    let c2 = bo.operands[usize::from(!in_rhs)];
+    let (lv, c1, bo0_flags) = match prior {
+        Some((lv, flags)) => (lv, lv, flags),
+        None => {
+            let (mut lv, mut c1) = (bo0.operands[0], bo0.operands[1]);
+            if ctx.is_loop_invariant(lv) && !ctx.is_loop_invariant(c1) {
+                std::mem::swap(&mut lv, &mut c1);
+            }
+            if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) {
+                return None;
+            }
+            (lv, c1, bo0.flags)
+        }
+    };
+    if !ctx.is_loop_invariant(c2) {
         return None;
     }
     // A value an earlier reassociation of the loop has erased is not read.
@@ -485,12 +505,12 @@ fn hoist_bo_association(
         },
         _ => false,
     };
-    if erased(lv) || erased(c1) || erased(c2) {
+    if erased(lv) || (prior.is_none() && erased(c1)) || erased(c2) {
         return None;
     }
     // `OverflowTracking` with `AllKnownNonNegative` and `AllKnownNonZero` off,
     // `applyFlags` after `dropPoisonGeneratingFlags`.
-    let both = |flag: Wrap| bo.flags.contains(flag) && bo0.flags.contains(flag);
+    let both = |flag: Wrap| bo.flags.contains(flag) && bo0_flags.contains(flag);
     let mut flags = Wrap::default();
     match op {
         BinaryOp::Add if both(Wrap::NUW) => {
@@ -502,7 +522,7 @@ fn hoist_bo_association(
         BinaryOp::Or if both(Wrap::DISJOINT) => flags.insert(Wrap::DISJOINT),
         _ => {}
     }
-    Some(Reassociation::BinaryOp { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags })
+    Some(Reassociation::BinaryOp { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags, chained: prior.is_some() })
 }
 
 /// [`hoistAddSub`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2538)
