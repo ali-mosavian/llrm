@@ -555,6 +555,19 @@ pub trait Tti {
         Cost::FREE
     }
 
+    /// What a `memcpy`, `memmove` or `memset` of `length` bytes (none: not a
+    /// constant) costs under `kind`, where the target expands it inline or
+    /// into a call by its length. None: `intrinsic_cost` answers.
+    fn memory_intrinsic_cost(
+        &self,
+        family: &str,
+        length: Option<u64>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (family, length, kind);
+        None
+    }
+
     /// What computing an address that no addressing mode holds costs (a
     /// `lea` or an add): one unit, as the pin prices it.
     fn address_computation_cost(

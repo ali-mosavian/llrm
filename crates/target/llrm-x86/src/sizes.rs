@@ -18,6 +18,8 @@
 //! | load, store | `mov r,[m]`; `mov [m],r` | 2 |
 //! | store of a constant | `mov [m],imm32` | 2 + 4 |
 //! | sign or zero extension | `movsx`, `movzx` | 3 |
+//! | phi, branch | `mov r,r`; `jcc rel8` | 2 |
+//! | `memcpy` of n bytes | a `mov r,[m]; mov [m],r` pair per dword (6), `rep movsl` form (20) from 4 pairs | |
 //! | direct call | `call rel32`, a push per argument, `add esp,n` | 5 + 2 each + 3 |
 //!
 //! A 16-bit operation takes the 66h prefix, a value of 64 bits is its pieces
@@ -134,9 +136,9 @@ pub fn memory(
     Cost::of(2 * parts + prefix + immediate)
 }
 
-/// Bytes a phi or a branch takes: a copy at most, and a short jump.
-pub fn control_flow(phi: bool) -> Cost {
-    Cost::of(if phi { 1 } else { 2 })
+/// Bytes a phi or a branch takes: a register copy (`mov r,r`), and a short jump.
+pub fn control_flow(_phi: bool) -> Cost {
+    Cost::of(2)
 }
 
 /// Bytes the address adds to an access: a global's absolute address, a frame
@@ -157,15 +159,26 @@ pub fn call(arguments: i64) -> Cost {
     Cost::of(5 + 2 * arguments + if arguments > 0 { 3 } else { 0 })
 }
 
+/// Bytes of a `memcpy`, `memmove` or `memset` of `length` bytes: a load and a
+/// store (or a store of the fill) per dword, the `rep movsl` / `rep stosl`
+/// form once that is shorter; without a constant length that form with its
+/// byte tail.
+pub fn memory_intrinsic(
+    family: &str,
+    length: Option<u64>,
+) -> Cost {
+    let fill = family == "memset";
+    let (rep, tail, piece) = if fill { (14, 28, 7) } else { (20, 38, 6) };
+    let Some(length) = length else { return Cost::of(tail) };
+    let pieces = (length / 4 + (length % 4).div_ceil(2)) as i64;
+    Cost::of((pieces * piece).min(rep))
+}
+
 /// Bytes of the code a call to the intrinsic `name` is, where this knows it;
 /// none for the rest.
 pub fn intrinsic(name: &str) -> Option<Cost> {
     let family = name.strip_prefix("llvm.")?.split('.').next()?;
     Some(Cost::of(match family {
-        // A copy or fill is `rep movsl` / `rep stosl` with a byte tail and the
-        // setup of both: the length is not visible to the query.
-        "memcpy" | "memmove" => 38,
-        "memset" => 28,
         "umin" | "umax" | "smin" | "smax" | "abs" => 6,
         "bswap" | "fabs" | "sqrt" => 2,
         "ctpop" | "ctlz" | "cttz" => 8,
@@ -193,6 +206,13 @@ mod tests {
         let form = |base| AddressForm { base, displacement_bytes: 0, indexed: false };
         assert_eq!(address(form(AddressBase::Global)), Cost::of(4));
         assert_eq!(address(form(AddressBase::Register)), Cost::of(0));
+    }
+
+    #[test]
+    fn a_small_constant_copy_is_a_pair_of_moves_per_dword_and_a_long_one_the_rep_form() {
+        assert_eq!(memory_intrinsic("memcpy", Some(8)), Cost::of(12));
+        assert_eq!(memory_intrinsic("memcpy", Some(64)), Cost::of(20));
+        assert_eq!(memory_intrinsic("memcpy", None), Cost::of(38));
     }
 
     #[test]

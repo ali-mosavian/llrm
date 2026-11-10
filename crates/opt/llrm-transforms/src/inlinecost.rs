@@ -1779,6 +1779,8 @@ impl<'a> Analyzer<'a> {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
                 self.size_units += self.code_size_of(inst);
+            } else if self.free_but_encoded(inst) {
+                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -2035,6 +2037,24 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    /// Whether an instruction the analyzer prices at nothing still encodes
+    /// bytes in the spliced body. The pin counts phis, jumps, the first
+    /// return and free casts as free because they cost no work, not because
+    /// they vanish; only a folded result (a known constant, an SROA'd
+    /// address) vanishes. The byte view prices what stays.
+    fn free_but_encoded(&self, inst: InstId) -> bool {
+        let operation = self.callee.instruction(inst);
+        let stays = match &operation.opcode {
+            Opcode::Phi | Opcode::Cast(_) => true,
+            Opcode::Br => operation.operands.len() == 1,
+            Opcode::Ret => true,
+            _ => false,
+        };
+        stays
+            && self.site.tti.is_some_and(|tti| tti.inline_size_view().is_some())
+            && operation.result.is_none_or(|result| self.simplified.get(&result).is_none() && self.offsets.get(&result).is_none())
+    }
+
     fn code_size_of(
         &self,
         inst: InstId,

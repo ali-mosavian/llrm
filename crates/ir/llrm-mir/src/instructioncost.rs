@@ -353,6 +353,19 @@ pub fn instruction_cost_with(
             let callee = crate::memory::callee(context, function, inst).and_then(|id| globals.get(id.0 as usize));
             let Some(callee) = callee else { return Cost::BASIC * (arguments + 1) };
             let name = callee.name.as_deref();
+            if let Some(family) = name
+                .and_then(|name| name.strip_prefix("llvm."))
+                .and_then(|rest| rest.split('.').next())
+                .filter(|family| matches!(*family, "memcpy" | "memmove" | "memset"))
+                && let Some(length) = operands.get(2)
+                && let Some(cost) = tti.memory_intrinsic_cost(
+                    family,
+                    constant_int(context, *length).and_then(|bits| u64::try_from(bits).ok()),
+                    kind,
+                )
+            {
+                return cost;
+            }
             if name.is_some_and(|name| name.starts_with("llvm.")) {
                 let arguments: Option<Vec<Ty>> =
                     operands[..operands.len() - 1].iter().map(|&one| modelled(one)).collect();

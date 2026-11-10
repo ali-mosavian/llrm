@@ -711,6 +711,15 @@ impl Tti for X86 {
         Cost::FREE
     }
 
+    fn memory_intrinsic_cost(
+        &self,
+        family: &str,
+        length: Option<u64>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        (self.size_bytes && kind == CostKind::CodeSize).then(|| crate::sizes::memory_intrinsic(family, length))
+    }
+
     fn address_computation_cost(
         &self,
         kind: CostKind,
