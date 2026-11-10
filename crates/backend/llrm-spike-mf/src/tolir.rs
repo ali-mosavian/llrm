@@ -256,7 +256,7 @@ impl<T: Target> Converted<T> {
         let before = self.body.registers.replace(registers);
         let allocatable = self.body.clone();
         self.body = self.with_effects(function, registers);
-        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, |_, counted| {
+        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
             let mut model =
                 llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|(_, limit)| *limit).collect());
             for value in 1..=known {

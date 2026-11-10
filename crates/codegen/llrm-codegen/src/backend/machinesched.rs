@@ -46,7 +46,8 @@ use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
 use crate::backend::regpressure::{Delta, Model, PressureChange, Region, Tracker};
-use crate::backend::schedboundary::{Machine, ProcResource, Unit};
+use crate::backend::schedboundary::Unit;
+use crate::backend::schedmodel::SchedulingModel;
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -242,8 +243,8 @@ pub struct Graph {
     pub succs: Vec<Vec<usize>>,
     /// The latency of each edge in `preds`, in the same order: what the
     /// earlier instruction takes to produce what the later one reads
-    /// ([`def_latency`]), one for an output dependence, none for an anti
-    /// dependence or a memory order.
+    /// ([`SchedulingModel::def_latency`]), one for an output dependence, none
+    /// for an anti dependence or a memory order.
     pub latencies: Vec<Vec<u32>>,
     /// For each instruction, the ones weakly ordered before it
     /// ([`copy_constrain`]): they never hold a node back, `Weak` of
@@ -403,7 +404,7 @@ impl Graph {
 /// target with none (i486): `TargetInstrInfo::defaultDefLatency` is zero for
 /// a transient instruction (a copy), `getLoadLatency` (4) for a load, one for
 /// the rest.
-fn def_latency(one: &Insn) -> u32 {
+pub(crate) fn default_def_latency(one: &Insn) -> u32 {
     let Some(what) = &one.what else { return 1 };
     let copy = what.op == Operation::Move
         && matches!(
@@ -446,6 +447,7 @@ pub fn graph(
     insns: &[Arc<Insn>],
     regs: Regs,
     bits: u32,
+    model: &dyn SchedulingModel,
 ) -> Graph {
     let n = insns.len();
     let mut effects: Vec<_> = insns.iter().map(|one| liveness::effect(regs, bits, one)).collect();
@@ -518,7 +520,7 @@ pub fn graph(
         edges.extend(unknown.map(|earlier| (earlier, 0)));
         for value in &one.uses {
             if let Some((Some(def), _)) = by_value.get(value) {
-                edges.push((*def, def_latency(&insns[*def])));
+                edges.push((*def, model.def_latency(&insns[*def])));
             }
         }
         for value in &one.defines {
@@ -531,7 +533,7 @@ pub fn graph(
             Some((reads, writes)) => {
                 for bit in bits_of(reads) {
                     if let Some(&def) = by_lane[bit].defs.last() {
-                        edges.push((def, def_latency(&insns[def])));
+                        edges.push((def, model.def_latency(&insns[def])));
                     }
                 }
                 for bit in bits_of(writes) {
@@ -910,10 +912,11 @@ impl BottomPressure for Followed<'_> {
 /// Not translated (MS6): `Rem.IsAcyclicLatencyLimited` (SB4 of
 /// [`genericdriver`]), which turns on the height and depth heuristic in a loop
 /// whose in-flight micro-ops pass the buffer (32).
-pub fn bottom_up(
+pub fn order_region(
     insns: &[Arc<Insn>],
     graph: &Graph,
     tracking: Option<&Tracking>,
+    model: &dyn SchedulingModel,
 ) -> Vec<usize> {
     let n = insns.len();
     let region = tracking.map(|_| Region::of(insns));
@@ -940,10 +943,13 @@ pub fn bottom_up(
                 }
             },
         );
-    let machine = i486_machine();
-    let units = vec![Unit { micro_ops: 1, ..Unit::default() }; n];
+    let machine = model.machine();
+    let units: Vec<Unit> = insns.iter().map(|one| model.unit(one)).collect();
+    let policy = model.policy();
+    // DEVIATE SB2: pressure is followed bottom-up only.
+    assert!(policy.only_bottom_up || followed.is_none(), "SB2: a bidirectional region does not track pressure yet");
     let pressure = followed.as_mut().map(|one| one as &mut dyn BottomPressure);
-    let (order, reasons) = Scheduler::new(graph, &machine, units, RegionPolicy::bottom_up(), pressure).schedule();
+    let (order, reasons) = Scheduler::new(graph, &machine, units, policy, pressure).schedule();
     if trace() {
         // Bottom-up picks come last-first.
         for (&node, reason) in order.iter().rev().zip(&reasons) {
@@ -958,18 +964,13 @@ pub fn bottom_up(
     order
 }
 
-/// X86.td's `GenericModel`: issue width 4, a micro-op buffer of 32, no
-/// resources.
-fn i486_machine() -> Machine {
-    Machine::new(4, 32, vec![ProcResource { num_units: 0, buffer_size: -1, sub_units: vec![] }])
-}
-
 /// The pre-RA machine scheduler: every region of a block ordered by
-/// [`bottom_up`]. DEVIATE MS4: regions end at more instructions than the
+/// [`order_region`]. DEVIATE MS4: regions end at more instructions than the
 /// pin's. DEVIATE RP1/RP2 are `regpressure.rs`'s.
 pub struct MachineScheduler {
     pub classes: Rc<RegisterClasses>,
     pub segments: Segments,
+    pub model: Rc<dyn SchedulingModel>,
 }
 
 impl LIRTransform for MachineScheduler {
@@ -987,7 +988,7 @@ impl LIRTransform for MachineScheduler {
     ) -> Result<LirBody, String> {
         let registers = &self.classes;
         let segments = &self.segments;
-        Ok(scheduled(&body, registers.available.len(), |body, counted| {
+        Ok(scheduled(&body, registers.available.len(), &*self.model, |body, counted| {
             let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
             let mut widths: IndexMap<u32, i64> = IndexMap::default();
             for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
@@ -1066,6 +1067,7 @@ const X87_STACK_LIMIT: u32 = 7;
 pub fn scheduled(
     body: &LirBody,
     limit: usize,
+    sched: &dyn SchedulingModel,
     model: impl FnOnce(&LirBody, &dyn Fn(u32) -> bool) -> Model,
 ) -> LirBody {
     let (regs, bits) = (body.regs(), body.bits);
@@ -1156,9 +1158,9 @@ pub fn scheduled(
                         let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
                         Tracking { model, live_out, live_thru }
                     });
-                    let mut deps = graph(slice, regs, bits);
+                    let mut deps = graph(slice, regs, bits, sched);
                     copy_constrain(slice, &mut deps, &|value| now.contains(&value));
-                    let order = bottom_up(slice, &deps, tracking.as_ref());
+                    let order = order_region(slice, &deps, tracking.as_ref(), sched);
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
                         for (place, &node) in order.iter().enumerate() {
                             out[region.start + place] = Arc::clone(&slice[node]);
@@ -1183,6 +1185,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{graph, regions};
+    use crate::backend::schedmodel::GenericModel;
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
 
@@ -1261,7 +1264,7 @@ mod tests {
             .collect();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let started = std::time::Instant::now();
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel);
         assert_eq!(found.preds.len(), insns.len());
         assert!(started.elapsed().as_millis() < 1000, "{:?} for 40,000 adds", started.elapsed());
     }
@@ -1288,7 +1291,7 @@ mod tests {
             ));
         }
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16);
+        let mut found = graph(&insns, regs, 16, &GenericModel);
         let started = std::time::Instant::now();
         copy_constrain(&insns, &mut found, &|_| false);
         assert!(started.elapsed().as_millis() < 1000, "{:?} to constrain 6,000 copies", started.elapsed());
@@ -1302,7 +1305,7 @@ mod tests {
     /// `mov` more was left in the loop.
     #[test]
     fn test_the_use_of_a_copy_stays_before_the_next_def_of_the_copied_value() {
-        use super::{bottom_up, copy_constrain};
+        use super::{copy_constrain, order_region};
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
             insn(0, semantics(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
@@ -1311,11 +1314,15 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16);
-        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3], "premise: program order without the edge");
+        let mut found = graph(&insns, regs, 16, &GenericModel);
+        assert_eq!(
+            order_region(&insns, &found, None, &GenericModel),
+            [0, 1, 2, 3],
+            "premise: program order without the edge"
+        );
         copy_constrain(&insns, &mut found, &|value| value == 1);
         assert_eq!(found.weak_preds[1], [2]);
-        assert_eq!(bottom_up(&insns, &found, None), [0, 2, 1, 3]);
+        assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 2, 1, 3]);
     }
 
     /// `l = g; g = g + 1; t = l * 3; out = t + g`: the pin returns at "two
@@ -1333,7 +1340,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16);
+        let mut found = graph(&insns, regs, 16, &GenericModel);
         copy_constrain(&insns, &mut found, &|value| value == 1);
         assert!(found.weak_preds.iter().all(Vec::is_empty), "{:?}", found.weak_preds);
     }
@@ -1345,7 +1352,7 @@ mod tests {
     fn test_the_graph_orders_data_and_a_load_before_a_store_and_nothing_else() {
         let insns = body();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel);
         assert_eq!(found.preds[1], [0], "the add reads the first load");
         assert!(found.preds[2].is_empty(), "the second load is ordered with nothing before it: {:?}", found.preds);
         assert_eq!(found.preds[3], [0, 1, 2], "the store follows both loads and the add");
@@ -1381,7 +1388,7 @@ mod tests {
     #[test]
     fn test_accesses_to_different_slots_are_not_ordered_by_the_memory_lane() {
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let order = |insns: Vec<Arc<Insn>>| graph(&insns, regs, 16).preds;
+        let order = |insns: Vec<Arc<Insn>>| graph(&insns, regs, 16, &GenericModel).preds;
         // No operand: the lane alone, a store then a load are ordered.
         assert_eq!(order(vec![access(0, true, None), access(1, false, None)])[1], [0]);
         // The operand says another slot: no edge.
@@ -1432,7 +1439,7 @@ mod tests {
     /// live.
     #[test]
     fn test_bottom_up_places_a_load_by_its_reader_when_the_limit_is_two() {
-        use super::bottom_up;
+        use super::order_region;
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
             insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
@@ -1443,12 +1450,12 @@ mod tests {
             insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel);
         let model = one_set(2);
         let tracking = super::Tracking { model: &model, live_out: vec![6], live_thru: vec![] };
-        assert_eq!(bottom_up(&insns, &found, Some(&tracking)), [0, 1, 3, 2, 4, 5]);
+        assert_eq!(order_region(&insns, &found, Some(&tracking), &GenericModel), [0, 1, 3, 2, 4, 5]);
         // Pressure not followed (a small region) leaves the order alone.
-        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 1, 2, 3, 4, 5]);
     }
 
     /// The long region of a block was kept in source order whatever the
@@ -1476,10 +1483,13 @@ mod tests {
             crate::support::hash::IndexMap::default(),
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-        let defined: Vec<u32> =
-            scheduled(&body, 2, |_, _| one_set(2)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        let defined: Vec<u32> = scheduled(&body, 2, &GenericModel, |_, _| one_set(2)).blocks[0]
+            .insns
+            .iter()
+            .flat_map(|one| one.defines.clone())
+            .collect();
         assert_eq!(defined, [1, 2, 4, 3, 5, 6]);
-        let kept: Vec<u32> = scheduled(&body, 16, |_, _| one_set(2)).blocks[0]
+        let kept: Vec<u32> = scheduled(&body, 16, &GenericModel, |_, _| one_set(2)).blocks[0]
             .insns
             .iter()
             .flat_map(|one| one.defines.clone())
@@ -1513,7 +1523,7 @@ mod tests {
             crate::support::hash::IndexMap::default(),
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-        let after = scheduled(&body, 2, |_, _| one_set(2));
+        let after = scheduled(&body, 2, &GenericModel, |_, _| one_set(2));
         let order: Vec<u32> = after.blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
         assert_ne!(order, [1, 2, 3, 4, 5, 6], "the load of 3 moved");
         for one in after.blocks[0].insns.iter() {
@@ -1529,7 +1539,7 @@ mod tests {
     /// the order is the source's.
     #[test]
     fn test_a_load_stays_next_to_its_reader() {
-        use super::bottom_up;
+        use super::order_region;
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
             insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(1)]), vec![1], vec![]),
@@ -1538,9 +1548,9 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(3), imm(1)]), vec![4], vec![3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel);
         assert_eq!(found.latencies[3], [4], "the reader still waits four cycles for the load");
-        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3]);
+        assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 1, 2, 3]);
     }
 
     /// A zero made before `add` was scheduled between `add` and `adc` (i64
@@ -1555,7 +1565,7 @@ mod tests {
             insn(1, semantics(Operation::Binary, "add", vec![held(3)], vec![held(2), held(2)]), vec![3], vec![2]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the zero stays before the add");
+        assert_eq!(graph(&insns, regs, 16, &GenericModel).preds[1], [0], "the zero stays before the add");
     }
 
     /// Flags no one reads before the next flag writer are a dead def, and the
@@ -1572,7 +1582,7 @@ mod tests {
             insn(2, semantics(Operation::Binary, "add", vec![held(4)], vec![held(2), held(3)]), vec![4], vec![2, 3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 32);
+        let found = graph(&insns, regs, 32, &GenericModel);
         assert!(found.preds[1].is_empty(), "the second add waits for the first only through flags: {:?}", found.preds);
         assert_eq!(found.preds[2], [0, 1], "the third reads both");
     }
@@ -1596,7 +1606,7 @@ mod tests {
         let carry =
             insn(1, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(6)]), vec![5], vec![5, 6]);
         let insns = vec![compare, carry, add(2, 10, 11, 12), add(3, 13, 14, 15), add(4, 16, 17, 18)];
-        let g = graph(&insns, regs, 32);
+        let g = graph(&insns, regs, 32, &GenericModel);
         assert!(g.preds[3].contains(&1), "the second dead write stays after the adc: {g:?}");
     }
 
@@ -1679,7 +1689,7 @@ mod tests {
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![wide(1), wide(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Binary, "adc", vec![held(3)], vec![held(3), held(4)]), vec![3], vec![3, 4]),
         ];
-        assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the adc stays after the fcom");
+        assert_eq!(graph(&insns, regs, 16, &GenericModel).preds[1], [0], "the adc stays after the fcom");
         for name in ["fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "ftst", "fxam"] {
             let one = insn(0, semantics(Operation::Compare, name, vec![], vec![]), vec![], vec![]);
             assert!(x87_compare(&one), "{name}");
@@ -1712,7 +1722,7 @@ mod tests {
             insn(1, semantics(Operation::Unary, "seta", vec![byte], vec![]), vec![3], vec![]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
-        assert_eq!(graph(&insns, regs, 32).preds[1], [0], "the set stays after the fcom");
+        assert_eq!(graph(&insns, regs, 32, &GenericModel).preds[1], [0], "the set stays after the fcom");
     }
 
     /// The audit of the two effects the re-land left unchecked. A shift by `cl`
@@ -1731,7 +1741,7 @@ mod tests {
         let flags = crate::backend::peephole::Lanes::flags(ARITHMETIC_FLAGS);
         let shift_effect = liveness::effect(regs, 32, &shift).expect("a shift by cl has a decoded effect");
         assert!(!shift_effect.writes.is_disjoint(&flags), "the shl writes the flags");
-        let g = graph(&[compare.clone(), shift, carry], regs, 32);
+        let g = graph(&[compare.clone(), shift, carry], regs, 32, &GenericModel);
         assert!(g.preds[2].contains(&1), "adc stays after the shl: {g:?}");
         let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let fcmov = insn(1, semantics(Operation::Move, "fcmove", vec![wide(7)], vec![wide(8)]), vec![7], vec![7, 8]);
@@ -1739,7 +1749,7 @@ mod tests {
         // compare set.
         let known = liveness::effect(regs, 32, &fcmov).map(|effect| !effect.all_reads().is_disjoint(&flags));
         assert!(known.is_none_or(|reads| reads), "an fcmov with a known effect reads the flags");
-        let g = graph(&[compare, fcmov], regs, 32);
+        let g = graph(&[compare, fcmov], regs, 32, &GenericModel);
         assert_eq!(g.preds[1], [0], "the fcmov stays after the cmp: {g:?}");
     }
 
@@ -1758,7 +1768,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(4)]), vec![5], vec![5, 4]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
-        let found = graph(&insns, regs, 32);
+        let found = graph(&insns, regs, 32, &GenericModel);
         assert!(found.preds[1].contains(&0), "the add stays after the or: {found:?}");
     }
 
@@ -1838,7 +1848,11 @@ mod tests {
             let insns: Vec<Arc<Insn>> = (0..n)
                 .map(|at| insn(at as i64, semantics(Operation::Move, "x", vec![], vec![]), vec![], vec![]))
                 .collect();
-            assert_eq!(super::bottom_up(&insns, &graph, None), old_untracked_order(&graph), "{edges:?}");
+            assert_eq!(
+                super::order_region(&insns, &graph, None, &GenericModel),
+                old_untracked_order(&graph),
+                "{edges:?}"
+            );
         }
     }
 
@@ -1950,12 +1964,12 @@ mod tests {
                     insn(k as i64, semantics(Operation::Binary, "add", vec![held(value)], sources), vec![value], uses)
                 })
                 .collect();
-            let found = super::graph(&insns, regs, 16);
+            let found = super::graph(&insns, regs, 16, &GenericModel);
             let model = one_set(1 + next(4) as u32);
             let tracking = super::Tracking { model: &model, live_out: vec![n as u32], live_thru: vec![] };
-            let order = super::bottom_up(&insns, &found, Some(&tracking));
+            let order = super::order_region(&insns, &found, Some(&tracking), &GenericModel);
             assert_eq!(order, old_tracked_order(&insns, &found, &tracking), "{insns:?}");
-            moved_by_pressure += usize::from(order != super::bottom_up(&insns, &found, None));
+            moved_by_pressure += usize::from(order != super::order_region(&insns, &found, None, &GenericModel));
         }
         assert!(moved_by_pressure > 0, "pressure never decided a pick: the oracle compares nothing");
     }
