@@ -1,9 +1,10 @@
 //! `lower_phis` splits a critical edge as the pin does (`SplitCriticalEdge`,
 //! MachineBasicBlock.cpp#L1196): the new block lies right after its source, the
 //! source's edge to it has the probability of the edge it replaced, and its one
-//! edge has probability 1. The block odds are keyed by block, so they follow the
-//! blocks when one is placed beside its source: a table keyed by position gave
-//! every later block the odds of its neighbour, and a split edge none at all.
+//! edge has probability 1. The block odds are keyed by block, so they follow
+//! the blocks when one is placed beside its source: a table keyed by position
+//! gave every later block the odds of its neighbour, and a split edge none at
+//! all.
 
 use std::collections::BTreeMap;
 
@@ -40,7 +41,10 @@ fn branches(block: &MBlock) -> Vec<String> {
 }
 
 /// The odds, by the labels of the blocks they join.
-fn by_label(machine: &MFunc, module: &llrm_mir::module::Module) -> Edges {
+fn by_label(
+    machine: &MFunc,
+    module: &llrm_mir::module::Module,
+) -> Edges {
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
     edge_odds(module, function, &layout, machine)
@@ -62,7 +66,11 @@ fn a_split_edge_keeps_its_probability_and_the_odds_follow_the_blocks() {
     let after = by_label(&machine, &module);
     let added: Vec<usize> =
         (0..machine.blocks.len()).filter(|&at| !labels.contains(&machine.blocks[at].label)).collect();
-    assert!(added.len() >= 2, "the premise: critical edges were split: {:?}", machine.blocks.iter().map(|b| &b.label).collect::<Vec<_>>());
+    assert!(
+        added.len() >= 2,
+        "the premise: critical edges were split: {:?}",
+        machine.blocks.iter().map(|b| &b.label).collect::<Vec<_>>()
+    );
     let mut replaced = 0;
     for &at in &added {
         let edge = &machine.blocks[at].label;
@@ -81,8 +89,16 @@ fn a_split_edge_keeps_its_probability_and_the_odds_follow_the_blocks() {
             "{edge} is not beside its source {source}: {:?}",
             machine.blocks.iter().map(|b| &b.label).collect::<Vec<_>>()
         );
-        assert_eq!(after.get(&(source.clone(), edge.clone())), before.get(&(source.clone(), target.clone())), "{source} -> {edge}");
-        assert_eq!(after.get(&(edge.clone(), target.clone())), Some(&BranchProbability::get_one()), "{edge} -> {target}");
+        assert_eq!(
+            after.get(&(source.clone(), edge.clone())),
+            before.get(&(source.clone(), target.clone())),
+            "{source} -> {edge}"
+        );
+        assert_eq!(
+            after.get(&(edge.clone(), target.clone())),
+            Some(&BranchProbability::get_one()),
+            "{edge} -> {target}"
+        );
         replaced += 1;
     }
     assert_eq!(replaced, added.len());

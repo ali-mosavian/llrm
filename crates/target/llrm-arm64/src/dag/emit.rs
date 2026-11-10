@@ -753,11 +753,13 @@ struct Emitter<'a> {
     cuts: Vec<Cut>,
     /// The splits so far in the function, for fresh labels.
     splits: usize,
-    /// The registers that hold a copy of the stack pointer (`CopyFromReg SP`): an address with one as its base uses
-    /// the stack pointer itself, as `InstrEmitter` uses a reserved register where it is read.
+    /// The registers that hold a copy of the stack pointer (`CopyFromReg SP`):
+    /// an address with one as its base uses the stack pointer itself, as
+    /// `InstrEmitter` uses a reserved register where it is read.
     sp_copies: rustc_hash::FxHashSet<Gpr>,
-    /// Some block writes the stack pointer (a dynamic `alloca`, `llvm.stackrestore`): the outgoing area is no longer
-    /// reserved in the frame (`hasReservedCallFrame`), each call makes room for it.
+    /// Some block writes the stack pointer (a dynamic `alloca`,
+    /// `llvm.stackrestore`): the outgoing area is no longer reserved in the
+    /// frame (`hasReservedCallFrame`), each call makes room for it.
     moves_sp: bool,
     /// The register each phi's edges copy into, by the phi's register
     /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
@@ -1086,7 +1088,9 @@ impl Emitter<'_> {
     ) -> Result<Addr, String> {
         let imm = offset as i64;
         match self.operand(value)? {
-            Operand::Reg(base) => Ok(Addr::Offset { base: if self.sp_copies.contains(&base) { Gpr::R31 } else { base }, imm }),
+            Operand::Reg(base) => {
+                Ok(Addr::Offset { base: if self.sp_copies.contains(&base) { Gpr::R31 } else { base }, imm })
+            }
             Operand::Slot(slot) => Ok(Addr::Slot { slot, offset: imm }),
             Operand::Fixed(at) => Ok(Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm }),
             _ => Err("a block of memory at something that is no pointer register or frame object".into()),
@@ -1439,9 +1443,10 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// `AArch64FrameLowering::eliminateCallFramePseudoInstr` where the call frame is not reserved: `sub sp, sp, #n`
-    /// before the call's stores, `add sp, sp, #n` after it, `n` the bytes aligned to 16 (`emitFrameOffset`: 12 bits,
-    /// then the next 12 shifted).
+    /// `AArch64FrameLowering::eliminateCallFramePseudoInstr` where the call
+    /// frame is not reserved: `sub sp, sp, #n` before the call's stores,
+    /// `add sp, sp, #n` after it, `n` the bytes aligned to 16
+    /// (`emitFrameOffset`: 12 bits, then the next 12 shifted).
     fn adjust_stack(
         &mut self,
         bytes: u64,
@@ -1966,13 +1971,24 @@ pub fn emit(
         splits: 0,
         sp_copies: rustc_hash::FxHashSet::default(),
         incoming: HashMap::default(),
-        moves_sp: blocks.iter().any(|block| {
-            block.units.iter().flat_map(|unit| &unit.nodes).any(|&node| {
-                let node = block.dag.node(SDValue { node, res: 0 });
-                node.opcode == ISD::CopyToReg
-                    && matches!(block.dag.node(node.ops[1]).data, NodeData::PhysReg(id) if id == crate::reg::SP)
-            })
-        }),
+        moves_sp: blocks
+            .iter()
+            .any(
+                |block| block
+                    .units
+                    .iter()
+                    .flat_map(|unit| &unit.nodes)
+                    .any(
+                        |&node| {
+                            let node = block.dag.node(SDValue { node, res: 0 });
+                            node.opcode == ISD::CopyToReg
+                                && matches!(
+                                    block.dag.node(node.ops[1]).data,
+                                    NodeData::PhysReg(id) if id == crate::reg::SP
+                                )
+                        },
+                    ),
+            ),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
