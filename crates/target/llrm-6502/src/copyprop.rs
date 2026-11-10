@@ -47,6 +47,13 @@
 //! first (`MaybeDeadCopies`), else a dead `lda` is kept alive as a transfer's
 //! source. On by default; `LLRM_6502_MCP=0` is the kill switch ([`enabled`]).
 //!
+//! Hosting: `backend/machinecp.rs` is the generic translation of the same pass,
+//! but only `flow::machine_with` runs it and the 6502 emits `Asm` without going
+//! through that flow, so there is no allocated `LirBody` to run it on. Not
+//! checked: its byte-lane tracker against A/X/Y, the zero-page cells and the
+//! zero/sign flag rule (MCP2). At 6502-a's allocated-`LirBody` POC (2026-11-20,
+//! window to about 11-27) check hosting there, then migrate or re-justify MCP1-3.
+//!
 //! # Not subsumed
 //! With the pass on, skipping a special-case peephole (162 cells, 2026-11-09)
 //! makes cells larger: `load_straight_into_a` +19 B (lz4c, hand_memmove),
