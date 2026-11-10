@@ -6559,6 +6559,7 @@ fn test_a_float_slot_copy_is_skipped_on_a_register_file_without_x87() {
         views: base.views,
         byte_lanes: base.byte_lanes,
         lanes_x86: base.lanes_x86,
+        lanes_none: base.lanes_none,
         ties_by_row: base.ties_by_row,
     })));
     let mut input = float_copy_body((-4, 4), (-8, 4), &[]);

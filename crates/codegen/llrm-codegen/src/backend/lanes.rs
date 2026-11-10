@@ -183,7 +183,7 @@ fn table_of(regs: Regs) -> &'static Table {
         // Not a default: a z80 file without the line read x86's table for every register (no effect decoded, every
         // instruction a scheduling barrier).
         assert!(
-            regs.0.lanes_x86,
+            regs.0.lanes_x86 || regs.0.lanes_none,
             "a register file with integer views under 32 bits (`{small:?}`) must say `@lanes bytes`, `@lanes x86` \
              or `@lanes none` in its registers.regs"
         );
@@ -234,12 +234,19 @@ impl Drop for Guard {
 /// Whether `regs` is a file the x86 table serves: byte lanes under a root of
 /// four, the shapes `machinecp` has its fixed units for.
 pub fn is_x86(regs: Regs) -> bool {
-    std::ptr::eq(table_of(regs), &*X86)
+    // a file that says `@lanes none` has no table; it is not x86's
+    !regs.0.lanes_none && std::ptr::eq(table_of(regs), &*X86)
 }
 
 /// Makes the lanes of `regs`' file the ones this thread reads. A mask made
 /// under one file is not meaningful under another.
 pub fn enter(regs: Regs) -> Guard {
+    // not a default: a consumer of lanes on a target that has none must say so, by stating its lanes
+    assert!(
+        !regs.0.lanes_none,
+        "this register file says `@lanes none` (its target reads no lanes yet), but something reads its lanes: \
+         it needs `@lanes bytes` and a table of its own in registers.regs"
+    );
     let table = table_of(regs);
     let was = ACTIVE.with(|active| active.replace((!std::ptr::eq(table, &*X86)).then_some(table)));
     // A register prints by its file's name, iced's only for x86.
@@ -724,8 +731,41 @@ mod tests {
             views: base.views,
             byte_lanes: false,
             lanes_x86: false,
+            lanes_none: false,
             ties_by_row: base.ties_by_row,
         })));
         let _ = table_of(bare);
+    }
+
+    /// m68k's file says `@lanes none`: its private pipeline reads no lanes. A consumer that later reaches
+    /// `enter` (the scheduler, machinecp's fixed units) got x86's table for ids that are not x86's, without a
+    /// word; it is refused by name, and `is_x86` is false for the file.
+    #[test]
+    #[should_panic(expected = "@lanes none")]
+    fn reading_the_lanes_of_a_file_that_says_none_is_refused() {
+        use llrm_lir::registers::{Info, Regs};
+        let base = &llrm_x86_m16::REGISTER_INFO;
+        let none = Regs(Box::leak(Box::new(Info {
+            table: base.table,
+            frame: base.frame,
+            stack: base.stack,
+            loads: base.loads,
+            scratch: base.scratch,
+            bytes: base.bytes,
+            data_segment: base.data_segment,
+            stack_segment: base.stack_segment,
+            code_segment: base.code_segment,
+            far_segment: base.far_segment,
+            widths: base.widths,
+            effects: base.effects,
+            cache: Default::default(),
+            views: base.views,
+            byte_lanes: false,
+            lanes_x86: false,
+            lanes_none: true,
+            ties_by_row: base.ties_by_row,
+        })));
+        assert!(!is_x86(none), "a file that says none is not x86's");
+        let _ = enter(none);
     }
 }

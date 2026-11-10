@@ -48,11 +48,16 @@ pub fn byte_lanes(text: &str) -> bool {
     order(text, "@lanes").iter().any(|word| word == "bytes")
 }
 
-/// Whether the file says its lanes are x86's table: `@lanes x86`, or `@lanes none` for a file whose target reads no
-/// lanes yet (the x86 table then stands in and nothing reads it). A file with integer views under 32 bits and
-/// neither this nor `@lanes bytes` is refused (`lanes::table_of`).
+/// Whether the file says its lanes are x86's table: `@lanes x86`. A file with integer views under 32 bits and
+/// none of `@lanes bytes`, `@lanes x86` and `@lanes none` is refused (`lanes::table_of`).
 pub fn lanes_x86(text: &str) -> bool {
-    order(text, "@lanes").iter().any(|word| word == "x86" || word == "none")
+    order(text, "@lanes").iter().any(|word| word == "x86")
+}
+
+/// Whether the file says `@lanes none`: its target reads no lanes yet, and a read (`lanes::enter`) is refused by
+/// name until the file states the lanes it needs.
+pub fn lanes_none(text: &str) -> bool {
+    order(text, "@lanes").iter().any(|word| word == "none")
 }
 
 /// Whether a `@ties rows` line says the rows of the file's instructions state
@@ -283,7 +288,7 @@ pub fn source_with(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {}, lanes_x86: {}, ties_by_row: {} }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {}, lanes_x86: {}, lanes_none: {}, ties_by_row: {} }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         bytes.join(", "),
@@ -296,6 +301,7 @@ pub fn source_with(
         optional("far_segment")?,
         byte_lanes(text),
         lanes_x86(text),
+        lanes_none(text),
         ties_by_row(text)
     ));
     Ok(code)
