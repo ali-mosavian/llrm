@@ -26,3 +26,6 @@ num-traits = { workspace = true }
 llrm-iselgen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
+
+[dev-dependencies]
+llrm-transforms = { workspace = true }

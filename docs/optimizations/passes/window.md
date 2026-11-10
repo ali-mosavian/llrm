@@ -67,7 +67,7 @@ left alone. The new branches carry `branch_weights`.
 
 DEVIATE LP-4 (no pin pass: huge-pointer windows are the DOS exception, LLVM
 has no huge pointer; exit: none planned, kept; to migrate off the old
-analyses it reads; owner w-6; review 2026-11-27).
+analyses it reads; owner w10-instcombine; review 2026-11-27).
 
 ## Example
 Before:

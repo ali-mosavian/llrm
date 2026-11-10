@@ -57,6 +57,8 @@ const SOURCE_ORDER: Options = Options {
     code_model: llrm_m68k::compile::CodeModel::Small,
     mid_end: true,
     size: false,
+    size_libcalls: llrm_m68k::libcalls::Mode::Auto,
+    libcalls: None,
     strict: false,
     source_order: true,
     indexed: false,
@@ -75,7 +77,9 @@ const SOURCE_ORDER: Options = Options {
     return_dup: false,
     class_split: false,
     compare_destinations: false,
+    carry_chain: true,
     global_copies: true,
+    mul: llrm_m68k::dagisel::mulprice::Mode::Pin,
     loop_carried_first: false,
     debug: false,
 };

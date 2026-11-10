@@ -1,0 +1,1 @@
+ABI: long double is binary128, 16 bytes with 16-byte alignment on wasm32 (the pin clang agrees): sizes 16, 32, 48 (1+15+16+2+14), 16.

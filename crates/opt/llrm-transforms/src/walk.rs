@@ -281,6 +281,7 @@ impl ProgramPass for Walk {
             let private = private(program, at);
             let module = &mut program.modules[at];
             let mut recursive = crate::inline::recursive(module);
+            let mut linear_recursive = crate::inline::linear_recursive(module, &recursive);
             let addressed = llrm_mir::callgraph::addressed(module);
             // The calls to each function as the splices leave them, as LLVM's
             // use lists do (`isSoleCallToLocalFunction`), and a callee with
@@ -332,6 +333,7 @@ impl ProgramPass for Walk {
                                 live.references(),
                                 &addressed,
                                 &recursive,
+                                &linear_recursive,
                                 params,
                                 size,
                                 self.inline.limit == 0,
@@ -495,6 +497,7 @@ impl ProgramPass for Walk {
                             live.spliced(module, &mut modules[at], was, mid);
                             if recursive.contains(&id) {
                                 recursive = crate::inline::recursive(module);
+                                linear_recursive = crate::inline::linear_recursive(module, &recursive);
                             }
                             repeats += 1;
                             continue;
@@ -548,6 +551,8 @@ impl ProgramPass for Walk {
                                     && left == calls.len() as i64;
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee)));
+                                } else if tti.inline_trial_groups_sites() && calls.len() > 1 {
+                                    units.push((calls, 0));
                                 } else {
                                     units.extend(calls.into_iter().map(|one| (vec![one], 0)));
                                 }
@@ -610,6 +615,7 @@ impl ProgramPass for Walk {
                                         live.references(),
                                         &addressed,
                                         &recursive,
+                                        &linear_recursive,
                                         params,
                                         size,
                                         self.inline.limit == 0,
@@ -826,6 +832,7 @@ impl ProgramPass for Walk {
                         live.spliced(module, &mut modules[at], was, now.clone());
                         if recursive.contains(&id) {
                             recursive = crate::inline::recursive(module);
+                            linear_recursive = crate::inline::linear_recursive(module, &recursive);
                         }
                         repeats += 1;
                         if repeats >= DEVIRT_REPEATS || !exposed {
@@ -1110,7 +1117,7 @@ pub(crate) fn take_walk_promotions(
 /// 6368 clocks against 6209) and the copies are of the tree (fib: 132006
 /// clocks, 294986 copied after tail-call elimination made it a loop).
 ///
-/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w-6, review
+/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w10-instcombine, review
 /// 2026-11-30. The rule is cost-based: the target's `gcc_insns` (150 here,
 /// 450 for peeling), the call frequency over the entry's (10%), depth 3; no
 /// shape of a program. Depth 3 and cap 450 kept. The priced row is recpow -O1:
@@ -1370,6 +1377,17 @@ pub fn function_bytes(
                 Opcode::Select => costs.branch + costs.r#move,
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
+                // `llvm.lifetime.*`, `llvm.assume` and the rest the cost model calls free emit no instruction: priced as
+                // calls they were 60 B of 267 in stack_arrays_copy (object 94). A target opts in (`free_intrinsics`):
+                // the others' inlining bars were fit with the markers priced as calls.
+                Opcode::Call(_) | Opcode::Invoke(_)
+                    if costs.free_intrinsics
+                        && llrm_mir::memory::callee(&module.context, function, inst)
+                        .and_then(|global| module.global(global).name.as_deref())
+                        .is_some_and(llrm_mir::tti::is_free_intrinsic) =>
+                {
+                    0
+                }
                 Opcode::Call(_) | Opcode::Invoke(_) => {
                     costs.call + costs.argument * operation.operands.len().saturating_sub(1) as i64
                 }

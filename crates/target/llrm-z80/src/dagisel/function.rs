@@ -46,8 +46,10 @@ pub fn builder_target() -> BuilderTarget {
         // from a third of its range filled, at speed as well as size.
         min_jump_table_density: Some(40),
         preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        refuse_unknown_intrinsics: true,
         variable_shift_legal: false,
         string_instructions: false,
+        max_alloca_align: Some(crate::MAX_ALLOCA_ALIGN),
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
@@ -69,7 +71,11 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
         // the symbol's linkage (`isOffsetFoldingLegal`)
-        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::for_pointer_bits(16).dag },
+        dag: DagConfig {
+            dso_local_symbols: true,
+            sext_bool_add_preferred: true,
+            ..BuilderTarget::for_pointer_bits(16).dag
+        },
         ..BuilderTarget::for_pointer_bits(16)
     }
 }
@@ -120,6 +126,8 @@ pub struct Selection {
     pub returns_twice: bool,
     /// `internal` or `private` linkage: the label is not exported.
     pub local: bool,
+    /// The function carries `optsize` or `minsize`: tuned for size at any level.
+    pub sized: bool,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
@@ -165,6 +173,7 @@ pub fn select_function_with(
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
+    let tuned_for_size = sized;
     let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
         && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
     let mut info = FunctionLoweringInfo::new(function);
@@ -241,7 +250,7 @@ pub fn select_function_with(
         );
     let tables = info.jump_tables.clone();
     let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable, frequencies, tables })
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, unreachable, frequencies, tables })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

@@ -200,6 +200,8 @@ pub struct Profile {
     /// Equal literal stores share a register at the speed levels too
     /// (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
+    /// At -Os a 1 is `xor r,r; inc r` (`TimingTable::size_one_is_xor_inc`).
+    pub size_one_is_xor_inc: bool,
     /// A select of two constants in a block at least this often run is a branch
     /// on a CPU with no `cmov`; 0 is off
     /// (`TimingTable::branch_constant_selects`).
@@ -413,6 +415,7 @@ impl Profile {
             speed_rate: true,
             post_ra_tail_duplicate: false,
             share_literal_stores: false,
+            size_one_is_xor_inc: false,
             branch_constant_selects: 0,
             spills_extended: false,
             exhaustive: false,
@@ -655,6 +658,7 @@ fn _profile(
         share_congruent_phis: table.share_congruent_phis,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         share_literal_stores: table.share_literal_stores,
+        size_one_is_xor_inc: table.size_one_is_xor_inc,
         branch_constant_selects: table.branch_constant_selects,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
@@ -773,7 +777,7 @@ fn general_registers(arch: &dyn Target) -> Vec<RegId> {
     let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
-        .map(|name| RegId::named(name).unwrap_or_else(|| panic!("no register {name}")))
+        .map(|name| arch.registers().by_name(name).unwrap_or_else(|| panic!("the target names no register `{name}`")))
         .collect()
 }
 
@@ -809,6 +813,20 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    /// The general registers are named through the target's own file now; on
+    /// every x86 target they are what x86's name table gave.
+    #[test]
+    fn test_the_general_registers_are_what_the_x86_name_table_gave() {
+        let targets: [&dyn Target; 3] = [&llrm_x86_m16::M16, &llrm_x86_m32::M32, &llrm_x86_m64::M64];
+        for arch in targets {
+            let file = llrm_target::registers::file(&arch.registers_text()).unwrap();
+            let old: Vec<RegId> =
+                llrm_target::registers::of_class(&file, "gpr").into_iter().map(|name| RegId::named(name).unwrap()).collect();
+            assert!(!old.is_empty());
+            assert_eq!(general_registers(arch), old, "{}", arch.name());
+        }
+    }
 
     /// TA-4 was written as a pass's own rule for the m16 prefixed `lea`; the
     /// mode comes from the address forms, so a flat dword form, a 64-bit one

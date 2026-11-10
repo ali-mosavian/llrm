@@ -33,6 +33,11 @@ def ow_tree() -> Path:
     return cache / "llrm" / f"ow-src-{commit}"
 
 
+def ow_present() -> bool:
+    """Whether `ow_tree()` is whole: toolchain/cache.sh writes `.complete` last, so a directory without it is an interrupted or running fetch."""
+    return (ow_tree() / ".complete").is_file()
+
+
 def cc_environment() -> dict[str, str]:
     """The variables llrm-cc needs, from the caller's (the Open Watcom tree is `ow_tree()`, no variable)."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
@@ -239,6 +244,18 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     if a == b and not same_source:
         raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
+
+
+def backends_of(target: str) -> tuple[str, ...]:
+    """The programs beside llrm-cc that compile for `target` (a row of crates/driver/llrm-cc/targets.toml): llrm-llc, and the row's own `llc_program` where it names another. A pair
+    that shares the target's own backend reads SAME on every row of that target, whatever llrm-llc is."""
+    import tomllib
+
+    rows = tomllib.loads((Path(__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
+    if target not in rows:
+        raise SystemExit(f"unknown target {target!r}: not a row of crates/driver/llrm-cc/targets.toml (a misspelled name would read as 'no own backend' and fake an identity pass)")
+    own = rows[target].get("llc_program", "llrm-llc")
+    return ("llrm-llc",) if own == "llrm-llc" else ("llrm-llc", own)
 
 
 def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:

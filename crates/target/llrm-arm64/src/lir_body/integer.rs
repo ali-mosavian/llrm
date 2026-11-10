@@ -214,6 +214,18 @@ pub(super) fn to(
             vec![g(*rn, *width), g(*rm, *width), imm(position(&CONDS, *cond))],
             None,
         ),
+        Inst::AddCarry { op, width, rd, rn, rm } => semantics(
+            Operation::Binary,
+            format!(
+                "{}{}{}r",
+                if op.subtract { "SBC" } else { "ADC" },
+                if op.set_flags { "S" } else { "" },
+                width_letter(*width)
+            ),
+            vec![g(*rd, *width)],
+            vec![g(*rn, *width), g(*rm, *width)],
+            None,
+        ),
         Inst::CondCompare { negate, width, rn, rm_or_imm, nzcv, cond } => {
             let (second, form) = match rm_or_imm {
                 CcOperand::Reg(rm) => (g(*rm, *width), 'r'),
@@ -312,6 +324,10 @@ pub(super) fn back(
     }
     if let Some(op) = by_name(&MUL3, mnemonic) {
         return Some(Inst::ThreeSource { op, width, rd: rd()?, rn: reg(0), rm: reg(1), ra: reg(2) });
+    }
+    if matches!(mnemonic, "ADC" | "ADCS" | "SBC" | "SBCS") {
+        let op = AddSub { subtract: mnemonic.starts_with("SBC"), set_flags: mnemonic.ends_with('S') };
+        return Some(Inst::AddCarry { op, width, rd: rd()?, rn: reg(0), rm: reg(1) });
     }
     if let Some(op) = by_name(&SELECT, mnemonic) {
         return Some(Inst::CondSelect { op, width, rd: rd()?, rn: reg(0), rm: reg(1), cond: member(&CONDS, &s[2]) });

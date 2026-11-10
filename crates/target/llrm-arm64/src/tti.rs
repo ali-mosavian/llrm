@@ -51,7 +51,7 @@
 //! # See also
 //! `llrm_mir::tti`, the interface; `llrm_x86::tti`, the x86 model.
 
-use llrm_mir::lowering::{ExtUser, Lowering};
+use llrm_mir::lowering::{ExtUser, Isd, LoadExt, Lowering};
 use llrm_mir::tti::*;
 
 use crate::expand_imm::mov_imm;
@@ -87,17 +87,19 @@ impl Cpu {
 /// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
 /// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
 /// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
-/// +148 B for -722 and -168 instructions. A wash at the floor, and they run few times.
-/// jpeg -O2: +28 and +8 B for -33 and -42 instructions of 11.65 M and 8.49 M (measured, not
-/// 0): the 3-trip component loops of the header parse (`id[c] == want`, 16 B for 11 clocks a
-/// run) run once a program, so the saving is real and one-off. The model prices them right at
-/// 1.2 instructions a byte, above the 0.8 break-even; it cannot know the code is cold.
+/// +148 B for -722 and -168 instructions. A wash at the floor, and they run few
+/// times. jpeg -O2: +28 and +8 B for -33 and -42 instructions of 11.65 M and
+/// 8.49 M (measured, not 0): the 3-trip component loops of the header parse
+/// (`id[c] == want`, 16 B for 11 clocks a run) run once a program, so the
+/// saving is real and one-off. The model prices them right at 1.2 instructions
+/// a byte, above the 0.8 break-even; it cannot know the code is cold.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// Bytes, in thousandths, one inliner cost unit (an instruction) stands for.
 const BYTES_PER_COST_UNIT_MILLI: i64 = 4000;
 
-/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250 clocks).
+/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250
+/// clocks).
 const INLINE_MILLICLOCKS_PER_UNIT: i64 = 250_000;
 
 /// AArch64's scalar profile.
@@ -288,26 +290,64 @@ fn kind_name(kind: CostKind) -> &'static str {
     }
 }
 
-type Prices = llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>>;
+thread_local! {
+    static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rows of the intrinsic table this thread has indexed.
+pub fn intrinsic_rows_indexed() -> usize {
+    INDEXED.with(std::cell::Cell::get)
+}
+
+type Section = llrm_support::hash::HashMap<&'static str, Option<i64>>;
 
 /// Intrinsic prices by (cpu, kind, callee name), as the pinned `opt` gives them
-/// (DEVIATE 1).
-fn intrinsic_prices() -> &'static Prices {
-    static PRICES: std::sync::OnceLock<Prices> = std::sync::OnceLock::new();
-    PRICES.get_or_init(|| {
-        include_str!("tti_intrinsics.txt")
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| {
-                let mut words = line.split(' ');
-                let (cpu, kind, name, cost) = (words.next()?, words.next()?, words.next()?, words.next()?);
-                Some(((cpu, kind, name), cost.parse().ok()))
-            })
-            .collect()
-    })
+/// (DEVIATE 1). A compile reads the rows of one cpu and a few kinds, which the
+/// file keeps together: each such section is found in the text and indexed
+/// when a price of it is first asked for, not the 1081 rows of all of them.
+fn intrinsic_price(
+    cpu: &'static str,
+    kind: &'static str,
+    name: &str,
+) -> Option<Option<i64>> {
+    static SECTIONS: std::sync::Mutex<Vec<(&str, &str, &Section)>> = std::sync::Mutex::new(Vec::new());
+    let mut sections = SECTIONS.lock().unwrap();
+    let known = sections.iter().find(|(c, k, _)| *c == cpu && *k == kind).map(|(_, _, section)| *section);
+    let section = known.unwrap_or_else(|| {
+        let section: &'static Section = Box::leak(Box::new(index_section(cpu, kind)));
+        sections.push((cpu, kind, section));
+        section
+    });
+    section.get(name).copied()
+}
+
+/// The rows `cpu kind name cost` of one section of the table, by name.
+fn index_section(
+    cpu: &str,
+    kind: &str,
+) -> Section {
+    const TABLE: &str = include_str!("tti_intrinsics.txt");
+    let prefix = format!("{cpu} {kind} ");
+    let Some(start) = TABLE.find(&format!("\n{prefix}")).map(|at| at + 1) else { return Section::default() };
+    let rows = TABLE[start..].lines().take_while(|line| line.starts_with(&prefix));
+    let mut section = Section::default();
+    for line in rows {
+        INDEXED.with(|indexed| indexed.set(indexed.get() + 1));
+        let mut words = line[prefix.len()..].split(' ');
+        if let (Some(name), Some(cost)) = (words.next(), words.next()) {
+            section.insert(name, cost.parse().ok());
+        }
+    }
+    section
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
     /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
     /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
@@ -316,27 +356,30 @@ impl Tti for AArch64 {
         true
     }
 
-    /// DEVIATE (owner greedy-anyisa, exit 2026-11-15): the pin has no byte trial. At
-    /// -Os the trial that keeps `tmul`, `clamp`, `extend` inline (smaller in
-    /// bytes, the unit model refuses them) is bounded by the caller's size,
-    /// and jpeg_fixed's `bench_jpeg_fixed` is 600+ instructions. Cost: 16
-    /// trials of about 15 ms, jpeg_fixed -Os compiles in 0.38 s, not 0.14 s.
-    /// A callee rejected in one round is not tried in the next
-    /// (`inline_trial_skips_rejected`).
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-15): the pin has no byte
+    /// trial. At -Os the trial that keeps `tmul`, `clamp`, `extend` inline
+    /// (smaller in bytes, the unit model refuses them) is bounded by the
+    /// caller's size, and jpeg_fixed's `bench_jpeg_fixed` is 600+
+    /// instructions. Cost: 16 trials of about 15 ms, jpeg_fixed -Os
+    /// compiles in 0.38 s, not 0.14 s. A callee rejected in one round is
+    /// not tried in the next (`inline_trial_skips_rejected`).
     fn inline_trial_caller_limit(&self) -> usize {
         20_000
     }
 
-    /// DEVIATE (owner greedy-anyisa, exit 2026-11-30): the trial's copy goes through the cleanup
-    /// list, not the whole one: Ir of jpeg_fixed -Os 1.39 G, not 2.95 G (pre-trial 1.38 G). The
-    /// cleanup list misses a few simplifications, so some trials decide otherwise
-    /// (jpeg_single 3592 -> 3608 B, jpeg_fixed 3516 -> 3484 B; the sum is the same). Re-running
-    /// near misses with the whole list swaps the +16 B between the cells at 2.05 G Ir (parked,
-    /// #8278): `extend` and `receive` read alike in both and pay in one only. Exit: a trial
-    /// estimate that predicts the final bytes of those two. Exception (w15): at speed a trial of a
-    /// callee with a loop uses the whole list, as the cleanup list has no loop passes (vla -O2:
-    /// the 8-site copy priced +644 B, the unrolled and folded one is -40 B); at size the cleanup
-    /// list stays (jpeg -Os +32 B with the whole one).
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-30): the trial's copy goes
+    /// through the cleanup list, not the whole one: Ir of jpeg_fixed -Os
+    /// 1.39 G, not 2.95 G (pre-trial 1.38 G). The cleanup list misses a few
+    /// simplifications, so some trials decide otherwise (jpeg_single 3592
+    /// -> 3608 B, jpeg_fixed 3516 -> 3484 B; the sum is the same). Re-running
+    /// near misses with the whole list swaps the +16 B between the cells at
+    /// 2.05 G Ir (parked, #8278): `extend` and `receive` read alike in both and
+    /// pay in one only. Exit: a trial estimate that predicts the final
+    /// bytes of those two. Exception (w15): at speed a trial of a callee
+    /// with a loop uses the whole list, as the cleanup list has no loop
+    /// passes (vla -O2: the 8-site copy priced +644 B, the unrolled and
+    /// folded one is -40 B); at size the cleanup list stays (jpeg -Os +32 B
+    /// with the whole one).
     fn inline_trial_light_simplify(&self) -> bool {
         true
     }
@@ -391,8 +434,15 @@ impl Tti for AArch64 {
     /// clocks, the median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
     /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
-    /// decisions are those of the fit; the refit to the scoring rate is its own
-    /// change.
+    /// decisions are those of the fit.
+    ///
+    /// Refit scan (provisional: net = executed instructions + 0.3 x bytes, an
+    /// instruction proxy, not clocks; 2026-11-08, 34 programs at -O2/-O3,
+    /// release/next 8d22165d6d, rerun from the knob and scripts in draft PR
+    /// 8402): 30 and 10 clk/B change no cell against 62.5; 3 changes
+    /// jpeg_fixed and jpeg_single only (+84 B, -1.6k instructions); the
+    /// scoring rate 0.3 makes both worse in bytes and instructions (+540 B,
+    /// +688k instructions on jpeg_single -O2). Kept at the fitted rate.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }
@@ -435,11 +485,18 @@ impl Tti for AArch64 {
         Some((2, 40))
     }
 
-    /// The calls of a recursion are most of its clocks (rectwo `paths` 12 of 15,
-    /// fib 8 of 11; bintree `walk` 16 of 33, quicksort 16 of 51, queens 8 of 37,
-    /// which copies grew +97k, +126k and more).
+    /// The calls of a recursion are most of its clocks (rectwo `paths` 12 of
+    /// 15, fib 8 of 11; bintree `walk` 16 of 33, quicksort 16 of 51, queens
+    /// 8 of 37, which copies grew +97k, +126k and more).
     fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
         Some((3, 5))
+    }
+
+    /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear recursion called from another function is peeled into
+    /// the caller to gcc's caps. recpow -O2: 67,475 instructions / 260 B to 42,666 / 920 B (gcc 44,084 / 1,244); the other 71 cells of the
+    /// corpus are identical. Pin: none.
+    fn peels_linear_recursion(&self) -> bool {
+        true
     }
 
     /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save
@@ -638,8 +695,8 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Cost {
         let _ = (ret, args);
-        match intrinsic_prices().get(&(self.cpu.name(), kind_name(kind), name)) {
-            Some(Some(cost)) => Cost::of(*cost),
+        match intrinsic_price(self.cpu.name(), kind_name(kind), name) {
+            Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
             // A scalar intrinsic with no case of its own (`stacksave`) is
@@ -1116,13 +1173,62 @@ impl Lowering for AArch64Lowering {
         true
     }
 
-    // AArch64ISelLowering.h, `isSExtCheaperThanZExt`: `w` to `x` is one `sxtw`.
-    fn is_sext_cheaper_than_zext(
+    // `isOperationLegalOrCustom`, read from the table the DAG legalizer uses
+    // (`TargetLowering::aarch64`, AArch64ISelLowering.cpp#L481): one table, so the IR-level
+    // answer cannot drift from the legalizer's.
+    fn is_operation_legal_or_custom(
         &self,
-        from_bits: u32,
-        to_bits: u32,
+        op: Isd,
+        bits: u32,
     ) -> bool {
-        from_bits == 32 && to_bits == 64
+        use llrm_sdag::actions::{Aarch64Features, TargetLowering};
+        use llrm_sdag::isd::ISD;
+        use llrm_sdag::mvt::EVT;
+        let node = match op {
+            Isd::Add => ISD::Add,
+            Isd::Sub => ISD::Sub,
+            Isd::Mul => ISD::Mul,
+            Isd::UDiv => ISD::UDiv,
+            Isd::SDiv => ISD::SDiv,
+            Isd::URem => ISD::URem,
+            Isd::SRem => ISD::SRem,
+            Isd::Shl => ISD::Shl,
+            Isd::Srl => ISD::Srl,
+            Isd::Sra => ISD::Sra,
+            Isd::And => ISD::And,
+            Isd::Or => ISD::Or,
+            Isd::Xor => ISD::Xor,
+            Isd::Select => ISD::Select,
+            Isd::SetCc => ISD::SetCC,
+            Isd::Truncate => ISD::Truncate,
+            Isd::ZeroExtend => ISD::ZeroExtend,
+            Isd::SignExtend => ISD::SignExtend,
+        };
+        thread_local! {
+            static TABLE: TargetLowering = TargetLowering::aarch64(Aarch64Features::default());
+        }
+        TABLE.with(|table| table.is_operation_legal_or_custom(node, EVT::integer(bits)))
+    }
+
+    // AArch64ISelLowering.cpp#L1274, `EnableExtLdPromotion = true`: CodeGenPrepare promotes the
+    // operands of an extension towards the load that feeds them (CodeGenPrepare.cpp#L6747):
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1274
+    fn enable_ext_ld_promotion(&self) -> bool {
+        true
+    }
+
+    // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1, Expand)` for every
+    // integer type; the rest is the base class's `Legal`:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1141
+    fn is_load_ext_legal(
+        &self,
+        ext: LoadExt,
+        value_bits: u32,
+        memory_bits: u32,
+    ) -> bool {
+        !(ext == LoadExt::Sign && memory_bits == 1)
+            && llrm_mir::lowering::simple_int(value_bits)
+            && llrm_mir::lowering::simple_int(memory_bits)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942

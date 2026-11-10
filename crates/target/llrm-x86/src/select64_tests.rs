@@ -356,11 +356,12 @@ fn lea_of_a_symbol_beside_a_register_keeps_the_register() {
     assert_eq!(bytes(&lea), [0x48, 0x8d, 0x81, 0, 0, 0, 0]);
 }
 
-/// `mov eax, ecx` was `8B C1` and `sub eax, ecx` `2B C1`, the `op r, r/m` form of
-/// iced; the pin writes every register-to-register `mov`, `add`, `or`, `and`,
-/// `sub`, `xor` and `cmp` as `op r/m, r` (`89 C8`, `29 C8`, ... `MOV32rr`,
-/// `SUB32rr`): same length, other bytes, so no object matched the pin's and
-/// every COMDAT checksum differed. Opcodes read from llc d1106deb71 output.
+/// `mov eax, ecx` was `8B C1` and `sub eax, ecx` `2B C1`, the `op r, r/m` form
+/// of iced; the pin writes every register-to-register `mov`, `add`, `or`,
+/// `and`, `sub`, `xor` and `cmp` as `op r/m, r` (`89 C8`, `29 C8`, ...
+/// `MOV32rr`, `SUB32rr`): same length, other bytes, so no object matched the
+/// pin's and every COMDAT checksum differed. Opcodes read from llc d1106deb71
+/// output.
 #[test]
 fn a_register_to_register_alu_op_is_the_pins_destination_in_rm_form() {
     let binary = |name: &str, width| {
@@ -378,10 +379,41 @@ fn a_register_to_register_alu_op_is_the_pins_destination_in_rm_form() {
     }
     let compare = sem(Operation::Compare, Some("cmp"), vec![], vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)], None, false);
     assert_eq!(bytes(&compare), [0x39, 0xc8]);
-    let mov = |into, from, width| sem(Operation::Move, Some("mov"), vec![rg(into, width)], vec![rg(from, width)], None, false);
+    let mov = |into, from, width| {
+        sem(Operation::Move, Some("mov"), vec![rg(into, width)], vec![rg(from, width)], None, false)
+    };
     assert_eq!(bytes(&mov(RegId::EAX, RegId::ECX, 4)), [0x89, 0xc8]);
     assert_eq!(bytes(&mov(RegId::AL, RegId::CL, 1)), [0x88, 0xc8]);
     // control: a load keeps the `op r, r/m` form, the only one it has
     let load = sem(Operation::Move, Some("mov"), vec![rg(RegId::EAX, 4)], vec![frame(-4, 4)], None, false);
     assert_eq!(bytes(&load), [0x8b, 0x45, 0xfc]);
+}
+
+/// `movslq %eax,%rax` was 48 63 c0; the pin writes it `cltq` (48 98,
+/// `optimizeMOVSX`, X86EncodingOptimization.cpp). Every `long f() { return
+/// int_fn(); }` kept the 3-byte form: fib -Os 74 B against gcc's 67.
+#[test]
+fn a_dword_widened_in_rax_is_cltq() {
+    let extend =
+        |name, into, from| sem(Operation::Extend, Some(name), vec![rg(into, 8)], vec![rg(from, 4)], None, false);
+    assert_eq!(bytes(&extend("movsx", RegId::RAX, RegId::EAX)), [0x48, 0x98]);
+    // Other registers keep movslq; so does the zero extension.
+    assert_eq!(bytes(&extend("movsx", RegId::RAX, RegId::ECX)), [0x48, 0x63, 0xc1]);
+    assert_eq!(bytes(&extend("movsx", RegId::RCX, RegId::EAX)), [0x48, 0x63, 0xc8]);
+    assert_eq!(bytes(&extend("movzx", RegId::RAX, RegId::EAX)), [0x89, 0xc0]);
+}
+
+/// `lea (%rsp),%rdi` was 48 8d 3c 24 (4 bytes); the pin turns a base-only,
+/// zero-displacement `lea` into `mov %rsp,%rdi` (48 89 e7, 3 bytes:
+/// `tryOptimizeLEAtoMOV`, X86RegisterInfo.cpp). bench queens -Os passes `q`
+/// that way, 9 objects of 40 had one.
+#[test]
+fn a_lea_of_a_bare_base_is_a_mov() {
+    let at = |through, disp| {
+        let place = ir::AddressRef { through, ..ir::AddressRef::new(Some(llrm_lir::Addr::new(Space::Frame, disp))) };
+        sem(Operation::Address, Some("lea"), vec![rg(RegId::RDI, 8)], vec![Loc::Address(place)], None, false)
+    };
+    assert_eq!(bytes(&at(RegId::RSP, 0)), [0x48, 0x89, 0xe7]);
+    // A displacement keeps the lea.
+    assert_eq!(bytes(&at(RegId::RSP, 8)), [0x48, 0x8d, 0x7c, 0x24, 0x08]);
 }

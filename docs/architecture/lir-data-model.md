@@ -6,7 +6,7 @@ architecture-order: 550
 
 TL;DR: LIR instructions are immutable `Arc<Insn>`; a rename rebuilds the instruction (746 renames, 3.9 M instructions on d_faces in SplitKit alone). LLVM mutates a `MachineOperand` in place (`setReg`) and keeps use/def lists in `MachineRegisterInfo`. This note proposes block-granular copy-on-write with `&mut Insn` first, the arena and intrusive lists second, in seven slices, each landable and measured.
 
-Status: design, owner uselist-port. Reference: LLVM at `d1106deb71cc` (`MachineInstr.h`, `MachineOperand.h`, `MachineRegisterInfo.h`, `MachineRegisterInfo.cpp::addRegOperandToUseList`, `MachineOperand::setReg`).
+Status: design, owner anyisa. Reference: LLVM at `d1106deb71cc` (`MachineInstr.h`, `MachineOperand.h`, `MachineRegisterInfo.h`, `MachineRegisterInfo.cpp::addRegOperandToUseList`, `MachineOperand::setReg`).
 
 ## Today
 

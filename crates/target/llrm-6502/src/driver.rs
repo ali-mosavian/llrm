@@ -26,20 +26,23 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
 
 impl Level {
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -49,6 +52,7 @@ impl Level {
             Self::O1 => Options::basic(),
             Self::O2 => Options::default(),
             Self::O3 => Options::speed(),
+            Self::Omax => Options::aggressive(),
             Self::Os => Options::size(),
             Self::Oz => Options::min_size(),
         }
@@ -197,7 +201,8 @@ fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {

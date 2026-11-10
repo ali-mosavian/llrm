@@ -57,7 +57,7 @@
 //!
 //! The exit ("adopt the pin's `fastcc` if no worse") is met on clocks at
 //! -O1..-O3, by `rectwo` (-9.6%) and `fib` (-5.0%); d_faces compile Ir -0.28%.
-//! Rows above the old default are numbered, owner funcattrs-port, exit "tune
+//! Rows above the old default are numbered, owner w10-instcombine, exit "tune
 //! after the allocator work" (the cost is frame traffic around calls), review
 //! 2026-11-13:
 //! - CC2, -Os clocks +0.2%: `x_hanoi2` +32.2%, `queens` +4.9%, `bintree` +2.0%.

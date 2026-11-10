@@ -462,3 +462,26 @@ fn static_frame(
     let colors = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
     Ok((sizes.iter().map(|&(_, size, align)| (size as u64, align as u64)).collect(), colors.colors))
 }
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    use super::*;
+
+    /// Every target's datalayout names the stack alignment its frames keep, or the passes that raise an alloca to its type's preferred
+    /// alignment have no bound. wasm declares S128 (the pin's string) and keeps 16.
+    #[test]
+    fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
+        // The pin clang's strings (d1106deb71cc), not ours read back.
+        for (width, pin) in [
+            (Width::W32, "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"),
+            (Width::W64, "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"),
+        ] {
+            llrm_target::testing::assert_stack_facts(
+                "wasm",
+                &crate::layout(width).datalayout,
+                WasmArch { width }.stack_alignment() as u64,
+                Some(pin),
+            );
+        }
+    }
+}

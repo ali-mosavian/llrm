@@ -55,7 +55,9 @@ pub(super) fn synth(t: i64, limit: i64, memo: &mut Memo, ops: &Ops) -> Option<(C
     let mut best: Option<(Chain, i64)> = None;
     let mut bound = limit;
     let mut try_step = |from: i64, steps: &[((&'static str, i64), i64)], memo: &mut Memo, bound: &mut i64| {
-        let price: i64 = steps.iter().map(|&(_, p)| p).sum();
+        // A chain that starts from `x` itself and not with a `lea` copies it first, when the ranking counts that copy.
+        let seed = if ops.seeded && from == 1 && !matches!(steps.first(), Some(&(("lea" | "flea", _), _))) { ops.mov } else { 0 };
+        let price: i64 = steps.iter().map(|&(_, p)| p).sum::<i64>() + seed;
         if let Some((mut chain, cost)) = synth(from, *bound - price, memo, ops) {
             chain.extend(steps.iter().map(|&(step, _)| step));
             *bound = cost + price;

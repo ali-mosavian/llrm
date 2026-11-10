@@ -41,6 +41,7 @@ pub mod mosisd {
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
     pub const FSHL1: ISD = ISD::Target(ids::FSHL1);
     pub const FSHR1: ISD = ISD::Target(ids::FSHR1);
+    pub const SRL1C: ISD = ISD::Target(ids::SRL1C);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -127,6 +128,11 @@ pub fn target_lowering() -> TargetLowering {
     // an undefined value is a zero of the type (the legalizer builds it) until
     // the MIR has `undef`
     set(&[Undef, Poison], Action::Expand);
+    // `CLC; ADC; ROR` keeps the carry out of a byte add: the floor and ceiling
+    // averages of two bytes
+    for op in [AvgFloorU, AvgCeilU] {
+        tl.set_operation_action(op, MVT::I8, Action::Legal);
+    }
     tl.set_operation_action(Undef, MVT::I1, Action::Expand);
     tl.set_operation_action(Poison, MVT::I1, Action::Expand);
     // its action is read at the type it extends from, a bit among them
