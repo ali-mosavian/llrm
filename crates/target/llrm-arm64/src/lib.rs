@@ -28,6 +28,7 @@ pub mod mc;
 pub mod memcluster;
 pub mod mfunc;
 pub mod pairs;
+pub mod phisplit;
 pub mod postrasink;
 pub mod prepass;
 pub mod regalloc;

@@ -594,14 +594,12 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
 /// register `i` of its own; `i = COPY v` goes at the end of each predecessor
 /// `p`, before its branches, and `d = COPY i` at the top of the phi's block. A
 /// predecessor with several successors gets a block on the edge for its copies
-/// (laid out right after its source, as `SplitCriticalEdge` does), so a copy
-/// never runs on a path that does not take the phi.
+/// only where `PHIElimination::SplitPHIEdges` splits ([`crate::phisplit`]); the
+/// block lies right after its source, as `SplitCriticalEdge` does. Elsewhere
+/// the copies end the predecessor.
 ///
-/// DEVIATE ARM64-PHI-SPLIT (owner arm64-phi, exit 2026-11-24, gap 3 of
-/// docs/architecture/arm64-spike.md): every such edge is split,
-/// where the pin splits by liveness (`SplitPHIEdges`). Selection used to split
-/// the same edges, so the code is the same. The registers of the phis' edges
-/// are numbered here, after selection, in the pin's order (`LowerPHINode`:
+/// The registers of the phis' edges are numbered here, after selection, in
+/// the pin's order (`LowerPHINode`:
 /// [L372](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L372),
 /// [L415](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L415),
 /// [L620](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L620)),
@@ -609,6 +607,24 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
 /// can fall the other way than before: jpeg_single -O3 is +36 B and +0.054%
 /// executed for that reason (2026-11-09, closed as pin-faithful tie-order).
 pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
+    lower_phis_with(function, Splitting::ByLiveness)
+}
+
+/// Which critical edges phi elimination splits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Splitting {
+    /// `PHIElimination::SplitPHIEdges`, as [`crate::phisplit`] has it.
+    ByLiveness,
+    /// None: the fast register allocation pipeline (-O0) has no
+    /// `LiveVariables` for the pass to ask.
+    Never,
+}
+
+/// [`lower_phis`] with the edges to split chosen by `splitting`.
+pub fn lower_phis_with(
+    function: &mut MFunc,
+    splitting: Splitting,
+) -> Result<(), String> {
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
@@ -636,6 +652,24 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
             }
         }
     }
+    let split: llrm_support::hash::HashSet<(usize, usize)> = match splitting {
+        Splitting::Never => Default::default(),
+        Splitting::ByLiveness => {
+            let graph = crate::prepass::cfg(function);
+            let by_block: Vec<Vec<Vec<(Reg, usize)>>> = phis
+                .iter()
+                .map(|block| {
+                    block
+                        .iter()
+                        .map(|(_, incoming)| {
+                            incoming.iter().filter_map(|(value, from)| labels.get(from).map(|&from| (*value, from))).collect()
+                        })
+                        .collect()
+                })
+                .collect();
+            crate::phisplit::edges_to_split(function, &graph, &by_block)
+        }
+    };
     for (at, block) in function.blocks.iter_mut().enumerate() {
         if phis[at].is_empty() {
             continue;
@@ -688,6 +722,16 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
             continue;
         }
         for to in carrying {
+            if !split.contains(&(from, to)) {
+                // The copies end `from`, before its branches
+                // (`LowerPHINode`): on the other path they are dead.
+                let ops = &mut function.blocks[from].ops;
+                let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
+                for (offset, copy) in copies(to).into_iter().enumerate() {
+                    ops.insert(first_branch + offset, copy);
+                }
+                continue;
+            }
             let label = function.blocks[to].label.clone();
             let edge = format!(".L{}.e{}", function.name, edges.len());
             let mut body = copies(to);

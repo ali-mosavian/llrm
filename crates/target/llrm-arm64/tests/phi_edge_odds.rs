@@ -16,7 +16,18 @@ use llrm_arm64::mfunc::{MBlock, MFunc, Op, lower_phis};
 use llrm_mir::blockfrequency::BranchProbability;
 use llrm_mir::datalayout::DataLayout;
 
+/// `%k` is read by `head`'s phi and by `other`: live out of `entry` past the
+/// phis, and not live into `head`, which is the edge the pin splits.
 const IR: &str = "target datalayout = \"e-m:o-i64:64-i128:128-n32:64-S128\"\n\
+define i64 @f(i64 %n, i1 %c) {\n\
+entry:\n  %k = mul i64 %n, 3\n  br i1 %c, label %head, label %other\n\
+head:\n  %i = phi i64 [ %k, %entry ], [ %next, %head ]\n  %next = add i64 %i, 1\n  %done = icmp eq i64 %next, %n\n  br i1 %done, label %join, label %head\n\
+other:\n  %q = add i64 %k, 1\n  br label %join\n\
+join:\n  %r = phi i64 [ %next, %head ], [ %q, %other ]\n  ret i64 %r\n}";
+
+/// The same function where every phi value is read only by its phi: a copy at
+/// the end of `entry` would be the value's kill.
+const IR_DIES: &str = "target datalayout = \"e-m:o-i64:64-i128:128-n32:64-S128\"\n\
 define i64 @f(i64 %n, i1 %c) {\n\
 entry:\n  br i1 %c, label %head, label %join\n\
 head:\n  %i = phi i64 [ 0, %entry ], [ %next, %head ]\n  %next = add i64 %i, 1\n  %done = icmp eq i64 %next, %n\n  br i1 %done, label %join, label %head\n\
@@ -66,9 +77,10 @@ fn a_split_edge_keeps_its_probability_and_the_odds_follow_the_blocks() {
     let after = by_label(&machine, &module);
     let added: Vec<usize> =
         (0..machine.blocks.len()).filter(|&at| !labels.contains(&machine.blocks[at].label)).collect();
-    assert!(
-        added.len() >= 2,
-        "the premise: critical edges were split: {:?}",
+    assert_eq!(
+        added.len(),
+        1,
+        "the premise: only the edge into `head` is split: {:?}",
         machine.blocks.iter().map(|b| &b.label).collect::<Vec<_>>()
     );
     let mut replaced = 0;
@@ -113,37 +125,34 @@ fn a_split_edge_keeps_its_probability_and_the_odds_follow_the_blocks() {
     }
 }
 
-/// The prepass merges a loop's back-edge block into its latch, so every block
-/// after it moved up one place. The selector's ids were a list in block order
-/// that the pass did not shorten: each later block took its neighbour's id,
-/// and bench `jpeg_single` -O1 allocated with the wrong block frequencies
-/// (143 stack reloads in one function against 69 before the placement
-/// change and the pin's 50).
+/// A pass that puts a block in front of others (or takes one out) must not
+/// move the odds of the blocks it passes. The selector's ids were a list in
+/// block order that no pass kept in step: each later block took its
+/// neighbour's id, and bench `jpeg_single` -O1 allocated with the wrong block
+/// frequencies (143 stack reloads in one function against 69 before the
+/// placement change and the pin's 50).
 #[test]
-fn the_odds_still_follow_the_blocks_after_the_prepass_removes_an_edge_block() {
+fn the_odds_still_follow_the_blocks_when_a_pass_inserts_one() {
     let module = llrm_mir::parse::module(IR).expect("parses");
     let mut machine = emit("f", &select_function(&module, "f").expect("selects"), false).expect("emits");
-    let before = by_label(&machine, &module);
     lower_phis(&mut machine).expect("lowers");
-    let split = machine.blocks.len();
-    llrm_arm64::prepass::run(&mut machine, false);
-    assert!(machine.blocks.len() < split, "the premise: the prepass removed an edge block ({split} blocks)");
-    let after = by_label(&machine, &module);
-    // The odds an edge has by the original blocks it joins: through an edge
-    // block they are the first half's, the second half's is certain.
-    let through = |label: &str| -> Option<String> {
-        let block = machine.blocks.iter().find(|block| block.label == label)?;
-        let [target] = &branches(block)[..] else { return None };
-        (!before.keys().any(|(from, _)| from == label)).then(|| target.clone())
-    };
-    for ((from, to), probability) in &after {
-        let expected = match (through(from), through(to)) {
-            (Some(_), _) => BranchProbability::get_one(),
-            (None, Some(onward)) => *before.get(&(from.clone(), onward.clone())).expect("the edge it replaced"),
-            (None, None) => *before.get(&(from.clone(), to.clone())).expect("an edge of the IR"),
-        };
-        assert_eq!(*probability, expected, "{from} -> {to}: {after:?}");
-    }
+    let before = by_label(&machine, &module);
+    assert!(before.len() >= 4, "the premise: the function has odds to move: {before:?}");
+    machine.blocks.insert(1, MBlock { label: ".Lf.inserted".into(), ops: Vec::new().into() });
+    assert_eq!(by_label(&machine, &module), before);
+}
+
+/// A phi value only its phi reads dies in the copy at the end of the
+/// predecessor: `SplitPHIEdges` leaves the edge (`isLiveOutPastPHIs`), so no
+/// block is made. Every critical edge was split, 342 blocks in jpeg_single
+/// -O1 where the pin has 260.
+#[test]
+fn an_edge_whose_value_only_the_phi_reads_is_not_split() {
+    let module = llrm_mir::parse::module(IR_DIES).expect("parses");
+    let mut machine = emit("f", &select_function(&module, "f").expect("selects"), false).expect("emits");
+    let blocks = machine.blocks.len();
+    lower_phis(&mut machine).expect("lowers");
+    assert_eq!(machine.blocks.len(), blocks, "{:?}", machine.blocks.iter().map(|b| &b.label).collect::<Vec<_>>());
 }
 
 /// `fold` reads its odds by the number a block's label ends in, but the table

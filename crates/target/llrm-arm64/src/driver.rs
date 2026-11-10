@@ -237,7 +237,14 @@ fn lower_function(
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
         crate::lir_body::stages::observe(&machine)?;
     }
-    crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
+    // The pin's -O0 pipeline has no `LiveVariables`, so phi elimination splits
+    // no edge; clang marks every function of a -O0 module `optnone`.
+    let splitting = if function.attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optnone")) {
+        crate::mfunc::Splitting::Never
+    } else {
+        crate::mfunc::Splitting::ByLiveness
+    };
+    crate::mfunc::lower_phis_with(&mut machine, splitting).map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
         let undefined = crate::mfunc::undefined_reads(&machine);
