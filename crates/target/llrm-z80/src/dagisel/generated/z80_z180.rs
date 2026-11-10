@@ -1157,7 +1157,7 @@ pub fn node_predicate<D: Dag, H: Hooks<D>>(dag: &D, hooks: &H, value: SDValue, i
         2 => predicates::unindexed_store(args),
         3 => predicates::non_truncating_store(args),
         4 => predicates::memory_vt_i8(args),
-        5 => predicates::has_one_use(args),
+        5 => predicates::imm_stored_in_immediate_form(args),
         6 => predicates::zext_load(args),
         7 => predicates::ext_load(args),
         _ => unreachable!("node predicate {id} is not in this table"),

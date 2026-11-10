@@ -2588,6 +2588,20 @@ fn form(text: &str) -> String {
     key
 }
 
+/// Whether `users` stores of one constant word are no longer as two `ld (hl),n`
+/// each than as one `ld rr,nn` and two register stores each (`inc hl` between
+/// the halves either way), by the encoding table's bytes.
+pub(crate) fn immediate_store_is_not_longer(users: usize) -> bool {
+    let bytes = |text: &str| table_cost(&form(text)).map(|cost| cost.bytes);
+    let (Some(immediate), Some(register), Some(step), Some(load)) =
+        (bytes("ld (hl), #1"), bytes("ld (hl), e"), bytes("inc hl"), bytes("ld de, #1"))
+    else {
+        return users <= 1;
+    };
+    let users = users as u32;
+    users * (2 * immediate + step) <= load + users * (2 * register + step)
+}
+
 /// The table's cost of a form as `form` writes it. The accumulator is `a` where the table has the form for it alone
 /// (`ld a;(bc)`, `ld (nn);a`), else every byte register is `b` there, so a copy between two of them is `ld b;b`, which
 /// the table spells `ld b;c`.

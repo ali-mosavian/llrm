@@ -903,7 +903,7 @@ fn machined_once(
     // spill slots can end on a word, so a 4-aligned frame needs it too: the
     // backend run again aligns the allocas and the frame moved by the hole
     // did not (reserve 286 against 288).
-    let align = frame.align.max(frame.alloca_align);
+    let align = frame.object_cap().max(frame.alloca_align);
     let spilled = if align > 1 { (spilled + align - 1).div_euclid(align) * align } else { spilled };
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(best(first));
@@ -1515,7 +1515,7 @@ fn phased(
         .capacities
         .values()
         .filter(|&&size| size > 0)
-        .map(|&size| (1i64 << size.ilog2()).min(frame.align))
+        .map(|&size| (1i64 << size.ilog2()).min(frame.object_cap()))
         .chain([frame.alloca_align])
         .max()
         .unwrap_or(1)
