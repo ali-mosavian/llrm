@@ -35,9 +35,12 @@ fn asm(
     assembly(ir, cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
+/// The CPUs with no `muls.l`: the long multiply is a libcall there.
+const NO_LONG_MULTIPLY: [&str; 2] = ["68000", "68010"];
+
 #[test]
-fn two_unsigned_halves_are_multiplied_with_mulu_w() {
-    for cpu in CPUS {
+fn two_unsigned_halves_are_multiplied_with_mulu_w_where_the_long_multiply_is_a_call() {
+    for cpu in NO_LONG_MULTIPLY {
         for level in [Level::O2, Level::Os] {
             let out = asm(&product("zext", "zext"), cpu, level);
             assert!(out.contains("mulu\t") && !out.contains("__mulsi3") && !out.contains("mulu.l"), "{cpu} {level:?}:\n{out}");
@@ -46,10 +49,36 @@ fn two_unsigned_halves_are_multiplied_with_mulu_w() {
 }
 
 #[test]
-fn two_signed_halves_are_multiplied_with_muls_w() {
-    for cpu in CPUS {
+fn two_signed_halves_are_multiplied_with_muls_w_where_the_long_multiply_is_a_call() {
+    for cpu in NO_LONG_MULTIPLY {
         let out = asm(&product("sext", "sext"), cpu, Level::O2);
         assert!(out.contains("muls\t") && !out.contains("__mulsi3") && !out.contains("muls.l"), "{cpu}:\n{out}");
+    }
+}
+
+/// bench/memory at 68020 -O1 was 2 B larger with the word multiply: an
+/// extended operand costs the `ext.l` and a copy of its source (the tied
+/// destination) that `muls.l d0,d0` does not. Where `muls.l` exists the
+/// extended operands keep it.
+#[test]
+fn an_extended_halfword_keeps_the_long_multiply_where_there_is_one() {
+    for cpu in CPUS.iter().filter(|cpu| !NO_LONG_MULTIPLY.contains(cpu)) {
+        for how in ["sext", "zext"] {
+            let out = asm(&product(how, how), cpu, Level::O1);
+            assert!(out.contains(".l\t") && !out.contains("muls\t") && !out.contains("mulu\t"), "{cpu} {how}:\n{out}");
+        }
+    }
+}
+
+/// Operands that are already full-width values known to fit 16 bits take
+/// the word multiply on every CPU: no extension, no copy, and 2 B shorter.
+#[test]
+fn masked_operands_take_the_word_multiply_on_every_cpu() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i32 %a, i32 %b) {\n  %x = and i32 %a, 65535\n  %y = and i32 %b, 65535\n  %m = mul i32 %x, %y\n  ret i32 %m\n}";
+    for cpu in CPUS {
+        let out = asm(ir, cpu, Level::O2);
+        assert!(out.contains("mulu\t") && !out.contains("__mulsi3") && !out.contains("mulu.l"), "{cpu}:\n{out}");
     }
 }
 

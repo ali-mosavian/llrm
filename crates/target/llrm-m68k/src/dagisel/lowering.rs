@@ -270,6 +270,7 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
             half: EVT::I16,
             unsigned: u32::from(opcode::UMULd32d16),
             signed: u32::from(opcode::SMULd32d16),
+            has_full_multiply: !matches!(self.cpu, Cpu::M68000 | Cpu::M68010),
         })
     }
 

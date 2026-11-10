@@ -60,6 +60,12 @@ pub struct HalfMul {
     pub half: EVT,
     pub unsigned: u32,
     pub signed: u32,
+    /// The target has a full-width multiply instruction (`muls.l`). The half
+    /// multiply then needs the operand's extension and a copy of the source
+    /// (the tied destination), which the full-width one needs just the same
+    /// without the copy: it is used only for operands that are already full
+    /// width.
+    pub has_full_multiply: bool,
 }
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
@@ -4163,6 +4169,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         half: HalfMul,
     ) -> Option<SDValue> {
         if self.dag.constant(x).is_some() || self.dag.constant(y).is_some() {
+            return None;
+        }
+        // an extension of a half-width value, or a load that extends one
+        let extends_half = |dag: &SelectionDAG, v: SDValue| {
+            if dag.opcode(v) == ISD::Load {
+                return matches!(dag.node(v).data, NodeData::Mem(info) if info.ext.is_some() && info.mem_vt == half.half);
+            }
+            matches!(dag.opcode(v), ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend)
+                && dag.value_type(dag.operand(v, 0)) == half.half
+        };
+        if half.has_full_multiply && (extends_half(self.dag, x) || extends_half(self.dag, y)) {
             return None;
         }
         let (width, narrow) = (vt.size_in_bits(), half.half.size_in_bits());
