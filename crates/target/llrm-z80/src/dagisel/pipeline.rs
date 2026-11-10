@@ -76,6 +76,10 @@ thread_local! {
     /// Every long multiply of an unsized function is the `__mulsi3` call, the near-power constants included
     /// (the form `DECOMPOSE_MULS` is the inline counterpart of, for a sized one).
     pub static CALL_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function with a constant-count `memset` is selected the second time, each such fill an
+    /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
+    /// prices the two with the routine linked once (`compile::decomposed_functions`).
+    pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.
