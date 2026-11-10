@@ -28,10 +28,10 @@
 //!  b4: r = phi [b1: v] [b2: x]
 //! ```
 //!
-//! DEVIATE M7 (row 44): `hasStoreBetween` counts every store, call and
-//! ordered access as one that may alias the load: no alias analysis reaches
-//! LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
-//! along a critical edge. Exit: memory operands with an alias query on LIR.
+//! `hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`); an
+//! instruction with no `Insn::memory` may alias anything, so a body whose target
+//! states none (x86) counts every store, as `mayAlias` without operands does.
+//! (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
 //!
 //! Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
 //! instruction goes to a post-dominating block when no in-cycle operand it
@@ -237,9 +237,8 @@ fn edge_probabilities(
     all
 }
 
-/// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `hasStoreBetween`
-/// counts. No alias analysis reaches here, so any of these may alias a load
-/// (DEVIATE M7).
+/// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `isSafeToMove`'s
+/// `SawStore` counts.
 pub(crate) fn may_store(one: &Insn) -> bool {
     let Some(what) = &one.what else { return true };
     one.volatile()
@@ -249,6 +248,13 @@ pub(crate) fn may_store(one: &Insn) -> bool {
             what.op,
             Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Copy
         )
+}
+
+/// `isCall() || hasOrderedMemoryRef()`: an access `hasStoreBetween` treats as
+/// aliasing whatever it moves.
+pub(crate) fn ordered_access(one: &Insn) -> bool {
+    let Some(what) = &one.what else { return true };
+    one.volatile() || one.call.is_some() || matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape)
 }
 
 /// `TII->isAsCheapAsAMove`: a copy or a move of a constant. Not the 64-bit
@@ -394,6 +400,8 @@ struct Sinker {
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.
     has_store_cache: HashMap<(usize, usize), bool>,
+    /// `StoreInstrCache`: the stores between a pair of blocks.
+    store_instr_cache: HashMap<(usize, usize), Vec<Arc<Insn>>>,
     /// `ToSplit`.
     to_split: Vec<(usize, usize)>,
     changed: bool,
@@ -480,6 +488,7 @@ impl Sinker {
                 merged: HashMap::default(),
                 to_split: Vec::new(),
                 has_store_cache: HashMap::default(),
+                store_instr_cache: HashMap::default(),
                 changed: false,
                 ..before
             };
@@ -539,6 +548,7 @@ impl Sinker {
             merged: HashMap::default(),
             to_split: Vec::new(),
             has_store_cache: HashMap::default(),
+            store_instr_cache: HashMap::default(),
             changed: false,
             regs: body.regs(),
             bits: body.bits,
@@ -1050,12 +1060,15 @@ impl Sinker {
 
     /// `hasStoreBetween`
     /// ([#L1660](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1660)):
-    /// whether a store, call or ordered access may run between `from` and
-    /// `to`, which must be in a straight line. Past the thresholds it says yes.
+    /// whether a call, an ordered access or a store that may alias `moved` may
+    /// run between `from` and `to`, which must be in a straight line. Past the
+    /// thresholds it says yes. The stores of a pair are kept
+    /// (`StoreInstrCache`), so the next load asks each one.
     fn has_store_between(
         &mut self,
         from: usize,
         to: usize,
+        moved: &Insn,
     ) -> bool {
         if !self.dom.dominates(from, to) || !self.post.dominates(to, from) {
             return true;
@@ -1063,10 +1076,14 @@ impl Sinker {
         if let Some(&known) = self.has_store_cache.get(&(from, to)) {
             return known;
         }
+        if let Some(stores) = self.store_instr_cache.get(&(from, to)) {
+            return stores.iter().any(|store| store.may_alias(moved));
+        }
         let mut handled = HashSet::default();
         let mut dominated: Vec<usize> = Vec::new();
+        let mut stores: Vec<Arc<Insn>> = Vec::new();
+        let mut aliased = false;
         let mut stack = vec![from];
-        let mut saw_store = false;
         while let Some(block) = stack.pop() {
             if !handled.insert(block) {
                 continue;
@@ -1078,7 +1095,7 @@ impl Sinker {
             dominated.push(block);
             let too_big = self.insns[block].len() > SINK_LOAD_INSTS_PER_BLOCK_THRESHOLD
                 || dominated.len() > SINK_LOAD_BLOCKS_THRESHOLD;
-            if too_big || self.insns[block].iter().any(|one| may_store(one)) {
+            if too_big || self.insns[block].iter().any(|one| ordered_access(one)) {
                 // What sits above or below the block in the straight line
                 // shares the answer.
                 for &other in &dominated {
@@ -1088,12 +1105,20 @@ impl Sinker {
                         self.has_store_cache.insert((from, other), true);
                     }
                 }
-                saw_store = true;
-                break;
+                self.has_store_cache.insert((from, to), true);
+                return true;
+            }
+            for one in self.insns[block].iter().filter(|one| may_store(one)) {
+                aliased |= one.may_alias(moved);
+                stores.push(Arc::clone(one));
             }
         }
-        self.has_store_cache.insert((from, to), saw_store);
-        saw_store
+        if stores.is_empty() {
+            self.has_store_cache.insert((from, to), false);
+        } else {
+            self.store_instr_cache.insert((from, to), stores);
+        }
+        aliased
     }
 
     /// `SinkInstruction`: the instruction at `index` of `block`, moved into a
@@ -1129,7 +1154,7 @@ impl Sinker {
                 one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))));
             let enters_cycle = self.cycle[sink_to].is_some_and(|header| self.irreducible[header] || header == sink_to);
             // A load goes along a critical edge only past no store.
-            let store_between = loads && self.has_store_between(block, sink_to);
+            let store_between = loads && self.has_store_between(block, sink_to, &one);
             if store_between || !self.dom.dominates(block, sink_to) || enters_cycle {
                 self.postpone_split_critical_edge(&one, block, sink_to, break_phi_edge);
                 return false;
@@ -2028,7 +2053,8 @@ mod tests {
     /// A load in a loop, read only in the exit that the loop's two paths both
     /// reach, was left in the loop whatever lay between (DEVIATE M1: no load
     /// along a critical edge); the pin sinks it when `hasStoreBetween` finds
-    /// none. With a store on the way it stays.
+    /// none. With a store on the way it stays, unless both say what they reach
+    /// and it is another object (`mayAlias`; every store counted before).
     #[test]
     fn test_a_load_goes_along_a_critical_edge_past_no_store() {
         use crate::model::ir::Mem;
@@ -2036,7 +2062,17 @@ mod tests {
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let build = |between: Arc<Insn>| {
+        let reaches = |one: Arc<Insn>, slot: i64, store: bool| -> Arc<Insn> {
+            let mut one = (*one).clone();
+            one.memory = Some(crate::model::memref::MemRef {
+                object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+                offset: Some(0),
+                bytes: Some(4),
+                store,
+            });
+            Arc::new(one)
+        };
+        let build = |between: Arc<Insn>, load_slot: Option<i64>| {
             // entry -> head; head -> latch | exit; latch -> head | side; side
             // -> exit.
             let mut body = LirBody::new(
@@ -2048,15 +2084,18 @@ mod tests {
                         1,
                         vec![2, 4],
                         vec![
-                            insn(
-                                10,
-                                Operation::Move,
-                                "mov",
-                                vec![held(3)],
-                                vec![Loc::Mem(cell.clone())],
-                                vec![3],
-                                vec![1],
-                            ),
+                            {
+                                let load = insn(
+                                    10,
+                                    Operation::Move,
+                                    "mov",
+                                    vec![held(3)],
+                                    vec![Loc::Mem(cell.clone())],
+                                    vec![3],
+                                    vec![1],
+                                );
+                                load_slot.map_or(load.clone(), |slot| reaches(load, slot, false))
+                            },
                             jump(11),
                         ],
                     )
@@ -2083,10 +2122,14 @@ mod tests {
         let nop = insn(15, Operation::Move, "mov", vec![held(6)], vec![held(1)], vec![6], vec![1]);
         let store = insn(15, Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![held(1)], vec![], vec![1]);
         let loads = |body: &LirBody, at: usize| body.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
-        let clear = build(nop);
+        let clear = build(nop, None);
         assert!(loads(&clear, 4) && !loads(&clear, 1), "no store between: the load left the loop");
-        let blocked = build(store);
+        let blocked = build(store.clone(), None);
         assert!(loads(&blocked, 1) && !loads(&blocked, 4), "a store between: the load stays");
+        let elsewhere = build(reaches(store.clone(), 2, true), Some(1));
+        assert!(loads(&elsewhere, 4) && !loads(&elsewhere, 1), "a store to another object: the load left the loop");
+        let there = build(reaches(store, 1, true), Some(1));
+        assert!(loads(&there, 1) && !loads(&there, 4), "a store to its object: the load stays");
     }
 
     /// The edge a loop is left by is split-worthy (at most the pin's 40
