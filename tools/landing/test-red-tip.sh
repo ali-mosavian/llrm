@@ -28,4 +28,17 @@ grep -q '^STOP: release/next red: compile::tests::a debug_tests::b$' $d/o || { e
 printf 'compile::tests::a #6716\ndebug_tests::b #6716\n' > $d/allow
 echo "$q" | red_tip $d/allow 101 >$d/o || { echo "FAIL: excused quiet-format red tests stopped the runner: $(cat $d/o)"; exit 1; }
 tip_test_cmd "-p x" | grep -q -- '--no-fail-fast' || { echo "FAIL: cargo stops at the first red crate, so the stop line misses the others"; exit 1; }
+# a binary that does not build: `cargo test --lib` never compiles it (llrm-mir.rs missed a field added to a library struct, #8829)
+w=$(mktemp -d); mkdir -p $w/lib/src $w/bin/src
+printf '[workspace]\nresolver = "2"\nmembers = ["lib", "bin"]\n' > $w/Cargo.toml
+printf '[package]\nname = "fixlib"\nversion = "0.1.0"\nedition = "2021"\n' > $w/lib/Cargo.toml
+printf 'pub struct Opts { pub a: u32, pub b: u32 }\n' > $w/lib/src/lib.rs
+printf '[package]\nname = "fixbin"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nfixlib = { path = "../lib" }\n' > $w/bin/Cargo.toml
+printf 'fn main() { let _ = fixlib::Opts { a: 1 }; }\n' > $w/bin/src/main.rs
+bins_verdict $w $d/target "-p fixbin" >$d/o 2>&1 && { echo "FAIL: a bin missing a struct field passed the bins check"; cat $d/o; exit 1; }
+grep -q 'a binary does not build' $d/o || { echo "FAIL: bins stop line: $(cat $d/o)"; exit 1; }
+printf 'fn main() { let _ = fixlib::Opts { a: 1, b: 2 }; }\n' > $w/bin/src/main.rs
+bins_verdict $w $d/target "-p fixbin" >$d/o 2>&1 || { echo "FAIL: a building bin was refused: $(cat $d/o)"; exit 1; }
+# wired: tip_verdict runs it before the lib tests
+awk '/^tip_verdict\(\)/,/^}/' tools/landing/red-tip.sh | grep -q 'bins_verdict "\$w"' || { echo "FAIL: tip_verdict does not run the bins check"; exit 1; }
 echo PASS
