@@ -503,6 +503,15 @@ pub trait Tti {
         }
     }
 
+    /// Whether a callee that allocates may be copied into a recursive caller,
+    /// as the pin's `getInlineCost` allows up to 1024 bytes of it
+    /// (`TotalAllocaSizeRecursiveCaller`). DEVIATE (default no): a recursion's
+    /// depth times the callee's frame overflows a small platform's stack.
+    /// Exit: a target that says yes.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        false
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its
@@ -875,6 +884,13 @@ pub trait Tti {
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
+    }
+
+    /// Whether the -O1 unroll walk may peel a loop (the pin does, under
+    /// `-funroll-loops`). A peel copies the loop body, which -O1 on a
+    /// bytes-strict target cannot pay for.
+    fn peels_at_o1(&self) -> bool {
+        true
     }
 
     /// `Tuning::second_ipsccp`.

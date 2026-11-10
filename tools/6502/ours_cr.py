@@ -149,6 +149,8 @@ def split_output(stdout):
 
 sys.path.insert(0, str(HERE))
 import crlib
+sys.path.insert(0, str(HERE.parent))
+import corpus_targets
 from flagset import CORPUS_COMMON, program_flags
 RTDIR = Path(os.environ.get("RT_DIR", HERE.parents[1] / "runtime" / "compiler-rt"))
 def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the runtime routines the program and the modules name
@@ -174,6 +176,9 @@ def one(job):
     name = path.stem
     if not path.with_suffix(".out").exists():
         return name, "NO-OUT", "no .out beside the source: a helper, not a program (counted, not measured)"
+    listed = corpus_targets.tags(path.read_text())  # only an explicit `// targets:` line: the 6502 corpus measures -m32 and DOS-marked programs on purpose
+    if listed is not None and not corpus_targets.applies("6502-sim65", "// targets: " + " ".join(listed) + "\n"):
+        return name, "N/A", "n/a, targets: " + " ".join(listed)
     w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
     want = expected(path.with_suffix(".out"))
     (w / "d.s").write_text(driver())

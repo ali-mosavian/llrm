@@ -739,6 +739,20 @@ impl Printer<'_> {
                 self.push("ex de, hl");
                 self.push("ldir");
             }
+            // the byte stored at hl, then `ldir` copies it forward over the
+            // next bc bytes (de is hl + 1): a fill of a constant count
+            "LDFILLi" | "LDFILLr" => {
+                let value = if op == "LDFILLi" {
+                    self.immediate(inst, 1, 0xFF)?
+                } else {
+                    name(self.register(inst, 1)?).to_owned()
+                };
+                self.push(format!("ld (hl), {value}"));
+                self.push("ld e, l");
+                self.push("ld d, h");
+                self.push("inc de");
+                self.push("ldir");
+            }
             "LDIRG" => {
                 let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
                 self.push("ld a, b");
