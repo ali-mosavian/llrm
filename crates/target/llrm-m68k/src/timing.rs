@@ -118,7 +118,13 @@ fn list_size(text: &str) -> Option<u32> {
     for part in text.split('/') {
         match part.split_once('-') {
             Some((from, to)) => {
-                let number = |register: &str| register.get(2..)?.parse::<u32>().ok();
+                // `%fp` and `%sp` end the lists gcc and the pin print
+                // (`%d2-%d7/%a2-%fp`): `%a6` and `%a7`.
+                let number = |register: &str| match register {
+                    "%fp" => Some(6),
+                    "%sp" => Some(7),
+                    _ => register.get(2..)?.parse::<u32>().ok(),
+                };
                 count += number(to)?.checked_sub(number(from)?)? + 1;
             }
             None if is_data(part) || is_address(part) => count += 1,
