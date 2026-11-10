@@ -115,3 +115,93 @@ def test_an_allowed_stale_oz_table_says_so_in_its_header(tmp_path):
     out = tmp_path / "out.tsv"
     t.main([str(out), "--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src"), "--allow-stale-oz"])
     assert "# STALE-OZ ALLOWED: a" in out.read_text().splitlines()
+
+
+def _stale_dirs(tmp_path, programs):
+    for lv, bytes_ in (("s", 907), ("z", 953)):
+        d = tmp_path / "ours"
+        d.mkdir(exist_ok=True)
+        (d / f"full.{lv}.tsv").write_text("".join(f"{p}\tours\t{bytes_}\t1\n" for p in programs))
+    (tmp_path / "sdcc").mkdir(exist_ok=True)
+    (tmp_path / "src").mkdir(exist_ok=True)
+    for p in programs:
+        (tmp_path / "src" / f"{p}.c").write_text("int x;")
+    return ["--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src")]
+
+
+ROW_LINE = "| {} | p (z80) | Oz | bytes | 1 | 2 | +1 | estimator gap | z80 | {} | #1 |\n"
+
+
+def _rows_file(tmp_path, exit_="2026-12-15"):
+    rows = tmp_path / "rows.md"
+    rows.write_text("| id | program/module | level | metric | main | parity | delta | cause | owner | exit | PR |\n|---|---|---|---|--:|--:|--:|---|---|---|---|\n"
+                    + ROW_LINE.format("Z80-OZ-1", exit_) + ROW_LINE.format("Z80-OZ-2", exit_))
+    return ["--rows", str(rows)]
+
+
+def test_a_known_gap_row_that_is_not_in_the_rows_table_is_refused(tmp_path):
+    """The row id was an unchecked string: `--known-oz-gap a=NOPE` wrote the table with a row nobody owns."""
+    out = tmp_path / "out.tsv"
+    args = _stale_dirs(tmp_path, ["a"]) + _rows_file(tmp_path)
+    for named in ("a=NOPE", "a=Z80-OZ-9"):
+        try:
+            t.main([str(out), *args, "--known-oz-gap", named])
+            raised = False
+        except SystemExit as stop:
+            raised = stop.code == 1
+        assert raised and not out.exists()
+    t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
+    assert out.exists()
+
+
+def test_a_known_gap_row_without_an_exit_is_refused(tmp_path):
+    out = tmp_path / "out.tsv"
+    args = _stale_dirs(tmp_path, ["a"]) + _rows_file(tmp_path, exit_="")
+    try:
+        t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
+        raised = False
+    except SystemExit as stop:
+        raised = stop.code == 1
+    assert raised and not out.exists()
+
+
+def test_a_gap_named_with_its_row_is_written_and_listed_and_any_other_still_refuses(tmp_path):
+    out = tmp_path / "out.tsv"
+    args = _stale_dirs(tmp_path, ["a", "b"]) + _rows_file(tmp_path)
+    try:
+        t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
+        raised = False
+    except SystemExit as stop:
+        raised = stop.code == 1
+    assert raised and not out.exists()  # b is not named
+    t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1", "--known-oz-gap", "b=Z80-OZ-2"])
+    assert "# OZ>OS ESTIMATOR GAP (oz_best_of): a=Z80-OZ-1 b=Z80-OZ-2" in out.read_text().splitlines()
+
+
+VOLATILE_BITFIELD = "struct S { unsigned a : 3; unsigned f : 15; };\nvolatile struct S v;\n"
+
+
+def test_a_volatile_bitfield_cell_is_not_like_for_like_never_worse_or_dropped():
+    """volatile_bitfield read B-worse T-worse (519 B against 289): SDCC reads one byte, the pin keeps the 32-bit container."""
+    assert t.is_volatile_bitfield(VOLATILE_BITFIELD)
+    assert t.verdict("O2", (519, 2783), SDCC, volatile_bitfield=True) == t.NOT_LIKE
+    got = {r[1]: r[10] for r in t.rows({"2": {"p": {"ours": (519, 2783)}}}, {"2": {"p": {"sdcc-size": (289, 1956)}}}, {"p": VOLATILE_BITFIELD})}
+    assert got["O2"] == t.NOT_LIKE
+
+
+def test_a_plain_volatile_beside_a_plain_bitfield_stays_ranked():
+    """The first predicate fired on any bit-field in a source that mentioned volatile anywhere: this program would have
+    been exempted silently."""
+    mixed = "struct S { unsigned a : 3; };\nstruct S plain;\nvolatile int flag;\n"
+    assert not t.is_volatile_bitfield(mixed)
+    assert t.is_volatile_bitfield("struct S { unsigned a : 3; };\nstruct S volatile v;\n")
+    assert t.is_volatile_bitfield("struct S { volatile unsigned a : 3; };\nstruct S v;\n")
+    nested = "struct S { unsigned a : 3; };\nunion U { long whole; struct S s; };\nvolatile union U u;\n"
+    assert t.is_volatile_bitfield(nested)
+
+
+def test_other_volatile_and_colon_sources_stay_ranked():
+    """A ternary, a case label and a plain volatile are not bit-fields."""
+    for source in ("volatile int z;\nint f(int x) { return x ? 1 : 64; }\n", "volatile long z;\nint g(int x) { switch (x) { case 1: return 2; } return 0; }\n",
+                   "struct S { unsigned a : 3; };\nint plain;\n"):
+        assert not t.is_volatile_bitfield(source), source

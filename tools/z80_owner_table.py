@@ -21,6 +21,9 @@ LEVELS = [("1", "O1"), ("s", "Os"), ("z", "Oz"), ("2", "O2"), ("3", "O3")]
 STRICT = {"O1", "Os", "Oz"}
 RATE = 3  # T-states per byte at O2/O3
 UNRANKED = "UNRANKED (double: ours f64 vs SDCC f32)"
+# SDCC touches only the bytes of a volatile bit-field; the pin keeps the container's width (a volatile load is never
+# narrowed), so the two programs make different accesses to the object (ruling 2026-11-10, volatile_bitfield).
+NOT_LIKE = "NOT-LIKE-FOR-LIKE (volatile bit-field access width)"
 
 
 def read_pairs(path):
@@ -37,7 +40,37 @@ def is_double(source):
     return re.search(r"\bdouble\b", source) is not None
 
 
-def verdict(level, ours, sdcc, double=False):
+def is_volatile_bitfield(source):
+    """A bit-field member of a volatile-qualified object, or a volatile-qualified bit-field.
+
+    A struct or union tag holds a bit-field when its body declares `type name : width;` or names a tag that does. It is
+    volatile when a member of it is declared `volatile`, or an object is: `volatile struct S v;`, `struct S volatile v;`.
+    A volatile object elsewhere in the source, or a bit-field of a plain object, is not enough. A typedef'd tag is not
+    followed: that cell stays ranked."""
+    bodies = {}
+    for m in re.finditer(r"\b(?:struct|union)\s+(\w+)\s*\{([^{}]*)\}", source):
+        bodies[m.group(1)] = m.group(2)
+    field = re.compile(r"(?:^|;)\s*((?:(?:unsigned|signed|const|volatile|int|long|short|char|_Bool)\s+)+)\w+\s*:\s*\d+\s*(?=;)")
+    holds = {tag for tag, body in bodies.items() if field.search(body)}
+    # a tag that holds a member of a tag that holds one
+    grown = True
+    while grown:
+        grown = False
+        for tag, body in bodies.items():
+            if tag not in holds and any(re.search(rf"\b(?:struct|union)\s+{h}\b(?!\s*\{{)", body) for h in holds):
+                holds.add(tag)
+                grown = True
+    for tag, body in bodies.items():
+        for m in field.finditer(body):
+            if re.search(r"\bvolatile\b", m.group(1)):
+                return True
+    return any(
+        re.search(rf"\bvolatile\s+(?:struct|union)\s+{h}\b|\b(?:struct|union)\s+{h}\s+volatile\b", source) is not None
+        for h in holds
+    )
+
+
+def verdict(level, ours, sdcc, double=False, volatile_bitfield=False):
     """The cell's verdict. `ours` is (B, T) or None; `sdcc` {variant: (B, T)}."""
     if ours is None:
         return "UNMEASURED"
@@ -45,6 +78,8 @@ def verdict(level, ours, sdcc, double=False):
         return "NO-SDCC"
     if double:
         return UNRANKED
+    if volatile_bitfield:
+        return NOT_LIKE
     best_b = min(b for b, _ in sdcc.values())
     best_t = min(t for _, t in sdcc.values())
     d_b, d_t = ours[0] - best_b, ours[1] - best_t
@@ -72,6 +107,11 @@ def stale_oz(ours):
     llrm-z80 at -Oz keeps the -Os build where that is smaller (`Request::oz_best_of`), so from one binary Oz is never
     bigger than Os. A row that is was measured by another binary, or before the best-of: loop_fusion Oz read 953 B
     against Os 907 B in the 2026-11-09 table, when the binary gives 907 for both.
+
+    The choice is made on the module's estimated bytes, the table measures linked bytes: where the estimate is wrong
+    (memmove_overlap, switch_peeled_table: Z80-OZ-1/-2) Oz is bigger. That is an estimator gap, not a stale row. The
+    caller names it with `--known-oz-gap PROG=ROW`; ROW must be a row of docs/working/above-main-rows.md with an owner
+    and an exit. Remove the flag when `oz_best_of` is fixed. Any other program is stale.
 
     `oz_best_of` chooses per module (`compile::effective`), and a module is one corpus program, so the invariant holds
     per program, not per function.
@@ -101,7 +141,7 @@ def rows(ours, sdcc, sources):
                     REFUSED.append((prog, name, k, why))
                     del s[k]
             double = is_double(sources.get(prog, ""))
-            v = verdict(name, o, s, double)
+            v = verdict(name, o, s, double, is_volatile_bitfield(sources.get(prog, "")))
             if o is None or not s:
                 out.append((prog, name, o[0] if o else "", o[1] if o else "", "", "", "", "", "", "", v, "", len(s)))
                 continue
@@ -112,6 +152,19 @@ def rows(ours, sdcc, sources):
     return out
 
 
+ROWS = Path(__file__).resolve().parent.parent / "docs" / "working" / "above-main-rows.md"
+
+
+def open_rows(table):
+    """Ids of the rows of the above-main table that have an owner and an exit."""
+    found = set()
+    for line in Path(table).read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.startswith("| ") and len(cells) >= 10 and cells[8] and cells[9] and cells[0] != "id":
+            found.add(cells[0])
+    return found
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
@@ -119,6 +172,10 @@ def main(argv):
     ap.add_argument("--sdcc", action="append", required=True)
     ap.add_argument("--programs", required=True)
     ap.add_argument("--header-line", action="append", default=[])
+    ap.add_argument("--known-oz-gap", action="append", default=[], metavar="PROG=ROW",
+                    help="a program whose Oz bytes exceed Os through an oz_best_of estimator gap, with its row in "
+                         "above-main-rows.md (owner and exit); remove when oz_best_of is fixed")
+    ap.add_argument("--rows", default=str(ROWS), help="the rows table that --known-oz-gap rows must be in")
     ap.add_argument("--allow-stale-oz", action="store_true", help="write the table although an Oz row is bigger than its Os row")
     a = ap.parse_args(argv)
     ours, sdcc = {}, {}
@@ -131,13 +188,21 @@ def main(argv):
                         for prog, v in read_pairs(p).items():
                             into.setdefault(lv, {}).setdefault(prog, {}).update(
                                 {k: x for k, x in v.items() if (k == "ours") == (into is ours)})
-    stale = stale_oz(ours)
+    known = dict(item.split("=", 1) for item in a.known_oz_gap)
+    missing = sorted(row for row in known.values() if row not in open_rows(a.rows))
+    if missing:
+        print(f"--known-oz-gap rows not in {a.rows} with an owner and an exit: {' '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
+    stale = [row for row in stale_oz(ours) if row[0] not in known]
+    gaps = [row for row in stale_oz(ours) if row[0] in known]
+    if gaps:
+        a.header_line.append("OZ>OS ESTIMATOR GAP (oz_best_of): " + " ".join(f"{prog}={known[prog]}" for prog, _, _ in gaps))
     if stale and a.allow_stale_oz:
         a.header_line.append("STALE-OZ ALLOWED: " + " ".join(prog for prog, _, _ in stale))
     elif stale:
         for prog, os_b, oz_b in stale:
             print(f"stale Oz row: {prog} Oz {oz_b} B > Os {os_b} B", file=sys.stderr)
-        print("regenerate the Oz column from the binary of the Os column (or --allow-stale-oz)", file=sys.stderr)
+        print("regenerate the Oz column from the binary of the Os column (or --known-oz-gap PROG=ROW, --allow-stale-oz)", file=sys.stderr)
         sys.exit(1)
     sources = {p.stem: p.read_text() for p in Path(a.programs).glob("*.c")}
     table = rows(ours, sdcc, sources)

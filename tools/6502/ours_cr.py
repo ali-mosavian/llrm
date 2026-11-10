@@ -148,6 +148,7 @@ def split_output(stdout):
 
 sys.path.insert(0, str(HERE))
 import crlib
+from flagset import CORPUS_COMMON, program_flags
 RTDIR = Path(os.environ.get("RT_DIR", HERE.parents[1] / "runtime" / "compiler-rt"))
 def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the runtime routines the program and the modules name
     """Add the compiler-rt member of every symbol the link leaves unresolved, until it links."""
@@ -167,19 +168,6 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
             if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
             objs.append(stem + ".o")
     return objs, "no fixpoint"
-X86_ONLY = re.compile(r"-(m32|m16|march=.*|mabi=.*|mlong-double-80|mregparm=.*)$")
-def header_flags(path):
-    """The `// flags:` -f options of a program (alternatives split by `|`), x86-only -m options dropped.
-    Any other token is an error: a flag the harness cannot honor must not be measured as if it were."""
-    first = open(path).readline()
-    if not first.startswith("// flags:"): return []
-    out = []
-    for alt in first[len("// flags:"):].split("|"):
-        for t in alt.split():
-            if re.fullmatch(r"-O\w+", t) or t.startswith("-W") or X86_ONLY.fullmatch(t): continue
-            if not t.startswith(("-f", "-D")): raise SystemExit(f"{path}: header flag {t} is not handled by the harness")
-            if t not in out: out.append(t)
-    return out
 def one(job):
     path, level, lib = job
     name = path.stem; w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
@@ -187,7 +175,7 @@ def one(job):
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, f"--target={CPU}-sim65", flag, "-S", "-w", "-fsigned-char", *header_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, f"--target={CPU}-sim65", flag, "-S", "-w", *CORPUS_COMMON, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:

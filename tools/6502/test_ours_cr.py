@@ -15,10 +15,9 @@ def run(env_rt, script="ours_cr.py"):
                           capture_output=True, text=True, env=env, timeout=120)
 
 def header_flags_fn():
-    src = open(os.path.join(HERE, "ours_cr.py")).read()
-    ns = {}
-    exec("import re\n" + src[src.index("X86_ONLY"):src.index("def one(job):")], ns)
-    return ns["header_flags"]
+    sys.path.insert(0, HERE)
+    import flagset
+    return flagset.program_flags
 
 class HeaderFlags(unittest.TestCase):
     """ours_cr compiled every program without its `// flags:` -f options: 24 of 212 programs (12 with

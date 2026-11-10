@@ -1345,12 +1345,13 @@ impl Builder<'_> {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // DEVIATE MEM-1: a length known at run time is `rep movsd`
-                    // inline at speed where the target's tuning says so (the
-                    // pin calls `memcpy`)
+                    // inline at -O2/-O3 where the target's tuning says so (the
+                    // pin calls `memcpy`; -O1 and size keep the call)
                     _ if strings_exist
                         && matches!(which, Intrinsic::MemCpy)
                         && constant.is_none()
                         && !opt_size
+                        && !self.target.bytes_strict
                         && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy()) =>
                     {
                         self.rep_movs_dwords(root, dst, other, size)
@@ -1590,7 +1591,7 @@ impl Builder<'_> {
             );
         // DEVIATE MEM-1: where the target inlines variable copies, a length
         // whose low two bits are known zero (`n << 2`) has no byte tail
-        let inlines = self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
+        let inlines = !self.target.bytes_strict && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
         if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
             || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
         {

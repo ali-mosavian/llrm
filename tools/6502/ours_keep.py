@@ -6,6 +6,8 @@ import sys, re, os, json, tempfile, shutil, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from flagset import CORPUS_COMMON, program_flags
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
 CORPUS = Path(os.environ.get("OURS_CORPUS", HERE.parents[1] / "tests" / "run" / "c"))
@@ -139,7 +141,7 @@ def one(job):
     (w / "d.s").write_text(driver())
     flag = {"O2": "-O2", "O1": "-O1", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", "-fsigned-char", "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", *CORPUS_COMMON, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:
