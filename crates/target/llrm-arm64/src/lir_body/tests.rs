@@ -809,3 +809,50 @@ fn the_body_carries_the_edge_odds_by_block_position() {
     assert_eq!(lowered.body.odds.probability(0, 1), Some(0.375));
     assert_eq!(lowered.body.odds.probability(1, 0), None);
 }
+
+/// A constant made inside a loop is made once in its preheader: the pin hoists
+/// every trivially rematerializable instruction (`IsProfitableToHoist`, "should
+/// always be hoisted providing the register allocator can just pull them down
+/// again"). The predicate asked for the x86 name `mov`, so arm64's `MOVImm`
+/// stayed in the loop (nbody_fixed's `movz #512` in the innermost loop, +29995
+/// executed instructions at -O2 once the sink stage ran).
+#[test]
+fn a_constant_made_in_a_loop_is_made_in_its_preheader() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::machinelicm::hoisted;
+
+    let r = |n| Gpr(Gpr::FIRST_VIRTUAL + n);
+    let (value, divisor, quotient, counter) = (r(2), r(1), r(3), r(4));
+    let wide = |dst, value| Op::Imm { dst, bits: 64, value };
+    let mut function = MFunc::new("t");
+    function.next_register = Gpr::FIRST_VIRTUAL + 16;
+    let block =
+        |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    function.blocks = vec![
+        block("pre", vec![wide(value, 7), wide(counter, 9)]),
+        block(
+            "loop",
+            vec![
+                wide(divisor, 512),
+                Op::I(Inst::Divide { op: Div::Udiv, width: WIDTHS[1], rd: quotient, rn: value, rm: divisor }),
+                Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: true, set_flags: false },
+                    width: WIDTHS[1],
+                    rd: counter,
+                    rn: counter,
+                    imm12: 1,
+                    shift12: false,
+                }),
+                Op::I(Inst::CompareBranch { nonzero: true, width: Width::X, rt: counter, target: label("loop") }),
+            ],
+        ),
+        block("done", vec![Op::Return { uses: vec![], tail: None }]),
+    ];
+    let body = to_lir(&function).expect("the forms map").body;
+    let after = hoisted(&body, &RegisterClasses::of(&crate::description::Arm64));
+    let has = |body: &LirBody, at: usize, name: &str| {
+        body.blocks[at].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(name)))
+    };
+    assert!(has(&body, 1, "MOVImm"), "the premise: the constant starts in the loop");
+    assert!(has(&after, 0, "MOVImm") && !has(&after, 1, "MOVImm"), "the constant stayed in the loop");
+}

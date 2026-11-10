@@ -24,6 +24,10 @@ use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, s
 use llrm_m68k::object::{assemble, executable, write_executable};
 use llrm_m68k::timing::{cost_on, from_gnu};
 
+// An explicit path: matrix.rs includes this file as a module, where `mod tempdir;` would look beside it.
+#[path = "tempdir/mod.rs"]
+mod tempdir;
+
 /// Executed instructions read before a run is called runaway.
 const CAP: usize = 2_000_000;
 
@@ -452,8 +456,7 @@ fn assembled(
 
 fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempdir::Scratch::new("cycles");
     let models = models();
     if std::env::args().nth(1).as_deref() == Some("--exe") {
         let calls: f64 = std::env::var("CYCLES_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(3000.0);
@@ -555,5 +558,4 @@ fn main() {
         }
         println!("| {name} | {} |", cells.join(" | "));
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
