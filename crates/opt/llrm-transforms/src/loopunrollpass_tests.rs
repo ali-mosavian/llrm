@@ -1420,13 +1420,30 @@ fn sandy_bridge_throughput() -> llrm_mir::target::Throughput {
 /// priced at 600 milliclocks a byte (the test's knob: 55 B added; 87 clocks saved at a clock an instruction,
 /// about 20 on a core with the SandyBridge resources); with that core's throughput model, or without any;
 /// whether the loop is gone.
-fn fill_unrolled(throughput: bool) -> bool {
-    let mut module = parsed(
-        "@stream = global [16 x i8] zeroinitializer
+fn fill_unrolled(throughput: bool, call: bool) -> bool {
+    let (callee, first, folded, stored) = if call {
+        // Called twice, so not an inline candidate of the loop's own metrics (one live use is): the inliner decides it
+        // once the copies make the argument a constant.
+        let steps: String = (1..=120).map(|step| format!("  %y{step} = mul i32 %y{}, 7\n", step - 1)).collect();
+        (
+            format!("define internal i32 @g(i32 %y0) {{\n{steps}  ret i32 %y120\n}}\n"),
+            "%pre = call i32 @g(i32 5)".to_string(),
+            "%g = call i32 @g(i32 %s)".to_string(),
+            "%g".to_string(),
+        )
+    } else {
+        (String::new(), String::new(), String::new(), "%s".to_string())
+    };
+    // The copies of a loop around a call stay under the pin's threshold of 150.
+    let trips = if call { 8 } else { 16 };
+    let mut module = parsed(&format!(
+        "@stream = global [{trips} x i8] zeroinitializer
 @zero = global i32 0
 
-define void @f() {
+{callee}
+define void @f() {{
 entry:
+  {first}
   br label %loop
 
 loop:
@@ -1436,18 +1453,19 @@ loop:
   %c = add i32 %m, 85
   %z = load i32, ptr @zero
   %s = add i32 %c, %z
-  %t = trunc i32 %s to i8
-  %p = getelementptr [16 x i8], ptr @stream, i32 0, i32 %i
+  {folded}
+  %t = trunc i32 {stored} to i8
+  %p = getelementptr [{trips} x i8], ptr @stream, i32 0, i32 %i
   store i8 %t, ptr %p
   %next = add i32 %i, 1
-  %more = icmp ne i32 %next, 16
+  %more = icmp ne i32 %next, {trips}
   br i1 %more, label %loop, label %done
 
 done:
   ret void
-}
-",
-    );
+}}
+"
+    ));
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(&mut module).expect("closes");
@@ -1459,7 +1477,7 @@ done:
         min_size: false,
         only_when_forced: false,
         prepare_for_lto: false,
-        target_unrolling: true,
+        target_unrolling: !call,
         inliner_follows: true,
     };
     let target = throughput.then(|| {
@@ -1491,6 +1509,15 @@ done:
 /// slots, about a clock for the three removed, so the 55 B stay rolled at 600 milliclocks a byte.
 #[test]
 fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_is_priced_serially() {
-    assert!(fill_unrolled(false), "premise: priced at a clock an instruction, the unroll pays");
-    assert!(!fill_unrolled(true), "the SandyBridge resources: the folded instructions free issue slots, not clocks");
+    assert!(fill_unrolled(false, false), "premise: priced at a clock an instruction, the unroll pays");
+    assert!(!fill_unrolled(true, false), "the SandyBridge resources: the folded instructions free issue slots, not clocks");
+}
+
+/// dot -O3 m64: the 40-trip loop around `dot(a, b)` (a function the inliner takes next) was priced by the core's
+/// resources at "saves 0 clk", kept rolled, and `dot` stayed unfolded: +306 B and 87 -> 170 clocks a call. A
+/// trip that calls it is outside the model; the serial price decides, as before.
+#[test]
+fn test_a_loop_calling_a_function_the_inliner_takes_is_priced_serially_on_a_core_with_resources() {
+    assert!(fill_unrolled(false, true), "premise: priced serially, the unroll pays");
+    assert!(fill_unrolled(true, true), "the callee folds on the copies' constants: not a trip the resources show");
 }
