@@ -33,7 +33,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate};
 use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
-use crate::combine_shared::{has_one_use, query, replace_operand};
+use crate::combine_shared::{drop_poison_generating_annotations, has_one_use, query, replace_operand};
 use crate::combine_visit_select::Sel;
 
 /// `m_Cttz(m_Value(X), m_Value())` or `m_Ctlz(..)`: the call and `X`.
@@ -96,7 +96,7 @@ pub(crate) fn select_cttz_ctlz(
     let bits = u128::from(q.scalar_bits(count));
     if is_int(value_on_zero, bits) {
         // A range annotation on the intrinsic may no longer be valid.
-        c.function.drop_poison_generating_annotations(call);
+        drop_poison_generating_annotations(c, call);
         c.add_to_worklist(call);
         return Some(Visit::Replace(select_arg));
     }
