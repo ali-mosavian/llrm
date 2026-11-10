@@ -642,6 +642,18 @@ pub fn assembled_by(
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
     let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
+    // `shouldAssumeDSOLocal`: shared-library code binds no default-visibility
+    // definition itself, and no code binds a weak one.
+    let preemptible: BTreeSet<String> = weak
+        .iter()
+        .cloned()
+        .chain(
+            procedures
+                .iter()
+                .filter(|one| one.public && module.preempts_default_visibility() && !visibility.contains_key(&one.name))
+                .map(|one| one.name.clone()),
+        )
+        .collect();
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
@@ -649,6 +661,7 @@ pub fn assembled_by(
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
         visibility,
+        preemptible,
         aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
@@ -1465,6 +1478,7 @@ fn phased(
         target.selection.rules(),
         &registers,
         target.selector,
+        &target.arch.omitted_phases().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {

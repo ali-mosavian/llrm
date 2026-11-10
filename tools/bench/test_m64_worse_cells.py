@@ -5,8 +5,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import m64_worse_cells as worse_cells  # noqa: E402
 
 
-def row(program, compiler, code):
-    return f"x86-m64\t{program}\tO1\t{compiler}\t{code}\t0\t0\t\t\t\t\t\t\t\n"
+def row(program, compiler, code, data=0, pad=0):
+    text = code + pad if isinstance(code, int) else code
+    return f"x86-m64\t{program}\tO1\t{compiler}\t{code}\t{text}\t{data}\t\t\t\t\t\t\t\n"
 
 
 def test_a_row_with_no_gcc_cell_is_refused_not_compared_with_clang():
@@ -19,4 +20,170 @@ def test_a_row_with_no_gcc_cell_is_refused_not_compared_with_clang():
 def test_a_complete_row_is_compared_with_the_best_of_the_two():
     text = row("p", "ours", 300) + row("p", "gcc", 250) + row("p", "clang", 280)
     rows, missing = worse_cells.worse(worse_cells.cells(text.splitlines()))
-    assert rows == [("p", "O1", 300, 250)] and missing == []
+    assert rows == [("code", "p", "O1", 300, 250), ("code+data", "p", "O1", 300, 250)] and missing == []
+
+
+def test_ours_winning_on_code_and_losing_on_code_plus_data_is_worse_on_the_second_axis():
+    """The tables compared text only: a pool or table moved to .rodata made ours look smaller."""
+    text = row("p", "ours", 200, 400) + row("p", "gcc", 250, 100) + row("p", "clang", 280, 120)
+    rows, missing = worse_cells.worse(worse_cells.cells(text.splitlines()))
+    assert rows == [("code+data", "p", "O1", 600, 350)] and missing == []
+
+
+def test_the_data_of_an_object_counts_bss_and_a_const_table(tmp_path):
+    """The matrix's data column was `size -A` .data + .rodata*: a 4 kB zero-filled buffer (histo) read 0 against 4608, grep 81 against 3137."""
+    import shutil
+    import subprocess
+
+    if shutil.which("gcc") is None:
+        import pytest
+
+        pytest.skip("needs gcc")
+    (tmp_path / "t.c").write_text("char bss[4096];\nconst int table[16] = {1,2,3};\nint f(int i) { bss[i] = 1; return bss[i + 1] + table[i & 15]; }\n")
+    subprocess.run(["gcc", "-O1", "-fPIE", "-c", str(tmp_path / "t.c"), "-o", str(tmp_path / "t.o")], check=True)
+    assert worse_cells.object_data(tmp_path / "t.o") >= 4096 + 64
+
+
+def test_a_table_without_the_object_bytes_mark_is_refused(tmp_path):
+    import subprocess
+    import sys
+
+    table = tmp_path / "old.tsv"
+    table.write_text("# x86-m64 matrix, data_bytes .data+.rodata*\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+    done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+    assert done.returncode != 0 and "data=object_bytes" in done.stderr
+
+
+def test_a_column_whose_code_exceeds_its_emitted_text_is_refused_not_compared():
+    """Padding on one side only: gcc's raw .text (padded) in the code column against our padding-free code made ours look 8 B smaller than it is.
+    Padding-free code can never exceed the emitted text, so a column that does was measured another way."""
+    text = row("p", "ours", 300, pad=16) + row("p", "gcc", 310) + row("p", "clang", 320)
+    text = text.replace("O1\tgcc\t310\t310", "O1\tgcc\t310\t302")
+    rows, missing = worse_cells.worse(worse_cells.cells(text.splitlines()))
+    assert rows == [] and len(missing) == 1 and "gcc" in missing[0] and "padding" in missing[0]
+
+
+def test_a_column_with_no_emitted_text_is_refused_because_its_padding_cannot_be_told():
+    text = row("p", "ours", 300) + row("p", "gcc", 250) + row("p", "clang", 280)
+    text = text.replace("O1\tclang\t280\t280", "O1\tclang\t280\t")
+    rows, missing = worse_cells.worse(worse_cells.cells(text.splitlines()))
+    assert rows == [] and len(missing) == 1 and "clang" in missing[0]
+
+
+def test_padding_is_its_own_column_and_not_part_of_the_comparison():
+    """Ours aligns functions (pad 16) and gcc does not at -O1: the verdict is on code, the padding is reported beside it."""
+    text = row("p", "ours", 300, pad=16) + row("p", "gcc", 310) + row("p", "clang", 320)
+    table = worse_cells.cells(text.splitlines())
+    rows, missing = worse_cells.worse(table)
+    assert rows == [] and missing == [] and worse_cells.padding(table)[("p", "O1")] == {"ours": 16, "gcc": 0, "clang": 0}
+
+
+def test_a_table_without_the_padding_free_mark_is_refused(tmp_path):
+    import subprocess
+    import sys
+
+    table = tmp_path / "raw.tsv"
+    table.write_text("# x86-m64 matrix; data=object_bytes; code_bytes .text incl. padding\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+    done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+    assert done.returncode != 0 and "padding-free" in done.stderr
+
+
+def _git(repo, *args):
+    import subprocess
+
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _bench_repo(tmp_path):
+    (tmp_path / "bench" / "p").mkdir(parents=True)
+    (tmp_path / "bench" / "p" / "p.c").write_text("int a;\n")
+    (tmp_path / "bench" / "q").mkdir()
+    (tmp_path / "bench" / "q" / "q.c").write_text("int b;\n")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "one")
+    return _git(tmp_path, "rev-parse", "HEAD")
+
+
+def test_a_program_changed_after_the_matrix_commit_is_stale(tmp_path):
+    """The 11-09 sfm16 rows were built before #8706 made `unsigned long` 32-bit: ours 2123 B / gcc 1797 B against 1880 / 1697 on the tip source,
+    and a +35 reg-reg mov gap chased on the old program. A table that does not name the bench commit it was built from cannot be told stale."""
+    built = _bench_repo(tmp_path)
+    (tmp_path / "bench" / "p" / "p.c").write_text("int a; int c;\n")
+    _git(tmp_path, "commit", "-qam", "two")
+    assert worse_cells.stale_programs(["p", "q"], built, tmp_path) == ["p"]
+
+
+def test_a_change_to_a_program_expected_file_is_not_a_change_of_its_source(tmp_path):
+    built = _bench_repo(tmp_path)
+    (tmp_path / "bench" / "p" / "expected.toml").write_text("x = 1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "two")
+    assert worse_cells.stale_programs(["p", "q"], built, tmp_path) == []
+
+
+def test_a_table_built_from_the_current_source_is_not_stale(tmp_path):
+    _bench_repo(tmp_path)
+    (tmp_path / "bench" / "p" / "p.c").write_text("int a; int c;\n")
+    _git(tmp_path, "commit", "-qam", "two")
+    assert worse_cells.stale_programs(["p", "q"], _git(tmp_path, "rev-parse", "HEAD"), tmp_path) == []
+
+
+def test_a_table_without_the_bench_commit_or_the_pie_mark_is_refused(tmp_path):
+    import subprocess
+
+    for header, word in (("# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE\n", "bench="), ("# m; data=object_bytes; code_bytes padding-free; bench=abc\n", "reloc=-fPIE")):
+        table = tmp_path / "t.tsv"
+        table.write_text(header + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+        done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+        assert done.returncode != 0 and word in done.stderr
+
+
+def _landing(repo, name):
+    (repo / "crates").mkdir(exist_ok=True)
+    (repo / "crates" / name).write_text(name)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", name)
+
+
+def test_a_compiler_many_landings_behind_the_checkout_is_stale(tmp_path):
+    """The 11-09 table was also built by a compiler 95 landings older than the tip: its gaps moved with #8735 and others, and 'sources unchanged' did not make
+    them current. A table counts as current within MAX_LANDINGS commits that touch crates/."""
+    built = _bench_repo(tmp_path)
+    for i in range(worse_cells.MAX_LANDINGS + 1):
+        _landing(tmp_path, f"c{i}")
+    assert worse_cells.compiler_landings(built, tmp_path) == worse_cells.MAX_LANDINGS + 1
+
+
+def test_commits_that_do_not_touch_the_compiler_do_not_age_a_table(tmp_path):
+    built = _bench_repo(tmp_path)
+    for i in range(worse_cells.MAX_LANDINGS + 5):
+        (tmp_path / f"doc{i}.md").write_text("x")
+        _git(tmp_path, "add", ".")
+        _git(tmp_path, "commit", "-qm", f"doc{i}")
+    assert worse_cells.compiler_landings(built, tmp_path) == 0
+
+
+def test_a_table_without_a_compiler_stamp_is_refused(tmp_path):
+    import subprocess
+
+    table = tmp_path / "t.tsv"
+    table.write_text("# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE; bench=abcdef1\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+    done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+    assert done.returncode != 0 and "compiler=" in done.stderr
+
+
+def test_allow_stale_lists_an_aged_table_and_prints_its_age(tmp_path):
+    """The guard refused a 95-landing-old table outright, which also hid its gaps from a reader who only wanted to judge them; it must stop the quoting, not the listing."""
+    import subprocess
+
+    built = _bench_repo(tmp_path)
+    for i in range(worse_cells.MAX_LANDINGS + 1):
+        _landing(tmp_path, f"c{i}")
+    table = tmp_path / "t.tsv"
+    table.write_text(f"# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE; bench={built}; compiler={built}\n" + row("p", "ours", 300) + row("p", "gcc", 250) + row("p", "clang", 280))
+    cmd = [sys.executable, str(Path(worse_cells.__file__)), str(table), "--repo", str(tmp_path)]
+    refused = subprocess.run(cmd, capture_output=True, text=True)
+    assert refused.returncode != 0 and "--allow-stale" in refused.stderr and "code\tp\tO1" not in refused.stdout
+    listed = subprocess.run([*cmd, "--allow-stale"], capture_output=True, text=True)
+    assert listed.returncode == 0 and "code\tp\tO1\t300\t250" in listed.stdout and f"{worse_cells.MAX_LANDINGS + 1} landings behind" in listed.stderr

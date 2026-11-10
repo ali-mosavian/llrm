@@ -474,6 +474,17 @@ pub enum Allocator {
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
+/// x86's `isAsCheapAsAMove` of a constant: `MOV64ri` (`movabs`), an immediate
+/// that neither a sign-extended nor a zero-extended dword makes, is
+/// rematerializable but not cheap (X86InstrMisc.td, outside the `MOV8ri`..
+/// `MOV64ri32` block).
+pub fn x86_cheap_move_immediate(
+    bytes: u8,
+    value: i64,
+) -> bool {
+    !(bytes == 8 && !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&value))
+}
+
 pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
@@ -583,6 +594,14 @@ pub trait Target {
         false
     }
 
+    /// The machine phases (`flow::machine_with`'s class names) this target does
+    /// not run, each with why. The pin's `TargetPassConfig` adds each target's
+    /// own passes while the phase list here is x86's, so a target names what
+    /// its pin has no pass for. An unknown name is an error in `machine_with`.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
@@ -590,6 +609,24 @@ pub trait Target {
     /// (LEAF-FOLD-OS).
     fn leaf_fold_at_size(&self) -> bool {
         false
+    }
+
+    /// MachineCSE keeps a compare whose difference nothing reads apart from the
+    /// same difference made in a later block, when that difference overwrites
+    /// an operand still live (CSE-CMP): sharing them moves the subtract in
+    /// front of the branch and adds a copy of the operand. The pin shares.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
+        false
+    }
+
+    /// `TargetInstrInfo::isAsCheapAsAMove` for a constant: whether a
+    /// `bytes`-wide register can be given `value` by one move that is as
+    /// cheap as a copy (MachineSink, MachineCSE and MachineLICM leave it
+    /// where it is). The default is x86's: every immediate but a `movabs`.
+    /// AArch64 asks whether the constant takes two instructions or fewer
+    /// (`AArch64InstrInfo.cpp#L1385`).
+    fn cheap_move_immediate(&self) -> fn(u8, i64) -> bool {
+        x86_cheap_move_immediate
     }
 
     /// The pressure sets of the register classes and each set's limit, for a

@@ -6,7 +6,7 @@
 //! `$GCC_M68K` (the unpacked m68k binutils, for `objdump`: the pin's
 //! `llvm-objdump` shows `addq` and `tst` as `<unknown>`) and `qemu-m68k`.
 //! `cycles --exe PATH...`: prices each prebuilt ELF: every executed instruction
-//! outside the functions `h_*`, `main` and `_start`, per processor of
+//! outside the functions `h_*` and `_start` (`main` included), per processor of
 //! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
 //! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
 //! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
@@ -44,36 +44,76 @@ pub(crate) fn models() -> Vec<Model> {
         .collect()
 }
 
-/// The program counters qemu executed, in order.
+/// The program counters qemu executed, in order; `complete` is false when the
+/// run was cut short (the time limit or `cap`), so the counts are a prefix.
+struct Trace {
+    pcs: Vec<u32>,
+    complete: bool,
+}
+
+/// `CYCLES_TIMEOUT`: seconds a traced run may take. The trace runs at about
+/// 2.5 M instructions per second, so a long program needs this raised.
+fn time_limit() -> std::time::Duration {
+    std::time::Duration::from_secs(std::env::var("CYCLES_TIMEOUT").ok().and_then(|s| s.parse().ok()).unwrap_or(120))
+}
+
 fn trace(
     exe: &Path,
     cap: usize,
     cpu: &str,
-) -> Vec<u32> {
+) -> Trace {
+    let mut command = Command::new("qemu-m68k");
+    command.args(["-cpu", cpu, "-one-insn-per-tb", "-d", "exec", "-D", "/dev/stderr"]).arg(exe);
+    read_trace(command, cap, time_limit())
+}
+
+/// Run `command` and collect the pcs of its stderr `exec` lines. A run killed
+/// at `limit` used to be priced as if it had finished: the jpeg_single cells
+/// of 11-09 were prefixes of a 516 M-instruction run (224 M to 311 M, by load).
+fn read_trace(
+    mut command: Command,
+    cap: usize,
+    limit: std::time::Duration,
+) -> Trace {
     use std::io::{BufRead, BufReader};
-    let mut child = Command::new("timeout")
-        .args(["120", "qemu-m68k", "-cpu", cpu, "-one-insn-per-tb", "-d", "exec", "-D", "/dev/stderr"])
-        .arg(exe)
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("timeout runs qemu-m68k");
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    let mut child = command.stderr(Stdio::piped()).spawn().expect("the traced command starts");
+    let stderr = child.stderr.take().unwrap();
+    let child = Arc::new(Mutex::new(child));
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let (finished, watch) = mpsc::channel::<()>();
+    let watchdog = {
+        let (child, timed_out) = (child.clone(), timed_out.clone());
+        std::thread::spawn(move || {
+            if watch.recv_timeout(limit) == Err(mpsc::RecvTimeoutError::Timeout) {
+                timed_out.store(true, Ordering::SeqCst);
+                child.lock().unwrap().kill().ok();
+            }
+        })
+    };
     let mut pcs = Vec::new();
-    for line in BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
+    let mut capped = false;
+    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
         let Some(fields) = line.split_once('[').and_then(|(_, rest)| rest.split_once(']')) else { continue };
         if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
             pcs.push(pc);
         }
         if pcs.len() > cap {
-            child.kill().ok();
+            child.lock().unwrap().kill().ok();
+            capped = true;
             break;
         }
     }
-    child.wait().ok();
-    pcs
+    child.lock().unwrap().wait().ok();
+    finished.send(()).ok();
+    watchdog.join().ok();
+    Trace { pcs, complete: !capped && !timed_out.load(Ordering::SeqCst) }
 }
 
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
 /// difftest seed's `ours`) over those functions instead of the kernel `k`.
+/// The matrix names `k` itself: its tables do not move with the environment.
 fn functions() -> Vec<String> {
     std::env::var("CYCLES_FUNCS")
         .map_or_else(|_| vec!["k".to_owned()], |list| list.split(',').map(str::to_owned).collect())
@@ -85,25 +125,42 @@ fn listing(
     gcc: &Path,
     exe: &Path,
     harness: bool,
+    wanted: &[String],
 ) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
-        .args(["-d", "--no-show-raw-insn"])
+        // An executable linked by gcc says `m68k:68000` whatever the code: the
+        // instructions from the 68020 on (`extb.l`, `muls.l`) are `.short` and
+        // priced as nothing. The widest decoder reads them all.
+        .args(["-m", "m68k:68040", "-d", "--no-show-raw-insn"])
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
-    let wanted = functions();
+    parse_listing(&String::from_utf8_lossy(&out.stdout), harness, wanted)
+}
+
+/// `harness`: every function but the test harness's own helpers (`h_*`) and
+/// the entry stub. `main` is priced: the optimizer inlines the hot functions
+/// of a small program into it, and its clocks are the program's.
+fn is_harness_function(name: &str) -> bool {
+    name.starts_with("h_") || name == "_start"
+}
+
+fn parse_listing(
+    text: &str,
+    harness: bool,
+    wanted: &[String],
+) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let mut lines = Vec::new();
     let mut ranges = Vec::new();
     let mut open: Option<u32> = None;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in text.lines() {
         if let Some((address, name)) = line.split_once(" <").and_then(|(a, rest)| Some((a, rest.strip_suffix(">:")?))) {
             let address = u32::from_str_radix(address, 16).unwrap();
             if let Some(start) = open.take() {
                 ranges.push(start..address);
             }
-            // `harness`: every function but the test harness's own
-            let outside = harness && !(name.starts_with("h_") || name == "main" || name == "_start");
+            let outside = harness && !is_harness_function(name);
             if outside || wanted.iter().any(|one| one == name) {
                 open = Some(address);
             }
@@ -123,7 +180,74 @@ pub(crate) struct Total {
     pub(crate) insns: usize,
     pub(crate) clocks: Vec<u64>,
     pub(crate) partial: bool,
+    /// Executed instructions with no disassembly: unpriced on every model.
     pub(crate) unknown: usize,
+    /// Executed instructions one model has no row for (a 68020 `extb.l` on the
+    /// 68000), per model: only that model's column is partial.
+    pub(crate) unpriced: Vec<usize>,
+    /// The trace was cut short: every count is a prefix, not a result.
+    pub(crate) truncated: bool,
+}
+
+impl Total {
+    pub(crate) fn new(models: &[Model]) -> Total {
+        Total {
+            insns: 0,
+            clocks: vec![0; models.len()],
+            partial: false,
+            unknown: 0,
+            unpriced: vec![0; models.len()],
+            truncated: false,
+        }
+    }
+
+    /// Charge one executed instruction to every model; a model with no row
+    /// for it counts it unpriced and keeps its own mark.
+    pub(crate) fn charge(
+        &mut self,
+        models: &[Model],
+        text: &str,
+        bytes: u32,
+        taken: bool,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        for (slot, cpu) in models.iter().copied().enumerate() {
+            match cost_on(cpu, text, bytes, taken) {
+                Ok(one) => {
+                    self.clocks[slot] += u64::from(one.clocks);
+                    self.partial |= one.partial;
+                }
+                Err(why) => {
+                    self.unpriced[slot] += 1;
+                    if seen.insert(why.clone()) {
+                        eprintln!("unpriced: {why}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The table cell of the model in `slot`: its clocks, `*` for a bound,
+    /// ` ?n` for unpriced instructions; `cut` when the trace was cut short.
+    pub(crate) fn cell(
+        &self,
+        slot: usize,
+    ) -> String {
+        if self.truncated {
+            return format!("cut@{}", self.insns);
+        }
+        let mark = if self.partial { "*" } else { "" };
+        let unknown = if self.unknown_of(slot) > 0 { format!(" ?{}", self.unknown_of(slot)) } else { String::new() };
+        format!("{}{mark}{unknown}", self.clocks[slot])
+    }
+
+    /// The unpriced instructions of the model in `slot`.
+    pub(crate) fn unknown_of(
+        &self,
+        slot: usize,
+    ) -> usize {
+        self.unknown + self.unpriced[slot]
+    }
 }
 
 /// The qemu CPU a run of `exe` is traced on: the one its path names, the 68000
@@ -150,7 +274,19 @@ fn qemu_cpu_of(exe: &Path) -> &'static str {
 mod tests {
     use std::path::Path;
 
-    use super::qemu_cpu_of;
+    use llrm_m68k::isa::Cpu as Model;
+
+    use super::{Total, parse_listing, qemu_cpu_of, read_trace};
+
+    /// A small program's hot loop is inlined into `main`; the default priced
+    /// everything but `main`, so a 100-iteration loop read as 0 clocks and an
+    /// A/B of two compilers as "same" (rep_tails 68020 -O2, 2026-11-09).
+    #[test]
+    fn main_is_priced_with_the_functions_inlined_into_it() {
+        let text = "00000100 <_start>:\n 100:\tjsr 0x120\n00000120 <main>:\n 120:\taddql #1,%d0\n 122:\tbnes 0x120\n 124:\trts\n00000130 <h_report>:\n 130:\trts\n00000140 <sum>:\n 140:\trts\n";
+        let (_, ranges) = parse_listing(text, true, &[]);
+        assert_eq!(ranges, vec![0x120..0x130, 0x140..0x142]);
+    }
 
     /// The 040 and 060 matrix columns priced the instruction counts of a trace
     /// on `m68000` (partition 040: 202 instructions for gcc's 121).
@@ -165,6 +301,40 @@ mod tests {
             assert_eq!(qemu_cpu_of(Path::new(path)), cpu, "{path}");
         }
     }
+
+    /// 68020-only `extb.l` was marked unpriced on the 68020 column too
+    /// (`?16` there, though the 68020 has a row for it).
+    #[test]
+    fn an_instruction_one_model_lacks_marks_only_that_models_column() {
+        let models = [Model::M68000, Model::M68020];
+        let mut total = Total::new(&models);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            total.charge(&models, "extb.l %d2", 2, false, &mut seen);
+        }
+        total.charge(&models, "addq.l #1, %d0", 2, false, &mut seen);
+        assert_eq!(total.unknown_of(0), 16, "68000 lacks extb.l");
+        assert_eq!(total.unknown_of(1), 0, "68020 prices extb.l");
+        assert!(total.clocks[1] > total.clocks[0]);
+    }
+
+    /// jpeg_single's trace (516 M instructions, 200 s) was killed at the 120 s
+    /// limit and priced as a result: 224 M to 311 M instructions, by load.
+    #[test]
+    fn a_run_cut_by_the_time_limit_is_not_complete() {
+        let line = "Trace 0: 0x7f00 [00000000/00001000/00000000/0]";
+        let run = |script: String, limit: u64| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", &script]);
+            read_trace(command, usize::MAX, std::time::Duration::from_millis(limit))
+        };
+        let cut = run(format!("echo '{line}' >&2; exec sleep 30"), 300);
+        assert!(!cut.complete);
+        assert_eq!(cut.pcs, [0x1000]);
+        let whole = run(format!("echo '{line}' >&2"), 30_000);
+        assert!(whole.complete);
+        assert_eq!(whole.pcs, [0x1000]);
+    }
 }
 
 pub(crate) fn price(
@@ -172,8 +342,9 @@ pub(crate) fn price(
     exe: &Path,
     models: &[Model],
     harness: bool,
+    wanted: &[String],
 ) -> Total {
-    let (lines, ranges) = listing(gcc, exe, harness);
+    let (lines, ranges) = listing(gcc, exe, harness, wanted);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -194,8 +365,9 @@ pub(crate) fn price(
                 CAP
             },
         );
-    let pcs = trace(exe, cap, &cpu);
-    let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
+    let Trace { pcs, complete } = trace(exe, cap, &cpu);
+    let mut total = Total::new(models);
+    total.truncated = !complete;
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
@@ -211,22 +383,7 @@ pub(crate) fn price(
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
-        let mut failed = false;
-        for (slot, cpu) in models.iter().copied().enumerate() {
-            match cost_on(cpu, text, *bytes as u32, taken) {
-                Ok(one) => {
-                    total.clocks[slot] += u64::from(one.clocks);
-                    total.partial |= one.partial;
-                }
-                Err(why) => {
-                    failed = true;
-                    if seen.insert(why.clone()) {
-                        eprintln!("unpriced: {why}");
-                    }
-                }
-            }
-        }
-        total.unknown += usize::from(failed);
+        total.charge(models, text, *bytes as u32, taken, &mut seen);
     }
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {
@@ -309,25 +466,32 @@ fn main() {
             .collect();
         println!("| exe | insns | {} |", heads.join(" | "));
         for path in std::env::args().skip(2) {
-            let total = price(&gcc, Path::new(&path), &models, true);
-            let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let cells: Vec<String> =
-                total.clocks.iter().map(|one| format!("{one}{mark}{unknown} | {:.1}", *one as f64 / calls)).collect();
+            let total = price(&gcc, Path::new(&path), &models, true, &functions());
+            let cells: Vec<String> = (0..models.len())
+                .map(|slot| {
+                    let per_call = if total.truncated {
+                        "-".to_owned()
+                    } else {
+                        format!("{:.1}", total.clocks[slot] as f64 / calls)
+                    };
+                    format!("{} | {per_call}", total.cell(slot))
+                })
+                .collect();
             let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
             println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
         }
         return;
     }
     if let Some(exe) = std::env::var_os("CYCLES_EXE") {
-        let total = price(&gcc, Path::new(&exe), &models, false);
+        let total = price(&gcc, Path::new(&exe), &models, false, &functions());
         let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
         println!(
-            "insns {} clocks {} unpriced {} partial {}",
+            "insns {} clocks {} unpriced {} partial {} truncated {}",
             total.insns,
             clocks.join(" "),
-            total.unknown,
-            total.partial
+            (0..models.len()).map(|slot| total.unknown_of(slot)).max().unwrap_or(0),
+            total.partial,
+            total.truncated
         );
         return;
     }
@@ -385,10 +549,8 @@ fn main() {
                     Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
                 assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
             }
-            let total = price(&gcc, &exe, &models, false);
-            let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
+            let total = price(&gcc, &exe, &models, false, &functions());
+            let clocks: Vec<String> = (0..models.len()).map(|slot| total.cell(slot)).collect();
             cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
         }
         println!("| {name} | {} |", cells.join(" | "));

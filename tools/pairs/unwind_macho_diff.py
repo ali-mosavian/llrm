@@ -61,7 +61,7 @@ def main() -> int:
             run([f"{args.pin}/opt", "-O2", "-vectorize-loops=false", "-vectorize-slp=false", str(ir), "-S", "-o", str(opt)])
             pin_o, our_o = work / f"{source.stem}.pin.o", work / f"{source.stem}.our.o"
             run([f"{args.pin}/llc", "-O2", "-filetype=obj", str(opt), "-o", str(pin_o)])
-            run([args.llc, "-O2", "--isel=dag", "-o", str(our_o), str(opt)])
+            run([args.llc, "-O2", "-o", str(our_o), str(opt)])
             pin_words, our_words = (encodings_of(run([args.objdump or f"{args.pin}/llvm-objdump", "--macho", "--unwind-info", str(o)])) for o in (pin_o, our_o))
         except (RuntimeError, KeyError) as why:
             print(f"  refused {source.name}: {why}")

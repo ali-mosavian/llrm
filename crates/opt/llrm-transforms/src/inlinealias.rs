@@ -261,6 +261,7 @@ pub fn scoped(
         dom_conditions: None,
         cond_context: None,
         cxt: None,
+        pending_intrinsics: &[],
     };
     let first = declared.next_node().0 - declared.nodes().len() as u32;
     let mut nodes = Nodes::new(module, first);

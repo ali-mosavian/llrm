@@ -1439,7 +1439,10 @@ impl<'a> Dse<'a> {
         if !self.memory_is_not_modified_between(dead, killing) {
             return None;
         }
-        let shift = ((killing_off - dead_off) * 8) as u32;
+        // `tryToMergePartialOverlappingStores`' `LShiftAmount`: the byte at the
+        // lower address is the high one on a big-endian target.
+        let offset_bits = ((killing_off - dead_off) * 8) as u32;
+        let shift = if self.aa.unit().layout.big_endian { dead_bits - killing_bits - offset_bits } else { offset_bits };
         let mask_of = |bits: u32| if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
         let mask = mask_of(killing_bits) << shift;
         Some(((dead_constant & !mask) | ((killing_constant & mask_of(killing_bits)) << shift)) & mask_of(dead_bits))

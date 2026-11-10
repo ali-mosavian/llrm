@@ -982,6 +982,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::USubO => self.visit_usubo(node),
             ISD::USubOCarry => self.visit_usubo_carry(node),
+            ISD::SetCCCarry => self.visit_setcc_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
@@ -1444,6 +1445,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let vt = self.dag.value_type(node);
         let NodeData::CondCode(cond) = self.dag.node(ops[4]).data else { return None };
         let compare = self.dag.get_setcc(EVT::I1, ops[0], ops[1], cond);
+        // `SimplifySelectCC`: a compare that folded to a constant names the arm.
+        if self.dag.opcode(compare) != ISD::SetCC {
+            return self.dag.constant(compare).map(|value| if value != 0 { ops[2] } else { ops[3] });
+        }
         let simpler = self.visit_setcc(compare)?;
         if self.dag.opcode(simpler) != ISD::SetCC {
             return None;
@@ -1573,6 +1578,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
         let amount_vt = self.hooks.shift_amount_type(vt);
+        let register_wide = self.tli.is_some_and(|tli| tli.types.is_type_legal(vt));
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -1585,6 +1591,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
         }
         if c1.wrapping_sub(1) & mask == c2 {
+            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, review 2026-12-20; ends
+            // if the pin's M68k lowers a select of constants itself or
+            // `convertSelectOfConstantsToMath` is answered per target): where
+            // a true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
+            // and `sext (not c)` is the inverted `Scc` with no mask:
+            // `c ? C : C-1` is `C + sext (!c)`. The pin's own forms: the sext
+            // arm ([L13102][sext]) and `or (sext (not c)), C` ([L13122][not]).
+            //
+            // [sext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13102
+            // [not]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13122
+            // Only in a register-wide type: an expanded one pays the sext's
+            // high half (`add` with carry of `zext` is cheaper there).
+            if dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne && register_wide {
+                let not = dag.get_not(cond, EVT::I1);
+                let not = dag.get_sext_or_trunc(not, vt);
+                return Some(dag.get_node(ISD::Add, vt, &[not, then]));
+            }
             let cond = dag.get_zext_or_trunc(cond, vt);
             return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
         }
@@ -3285,7 +3308,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> bool {
         let (ka, kb) = (super::known_bits::known_bits(self.dag, a), super::known_bits::known_bits(self.dag, b));
         let all = super::fold::mask(ka.width);
-        (!ka.zero & all) + (!kb.zero & all) <= all
+        // At 128 bits the sum of the two maxima wraps in a `u128`, which read as "fits".
+        (!ka.zero & all).checked_add(!kb.zero & all).is_some_and(|sum| sum <= all)
     }
 
     /// `visitUADDO_CARRY`
@@ -3409,6 +3433,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node_multi(ISD::USubOCarry, &values, &[a, b, carry]));
         }
         None
+    }
+
+    /// `visitSETCCCARRY`
+    /// ([L15188](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15188)):
+    /// with no borrow in, the node is a plain `setcc` of its operands. The low
+    /// words' `usubo x, 0` folds to a zero borrow, so a compare of a long with
+    /// a constant whose low words are zero reaches here.
+    fn visit_setcc_carry(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (lhs, rhs, carry, cond) =
+            (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+        if !self.dag.is_null_constant(carry) {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        Some(self.dag.get_node(ISD::SetCC, vt, &[lhs, rhs, cond]))
     }
 
     /// The algebraic folds of `visitSUB`
