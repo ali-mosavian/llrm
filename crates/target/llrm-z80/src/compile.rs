@@ -343,7 +343,14 @@ fn with_variant(
     strict_o1: bool,
 ) -> Result<Allocated, String> {
     // stays only where it is cheaper than the best so far
-    match (best, allocate(variant, name, request.level)) {
+    // the merged variant is priced on its first allocation: the explored choices (`improved`) are three allocations
+    // for a variant that wins in one function of ten
+    let variant = if strict_o1 {
+        allocate_first(variant, name, request.level).map(|(first, ..)| first)
+    } else {
+        allocate(variant, name, request.level)
+    };
+    match (best, variant) {
         (Ok(base), Ok(split)) => match (priced_in_loops(&base, request.level), priced_in_loops(&split, request.level)) {
             (Some(one), Some(other)) if strict_o1 && request.level == Level::O1 => {
                 if other.0 <= one.0 && other.1 <= one.1 && other != one { Ok(split) } else { Ok(base) }
