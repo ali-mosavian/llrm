@@ -4,7 +4,7 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, re, subprocess, sys, tempfile, unittest
+import os, re, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -272,6 +272,19 @@ class NoOut(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr[-300:])
         self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["helper", "NO-OUT"]])
         self.assertIn("NO-OUT", done.stdout)
+
+class WorkDir(unittest.TestCase):
+    """2026-11-10: every run left its /tmp/o6progs-* directory (516 of them, one per run of every session) and /tmp ran out of inodes."""
+    def test_a_run_leaves_no_work_directory_behind(self):
+        tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, tmp, True)
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, out, True)
+        Path(corpus, "helper.c").write_text("int f(void) { return 1; }\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, TMPDIR=tmp)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", os.path.join(out, "o.tsv"), "helper"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([name for name in os.listdir(tmp) if name.startswith("o6progs-")], [])
 
 class NotForThisTarget(unittest.TestCase):
     """2026-11-10: long_double_union_pun (`// targets: x86-m16 x86-m32 x86-m64`, its `.out` the x87 80-bit layout) read WRONG on the 6502 at O1/O2/Os
