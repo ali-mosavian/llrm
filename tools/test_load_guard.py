@@ -80,6 +80,16 @@ class Env:
         time.sleep(0.1)
         self.dir.cleanup()
 
+    def queued(self, job, seconds=60):
+        """Wait until the starter's line is in the prio file: ordering tests that sleep a fixed time between starts flip under host load 40 when a starter is slow to start."""
+        prio = os.path.join(self.slots, "prio")
+        def listed():
+            try:
+                return any(line.split()[2:3] == [str(job.pid)] for line in open(prio))
+            except OSError:
+                return False
+        self.assertTrue(until(listed, seconds), f"{job.pid} never queued")
+
     def decided(self, jobs, seconds=60):
         """Wait until every starter has refused (exited) or been admitted (its job record exists): serialized admission under host load 60 left a fixed 1.5 s window counting starters still queued as admitted (11 of 12 'running' for a cap of 5)."""
         records = os.path.join(self.slots, "jobs")
@@ -215,11 +225,15 @@ class Admission(Env, unittest.TestCase):
         """A starter waiting for load logged nothing: a session could not tell 'queued' from 'hung'."""
         self.set_load(30.0, 30.0)
         guard = self.start("true", LG_WAIT_LOG="0.3", LG_SETTLE="0")
-        time.sleep(1.0)
+        seen = []  # wait for two "waiting" lines before the load drops: start-up under host load 40 took over the fixed 1 s
+        reader = threading.Thread(target=lambda: [seen.append(line) for line in guard.stderr])
+        reader.start()
+        self.assertTrue(until(lambda: "".join(seen).count("waiting for load") >= 2, 30), "".join(seen))
         self.assertIsNone(guard.poll(), "it started under load")
         self.set_load(1.0, 1.0)
-        self.assertEqual(guard.wait(timeout=5), 0)
-        err = guard.communicate()[1]
+        self.assertEqual(guard.wait(timeout=15), 0)
+        reader.join(timeout=5)
+        err = "".join(seen)
         waits = re.findall(r"load_guard: \d\d:\d\dZ waiting for load \(1m 30.0, 5m 30.0, slots 0/3 busy\)", err)
         self.assertGreaterEqual(len(waits), 2, err)
         self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0, slots 5\)")
@@ -275,7 +289,7 @@ class SlotCount(Env, unittest.TestCase):
         self.assertEqual(self.admitted(15.0, 1), 1)  # widens to 5
         self.set_load(21.0, 21.0)
         late = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(5)]
-        time.sleep(1.5)
+        self.decided(late)
         self.assertEqual(sum(1 for job in late if job.poll() is None), 4, "21 must keep 5 slots (1 already running)")
 
     def test_a_fresh_start_at_21_has_three_slots(self):
@@ -535,7 +549,7 @@ class Order(Env, unittest.TestCase):
         jobs = []
         for tier in tiers:
             jobs.append(self.start("bash", "-c", f"echo {tier} >> {log}", LG_TIER=str(tier), LG_SETTLE="0", LG_POLL="0.05", **env))
-            time.sleep(0.3)
+            self.queued(jobs[-1])
         self.set_load(1.0, 1.0)
         for job in jobs:
             job.wait(timeout=15)
@@ -625,10 +639,11 @@ class Drain(Env, unittest.TestCase):
         self.set_load(30.0, 30.0)
         log = os.path.join(self.dir.name, "order")
         jobs = [self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05")]
+        self.queued(jobs[0])
         time.sleep(1.5)
         for _ in range(3):
             jobs.append(self.start("bash", "-c", f"echo 1 >> {log}", LG_TIER="1", LG_SETTLE="0", LG_POLL="0.05"))
-            time.sleep(0.2)
+            self.queued(jobs[-1])
         self.set_load(1.0, 1.0)
         for job in jobs:
             job.wait(timeout=15)
@@ -756,7 +771,7 @@ class Drain(Env, unittest.TestCase):
         jobs = []
         for tier in (3, 1, 2):
             jobs.append(self.start("bash", "-c", f"echo {tier} >> {log}", LG_TIER=str(tier), LG_SETTLE="0", LG_POLL="0.05"))
-            time.sleep(0.3)
+            self.queued(jobs[-1])
         self.set_load(16.0, 16.0)
         for job in jobs:
             job.wait(timeout=15)
