@@ -23,6 +23,7 @@
 //! # See also
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
+mod counts;
 mod family;
 mod m68020;
 mod m68030;
@@ -414,12 +415,27 @@ pub fn cost(
     )
 }
 
+pub use counts::DataRegisters;
+
 /// [`cost`] for any CPU of the family.
 pub fn cost_on(
     cpu: Cpu,
     text: &str,
     bytes: u32,
     taken: bool,
+) -> Result<Cost, String> {
+    cost_on_counted(cpu, text, bytes, taken, None)
+}
+
+/// [`cost_on`] with the places a shift by a register moves, when the trace
+/// knows them ([`DataRegisters::places_of`]): the 68000 and 68010 add two
+/// clocks a place and the cost is no longer a bound.
+pub fn cost_on_counted(
+    cpu: Cpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+    count: Option<u32>,
 ) -> Result<Cost, String> {
     let text = text.trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
@@ -455,6 +471,8 @@ pub fn cost_on(
         && matches!(cpu, Cpu::M68000 | Cpu::M68010)
         && places(&operands).is_none()
         && operands.len() == 2;
+    let counted = by_register && count.is_some();
+    let clocks = clocks + 2 * count.filter(|_| by_register).unwrap_or(0);
     let partial = if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
     } else if matches!(cpu, Cpu::M68020 | Cpu::M68030 | Cpu::M68040) {
@@ -464,7 +482,7 @@ pub fn cost_on(
         matches!(base, "mulu" | "muls" | "divu" | "divs") || m68020::partial(base)
     } else {
         matches!(base, "mulu" | "muls" | "divu" | "divs")
-            || by_register
+            || (by_register && !counted)
             || (set_on_condition(base) && cpu == Cpu::M68000)
     };
     Ok(Cost { clocks, partial })
