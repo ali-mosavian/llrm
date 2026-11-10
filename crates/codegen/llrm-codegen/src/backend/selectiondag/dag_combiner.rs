@@ -4174,6 +4174,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
+        // the multiply reads only the low half of `x`: an extension of a
+        // half-width value to `vt` is dead work (`ext.l` before `muls.w`)
+        let x = match self.dag.opcode(x) {
+            ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend if self.dag.value_type(self.dag.operand(x, 0)) == half.half => {
+                let source = self.dag.operand(x, 0);
+                self.dag.get_node(ISD::AnyExtend, vt, &[source])
+            }
+            _ => x,
+        };
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
         Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
     }

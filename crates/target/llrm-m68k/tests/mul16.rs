@@ -83,3 +83,16 @@ fn a_constant_operand_is_left_to_the_pins_folds() {
     assert!(!out.contains("mulu\t") && !out.contains("muls\t"), "{out}");
     assert!(out.contains("#15"), "the fold's constant 3 * 5 is added after the product:\n{out}");
 }
+
+/// `muls.w` reads the low half of both operands, so the `ext.l` that made an
+/// operand 32-bit first is dead: memory 68020 -O1 was 2 B larger than the long
+/// multiply (`ext.l %d0` kept, plus a copy of the value for the tied register).
+#[test]
+fn a_halfword_operand_is_not_extended_first() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+              define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, %x\n  ret i32 %m\n}";
+    for cpu in CPUS {
+        let out = asm(ir, cpu, Level::O1);
+        assert!(out.contains("muls\t") && !out.contains("ext.l"), "{cpu}:\n{out}");
+    }
+}
