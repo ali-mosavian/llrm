@@ -194,7 +194,8 @@ def test_the_callconv_c_fixtures_are_in_the_front_end_compile_set():
 
 
 def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
-    """The callconv harnesses include <stdio.h>: swept without `-I`, five files at two levels failed (10 failed compiles, one new kind) at 526f94a61."""
+    """The callconv harnesses include <stdio.h>: swept without `-I`, five files at two levels failed (10 failed compiles, one new kind) at 526f94a61. Since #8011 the
+    stand-in also needs the m16 row and Borland's line: `-m16` names no target to llrm-cc, and all 42 callconv jobs failed on the host default."""
     for crate, mode in (("a", 16), ("b", 32)):
         (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
         (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
@@ -205,7 +206,7 @@ def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
     bins = tmp_path / "bins"
     bins.mkdir()
     for tool in ("llrm-cc", "llrm-qb", "llrm-nib"):
-        (bins / tool).write_text('#!/bin/sh\ncase "$*" in *"-I /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
+        (bins / tool).write_text('#!/bin/sh\ncase "$LLRM_CC_TARGET $*" in x86_16*"-c "*"-isystem /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
         (bins / tool).chmod(0o755)
     failed = q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
     assert "harness.c" not in {program for program, _, _ in failed}, failed
@@ -295,3 +296,31 @@ def test_a_sweep_where_nothing_compiles_aborts_instead_of_printing_a_table(tmp_p
     with pytest.raises(q.NothingCompiled, match="0 of 1 compiles succeeded"):
         q.sweep(compiler, _qcport_tree(tmp_path), tmp_path, levels=("-O1",), jobs=1)
 
+
+
+def test_a_sweep_of_callconv_fixtures_where_no_c_job_compiles_aborts(tmp_path):
+    """42 of 42 callconv jobs failed on llrm-cc's host default and were reported as failures of the fixtures: none compiling is a wrong invocation."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    fixtures = tmp_path / "tests/fixtures/callconv/c"
+    fixtures.mkdir(parents=True)
+    (fixtures / "cfcallee.c").write_text("int f(void) { return 0; }\n")
+    (tmp_path / "tests/run/qb").mkdir(parents=True)
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    for tool in ("llrm-cc", "llrm-qb", "llrm-nib"):
+        (bins / tool).write_text("#!/bin/sh\necho 'llrm-cc: expected ; after top level declarator' >&2\nexit 1\n")
+        (bins / tool).chmod(0o755)
+    with pytest.raises(q.NothingCompiled, match="0 of 2 compiles succeeded"):
+        q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
+
+
+def test_the_header_mirror_follows_links_and_drops_the_dos_end_of_file_byte(tmp_path):
+    """qctc/inc keeps Borland's headers once, as links (`find -type f` saw none), and dos.h ends in 0x1A, which clang reads as a stray token: dbg and mdl_ai failed at every level."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "DOS.H").write_bytes(b"#define X 1\n\x1a")
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "DOS.H").symlink_to(tmp_path / "real" / "DOS.H")
+    mirrored = q.mirror_includes(tmp_path / "raw", tmp_path / "inc")
+    assert (mirrored / "dos.h").read_bytes() == b"#define X 1\n"
