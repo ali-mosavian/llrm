@@ -36,3 +36,26 @@ fn a_vector_copy_is_a_q_load_and_store() {
     let (loaded, stored) = (reg("ldr"), reg("str"));
     assert!(loaded.is_some() && loaded == stored, "{text}");
 }
+
+/// A copy loop whose store is 80 elements ahead of its load (loop-idiom leaves it alone) stayed
+/// 1920 scalar `ldrh`/`strh` iterations; the vectorizer makes it eight lanes per `ldr q`/`str q`.
+#[test]
+fn an_overlapping_copy_loop_runs_on_q_registers() {
+    let text = assembly(
+        "define void @f(ptr noalias %a) {\n\
+         entry:\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n\
+         \x20 %s = getelementptr inbounds i16, ptr %a, i64 %i\n\
+         \x20 %v = load i16, ptr %s, align 2\n\
+         \x20 %j = add nuw nsw i64 %i, 80\n\
+         \x20 %d = getelementptr inbounds i16, ptr %a, i64 %j\n\
+         \x20 store i16 %v, ptr %d, align 2\n\
+         \x20 %next = add nuw nsw i64 %i, 1\n\
+         \x20 %done = icmp eq i64 %next, 1920\n\
+         \x20 br i1 %done, label %exit, label %loop\n\
+         exit:\n  ret void\n}\n",
+    );
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+    assert!(!text.contains("ldrh"), "{text}");
+}
