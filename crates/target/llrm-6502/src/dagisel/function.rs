@@ -12,12 +12,14 @@
 //! calls) needs none. Reason: frame objects wait for the 6502 machine function.
 //! Exit: M4.
 
+use llrm_support::hash::HashMap;
+
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::context::ConstantKind;
@@ -25,7 +27,6 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_support::hash::HashMap;
 
 use super::call::{CALL, MosCalling, RET_GLUE};
 use super::hooks::Cpu;
@@ -111,10 +112,7 @@ impl Selection {
             .iter()
             .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
             .filter(|(one, node)| {
-                matches!(
-                    one.dag.nodes()[*node as usize].opcode,
-                    ISD::Machine(code) if code as u16 == op::MUL32
-                )
+                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
             })
             .count()
     }

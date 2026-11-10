@@ -10,13 +10,12 @@
 //! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
 //! `visit_mul`.
 
+use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
-
-use super::lowering::mosisd;
 
 /// `sized`: the function is tuned for size (`optsize`, `minsize`).
 /// `synthesize`: the module-level re-selection of `mulimage` is running, which
@@ -137,10 +136,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(
-            op,
-            ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC
-        )
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -193,10 +189,7 @@ fn range_on_low_byte(
     let (sum, bound) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(sum) != EVT::I16
         || dag.opcode(sum) != ISD::Add
-        || !matches!(
-            dag.node(dag.operand(node, 2)).data,
-            NodeData::CondCode(CondCode::SetULt)
-        )
+        || !matches!(dag.node(dag.operand(node, 2)).data, NodeData::CondCode(CondCode::SetULt))
     {
         return None;
     }
@@ -308,9 +301,9 @@ fn low_bit_in_carry(
     Some(SDValue { node: sum.node, res: 0 })
 }
 
-/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes:
-/// the borrow of `a - b`, subtracted from `x` by a subtract with borrow. A
-/// split 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
+/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
+/// borrow of `a - b`, subtracted from `x` by a subtract with borrow. A split
+/// 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
 /// compare was a chain of its own and its result a byte.
 ///
 /// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
@@ -333,15 +326,14 @@ fn borrow_of_ult(
             .into_iter()
             .map(|(x, e)| (dag.operand(node, x), dag.operand(node, e)))
             .find(|&(_, e)| dag.opcode(e) == ISD::SignExtend)?,
-        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => (dag.operand(node, 0), dag.operand(node, 1)),
+        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => {
+            (dag.operand(node, 0), dag.operand(node, 1))
+        }
         _ => return None,
     };
     let compare = dag.operand(extended, 0);
     if dag.opcode(compare) != ISD::SetCC
-        || !matches!(
-            dag.node(dag.operand(compare, 2)).data,
-            NodeData::CondCode(CondCode::SetULt)
-        )
+        || !matches!(dag.node(dag.operand(compare, 2)).data, NodeData::CondCode(CondCode::SetULt))
     {
         return None;
     }
@@ -512,7 +504,6 @@ fn carry_in(
     SDValue { node: sum.node, res: 1 }
 }
 
-/// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
 /// The signed binary digits of an odd `m` with no two neighbours set (the
 /// non-adjacent form), lowest first: `(exponent, +1 or -1)`.
 fn non_adjacent_form(mut m: u128) -> Vec<(u32, bool)> {
@@ -590,6 +581,7 @@ fn synthesized_mul(
     Some(result)
 }
 
+/// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
 /// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
 /// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative
 /// `c`. Every step of a wide shift is a pass over each byte of the word, so

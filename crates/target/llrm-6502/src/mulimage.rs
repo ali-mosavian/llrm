@@ -31,8 +31,7 @@ pub fn library_bytes(routine: &str) -> u32 {
         }
         inside &= !word.starts_with(".endmacro");
     }
-    let priced =
-        |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
+    let priced = |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
     fn code<'a>(routine: &str) -> &'a str {
         let marker = format!("\n{routine}:");
         let start = crate::RUNTIME.find(&marker).unwrap_or_else(|| panic!("no `{routine}` in mos_rt.s")) + 1;
@@ -42,15 +41,10 @@ pub fn library_bytes(routine: &str) -> u32 {
     }
     let text = code(routine);
     let own = priced(text);
-    let tail = text
-        .lines()
-        .map(|line| line.split(';').next().unwrap_or("").trim())
-        .filter(|line| !line.is_empty())
-        .next_back();
+    let tail = text.lines().map(|line| line.split(';').next().unwrap_or("").trim()).filter(|line| !line.is_empty()).next_back();
     match tail.and_then(|line| line.strip_prefix("jmp ")) {
         Some(label) if !label.starts_with('@') => {
-            let from =
-                crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
+            let from = crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
             let body = &crate::RUNTIME[from..];
             let end = body.find("\n  rts").unwrap_or_else(|| panic!("`{label}` has no rts")) + "\n  rts".len();
             own + priced(&body[..end])
