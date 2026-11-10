@@ -3,8 +3,10 @@
 # FILE defaults to tests/run/c/*.c. Prints the counts; exits 1 on a DIFF, a STATUS (one side refused) or an
 # empty compared set (every program refused, or none given): that is no measurement, not a pass.
 set -u
+same=; [ "${1:-}" = --same-ok ] && { same=--same-ok; shift; }  # a head that changes only the frontend
 base=${1:?base llrm-cc}; new=${2:?new llrm-cc}; target=${3:?target}; level=${4:?level}; shift 4
 root=$(cd "$(dirname "$0")/.." && pwd)
+python3 "$root/tools/llrmbin.py" sides "$base" "$new" $same --target "$target" || exit 2  # prints cc + llc md5 per side; refuses one llc
 [ $# -gt 0 ] || set -- "$root"/tests/run/c/*.c
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 same=0; diff=0; refused=0; status=0
