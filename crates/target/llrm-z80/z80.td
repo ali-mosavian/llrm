@@ -55,6 +55,14 @@ def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCi
 def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
 // The signed order of two words: the carry holds the sign of a - b corrected for overflow.
 def Z80cmps : SDNode<"Z80ISD::CMPS", SDTZ80Cmp>;
+
+// A word op with its carry out in the flags: (sum, flags), and with the carry in (the flags before it).
+def SDTZ80Alf : SDTypeProfile<2, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>, SDTCisVT<3, i16>]>;
+def SDTZ80Alfc : SDTypeProfile<2, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i8>]>;
+def Z80addf : SDNode<"Z80ISD::ADDF", SDTZ80Alf, [SDNPCommutative]>;
+def Z80subf : SDNode<"Z80ISD::SUBF", SDTZ80Alf>;
+def Z80adcf : SDNode<"Z80ISD::ADCF", SDTZ80Alfc, [SDNPCommutative]>;
+def Z80sbcf : SDNode<"Z80ISD::SBCF", SDTZ80Alfc>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
 def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -122,6 +130,15 @@ let Defs = [F], Constraints = "$d = $a" in {
 // add hl,rr: the one 16-bit add. inc rr / dec rr leave the flags alone.
 let Defs = [F], Constraints = "$d = $a", isCommutable = 1 in
   def ADD16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "add hl, $b", [(set i16:$d, (add i16:$a, i16:$b))]>;
+// The same with the flags a value: the carry of a long's words (`UADDO`, `UADDO_CARRY`, `USUBO`, `USUBO_CARRY` at a word).
+let Constraints = "$d = $a" in {
+  let isCommutable = 1 in {
+    def ADD16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "add hl, $b", [(set i16:$d, i8:$f, (Z80addf i16:$a, i16:$b))]>;
+    def ADC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "adc hl, $b", [(set i16:$d, i8:$f, (Z80adcf i16:$a, i16:$b, i8:$c))]>;
+  }
+  def SUB16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "or a; sbc hl, $b", [(set i16:$d, i8:$f, (Z80subf i16:$a, i16:$b))]>;
+  def SBC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "sbc hl, $b", [(set i16:$d, i8:$f, (Z80sbcf i16:$a, i16:$b, i8:$c))]>;
+}
 let Constraints = "$d = $a" in {
   def INC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "inc $d", [(set i16:$d, (add i16:$a, (i16 1)))]>;
   def DEC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "dec $d", [(set i16:$d, (add i16:$a, (i16 -1)))]>;
@@ -170,6 +187,7 @@ let Defs = [F], Uses = [F], Constraints = "$d = $a" in {
   def ADC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "adc hl, $b", []>;
   def SBC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sbc hl, $b", []>;
 }
+
 
 // Shifts by a constant: one SLA/SRL/SRA (or add hl,hl, srl h; rr l) per bit, expanded when emitted.
 multiclass Shift<string n, RegisterClass rc, ValueType vt> {
