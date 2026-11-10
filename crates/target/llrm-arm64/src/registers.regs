@@ -4,6 +4,8 @@
 # x29 is the frame register and sp the stack: Darwin AAPCS64 keeps a frame pointer.
 #
 # name bits root lane classes dwarf codeview
+# @ties: a tied operand is the one an instruction's row marks `^`, not every Binary's first source.
+@ties rows
 @scratch x9 x10 x11 x12 x13 x14 x15
 # Integer registers, 64-bit roots then their 32-bit views.
 x0   64 x0 0 gpr,int,base,index 0 -

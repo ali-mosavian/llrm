@@ -30,6 +30,7 @@ if [ "$1" = --selftest ]; then
   echo "SELFTEST ok"; exit 0
 fi
 OUT=$1; A=$2; B=$3; shift 3
+python3 "$here/llrmbin.py" sides "$A/llrm-cc" "$B/llrm-cc" $([ "${CMP_AB_SAME_OK:-}" ] && echo --same-ok) || exit 2  # cc + llc md5 per side; one llc reads as no difference
 t=$(mktemp -d); trap 'rm -rf $t' EXIT; cd $t
 for n in 0 16 32 48; do printf '.text\n.p2align 6\n.space %d,0x90\n' $n > pad$n.s; gcc -c pad$n.s -o pad$n.o 2>/dev/null; done
 echo "# $(date -u +%FT%TZ) A=$A($(md5sum <$A/llrm-cc|cut -c1-8)) B=$B($(md5sum <$B/llrm-cc|cut -c1-8)) load $(cut -d' ' -f1-3 /proc/loadavg)" > $OUT

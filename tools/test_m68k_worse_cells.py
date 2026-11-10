@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, missing_levels, one_sided, single_input, skipped, verdict, verdicts  # noqa: E402
+from m68k_worse_cells import count, missing, missing_levels, one_sided, report, single_input, skipped, verdict, verdicts  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -16,6 +16,22 @@ def tsv(*rows):
 
 def cell(target, prog, level, ours, gcc, clang):
     return [(target, prog, level, name, b, k, 1, "") for name, (b, k) in (("ours", ours), ("gcc", gcc), ("clang", clang))]
+
+
+class HeaderRates(unittest.TestCase):
+    def test_a_flat_two_bytes_per_clock_header_is_refused(self):
+        stale = "# m68k matrix; byte_rate: 68000/68020/68040/68060 2 B per clk saved (O2: 1 clk = 2 B)\n"
+        rows = cell("m68k-68000", "partition", "O2", (98, 1264), (92, 1226), (150, 2104))
+        body = stale + COLS + "".join("\t".join(map(str, r)) + "\n" for r in rows)
+        with self.assertRaises(SystemExit) as why:
+            count(io.StringIO(body))
+        self.assertIn("timings.times", str(why.exception))
+
+    def test_the_committed_rates_are_per_cpu(self):
+        from m68k_worse_cells import committed_rates
+
+        rates = committed_rates()
+        self.assertEqual((rates["68000"], round(rates["68020"], 2), rates["68040"]), (0.5, 1.33, 3.2))
 
 
 class WorseCells(unittest.TestCase):
@@ -104,6 +120,28 @@ class WorseCells(unittest.TestCase):
         rows += [("m68k-68000", "clang_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "clang_only", "Os", "clang", 20, 100, 1, "")]
         self.assertEqual(one_sided(tsv(*rows)), [("m68k-68000", "gcc_only", "Os", "clang"), ("m68k-68000", "clang_only", "Os", "gcc")])
 
+
+class Report(unittest.TestCase):
+    def test_a_strict_o1_cell_shows_both_axes_not_one_mixed_number(self):
+        """crc16 68000 O1 printed "+52.0 B WORSE": 10 B smaller than gcc, 52 clk slower. The number was the clock excess labelled bytes."""
+        rows = cell("m68k-68000", "crc16", "O1", (74, 4252), (84, 4200), (152, 8134))
+        (line,) = report(tsv(*rows))
+        self.assertIn("dB=-10 B", line)
+        self.assertIn("dT=+52 clk", line)
+        self.assertNotIn("+52.0 B", line)
+
+    def test_an_o2_cell_shows_the_net_and_the_rate_it_is_made_at(self):
+        rows = cell("m68k-68000", "partition", "O2", (98, 1264), (92, 1226), (150, 2104))
+        (line,) = report(tsv(*rows))
+        self.assertIn("dB=+6 B dT=+38 clk", line)
+        self.assertIn("net=+25.0 B at 0.5 B/clk", line)
+
+    def test_an_os_cell_without_clocks_has_no_dt(self):
+        rows = cell("m68k-68000", "fib", "Os", (22, None), (20, None), (24, None))
+        (line,) = report(tsv(*[[*r[:5], "", *r[6:]] for r in rows]))
+        self.assertIn("dB=+2 B dT=n/a", line)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -135,7 +173,10 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(self.judge("O1", (90, 210), (80, 200), (120, 100)), "WORSE")
 
     def test_other_levels_have_no_virtual_exception(self):
-        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "ok")  # 20 B over, 50 clk * 0.5 saved
+        # ahead of gcc by the allowance (20 B over, 50 clk * 0.5 = 25 B allowed) and of clang (20 B under, 10 clk slower = 5 B)
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 160)), "ok")
+        # the same cell against a faster clang: 20 B under but 50 clk slower is 25 B at 0.5 B per clk, 5 B past the bar
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "WORSE")
         self.assertEqual(self.judge("Os", (100, 100), (80, 200), (120, 100)), "WORSE")
 
     def test_a_virtual_cell_is_not_counted_worse(self):

@@ -11,6 +11,7 @@ A cell with only one of the two external columns is named, and refused unless --
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
 O1 cells follow the VIRTUAL-OK rule of tools/virtual_ok.py (verdict()).
 Usage: m68k_worse_cells.py m68k.tsv [-v] [--allow-one-sided]
+-v lists each worse cell with both axes (dB, dT) and, at O2/O3, the net; the legend says how each level is judged.
 """
 import os
 import re
@@ -20,6 +21,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from virtual_ok import virtual_ok  # noqa: E402
 
 RATES = re.compile(r"byte_rate: (.*?) B per clk")
+TIMINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates", "target", "llrm-m68k", "src", "timings.times")
+
+
+def committed_rates(path: str = TIMINGS) -> dict[str, float]:
+    """Bytes per clock saved of each CPU, from the committed table (`cache_line` over `line_fill_clocks`)."""
+    rows: dict[str, list[str]] = {}
+    for line in open(path):
+        words = line.split()
+        if words and words[0] in ("march", "cache_line", "line_fill_clocks"):
+            rows[words[0]] = words[1:]
+    return {"68" + cpu[-3:]: int(line) / int(fill) for cpu, line, fill in zip(rows["march"], rows["cache_line"], rows["line_fill_clocks"])}
+
+
+def rate_text(path: str = TIMINGS) -> str:
+    """The `byte_rate:` text of a table header, read from the committed `timings.times`, never typed: `68000/010 0.5, 68020 1.33, 030/040/060
+    3.2`. Every table writer prints this, and `rates` reads it back."""
+    groups: list[tuple[list[str], float]] = []
+    for cpu, value in committed_rates(path).items():
+        value = round(value, 2)
+        if groups and groups[-1][1] == value:
+            groups[-1][0].append(cpu)
+        else:
+            groups.append(([cpu], value))
+    return ", ".join("/".join([names[0], *(name[2:] for name in names[1:])]) + f" {value:g}" for names, value in groups)
 
 
 def rates(header: str) -> dict[str, float]:
@@ -31,6 +56,11 @@ def rates(header: str) -> dict[str, float]:
         names, value = part.split()
         for name in names.split("/"):
             table[name if name.startswith("68") else "68" + name] = float(value)
+    # a header that states a rate other than the committed one flips every O2/O3 verdict (11-09: a flat "2 B per clk" read 68000 partition O2 as +82 B, +25 B at the committed 0.5)
+    committed = committed_rates()
+    wrong = {cpu: (value, committed[cpu]) for cpu, value in table.items() if cpu in committed and abs(value - committed[cpu]) > 0.01 * committed[cpu]}
+    if wrong:
+        raise SystemExit(f"byte_rate in the header differs from timings.times (stated, committed): {wrong}")
     return table
 
 
@@ -155,6 +185,40 @@ def one_sided(lines) -> list[tuple[str, str, str, str]]:
     return found
 
 
+LEGEND = (
+    "# dB, dT: ours minus the best external on that axis (bytes, clocks); negative is better. Judged per level:",
+    "# O1: strict per axis (worse on dB or dT), VIRTUAL-OK rule of tools/virtual_ok.py",
+    "# Os: bytes (dB) only",
+    "# O2, O3: net = excess bytes - byte_rate * clocks saved, against the external it is worst on; byte_rate per CPU from timings.times",
+)
+
+
+def axes(ours, refs: dict) -> tuple[int, int | None]:
+    """(dB, dT): ours less the best bytes among the references, ours less the best clocks (None when a side has none)."""
+    clocks = [ref[1] for ref in refs.values() if ref[1] is not None]
+    return ours[0] - min(ref[0] for ref in refs.values()), (None if ours[1] is None or not clocks else ours[1] - min(clocks))
+
+
+def report(lines) -> list[str]:
+    """One line per cell that is not ok: both axes and, at O2 and O3, the net the verdict is made on. The net is bytes
+    and the O1 excess is whichever axis is worse, so a bare number would mix bytes and clocks (crc16 O1 read "+52 B" for
+    10 B better and 52 clk worse)."""
+    lines = list(lines)
+    table, seen, _ = _seen(lines)
+    found = []
+    for target, prog, level, v, e in sorted(verdicts(lines), key=lambda c: -c[4]):
+        if v == "ok":
+            continue
+        by = seen[(target, prog, level)]
+        refs = {name: by[name] for name in ("gcc", "clang") if name in by}
+        d_bytes, d_clocks = axes(by["ours"], refs)
+        text = f"{target} {prog} {level} {v} dB={d_bytes:+d} B dT=" + ("n/a" if d_clocks is None else f"{d_clocks:+d} clk")
+        if level in ("O2", "O3"):
+            text += f" net={e:+.1f} B at {table[target.split('-')[1]]:g} B/clk"
+        found.append(text)
+    return found
+
+
 def count(lines) -> tuple[int, int]:
     results = list(verdicts(lines))
     return sum(1 for _, _, _, v, _ in results if v == "WORSE"), len(results)
@@ -162,9 +226,8 @@ def count(lines) -> tuple[int, int]:
 
 if __name__ == "__main__":
     if "-v" in sys.argv:
-        for target, prog, level, v, e in sorted(verdicts(open(sys.argv[1])), key=lambda c: -c[4]):
-            if v != "ok":
-                print(f"{target} {prog} {level} +{e:.1f} B {v}")
+        print("\n".join(LEGEND))
+        print("\n".join(report(open(sys.argv[1]))))
     lost = missing(open(sys.argv[1]))
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))

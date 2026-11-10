@@ -8,8 +8,8 @@ use std::process::Command;
 /// definition of _sf_clz64").
 #[test]
 fn an_internal_function_is_not_exported_by_the_driver() {
-    let dir = std::env::temp_dir().join("llrm-internal-label-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,

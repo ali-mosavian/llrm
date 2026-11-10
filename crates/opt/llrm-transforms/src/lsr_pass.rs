@@ -436,9 +436,8 @@ pub fn reduced_held(
     let mut mark = function.mark();
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
-        headers.reverse();
-        headers
+        // The order the code generator's legacy loop pass manager runs LSR in.
+        env.loops.get_loops_in_legacy_visit_order().iter().map(|one| one.get_header()).collect()
     };
     for header in headers {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);

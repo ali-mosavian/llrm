@@ -78,7 +78,7 @@ def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int) -> dict[
     result = {}
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(jobs) as pool:
         for target in targets:
-            applicable = [p for p in programs if ct.applies(target, p.read_text())]
+            applicable = [p for p in programs if ct.applies(target, p.read_text(), p)]
             rows = list(pool.map(lambda p: (p.stem, *compile_one(cc, target, p, Path(tmp))), applicable))
             result[target] = {
                 "programs": len(applicable),
