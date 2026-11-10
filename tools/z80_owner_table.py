@@ -21,6 +21,9 @@ LEVELS = [("1", "O1"), ("s", "Os"), ("z", "Oz"), ("2", "O2"), ("3", "O3")]
 STRICT = {"O1", "Os", "Oz"}
 RATE = 3  # T-states per byte at O2/O3
 UNRANKED = "UNRANKED (double: ours f64 vs SDCC f32)"
+# SDCC touches only the bytes of a volatile bit-field; the pin keeps the container's width (a volatile load is never
+# narrowed), so the two programs make different accesses to the object (ruling 2026-11-10, volatile_bitfield).
+NOT_LIKE = "NOT-LIKE-FOR-LIKE (volatile bit-field access width)"
 
 
 def read_pairs(path):
@@ -37,7 +40,14 @@ def is_double(source):
     return re.search(r"\bdouble\b", source) is not None
 
 
-def verdict(level, ours, sdcc, double=False):
+def is_volatile_bitfield(source):
+    """A `volatile` object with a bit-field member: a declaration `type name : width;` after a `{` or `;`."""
+    return re.search(r"\bvolatile\b", source) is not None and re.search(
+        r"[{;]\s*(?:(?:unsigned|signed|const|volatile|int|long|short|char|_Bool)\s+)+\w+\s*:\s*\d+\s*;", source
+    ) is not None
+
+
+def verdict(level, ours, sdcc, double=False, volatile_bitfield=False):
     """The cell's verdict. `ours` is (B, T) or None; `sdcc` {variant: (B, T)}."""
     if ours is None:
         return "UNMEASURED"
@@ -45,6 +55,8 @@ def verdict(level, ours, sdcc, double=False):
         return "NO-SDCC"
     if double:
         return UNRANKED
+    if volatile_bitfield:
+        return NOT_LIKE
     best_b = min(b for b, _ in sdcc.values())
     best_t = min(t for _, t in sdcc.values())
     d_b, d_t = ours[0] - best_b, ours[1] - best_t
@@ -106,7 +118,7 @@ def rows(ours, sdcc, sources):
                     REFUSED.append((prog, name, k, why))
                     del s[k]
             double = is_double(sources.get(prog, ""))
-            v = verdict(name, o, s, double)
+            v = verdict(name, o, s, double, is_volatile_bitfield(sources.get(prog, "")))
             if o is None or not s:
                 out.append((prog, name, o[0] if o else "", o[1] if o else "", "", "", "", "", "", "", v, "", len(s)))
                 continue
