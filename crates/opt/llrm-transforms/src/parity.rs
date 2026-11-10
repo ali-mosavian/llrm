@@ -339,7 +339,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "rotate-tre@1677",
         Late,
         "none (DEVIATE ROT-TRE)",
-        "the pin has no pass here; the translated LoopSimplify, LCSSA and LoopRotate run only where the target's table asks (Tuning::rotate_late_tre_loops), on the loop the TRE before it made; exit: 2026-11-30, owner x86-m16-b",
+        "the pin has no pass here; the translated LoopSimplify, LCSSA and LoopRotate run only where the target's table asks (Tuning::rotate_late_tre_loops), on the loop the TRE before it made; criterion: the entry block of a tail recursion holds the guard where the table asks and not under the pin's table (pipeline_tests); exit: 2026-11-30, owner x86-m16-b",
     ),
     partial(
         "simplifycfg@1682",
