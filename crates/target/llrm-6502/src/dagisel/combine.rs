@@ -160,9 +160,10 @@ impl CombineHooks for MosCombines {
         match dag.opcode(node) {
             ISD::Add => borrow_of_ult(dag, node)
                 .or_else(|| widened_add_with_carry(dag, node))
+                .or_else(|| word_with_loaded_byte(dag, node))
                 .or_else(|| funnel_by_one(dag, node))
                 .or_else(|| low_bit_in_carry(dag, node)),
-            ISD::Sub => borrow_of_ult(dag, node),
+            ISD::Sub => borrow_of_ult(dag, node).or_else(|| word_with_loaded_byte(dag, node)),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
@@ -431,6 +432,70 @@ fn is_any_extended_byte(
         }
         _ => false,
     }
+}
+
+/// `x + zext(*p)` and `x - zext(*p)` in a word, the byte loaded by nothing else:
+/// the low bytes add or subtract with the load as the operand, the high byte
+/// takes the carry (`adc #0`), as the pin's legalizer expands the word of an
+/// 8-bit target (`ExpandIntRes_ADDSUB`,
+/// [LegalizeIntegerTypes.cpp#L3725](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3725),
+/// the operand's half a zero). Left a word op, the byte was loaded into a cell
+/// for the word's second operand (`a - *p`: `lda (p); sta t; sec; lda a; sbc t`
+/// where `sec; lda a; sbc (p)` is the byte op: 17 B, 13 B).
+///
+/// DEVIATE 6502-ZBYTE: the word is legal here (a pair of byte cells), so the
+/// pin's legalizer never splits it. An address (`p + zext(*q)` read by a load or
+/// a store) stays a word add, which `MOSIdx` matches as `(p),y`. Owner:
+/// llrm-6502-a. Exit: 2026-12-01, when the word add and subtract expand as the
+/// pin's do.
+fn word_with_loaded_byte(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let sub = dag.opcode(node) == ISD::Sub;
+    if dag.value_type(node) != EVT::I16 || !matches!(dag.opcode(node), ISD::Add | ISD::Sub) {
+        return None;
+    }
+    let loaded = |dag: &SelectionDAG, term: SDValue| {
+        term.res == 0
+            && dag.opcode(term) == ISD::Load
+            && dag.users(term).take(2).count() == 1
+            && matches!(
+                dag.node(term).data,
+                NodeData::Mem(info) if info.ext == Some(LoadExt::ZExtLoad) && info.mem_vt == EVT::I8
+            )
+    };
+    let (x, b) = match (dag.operand(node, 0), dag.operand(node, 1)) {
+        (x, b) if loaded(dag, b) => (x, b),
+        (b, x) if !sub && loaded(dag, b) => (x, b),
+        _ => return None,
+    };
+    // `p + zext(*q)` that is a pointer stays a word: `(p),y` matches it
+    let is_address = |dag: &SelectionDAG, user: u32| {
+        let user = SDValue { node: user, res: 0 };
+        match dag.opcode(user) {
+            ISD::Load => dag.operand(user, 1) == node,
+            ISD::Store => dag.operand(user, 2) == node,
+            _ => false,
+        }
+    };
+    if dag.users(node).any(|user| is_address(dag, user)) {
+        return None;
+    }
+    let eight = dag.get_constant(8, EVT::I16);
+    let high = dag.get_node(ISD::Srl, EVT::I16, &[x, eight]);
+    let (x_low, x_high) = (dag.get_node(ISD::Truncate, EVT::I8, &[x]), dag.get_node(ISD::Truncate, EVT::I8, &[high]));
+    let low_byte = dag.get_node(ISD::Truncate, EVT::I8, &[b]);
+    let zero = dag.get_constant(0, EVT::I8);
+    let (first, next) = if sub { (ISD::USubO, ISD::USubOCarry) } else { (ISD::UAddO, ISD::UAddOCarry) };
+    let low = dag.get_node_multi(first, &[EVT::I8, EVT::I1], &[x_low, low_byte]);
+    let carry = SDValue { node: low.node, res: 1 };
+    let high = dag.get_node_multi(next, &[EVT::I8, EVT::I1], &[x_high, zero, carry]);
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I16,
+        &[SDValue { node: low.node, res: 0 }, SDValue { node: high.node, res: 0 }],
+    ))
 }
 
 /// One half of a `BuildPair`: `trunc` of it is the low piece, and `srl` of it

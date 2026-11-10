@@ -20,6 +20,9 @@ const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a
     define i16 @addw(ptr %p, i16 %x) {\n  %q = getelementptr i16, ptr %p, i16 1\n  %v = load i16, ptr %q, align 1\n  %r = add i16 %x, %v\n  ret i16 %r\n}\n\
     define i16 @subw(ptr %p, i16 %x) {\n  %v = load i16, ptr %p, align 1\n  %r = sub i16 %x, %v\n  ret i16 %r\n}\n\
     define i16 @addz(ptr %p, i16 %x) {\n  %b = load i8, ptr %p\n  %v = zext i8 %b to i16\n  %r = add i16 %x, %v\n  ret i16 %r\n}\n\
+    define i16 @subz(ptr %p, i16 %x) {\n  %b = load i8, ptr %p\n  %v = zext i8 %b to i16\n  %r = sub i16 %x, %v\n  ret i16 %r\n}\n\
+    define i16 @diffz(ptr %p, ptr %q) {\n  %a = load i8, ptr %p\n  %b = load i8, ptr %q\n  %za = zext i8 %a to i16\n  %zb = zext i8 %b to i16\n  %r = sub i16 %za, %zb\n  ret i16 %r\n}\n\
+    define i8 @pick(ptr %p, ptr %q) {\n  %b = load i8, ptr %q\n  %v = zext i8 %b to i16\n  %a = ptrtoint ptr %p to i16\n  %s = add i16 %a, %v\n  %t = inttoptr i16 %s to ptr\n  %r = load i8, ptr %t\n  ret i8 %r\n}\n\
     define i16 @sum32(ptr %p, i16 %unused) {\n  %q = getelementptr i8, ptr %p, i16 4\n  %r = getelementptr i8, ptr %p, i16 8\n  %a = load i32, ptr %q, align 1\n  %b = load i32, ptr %r, align 1\n  %s = add i32 %a, %b\n  %h = lshr i32 %s, 16\n  %t = trunc i32 %h to i16\n  ret i16 %t\n}\n\
     define i8 @addi(ptr %p, i8 %i, i8 %x) {\n  %z = zext i8 %i to i16\n  %q = getelementptr i8, ptr %p, i16 %z\n  %v = load i8, ptr %q\n  %r = add i8 %x, %v\n  ret i8 %r\n}\n\
     @g = global i32 0\n\
@@ -262,4 +265,36 @@ fn an_or_or_xor_of_a_zero_accumulator_through_a_pointer_is_the_load() {
     let mut asm = Asm::parse(live);
     drop_known_loads(&mut asm);
     assert_eq!(asm.text(), live, "a is not zero");
+}
+
+/// A word op whose second operand is a zero-extended loaded byte runs on the low
+/// bytes with the load as the operand and `#0` for the high byte: `a - *p` was
+/// `lda (p); sta t; sec; lda a; sbc t; ...` (17 B), `*p - *q` (scmp's final
+/// subtract) 19 B, 13 B now (2026-11-10).
+#[test]
+fn a_zero_extended_loaded_byte_is_the_operand_of_a_word_subtract() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let sub = text(cpu, "subz");
+        assert!(sub.contains("  sbc (rc2)"), "{cpu:?} subz:\n{sub}");
+        assert!(!sub.contains("lda (rc2)"), "{cpu:?} subz loads the byte first:\n{sub}");
+        let diff = text(cpu, "diffz");
+        assert!(diff.contains("  sbc (rc4)"), "{cpu:?} diffz:\n{diff}");
+        assert!(diff.matches("sta rc").count() == 0, "{cpu:?} diffz keeps a copy of a byte:\n{diff}");
+        // `buf[0]` is 5: a word minus it borrows through both bytes
+        for x in [0u16, 5, 255, 256, 0xFFFF] {
+            let want = x.wrapping_sub(5);
+            assert_eq!(run_word(cpu, "subz", x, false), i32::from(want as u8), "{cpu:?} {x} - 5, low");
+            assert_eq!(run_word(cpu, "subz", x, true), i32::from((want >> 8) as u8), "{cpu:?} {x} - 5, high");
+        }
+    }
+}
+
+/// The word is an address: `p + zext(*q)` read by a load stays the word add that
+/// `(p),y` takes, not a byte add and a carry.
+#[test]
+fn a_zero_extended_loaded_byte_added_to_a_pointer_stays_an_index() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let text = text(cpu, "pick");
+        assert!(!text.contains("adc #0"), "{cpu:?} pick splits the pointer add:\n{text}");
+    }
 }
