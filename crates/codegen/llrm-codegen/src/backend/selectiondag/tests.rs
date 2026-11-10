@@ -15,6 +15,7 @@ fn arg(
 mod abs;
 mod action_table;
 mod add_simplify;
+mod setcc_carry_fold;
 mod and_fold;
 mod and_simplify;
 mod assert_ext;

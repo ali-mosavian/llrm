@@ -62,6 +62,44 @@ fn a_store_before_a_loop_is_dropped_only_when_the_loop_never_reads_it() {
     assert_eq!(a.text(), read);
 }
 
+/// `float_conversions_loop` (+#8590) kept `ldy #0; sty rc10` after a call: nothing read `rc10` before the
+/// epilogue's restore, and a call keeps the callee-saved cells, so the store is dead (4 B with its load).
+#[test]
+fn a_store_to_a_callee_saved_cell_is_dropped_when_only_the_restore_follows() {
+    let mut a = asm("  sty rc10\n  jsr f\n  jsr g\n  pla\n  sta rc10\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  jsr f\n  jsr g\n  pla\n  sta rc10\n  rts\n");
+}
+
+/// A read after the call, a return without the restore, and a caller-saved cell across a call (the callee may
+/// read it as an argument) all keep the store.
+#[test]
+fn a_store_across_a_call_stays_when_a_read_or_the_return_follows() {
+    for text in [
+        "  sty rc10\n  jsr f\n  lda rc10\n  rts\n",
+        "  sty rc10\n  jsr f\n  rts\n",
+        "  sta rc2\n  jsr f\n  pla\n  rts\n",
+        // a call through a pointer: the `rts` jumps to the address pushed, and the callee reads rc2
+        "  sta rc2\n  lda t\n  pha\n  lda t+1\n  pha\n  rts\n",
+    ] {
+        let mut a = asm(text, &[]);
+        drop_dead_stores(&mut a);
+        assert_eq!(a.text(), text);
+    }
+}
+
+/// The 65C02 stores a zero with `stz`: `float_conversions_loop` kept a `stz rc10` after the call that only the
+/// restore followed (65C02-FLOATCONV-8590), where the 6502's `ldy #0; sty rc10` was dropped. Every store op is a store.
+#[test]
+fn a_dead_stz_goes_like_a_dead_sta() {
+    let mut a = asm("  stz rc10\n  jsr f\n  pla\n  sta rc10\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  jsr f\n  pla\n  sta rc10\n  rts\n");
+    let mut a = asm("  stz rc2\n  jsr f\n  rts\n", &[]);
+    drop_dead_stores(&mut a);
+    assert_eq!(a.text(), "  stz rc2\n  jsr f\n  rts\n");
+}
+
 /// `sta rc3; lda rc2; ldx rc3` went through memory to reach `x`.
 #[test]
 fn a_byte_stored_and_loaded_into_x_is_transferred() {

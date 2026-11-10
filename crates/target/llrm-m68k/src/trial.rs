@@ -95,6 +95,34 @@ fn relaxed_sizes(
     }
 }
 
+/// The clocks of the runtime routine `inst` calls, which the call instruction
+/// does not show ([`crate::routine`]).
+fn callee_clocks(
+    inst: &mc::Inst,
+    cpu: Cpu,
+    hoisted: &[llrm_lir::registers::RegId],
+) -> u32 {
+    let direct = inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
+    // a call through the register `lea __mulsi3, An` set (the call-target hoist)
+    let through = inst.opcode == "CALLj"
+        && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Reg(reg) if hoisted.contains(reg)));
+    if inst.opcode.starts_with("CALL") && (direct || through) { crate::routine::mulsi3_floor(cpu) } else { 0 }
+}
+
+/// The registers `lea __mulsi3, An` loads.
+fn mulsi3_registers(items: &[Item]) -> Vec<llrm_lir::registers::RegId> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Inst(inst) if inst.opcode == "LEA32b" => match inst.operands.as_slice() {
+                [mc::Operand::Reg(reg), mc::Operand::Symbol(name, 0)] if name == "__mulsi3" => Some(*reg),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
 /// instruction counts the share of runs that reach it (a two-way branch splits
 /// evenly) times ten per loop it sits in (a backward branch to a label makes
@@ -150,10 +178,12 @@ fn price_of(
     }
     let sizes = relaxed_sizes(items, &labels)?;
     let (mut bytes, mut clocks) = (0usize, 0u64);
+    let hoisted = mulsi3_registers(items);
     for (at, item) in items.iter().enumerate() {
         let Item::Inst(inst) = item else { continue };
         let size = sizes[at];
-        let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks;
+        let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks
+            + callee_clocks(inst, cpu, &hoisted);
         let depth = loops.iter().filter(|(from, to)| *from <= at && at <= *to).count().min(3);
         bytes += size;
         clocks += u64::from(cost) * share[at] * 10u64.pow(depth as u32);
@@ -173,6 +203,24 @@ pub fn keeps(
     match (price_of(with, cpu), price_of(without, cpu)) {
         (Some(with_cost), Some(without_cost)) => price.beats(cpu, with_cost, without_cost),
         _ => false,
+    }
+}
+
+/// Whether `without` replaces `with`. The size and rate prices keep `with`
+/// only where it beats `without` (a tie goes to `without`). The strict price
+/// (-O1: no worse in bytes and in clocks) replaces `with` only where `without`
+/// is no worse in both: where each wins one, `with` stands, so neither axis is
+/// given up for the other. False when either cannot be priced.
+pub fn prefers_without(
+    with: &[Item],
+    without: &[Item],
+    cpu: Cpu,
+    price: Price,
+) -> bool {
+    let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu), price_of(without, cpu)) else { return false };
+    match price {
+        Price::Strict => without_cost.0 <= with_cost.0 && without_cost.1 <= with_cost.1,
+        Price::Size | Price::Rate => !price.beats(cpu, with_cost, without_cost),
     }
 }
 

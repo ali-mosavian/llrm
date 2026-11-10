@@ -8,12 +8,12 @@ use std::process::Command;
 /// definition of _sf_clz64").
 #[test]
 fn an_internal_function_is_not_exported_by_the_driver() {
-    let dir = std::env::temp_dir().join("llrm-internal-label-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
          define internal i16 @helper(i16 %a) noinline {\n  %r = add i16 %a, 1\n  ret i16 %r\n}\n\
          define i16 @api(i16 %a) {\n  %r = call i16 @helper(i16 %a)\n  ret i16 %r\n}\n",
     )

@@ -1342,6 +1342,13 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, to, &[wide])
             }
+            op @ (ISD::Abs | ISD::AbsMinPoison) => {
+                // `PromoteIntRes_ABS`: the absolute value of the
+                // sign-extended operand.
+                let promoted = self.sext_promoted_integer(self.dag.operand(value, 0));
+                let wide = self.dag.value_type(promoted);
+                self.dag.get_node(op, wide, &[promoted])
+            }
             op @ (ISD::BitReverse | ISD::BSwap) => {
                 // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
                 // wider reversal, shifted down by the bits added.
@@ -1381,6 +1388,46 @@ impl<'a> TypeLegalizer<'a> {
                     self.dag.get_node(ISD::And, to, &[promoted, mask])
                 };
                 self.dag.get_node(op, to, &[wide, self.dag.operand(value, 1)])
+            }
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                // `PromoteIntRes_Rotate`
+                // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1533>):
+                // with room for the value twice, a
+                // variable rotate is one shift of the value concatenated
+                // with itself; otherwise the rotate becomes shifts and ORs
+                // (`expandROT`) that promote on their own.
+                let amount = self.dag.operand(value, 1);
+                let (old_bits, new_bits) = (vt.size_in_bits(), to.size_in_bits());
+                let custom_shifts = self.tli.operation_action(ISD::Shl, vt) == super::actions::Action::Custom
+                    || self.tli.operation_action(ISD::Srl, vt) == super::actions::Action::Custom;
+                if new_bits >= 2 * old_bits
+                    && self.dag.constant(amount).is_none()
+                    && !self.tli.is_operation_legal_or_custom(op, to)
+                    && !custom_shifts
+                {
+                    let op0 = self.promoted_integer(self.dag.operand(value, 0));
+                    let amount = if self.action(self.dag.value_type(amount)) == TypeAction::PromoteInteger {
+                        self.zext_promoted_integer(amount)
+                    } else {
+                        amount
+                    };
+                    let amount_vt = self.dag.value_type(amount);
+                    // The amount is taken modulo the old width.
+                    let width = self.dag.get_constant(u128::from(old_bits), amount_vt);
+                    let amount = self.dag.get_node(ISD::URem, amount_vt, &[amount, width]);
+                    let hi_shift = self.shift_const(u128::from(old_bits), to);
+                    let hi = self.dag.get_node(ISD::Shl, to, &[op0, hi_shift]);
+                    let mask = self.dag.get_constant(super::fold::mask(old_bits), to);
+                    let lo = self.dag.get_node(ISD::And, to, &[op0, mask]);
+                    let both = self.dag.get_node(ISD::Or, to, &[hi, lo]);
+                    let is_right = op == ISD::Rotr;
+                    let rotated = self.dag.get_node(if is_right { ISD::Srl } else { ISD::Shl }, to, &[both, amount]);
+                    if is_right { rotated } else { self.dag.get_node(ISD::Srl, to, &[rotated, hi_shift]) }
+                } else {
+                    let expanded = super::expand_funnel::expand_rotate(self.dag, self.tli, value);
+                    self.replace_value_with(value, expanded);
+                    return Ok(());
+                }
             }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
@@ -1787,6 +1834,15 @@ impl<'a> TypeLegalizer<'a> {
                     (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
                 let ((tl, th), (fl, fh)) = (self.expanded_integer(then), self.expanded_integer(other));
                 (self.dag.get_select(half, cond, tl, fl), self.dag.get_select(half, cond, th, fh))
+            }
+            ISD::BitCast
+                if self.tli.types.type_action(self.dag.value_type(self.dag.operand(value, 0)))
+                    == TypeAction::SoftenFloat =>
+            {
+                // `ExpandRes_BITCAST`, `TypeSoftenFloat`: the halves of the
+                // integer that stands for the float (the `getNode(BITCAST)` of
+                // each half to its own type is the half).
+                self.split_integer(self.softened_float(self.dag.operand(value, 0)), half)
             }
             ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
                 // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
@@ -3826,6 +3882,20 @@ impl<'a> TypeLegalizer<'a> {
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, SDValue { node: low.node, res: 1 }, cc])
             }
+            ISD::SelectCC if at < 2 && self.setcc_code(node).is_some() => {
+                // `ExpandIntOp_SELECT_CC`: the compare expanded to a boolean,
+                // and the select on that boolean against zero.
+                let code = self.setcc_code(node).expect("checked");
+                let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(lhs));
+                let compare = self.dag.get_setcc(bool_vt, lhs, rhs, code);
+                let flag = self.expand_setcc(compare, code);
+                let zero = self.dag.get_constant(0, self.dag.value_type(flag));
+                let not_equal = self.dag.get_cond_code(CondCode::SetNe);
+                let vt = self.dag.value_type(node);
+                let (tval, fval) = (self.dag.operand(node, 2), self.dag.operand(node, 3));
+                self.dag.get_node(ISD::SelectCC, vt, &[flag, zero, tval, fval, not_equal])
+            }
             ISD::SetCC => match self.setcc_code(node) {
                 Some(code) => self.expand_setcc(node, code),
                 None => {
@@ -3836,6 +3906,23 @@ impl<'a> TypeLegalizer<'a> {
                     });
                 }
             },
+            // The scale of a fixed-point multiply is an `i32`
+            // constant whatever the operands' width. `PromoteIntOp_FIX` zero
+            // extends it; where `i32` is expanded the low half carries it.
+            // DEVIATE SD602: the pin has no expand case, so a 16-bit target
+            // dies on `llvm.smul.fix.i16`. Exit: none, the pin's gap. Owner
+            // z80. Review 2026-11-27.
+            ISD::SMulFix
+            | ISD::UMulFix
+            | ISD::SMulFixSat
+            | ISD::UMulFixSat
+                if at == 2 =>
+            {
+                let (scale, _) = self.expanded_integer(self.dag.operand(node, 2));
+                let ops = [self.dag.operand(node, 0), self.dag.operand(node, 1), scale];
+                let updated = self.dag.update_node_operands(n, &ops);
+                SDValue { node: updated, res: 0 }
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,

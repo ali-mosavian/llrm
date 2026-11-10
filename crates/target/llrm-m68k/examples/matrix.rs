@@ -1,7 +1,7 @@
 //! `matrix [SET]`: the kernels of `bench/<SET>` (`kernels`, or `library`) built
 //! by this compiler twice (`ours`: `llrm-cc` over the C source, as a user runs
 //! it; `ours-ir`: the backend alone on the kernel's IR), m68k gcc (`$GCC_M68K`)
-//! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O2 and Os
+//! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O1, O2, O3 and Os
 //! for the 68000, 68020, 68040 and 68060, run under `qemu-m68k` and priced as
 //! `cycles` does. Prints the competitor-matrix rows: `target prog level
 //! compiler code_bytes clocks instrs note`, tab separated. An empty field means
@@ -63,6 +63,20 @@ fn other_code_sections(listing: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The rewritten listing lost its final newline: gas warned "end of file not at end of a line" on every
+    /// `ours` cell (1056 stderr lines in the 11-09 run), and a warning on our output hides a mis-assembled line.
+    #[test]
+    fn rewritten_listing_ends_in_a_newline() {
+        assert_eq!(super::relaxing_branches("\tbne\tL1\n\trts\n"), "\tjne\tL1\n\trts\n");
+    }
+
+    /// The matrix measured O2 and Os only, so O1 (strict: bytes and clocks) and
+    /// O3 had no cells and counted as clean.
+    #[test]
+    fn every_level_is_measured_by_default() {
+        assert_eq!(super::levels(), ["O1", "O2", "O3", "Os"]);
+    }
+
     /// gcc puts `main` in `.text.startup` and cold parts in `.text.unlikely`;
     /// a column that read `.text` alone undercounted those bytes (softfloat's
     /// finding for the ELF feeds; this corpus had none, so no cell moved).
@@ -188,6 +202,7 @@ fn ours_object(
     std::fs::write(&asm, format!(".text\n{}", relaxing_branches(&text))).map_err(|e| e.to_string())?;
     let status = Command::new(root.join("usr/bin/m68k-linux-gnu-as"))
         .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
+        .arg("--fatal-warnings")
         .arg(format!("-m{cpu}"))
         .arg("-o")
         .arg(object)
@@ -213,8 +228,8 @@ fn relaxing_branches(text: &str) -> String {
                 _ => line.to_owned(),
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|line| line + "\n")
+        .collect()
 }
 
 /// The pin's clang (front end and `-O` pipeline, to IR) into the pin's `llc`:
@@ -304,7 +319,7 @@ fn main() {
             }
             let module = llrm_mir::parse::module(&text).unwrap();
             let runtime: Vec<Item> = runtime_names.iter().flat_map(|one| items(&module, one, cpu).unwrap()).collect();
-            for level in ["O2", "Os"] {
+            for level in levels() {
                 let row =
                     |compiler: &str, size: Option<usize>, clocks: Option<u64>, insns: Option<usize>, note: &str| {
                         let cell = |value: Option<String>| value.unwrap_or_default();
@@ -340,12 +355,15 @@ fn main() {
                         if status != Some(*expected) {
                             return (None, None, format!("wrong result: {status:?}, want {expected}"));
                         }
-                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        let total = cycles::price(&gcc_root, &exe, &[model], false, &["k".to_owned()]);
+                        if total.truncated {
+                            return (None, None, "trace cut short: raise CYCLES_TIMEOUT".to_owned());
+                        }
                         if total.insns == 0 {
                             return (None, None, "priced no instruction".to_owned());
                         }
-                        if total.unknown > 0 {
-                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        if total.unknown_of(0) > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown_of(0));
                         } else if total.partial && notes.is_empty() {
                             notes = "data-dependent term at its bound".to_owned();
                         }
@@ -415,7 +433,22 @@ fn main() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The `-O` flag of a level.
+/// The levels a matrix measures: `O1` is strict (bytes and clocks), `O2` and
+/// `O3` are priced by the CPU's byte rate, `Os` is bytes. `MATRIX_LEVELS=O1,Os`
+/// keeps the named ones; an unknown name stops the run.
+const LEVELS: [&str; 4] = ["O1", "O2", "O3", "Os"];
+
+fn levels() -> Vec<&'static str> {
+    match std::env::var("MATRIX_LEVELS") {
+        Ok(only) => only
+            .split(',')
+            .map(|one| LEVELS.iter().copied().find(|level| *level == one).unwrap_or_else(|| panic!("MATRIX_LEVELS: unknown level {one}")))
+            .collect(),
+        Err(_) => LEVELS.to_vec(),
+    }
+}
+
+/// The `-O` flag of a level: the level itself, for every column.
 fn level_flag(level: &str) -> &'static str {
-    if level == "Os" { "Os" } else { "O2" }
+    LEVELS.iter().copied().find(|one| *one == level).unwrap_or_else(|| panic!("unknown level {level}"))
 }

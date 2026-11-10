@@ -17,7 +17,7 @@ use crate::module::{
 use crate::opcode::{
     AtomicInfo, AtomicKind, AtomicOrdering, Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause,
     FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags, INT_ATTRIBUTES, INT_PREDICATE, Opcode, RMW_OPS, TARGET_FLAG_ATTRIBUTES,
-    TYPE_ATTRIBUTES, Tail, spelled,
+    TYPE_ATTRIBUTES, Tail, UWTABLE_SYNC, spelled,
 };
 use crate::print::SCOPE_DECL_KIND;
 use crate::types::{FloatKind, StructBody, Type, TypeId};
@@ -848,17 +848,22 @@ impl Parser {
                 }
                 Token::Word(word) if TARGET_FLAG_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
-                    // An argument list (`uwtable(sync)`, `allocsize(0, 1)`) is
-                    // not read.
+                    // An argument list (`allocsize(0, 1)`) is not read, but
+                    // `uwtable(sync)` is: the kind decides what unwind rows a
+                    // function gets. `uwtable(async)` is the bare `uwtable`.
+                    let mut name = word.clone();
                     if self.eat_punct('(') {
                         while !self.eat_punct(')') {
                             if *self.peek() == Token::Eof {
                                 return self.fail(format!("`{word}(` is never closed"));
                             }
+                            if word == "uwtable" && self.is_word("sync") {
+                                name = UWTABLE_SYNC.into();
+                            }
                             self.next();
                         }
                     }
-                    out.push(Attribute::Flag(word.into()));
+                    out.push(Attribute::Flag(name.into()));
                 }
                 Token::Word(word) if FLAG_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();

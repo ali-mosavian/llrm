@@ -3,6 +3,7 @@
 pub mod abi;
 pub mod alloc;
 pub mod asm;
+pub mod copyprop;
 pub mod dagisel;
 pub mod driver;
 pub mod elf;
@@ -14,6 +15,7 @@ pub mod opcosts;
 pub mod peephole;
 pub mod peephole_cells;
 pub mod platform;
+pub mod pointer_alu;
 pub mod prepare;
 pub mod relax;
 pub mod routines;

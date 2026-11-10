@@ -122,6 +122,12 @@ pub struct Options {
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
     pub rematerialize_arguments: bool,
+    /// How a size-built function chooses between an inline expansion and a call
+    /// to the runtime ([`crate::libcalls`], M68K-SIZE-LIBCALL).
+    pub size_libcalls: crate::libcalls::Mode,
+    /// The kinds that choice made for the module, as [`crate::libcalls::mask`];
+    /// none given, the module is scanned for the function.
+    pub libcalls: Option<u8>,
     /// A loop's top is chosen by the jumps its fall-throughs remove, not by
     /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
     pub loop_top_by_jumps: bool,
@@ -153,6 +159,9 @@ pub struct Options {
     /// tuning); a function that saved a register is also built without, and
     /// the cheaper kept. False is the pin's M68k.
     pub global_copies: bool,
+    /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
+    /// [`crate::dagisel::mulprice`]).
+    pub mul: crate::dagisel::mulprice::Mode,
     /// The coalescer tries first the block whose copies read a value carried
     /// around the loop (`joins_loop_carried_first`, DEVIATE C15); false is the
     /// pin's block order.
@@ -168,6 +177,8 @@ impl Options {
         code_model: CodeModel::Small,
         mid_end: false,
         size: false,
+        size_libcalls: crate::libcalls::Mode::Auto,
+        libcalls: None,
         strict: false,
         source_order: false,
         indexed: false,
@@ -188,6 +199,7 @@ impl Options {
         compare_destinations: false,
         carry_chain: true,
         global_copies: true,
+        mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
     };
@@ -199,6 +211,8 @@ impl Default for Options {
             code_model: CodeModel::Small,
             mid_end: true,
             size: false,
+            size_libcalls: crate::libcalls::Mode::Auto,
+            libcalls: None,
             strict: false,
             source_order: false,
             indexed: true,
@@ -219,6 +233,7 @@ impl Default for Options {
             compare_destinations: true,
             carry_chain: true,
             global_copies: true,
+            mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
         }
@@ -266,6 +281,16 @@ pub fn items_with(
             .and_then(|id| module.global(id).function())
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     let price = crate::timing::Price::of(wants_size, options.strict);
+    // first: the multiply decides the shape of the rest, and its price counts
+    // the library routine, which the other rewrites do not touch
+    if touched.mul_trial {
+        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.sext_adds {
         let without = Options { sext_adds: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -347,6 +372,8 @@ struct Touched {
     /// The build saved a callee-saved register: the join order may have cost
     /// it.
     global_copies: bool,
+    /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
+    mul_trial: bool,
 }
 
 impl Touched {
@@ -357,7 +384,40 @@ impl Touched {
             || self.compare_destinations
             || self.carry_chain
             || self.global_copies
+            || self.mul_trial
     }
+}
+
+/// The bytes of `items` as assembled (a branch not yet sized counts 6).
+pub fn items_bytes(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The runtime calls the size-built functions of `module` make, as a
+/// [`crate::libcalls::mask`]: chosen once for the module (M68K-SIZE-LIBCALL),
+/// by the bytes each function builds to with and without them.
+pub fn libcalls_for(
+    module: &Module,
+    cpu: Cpu,
+    options: Options,
+) -> u8 {
+    let kinds = crate::libcalls::chosen(
+        module,
+        options.size_libcalls,
+        |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
+        |name, kinds| {
+            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            items_with(module, name, cpu, options).map(|items| items_bytes(&items))
+        },
+    );
+    crate::libcalls::mask(&kinds)
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -372,6 +432,14 @@ fn items_once(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
+    // call
+    let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
+    } else {
+        Vec::new()
+    };
+    let chain = crate::dagisel::mulprice::Chain::of(options.mul);
     let blocks = select_function_with(
         module,
         name,
@@ -382,10 +450,14 @@ fn items_once(
         options.code_model.absolute_data(),
         wants_size,
         options.carry_chain,
+        crate::timing::Price::of(wants_size, options.strict),
+        &chain,
+        &libcalls,
     )?;
     let mut function = emit(name, &blocks)?;
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
+    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {

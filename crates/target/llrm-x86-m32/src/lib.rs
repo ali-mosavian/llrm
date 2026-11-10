@@ -106,6 +106,15 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
         // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
         size_rotation_header_limit: Some(4),
+        // DEVIATE RS1 at m32 (owners x86-m32-bytes, exit 2026-12-20, as m64 and arm64): -Os rotates a
+        // loop only if its copied exit test folds in the preheader or counts its trips, as gcc's
+        // `ch_base::copy_headers` does at -Os (the copy is a compare and a branch, more than the
+        // jump it removes). 296 kernels, -Os: 17 shrink (-296 B: x_jpeg_fixed 2995 -> 2898, x_jpeg_single
+        // 3041 -> 2960, x_primes 100 -> 85), gap to best(gcc, clang) 4361 -> 4102 B. Os is strict bytes,
+        // clocks not bound: shellsort/x_isqrt/x_popcount/x_collatz +9..11%, 8 others +-1%.
+        // ROW M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz 84 -> 85 B (best 74),
+        // an unrotated inner loop changes the outer loop's registers (cause card to the greedy owners).
+        rotation_guard_must_fold_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
@@ -123,7 +132,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
+        // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+        lftr_any_stride: true,
         rep_stos_at_size: true,
+        rep_movs_at_size: true,
+        sdiv_pow2_stays_at_size: true,
+        push_imm_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
@@ -192,11 +206,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // worse with 450; their O3 card is open). Owner x86-m32, exit
         // 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
-        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2, gcc's 8
-        // at -O3. rectwo -O2 1449397 -> 347314 clk (1965 -> 277 B), fib
-        // 99618 -> 19993 (962 -> 215 B), frames 5035113 -> 4585856;
-        // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
-        recursive_inlining_depth: Some((2, 8)),
+        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2 and -O3. rectwo -O2
+        // 1449397 -> 347314 clk (1965 -> 277 B), fib 99618 -> 19993 (962 -> 215 B), frames
+        // 5035113 -> 4585856. -O3 had gcc's 8: over 12 recursion programs it cost +5556 B and
+        // +1.12 M instructions over -O2 (REC-8).
+        recursive_inlining_depth: Some((2, 2)),
         // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
         // threshold alone refuses, at a site 16x the caller's entry or hotter, is tried
         // inlined at -O2 and kept where the rate pays, the trial counting the callee's
@@ -209,13 +223,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // A callee that keeps more than eax/ecx/edx live pushes and pops ebx, esi,
         // edi, ebp once per call: the trial's clocks saved count it.
         callee_saved: Some((3, 4, costs.argument + costs.pop)),
-        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
-        // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
-        // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
-        // x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let
-        // GVN merge the pure same-argument calls (fib 99618 clk against
-        // 228901), so -O2 keeps today's order. Owner x86-m32, exit 2026-11-20.
-        recursive_tre_first: (false, true),
+        // DEVIATE REC-2/REC-8: gcc eliminates tail calls before it copies a recursion
+        // (passes.def:97, then pass_ipa_inline :164). Here the tree's copies come first at
+        // -O2 and -O3: GVN merges the pure same-argument calls across them (fib 99618 clk
+        // against 228901 with the loop first), and -O3 with the loop first and depth 8 lost
+        // to -O2 on fib, frames and rectwo. Owner x86-m32, exit 2026-11-20.
+        recursive_tre_first: (false, false),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
@@ -227,7 +240,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it
         // is `rep movsd` inline, as gcc's `rep_prefix_4_byte`. x_mergesort -O3:
         // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
-        // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
+        // (gcc 60026: row MEM-1-R1). -O1 and size keep the call (`bytes_strict`:
+        // no byte rate pays for the ~17 B; x_jpeg_single -O1 inlined it twice).
+        // Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
         // see `Tuning::ipsccp_widen_keeps_sign`.
@@ -282,6 +297,15 @@ impl llrm_target::Target for M32 {
     // leaf stays and costs a `jmp`); at -Os the constant is made in the
     // branching block and the branch goes to the join.
     fn leaf_fold_at_size(&self) -> bool {
+        true
+    }
+
+    // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's MachineCSE
+    // shares a branch-opening compare with the same subtract on one side, moving
+    // the subtract in front of the branch and copying the operand the other side
+    // reads. x_isqrt -O2: -7.7% clocks, -10 B (-O1 -5.9%, -Os -4.7%); the other 286
+    // non-m16 kernels at -O1/-O2/-O3/-Os are byte-identical.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
         true
     }
 
@@ -667,6 +691,20 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// -O3 copied a recursion to depth 8 with the loop first, gcc's setting,
+    /// while -O2 copies to depth 2 with the tree first. Over 12 recursion
+    /// programs -O3 was bigger by 5556 B and ran 1.12 M more instructions than
+    /// -O2 (fib 131 K against 14 K, frames 2.69 M against 1.76 M, rectwo 232 K
+    /// against 157 K). -O3 takes -O2's recursion policy.
+    #[test]
+    fn test_o3_copies_a_recursion_as_o2_does() {
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        let depth = tuning.recursive_inlining_depth.expect("m32 copies recursions");
+        assert_eq!(depth.1, depth.0, "recursive_inlining_depth (-O2, -O3)");
+        let first = tuning.recursive_tre_first;
+        assert_eq!(first.1, first.0, "recursive_tre_first (-O2, -O3)");
+    }
+
     /// The GPRs were ordered eax ecx edx ebx esi edi, so the callee-saved ebx
     /// was the first of them taken; the pin's GR32 order
     /// (X86RegisterInfo.td) is eax ecx edx esi edi ebx.

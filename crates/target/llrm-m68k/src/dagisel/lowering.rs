@@ -154,10 +154,11 @@ pub fn target_lowering_with(
     // expansion; the pin keeps `Expand` here. gcc calls libgcc for all six on
     // the 68000 and 68010, and so does this. From the 68020 gcc counts a
     // 32-bit `clz`, a 64-bit `clz` and a 32-bit `ctz` with `bfffo`
-    // (M68K-BFFFO, see `bfffo`), and our routines cost more clocks there than
-    // the inline code (u64 O2: -540 B, +4000 clk), so the 68020 and later
-    // stay inline until the routines are as fast as libgcc's. Owner m68k. Exit:
-    // 2026-11-30.
+    // (M68K-BFFFO, see `bfffo`). Whole linked programs, 2026-11-09, every
+    // count called against inline: u64 O2 -12 B and +1000 clk (+3% to +18% in
+    // all six cells), u32 +24 B, so the 68020 and later stay inline at speed
+    // levels; size-built functions choose per module (M68K-SIZE-LIBCALL, see
+    // `libcalls`). Owner m68k. Exit: 2026-11-30.
     if !m68020 {
         set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
     }
@@ -181,6 +182,12 @@ pub fn target_lowering_with(
     // `RTLIB::MUL_I64`: what `forceExpandWideMUL` calls for the product of two
     // `i32`s (a `smul.fix` with no `MULHS`, as the 68000's and the pin's)
     tl.set_libcall_name(Mul, MVT::I64, "__muldi3");
+    // `setMinStackArgumentAlignment`: the pin's M68k leaves it at 1, so its
+    // `va_arg` rounds the list to the type's alignment (2 for an `i32`) with
+    // `addq #1; and #-2`. Every stack argument takes a 4-byte slot (gcc's
+    // `PARM_BOUNDARY`), the 68000's stack stays even; no round is owed. Owner
+    // m68k. DEVIATE M68K-VA-MIN-ALIGN, review 2026-12-20.
+    tl.set_min_stack_argument_alignment(VA_SLOT);
     // `RTLIB::SDIV_I64` and the others: no CPU divides 64 bits
     for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
         tl.set_libcall_name(op, MVT::I64, name);
@@ -199,11 +206,35 @@ pub struct M68kLowering {
     /// A global's address is an absolute one, not PC-relative (the medium
     /// model on the 68000 and 68010, the large model).
     pub absolute_data: bool,
+    /// The CPU and the level's price, which [`super::mulprice`] reads.
+    pub cpu: Cpu,
+    pub price: crate::timing::Price,
+    pub mul: super::mulprice::Chain,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
     fn little_endian(&self) -> bool {
         false
+    }
+
+    /// `getScalarShiftAmountTy`: the pin's m68k keeps the default, the pointer
+    /// type (`i32`). A shift a combine made after legalization with the
+    /// shared `i8` amount had no pattern: `CannotSelect(Shl)`.
+    fn shift_amount_type(
+        &self,
+        _shifted: EVT,
+    ) -> EVT {
+        EVT::I32
+    }
+
+    /// `M68kTargetLowering::decomposeMulByConstant`, priced: DEVIATE
+    /// M68K-MUL-PRICE, see [`super::mulprice`].
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.mul.allows(super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c))
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
@@ -255,13 +286,13 @@ impl Hooks for M68kLowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCC => lower_setcc(dag, node, self.cpu),
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::ShlParts => Some(lower_shift_left_parts(dag, node)),
             ISD::SrlParts => Some(lower_shift_right_parts(dag, node, false)),
             ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
-            ISD::Select => Some(lower_select(dag, node)),
-            ISD::BrCond => Some(lower_brcond(dag, node)),
+            ISD::Select => Some(lower_select(dag, node, self.cpu)),
+            ISD::BrCond => Some(lower_brcond(dag, node, self.cpu)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
@@ -612,6 +643,10 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
+/// The bytes every stack argument takes, which is also the most a `va_arg` aligns its list pointer to (gcc packs each
+/// in a 4-byte slot; the pin's M68k sets neither `getMinStackArgumentAlignment` nor a cap).
+pub const VA_SLOT: u32 = 4;
+
 /// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`
 /// (`EQ` or `NE`); `BTST` sets `Z` when the bit is clear, as an `and` does.
 fn bit_test(
@@ -625,10 +660,75 @@ fn bit_test(
         src = dag.get_node(ISD::AnyExtend, EVT::I32, &[src]);
     }
     let vt = dag.value_type(src);
-    let bit_no = if dag.value_type(bit_no) == vt { bit_no } else { dag.get_node(ISD::AnyExtend, vt, &[bit_no]) };
+    // a constant bit number is an immediate (`btst #k`, see `btst.rs`)
+    let bit_no = match dag.constant(bit_no) {
+        Some(bits) => dag.get_constant_with(bits, vt, true, false),
+        None if dag.value_type(bit_no) == vt => bit_no,
+        None => dag.get_node(ISD::AnyExtend, vt, &[bit_no]),
+    };
     let test = dag.get_node(m68kisd::BTST, EVT::I8, &[src, bit_no]);
     let code = cc_operand(dag, if cc == CondCode::SetEq { cond::EQ } else { cond::NE });
     dag.get_node(m68kisd::SETCC, EVT::I8, &[code, test])
+}
+
+/// Whether `btst #k,Dn` takes no more bytes and no more clocks than
+/// `and.l #imm,Dn` on `cpu`, read from the timing tables (the 68000 and 68010
+/// 10 against 14 clk, the 68020 and 68030 4 against 6, the 68040 and 68060 1
+/// against 1; 4 B against 6).
+pub fn btst_beats_and_immediate(cpu: Cpu) -> bool {
+    use crate::timing::cost;
+    static BEATS: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
+            clocks("btst #23, %d0", 4) <= clocks("and.l #8388608, %d0", 6)
+        })
+    });
+    BEATS[cpu as usize]
+}
+
+/// Whether `tst.w`/`tst.b Dn` takes no more bytes and no more clocks than
+/// `btst #k,Dn` on `cpu`, read from the timing tables (2 B against 4).
+fn tst_beats_btst(cpu: Cpu) -> bool {
+    use crate::timing::cost;
+    static BEATS: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
+            let btst = clocks("btst #15, %d0", 4);
+            clocks("tst.w %d0", 2) <= btst && clocks("tst.b %d0", 2) <= btst
+        })
+    });
+    BEATS[cpu as usize]
+}
+
+/// DEVIATE M68K-BTST-SIGN (owner m68k-lsr-addressing, exit 2026-11-30): the
+/// pin has no counterpart (its `LowerAndToBTST` leaves a constant mask that
+/// fits a `TEST` alone). A mask that is the sign bit of the low byte or word,
+/// `(x & 0x80) != 0` or `(x & 0x8000) != 0` of an `i32`, is the sign of that
+/// part: `tst.b`/`tst.w Dn` (2 B, no copy) and a sign condition, where
+/// `btst #k,Dn` is 4 B and `and.l #imm` 6 B and a copy. Priced from the
+/// tables. Any other single bit stays [`lower_and_to_btst`]'s.
+fn lower_and_to_narrow_sign_test(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+    cpu: Cpu,
+) -> Option<SDValue> {
+    if dag.value_type(and) != EVT::I32 || !tst_beats_btst(cpu) {
+        return None;
+    }
+    let mask = dag.constant(dag.operand(and, 1))?;
+    let vt = match mask {
+        0x80 => EVT::I8,
+        0x8000 => EVT::I16,
+        _ => return None,
+    };
+    // `x & sign == 0` is `part >= 0`; `!= 0` is `part < 0`
+    let part = dag.get_node(ISD::Truncate, vt, &[dag.operand(and, 0)]);
+    let mut zero = dag.get_constant(0, vt);
+    let code = translate_cc(dag, if cc == CondCode::SetEq { CondCode::SetGe } else { CondCode::SetLt }, &mut zero);
+    let flags = emit_cmp(dag, part, zero, code);
+    let code = cc_operand(dag, code);
+    Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
 }
 
 /// `LowerAndToBTST`: `(1 << n) & x` and `(x >> n) & 1` against zero are a bit
@@ -637,6 +737,7 @@ fn lower_and_to_btst(
     dag: &mut SelectionDAG,
     and: SDValue,
     cc: CondCode,
+    cpu: Cpu,
 ) -> Option<SDValue> {
     if dag.value_type(and) != EVT::I32 {
         return None;
@@ -655,6 +756,17 @@ fn lower_and_to_btst(
     if mask == 1 && dag.opcode(op0) == ISD::Srl {
         return Some(bit_test(dag, dag.operand(op0, 0), dag.operand(op0, 1), cc));
     }
+    // DEVIATE M68K-BTST (owner m68k-lsr-addressing, exit 2026-11-30): the pin
+    // takes a constant mask to BTST only when the immediate does not fit a
+    // `TEST` (`!isUInt<32>`, M68kISelLowering.cpp#L1731), never at i32. A
+    // single bit below the sign bit is `btst #k,Dn` (4 B, no copy, flags Z
+    // only: this node's users are `EQ`/`NE`) where the pin's `and.l #imm`
+    // takes 6 B and a copy of a live value. Priced per CPU from the tables;
+    // bit 31 stays the sign test (`tst.l`, 2 B).
+    if mask.is_power_of_two() && mask < 1 << 31 && btst_beats_and_immediate(cpu) {
+        let bit_no = dag.get_constant(u128::from(mask.trailing_zeros()), EVT::I32);
+        return Some(bit_test(dag, op0, bit_no, cc));
+    }
     None
 }
 
@@ -664,6 +776,7 @@ fn lower_and_to_btst(
 fn lower_setcc(
     dag: &mut SelectionDAG,
     node: SDValue,
+    cpu: Cpu,
 ) -> Option<SDValue> {
     let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     if !dag.value_type(op0).is_integer() {
@@ -675,7 +788,8 @@ fn lower_setcc(
         && dag.is_null_constant(op1)
         && dag.opcode(op0) == ISD::And
         && dag.has_one_use(op0.node)
-        && let Some(test) = lower_and_to_btst(dag, op0, cc)
+        && let Some(test) =
+            lower_and_to_narrow_sign_test(dag, op0, cc, cpu).or_else(|| lower_and_to_btst(dag, op0, cc, cpu))
     {
         return Some(test);
     }
@@ -785,10 +899,11 @@ fn opposite(code: u128) -> u128 {
 fn lower_select(
     dag: &mut SelectionDAG,
     node: SDValue,
+    cpu: Cpu,
 ) -> SDValue {
     let (mut cond_value, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond_value) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond_value) {
+        if let Some(lowered) = lower_setcc(dag, cond_value, cpu) {
             cond_value = lowered;
         }
     }
@@ -811,10 +926,11 @@ fn lower_select(
 fn lower_brcond(
     dag: &mut SelectionDAG,
     node: SDValue,
+    cpu: Cpu,
 ) -> SDValue {
     let (chain, mut cond_value, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond_value) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond_value) {
+        if let Some(lowered) = lower_setcc(dag, cond_value, cpu) {
             cond_value = lowered;
         }
     }
@@ -835,13 +951,5 @@ fn lower_vastart(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let index = dag.var_args_frame_index?;
-    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
-    let first = dag.get_frame_index(EVT::I32, index);
-    let base = match dag.node(list).data {
-        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
-        _ => MemBase::Unknown,
-    };
-    let info = MemInfo { mem_vt: EVT::I32, align: 2, volatile: false, base, ext: None, space: 0, ordering: None };
-    Some(dag.get_store(chain, first, list, info))
+    llrm_codegen::backend::selectiondag::target_calling::lower_vastart_frame_index(dag, node, EVT::I32, 2)
 }

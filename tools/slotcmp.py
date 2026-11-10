@@ -79,14 +79,29 @@ def theirs(level: str, mode: str, work: Path) -> dict[str, int]:
     return counts
 
 
+def drop_symbol_prefix(counts: dict[str, int]) -> dict[str, int]:
+    """Ours names symbols with the target's one-underscore prefix (`_add_bits`, `___mulsf3`), the pin's llc without; when every name has it, drop it."""
+    if counts and all(name.startswith("_") for name in counts):
+        return {name[1:]: count for name, count in counts.items()}
+    return counts
+
+
+def common(mine: dict[str, int], pins: dict[str, int]) -> list[str]:
+    """The functions both sides counted. Refuses when there are none: a join of nothing printed `DELTAS {}` and read as 'no difference'."""
+    both = sorted(set(mine) & set(pins))
+    if not both:
+        sys.exit(f"slotcmp: no function in common; ours {sorted(mine)[:5]} pin {sorted(pins)[:5]}")
+    return both
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 4:
         print(__doc__)
         return 2
     src, level, target, mode, *args = argv
     work = Path(tempfile.mkdtemp(prefix="slotcmp-", dir=os.environ.get("WORK", str(Path.home() / "scratch"))))  # a dump is not for tmpfs
-    mine, pins = ours(src, level, target, mode, args, work), theirs(level, mode, work)
-    both = sorted(set(mine) & set(pins))
+    mine, pins = drop_symbol_prefix(ours(src, level, target, mode, args, work)), theirs(level, mode, work)
+    both = common(mine, pins)
     for name in both:
         if mine[name] != pins[name]:
             print(f"{name} ours {mine[name]} pin {pins[name]}")

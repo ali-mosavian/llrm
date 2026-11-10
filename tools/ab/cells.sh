@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# cells.sh DIR LIST: per-cell .text bytes and instruction count, DIR/base vs DIR/new.
+# cells.sh DIR LIST: per-cell code bytes, data bytes and instruction count, DIR/base vs DIR/new.
 # LIST lines: "<anything> <target> <-Olevel> <file.c>". Refuses to run when base and new are
 # the same binary (a sweep of a build against itself reads "no change" everywhere).
-# Env: CELLS_FLAGS (extra cc flags), CELLS_INC (include flags). Each row ends `flags: WORDS`: the file's own flags, `-` for none.
+# Env: CELLS_FLAGS (extra cc flags, passed to every compile), CELLS_INC (include flags). Each row ends `flags: WORDS`: the file's own flags, `-` for none,
+# then ` env: WORDS` when CELLS_FLAGS is set. CELLS_FLAGS was documented and never read: a `-fPIC` sweep (2026-11-10) compiled flagless.
 set -u
 . "$(dirname "$0")/../ab_env.sh"; ab_env_check || exit 2
 D=$1; L=$2
@@ -13,7 +14,7 @@ done
 [ "$(readlink -f "$D/base")" != "$(readlink -f "$D/new")" ] || { echo "cells: base and new are one directory" >&2; exit 2; }
 . "$(dirname "$0")/../fresh_compile.sh"
 w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
-declare -A text ins
+declare -A text dat ins
 empty=0
 while read -r _ tg lvl f; do
   fl=""; case $tg in x86_16-wat) fl=-march=i386;; x86_32-linux) fl=-m32;; esac
@@ -21,19 +22,18 @@ while read -r _ tg lvl f; do
   # without -fno-inline-functions inlined to 145 kB on z80 where the row is 17.5 kB).
   pf=$(python3 "$(dirname "$0")/cell_flags.py" "$f")
   for v in base new; do
-    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>&1 || continue
-    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
+    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>&1 || continue
+    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
-    # OMF (m16) objects defeat size(1): the file size then, symbols being equal on both sides.
-    text[$v]=$(size "$w/$v.o" 2>/dev/null | awk 'NR==2{print $1}')
-    [ -n "${text[$v]}" ] || text[$v]=$(stat -c %s "$w/$v.o")
+    # Code bytes of the object (object_bytes.py: per target; z80/6502 assemble their .s). Never the file's size: a failure is an EMPTY cell.
+    read -r text[$v] dat[$v] < <("$(dirname "$0")/object_bytes.py" "$tg" "$w/$v.o" 2>>"$w/err") || { unset "text[$v]" "dat[$v]"; }
     ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s")
   done
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then
-    echo "EMPTY $tg $lvl $f" ; empty=$((empty + 1)); unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'; continue
+    echo "EMPTY $tg $lvl $f$( [ -s "$w/err" ] && printf ' (%s)' "$(head -1 "$w/err")" )" ; : > "$w/err"; empty=$((empty + 1)); unset 'text[base]' 'text[new]' 'dat[base]' 'dat[new]' 'ins[base]' 'ins[new]'; continue
   fi
-  echo "$tg $lvl $(basename "$f") bytes ${text[base]} ${text[new]} instrs ${ins[base]} ${ins[new]} flags: ${pf:--}"
-  unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'
+  echo "$tg $lvl $(basename "$f") bytes ${text[base]} ${text[new]} data ${dat[base]} ${dat[new]} instrs ${ins[base]} ${ins[new]} flags: ${pf:--}${CELLS_FLAGS:+ env: $CELLS_FLAGS}"
+  unset 'text[base]' 'text[new]' 'dat[base]' 'dat[new]' 'ins[base]' 'ins[new]'
 done < "$L"
 # A cell that built nothing is a failed measurement, not a quiet one.
 [ "$empty" -eq 0 ] || { echo "cells: $empty EMPTY cell(s)" >&2; exit 1; }

@@ -468,11 +468,27 @@ pub fn graph(
     // effect and everything since it.
     let (mut store, mut loads): (Option<usize>, Vec<usize>) = (None, Vec::new());
     let (mut unknown, mut since): (Option<usize>, Vec<usize>) = (None, Vec::new());
+    // Where an instruction states what its access reaches (`Insn::memory`), the
+    // memory lane no longer orders it: each earlier store and load is kept and
+    // an edge made where `Insn::may_alias` says they may overlap
+    // (`addChainDependencies`). A body with none keeps the one chain above.
+    let aliasing = insns.iter().any(|one| one.memory.is_some());
+    let memory_lane = crate::backend::peephole::Lanes::flags(crate::backend::peephole::Lanes::MEMORY).mask();
+    let (mut stores_before, mut loads_before): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
     for later in 0..n {
         let mut edges: Vec<(usize, u32)> = Vec::new();
         let one = &insns[later];
         let (reads_memory, writes_memory) = memory(one);
-        let masks = effects[later].as_ref().map(|effect| (effect.all_reads().mask(), effect.writes.mask()));
+        let mut masks = effects[later].as_ref().map(|effect| (effect.all_reads().mask(), effect.writes.mask()));
+        let (mut reads_memory, mut writes_memory) = (reads_memory, writes_memory);
+        if aliasing {
+            if let Some((reads, writes)) = &mut masks {
+                reads_memory |= *reads & memory_lane != 0;
+                writes_memory |= *writes & memory_lane != 0;
+                *reads &= !memory_lane;
+                *writes &= !memory_lane;
+            }
+        }
         // What every instruction after one of unknown effect keeps behind it.
         edges.extend(unknown.map(|earlier| (earlier, 0)));
         for value in &one.uses {
@@ -509,11 +525,21 @@ pub fn graph(
             // An unknown effect is ordered with everything before it.
             None => edges.extend(since.iter().map(|&earlier| (earlier, 0))),
         }
-        if reads_memory || writes_memory {
-            edges.extend(store.map(|earlier| (earlier, 0)));
-        }
-        if writes_memory {
-            edges.extend(loads.iter().map(|&earlier| (earlier, 0)));
+        if aliasing {
+            let apart = |earlier: usize| !insns[earlier].may_alias(one) && one.memory.is_some() && insns[earlier].memory.is_some();
+            if reads_memory || writes_memory {
+                edges.extend(stores_before.iter().filter(|&&earlier| !apart(earlier)).map(|&earlier| (earlier, 0)));
+            }
+            if writes_memory {
+                edges.extend(loads_before.iter().filter(|&&earlier| !apart(earlier)).map(|&earlier| (earlier, 0)));
+            }
+        } else {
+            if reads_memory || writes_memory {
+                edges.extend(store.map(|earlier| (earlier, 0)));
+            }
+            if writes_memory {
+                edges.extend(loads.iter().map(|&earlier| (earlier, 0)));
+            }
         }
         // One edge to each earlier instruction, the longest latency.
         edges.sort_unstable();
@@ -561,7 +587,19 @@ pub fn graph(
             store = None;
             loads.clear();
         }
-        if writes_memory {
+        if aliasing {
+            if writes_memory {
+                if one.memory.is_some() {
+                    stores_before.push(later);
+                } else {
+                    // An access of unknown reach is ordered with everything
+                    // before it: the earlier ones are behind it now.
+                    (stores_before, loads_before) = (vec![later], Vec::new());
+                }
+            } else if reads_memory {
+                loads_before.push(later);
+            }
+        } else if writes_memory {
             (store, loads) = (Some(later), Vec::new());
         } else if reads_memory {
             loads.push(later);
@@ -1129,7 +1167,7 @@ pub fn scheduled(
                         // in the region ties it (two-address).
                         let tied: HashSet<u32> = slice
                             .iter()
-                            .filter(|one| one.what.as_ref().is_some_and(twoaddr::ties))
+                            .filter(|one| one.what.as_ref().is_some_and(|what| twoaddr::ties_in(body.registers, what)))
                             .flat_map(|one| one.defines.iter().copied())
                             .collect();
                         let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
@@ -1328,6 +1366,58 @@ mod tests {
         assert_eq!(found.preds[1], [0], "the add reads the first load");
         assert!(found.preds[2].is_empty(), "the second load is ordered with nothing before it: {:?}", found.preds);
         assert_eq!(found.preds[3], [0, 1, 2], "the store follows both loads and the add");
+    }
+
+    /// A load or store as arm64 states it: the memory lane and, when `object`
+    /// is given, what it reaches (`Insn::memory`).
+    fn access(
+        at: i64,
+        store: bool,
+        object: Option<(i64, u64, u64)>,
+    ) -> Arc<Insn> {
+        use crate::backend::peephole::Lanes;
+        use crate::model::memref::MemRef;
+        let memory = Lanes::flags(Lanes::MEMORY);
+        let name = if store { "str" } else { "ldr" };
+        let mut one = Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, name, vec![], vec![])), vec![], vec![]);
+        one.declared = Some((memory, if store { memory } else { Lanes::new() }));
+        one.memory = object.map(|(slot, offset, bytes)| MemRef {
+            object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+            offset: Some(offset as i64),
+            bytes: Some(bytes),
+            store,
+        });
+        Arc::new(one)
+    }
+
+    /// The memory lane ordered every store before every later access, so a load
+    /// from one frame slot stayed behind a store to another: the scheduler could
+    /// not move it above the store (`addChainDependencies` asks
+    /// `MachineInstr::mayAlias`). A load of the stored bytes stays behind; an
+    /// access that says nothing is ordered with everything before it.
+    #[test]
+    fn test_accesses_to_different_slots_are_not_ordered_by_the_memory_lane() {
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let order = |insns: Vec<Arc<Insn>>| graph(&insns, regs, 16).preds;
+        // No operand: the lane alone, a store then a load are ordered.
+        assert_eq!(order(vec![access(0, true, None), access(1, false, None)])[1], [0]);
+        // The operand says another slot: no edge.
+        let apart = order(vec![access(0, true, Some((1, 0, 8))), access(1, false, Some((2, 0, 8)))]);
+        assert!(apart[1].is_empty(), "{apart:?}");
+        // The same bytes: ordered.
+        assert_eq!(order(vec![access(0, true, Some((1, 0, 8))), access(1, false, Some((1, 4, 8)))])[1], [0]);
+        // A load of the first slot after stores to two: behind the first only.
+        let after = order(vec![
+            access(0, true, Some((1, 0, 8))),
+            access(1, true, Some((2, 0, 8))),
+            access(2, false, Some((1, 0, 8))),
+            access(3, true, None),
+        ]);
+        assert_eq!(after[2], [0], "{after:?}");
+        assert_eq!(after[3], [0, 1, 2], "an access of unknown reach follows everything: {after:?}");
+        // A store after a load of another slot is not ordered after it.
+        let war = order(vec![access(0, false, Some((1, 0, 8))), access(1, true, Some((2, 0, 8)))]);
+        assert!(war[1].is_empty(), "{war:?}");
     }
 
     /// A call, a terminator and a volatile access are in no region; the runs
