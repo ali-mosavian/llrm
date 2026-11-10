@@ -260,6 +260,13 @@ pub struct Tuning {
     /// 261/303228. Open Os row M16-OS-MATMUL-DIVISOR (owner x86-m16, exit
     /// 2026-11-20): matmul -Os 289 B/23807 clk against 284/23679 at 1000.
     pub address_reference_milliweight: u32,
+    /// DEVIATE ROT-TRE (owner x86-m16-b, exit 2026-11-30): a loop that the
+    /// last tail-call elimination made is rotated (`LoopRotate`), so the exit
+    /// test of its first trip stands before the loop. The pin eliminates tail
+    /// calls at -O1 only once, at PassBuilderPipelines.cpp#L1677, after its
+    /// loop rotation (#L728), so that loop keeps its exit test in the header
+    /// and a base case pays the setup of the loop. false: the pin's.
+    pub rotate_late_tre_loops: bool,
     /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
     /// latency exceeds its issue-bound time is not unrolled at run time
     /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
@@ -460,6 +467,7 @@ impl Tuning {
         slots_loop_width_rule: false,
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
+        rotate_late_tre_loops: false,
         unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
@@ -1326,6 +1334,7 @@ mod tests {
         assert!(!pin.slots_loop_width_rule);
         assert!(pin.carry_slot_indexes);
         assert_eq!(pin.address_reference_milliweight, 1000);
+        assert!(!pin.rotate_late_tre_loops);
         assert_eq!(pin.inline_threshold, None);
     }
 }

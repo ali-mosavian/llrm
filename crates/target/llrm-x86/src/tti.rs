@@ -896,6 +896,10 @@ impl Tti for X86 {
         self.tuning.recursive_tre_first
     }
 
+    fn rotates_late_tre_loops(&self) -> bool {
+        self.tuning.rotate_late_tre_loops
+    }
+
     fn peels_folded_entry(&self) -> bool {
         self.tuning.peel_folded_entry
     }

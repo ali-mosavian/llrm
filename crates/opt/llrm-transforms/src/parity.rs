@@ -335,6 +335,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
     entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
+    entry("rotate-tre@1677", Late, "none (DEVIATE ROT-TRE; gcc passes.def pass_tail_recursion, pass_ch)", Old, ""),
     partial(
         "simplifycfg@1682",
         Late,

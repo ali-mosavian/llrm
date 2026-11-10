@@ -608,7 +608,7 @@ b:
 }
 ";
     let ranged = |options: pipeline::Options| {
-        let mut module = crate::testing::parsed(text);
+        let mut module = llrm_analysis::testing::parsed(text);
         let options = pipeline::Options { inline: crate::inline::Threshold::none(), ..options };
         let applied = Applied { options, ..Applied::default() };
         let entered = |program: &mut Program| {
@@ -648,7 +648,7 @@ done:
 }
 ";
     let asked = |options: pipeline::Options| {
-        let mut module = crate::testing::parsed(text);
+        let mut module = llrm_analysis::testing::parsed(text);
         let options = pipeline::Options { inline: crate::inline::Threshold::none(), ..options };
         let applied = Applied { options, ..Applied::default() };
         llrm_mir::passes::trace_recomputes(true);
@@ -706,7 +706,7 @@ fn pipelined(
     text: &str,
     options: pipeline::Options,
 ) -> (Module, Vec<(&'static str, &'static str, usize)>) {
-    let mut module = crate::testing::parsed(text);
+    let mut module = llrm_analysis::testing::parsed(text);
     let applied = Applied { options, ..Applied::default() };
     llrm_mir::passes::trace_recomputes(true);
     let entered = |program: &mut Program| {
@@ -1445,6 +1445,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "divrempairs@1667",
             "expandmemcmp@1673",
             "tailrec@1677",
+            "rotate-tre@1677",
             "simplifycfg@1682"
         ]
     );
@@ -2275,6 +2276,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "divrempairs@1667",
             "expandmemcmp@1673",
             "tailrec@1677",
+            "rotate-tre@1677",
             "simplifycfg@1682"
         ]
     );
@@ -2902,7 +2904,7 @@ b:
 }
 ";
     let flags = |options: pipeline::Options| {
-        let mut module = crate::testing::parsed(text);
+        let mut module = llrm_analysis::testing::parsed(text);
         let applied = Applied { options, ..Applied::default() };
         let entered = |program: &mut Program| {
             program.exports.entries.insert("main".to_owned());
@@ -2960,7 +2962,7 @@ b:
 }
 ";
     let narrowed = |options: pipeline::Options| {
-        let mut module = crate::testing::parsed(text);
+        let mut module = llrm_analysis::testing::parsed(text);
         let applied = Applied { options, ..Applied::default() };
         Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
             pipeline::applied(program, &applied)
@@ -3112,4 +3114,53 @@ fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_a
     let printed = llrm_mir::print::module(&module);
     assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
     assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
+}
+
+/// `@paths` after the -O1 pipeline over a tree recursion, on `target`.
+fn tree_recursion_at_o1(target: llrm_x86_m16::Dos) -> String {
+    let text = "define i32 @paths(i16 %n, i16 %m) {
+b0:
+  %a = icmp eq i16 %n, 0
+  %b = icmp eq i16 %m, 0
+  %c = or i1 %a, %b
+  br i1 %c, label %done, label %rec
+
+rec:
+  %n1 = add nsw i16 %n, -1
+  %x = call i32 @paths(i16 %n1, i16 %m)
+  %m1 = add nsw i16 %m, -1
+  %y = call i32 @paths(i16 %n, i16 %m1)
+  %s = add i32 %x, %y
+  br label %done
+
+done:
+  %r = phi i32 [ 1, %b0 ], [ %s, %rec ]
+  ret i32 %r
+}";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    llrm_mir::program::Program::lend(&mut module, std::rc::Rc::new(target), |program: &mut llrm_mir::program::Program| {
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module)
+}
+
+/// The first block of a printed function, up to the blank line.
+fn entry_block(printed: &str) -> &str {
+    let body = printed.split_once("{\n").map_or(printed, |(_, rest)| rest);
+    body.split("\n\n").next().unwrap_or(body)
+}
+
+/// rectwo -O1 at m16: the pin eliminates tail calls once, after its loop
+/// rotation, so the loop kept its exit test in the header and the base case
+/// paid the setup of the loop (87 B against main's 79). DEVIATE ROT-TRE: the
+/// loop is rotated, and its first exit test stands in the entry block.
+#[test]
+fn test_the_loop_of_a_tail_recursion_is_rotated_where_the_target_asks() {
+    let rotated = tree_recursion_at_o1(llrm_x86_m16::Dos::default());
+    assert!(entry_block(&rotated).contains("br i1"), "no guard before the loop:\n{rotated}");
+    let pin = tree_recursion_at_o1(llrm_x86_m16::Dos::pin_tuned());
+    assert!(!entry_block(&pin).contains("br i1"), "the pin's table rotated it:\n{pin}");
 }

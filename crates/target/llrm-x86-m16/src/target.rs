@@ -327,6 +327,8 @@ impl Machine for Dos {
             carry_slot_indexes: false,
             // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
             address_reference_milliweight: 3000,
+            // DEVIATE ROT-TRE (owner x86-m16-b, exit 2026-11-30): see Tuning.
+            rotate_late_tre_loops: true,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.

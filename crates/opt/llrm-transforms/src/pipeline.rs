@@ -658,6 +658,47 @@ impl FunctionPass for Slot {
     }
 }
 
+/// A slot of passes that run only where the target asks (`asked` over its
+/// `Tti`); anywhere else it holds nothing.
+struct WhenTarget {
+    name: &'static str,
+    asked: fn(&dyn llrm_mir::tti::Tti) -> bool,
+    inner: Together,
+}
+
+impl FunctionPass for WhenTarget {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn parts(&self) -> Vec<&'static str> {
+        self.inner.parts()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.inner.adds_memory_operations()
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.inner.reads()
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        if !(self.asked)(&*looprotate::target_tti(analyses.outer().target())) {
+            return PreservedAnalyses::all();
+        }
+        self.inner.run(unit, analyses)
+    }
+}
+
 /// Passes that stand for one pass of LLVM, run one after the other and named
 /// as one: SROA runs mem2reg on what it splits, so the slot is SROA, then
 /// Promote, with nothing between (SROA.cpp `promoteAllocas`).
@@ -1056,6 +1097,26 @@ pub(crate) fn llvm_order(
             // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
             // runs in one).
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
+            // DEVIATE ROT-TRE (`Tuning::rotate_late_tre_loops`): the loop this
+            // TRE made is rotated, as the loop pass manager at #L728 rotates
+            // the loops of the pipelines whose TRE comes before it.
+            Box::new(WhenTarget {
+                name: "rotate-tre@1677",
+                asked: |tti| tti.rotates_late_tre_loops(),
+                inner: Together {
+                    name: "rotate-tre@1677",
+                    parts: vec![
+                        Box::new(loopsimplify::LoopSimplify),
+                        Box::new(lcssa::LoopClosedSSA),
+                        Box::new(looprotate::LoopRotate {
+                            duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                            size: applied.options.prefers_size(),
+                            check_exit_count: false,
+                            free_guard: false,
+                        }),
+                    ],
+                },
+            }),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
         ],
         Phase::Simplify => {

@@ -1100,6 +1100,11 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::rotate_late_tre_loops`.
+    fn rotates_late_tre_loops(&self) -> bool {
+        false
+    }
+
     /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
     /// eliminated before its copies of itself are made.
     fn recursive_tre_first(&self) -> (bool, bool) {
