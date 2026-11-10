@@ -1440,6 +1440,8 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
+    // The clones of the step before the walk and of the one after it share a bound.
+    let cloning = crate::ipacp::Shared::default();
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
     // `RecomputeGlobalsAAPass` alone, read cached in between.
     manager.require_cached::<GlobalsAA>();
@@ -1497,7 +1499,7 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 {
-            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
+            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline, cloning: cloning.clone() });
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
@@ -1532,6 +1534,7 @@ pub fn recorded(
     });
     manager.add_program(Interprocedural {
         late,
+        cloning,
         pipeline: Box::new(move |module, analyses, id, stage| {
             // The pin runs nothing over a body `DeadArgumentEliminationPass`
             // changed: the late function pipeline, which every body goes
