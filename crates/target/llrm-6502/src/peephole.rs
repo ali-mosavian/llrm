@@ -156,6 +156,9 @@ pub fn run_with(
     crate::peephole_cells::coalesce_copy(asm);
     // the chain's load can follow the store it was loaded from
     drop_reloads(asm);
+    if crate::copyprop::enabled(std::env::var_os("LLRM_6502_MCP").as_deref()) {
+        crate::copyprop::copy_propagation(asm);
+    }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     // a transfer that fed an `or` of zero is gone: the load is next to its store

@@ -65,14 +65,17 @@ fn a_one_bit_mask_against_zero_is_a_btst_not_a_copy_and_an_and() {
 /// crc16's `crc & 0x8000` (bench/library/crc16.ll) is the sign of the low word:
 /// `tst.w` (2 B, 4 clk on the 68000) where `btst #15` is 4 B, 10 clk and the
 /// first form was `and.l #32768` (6 B, 16 clk). At O1 that was 4972 clk against
-/// gcc's 4200 on the 68000.
+/// gcc's 4200 on the 68000. With the loop's `crc` carried as a word
+/// (`narrowcycle`) the carry of `add.w %d0, %d0` is that bit and the `tst.w`
+/// goes (`narrow_cycle.rs`): the bit is read by `tst.w` or by the carry, never
+/// by `btst` or an `and`.
 #[test]
-fn crc16_tests_its_top_bit_with_tst_w() {
+fn crc16_tests_its_top_bit_with_tst_w_or_the_carry() {
     let ir = include_str!("../bench/library/crc16.ll");
     for name in ["68000", "68020"] {
         for level in [Level::O1, Level::O2, Level::Os] {
             let out = assembly(ir, cpu_of(name).unwrap(), level).expect("compiles");
-            assert!(out.contains("tst.w"), "{name} {level:?}:\n{out}");
+            assert!(out.contains("tst.w") || (out.contains("add.w\t") && out.contains("bcc")), "{name} {level:?}:\n{out}");
             assert!(!out.contains("btst\t#15") && !out.contains("and.l\t#32768"), "{name} {level:?}:\n{out}");
         }
     }

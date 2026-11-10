@@ -342,6 +342,17 @@ impl Back<'_> {
     }
 }
 
+/// The selected form of `op`, as the shared scheduler reads an instruction
+/// (`one`): none for an operation with no mapping yet.
+pub(crate) fn form_of(
+    function: &MFunc,
+    symbols: &mut Vec<String>,
+    wide: &[Reg],
+    op: &Op,
+) -> Option<Semantics> {
+    one(&mut To { function, symbols, wide }, op).ok()
+}
+
 fn one(
     cx: &mut To,
     op: &Op,

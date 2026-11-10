@@ -16,6 +16,8 @@ use llrm_codegen::backend::selectiondag::MemLocation;
 use llrm_codegen::backend::selectiondag::chain_combine::AliasOracle;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module};
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 pub struct IrAlias<'a> {
     unit: Unit<'a>,
@@ -47,5 +49,18 @@ impl AliasOracle for IrAlias<'_> {
         };
         let mut stack = AggregateAA::default_pipeline(&self.unit);
         stack.alias(&location(a), &location(b), &mut self.batch.borrow_mut(), None) == AliasResult::NoAlias
+    }
+
+    fn same_underlying_object(
+        &self,
+        locations: &[MemLocation],
+    ) -> bool {
+        let query = Query {
+            globals: self.unit.globals,
+            ..Query::bare(self.unit.context, self.unit.function, self.unit.layout)
+        };
+        let mut objects = locations.iter().map(|one| get_underlying_object(&query, one.pointer, 0));
+        let first = objects.next();
+        objects.all(|object| Some(object) == first)
     }
 }

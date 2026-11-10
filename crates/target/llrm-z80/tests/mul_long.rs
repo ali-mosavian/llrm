@@ -123,7 +123,9 @@ fn the_routines_replace_long_shifts_and_multiplies_at_o1_and_not_at_o2() {
         (asm.matches("call __ashlsi3").count() + asm.matches("call __lshrsi3").count(), asm.matches("call __mulsi3").count())
     };
     let (o1, o2) = (calls(llrm_z80::driver::Level::O1), calls(llrm_z80::driver::Level::O2));
-    assert!(o1.0 > 0 && o1.1 > 0, "O1 calls the routines: {o1:?}");
+    // The long shifts are inline at O1 too since `add hl, hl; adc hl, hl` carries in the flag (they cost the
+    // regret-based comparison less there than the routine); the multiplies are still the routine.
+    assert!(o1.1 > 0, "O1 calls the multiply routine: {o1:?}");
     assert_eq!(o2.0, 0, "O2 keeps the shifts inline: {o2:?}");
 }
 

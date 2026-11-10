@@ -928,7 +928,14 @@ pub fn _data(
             }
             masm::Datum::Align(masm::Align { to }) => {
                 segment.align = segment.align.max(*to as usize);
-                segment.put(&vec![0; (-(segment.image.len() as i64)).rem_euclid(*to) as usize], &[]);
+                let pad = (-(segment.image.len() as i64)).rem_euclid(*to) as usize;
+                // Uninitialised data is zeroed at start-up: its padding is not stored (a stored byte
+                // makes the linker store the segment up to it).
+                if segment.role == Role::Bss {
+                    segment.skip(pad);
+                } else {
+                    segment.put(&vec![0; pad], &[]);
+                }
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
             masm::Datum::SegmentWord(name) => segment.put(&[0, 0], &[Fixup::new(0, BASE, name.clone())]),
@@ -1882,6 +1889,28 @@ mod tests {
         byte: Option<u8>,
     ) -> masm::Datum {
         masm::Datum::Fill(masm::Fill { size, byte })
+    }
+
+    /// Alignment padding in an uninitialised segment was stored: jpeg_fixed's `_BSS` (15850 bytes) carried two
+    /// one-byte zero data records and jwlink stored the whole segment up to them, 16380 data bytes against bcc's 474.
+    #[test]
+    fn alignment_padding_in_a_bss_segment_is_not_stored() {
+        let mut segment = Segment::new("_BSS", Role::Bss, true);
+        let mut symbols = IndexMap::default();
+        let items = [fill(3, None), masm::Datum::Align(masm::Align { to: 4 }), fill(10, None)];
+        _data(&mut segment, 0, &items, &mut symbols, CodeModel::Segmented16);
+        assert_eq!(segment.image.len(), 14);
+        assert!(segment.spans.is_empty(), "{:?}", segment.spans);
+    }
+
+    /// A data segment keeps its padding: bytes between stored data are part of the image.
+    #[test]
+    fn alignment_padding_in_a_data_segment_is_stored() {
+        let mut segment = Segment::new("_DATA", Role::Data, true);
+        let mut symbols = IndexMap::default();
+        let items = [masm::Datum::Bytes(vec![1, 2, 3]), masm::Datum::Align(masm::Align { to: 4 }), masm::Datum::Bytes(vec![9])];
+        _data(&mut segment, 0, &items, &mut symbols, CodeModel::Segmented16);
+        assert_eq!(segment.spans, vec![[0, 5]]);
     }
 
     fn hex(text: &str) -> Vec<u8> {
