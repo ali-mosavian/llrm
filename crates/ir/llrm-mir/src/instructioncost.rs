@@ -25,7 +25,7 @@ use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Opcode};
-use crate::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty};
+use crate::tti::{AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty};
 use crate::types::{Type, TypeId};
 
 /// `TTI::getOperandInfo`: what is known of an operand's value.
@@ -169,13 +169,14 @@ fn gep_cost(
     operands: &[Operand],
     source: TypeId,
     access_bytes: Option<u64>,
+    kind: CostKind,
 ) -> Cost {
     let base_global = matches!(
         operands[0],
         Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_))
     );
     if operands.len() == 1 {
-        return if base_global { Cost::BASIC } else { Cost::FREE };
+        return if base_global { tti.address_computation_cost(kind) } else { Cost::FREE };
     }
     let indices: Vec<Option<i128>> = operands[1..]
         .iter()
@@ -196,7 +197,7 @@ fn gep_cost(
     let (offset, variable, target) = layout.collect_offset_typed(&context.types, source, &indices);
     // No addressing mode takes two scale registers.
     if variable.len() > 1 {
-        return Cost::BASIC;
+        return tti.address_computation_cost(kind);
     }
     let scale = variable.first().map_or(0, |&(_, scale)| scale as i64);
     // A scaled index that costs instructions of its own (real mode's prefixed
@@ -206,7 +207,69 @@ fn gep_cost(
     // ask about, the type the last index selects stands in for it.
     let bytes = access_bytes.unwrap_or_else(|| layout.alloc_size(&context.types, target));
     let legal = tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale);
-    if folds && legal { Cost::FREE } else { Cost::BASIC }
+    if folds && legal { Cost::FREE } else { tti.address_computation_cost(kind) }
+}
+
+/// How the load or store through `pointer` names its memory: a global by its
+/// own address, a stack slot, or a register; a GEP of constant indices is its
+/// displacement, a variable one a scaled index.
+fn address_form(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+) -> AddressForm {
+    let global = |operand: Operand| {
+        matches!(operand, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_)))
+    };
+    let slot = |operand: Operand| {
+        let Operand::Value(value) = operand else { return false };
+        matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. }))
+    };
+    let base_of = |operand: Operand| {
+        if global(operand) {
+            AddressBase::Global
+        } else if slot(operand) {
+            AddressBase::Frame
+        } else {
+            AddressBase::Register
+        }
+    };
+    if global(pointer) {
+        return AddressForm { base: AddressBase::Global, displacement_bytes: 0, indexed: false };
+    }
+    let Operand::Value(value) = pointer else {
+        return AddressForm { base: AddressBase::Register, displacement_bytes: 0, indexed: false };
+    };
+    let ValueDef::Instruction(def) = function.value(value).def else {
+        return AddressForm { base: AddressBase::Register, displacement_bytes: 0, indexed: false };
+    };
+    let gep = function.instruction(def);
+    let Opcode::GetElementPtr { source } = gep.opcode else {
+        return AddressForm { base: base_of(pointer), displacement_bytes: 0, indexed: false };
+    };
+    let indices: Vec<Option<i128>> = gep.operands[1..]
+        .iter()
+        .map(|&index| {
+            constant_int(context, index).map(|bits| {
+                let width = operand_type(context, function, index)
+                    .and_then(|ty| match context.types.get(ty) {
+                        Type::Int(width) => Some(*width),
+                        _ => None,
+                    })
+                    .unwrap_or(64);
+                let shift = 128 - width.min(128);
+                ((bits << shift) as i128) >> shift
+            })
+        })
+        .collect();
+    let (offset, variable, _) = layout.collect_offset_typed(&context.types, source, &indices);
+    let displacement_bytes = match offset {
+        0 => 0,
+        -128..=127 => 1,
+        _ => 4,
+    };
+    AddressForm { base: base_of(gep.operands[0]), displacement_bytes, indexed: !variable.is_empty() }
 }
 
 /// The bytes the load or store that is the only user of the GEP `inst`
@@ -276,6 +339,14 @@ pub fn instruction_cost_with(
         |operand: Operand| operand_type(context, function, operand).and_then(|ty| Ty::of(&context.types, ty));
     let result = Ty::of(&context.types, operation.ty);
     let info = |at: usize| operand_info(context, operands[at]);
+    // What the address adds to the bytes of a load or store (code size only).
+    let address_cost = |pointer: Operand| {
+        if kind == CostKind::CodeSize {
+            tti.access_address_cost(address_form(context, layout, function, pointer), kind)
+        } else {
+            Cost::FREE
+        }
+    };
     match &operation.opcode {
         Opcode::Call(call) | Opcode::Invoke(call) => {
             let arguments = operands.len().saturating_sub(1) as i64;
@@ -299,7 +370,7 @@ pub fn instruction_cost_with(
                 Type::Function { parameters, .. } => parameters.len() as i64,
                 _ => arguments,
             };
-            Cost::BASIC * (parameters + 1)
+            tti.direct_call_cost(parameters, kind)
         }
         Opcode::Br | Opcode::Ret | Opcode::Switch => tti.cf_instr_cost(false, kind),
         Opcode::Phi => tti.cf_instr_cost(true, kind),
@@ -324,7 +395,7 @@ pub fn instruction_cost_with(
         }
         Opcode::GetElementPtr { source } => {
             let access = sole_access_bytes(context, layout, function, inst);
-            gep_cost(tti, context, layout, function, operands, *source, access)
+            gep_cost(tti, context, layout, function, operands, *source, access, kind)
         }
         Opcode::Binary(op) => match result {
             Some(ty) => tti.arithmetic_cost(arith_of(*op), ty, kind, info(0), info(1)),
@@ -358,7 +429,10 @@ pub fn instruction_cost_with(
         // BasicTTIImpl prices the other instructions at one unit.
         Opcode::Atomic(_) => Cost::BASIC,
         Opcode::Store { .. } => match modelled(operands[0]) {
-            Some(ty) => tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant),
+            Some(ty) => {
+                tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant)
+                    + address_cost(operands[1])
+            }
             None => Cost::INVALID,
         },
         Opcode::Load { .. } => {
@@ -373,7 +447,10 @@ pub fn instruction_cost_with(
                 loaded = function.instruction(only.user).ty;
             }
             match Ty::of(&context.types, loaded) {
-                Some(ty) => tti.memory_op_cost(MemoryOp::Load, ty, kind, false),
+                Some(ty) => {
+                    tti.memory_op_cost(MemoryOp::Load, ty, kind, false)
+                        + address_cost(operands[0])
+                }
                 None => Cost::INVALID,
             }
         }

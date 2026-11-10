@@ -3232,6 +3232,30 @@ pub fn decide(
             describe(&cost),
             site.relative_frequency
         );
+        // The callee's whole body in the size view's units (bytes where the
+        // target has a byte view): what the estimate is checked against the
+        // callee's symbol size with.
+        if let Some(tti) = context.tti {
+            let view = tti.inline_size_view();
+            let bytes: i64 = callee
+                .layout()
+                .iter()
+                .flat_map(|&block| callee.iter_block(block))
+                .map(|inst| {
+                    llrm_mir::instructioncost::instruction_cost(
+                        view.as_deref().unwrap_or(tti),
+                        &module.context,
+                        layout,
+                        &module.globals,
+                        callee,
+                        inst,
+                        llrm_mir::tti::CostKind::CodeSize,
+                    )
+                    .value
+                })
+                .sum();
+            eprintln!("inline:   callee-size {} {bytes}", callee_global.name.as_deref().unwrap_or("?"));
+        }
     }
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.

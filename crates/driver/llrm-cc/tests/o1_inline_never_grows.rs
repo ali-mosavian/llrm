@@ -98,3 +98,48 @@ fn test_m32_o2_inline_prices_the_call_sequence_and_the_caller_s_run_count() {
     let (_, size) = compile("o2rate", &source, "-O2");
     assert!(size < 22_700, "object is {size} B; the call priced as one instruction gave 22,860");
 }
+
+/// INL-O1 SIZE: the inliner counts a callee in bytes of encoded code. A refill
+/// reader of many absolute-address accesses and a variable-length copy is about
+/// 190 B; counted as an instruction each (24 units, 84 B at the old 3.5 scale)
+/// it was copied into every site of a loop (x_jpeg_single -O1: `next` eight
+/// times, +1533 B and +0.5 M clk over keeping it a call). A one-instruction
+/// callee still inlines.
+#[test]
+fn test_m32_o1_inline_counts_a_callee_in_encoded_bytes() {
+    let source = r#"
+#include <string.h>
+static unsigned char inbuf[512], store[4000];
+static int inpos, inlen, bad, at, total, refills, last, sum1, sum2;
+static int next(void)
+{
+    if (inpos == inlen) {
+        int n = 4000 - at;
+        if (n > 511) n = 511;
+        memcpy(inbuf, store + at, n + 1);
+        at += n + 1;
+        inlen = n + 1;
+        inpos = 0;
+        total += inlen;
+        refills++;
+        last = inbuf[0];
+        sum1 += inbuf[1];
+        sum2 ^= inbuf[2];
+        if (inlen <= 0) { inlen = 0; bad = 1; return 0; }
+    }
+    return inbuf[inpos++];
+}
+static int add1(int x) { return x + 1; }
+int caller(int count)
+{
+    int sum = 0;
+    for (int i = 0; i < count; i++)
+        sum += next() + next() + next() + next() + add1(i);
+    return sum;
+}
+"#;
+    let (listing, _) = compile("bytes", source, "-O1");
+    let calls_of = |name: &str| listing.lines().filter(|line| line.contains("call") && line.contains(name)).count();
+    assert!(calls_of("next") >= 4, "`next` is copied into its sites: {} calls left of 4", calls_of("next"));
+    assert_eq!(calls_of("add1"), 0, "a one-instruction callee stays a call");
+}

@@ -155,7 +155,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50 packed ops) is vector-shaped: vector-deferred list.
         unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
-        inline_o1_unit_bytes_milli: 3500,
+        // DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner counts a callee in
+        // bytes of encoded code by instruction kind (`sizes`), not one unit an instruction scaled by
+        // a fitted 3.5. x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an estimated 82 B:
+        // +1533 B and +0.5 M clk.
+        inline_size_bytes: true,
+        inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: per_byte,
         sdiv_by_magnitude: true,
         call_sequence_fixed_clocks: costs.call + costs.return_,
