@@ -153,11 +153,14 @@ pub fn remat_shape(one: &Insn) -> bool {
                     [Loc::Held(held)] if held.value == one.defines[0]
                 )
                 && (w.sources.len() == 1
-                    // a cheap operation on registers: the registers it reads, then the identity of
-                    // the operation (`isReMaterializable` with `allUsesAvailableAt`)
+                    // a cheap operation on registers: the registers it reads,
+                    // then the identity of the operation (`isReMaterializable`
+                    // with `allUsesAvailableAt`)
                     || (w.op == Operation::Move
-                        && matches!(w.sources.split_last(), Some((Loc::Imm(_), reads))
-                            if reads.iter().all(|loc| matches!(loc, Loc::Held(_)))))
+                        && matches!(
+                            w.sources.split_last(),
+                            Some((Loc::Imm(_), reads)) if reads.iter().all(|loc| matches!(loc, Loc::Held(_)))
+                        ))
                     || (w.op == Operation::FloatLoad
                         && w.sources.is_empty()
                         && matches!(w.name.as_deref(), Some("fld1" | "fldz"))))
@@ -349,17 +352,35 @@ impl<'a> InlineSpiller<'a> {
         if by_value_number && self.tables.remat_cells.borrow().is_empty() {
             return None;
         }
-        let mut def: Option<InstrKey> = None;
+        let mut defs: Vec<InstrKey> = Vec::new();
         for operand in lis.operands(reg) {
-            if operand.is_def {
-                if def.is_some_and(|seen| seen != operand.instr) {
-                    return None;
-                }
-                def = Some(operand.instr);
+            if operand.is_def && !defs.contains(&operand.instr) {
+                defs.push(operand.instr);
+            }
+        }
+        // `reMaterializeFor` asks the original's value number at each use, and
+        // the pin's split editor makes a piece of a literal by remaking the
+        // literal at each switch (`defFromParent`, "recalc"): a piece that
+        // several literals define holds one value. They are the same
+        // literal, so any stands in for the others; each goes with the piece.
+        // Only literals: they read no register, so nothing has to be
+        // available at the use.
+        if defs.len() > 1 {
+            let first = Arc::clone(lis.instr(defs[0]));
+            let same = |one: &Insn| {
+                one.uses.is_empty()
+                    && one.group.is_none()
+                    && self.tii.remat_shape(one)
+                    && one.what.as_ref().zip(first.what.as_ref()).is_some_and(|(a, b)| {
+                        a.op == b.op && a.name == b.name && a.sources == b.sources && a.dests.len() == b.dests.len()
+                    })
+            };
+            if !own_remat || !defs.iter().all(|key| same(lis.instr(*key))) {
+                return None;
             }
         }
         // The instruction that defines `reg`: what goes once it is made again.
-        let own = Arc::clone(lis.instr(def?));
+        let own = Arc::clone(lis.instr(*defs.first()?));
         let mut def = Arc::clone(&own);
         if by_value_number {
             // `scanRemattable` asks the original's value number at the copy
@@ -395,15 +416,20 @@ impl<'a> InlineSpiller<'a> {
         }
         let what = def.what.clone()?;
         let Loc::Held(defined) = what.dests[0] else { return None };
-        let units: Vec<(usize, Vec<InstrKey>)> =
-            Self::units(lis, reg).into_iter().filter(|(_, members)| members != &[own.id()]).collect();
+        let units: Vec<(usize, Vec<InstrKey>)> = Self::units(lis, reg)
+            .into_iter()
+            .filter(|(_, members)| !(members.len() == 1 && defs.contains(&members[0])))
+            .collect();
         for (_, members) in &units {
             let first = lis.indexes.get_instruction_index(members[0]);
             if !def.uses.is_empty() && !vrai.all_uses_available_at(def.id(), &first, lis) {
                 return None;
             }
         }
-        let def_block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(own.id()));
+        let def_blocks: Vec<(usize, InstrKey)> = defs
+            .iter()
+            .map(|key| (lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(*key)), *key))
+            .collect();
         let mut made = Vec::new();
         for (block, members) in units {
             // The registers a copy's members write: a definition that reads one
@@ -511,7 +537,9 @@ impl<'a> InlineSpiller<'a> {
             made.push(value);
         }
         if own_remat {
-            lis.remove_instr(def_block, own.id());
+            for (def_block, key) in def_blocks {
+                lis.remove_instr(def_block, key);
+            }
         } else {
             // A copy reads a register whose range it was holding up:
             // `eliminateDeadDefs` cuts it back (`spill` calls it).
@@ -811,13 +839,13 @@ impl InlineSpiller<'_> {
     /// spills at 10 bytes (`spills_extended`, D-RFP5). Exit: the
     /// class width once the classes are split.
     ///
-    /// OPEN D-RFP3 (RFP-5, owner: greedy-subreg, exit: 2026-11-20): where the qword is kept (Nib
-    /// fast), a promoted float phi lives unrounded in a register or cell next
-    /// to the f32 memory copy a store wrote, so which one a read sees
-    /// follows the spill choice (nbody_single.bas printed 86015 or 86016
-    /// across unrelated commits; BASIC now rounds each assignment, Nib has
-    /// no row that shows it). Exit: a Nib row that fails, then rounding
-    /// where promotion splits a copy.
+    /// OPEN D-RFP3 (RFP-5, owner: greedy-subreg, exit: 2026-11-20): where the
+    /// qword is kept (Nib fast), a promoted float phi lives unrounded in a
+    /// register or cell next to the f32 memory copy a store wrote, so which
+    /// one a read sees follows the spill choice (nbody_single.bas printed
+    /// 86015 or 86016 across unrelated commits; BASIC now rounds each
+    /// assignment, Nib has no row that shows it). Exit: a Nib row that
+    /// fails, then rounding where promotion splits a copy.
     ///
     /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
     /// the value reads the cell as its memory operand (`fadd qword ptr [m]`),
@@ -2457,7 +2485,8 @@ mod tests {
             let tables = Rc::new(Tables::default());
             tables.widths.borrow_mut().insert(1, 2);
             let order_of = |_: u32| Vec::new();
-            let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+            let mut spiller =
+                InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
             let (env, original) = (Env, Default::default());
             let mut vrai = VirtRegAuxInfo::new(&env, &original);
             let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -2614,7 +2643,8 @@ mod tests {
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
         let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
         spiller.spill(ctx, 1, &mut made);
-        let before_store = lis.block_insns(0).iter().take_while(|one| !one.spill_store).filter(|one| one.spill_reload).count();
+        let before_store =
+            lis.block_insns(0).iter().take_while(|one| !one.spill_store).filter(|one| one.spill_reload).count();
         assert_eq!(before_store, 1, "the reload that was there, and no other before the store");
     }
 
