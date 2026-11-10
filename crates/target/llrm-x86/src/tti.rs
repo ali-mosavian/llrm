@@ -832,6 +832,10 @@ impl Tti for X86 {
         self.tuning.inline_size_bytes
     }
 
+    fn inline_size_view_is_measured(&self) -> bool {
+        self.tuning.inline_size_bytes
+    }
+
     fn inline_second_round_at_o1(&self) -> bool {
         self.tuning.inline_size_bytes
     }

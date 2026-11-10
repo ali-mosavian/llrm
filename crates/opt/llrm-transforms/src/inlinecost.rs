@@ -2051,7 +2051,7 @@ impl<'a> Analyzer<'a> {
             _ => false,
         };
         stays
-            && self.size_view().is_some()
+            && self.measured()
             && operation.result.is_none_or(|result| self.simplified.get(&result).is_none() && self.offsets.get(&result).is_none())
     }
 
@@ -2059,7 +2059,14 @@ impl<'a> Analyzer<'a> {
     /// size caller keeps the units its -Os bound was fitted in (DEVIATE
     /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14).
     fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        self.site.tti?.inline_size_view().filter(|_| self.site.caller_size == CallerSize::Speed)
+        let tti = self.site.tti?;
+        tti.inline_size_view().filter(|_| !tti.inline_size_view_is_measured() || self.site.caller_size == CallerSize::Speed)
+    }
+
+    /// Whether the size view is the measured one (`inline_size_view_is_measured`)
+    /// and serves this caller.
+    fn measured(&self) -> bool {
+        self.size_view().is_some() && self.site.tti.is_some_and(|tti| tti.inline_size_view_is_measured())
     }
 
     fn code_size_of(
@@ -2099,7 +2106,8 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
-        (size * view.as_deref().unwrap_or(tti).call_code_size_percent() + 50) / 100 + self.byval_copy_size()
+        let percent = if self.measured() { view.as_deref().unwrap_or(tti).call_code_size_percent() } else { tti.call_code_size_percent() };
+        (size * percent + 50) / 100 + self.byval_copy_size()
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat

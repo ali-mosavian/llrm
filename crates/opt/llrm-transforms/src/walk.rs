@@ -1486,7 +1486,7 @@ fn body_size(
     id: GlobalId,
     speed: bool,
 ) -> i64 {
-    let view = tti.inline_size_view().filter(|_| speed);
+    let view = tti.inline_size_view().filter(|_| speed || !tti.inline_size_view_is_measured());
     sized(module, layout, view.as_deref().unwrap_or(tti), id, true)
 }
 

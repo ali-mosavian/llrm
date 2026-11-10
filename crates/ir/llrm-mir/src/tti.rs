@@ -674,6 +674,16 @@ pub trait Tti {
         false
     }
 
+    /// Whether the inliner's size view is measured in encoded bytes: it also
+    /// prices what the pin counts free (phis, jumps, the first return, casts)
+    /// and the call by its whole sequence, and it serves speed callers only,
+    /// a size caller keeping the units its bound was fitted in (DEVIATE
+    /// INL-O1 SIZE). False: the view, where there is one, prices every
+    /// caller as it did.
+    fn inline_size_view_is_measured(&self) -> bool {
+        false
+    }
+
     /// Whether the -O1 pipeline walks the call graph a second time after the
     /// dead globals and loops are gone, repricing a callee the folds emptied
     /// (`Options::second_inline`, which a driver may turn on at every level).
