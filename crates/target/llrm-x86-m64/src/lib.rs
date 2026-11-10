@@ -437,6 +437,7 @@ impl llrm_target::Target for M64 {
                             // milliclocks a byte, the m64 net rate (fpbench -O2:
                             // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
                             unroll_milliclocks_per_byte: 312,
+                            unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight

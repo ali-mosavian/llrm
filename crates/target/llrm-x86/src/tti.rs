@@ -711,6 +711,10 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        self.tuning.unroll_prices_nest
+    }
+
     fn unroll_never_grows_at_o1(&self) -> bool {
         self.tuning.unroll_never_grows_at_o1
     }

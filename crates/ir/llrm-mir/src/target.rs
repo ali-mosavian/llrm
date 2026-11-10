@@ -359,6 +359,8 @@ pub struct Tuning {
     /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
     /// -O2/-O3. 0: the pin's threshold alone.
     pub unroll_milliclocks_per_byte: i64,
+    /// DEVIATE UP1-NEST (`Tti::unroll_prices_nest_loops_without_outer_counter`).
+    pub unroll_prices_nest: bool,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
@@ -486,6 +488,7 @@ impl Tuning {
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
+        unroll_prices_nest: false,
         sink_select_arms: false,
         inline_variable_memcpy: false,
         size_copy_price: None,
