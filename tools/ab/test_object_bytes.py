@@ -179,3 +179,45 @@ def test_a_wasm_object_counts_its_code_and_data_sections(tmp_path):
     obj.write_bytes(module)
     done = run("wasm32", obj)
     assert done.returncode == 0 and done.stdout.split() == ["4", "0", "0"], done.stderr
+
+
+def test_a_32_bit_omf_object_is_read_by_the_omf_reader_not_refused(tmp_path, monkeypatch):
+    """x86_32-wat objects are OMF too: `footprint` sent only x86_16 to the OMF reader and answered x86_32 with "no reader" (the known_loads_walks byte column,
+    2026-11-10). The reader is stood in for here: the routing is under test, not the decoder."""
+    import types
+
+    obj = tmp_path / "o.obj"
+    obj.write_bytes(b"\x80" + bytes(15))  # a THEADR record's first byte: not ELF
+    fake = types.ModuleType("sizes")
+    fake.code_size = lambda path: types.SimpleNamespace(code=40, align=3)
+    fake.data_bytes = lambda path: (5, 2)
+    monkeypatch.setitem(sys.modules, "sizes", fake)
+    monkeypatch.syspath_prepend(str(TOOL.parent))
+    import object_bytes
+
+    found = object_bytes.footprint("x86_32-wat", obj)
+    assert (found.code, found.data, found.bss, found.align) == (40, 5, 2, 3)
+
+
+def test_a_stale_binaries_refusal_exits_non_zero_and_prints_no_byte_count(tmp_path, monkeypatch, capsys):
+    """`sizes` refuses a tree whose release binaries are older than their source (SystemExit with the reason). The reader must pass that on: no number on stdout,
+    a non-zero exit. A wrapper that took the last output line as the count printed the reason as the bytes (known_loads_walks, 2026-11-10)."""
+    import types
+
+    obj = tmp_path / "o.obj"
+    obj.write_bytes(b"\x80" + bytes(15))
+
+    def refuse(path):
+        raise SystemExit("stale binaries in target/release: llrm-pass older than the source they are built from")
+
+    fake = types.ModuleType("sizes")
+    fake.code_size = refuse
+    fake.data_bytes = refuse
+    monkeypatch.setitem(sys.modules, "sizes", fake)
+    monkeypatch.syspath_prepend(str(TOOL.parent))
+    import object_bytes
+
+    with pytest.raises(SystemExit) as refused:
+        object_bytes.main(["object_bytes.py", "x86_32-wat", str(obj)])
+    assert "stale binaries" in str(refused.value) and refused.value.code != 0
+    assert capsys.readouterr().out == ""

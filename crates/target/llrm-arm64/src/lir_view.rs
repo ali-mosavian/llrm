@@ -216,6 +216,7 @@ fn view_with(
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
     let wide = crate::regalloc::wide_registers(function);
+    let wide_list: Vec<Reg> = wide.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
@@ -324,6 +325,10 @@ fn view_with(
                 operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
             let mut inst = LirInst::new(kind, operands);
+            if !fused && !zero && matches!(op, Op::I(_) | Op::Copy { .. } | Op::Imm { .. }) {
+                inst.form = crate::lir_body::form_of(function, &mut symbols, &wide_list, &op).map(std::sync::Arc::new);
+                inst.form_operands = inst.operands.clone();
+            }
             inst.ties = ties;
             inst.origin = origin;
             inst.terminator = terminator;
@@ -797,6 +802,17 @@ impl AllocTarget for Arm64 {
 
     fn schedules_before_allocation() -> bool {
         true
+    }
+
+    /// `-mcpu=generic` on Linux: the Cortex-A510 model. DEVIATE SB8: Darwin
+    /// (`apple-m1`) keeps the generic model until the Apple A14 model's data
+    /// (S1) lands.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        if darwin() {
+            std::rc::Rc::new(crate::schedmodel::DarwinModel)
+        } else {
+            std::rc::Rc::new(crate::schedmodel::Arm64Model::generic())
+        }
     }
 
     /// The coalescer makes a definition again for a copy only if it is
