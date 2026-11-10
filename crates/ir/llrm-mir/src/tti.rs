@@ -917,7 +917,8 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4):
+    /// `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
     }

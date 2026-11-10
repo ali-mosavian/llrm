@@ -13,7 +13,7 @@
 //! value, the step by its size and the store the selector's `expandVAArg`
 //! makes, written here so the list slot has no user SROA cannot see through.
 //!
-//! DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k uses it too): the pin lowers
+//! DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4): the pin lowers
 //! the intrinsics in selection only. Off unless
 //! `Tuning::promote_va_list`. Exit: the target states `va_list` as a value
 //! the pin's mem2reg understands, or the pin does.
