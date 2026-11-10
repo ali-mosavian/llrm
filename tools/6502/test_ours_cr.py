@@ -273,6 +273,34 @@ class NoOut(unittest.TestCase):
         self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["helper", "NO-OUT"]])
         self.assertIn("NO-OUT", done.stdout)
 
+class NotForThisTarget(unittest.TestCase):
+    """2026-11-10: long_double_union_pun (`// targets: x86-m16 x86-m32 x86-m64`, its `.out` the x87 80-bit layout) read WRONG on the 6502 at O1/O2/Os
+    (got the shorts of a 64-bit double, which is right for this target) and went to the coordinator as a miscompile. A program whose targets line
+    excludes the 6502 is N/A: not compiled, not measured, not a failure."""
+    def test_a_program_tagged_for_other_targets_is_n_a_not_wrong(self):
+        import json
+        corpus = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "pun.c").write_text("// targets: x86-m16 x86-m32 x86-m64\nint main(void) { return 0; }\n")
+        Path(corpus, "pun.out").write_text("1\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O1", out, "pun"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["pun", "N/A"]])
+
+    def test_an_untagged_m32_program_is_still_measured(self):
+        """The shared `applies` calls 71 corpus programs n/a on the 6502 (every `-m32` one, DOS markers): the 6502 matrix measures memcpy_libcall and
+        mem_length_boundaries_m32 on purpose, so only an explicit targets line makes a program N/A."""
+        import json
+        corpus = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "m32.c").write_text("// flags: -O2 -m32\nint main(void) { return 0; }\n")
+        Path(corpus, "m32.out").write_text("1\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus)
+        cc = os.path.join(corpus, "cc"); Path(cc).write_text("#!/bin/sh\nexit 1\n"); os.chmod(cc, 0o755)
+        subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), cc, "O1", out, "m32"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        self.assertNotEqual(json.load(open(out + ".json"))[0][1], "N/A")
+
 class Runner(unittest.TestCase):
     """The corpus runner printed "done" after 12 runs that had all crashed: it reads every run's exit status and tsv first."""
     def go(self, stub_body):

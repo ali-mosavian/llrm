@@ -106,6 +106,16 @@ class Void(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ab_rows.main(["x", a, b, "--level", "Os"]), 0)
 
+class NotForThisTarget(unittest.TestCase):
+    """A program tagged for other targets is N/A on both sides, like a helper: it does not void the run."""
+    def test_an_n_a_program_does_not_void_the_run(self):
+        import contextlib, io, json
+        a, b = tsv([("p", 10, 10)]), tsv([("p", 10, 10)])
+        for path in (a, b):
+            json.dump([["p", "PASS", {}], ["pun", "N/A", "n/a, targets: x86-m16 x86-m32 x86-m64"]], open(path + ".json", "w"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ab_rows.main(["x", a, b, "--level", "Os"]), 0)
+
 class Residues(unittest.TestCase):
     """2026-11-10: the 16-pad mean (pads 0,16..240: 16 of the 256 address residues a page crossing depends on) called 8 cells worse that
     all 256 residues show better (6502 O1 mul_constants -5 B, +8888 cy on 16, -2000 cy on 256). A clocks-only failure read from fewer
