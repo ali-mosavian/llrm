@@ -11,3 +11,9 @@ def test_cycles_are_the_mean_of_the_layouts():
 
 def test_a_single_layout_is_its_own_mean():
     assert b.merged([LOG]) == LOG
+
+
+def test_the_least_layout_is_available_next_to_the_mean():
+    other = LOG.replace("1000 cy", "1100 cy").replace("2000 cy", "1900 cy")
+    out = b.merged([LOG, other], min)
+    assert "40 B, 1000 cy, 10 in" in out and "479 B linked, 90 B body, 1900 cy" in out, out

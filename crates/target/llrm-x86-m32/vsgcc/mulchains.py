@@ -20,8 +20,26 @@ def ops(vals):
             yield (vals[i] - vals[j]) % M, 2, 1
 
 
-def search(target, depth):
+def last_ops(vals, target):
+    """The (bytes, clocks) of each single op that turns `vals` into `target`, found by inverting it."""
+    found = []
+    for a in vals:
+        if any((a << k) % M == target for k in range(1, 32)):
+            found.append((3, 2))
+        if (-a) % M == target:
+            found.append((2, 1))
+        for b in vals:
+            if (a + b) % M == target or (a - b) % M == target:
+                found.append((2, 1))
+            for s in (1, 2, 4, 8):
+                if (a + b * s) % M == target:
+                    found.append((3, 1))
+    return found
+
+
+def search(target, depth, invert_last=True):
     """Pareto set (bytes, clocks) of chains of <= depth ops that reach target."""
+    target %= M
     best = {}
 
     def go(vals, d, b, c):
@@ -29,6 +47,10 @@ def search(target, depth):
             best[(b, c)] = d
             return
         if d == depth:
+            return
+        if invert_last and d == depth - 1:
+            for ob, oc in last_ops(vals, target):
+                best[(b + ob, c + oc)] = depth
             return
         seen = set(vals)
         for v, ob, oc in ops(vals):

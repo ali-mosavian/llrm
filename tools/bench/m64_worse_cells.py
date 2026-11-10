@@ -16,6 +16,11 @@ was built from; a program whose sources (`bench/P/*.c`, `*.h`, `bench/bench_io.h
 checkout, is stale and listed (exit 2): the 11-09 sfm16 rows were built before #8706 made `unsigned long` 32-bit, and a gap was chased on
 the old program.
 
+A table must also say `compiler=<commit>`, the commit its `ours` column was built from, and is refused when more than MAX_LANDINGS commits
+touching crates/ have landed since: the 11-09 table was 95 landings old by the next morning, and its unchanged-source rows were stale as gaps.
+
+`--allow-stale` lists an aged or source-stale table anyway and prints its age (`AGE ...`, `STALE ...` on stderr): not to be quoted as current.
+
 A cell with no number for ours, gcc or clang is refused (exit 2, listed), never compared against the next-best column: a missing
 reference understated the z80 gaps by up to 1.7 kB."""
 import re
@@ -30,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 DATA_MARK = "data=object_bytes"
 PAD_MARK = "code_bytes padding-free"
 RELOC_MARK = "reloc=-fPIE"
+MAX_LANDINGS = 30  # first-parent commits touching crates/ between the table's compiler and this checkout (the tip took 95 in 11 h on 11-09/10)
 SHARED_SOURCES = ("bench/bench_io.h", "runtime/shared/posix")
 
 
@@ -40,6 +46,14 @@ def object_data(obj: Path) -> int:
     return object_bytes.object_bytes("x86_64-linux", obj)[1]
 
 COLUMNS = ("ours", "gcc", "clang")
+
+
+def compiler_landings(built: str, repo: Path) -> int:
+    """Commits touching the compiler (crates/) that landed after commit `built`, which built the table's `ours` column."""
+    done = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", "--first-parent", f"{built}..HEAD", "--", "crates"], capture_output=True, text=True)
+    if done.returncode:
+        sys.exit(f"compiler commit {built} is not a commit of {repo}: the table cannot be checked for age")
+    return int(done.stdout)
 
 
 def stale_programs(programs: list[str], built: str, repo: Path) -> list[str]:
@@ -108,23 +122,41 @@ def worse(table: dict[tuple[str, str], dict[str, tuple[str, str, str]]]) -> tupl
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "--data":
-        print(object_data(Path(sys.argv[2])))
+    args = sys.argv[1:]
+    allow_stale = "--allow-stale" in args
+    repo = Path(__file__).resolve().parents[2]
+    if "--repo" in args:  # the checkout the age is counted in (tests)
+        repo = Path(args[args.index("--repo") + 1])
+        del args[args.index("--repo") : args.index("--repo") + 2]
+    args = [a for a in args if a != "--allow-stale"]
+    if args[0] == "--data":
+        print(object_data(Path(args[1])))
         sys.exit(0)
-    text = open(sys.argv[1]).read()
+    text = open(args[0]).read()
     if DATA_MARK not in text.splitlines()[0]:
-        sys.exit(f"{sys.argv[1]}: the header does not say {DATA_MARK}: its data column left .bss out; rebuild the table")
+        sys.exit(f"{args[0]}: the header does not say {DATA_MARK}: its data column left .bss out; rebuild the table")
     if PAD_MARK not in text.splitlines()[0]:
-        sys.exit(f"{sys.argv[1]}: the header does not say {PAD_MARK}: its code column may carry alignment padding on one side only; rebuild the table")
+        sys.exit(f"{args[0]}: the header does not say {PAD_MARK}: its code column may carry alignment padding on one side only; rebuild the table")
     if RELOC_MARK not in text.splitlines()[0]:
-        sys.exit(f"{sys.argv[1]}: the header does not say {RELOC_MARK}: the external columns may be built another way than ours; rebuild the table")
+        sys.exit(f"{args[0]}: the header does not say {RELOC_MARK}: the external columns may be built another way than ours; rebuild the table")
     built = re.search(r"\bbench=([0-9a-f]{7,40})\b", text.splitlines()[0])
     if not built:
-        sys.exit(f"{sys.argv[1]}: the header does not say bench=<commit>: its sources cannot be checked against the tip; rebuild the table")
+        sys.exit(f"{args[0]}: the header does not say bench=<commit>: its sources cannot be checked against the tip; rebuild the table")
+    compiler = re.search(r"\bcompiler=([0-9a-f]{7,40})\b", text.splitlines()[0])
+    if not compiler:
+        sys.exit(f"{args[0]}: the header does not say compiler=<commit>: the age of its `ours` column cannot be told; rebuild the table")
+    # --allow-stale: an aged table is still listed, with its age on stderr: the guard stops quoting, not judging.
+    age = compiler_landings(compiler.group(1), repo)
+    print(f"AGE compiler {compiler.group(1)} is {age} landings behind this checkout (limit {MAX_LANDINGS})", file=sys.stderr)
+    if age > MAX_LANDINGS and not allow_stale:
+        sys.exit(f"{args[0]}: its compiler {compiler.group(1)} is {age} landings behind this checkout (limit {MAX_LANDINGS}): rebuild the table, or --allow-stale to list it anyway")
     table = cells(text.splitlines())
-    old = stale_programs(sorted({program for program, _ in table}), built.group(1), Path(__file__).resolve().parents[2])
+    old = stale_programs(sorted({program for program, _ in table}), built.group(1), repo)
     if old:
-        sys.exit(f"{sys.argv[1]}: built from bench {built.group(1)}; sources changed since for {', '.join(old)}: re-run those rows")
+        message = f"{args[0]}: built from bench {built.group(1)}; sources changed since for {', '.join(old)}: re-run those rows"
+        if not allow_stale:
+            sys.exit(message + " (or --allow-stale to list it anyway)")
+        print("STALE", message, file=sys.stderr)
     rows, missing = worse(table)
     pad = padding(table)
     for axis, program, level, ours, best in sorted(rows, key=lambda r: (r[0], -(r[3] - r[4]) / max(r[4], 1))):

@@ -84,3 +84,12 @@ if [ -n "$ENC_NS" ]; then
   [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
   python3 -I "$ROOT/tools/dagisel/enctable.py" "$WORK/target.json" "$OUT/enc.rs" "${ENC_NS%::}"
 fi
+# `sched_cpus = [...]`: the pin's scheduling models of those CPUs and the class of each emitted opcode (sched.rs).
+SCHED_CPUS=$(field sched_cpus)
+if [ -n "$SCHED_CPUS" ]; then
+  [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  "${TBLGEN[@]}" -gen-subtarget "$T/$TD" -o "$WORK/GenSubtarget.inc"
+  # shellcheck disable=SC2086 # one word per CPU
+  python3 -I "$ROOT/tools/dagisel/schedtable.py" --subtarget "$WORK/GenSubtarget.inc" --instrinfo "$WORK/GenInstrInfo.inc" \
+    --json "$WORK/target.json" --mcschedule "$S/include/llvm/MC/MCSchedule.h" --dir "$OUT" --out "$OUT/sched.rs" $SCHED_CPUS
+fi

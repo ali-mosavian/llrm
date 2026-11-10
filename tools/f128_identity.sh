@@ -5,6 +5,7 @@ set -u
 base=${1:?base bin dir}; new=${2:?new bin dir}; shift 2
 root=$(cd "$(dirname "$0")/.." && pwd); out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 ulimit -v 16000000
+python3 "$root/tools/llrmbin.py" sides "$base/llrm-cc" "$new/llrm-cc" || exit 2  # LLRM_LLC is set per side below, so the llc beside each is what runs
 for t in ${*:-x86_64-linux x86_32-linux arm64-linux wasm32 m68k-68020 6502-sim65 z80-sdcc}; do
   same=0; diff=0; one=0; both=0; n=0
   for f in "$root"/tests/run/c/*.c; do
