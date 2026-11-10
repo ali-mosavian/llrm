@@ -17,13 +17,22 @@
 //! L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
 //!
 //! # Not translated
-//! - SB3: `ExitSU` (the region end); the critical path is the deepest root.
+//! - SB3: `ExitSU` as a node. The terminator stays a schedulable node, so it
+//!   takes an issue slot the pin's `ExitSU` does not. The edge it holds for an
+//!   unread def (`buildSchedGraph`, latency less one) is translated for a model
+//!   that asks (`SchedulingModel::exit_edges`, arm64); the x86 models do not
+//!   and keep the deepest root as the critical path.
 //! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
 //!   is only asked of a model with a micro-op buffer (Cyclone), not the
 //!   in-order A510.
+//! - SB5b: the fast-cluster path of `BaseMemOpClusterMutation` (threshold 1000).
 //! - SB5: macro fusion, and
 //!   `tryBiasPhysRegs`/`reschedulePhysReg` (no region holds a physical
 //!   register, MS4).
+//!
+//! - SB9: a pre/post-indexed access reports no memory operand to the cluster
+//!   mutation (`getMemOperandsWithOffsetWidth`); it exists only after
+//!   `ldst_update`.
 //!
 //! Owner arm64-phi; exit with the model branch that first needs each.
 

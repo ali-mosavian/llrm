@@ -161,7 +161,15 @@ impl SchedulingModel for Arm64Model {
         &self,
         insn: &Insn,
     ) -> Unit {
-        let Some(class) = self.class(insn) else { return Unit { micro_ops: 1, ..Unit::default() } };
+        let class = self.class(insn);
+        if llrm_support::env_flag!("LLRM_MS_TRACE") {
+            eprintln!(
+                "machinesched class {} {}",
+                insn.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("-"),
+                if class.is_some() { "hit" } else { "miss" }
+            );
+        }
+        let Some(class) = class else { return Unit { micro_ops: 1, ..Unit::default() } };
         let mut unit = Unit {
             micro_ops: u32::from(class.num_micro_ops),
             begin_group: class.begin_group,
