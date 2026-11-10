@@ -227,6 +227,7 @@ pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
 pub mod exitne;
+pub mod narrowcycle;
 pub mod narrowiv;
 pub mod exitopt;
 pub mod exitpredicate;

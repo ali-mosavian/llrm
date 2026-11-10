@@ -373,7 +373,21 @@ pub fn select_block(
         Cpu::Z80 => z80_z80::TABLE,
         Cpu::Z180 => z80_z180::TABLE,
     });
-    let mut hooks = Z80Hooks::new(cpu, false);
+    // the users of each constant before any is selected: a selected store no longer names it
+    let mut uses: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for (id, node) in dag.nodes().iter().enumerate() {
+        if dag.is_deleted(id as u32) {
+            continue;
+        }
+        let mut seen: Vec<u32> = Vec::new();
+        for op in &node.ops {
+            if !seen.contains(&op.node) && dag.nodes()[op.node as usize].opcode == ISD::Constant {
+                seen.push(op.node);
+                *uses.entry(op.node).or_default() += 1;
+            }
+        }
+    }
+    let mut hooks = Z80Hooks::new(cpu, false).with_uses(uses);
     do_instruction_selection_with(dag, &Z80Pins, |adapter, node| selector.select(adapter, &mut hooks, node))
         .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();
