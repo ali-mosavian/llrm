@@ -17,7 +17,7 @@ for p in $progs; do
   [ -n "$stage" ] || { echo "$p: no switchconv stage"; continue; }
   (echo 'target triple = "x86_64-unknown-linux-gnu"'; grep -v '^target triple' "$stage") > "$out/$p.mid.ll"
   "$b/llc" -O2 -relocation-model=pic -filetype=obj "$out/$p.mid.ll" -o "$out/$p.llc.o" 2>> "$out/$p.err" || { echo "$p: llc failed"; head -2 "$out/$p.err"; continue; }
-  t() { python3 "$root/tools/ab/object_bytes.py" x86_64-linux "$1" | awk '{print $1 + $2}'; }  # code + data
+  t() { uv run -q --project "$root/tools" python "$root/tools/ab/object_bytes.py" x86_64-linux "$1" | awk '{print $1 + $2}'; }  # code + data
   n() { objdump -d --no-show-raw-insn "$1" | grep -cE '^ +[0-9a-f]+:'; }
   printf '%-10s %7s %7s   %7s %7s\n' "$p" "$(t $out/$p.llc.o)" "$(t $out/$p.llrm.o)" "$(n $out/$p.llc.o)" "$(n $out/$p.llrm.o)"
 done
