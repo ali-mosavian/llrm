@@ -34,7 +34,7 @@
 //!   allows vectorization and reordering.
 
 use llrm_analysis::ivdescriptors::{
-    InductionDescriptor, InductionKind, InductionStep, RecurrenceDescriptor, is_induction_phi, is_reduction_phi,
+    Analyses, InductionDescriptor, InductionKind, InductionStep, RecurrenceDescriptor, is_induction_phi, is_reduction_phi,
 };
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::scev::backedge::ExitCountKind;
@@ -167,7 +167,7 @@ fn can_vectorize_instr(
         if data.operands.len() != 4 {
             return Err(Refusal("Found an invalid PHI"));
         }
-        if let Some(descriptor) = is_reduction_phi(cx, Some(se), inst, the_loop) {
+        if let Some(descriptor) = is_reduction_phi(cx, Some(se), inst, the_loop, &Analyses::NONE) {
             found.reductions.push((inst, descriptor));
             return Ok(());
         }
