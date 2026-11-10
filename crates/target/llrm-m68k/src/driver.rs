@@ -169,9 +169,11 @@ fn lowered(
     // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
     // expansion
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
-    // The mid-end is the module's, run once: `text_with` runs it over the whole
-    // module for each function it is given.
-    crate::compile::mid_end_for(&program.modules[0], cpu)
+    // No second loop strength reduction: the pin runs LSR once, LoopTermFold
+    // right after it (`TargetPassConfig::addIRPasses`, l.874-876), and the
+    // pipeline's strength slot is that one. A second run rebuilt the counter
+    // the fold had removed. `compile::mid_end*` stays for raw-IR callers.
+    Ok(program.modules.swap_remove(0))
 }
 
 /// [`assembly`] with the debug lines and the stage dump chosen.

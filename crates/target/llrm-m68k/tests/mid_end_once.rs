@@ -1,4 +1,4 @@
-//! The m68k mid-end runs once per module, not once per function.
+//! The driver runs no mid-end (second LSR) after the pipeline.
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};
@@ -17,20 +17,19 @@ fn module_of(functions: usize) -> String {
     ir
 }
 
-/// `assembly` ran the mid-end over the whole module once for each function it
-/// printed: memory_expansion (1614 blocks, ~40 functions) took 294 s of CPU,
-/// 25,000 liveness solves. The test counted `liveness::solves()`, which the
-/// mid-end stopped calling: it read 0 solves and passed on any behaviour
-/// (the guard `four > 0` failed instead). It counts the runs of the mid-end
-/// itself now: one per module, however many functions.
+/// `assembly` ran a second loop strength reduction (`compile::mid_end`) after
+/// the pipeline's own, which had already run LoopTermFold: with the fold
+/// enabled, partition's pointer-compare exit became a count-to-zero again
+/// (98 B, as with the fold off). The driver runs no mid-end after the
+/// pipeline now. (Earlier form: one run per module, not per function, after
+/// 294 s of CPU on memory_expansion.)
 #[test]
-fn the_mid_end_is_not_run_again_for_each_function() {
+fn the_driver_runs_no_second_mid_end_after_the_pipeline() {
     let runs = |functions: usize| {
         let before = llrm_m68k::compile::mid_end_runs();
         assembly(&module_of(functions), Cpu::M68020, Level::O2).expect("compiles");
         llrm_m68k::compile::mid_end_runs() - before
     };
     let (four, eight) = (runs(4), runs(8));
-    assert!(four > 0, "the mid-end never ran: the counter measures nothing");
-    assert_eq!((four, eight), (1, 1), "four functions {four} runs, eight {eight}");
+    assert_eq!((four, eight), (0, 0), "four functions {four} runs, eight {eight}");
 }

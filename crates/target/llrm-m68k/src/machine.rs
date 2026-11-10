@@ -99,7 +99,35 @@ impl M68k {
     }
 }
 
+thread_local! {
+    static LOOP_TERM_FOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether LoopTermFold is on for m68k on this thread: the pin enables it only
+/// for RISCV, AVR and Mips (`lib/Target/*/*TargetMachine.cpp`), so off unless a
+/// caller asks (`LLRM_M68K_LTF` for the A/B sweeps, [`with_loop_term_fold`] for
+/// tests). The opt-in decision is piece 2 of the single-LSR chain.
+fn loop_term_fold() -> bool {
+    LOOP_TERM_FOLD.with(std::cell::Cell::get) || std::env::var_os("LLRM_M68K_LTF").is_some()
+}
+
+/// `run` with LoopTermFold on (or off) for m68k on this thread.
+pub fn with_loop_term_fold<R>(on: bool, run: impl FnOnce() -> R) -> R {
+    let before = LOOP_TERM_FOLD.with(|flag| flag.replace(on));
+    let result = run();
+    LOOP_TERM_FOLD.with(|flag| flag.set(before));
+    result
+}
+
 impl Tti for M68k {
+    fn enables_loop_term_fold(&self, _optsize: bool) -> bool {
+        loop_term_fold()
+    }
+
+    fn ltf_reuses_dominating_values(&self) -> bool {
+        loop_term_fold()
+    }
+
     fn opt_size_inline_byte_gate(&self) -> bool {
         true
     }
