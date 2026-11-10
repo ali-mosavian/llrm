@@ -74,3 +74,15 @@ seen: .res 1
     let main = "  lda #0\n  sta rc0\n  lda #$F0\n  sta rc1\n  jsr g\n  cmp seen\n  beq same\n  lda #1\n  rts\nsame:\n  lda #0\n";
     assert_eq!(common::run_with("alloca-align-two", main, &extra), 0);
 }
+
+/// The clamp left `load/store ... align 2` on an `align 1` object: the access claimed an alignment nothing has, a load of it could not be
+/// speculated, and `c >= '0' && c <= '9'` kept two branches (isdigit 28 -> 50 bytes, `tti::a_range_test_of_a_word_...`).
+#[test]
+fn an_access_to_a_clamped_local_states_what_the_local_keeps() {
+    let ir = format!(
+        "target datalayout = \"{}\"\n\ndeclare void @use(ptr)\n\ndefine i16 @f(i16 %v) {{\nentry:\n  %x = alloca i16, align 2\n  store i16 %v, ptr %x, align 2\n  call void @use(ptr %x)\n  %r = load i16, ptr %x, align 2\n  ret i16 %r\n}}\n",
+        common::pipeline::datalayout()
+    );
+    let text = mid_end(&ir).expect("compiles");
+    assert!(!text.contains("align 2"), "an access still states align 2 on an align 1 local:\n{text}");
+}

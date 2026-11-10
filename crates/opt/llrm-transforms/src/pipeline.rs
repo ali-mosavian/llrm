@@ -1413,6 +1413,21 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                     let realigned = realigned_above.is_some_and(|above| wanted > above);
                     if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
+                        // An access that states more than its object keeps claims an alignment nothing has, and
+                        // `isSafeToSpeculateLoad` refuses it (`isDereferenceableAndAlignedPointer`): the second load of
+                        // `c >= '0' && c <= '9'` stayed behind its branch and the range check never formed.
+                        let Some(result) = function.instruction(inst).result else { continue };
+                        for user in function.users(result).into_iter().copied().collect::<Vec<_>>() {
+                            let access = function.instruction(user.user);
+                            let pointer = match access.opcode {
+                                llrm_mir::opcode::Opcode::Load { align, .. } => (user.index == 0).then_some(align),
+                                llrm_mir::opcode::Opcode::Store { align, .. } => (user.index == 1).then_some(align),
+                                _ => None,
+                            };
+                            if pointer.is_some_and(|stated| stated.is_none_or(|stated| stated > kept)) {
+                                function.set_access_align(user.user, kept);
+                            }
+                        }
                     }
                 }
             }
