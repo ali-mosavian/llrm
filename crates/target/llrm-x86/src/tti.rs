@@ -214,9 +214,9 @@ impl X86 {
     }
 
     /// Whether `inst` is a plain load whose one user, in its own block, takes
-    /// it as a memory operand: `op r,[m]` for the integer ALU operations and
-    /// the compare (the load in either place of a commutative one, the second
-    /// of `sub`), `fadd`/`fmul` for float and double.
+    /// it as a memory operand beside a register: `op r,[m]` for the integer ALU
+    /// operations and the compare (the load in either place of a commutative
+    /// one, the second of `sub`), `fadd`/`fmul` for float and double.
     fn load_folds_into_its_only_user(
         &self,
         context: &llrm_mir::context::Context,
@@ -238,6 +238,13 @@ impl X86 {
             return false;
         }
         let place = only.index as usize;
+        // The memory form needs a register for the other operand: against an immediate
+        // `cmp [m],imm` is longer than the shared load plus `test`/`cmp r,imm`, and
+        // `add r,imm` cannot take the load at all.
+        let Some(&other) = function.instruction(only.user).operands.get(1 - place.min(1)) else { return false };
+        if !matches!(other, llrm_mir::module::Operand::Value(_)) {
+            return false;
+        }
         match &function.instruction(only.user).opcode {
             Opcode::Binary(BinaryOp::Add | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => integer.is_some(),
             Opcode::Binary(BinaryOp::Mul) => matches!(integer, Some(16 | 32 | 64)),

@@ -346,3 +346,33 @@ fn test_a_load_that_is_the_first_operand_of_a_sub_is_still_hoisted_on_x86() {
     let on_x86 = hoisted_with(&X86::of_cpu("i486").expect("a cpu"), &text);
     assert_eq!(on_x86.matches("load i32").count(), 1, "{on_x86}");
 }
+
+/// Against an immediate the memory form (`cmp [m],imm`) is longer than the
+/// shared load plus `test`: folding it grew sfm16_dbg -Os by 1 B at m16/m32 and
+/// 2 B at m64 (identity sweep, 2026-11-10).
+#[test]
+fn test_a_load_compared_with_a_constant_is_still_hoisted_on_x86() {
+    let text = format!(
+        "define i1 @f(ptr %p, i1 %c) {{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %l = load i32, ptr %p
+  %a = icmp eq i32 %l, 0
+  br label %b3
+
+b2:
+  %r = load i32, ptr %p
+  %b = icmp slt i32 %r, 0
+  br label %b3
+
+b3:
+  %v = phi i1 [ %a, %b1 ], [ %b, %b2 ]
+  ret i1 %v
+}}
+"
+    );
+    let on_x86 = hoisted_with(&X86::of_cpu("i486").expect("a cpu"), &text);
+    assert_eq!(on_x86.matches("load i32").count(), 1, "{on_x86}");
+}
