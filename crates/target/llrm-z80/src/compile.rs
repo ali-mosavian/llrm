@@ -300,6 +300,7 @@ fn allocated_with(
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
+    merge_lone_constant_stores(&mut function);
     let mut hoisted = function.clone();
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
@@ -1472,6 +1473,53 @@ fn split_loop_constant_stores(function: &mut MFunction) -> bool {
             changed = true;
             at += 2;
         }
+    }
+    changed
+}
+
+/// A constant word made in a block and stored there from a pair, with no other reader, is stored as immediates
+/// (4 B and 38 T against 9 B and 48 T in the frame): the one case the choice needs no pricing. The selector took the
+/// pair because the DAG's constant had a second user that became something else (an `adc` of zero, a counter), so
+/// the pair serves one store. Nearest pin step `InlineSpiller::reMaterializeFor`; DEVIATE Z80-IMM-USES (owner
+/// llrm-target-z80, exit 2026-11-30). Whether anything changed. Linear in the instructions.
+pub fn merge_lone_constant_stores(function: &mut MFunction) -> bool {
+    let mut users: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    let mut defs: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            match operand {
+                Operand::Use(Reg::Virt(v)) => *users.entry(*v).or_default() += 1,
+                Operand::Def(Reg::Virt(v)) => *defs.entry(*v).or_default() += 1,
+                _ => {}
+            }
+        }
+    }
+    let mut changed = false;
+    for block in &mut function.blocks {
+        let mut made: llrm_support::hash::HashMap<u32, i64> = llrm_support::hash::HashMap::default();
+        let mut gone: Vec<u32> = Vec::new();
+        for inst in &mut block.insts {
+            if let (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(value)]) = (inst.kind, &inst.operands[..]) {
+                if users.get(v) == Some(&1) && defs.get(v) == Some(&1) {
+                    made.insert(*v, *value as i64);
+                }
+                continue;
+            }
+            let immediate = match inst.kind {
+                Kind::Op("LD16mr") => "LD16mi",
+                Kind::Op("LD16fr") => "LD16fi",
+                _ => continue,
+            };
+            let Some(Operand::Use(Reg::Virt(v))) = inst.operands.first().cloned() else { continue };
+            let Some(value) = made.remove(&v) else { continue };
+            inst.kind = Kind::Op(immediate);
+            inst.operands[0] = Operand::Imm(value as _);
+            gone.push(v);
+            changed = true;
+        }
+        block.insts.retain(|inst| {
+            !matches!((inst.kind, &inst.operands[..]), (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(_)]) if gone.contains(v))
+        });
     }
     changed
 }
