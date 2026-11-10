@@ -77,6 +77,9 @@ thread_local! {
     /// Every long multiply of an unsized function is the `__mulsi3` call, the near-power constants included
     /// (the form `DECOMPOSE_MULS` is the inline counterpart of, for a sized one).
     pub static CALL_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The long shifts by a constant that the size threshold sends to the routine are calls in an unsized
+    /// function too, whatever its multiplies do (`CALL_MULS` also sets it).
+    pub static CALL_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function with a constant-count `memset` is selected the second time, each such fill an
     /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
     /// prices the two with the routine linked once (`compile::decomposed_functions`).
@@ -340,7 +343,7 @@ pub fn select_block(
     // them to pay for the routine (`prepare::mark_long_multiplies`), at every
     // level: four word multiplies inline cost more bytes and more T-states
     let all_calls = CALL_MULS.with(std::cell::Cell::get);
-    tli.set_force_shift_calls(all_calls && !sized);
+    tli.set_force_shift_calls((all_calls || CALL_SHIFTS.with(std::cell::Cell::get)) && !sized);
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
         if !sized {

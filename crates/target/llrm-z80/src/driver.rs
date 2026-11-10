@@ -160,7 +160,17 @@ pub fn selections_both(
     text: &str,
     request: &Request,
 ) -> Result<Vec<Selected>, String> {
-    Ok(selections_with_alternatives(text, request)?.0)
+    Ok(selections_with_alternatives(text, request)?.main)
+}
+
+/// The module's functions as selected, and again those with another form to price.
+pub struct Forms {
+    pub main: Vec<Selected>,
+    /// Long multiplies decomposed (a sized function) or every one a call with the shifts (an unsized one at -O1).
+    pub alternatives: Vec<Selected>,
+    /// An unsized function at -O1 with the long shifts the size threshold sends to the routine called, the
+    /// multiplies as in `main`: shifts and multiplies are priced as separate choices.
+    pub shift_calls: Vec<Selected>,
 }
 
 /// A function's name and its selection scheduled by `Source` and by `ILP`.
@@ -173,7 +183,7 @@ pub type Selected = (String, Result<Selection, String>, Result<Selection, String
 pub fn selections_with_alternatives(
     text: &str,
     request: &Request,
-) -> Result<(Vec<Selected>, Vec<Selected>), String> {
+) -> Result<Forms, String> {
     let mut program = program(text, request)?;
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
@@ -237,7 +247,21 @@ pub fn selections_with_alternatives(
             Some(selected)
         })
         .collect();
-    Ok((main, alternatives))
+    let shift_calls: Vec<Selected> = if request.level == Level::O1 {
+        names
+            .iter()
+            .filter(|name| calls_the_routine(name) == Some(false))
+            .map(|name| {
+                crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(true));
+                let selected = (name.clone(), select(name, false), select(name, true));
+                crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(false));
+                selected
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(Forms { main, alternatives, shift_calls })
 }
 
 /// The cost model the mid-end reads: the pin's `opt` with no target, whose

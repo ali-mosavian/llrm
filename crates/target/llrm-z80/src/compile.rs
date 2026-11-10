@@ -50,8 +50,8 @@ pub fn take_text_compares() -> usize {
 pub struct Prepared {
     selections: Selections,
     /// The functions that call `__mulsi3`, selected with the multiplies
-    /// decomposed.
-    alternatives: Selections,
+    /// decomposed, and with the long shifts called.
+    alternatives: Alternatives,
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
     sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
@@ -79,13 +79,28 @@ pub fn prepare(
     let (selections, alternatives) = if best_of {
         cached_both(ir, request)?
     } else {
-        let (selections, alternatives) = selections_with_alternatives(ir, request)?;
-        (Selections::new(selections), Selections::new(alternatives))
+        let forms = selections_with_alternatives(ir, request)?;
+        (Selections::new(forms.main), (Selections::new(forms.alternatives), Selections::new(forms.shift_calls)))
     };
     Ok(Prepared { selections, alternatives, sources, level: request.level })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
+
+/// The selections of the functions with another form to price: the decomposed multiplies (a sized function) or
+/// every multiply and shift a call (an unsized one at -O1), and the long shifts called with the multiplies as
+/// selected.
+type Alternatives = (Selections, Selections);
+
+/// One of the forms of a function priced against the others (`decomposed_functions`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Form {
+    Selected,
+    Alternative,
+    ShiftCalls,
+}
+
+const FORMS: [Form; 3] = [Form::Selected, Form::Alternative, Form::ShiftCalls];
 
 /// Each function selected with the DAG scheduled by `Source` and by `ILP`.
 type Selections = std::rc::Rc<
@@ -99,7 +114,7 @@ type Selections = std::rc::Rc<
 thread_local! {
     /// The two modules most recently run through the mid-end and selection (two: -Oz compiles a module as -Oz and as
     /// -Os, then reads the one it keeps), most recent first, with what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Alternatives)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
     /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
@@ -184,7 +199,7 @@ fn cached_selections(
 fn cached_both(
     ir: &str,
     request: &Request,
-) -> Result<(Selections, Selections), String> {
+) -> Result<(Selections, Alternatives), String> {
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
@@ -197,8 +212,9 @@ fn cached_both(
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let (main, alternatives) = selections_with_alternatives(ir, request)?;
-    let (one, other) = (Selections::new(main), Selections::new(alternatives));
+    let forms = selections_with_alternatives(ir, request)?;
+    let (one, other) =
+        (Selections::new(forms.main), (Selections::new(forms.alternatives), Selections::new(forms.shift_calls)));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
         held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
@@ -394,10 +410,13 @@ mod tests {
     fn at_o1_a_call_is_priced_against_its_own_function_not_the_module() {
         let routines = std::collections::HashSet::from(["__ashlsi3".to_owned()]);
         let hot_loop = (4000, 40_000_000, std::collections::HashSet::new());
-        let step = ("step".to_owned(), (30, 700, routines), Some((44, 120, std::collections::HashSet::new())));
+        let step = (
+            "step".to_owned(),
+            [Some((30, 700, routines)), Some((44, 120, std::collections::HashSet::new())), None],
+        );
         let variants: Variants = (vec![hot_loop], vec![step]);
-        let (calls, inline) = (std::collections::HashSet::new(), std::collections::HashSet::from([0]));
-        let module = |form| module_price(&variants, form);
+        let (calls, inline) = ([Form::Selected], [Form::Alternative]);
+        let module = |form: &[Form]| module_price(&variants, form);
         assert!(prefers(Level::O1, module(&calls), module(&inline)), "the module price cannot see the cost");
         assert!(!prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
     }
@@ -2243,21 +2262,22 @@ pub fn weighted_lines(
 /// the module's plan names stays ([`decomposes`]).
 fn lines_in(
     selected: &Selections,
-    alternatives: &Selections,
+    alternatives: &Alternatives,
     name: &str,
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
-    if alternatives.iter().any(|(one, ..)| one == name) && decomposes(selected, alternatives, name, request) {
-        return lines_of(alternatives, name, number, request);
+    match form_of(selected, alternatives, name, request) {
+        Form::Selected => lines_of(selected, name, number, request),
+        Form::Alternative => lines_of(&alternatives.0, name, number, request),
+        Form::ShiftCalls => lines_of(&alternatives.1, name, number, request),
     }
-    lines_of(selected, name, number, request)
 }
 
 thread_local! {
     /// The functions of the module whose alternatives are `__mulsi3`'s
     /// (by the address of that list) that keep the shifts and adds.
-    static DECOMPOSED: std::cell::RefCell<Option<(usize, std::rc::Rc<std::collections::HashSet<String>>)>> =
+    static DECOMPOSED: std::cell::RefCell<Option<(usize, std::rc::Rc<std::collections::HashMap<String, Form>>)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -2273,66 +2293,87 @@ thread_local! {
 /// DEVIATE z80-callinline-price (replaces z80-mul-function-price; see `prefers`): the pin's
 /// `decomposeMulByConstant` has no such choice. Owner z80. Every runtime routine a variant reaches is already
 /// priced (`runtime_size`), so no libcall is left out of the total.
-fn decomposes(
+fn form_of(
     selected: &Selections,
-    alternatives: &Selections,
+    alternatives: &Alternatives,
     name: &str,
     request: &Request,
-) -> bool {
-    let key = std::rc::Rc::as_ptr(alternatives) as usize;
+) -> Form {
+    if !alternatives.0.iter().chain(alternatives.1.iter()).any(|(one, ..)| one == name) {
+        return Form::Selected;
+    }
+    let key = std::rc::Rc::as_ptr(&alternatives.0) as usize;
     let held = DECOMPOSED.with(|held| {
         held.borrow().as_ref().filter(|(was, _)| *was == key).map(|(_, set)| set.clone())
     });
-    let set = held.unwrap_or_else(|| {
-        let set = std::rc::Rc::new(decomposed_functions(selected, alternatives, request));
-        DECOMPOSED.with(|held| *held.borrow_mut() = Some((key, set.clone())));
-        set
+    let forms = held.unwrap_or_else(|| {
+        let forms = std::rc::Rc::new(decomposed_functions(selected, alternatives, request));
+        DECOMPOSED.with(|held| *held.borrow_mut() = Some((key, forms.clone())));
+        forms
     });
-    set.contains(name)
+    forms.get(name).copied().unwrap_or(Form::Selected)
 }
 
 /// The priced forms of the module's functions: those with one form, and
-/// those that call `__mulsi3` with the form built with shifts and adds too
-/// (bytes, runtime routines reached).
+/// those with another form too (bytes, clocks, runtime routines reached).
 type Priced = (u32, u64, std::collections::HashSet<String>);
-type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
+/// A function with another form: its name and its price in each of the `FORMS` that exists (`Selected` always).
+type Entry = (String, [Option<Priced>; 3]);
+type Variants = (Vec<Priced>, Vec<Entry>);
 
 fn variants(
     selected: &Selections,
-    alternatives: &Selections,
+    alternatives: &Alternatives,
     request: &Request,
 ) -> Variants {
     let speed = !matches!(request.level, Level::Os | Level::Oz);
     // the printed form of every function, and for those with an alternative
-    // the form with the shifts
+    // the other forms
     let priced = |lines: Vec<Line>| {
         let (bytes, clocks) = expand::price_emitted(&lines, speed);
         (bytes, clocks, crate::runtime_size::referenced(&lines))
     };
     let mut fixed: Vec<Priced> = Vec::new();
-    let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
+    let mut either: Vec<Entry> = Vec::new();
     for (one, ..) in selected.iter() {
         let call = lines_of(selected, one, 0, request).ok().map(priced);
         let Some(call) = call else { continue };
-        if !alternatives.iter().any(|(other, ..)| other == one) {
+        let others = [(&alternatives.0, Form::Alternative), (&alternatives.1, Form::ShiftCalls)];
+        if !others.iter().any(|(set, _)| set.iter().any(|(other, ..)| other == one)) {
             fixed.push(call);
             continue;
         }
-        let differs = {
-            let (a, b) = (machine_function_with(selected, one, true), machine_function_with(alternatives, one, true));
-            !matches!((a, b), (Ok(a), Ok(b)) if format!("{a:?}") == format!("{b:?}"))
-        };
-        let decomposed = if differs { lines_of(alternatives, one, 0, request).ok().map(priced) } else { None };
-        either.push((one.clone(), call, decomposed));
+        let mut forms: [Option<Priced>; 3] = [Some(call), None, None];
+        for (set, form) in others {
+            if !set.iter().any(|(other, ..)| other == one) {
+                continue;
+            }
+            let differs = {
+                let (a, b) = (machine_function_with(selected, one, true), machine_function_with(set, one, true));
+                !matches!((a, b), (Ok(a), Ok(b)) if format!("{a:?}") == format!("{b:?}"))
+            };
+            if differs {
+                forms[form as usize] = lines_of(set, one, 0, request).ok().map(priced);
+            }
+        }
+        either.push((one.clone(), forms));
     }
     (fixed, either)
 }
 
-/// The module's bytes with the functions of `decomposes` built with shifts
-/// and adds: theirs and the runtime routines reached, each linked once.
+/// The price of entry `at` in form `form`; the selected one where it has no such form.
+fn form_price(
+    (_, forms): &Entry,
+    form: Form,
+) -> &Priced {
+    forms[form as usize].as_ref().unwrap_or_else(|| forms[Form::Selected as usize].as_ref().expect("selected"))
+}
+
+/// The module's bytes with each function in the form `chosen` gives it: theirs and the runtime routines reached,
+/// each linked once.
 fn module_price(
     (fixed, either): &Variants,
-    decomposes: &std::collections::HashSet<usize>,
+    chosen: &[Form],
 ) -> (u32, u64) {
     use std::collections::HashSet;
     let mut reached: HashSet<String> = HashSet::new();
@@ -2342,11 +2383,8 @@ fn module_price(
         clocks += one_clocks;
         reached.extend(refs.iter().cloned());
     }
-    for (at, (_, call, decomposed)) in either.iter().enumerate() {
-        let (one_bytes, one_clocks, refs) = match decomposed {
-            Some(decomposed) if decomposes.contains(&at) => decomposed,
-            _ => call,
-        };
+    for (at, entry) in either.iter().enumerate() {
+        let (one_bytes, one_clocks, refs) = form_price(entry, chosen[at]);
         bytes += one_bytes;
         clocks += one_clocks;
         reached.extend(refs.iter().cloned());
@@ -2354,25 +2392,25 @@ fn module_price(
     (bytes + crate::runtime_size::reached(&reached), clocks)
 }
 
-/// The module's bytes with every function calling `__mulsi3` and with every
-/// one that has the other form built with shifts and adds.
+/// The module's bytes with every function in its selected form and with every one that has the other form in it.
 pub fn module_prices(
     ir: &str,
     request: &Request,
 ) -> Result<(u32, u32), String> {
     let (selected, alternatives) = cached_both(ir, request)?;
     let variants = variants(&selected, &alternatives, request);
-    let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
-    Ok((module_price(&variants, &std::collections::HashSet::new()).0, module_price(&variants, &every).0))
+    let none = vec![Form::Selected; variants.1.len()];
+    let every: Vec<Form> = variants.1.iter().map(|(_, forms)| if forms[1].is_some() { Form::Alternative } else { Form::Selected }).collect();
+    Ok((module_price(&variants, &none).0, module_price(&variants, &every).0))
 }
 
-/// The price of function `at` alone in the form `decomposes` gives it: its bytes and clocks, and the bytes of the
+/// The price of function `at` alone in the form `chosen` gives it: its bytes and clocks, and the bytes of the
 /// runtime routines it reaches that no other function of the module reaches. The clocks of a function are
 /// weighted by the loops inside it only, so against the whole module's clocks (dominated by a hot loop elsewhere)
 /// a call that costs a hundredfold in a function the loop calls would not register.
 fn own_price(
     (fixed, either): &Variants,
-    decomposes: &std::collections::HashSet<usize>,
+    chosen: &[Form],
     at: usize,
 ) -> (u32, u64) {
     use std::collections::HashSet;
@@ -2384,41 +2422,35 @@ fn own_price(
                 .iter()
                 .enumerate()
                 .filter(|(one, _)| *one != at)
-                .flat_map(|(one, (_, call, decomposed))| match decomposed {
-                    Some(decomposed) if decomposes.contains(&one) => decomposed.2.iter(),
-                    _ => call.2.iter(),
-                }),
+                .flat_map(|(one, entry)| form_price(entry, chosen[one]).2.iter()),
         )
         .cloned()
         .collect();
-    let (_, call, decomposed) = &either[at];
-    let (bytes, clocks, refs) = match decomposed {
-        Some(decomposed) if decomposes.contains(&at) => decomposed,
-        _ => call,
-    };
+    let (bytes, clocks, refs) = form_price(&either[at], chosen[at]);
     let mut with = others.clone();
     with.extend(refs.iter().cloned());
     (bytes + crate::runtime_size::reached(&with) - crate::runtime_size::reached(&others), *clocks)
 }
 
-/// The functions of the module that call `__mulsi3`, built with the shifts
-/// and adds where the module is smaller for it (bytes first at the size
-/// levels).
+/// The form of each function of the module that has more than one, where the module is smaller for it (bytes
+/// first at the size levels). Only the functions that leave `Selected` are named.
 fn decomposed_functions(
     selected: &Selections,
-    alternatives: &Selections,
+    alternatives: &Alternatives,
     request: &Request,
-) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
+) -> std::collections::HashMap<String, Form> {
     let variants = variants(selected, alternatives, request);
     let either = &variants.1;
     let level = request.level;
-    let total = |decomposes: &HashSet<usize>| module_price(&variants, decomposes);
+    let total = |chosen: &[Form]| module_price(&variants, chosen);
     // descend from all alternatives and from none (two functions may together
     // pay for a routine neither pays for alone); a flip needs a strictly better
     // module price at the level, and the second start wins only if strictly
     // better than the first
-    let every: HashSet<usize> = (0..either.len()).filter(|at| either[*at].2.is_some()).collect();
+    let every: Vec<Form> = either
+        .iter()
+        .map(|(_, forms)| if forms[Form::Alternative as usize].is_some() { Form::Alternative } else { Form::Selected })
+        .collect();
     // a function tuned for size (`optsize`/`minsize`) is priced bytes first at any level, as the pin's `ForCodeSize`
     // reads it; the others by the level
     let size_first: Vec<bool> = either
@@ -2428,30 +2460,30 @@ fn decomposed_functions(
                 || selected.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.sized))
         })
         .collect();
-    let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
-    let descend = |start: HashSet<usize>| {
+    let all_sized = either.iter().enumerate().all(|(at, (_, forms))| size_first[at] || forms.iter().skip(1).all(Option::is_none));
+    let descend = |start: Vec<Form>| {
         let mut chosen = start;
         let mut best = total(&chosen);
         for _ in 0..3 {
             let mut moved = false;
             for at in 0..either.len() {
-                if either[at].2.is_none() {
-                    continue;
-                }
-                let mut other = chosen.clone();
-                if !other.remove(&at) {
-                    other.insert(at);
-                }
-                let price = total(&other);
-                let better = if size_first[at] {
-                    prefers(Level::Os, price, best)
-                } else if level == Level::O1 {
-                    prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
-                } else {
-                    prefers(level, price, best)
-                };
-                if better {
-                    (chosen, best, moved) = (other, price, true);
+                for form in FORMS {
+                    if form == chosen[at] || either[at].1[form as usize].is_none() {
+                        continue;
+                    }
+                    let mut other = chosen.clone();
+                    other[at] = form;
+                    let price = total(&other);
+                    let better = if size_first[at] {
+                        prefers(Level::Os, price, best)
+                    } else if level == Level::O1 {
+                        prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
+                    } else {
+                        prefers(level, price, best)
+                    };
+                    if better {
+                        (chosen, best, moved) = (other, price, true);
+                    }
                 }
             }
             if !moved {
@@ -2463,17 +2495,18 @@ fn decomposed_functions(
     // a tie keeps the faster form: the alternative at the size levels is the
     // inline form, at the others the all-calls form
     let module_level = if all_sized { Level::Os } else { level };
+    let none = vec![Form::Selected; either.len()];
     let (first, second) = if module_level == Level::Os {
-        (descend(every), descend(HashSet::new()))
+        (descend(every), descend(none))
     } else {
-        (descend(HashSet::new()), descend(every))
+        (descend(none), descend(every))
     };
     let chosen = if prefers(module_level, second.0, first.0) { second.1 } else { first.1 };
     either
         .iter()
-        .enumerate()
-        .filter(|(at, (_, _, decomposed))| decomposed.is_some() && chosen.contains(at))
-        .map(|(_, (one, ..))| one.clone())
+        .zip(chosen)
+        .filter(|(_, form)| *form != Form::Selected)
+        .map(|((name, _), form)| (name.clone(), form))
         .collect()
 }
 
@@ -2579,7 +2612,7 @@ pub fn text_in(
 fn text_of(
     source: Option<(String, Option<u32>)>,
     selected: &Selections,
-    alternatives: &Selections,
+    alternatives: &Alternatives,
     name: &str,
     number: usize,
     request: &Request,
