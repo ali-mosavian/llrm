@@ -49,11 +49,9 @@ above() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>b)}'; }
 settled() {  # settled L1
   local ok=1 every=${LG_SETTLE:-15}
   awk -v a="$1" -v b="${LG_FAST_1M:-44}" 'BEGIN{exit !(a<b)}' && every=$(awk -v a="$every" -v b="${LG_SETTLE_FAST:-5}" 'BEGIN{print (b<a)?b:a}')
-  exec {lock_fd}>"$slot_dir/admit.lock"; flock "$lock_fd"
   if awk -v now="$(date +%s)" -v last="$(stat -c %Y "$slot_dir/last_admit" 2>/dev/null || echo 0)" -v every="$every" 'BEGIN{exit !(now-last>=every)}'; then
     touch "$slot_dir/last_admit"; ok=0
   fi
-  exec {lock_fd}>&-
   return $ok
 }
 
@@ -147,17 +145,22 @@ admit() {
   while :; do
     read -r l1 _ < "$file"
     slots=$(slot_count "$l1")
+    # Count, take a slot and record the job under one lock (admit.lock, bounded wait): two starters evaluating at once each saw the other only as a probe
+    # and both took a slot under a cap of 1 (the loop's last flake). Released before every return and before the sleep.
+    exec {adm_fd}>"$slot_dir/admit.lock"; flock -w 30 "$adm_fd" || true
     scan_holders; busy=0
     for i in $(seq 1 "$widest"); do  # slots beyond the current count stay held by running jobs
       exec {slot_fd}>"$slot_dir/slot.$i"
       if flock -n "$slot_fd"; then
-        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first "$l1"; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; mkdir -p "$slot_dir/jobs"; echo "$$ 0 $*" > "$slot_dir/jobs/$$"; return 0; fi
+        [ -z "${LG_TEST_PROBE_PAUSE:-}" ] || sleep "$LG_TEST_PROBE_PAUSE" {slot_fd}>&-  # test hook: hold the probe lock before deciding
+        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first "$l1"; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; mkdir -p "$slot_dir/jobs"; echo "$$ 0 $*" > "$slot_dir/jobs/$$"; exec {adm_fd}>&-; return 0; fi
         flock -u "$slot_fd"
       else
         slot_busy "$i" && busy=$((busy + 1))
       fi
       exec {slot_fd}>&-
     done
+    exec {adm_fd}>&-
     [ "${LG_NO_WAIT:-}" = 1 ] && { log "no free slot or load too high"; return 75; }
     # a queued starter says so at once and every LG_WAIT_LOG seconds (60): "queued" must not look like "hung"
     if awk -v now="$(date +%s.%N)" -v due="$next_note" 'BEGIN{exit !(now>=due)}'; then

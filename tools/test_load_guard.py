@@ -452,6 +452,29 @@ class ActiveHolders(Env, unittest.TestCase):
         self.assertTrue(self.admitted(2), "one job on two slot files ate two slots")
         self.assertFalse(self.admitted(1))
 
+    def slot_held(self, n):
+        import fcntl
+
+        try:
+            fd = os.open(os.path.join(self.slots, f"slot.{n}"), os.O_RDWR)
+        except OSError:
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
+        except OSError:
+            return True
+        finally:
+            os.close(fd)
+
+    def test_two_starters_deciding_at_once_do_not_both_take_a_slot_under_a_cap_of_one(self):
+        """The loop's last flake (test_a_starter_without_a_slot_says_it_waits_for_a_slot, 2 in 25 at load 60): the first starter holds slot 1 while it decides, the second counted
+        it as a probe, took slot 2 and went, then the first went too. Counting, taking and recording are one critical section."""
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0", LG_TEST_PROBE_PAUSE="8")
+        self.assertTrue(until(lambda: self.slot_held(1), 30), "the first starter never took slot 1")  # it holds slot.1, undecided, for 8 s
+        second = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_NO_WAIT="1", LG_SETTLE="0", LG_SCAN_EVERY="0")
+        self.assertEqual(second.wait(timeout=30), 75, "two starters were admitted under a cap of one")
+
     def test_a_job_admitted_but_not_yet_spawned_already_counts(self):
         """The 1-in-6 failure of the loop: a starter right behind an admitted one found it holding the slot with no record and no child yet, read it as a probe, and took slot 2 (slots 1)."""
         first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0", LG_TEST_SPAWN_PAUSE="3")
