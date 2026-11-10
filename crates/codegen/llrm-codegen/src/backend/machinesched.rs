@@ -1841,4 +1841,122 @@ mod tests {
             assert_eq!(super::bottom_up(&insns, &graph, None), old_untracked_order(&graph), "{edges:?}");
         }
     }
+
+    /// The old loop with pressure followed (release/next c682533d86): register
+    /// excess, register critical, weak, register max, then the later node.
+    fn old_tracked_order(
+        insns: &[Arc<Insn>],
+        graph: &super::Graph,
+        tracking: &super::Tracking,
+    ) -> Vec<usize> {
+        use crate::backend::regpressure::{Pick, Region, Tracker, try_pressure};
+        let n = insns.len();
+        let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
+        let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+        let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
+        let region = Region::of(insns);
+        let mut program = Tracker::over(tracking.model, &region, tracking.live_out.iter().copied(), [], false);
+        for node in (0..n).rev() {
+            program.place(node);
+        }
+        let region_max = program.max().to_vec();
+        let mut critical = Tracker::critical_sets(tracking.model, &region_max);
+        let mut tracker = Tracker::over(
+            tracking.model,
+            &region,
+            tracking.live_out.iter().copied(),
+            tracking.live_thru.iter().copied(),
+            true,
+        );
+        let mut placed = Vec::with_capacity(n);
+        while placed.len() < n {
+            let mut best = 0;
+            let deltas: Vec<_> = available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect();
+            for candidate in 1..available.len() {
+                let (try_node, cand_node) = (available[candidate], available[best]);
+                let (try_delta, cand_delta) = (&deltas[candidate], &deltas[best]);
+                let pressure = |try_p, cand_p| match try_pressure(try_p, cand_p) {
+                    Pick::Try => Some(true),
+                    Pick::Cand => Some(false),
+                    Pick::Neither => None,
+                };
+                let wins = pressure(try_delta.excess, cand_delta.excess)
+                    .or_else(|| pressure(try_delta.critical_max, cand_delta.critical_max))
+                    .or_else(|| {
+                        let (try_weak, cand_weak) = (weak_left[try_node], weak_left[cand_node]);
+                        (try_weak != cand_weak).then_some(try_weak < cand_weak)
+                    })
+                    .or_else(|| pressure(try_delta.current_max, cand_delta.current_max))
+                    .unwrap_or(try_node > cand_node);
+                if wins {
+                    best = candidate;
+                }
+            }
+            let node = available.swap_remove(best);
+            tracker.place(node);
+            for entry in &mut critical {
+                let most = tracker.max()[entry.set] as i32;
+                if most > entry.inc {
+                    entry.inc = most;
+                }
+            }
+            placed.push(node);
+            for &before in &graph.weak_preds[node] {
+                weak_left[before] -= 1;
+            }
+            for &before in &graph.preds[node] {
+                waiting[before] -= 1;
+                if waiting[before] == 0 {
+                    available.push(before);
+                }
+            }
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// Same as the untracked oracle with pressure followed: on 300 random
+    /// value graphs and limits of 1 to 4 the driver orders as the loop it
+    /// replaced (0 differ, and the limit does split the picks: some graphs
+    /// order differently from the untracked order).
+    #[test]
+    fn test_bottom_up_with_pressure_orders_as_the_loop_it_replaced() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let mut moved_by_pressure = 0;
+        for _ in 0..300 {
+            let n = 3 + next(6);
+            let insns: Vec<Arc<Insn>> = (0..n)
+                .map(|k| {
+                    let value = k as u32 + 1;
+                    let uses: Vec<u32> = if k == 0 {
+                        vec![]
+                    } else {
+                        (0..1 + next(2))
+                            .map(|_| 1 + next(k) as u32)
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .into_iter()
+                            .collect()
+                    };
+                    let sources =
+                        if uses.is_empty() { vec![imm(k as i64)] } else { uses.iter().map(|&u| held(u)).collect() };
+                    insn(k as i64, semantics(Operation::Binary, "add", vec![held(value)], sources), vec![value], uses)
+                })
+                .collect();
+            let found = super::graph(&insns, regs, 16);
+            let model = one_set(1 + next(4) as u32);
+            let tracking = super::Tracking { model: &model, live_out: vec![n as u32], live_thru: vec![] };
+            let order = super::bottom_up(&insns, &found, Some(&tracking));
+            assert_eq!(order, old_tracked_order(&insns, &found, &tracking), "{insns:?}");
+            moved_by_pressure += usize::from(order != super::bottom_up(&insns, &found, None));
+        }
+        assert!(moved_by_pressure > 0, "pressure never decided a pick: the oracle compares nothing");
+    }
 }
