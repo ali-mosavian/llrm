@@ -84,6 +84,12 @@ impl Machine {
         }
     }
 
+    /// `hasInstrSchedModel`: the model states resources (the invalid entry
+    /// alone is none).
+    pub fn has_instr_sched_model(&self) -> bool {
+        self.resources.len() > 1
+    }
+
     pub fn latency_factor(&self) -> u32 {
         self.resource_lcm
     }
@@ -436,33 +442,35 @@ impl Boundary {
             },
         }
         self.retired_mops += inc_mops;
-        let dec_rem_issue = inc_mops * machine.micro_op_factor();
-        assert!(rem.rem_issue_count >= dec_rem_issue, "micro-ops double counted");
-        rem.rem_issue_count -= dec_rem_issue;
-        if self.zone_crit_res_idx != 0 {
-            // Issue becomes the critical resource once the scaled micro-ops
-            // pass the old one by a cycle.
-            let scaled = i64::from(self.retired_mops * machine.micro_op_factor());
-            if scaled - i64::from(self.resource_count(self.zone_crit_res_idx)) >= i64::from(machine.latency_factor()) {
-                self.zone_crit_res_idx = 0;
+        if machine.has_instr_sched_model() {
+            let dec_rem_issue = inc_mops * machine.micro_op_factor();
+            assert!(rem.rem_issue_count >= dec_rem_issue, "micro-ops double counted");
+            rem.rem_issue_count -= dec_rem_issue;
+            if self.zone_crit_res_idx != 0 {
+                // Issue becomes the critical resource once the scaled micro-ops
+                // pass the old one by a cycle.
+                let scaled = i64::from(self.retired_mops * machine.micro_op_factor());
+                if scaled - i64::from(self.resource_count(self.zone_crit_res_idx)) >= i64::from(machine.latency_factor()) {
+                    self.zone_crit_res_idx = 0;
+                }
             }
-        }
-        for entry in &unit.writes {
-            let cycle =
-                self.count_resource(machine, unit, entry.idx, entry.release_at_cycle, entry.acquire_at_cycle, rem);
-            if cycle > next_cycle {
-                next_cycle = cycle;
-            }
-        }
-        if unit.has_reserved_resource {
-            // Top-down: the cycle the node issues plus what it reserves;
-            // bottom-up: the node's cycle.
             for entry in &unit.writes {
-                if machine.resources[entry.idx].buffer_size == 0 {
-                    let (until, instance) =
-                        self.next_resource_cycle(machine, unit, entry.idx, entry.release_at_cycle, entry.acquire_at_cycle);
-                    self.reserved_cycles[instance] =
-                        if self.is_top { until.max(next_cycle + entry.release_at_cycle) } else { next_cycle };
+                let cycle =
+                    self.count_resource(machine, unit, entry.idx, entry.release_at_cycle, entry.acquire_at_cycle, rem);
+                if cycle > next_cycle {
+                    next_cycle = cycle;
+                }
+            }
+            if unit.has_reserved_resource {
+                // Top-down: the cycle the node issues plus what it reserves;
+                // bottom-up: the node's cycle.
+                for entry in &unit.writes {
+                    if machine.resources[entry.idx].buffer_size == 0 {
+                        let (until, instance) =
+                            self.next_resource_cycle(machine, unit, entry.idx, entry.release_at_cycle, entry.acquire_at_cycle);
+                        self.reserved_cycles[instance] =
+                            if self.is_top { until.max(next_cycle + entry.release_at_cycle) } else { next_cycle };
+                    }
                 }
             }
         }

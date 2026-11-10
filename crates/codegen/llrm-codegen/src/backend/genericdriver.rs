@@ -72,7 +72,6 @@ fn resource_limited(l_factor: u32, count: u32, latency: u32) -> bool {
 pub struct Scheduler<'a> {
     graph: &'a Graph,
     machine: &'a Machine,
-    has_model: bool,
     units: Vec<Unit>,
     policy: RegionPolicy,
     pressure: Option<&'a mut dyn BottomPressure>,
@@ -96,7 +95,6 @@ impl<'a> Scheduler<'a> {
     pub fn new(
         graph: &'a Graph,
         machine: &'a Machine,
-        has_model: bool,
         mut units: Vec<Unit>,
         policy: RegionPolicy,
         pressure: Option<&'a mut dyn BottomPressure>,
@@ -119,12 +117,11 @@ impl<'a> Scheduler<'a> {
         for node in (0..n).rev() {
             units[node].height = succ_edges[node].iter().map(|&(succ, lat)| units[succ].height + lat).max().unwrap_or(0);
         }
-        let rem = if has_model { Remainder::new(machine, &units) } else { Remainder::default() };
+        let rem = if machine.has_instr_sched_model() { Remainder::new(machine, &units) } else { Remainder::default() };
         let idle = Cand::new(0, false, CandPolicy::default());
         Scheduler {
             graph,
             machine,
-            has_model,
             policy,
             pressure,
             top: Boundary::new(machine, true),
@@ -175,10 +172,10 @@ impl<'a> Scheduler<'a> {
     fn set_policy(&self, zone: &Boundary, other: &Boundary) -> CandPolicy {
         let mut policy = CandPolicy::default();
         let (other_count, other_crit) =
-            if self.has_model { other.other_resource_count(self.machine, &self.rem) } else { (0, 0) };
+            if self.machine.has_instr_sched_model() { other.other_resource_count(self.machine, &self.rem) } else { (0, 0) };
         let mut rem_latency = None;
         let mut other_limited = false;
-        if self.has_model && other_count != 0 {
+        if self.machine.has_instr_sched_model() && other_count != 0 {
             let rem = *rem_latency.get_or_insert_with(|| self.rem_latency(zone));
             other_limited = resource_limited(self.machine.latency_factor(), other_count, rem);
         }
@@ -432,7 +429,7 @@ mod tests {
 
     fn order(buffer: u32, policy: RegionPolicy) -> Vec<usize> {
         let (graph, machine, units) = diamond(buffer);
-        Scheduler::new(&graph, &machine, true, units, policy, None).schedule().0
+        Scheduler::new(&graph, &machine, units, policy, None).schedule().0
     }
 
     /// pin: `llc -mcpu=generic` (in order) hoists the load and the divides above

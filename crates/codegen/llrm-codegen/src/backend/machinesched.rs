@@ -44,7 +44,9 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
-use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Region, Tracker, try_pressure};
+use crate::backend::genericdriver::{BottomPressure, RegionPolicy, Scheduler};
+use crate::backend::regpressure::{Delta, Model, PressureChange, Region, Tracker};
+use crate::backend::schedboundary::{Machine, ProcResource, Unit};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -860,45 +862,30 @@ pub struct Tracking<'a> {
     pub live_thru: Vec<u32>,
 }
 
-/// `tryCandidate` (MachineScheduler.cpp#L3965) of `GenericScheduler` for a
-/// bottom-up region of a target with no schedule model: `RegExcess`,
-/// `RegCritical` where pressure is tracked, `Weak`, `RegMax` where it is, then
-/// `NodeOrder` (the
-/// later one first). Left out: `tryBiasPhysRegs` (no physical-register copy is
-/// in a region, MS4), stalls, clusters and resources (no model),
-/// and latency, which only `ReduceLatency` turns on and `pickNode` of a
-/// bottom-up region never sets (`NoPolicy`).
-fn try_candidate(
-    try_node: usize,
-    try_delta: &Delta,
-    try_weak: usize,
-    cand_node: usize,
-    cand_delta: &Delta,
-    cand_weak: usize,
-    tracked: bool,
-) -> Option<&'static str> {
-    let pressure = |name, try_p, cand_p| match try_pressure(try_p, cand_p) {
-        Pick::Try => Some(Some(name)),
-        Pick::Cand => Some(None),
-        Pick::Neither => None,
-    };
-    if tracked {
-        for (name, try_p, cand_p) in [
-            ("REG-EXCESS", try_delta.excess, cand_delta.excess),
-            ("REG-CRIT", try_delta.critical_max, cand_delta.critical_max),
-        ] {
-            if let Some(picked) = pressure(name, try_p, cand_p) {
-                return picked;
+/// The bottom zone's pressure, for the driver: the tracker, the region's
+/// critical sets and the maximum of the program order (`RegionCriticalPSets`,
+/// `RegionPressure`).
+struct Followed<'a> {
+    tracker: Tracker<'a>,
+    critical: Vec<PressureChange>,
+    region_max: Vec<u32>,
+}
+
+impl BottomPressure for Followed<'_> {
+    fn delta(&self, node: usize) -> Delta {
+        self.tracker.delta(node, &self.critical, &self.region_max)
+    }
+
+    fn place(&mut self, node: usize) {
+        self.tracker.place(node);
+        // `updateScheduledPressure`.
+        for entry in &mut self.critical {
+            let most = self.tracker.max()[entry.set] as i32;
+            if most > entry.inc {
+                entry.inc = most;
             }
         }
     }
-    if try_weak != cand_weak {
-        return (try_weak < cand_weak).then_some("WEAK");
-    }
-    if tracked && let Some(picked) = pressure("REG-MAX", try_delta.current_max, cand_delta.current_max) {
-        return picked;
-    }
-    (try_node > cand_node).then_some("ORDER")
 }
 
 /// The order of a region scheduled bottom-up as `GenericScheduler` does for
@@ -907,98 +894,57 @@ fn try_candidate(
 /// `SchedBoundary::releaseNode` never defers a node (`IsBuffered`, and one
 /// micro-op never overfills a cycle) and the latency of an edge does not
 /// order anything: an instruction is available once every reader is placed,
-/// and [`try_candidate`] picks among those. With `tracking` (a region of more
-/// than half the allocatable registers' worth of instructions, `initPolicy`
-/// #L3688) pressure is followed per set.
+/// and [`genericsched::try_candidate`] picks among those. With `tracking` (a
+/// region of more than half the allocatable registers' worth of instructions,
+/// `initPolicy` #L3688) pressure is followed per set.
 ///
-/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited`, which turns on the
-/// height and depth heuristic in a loop whose in-flight micro-ops pass the
-/// buffer (32).
+/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited` (SB4 of
+/// [`genericdriver`]), which turns on the height and depth heuristic in a loop
+/// whose in-flight micro-ops pass the buffer (32).
 pub fn bottom_up(
     insns: &[Arc<Insn>],
     graph: &Graph,
     tracking: Option<&Tracking>,
 ) -> Vec<usize> {
     let n = insns.len();
-    let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
-    let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
-    let mut placed = Vec::with_capacity(n);
-    let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
-    // `RegionPressure` (program order) and `RegionCriticalPSets`.
-    let mut region_max: Vec<u32> = Vec::new();
-    let mut critical: Vec<PressureChange> = Vec::new();
     let region = tracking.map(|_| Region::of(insns));
-    let mut tracker = tracking
-        .zip(region.as_ref())
-        .map(
-            |(tracking, region)| {
-                let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
-                for node in (0..n).rev() {
-                    program.place(node);
-                }
-                region_max = program.max().to_vec();
-                critical = Tracker::critical_sets(tracking.model, &region_max);
-                Tracker::over(
-                    tracking.model,
-                    region,
-                    tracking.live_out.iter().copied(),
-                    tracking.live_thru.iter().copied(),
-                    true,
-                )
-            },
-        );
-    while placed.len() < n {
-        let mut best = 0;
-        let mut why = "ONLY1";
-        // `pickOnlyChoice` when only one is available.
-        if available.len() > 1 {
-            why = "FIRST";
-            let deltas: Vec<Delta> = match &tracker {
-                Some(tracker) => available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect(),
-                None => vec![Delta::default(); available.len()],
-            };
-            for candidate in 1..available.len() {
-                if let Some(reason) = try_candidate(
-                    available[candidate],
-                    &deltas[candidate],
-                    weak_left[available[candidate]],
-                    available[best],
-                    &deltas[best],
-                    weak_left[available[best]],
-                    tracker.is_some(),
-                ) {
-                    best = candidate;
-                    why = reason;
-                }
-            }
+    let mut followed = tracking.zip(region.as_ref()).map(|(tracking, region)| {
+        let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+        for node in (0..n).rev() {
+            program.place(node);
         }
-        let node = available.swap_remove(best);
-        if trace() {
-            eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
+        let region_max = program.max().to_vec();
+        let critical = Tracker::critical_sets(tracking.model, &region_max);
+        Followed {
+            tracker: Tracker::over(
+                tracking.model,
+                region,
+                tracking.live_out.iter().copied(),
+                tracking.live_thru.iter().copied(),
+                true,
+            ),
+            critical,
+            region_max,
         }
-        if let Some(tracker) = &mut tracker {
-            tracker.place(node);
-            // `updateScheduledPressure`.
-            for entry in &mut critical {
-                let most = tracker.max()[entry.set] as i32;
-                if most > entry.inc {
-                    entry.inc = most;
-                }
-            }
-        }
-        placed.push(node);
-        for &before in &graph.weak_preds[node] {
-            weak_left[before] -= 1;
-        }
-        for &before in &graph.preds[node] {
-            waiting[before] -= 1;
-            if waiting[before] == 0 {
-                available.push(before);
-            }
+    });
+    let machine = i486_machine();
+    let units = vec![Unit { micro_ops: 1, ..Unit::default() }; n];
+    let pressure = followed.as_mut().map(|one| one as &mut dyn BottomPressure);
+    let (order, reasons) =
+        Scheduler::new(graph, &machine, units, RegionPolicy::bottom_up(), pressure).schedule();
+    if trace() {
+        // Bottom-up picks come last-first.
+        for (&node, reason) in order.iter().rev().zip(&reasons) {
+            eprintln!("machinesched pick {node} {:?} {} tracked={}", insns[node].defines, reason.name(), tracking.is_some());
         }
     }
-    placed.reverse();
-    placed
+    order
+}
+
+/// X86.td's `GenericModel`: issue width 4, a micro-op buffer of 32, no
+/// resources.
+fn i486_machine() -> Machine {
+    Machine::new(4, 32, vec![ProcResource { num_units: 0, buffer_size: -1, sub_units: vec![] }])
 }
 
 /// The pre-RA machine scheduler: every region of a block ordered by
