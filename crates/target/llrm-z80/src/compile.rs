@@ -1477,7 +1477,8 @@ fn split_loop_constant_stores(function: &mut MFunction) -> bool {
 /// A constant word made in a block and stored there from a pair, with no other reader, is stored as immediates
 /// (4 B and 38 T against 9 B and 48 T in the frame): the one case the choice needs no pricing. The selector took the
 /// pair because the DAG's constant had a second user that became something else (an `adc` of zero, a counter), so
-/// the pair serves one store. Whether anything changed. Linear in the instructions.
+/// the pair serves one store. Nearest pin step `InlineSpiller::reMaterializeFor`; DEVIATE Z80-IMM-USES (owner
+/// llrm-target-z80, exit 2026-11-30). Whether anything changed. Linear in the instructions.
 pub fn merge_lone_constant_stores(function: &mut MFunction) -> bool {
     let mut users: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
     let mut defs: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
