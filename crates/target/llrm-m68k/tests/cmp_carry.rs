@@ -33,6 +33,18 @@ b:
   ret i32 %s
 }";
 
+/// The same through a `select`, which the mid-end makes of the diamond when
+/// both arms are cheap (crc16's loop body, a C `x < 0 ? (x << 1) ^ k : x <<
+/// 1`); the sign test is read by a conditional move until it becomes a branch.
+const SIGN_THEN_DOUBLE_SELECT: &str = "define i32 @k(i32 %x) {
+entry:
+  %neg = icmp slt i32 %x, 0
+  %s = shl i32 %x, 1
+  %m = xor i32 %s, 4129
+  %r = select i1 %neg, i32 %m, i32 %s
+  ret i32 %r
+}";
+
 /// The codes of `add` are not the codes of `tst` for these: a reader of Z
 /// (`ble`, `bne`) or a `tst` of another register or at another size keeps the
 /// `tst`.
@@ -85,6 +97,19 @@ fn the_carry_of_the_doubling_stands_in_for_the_sign_test() {
 }
 
 #[test]
+fn a_select_on_the_sign_reads_the_carry_too() {
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let base = asm(SIGN_THEN_DOUBLE_SELECT, cpu, false);
+        assert!(base.contains("tst.l"), "premise: the select tests the sign without the pass:\n{base}");
+        let out = asm(SIGN_THEN_DOUBLE_SELECT, cpu, true);
+        assert!(
+            !out.contains("tst.l") && out.contains("add.l") && (out.contains("bcc") || out.contains("bcs")),
+            "{cpu:?}:\n{out}"
+        );
+    }
+}
+
+#[test]
 fn a_test_of_another_register_stays() {
     let out = asm(SIGN_OF_ANOTHER, Cpu::M68000, true);
     assert!(out.contains("tst.l"), "{out}");
@@ -107,8 +132,17 @@ fn a_word_test_of_a_long_doubling_stays() {
 #[test]
 fn the_carry_gives_the_same_answers_as_the_sign_on_qemu() {
     let Some(qemu) = support::qemu() else { return };
+    for form in [SIGN_THEN_DOUBLE, SIGN_THEN_DOUBLE_SELECT] {
+        run_edge_values(&qemu, form);
+    }
+}
+
+fn run_edge_values(
+    qemu: &std::path::Path,
+    form: &str,
+) {
     let values: [i32; 9] = [0, 1, -1, 0x7fff_ffff, i32::MIN, 0x4000_0000, 0x1234_5678, -0x6543_2110, 0x8000];
-    let mut text = format!("{LAYOUT}{SIGN_THEN_DOUBLE}\ndefine i32 @f() {{\n  %a0 = add i32 0, 0\n");
+    let mut text = format!("{LAYOUT}{form}\ndefine i32 @f() {{\n  %a0 = add i32 0, 0\n");
     for (n, x) in values.iter().enumerate() {
         let doubled = (*x as u32) << 1;
         let expected = if *x < 0 { doubled ^ 4129 } else { doubled } as i32;
@@ -132,7 +166,7 @@ fn the_carry_gives_the_same_answers_as_the_sign_on_qemu() {
         }
         let path = support::unique_path("cmp_carry");
         write_executable(&path, &executable(&all).unwrap()).unwrap();
-        let code = support::run(&qemu, &["-cpu", name], &path);
+        let code = support::run(qemu, &["-cpu", name], &path);
         std::fs::remove_file(&path).ok();
         assert_eq!(code, Some(42), "{cpu:?}");
     }

@@ -4,11 +4,13 @@
 //! (the `add` writes the register the `tst` reads) both go.
 //!
 //! # How it works
-//! [`reuse_shift_out_flags`] runs after [`crate::shiftadd`], before
-//! allocation. For a `tst` of a register `v` at size `s` it finds the `add`
-//! of `v` to itself at size `s` earlier in the block with nothing between that
-//! sets or reads the codes or calls, and the readers of the codes after the
-//! `tst`, up to the next setter. When every reader tests the sign (`bpl`,
+//! [`reuse_shift_out_flags`] runs after the select is a branch and the
+//! instructions of its arms are sunk (`machine_sink`), before allocation: while
+//! the select is a `CMOV`, the arm's `xor` sits between the `add` and the
+//! `tst` and clobbers C. For a `tst` of a register `v` at size `s` it finds the
+//! `add` of `v` to itself at size `s` earlier in the block with nothing between
+//! that sets or reads the codes or calls, and the readers of the codes after
+//! the `tst`, up to the next setter. When every reader tests the sign (`bpl`,
 //! `bge`: clear; `bmi`, `blt`: set), the `tst` goes and they become `bcc` and
 //! `bcs`: `tst` clears V, so those four read N alone, and N of `tst v` is the
 //! C the `add` left.

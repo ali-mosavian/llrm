@@ -471,9 +471,6 @@ fn items_once(
             crate::cmpshift::reuse_shift_flags(&mut function);
         }
         crate::shiftadd::shifts_to_adds(&mut function);
-        if options.reuse_shift_out_flags {
-            crate::cmpcarry::reuse_shift_out_flags(&mut function);
-        }
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
@@ -505,6 +502,9 @@ fn items_once(
     function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
+    if options.short && options.reuse_shift_out_flags {
+        crate::cmpcarry::reuse_shift_out_flags(&mut function);
+    }
     crate::regalloc::split_flag_edges(&mut function);
     eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
