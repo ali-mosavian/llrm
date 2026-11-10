@@ -4,9 +4,24 @@ import importlib.util
 import unittest
 from pathlib import Path
 
+run_spec = importlib.util.spec_from_file_location("run", Path(__file__).resolve().parent / "run.py")
+run = importlib.util.module_from_spec(run_spec)
+run_spec.loader.exec_module(run)
 spec = importlib.util.spec_from_file_location("sweep_guard", Path(__file__).resolve().parent / "sweep_guard.py")
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
+
+
+class CompileLimit(unittest.TestCase):
+    def test_a_compile_that_waits_past_the_limit_without_computing_is_not_slow(self):
+        """fixed_point -O3 read `SLOW llc over 120 s` for a 3 s compile: the load guard stopped the sweep's process group and the
+        wall clock ran. The limit is CPU time; a process that sleeps 3 s on a 1 s limit finished."""
+        done = run.llc_limited(["sleep", "3"], ".", 1)
+        self.assertEqual(done.returncode, 0)
+
+    def test_a_compile_that_computes_past_the_limit_is_stopped_and_named(self):
+        done = run.llc_limited(["python3", "-c", "while True: pass"], ".", 1)
+        self.assertEqual(done.returncode, run.CPU_LIMIT)
 
 
 class RowCount(unittest.TestCase):
