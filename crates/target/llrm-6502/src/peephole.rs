@@ -1155,6 +1155,14 @@ fn walk<'a>(
                     _ => None,
                 };
             }
+            // the same through a pointer: `ora (p),y` of a zero is `lda (p),y`
+            (Op::Ora | Op::Eor, _, Operand::IndirectY(_) | Operand::Indirect(_))
+                if state[0] == Some(Value::Imm("0")) =>
+            {
+                let place = line.inst().map_or(0, |inst| inst.place);
+                stores.push((at, Inst { op: Op::Lda, operand: operand.clone(), place }, 0));
+                state[0] = None;
+            }
             (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => state[0] = None,
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => state[0] = None,
             (Op::Ldx | Op::Inx | Op::Dex, ..) => state[1] = None,

@@ -15,6 +15,7 @@ pub mod opcosts;
 pub mod peephole;
 pub mod peephole_cells;
 pub mod platform;
+pub mod pointer_alu;
 pub mod prepare;
 pub mod relax;
 pub mod routines;

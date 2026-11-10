@@ -60,3 +60,15 @@ define i32 @add_ones(i32 %x) nounwind {
     let asm = text(ir, "add_ones", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(!asm.contains("ld c, l"), "hl copied to bc for nothing:\n{asm}");
 }
+
+/// phi_slot_unknown_arm: the sum's other operand was a copy of the doubled
+/// index, and the global's address was made right there. The swap moved the
+/// copy into `hl` and left the doubled index in `de`: `add hl, hl` (1 B) became
+/// `sla e; rl d` (4 B), +5 B and +3892 T. Only a value made by an instruction
+/// that can make it in `hl` takes the place.
+#[test]
+fn a_copy_of_a_live_value_does_not_take_hl_from_a_made_address() {
+    let ir = include_str!("data/commute_doubled_copy.ll");
+    let asm = text(ir, "main", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!asm.contains("sla e"), "the doubled index went to de:\n{asm}");
+}
