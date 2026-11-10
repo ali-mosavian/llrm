@@ -50,6 +50,13 @@ impl Target for Arm64 {
         "arm64"
     }
 
+    /// `isCheapImmediate` (AArch64InstrInfo.cpp#L1385): a 32-bit constant is
+    /// always cheap; a 64-bit one when `expandMOVImm` makes it in two
+    /// instructions or fewer.
+    fn cheap_move_immediate(&self) -> fn(u8, i64) -> bool {
+        crate::expand_imm::cheap_move_immediate
+    }
+
     fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
         &crate::mc::Arm64Objects
     }
