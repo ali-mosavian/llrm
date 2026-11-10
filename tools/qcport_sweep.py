@@ -65,6 +65,12 @@ def cc_env() -> dict[str, str]:
     return {**os.environ, "LLRM_CC_TARGET": oracle_qcport.ROW}
 
 
+def mirror_includes(source: Path, into: Path) -> Path:
+    """`source` as clang reads it, by tools/lowercase-includes.sh: lower-case names, no DOS end-of-file byte (the raw dos.h ends in 0x1A: dbg and mdl_ai failed on it)."""
+    subprocess.run([str(HERE / "lowercase-includes.sh"), str(source), str(into)], check=True, capture_output=True)
+    return into
+
+
 class NothingCompiled(SystemExit):
     """Every compile failed: the sweep's premise (some module compiles) is false, so its table would say nothing about the compiler."""
 
@@ -148,21 +154,33 @@ def program_flags(source: Path) -> list[str]:
     return run_tests.compiler_arguments(source) if source.suffix == ".bas" and "tests/run" in source.as_posix() else []
 
 
+def borland_line(include: Path) -> list[str]:
+    """llrm-cc's line for Borland-dialect C (the fixtures, QCport): the m16 row comes from `cc_env`, `-m16` names no target to llrm-cc."""
+    return ["-c", "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", str(include)]
+
+
 def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT, include: Path | None = None) -> list[tuple[str, str, str]]:
-    """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on."""
+    """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on; exits (NothingCompiled) when no C job compiled."""
     env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in ORACLES}}
+    cc_environment = {**cc_env(), **{k: v for k, v in env.items() if k.startswith("LLRM_CHECK_")}}
 
     def one(job):
         tool, source, machine, level = job
-        headers = ["-I", str(include)] if include and source.suffix == ".c" else []
         with object_file() as out:
-            done = subprocess.run([str(bins / tool), str(source), *program_flags(source), *headers, level, machine, "-o", out], capture_output=True, text=True, env=env)
+            if tool == "llrm-cc":
+                done = subprocess.run([str(bins / tool), level, *borland_line(include or Path("/nonexistent")), str(source), "-o", out], capture_output=True, text=True, env=cc_environment)
+            else:
+                done = subprocess.run([str(bins / tool), str(source), *program_flags(source), level, machine, "-o", out], capture_output=True, text=True, env=env)
         if done.returncode == 0 or (machine == "-m32" and BY_DESIGN.search(done.stderr + done.stdout)):
             return None
         return (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
 
+    todo = extra_jobs(root)
     with ThreadPoolExecutor(jobs) as pool:
-        return [r for r in pool.map(one, extra_jobs(root)) if r]
+        results = list(pool.map(one, todo))
+    c_total = [i for i, job in enumerate(todo) if job[0] == "llrm-cc"]
+    need_some_compiled(len(c_total), sum(results[i] is not None for i in c_total))
+    return [r for r in results if r]
 
 
 def grouped(failures: list[tuple[str, str, str]]) -> dict[str, list[tuple[str, str]]]:
@@ -252,7 +270,10 @@ def main() -> int:
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-cc"
     # The binary names what was swept: origin/release/next moves during a run, and a report must not name a sha it did not test.
     head, dirty = stamp.read(compiler)
-    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
+    with tempfile.TemporaryDirectory(prefix="sweep-inc-") as mirror:
+        if not os.environ.get("LLRM_BORLAND_INC"):  # that variable already names a mirror
+            include = mirror_includes(include, Path(mirror) / "inc")
+        failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
     groups = grouped(failures)
     known = tomllib.loads(KNOWN.read_text()).get("known", []) if KNOWN.exists() else []
     fresh = new_kinds(groups, known)
