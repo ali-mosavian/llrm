@@ -10,6 +10,9 @@
 //! displacement (the object's, the operand's and the bytes pushed ahead of it)
 //! to fit in -128..=127: [`Bounds`] gives the range it can have, from the
 //! frame laid out before the fold with room for the arguments a call pushes.
+//! The depth also grows by cleanups `expand` leaves owed across calls, which
+//! only emission sees: it checks the final displacement ([`OUT_OF_RANGE`]) and
+//! emits the function again without the fold.
 //!
 //! DEVIATE: the pin forms the indexed address from a register holding the
 //! `lea`, and `getFrameIndexAddress` drops an index beside a frame index
@@ -25,6 +28,11 @@ use crate::frame::Base;
 use crate::mfunc::{Inst, MFunction};
 use crate::regalloc::Assignment;
 use crate::scaledindex::memory_at;
+
+/// What emission says when a folded operand's displacement left eight bits: the
+/// stack pointer was further down than [`Bounds`] foresaw (call cleanups owed),
+/// and the function is emitted again without the fold.
+pub const OUT_OF_RANGE: &str = "an indexed displacement beyond eight bits";
 
 /// The bytes beyond the laid-out displacement of a slot that the stack pointer
 /// can be further down when it is read: a call's arguments still pushed when
