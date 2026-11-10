@@ -336,3 +336,11 @@ def test_the_sides_command_exits_2_on_one_llc_and_0_with_same_ok(tmp_path):
     assert refused.returncode == 2 and "same llrm-llc" in refused.stderr, refused
     allowed = run("--same-ok")
     assert allowed.returncode == 0 and "md5" in allowed.stderr, allowed
+
+
+def test_the_compiler_environment_keeps_the_cache_dir_that_names_the_open_watcom_tree(monkeypatch):
+    """bench/widths ran llrm-cc without HOME: `{ow}` resolved to a relative `.cache/llrm/ow-src-*`, "the Open Watcom tree is missing", and both test_widths tests failed."""
+    monkeypatch.setenv("HOME", "/home/someone")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/cache")
+    env = llrmbin.cc_environment()
+    assert env["HOME"] == "/home/someone" and env["XDG_CACHE_HOME"] == "/cache"
