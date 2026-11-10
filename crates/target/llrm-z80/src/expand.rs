@@ -489,6 +489,17 @@ impl Printer<'_> {
                 let source = name_of(self, 2)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
+            // the words of a long, the carry in the flags: `add hl, rr` and `or a, a; sbc hl, rr` start,
+            // `adc hl, rr` and `sbc hl, rr` carry on (the destination and the flags come first)
+            "ADD16F" | "ADC16F" | "SBC16F" => {
+                let source = name_of(self, 3)?;
+                self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
+            }
+            "SUB16F" => {
+                let source = name_of(self, 3)?;
+                self.push("or a, a");
+                self.push(format!("sbc hl, {source}"));
+            }
             "SUB16" => {
                 let source = name_of(self, 2)?;
                 self.push("or a, a");
