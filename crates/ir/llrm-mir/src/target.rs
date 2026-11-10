@@ -271,6 +271,9 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
+    /// pin's 10 (40 when tuned for size).
+    pub min_jump_table_density: Option<u64>,
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
@@ -467,6 +470,7 @@ impl Tuning {
         unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
+        min_jump_table_density: None,
         split_merged_conditions: false,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
