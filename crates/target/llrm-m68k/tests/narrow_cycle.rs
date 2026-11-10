@@ -186,3 +186,14 @@ exit:
     let after = run(&text, Cpu::M68000);
     assert!(!after.contains("phi i8"), "{after}");
 }
+
+/// Symptom: a cycle read after the loop as `(crc >> 8) & 255` stayed a long on
+/// the 68000: the hand-written use rules knew an `and` mask and a `trunc`, not
+/// that a shift then a mask reads only bits 8..15. The demanded width of
+/// `computeRecurrenceType` says 16.
+#[test]
+fn a_cycle_read_through_a_shift_and_a_byte_mask_is_a_word() {
+    let after =
+        run(&crc_loop("%h = lshr i32 %out, 8\n  %v = and i32 %h, 255\n  ret i32 %v", "xor i32 %s, 4129"), Cpu::M68000);
+    assert!(after.contains("phi i16"), "{after}");
+}
