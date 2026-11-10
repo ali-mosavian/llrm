@@ -303,6 +303,7 @@ pub mod loopinterchange;
 pub mod loopinterchange_transform;
 pub mod looploadelim;
 pub mod loopvectorizelegality;
+pub mod loopvectorizeplan;
 pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;

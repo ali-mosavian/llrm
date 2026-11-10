@@ -516,6 +516,11 @@ pub trait Tti {
         false
     }
 
+    /// `enableAggressiveInterleaving(HasReductions)`: interleave a loop that is not small.
+    fn enable_aggressive_interleaving(&self) -> bool {
+        false
+    }
+
     /// `getMemoryOpCost` of a vector access of `align` bytes. `None`: the
     /// target does not price (so does not take) vector accesses of this type.
     fn vector_memory_op_cost(
