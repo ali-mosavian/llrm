@@ -2156,7 +2156,54 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    branch_over_tail_jump(drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))))
+    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_overwritten_byte_stores(
+        forward_byte_copies(forward_high_bytes(cancel_steps(lines))),
+    ))))
+}
+
+/// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an indirect jump or a block of ours.
+fn tail_symbol(jump: &str) -> Option<&str> {
+    let symbol = jump.strip_prefix("jp ")?;
+    (!(symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$'))).then_some(symbol)
+}
+
+/// `jp cc, L` to a block that is only `jp SYMBOL`, which nothing else reaches, is `jp cc, SYMBOL`: the conditional
+/// tail call (`BranchFolder::OptimizeBlock` makes one through `replaceBranchWithTailCall`). Wherever the block lies;
+/// the layout cannot lose it.
+fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
+    let mut names: llrm_support::hash::HashMap<String, usize> = llrm_support::hash::HashMap::default();
+    for line in &lines {
+        if let Line::Inst(text) = line {
+            for word in text.split([' ', ',']).filter(|word| !word.is_empty()) {
+                *names.entry(word.trim_start_matches('#').to_owned()).or_default() += 1;
+            }
+        }
+    }
+    // each label whose block is one `jp SYMBOL` that nothing falls into
+    let mut jumps: llrm_support::hash::HashMap<String, String> = llrm_support::hash::HashMap::default();
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Label(label) = line else { continue };
+        let after = lines[at + 1..].iter().find(|line| !matches!(line, Line::Loc(_) | Line::Label(_)));
+        let before = lines[..at].iter().rev().find_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        });
+        if let (Some(Line::Inst(jump)), Some(before)) = (after, before)
+            && let Some(symbol) = tail_symbol(jump)
+            && ends_flow(before)
+            && names.get(label).copied() == Some(1)
+        {
+            jumps.insert(label.clone(), symbol.to_owned());
+        }
+    }
+    for line in &mut lines {
+        let Line::Inst(text) = line else { continue };
+        let Some((cc, label)) = text.strip_prefix("jp ").and_then(|rest| rest.split_once(", ")) else { continue };
+        if let Some(symbol) = jumps.get(label) {
+            *text = format!("jp {cc}, {symbol}");
+        }
+    }
+    lines
 }
 
 /// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc, SYMBOL; L:`: the conditional jump over a
@@ -2190,10 +2237,7 @@ fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
             next += 1;
             step(&mut next);
             let Some(Line::Inst(jump)) = lines.get(next) else { return None };
-            let symbol = jump.strip_prefix("jp ")?;
-            if symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$') {
-                return None;
-            }
+            let symbol = tail_symbol(jump)?;
             let jump_at = next;
             next += 1;
             step(&mut next);
