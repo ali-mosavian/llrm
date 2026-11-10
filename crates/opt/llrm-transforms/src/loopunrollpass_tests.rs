@@ -666,6 +666,10 @@ fn a_priced_unroll_line_names_the_arrays_trips_and_float_file() {
         spilled: 3,
         float_file: 8,
         rate: 312,
+        saved_units: 90,
+        unit_clocks: 3,
+        constant_clocks: 0,
+        runs: 1,
     }
     .line();
     for want in ["4 trips", "ints 0", "floats 4", "rmw 2", "spilled 3", "float file 8", "rate 312"] {
@@ -1374,4 +1378,64 @@ done:
 ";
     assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
     assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
+}
+
+/// A 16-trip fill of a global byte array whose value folds in every copy
+/// (`(i + 1) * 179 + 85 + zero`, the multiply and add of the counter), unrolled whole at `-O2` with the x86-64 core issuing `width` instructions a clock
+/// and the unroll priced at 600 milliclocks a byte (the test's knob: 55 B added, 87 clocks saved
+/// a clock an instruction, 22 at four); whether the loop is gone.
+fn fill_unrolled_at_issue_width(width: u32) -> bool {
+    let mut module = parsed(
+        "@stream = global [16 x i8] zeroinitializer
+@zero = global i32 0
+
+define void @f() {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %n = add i32 %i, 1
+  %m = mul i32 %n, 179
+  %c = add i32 %m, 85
+  %z = load i32, ptr @zero
+  %s = add i32 %c, %z
+  %t = trunc i32 %s to i8
+  %p = getelementptr [16 x i8], ptr @stream, i32 0, i32 %i
+  store i8 %t, ptr %p
+  %next = add i32 %i, 1
+  %more = icmp ne i32 %next, 16
+  br i1 %more, label %loop, label %done
+
+done:
+  ret void
+}
+",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, ..llrm_mir::target::Tuning::PIN };
+    let mut tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    tti.issue_width = width;
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    !printed(&module).contains("%i = phi")
+}
+
+/// huffman_decode -O2 at m64: a 16-trip fill of folded constants was priced
+/// "saves 97 clk" at one clock a folded instruction and unrolled, +208 B for 23
+/// clocks run (paired, 13 blocks, ratio spread 1.5%). A core issuing four a clock
+/// frees a quarter of a clock for each, 24: below the bytes' price.
+#[test]
+fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_issues_one_a_clock() {
+    assert!(fill_unrolled_at_issue_width(1), "premise: priced at a clock an instruction, the unroll pays");
+    assert!(!fill_unrolled_at_issue_width(4), "four a clock: the folded instructions free slots, not clocks");
 }

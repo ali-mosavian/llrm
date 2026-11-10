@@ -364,7 +364,17 @@ fn priced_verdict(
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
     // to save 44 clocks a run ran 92 more: 14 more stores, 17 more exchanges).
     let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
-    let saved = (saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs;
+    // DEVIATE UP1-WIDTH (owner x86-m64, exit 2026-11-24): on a core that issues
+    // `IssueWidth` instructions a clock, a folded unit off the critical path
+    // frees an issue slot, not a clock: the instructions the copies need not
+    // run cost `1 / IssueWidth` of the one-clock-an-instruction table. The
+    // pin's `shouldFullUnroll` counts instructions and prices nothing; nearest
+    // pricing is `SelectOptimize::computeLoopCosts`' `IssueWidth` split of a loop
+    // into issue-bound and chain-bound time (huffman_decode -O2 m64: a 16-trip
+    // fill priced "saves 97 clk", ran 23, +208 B).
+    let width = i64::from(run.tti.issue_width()).max(1);
+    let removed = saved_units * body_clocks / rolled_units + constant_clocks;
+    let saved = ((removed + width / 2) / width - spill_clocks) * runs;
     why(
         run,
         lp,
@@ -382,6 +392,10 @@ fn priced_verdict(
             spilled,
             float_file: run.outer.target().float_registers(),
             rate,
+            saved_units,
+            unit_clocks: body_clocks / rolled_units,
+            constant_clocks,
+            runs,
         }
         .line(),
     );
@@ -443,12 +457,17 @@ pub(super) struct Priced {
     pub spilled: i64,
     pub float_file: i64,
     pub rate: i64,
+    /// The terms of `saved`: units the analysis folds, the body's clocks a unit, the clocks the control and the promoted loads add, the runs.
+    pub saved_units: i64,
+    pub unit_clocks: i64,
+    pub constant_clocks: i64,
+    pub runs: i64,
 }
 
 impl Priced {
     pub(super) fn line(&self) -> String {
         format!(
-            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}",
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}; saved units {} at {} clk, constant {} clk, runs {}",
             self.trips,
             self.saved,
             self.added,
@@ -461,7 +480,11 @@ impl Priced {
             self.rmw,
             self.spilled,
             self.float_file,
-            self.rate
+            self.rate,
+            self.saved_units,
+            self.unit_clocks,
+            self.constant_clocks,
+            self.runs
         )
     }
 }
