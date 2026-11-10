@@ -166,21 +166,22 @@ impl Tti for Mos6502 {
         up.threshold = FULL_UNROLL_UNITS;
     }
 
-    /// DEVIATE 6502-UNROLL-O1 (owner llrm-target-6502, exit 2026-11-27, with the
-    /// rows' `unroll_at_o1` and x86-m32's UNROLL-O1): at -O1, which is strict
-    /// on bytes, a full unroll is made only where the copies cost no more than
-    /// the rolled loop, by size or by the cost the analysis finds once the
-    /// trip's constants fold. clang marks every loop `unroll.disable` at -O1,
-    /// so 6502 -O1 kept float_in_place_update's two-trip loop (9441 B against
-    /// 19 B at -Os); the bare `-funroll-loops` grew byval_struct +178 B,
-    /// frameless +27 B, loop_fusion +10 B and shrank double_to_int64 -1466 B.
+    /// DEVIATE 6502-UNROLL-O1 (owner llrm-target-6502, exit 2026-11-27, with
+    /// the rows' `unroll_at_o1` and x86-m32's UNROLL-O1): at -O1, which is
+    /// strict on bytes, a full unroll is made only where the copies cost no
+    /// more than the rolled loop, by size or by the cost the analysis finds
+    /// once the trip's constants fold. clang marks every loop
+    /// `unroll.disable` at -O1, so 6502 -O1 kept float_in_place_update's
+    /// two-trip loop (9441 B against 19 B at -Os); the bare
+    /// `-funroll-loops` grew byval_struct +178 B, frameless +27 B,
+    /// loop_fusion +10 B and shrank double_to_int64 -1466 B.
     fn unroll_never_grows_at_o1(&self) -> bool {
         true
     }
 
-    /// 6502-UNROLL-O1: no peeling at -O1. `-funroll-loops` turned it on there and
-    /// known_loads_walks grew +4 B (6502) and +47 B (65C02) for -94k clocks;
-    /// -O1 is strict on bytes.
+    /// 6502-UNROLL-O1: no peeling at -O1. `-funroll-loops` turned it on there
+    /// and known_loads_walks grew +4 B (6502) and +47 B (65C02) for -94k
+    /// clocks; -O1 is strict on bytes.
     fn peels_at_o1(&self) -> bool {
         false
     }
@@ -254,7 +255,11 @@ impl Tti for Mos6502 {
         b: &LsrCost,
     ) -> bool {
         let key = |c: &LsrCost| {
-            let work = 3 * c.add_rec_cost + 7 * c.num_base_adds + 40 * c.num_iv_muls + 4 * c.imm_cost;
+            // u64: a rejected formula carries `u32::MAX` terms.
+            let work = 3 * u64::from(c.add_rec_cost)
+                + 7 * u64::from(c.num_base_adds)
+                + 40 * u64::from(c.num_iv_muls)
+                + 4 * u64::from(c.imm_cost);
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)

@@ -68,3 +68,25 @@ fn an_immediate_add_or_compare_is_legal() {
         assert!(tti.is_legal_add_immediate(imm) && tti.is_legal_icmp_immediate(imm), "{imm}");
     }
 }
+
+/// A rejected formula carries `u32::MAX` terms. The weighted sum overflowed
+/// `u32`: a debug build panicked, a release build wrapped and could rank the
+/// rejected formula cheapest.
+#[test]
+fn a_rejected_formula_loses_without_overflow() {
+    let tti = llrm_6502::driver::machine().tti().expect("a cost model");
+    let loser = llrm_mir::tti::LsrCost {
+        insns: u32::MAX,
+        num_regs: u32::MAX,
+        add_rec_cost: u32::MAX,
+        num_iv_muls: u32::MAX,
+        num_base_adds: u32::MAX,
+        imm_cost: u32::MAX,
+        setup_cost: u32::MAX,
+        scale_cost: u32::MAX,
+        spills: 0,
+    };
+    let ok = cost(3, 3, 2, 1, 4);
+    assert!(tti.is_lsr_cost_less(&ok, &loser));
+    assert!(!tti.is_lsr_cost_less(&loser, &ok));
+}
