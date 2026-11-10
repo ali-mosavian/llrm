@@ -1592,6 +1592,17 @@ pub trait Tti {
         false
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L569
+    /// `getPopcntSupport(bits) == PSK_FastHardware`: whether `ctpop` of an
+    /// integer of `bits` is one fast instruction. The base class says
+    /// software; `LoopIdiomRecognize` forms `ctpop` only where it is fast.
+    fn popcnt_support_fast(
+        &self,
+        _bits: u32,
+    ) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a function built for size turns a store or
     /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
     /// pin does; a target whose call setup and library routine are more bytes

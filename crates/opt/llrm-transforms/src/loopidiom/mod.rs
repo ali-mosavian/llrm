@@ -524,10 +524,12 @@ fn push(
 }
 
 pub mod build;
+pub mod common;
 pub mod crc;
 pub mod driver;
 pub mod hashrecognize;
 pub mod pass;
+pub mod popcount;
 pub mod process;
 pub mod strlen;
 
