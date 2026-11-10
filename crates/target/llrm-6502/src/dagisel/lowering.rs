@@ -19,6 +19,7 @@
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
+use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
@@ -471,6 +472,18 @@ fn lower_extend(
     {
         let byte = condition_byte(dag, condition);
         return if vt == EVT::I8 { byte } else { dag.get_node(ISD::ZeroExtend, vt, &[byte]) };
+    }
+    // `zext (trunc x)` is `x` resized where the truncate drops only zero bits
+    // (`isTruncateOf` in `visitZERO_EXTEND`,
+    // <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16421>):
+    // the bit `lower_setcc_carry` leaves is a byte of 0 or 1 already. The
+    // combiner has this fold, but the truncate is made here, after it ran.
+    if dag.opcode(node) != ISD::SignExtend && dag.opcode(condition) == ISD::Truncate {
+        let byte = dag.operand(condition, 0);
+        let above = u128::MAX >> (128 - dag.value_type(byte).size_in_bits()) & !1;
+        if masked_value_is_zero(dag, byte, above) {
+            return dag.get_zext_or_trunc(byte, vt);
+        }
     }
     // a sign-extended bit is all ones (`select c, 1, 2` reaches here as
     // `sext(c) + 2`)
