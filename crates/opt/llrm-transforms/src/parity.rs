@@ -335,7 +335,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
     entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
-    entry("rotate-tre@1677", Late, "none (DEVIATE ROT-TRE; gcc passes.def pass_tail_recursion, pass_ch)", Old, ""),
+    partial(
+        "rotate-tre@1677",
+        Late,
+        "none (DEVIATE ROT-TRE)",
+        "the pin has no pass here; the translated LoopSimplify, LCSSA and LoopRotate run only where the target's table asks (Tuning::rotate_late_tre_loops), on the loop the TRE before it made; exit: 2026-11-30, owner x86-m16-b",
+    ),
     partial(
         "simplifycfg@1682",
         Late,
