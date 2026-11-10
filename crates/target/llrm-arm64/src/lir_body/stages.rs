@@ -178,8 +178,15 @@ pub fn observe(function: &crate::mfunc::MFunc) -> Result<(), String> {
     Ok(())
 }
 
-/// `function` after the shared `MachineSink` phase, which runs on the
-/// selector's body with its phis (the pin runs it before `PhiElimination`),
+/// The phases of the pin's SSA optimization group that move or merge code:
+/// `MachineCSE`, then `MachineSink` (`addMachineSSAOptimization` order). The
+/// sink alone leaves the per-use copies of a constant the selector made in the
+/// entry, and sinks each into its use block; the CSE first makes them one
+/// value with several users, which has no block to sink into.
+const SSA_GROUP: [&str; 2] = ["MachineCSE", "MachineSink"];
+
+/// `function` after the shared phases of [`SSA_GROUP`], which run on the
+/// selector's body with its phis (the pin runs them before `PhiElimination`),
 /// fed the edge odds in `function.alloc_odds`. A phase that refuses leaves an
 /// error, not a silently unsunk body.
 pub fn sink(function: &crate::mfunc::MFunc) -> Result<crate::mfunc::MFunc, String> {
@@ -204,14 +211,18 @@ pub fn sink(function: &crate::mfunc::MFunc) -> Result<crate::mfunc::MFunc, Strin
         Selector::Old,
         &omitted,
     )?;
-    let mut phase = phases
-        .into_iter()
-        .find(|phase| phase.class_name() == "MachineSink")
-        .ok_or("the shared phase list has no MachineSink")?;
-    // The lane table is per thread: without it the phase reads x86's.
+    let mut chosen: Vec<_> = phases.into_iter().filter(|phase| SSA_GROUP.contains(&phase.class_name())).collect();
+    if chosen.len() != SSA_GROUP.len() {
+        return Err(format!("the shared phase list has {} of {SSA_GROUP:?}", chosen.len()));
+    }
+    // The lane table is per thread: without it the phases read x86's.
     let _file = enter(Regs(&crate::REGISTER_INFO));
-    let body = flow::checked(lowered.body.clone(), phase.as_mut(), true, None, &classes, &segments, &arch)
-        .map_err(|why| format!("MachineSink: {why:?}"))?;
+    let mut body = lowered.body.clone();
+    for phase in &mut chosen {
+        let name = phase.class_name();
+        body = flow::checked(body, phase.as_mut(), true, None, &classes, &segments, &arch)
+            .map_err(|why| format!("{name}: {why:?}"))?;
+    }
     let after = super::Lowered { body, debug_values: lowered.debug_values, tied: lowered.tied };
     super::from_lir(&after, function).map_err(|super::Unmapped(form)| format!("no way back for {form}"))
 }
