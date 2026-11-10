@@ -202,7 +202,9 @@ pub fn fold_icmp_inst_with_constant(
     {
         return Some(visit);
     }
-    if let Some(visit) = crate::combine_icmp_intrinsic::fold_icmp_intrinsic_with_constant(c, inst, pred, op0, value, width) {
+    if let Some(visit) =
+        crate::combine_icmp_intrinsic::fold_icmp_intrinsic_with_constant(c, inst, pred, op0, value, width)
+    {
         return Some(visit);
     }
     fold_icmp_bin_op_equality_with_constant(c, inst, pred, op0, value, width)

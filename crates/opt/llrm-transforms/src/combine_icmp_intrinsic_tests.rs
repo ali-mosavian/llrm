@@ -53,7 +53,10 @@ fn check(
         assert!(out.contains(one), "`{one}` missing\n{out}");
     }
     // The compare no longer reads the call; the dead call is left for `dce`.
-    assert!(!out.lines().any(|line| line.contains("icmp") && line.contains("%c")), "a compare still reads the {intrinsic} call\n{out}");
+    assert!(
+        !out.lines().any(|line| line.contains("icmp") && line.contains("%c")),
+        "a compare still reads the {intrinsic} call\n{out}"
+    );
 }
 
 /// `out` is the same as `body` alone: the pin leaves it.
@@ -290,4 +293,87 @@ fn saturating_arithmetic_compared_with_zero_compares_its_operands() {
         "llvm.ssub.sat",
         &["icmp sle i32 %a, %b"],
     );
+}
+
+/// A compare of `uadd.sat`/`usub.sat` with a constant, one use, is one
+/// compare of the operand.
+#[test]
+fn a_saturating_add_or_subtract_compared_with_a_constant_is_one_compare() {
+    check(
+        "i32 %x",
+        "declare i32 @llvm.uadd.sat.i32(i32, i32)",
+        "  %c = call i32 @llvm.uadd.sat.i32(i32 %x, i32 5)\n  %r = icmp ult i32 %c, 10\n",
+        "llvm.uadd.sat",
+        &["icmp ult i32 %x, 5"],
+    );
+    check(
+        "i32 %x",
+        "declare i32 @llvm.usub.sat.i32(i32, i32)",
+        "  %c = call i32 @llvm.usub.sat.i32(i32 %x, i32 5)\n  %r = icmp ugt i32 %c, 3\n",
+        "llvm.usub.sat",
+        &["icmp ugt i32 %x, 8"],
+    );
+}
+
+/// `ctpop` of a value with a known set bit, tested for a power of two, masks
+/// that bit out.
+#[test]
+fn a_power_of_two_test_of_a_value_with_a_known_bit_is_a_mask_test() {
+    check(
+        "i32 %x",
+        CTPOP,
+        "  %o = or i32 %x, 4\n  %c = call i32 @llvm.ctpop.i32(i32 %o)\n  %r = icmp ult i32 %c, 2\n",
+        "llvm.ctpop",
+        &["and i32 %x, -5", "icmp eq i32", ", 0"],
+    );
+}
+
+/// `ucmp`/`scmp` against a small constant compare the operands.
+#[test]
+fn a_three_way_compare_tested_against_a_small_constant_compares_its_operands() {
+    check(
+        "i32 %a, i32 %b",
+        "declare i8 @llvm.ucmp.i8.i32(i32, i32)",
+        "  %c = call i8 @llvm.ucmp.i8.i32(i32 %a, i32 %b)\n  %r = icmp eq i8 %c, 1\n",
+        "llvm.ucmp",
+        &["icmp ugt i32 %a, %b"],
+    );
+    check(
+        "i32 %a, i32 %b",
+        "declare i8 @llvm.scmp.i8.i32(i32, i32)",
+        "  %c = call i8 @llvm.scmp.i8.i32(i32 %a, i32 %b)\n  %r = icmp slt i8 %c, 1\n",
+        "llvm.scmp",
+        &["icmp sle i32 %a, %b"],
+    );
+}
+
+/// Two calls of one intrinsic compared for equality compare their inputs.
+#[test]
+fn two_byte_swaps_or_equal_rotates_compared_for_equality_compare_their_inputs() {
+    check(
+        "i32 %a, i32 %b",
+        "declare i32 @llvm.bswap.i32(i32)",
+        "  %p = call i32 @llvm.bswap.i32(i32 %a)\n  %q = call i32 @llvm.bswap.i32(i32 %b)\n  %r = icmp eq i32 %p, %q\n",
+        "llvm.bswap",
+        &["icmp eq i32 %a, %b"],
+    );
+    check(
+        "i32 %a, i32 %b",
+        "declare i32 @llvm.fshl.i32(i32, i32, i32)",
+        "  %p = call i32 @llvm.fshl.i32(i32 %a, i32 %a, i32 3)\n  %q = call i32 @llvm.fshl.i32(i32 %b, i32 %b, i32 3)\n  %r = icmp ne i32 %p, %q\n",
+        "llvm.fshl",
+        &["icmp ne i32 %a, %b"],
+    );
+}
+
+/// Rotates by different amounts become one rotate by the difference.
+#[test]
+fn rotates_by_different_amounts_compared_for_equality_are_one_rotate() {
+    let out = folded(
+        "i32 %a, i32 %b",
+        "declare i32 @llvm.fshl.i32(i32, i32, i32)",
+        "  %p = call i32 @llvm.fshl.i32(i32 %a, i32 %a, i32 3)\n  %q = call i32 @llvm.fshl.i32(i32 %b, i32 %b, i32 5)\n  %r = icmp eq i32 %p, %q\n",
+    );
+    assert!(out.contains("call i32 @llvm.fshl.i32(i32 %a, i32 %a, i32 -2)"), "{out}");
+    assert!(out.contains("icmp eq i32 %b,"), "{out}");
 }
