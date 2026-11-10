@@ -273,6 +273,7 @@ pub mod rmw;
 pub mod vectorsaves;
 pub use llrm_analysis::saverestore;
 pub mod schedboundary;
+pub mod schedmodel;
 pub mod schedule;
 pub mod selectconstants;
 pub mod selectiondag;

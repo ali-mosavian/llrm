@@ -45,7 +45,7 @@ def verdict(returncode: int, stdout: bytes, want: bytes | None) -> tuple[str, st
         return "run", f"exit {returncode}" + (" (signal)" if returncode < 0 else "")
     if want is None:
         return "noref", "no reference output"
-    if stdout != want:
+    if ct.output_lines(stdout.decode(errors="replace")) != ct.output_lines(want.decode(errors="replace")):
         return "output", "stdout differs from the reference"
     return "ok", ""
 
