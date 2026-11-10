@@ -75,6 +75,11 @@ pub struct LoopFacts {
     pub trip_count: u64,
     /// `getMaxSafeVectorWidthInBits` of the dependence checker.
     pub max_safe_width_in_bits: u64,
+    /// `isSafeForAnyVectorWidth`: no dependence bounds the width; otherwise IC stays 1
+    /// (`selectInterleaveCount` uses the distance for the VF alone).
+    pub safe_for_any_vector_width: bool,
+    /// `getMaxStoreLoadForwardSafeDistanceInBits`, unless `isSafeForAnyStoreLoadForwardDistances`.
+    pub store_load_forward_bits: Option<u64>,
     /// The widest induction type's width, `getWidestInductionType`.
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
@@ -256,8 +261,9 @@ fn select_interleave_count(
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
-    // Do not interleave where no epilogue is allowed (VP6), and a loop that is free needs none.
-    if facts.opt_size || loop_cost == 0 {
+    // Do not interleave where no epilogue is allowed (VP6), where the distance already bounded
+    // the VF ("We used the distance for the interleave count"), and a loop that is free needs none.
+    if facts.opt_size || !facts.safe_for_any_vector_width || loop_cost == 0 {
         return 1;
     }
     let registers = tti.number_of_registers(if vf == 1 { RegisterClass::Scalar } else { RegisterClass::Vector });
@@ -321,7 +327,10 @@ pub fn choose(
     }
     let (smallest, widest) = smallest_and_widest(&facts.recipes);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits / WidestType).
-    let max_safe = bit_floor(facts.max_safe_width_in_bits / u64::from(widest));
+    let mut max_safe = bit_floor(facts.max_safe_width_in_bits / u64::from(widest));
+    if let Some(distance) = facts.store_load_forward_bits {
+        max_safe = max_safe.min(distance / u64::from(widest));
+    }
     let max_vf = maximized_vf_for_target(tti, facts.trip_count, smallest, widest, max_safe);
     let (vf, cost) = best_vf(tti, facts, max_vf);
     if vf == 1 {

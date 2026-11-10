@@ -19,7 +19,7 @@ fn facts(
         recipes.push(Recipe::Binary { op: ArithOp::Add, lane });
     }
     recipes.push(Recipe::Store { lane, align });
-    LoopFacts { recipes, trip_count, max_safe_width_in_bits: 1 << 40, widest_induction_bits: 64, opt_size: false }
+    LoopFacts { recipes, trip_count, max_safe_width_in_bits: 1 << 40, safe_for_any_vector_width: true, store_load_forward_bits: None, widest_induction_bits: 64, opt_size: false }
 }
 
 /// (element bits, trip count, VF, IC) of the pin, for the copy and for the add form alike.
