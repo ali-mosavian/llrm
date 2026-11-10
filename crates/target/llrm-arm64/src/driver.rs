@@ -246,6 +246,7 @@ fn lower_function(
         }
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+    machine.unwind = crate::cfi::Unwind::of(function);
     let optsize = function
         .attrs
         .iter()
@@ -343,6 +344,7 @@ fn lower_function(
             blocks,
             variables,
             pool: machine.pool.clone(),
+            unwind: machine.unwind != crate::cfi::Unwind::None,
         },
         written,
     ))

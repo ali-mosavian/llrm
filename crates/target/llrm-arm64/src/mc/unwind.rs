@@ -4,6 +4,7 @@
 
 use llrm_debug::FrameRow;
 use llrm_dwarf::eh_frame::{EhTarget, Pointer};
+use llrm_object::assembler::Cfi;
 
 /// The DWARF number of the frame pointer, `x29`.
 pub const FP: u16 = 29;
@@ -42,93 +43,116 @@ const MODE_FRAMELESS: u32 = 0x0200_0000;
 const MODE_DWARF: u32 = 0x0300_0000;
 const MODE_FRAME: u32 = 0x0400_0000;
 
-/// The flag of a saved pair in the compact frame's word, by its low register
-/// (`x19` for `x19`/`x20`, `d8` for `d8`/`d9`), and the flags that may not be
-/// set yet: the pairs go in register number order, `x` before `d`.
+/// The flag of a saved pair in the compact word, by its registers (DWARF
+/// numbers) and the flags that may not be set yet: the pairs go in register
+/// number order, `x` before `d`.
 fn pair_flag(
-    low: &str,
-    high: &str,
+    first: u16,
+    second: u16,
     set: u32,
 ) -> Option<u32> {
-    const PAIRS: [(&str, &str, u32, u32); 9] = [
-        ("x19", "x20", 0x001, 0xF1E),
-        ("x21", "x22", 0x002, 0xF1C),
-        ("x23", "x24", 0x004, 0xF18),
-        ("x25", "x26", 0x008, 0xF10),
-        ("x27", "x28", 0x010, 0xF00),
-        ("d8", "d9", 0x100, 0xE00),
-        ("d10", "d11", 0x200, 0xC00),
-        ("d12", "d13", 0x400, 0x800),
-        ("d14", "d15", 0x800, 0),
+    const D0: u16 = 64;
+    const PAIRS: [(u16, u16, u32, u32); 9] = [
+        (19, 20, 0x001, 0xF1E),
+        (21, 22, 0x002, 0xF1C),
+        (23, 24, 0x004, 0xF18),
+        (25, 26, 0x008, 0xF10),
+        (27, 28, 0x010, 0xF00),
+        (D0 + 8, D0 + 9, 0x100, 0xE00),
+        (D0 + 10, D0 + 11, 0x200, 0xC00),
+        (D0 + 12, D0 + 13, 0x400, 0x800),
+        (D0 + 14, D0 + 15, 0x800, 0),
     ];
-    PAIRS.iter().find(|(a, b, _, blocked)| (*a, *b) == (low, high) && set & blocked == 0).map(|pair| pair.2)
+    PAIRS.iter().find(|pair| (pair.0, pair.1) == (first, second) && set & pair.3 == 0).map(|pair| pair.2)
 }
 
-/// The 32-bit word of Mach-O's `__compact_unwind` for a function with `rows`
-/// and its FDE at `fde` of `__eh_frame` (`AArch64AsmBackend::
-/// generateCompactUnwindEncoding`). A frame is the frame record, then saved
-/// pairs below it, each at the next two words down, and in the flags; frameless
-/// is the stack's size in sixteenths. Anything else is left to the DWARF frame.
-pub fn compact_encoding(
-    rows: &[FrameRow],
-    fde: usize,
-) -> u32 {
-    let dwarf = MODE_DWARF | (fde as u32 & 0x00FF_FFFF);
-    let Some(first) = rows.first() else { return MODE_FRAMELESS };
-    // The saves, highest address first: the order they are stated in.
-    let chain = |row: &FrameRow| {
-        let mut saved = row.saved.clone();
-        saved.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
-        saved
-    };
-    // The saved pairs of `saved`, each word 8 below the one before from `at`
-    // (0 where nothing was stated yet).
-    let flags = |saved: &[(String, i64)], mut at: i64| -> Option<u32> {
-        let mut set = 0;
-        for pair in saved.chunks(2) {
-            let [(low, one), (high, two)] = pair else { return None };
-            if at != 0 && *one != at - 8 || *two != one - 8 {
-                return None;
+/// Whether the word leaves the function to its DWARF frame.
+pub fn is_dwarf(encoding: u32) -> bool {
+    encoding & 0x0F00_0000 == MODE_DWARF
+}
+
+/// The 32-bit word of Mach-O's `__compact_unwind` for a function that stated
+/// `cfi`, in order (`AArch64AsmBackend::generateCompactUnwindEncoding`, step
+/// for step). The DWARF mode names no FDE: the linker finds it (the pin's
+/// object states `0x03000000`). A
+/// frame is the frame record, then saved pairs below it; frameless is the
+/// stack's size in sixteenths. Any directive it does not know, in any place,
+/// leaves the function to the DWARF frame: an epilogue's `def_cfa sp` or
+/// `def_cfa_offset 0` does.
+pub fn compact_encoding(cfi: &[Cfi]) -> u32 {
+    let dwarf = MODE_DWARF;
+    if cfi.is_empty() {
+        return MODE_FRAMELESS;
+    }
+    let (mut frame, mut stack, mut word, mut at) = (false, 0u64, 0u32, 0i64);
+    let mut index = 0;
+    while index < cfi.len() {
+        match cfi[index] {
+            Cfi::DefCfa { register, .. } => {
+                // The frame pointer is the only frame register compact unwind
+                // has, with the link register and the pointer saved next.
+                let [
+                    _,
+                    Cfi::Offset { register: link, offset: link_at },
+                    Cfi::Offset { register: pointer, offset: pointer_at },
+                    ..,
+                ] = cfi[index..]
+                else {
+                    return dwarf;
+                };
+                if register != FP || pointer_at + 8 != link_at || (link, pointer) != (LR, FP) {
+                    return dwarf;
+                }
+                at = pointer_at;
+                word |= MODE_FRAME;
+                frame = true;
+                index += 2;
             }
-            at = *two;
-            set |= pair_flag(low, high, set)?;
+            Cfi::DefCfaOffset { offset } => {
+                if stack != 0 {
+                    return dwarf;
+                }
+                stack = offset.unsigned_abs();
+            }
+            Cfi::Offset { register: first, offset: first_at } => {
+                // Saves go in consecutive pairs, each a word below the last.
+                let Some(Cfi::Offset { register: second, offset: second_at }) = cfi.get(index + 1).copied() else {
+                    return dwarf;
+                };
+                if at != 0 && first_at != at - 8 || second_at != first_at - 8 {
+                    return dwarf;
+                }
+                at = second_at;
+                let Some(flag) = pair_flag(first, second, word) else { return dwarf };
+                word |= flag;
+                index += 1;
+            }
+            Cfi::DefCfaRegister { .. } | Cfi::Restore { .. } => return dwarf,
         }
-        Some(set)
-    };
-    let Some(at) = rows.iter().position(|row| row.cfa_register == "x29") else {
-        // A stack of locals. Saves in it are not a word the unwinder can
-        // read (the pin's own words for them are DWARF's too).
-        let size = first.cfa_offset;
-        let saves = rows.iter().any(|row| row.cfa_register == "sp" && row.cfa_offset == size && !row.saved.is_empty());
-        return if !saves && first.cfa_register == "sp" && size % 16 == 0 && size / 16 < 0x1000 {
-            MODE_FRAMELESS | (size as u32 / 16) << 12
-        } else {
-            dwarf
-        };
-    };
-    // One stack adjustment before the frame register, and the saves stated with
-    // it.
-    if at > 1 || rows[..at].iter().any(|row| row.cfa_register != "sp" || !row.saved.is_empty()) {
-        return dwarf;
+        index += 1;
     }
-    let saved = chain(&rows[at]);
-    match saved.as_slice() {
-        [(lr, link), (fp, frame), rest @ ..] if (lr.as_str(), fp.as_str()) == ("x30", "x29") && frame + 8 == *link => {
-            flags(rest, *frame).map_or(dwarf, |set| MODE_FRAME | set)
+    if !frame {
+        // Compact unwind states a stack of at most 65520 bytes.
+        if stack > 65520 {
+            return dwarf;
         }
-        _ => dwarf,
+        word |= MODE_FRAMELESS | (stack as u32 / 16) << 12;
     }
+    word
 }
 
 /// At a function's entry the frame address is the stack pointer and the return
-/// address is in `x30`.
-pub fn eh_target() -> EhTarget<'static> {
+/// address is in `x30`. The CIE counts code in bytes and saves in slots of the
+/// pin's `getCalleeSaveStackSlotSize`: 4 on ELF (the `MCAsmInfo` default),
+/// where an FDE names its code by a 4-byte offset, and 8 on Mach-O, by 8.
+pub fn eh_target(darwin: bool) -> EhTarget<'static> {
     EhTarget {
-        pointer: Pointer::Pcrel4,
+        pointer: if darwin { Pointer::Pcrel8 } else { Pointer::Pcrel4 },
         address: 8,
+        slot: if darwin { 8 } else { 4 },
         return_column: u64::from(LR),
         return_saved: false,
-        code_alignment: 4,
+        code_alignment: 1,
         entry: FrameRow { offset: 0, cfa_register: "sp".into(), cfa_offset: 0, saved: Vec::new() },
         register: &register,
         def_cfa_on_register_change: true,
@@ -178,31 +202,54 @@ mod tests {
             comdats: Vec::new(),
             frames: vec![Frame { section: 0, offset: 0, length: 16, rows, cfi: Vec::new(), seh: Vec::new() }],
         };
-        let written = llrm_dwarf::eh_frame::expanded(&object, &eh_target()).unwrap();
+        let written = llrm_dwarf::eh_frame::expanded(&object, &eh_target(false)).unwrap();
         let image = &written.sections.last().unwrap().image;
         let fde = image.windows(3).any(|bytes| bytes == [0x0C, 29, 16]);
         assert!(fde, "no DW_CFA_def_cfa x29, 16 in {image:x?}");
     }
 
+    fn offset(
+        register: u16,
+        offset: i64,
+    ) -> Cfi {
+        Cfi::Offset { register, offset }
+    }
+
+    /// The prologue of a frame record, step by step (`uwtable`).
+    fn record_steps() -> Vec<Cfi> {
+        vec![
+            Cfi::DefCfaOffset { offset: 16 },
+            Cfi::DefCfa { register: FP, offset: 16 },
+            offset(LR, -8),
+            offset(FP, -16),
+        ]
+    }
+
+    /// The same, stated once after the prologue (`uwtable(sync)`).
+    fn record() -> Vec<Cfi> {
+        record_steps().split_off(1)
+    }
+
     #[test]
     fn a_frame_record_alone_is_the_compact_frame() {
-        let rows = [
-            row(4, "sp", 16, &[]),
-            row(8, "x29", 16, &[("x29", -16), ("x30", -8)]),
-            row(20, "sp", 16, &[("x29", -16), ("x30", -8)]),
-            row(24, "sp", 0, &[]),
-        ];
-        assert_eq!(compact_encoding(&rows, 0x40), 0x0400_0000);
+        assert_eq!(compact_encoding(&record()), 0x0400_0000);
+    }
+
+    /// The epilogue's `def_cfa sp` and `def_cfa_offset 0` are directives the
+    /// pin's encoder does not take: an asynchronous table is DWARF's (the
+    /// rows' encoder gave the frame word).
+    #[test]
+    fn an_asynchronous_frame_is_left_to_dwarf() {
+        let mut steps = record_steps();
+        assert_eq!(compact_encoding(&steps), 0x0400_0000, "the prologue alone is a frame");
+        steps.extend([Cfi::DefCfa { register: SP, offset: 16 }, Cfi::DefCfaOffset { offset: 0 }]);
+        assert_eq!(compact_encoding(&steps), 0x0300_0000);
     }
 
     #[test]
     fn locals_alone_are_a_frameless_stack_of_sixteenths() {
-        assert_eq!(compact_encoding(&[row(4, "sp", 48, &[]), row(12, "sp", 0, &[])], 0), 0x0200_3000);
-        assert_eq!(compact_encoding(&[], 0), 0x0200_0000);
-    }
-
-    fn frame(saved: &[(&str, i64)]) -> [FrameRow; 2] {
-        [row(4, "sp", 48, &[]), row(12, "x29", 16, saved)]
+        assert_eq!(compact_encoding(&[Cfi::DefCfaOffset { offset: 48 }]), 0x0200_3000);
+        assert_eq!(compact_encoding(&[]), 0x0200_0000);
     }
 
     /// The saved pairs are in the flags (the pin's `0x04000001` for `x19`,
@@ -210,34 +257,42 @@ mod tests {
     /// unwinder reads slowly.
     #[test]
     fn saved_pairs_are_flags_of_the_compact_frame() {
-        let record = [("x30", -8), ("x29", -16)];
-        let with = |more: &[(&str, i64)]| frame(&[&record[..], more].concat());
-        assert_eq!(compact_encoding(&with(&[("x19", -24), ("x20", -32)]), 0), 0x0400_0001);
-        assert_eq!(compact_encoding(&with(&[("x19", -24), ("x20", -32), ("x21", -40), ("x22", -48)]), 0), 0x0400_0003);
-        assert_eq!(compact_encoding(&with(&[("x23", -24), ("x24", -32), ("d8", -40), ("d9", -48)]), 0), 0x0400_0104);
+        let with = |more: &[(u16, i64)]| {
+            let mut cfi = record();
+            cfi.extend(more.iter().map(|&(register, at)| offset(register, at)));
+            cfi
+        };
+        assert_eq!(compact_encoding(&with(&[(19, -24), (20, -32)])), 0x0400_0001);
+        assert_eq!(compact_encoding(&with(&[(19, -24), (20, -32), (21, -40), (22, -48)])), 0x0400_0003);
+        assert_eq!(compact_encoding(&with(&[(23, -24), (24, -32), (72, -40), (73, -48)])), 0x0400_0104);
     }
 
     #[test]
     fn a_save_the_compact_frame_cannot_describe_is_left_to_dwarf() {
-        let record = [("x30", -8), ("x29", -16)];
-        let with = |more: &[(&str, i64)]| frame(&[&record[..], more].concat());
+        let with = |more: &[(u16, i64)]| {
+            let mut cfi = record();
+            cfi.extend(more.iter().map(|&(register, at)| offset(register, at)));
+            cfi
+        };
         // A hole between the record and the pair, a lone register, a pair
         // out of register order.
-        assert_eq!(compact_encoding(&with(&[("x19", -32), ("x20", -40)]), 0x1c), 0x0300_001c);
-        assert_eq!(compact_encoding(&with(&[("x19", -24)]), 0x1c), 0x0300_001c);
-        assert_eq!(compact_encoding(&with(&[("d8", -24), ("d9", -32), ("x19", -40), ("x20", -48)]), 0x1c), 0x0300_001c);
+        assert_eq!(compact_encoding(&with(&[(19, -32), (20, -40)])), 0x0300_0000);
+        assert_eq!(compact_encoding(&with(&[(19, -24)])), 0x0300_0000);
+        assert_eq!(compact_encoding(&with(&[(72, -24), (73, -32), (19, -40), (20, -48)])), 0x0300_0000);
     }
 
     #[test]
     fn a_frame_whose_record_is_not_the_top_save_is_left_to_dwarf() {
-        let rows = frame(&[("x19", -8), ("x30", -16), ("x29", -24)]);
-        assert_eq!(compact_encoding(&rows, 0x1c), 0x0300_001c);
+        let cfi = [Cfi::DefCfa { register: FP, offset: 16 }, offset(19, -8), offset(LR, -16), offset(FP, -24)];
+        assert_eq!(compact_encoding(&cfi), 0x0300_0000);
     }
 
+    /// The pin's encoder sets the pair flags of a stack without a frame record
+    /// too (the word stays frameless); the rows' encoder left it to DWARF.
     #[test]
-    fn registers_saved_without_a_frame_are_left_to_dwarf() {
-        let rows = [row(4, "sp", 32, &[]), row(12, "sp", 32, &[("x19", -24), ("x20", -32)])];
-        assert_eq!(compact_encoding(&rows, 0x1c), 0x0300_001c);
+    fn pairs_saved_without_a_frame_are_flags_of_the_frameless_word() {
+        let cfi = [Cfi::DefCfaOffset { offset: 32 }, offset(19, -24), offset(20, -32)];
+        assert_eq!(compact_encoding(&cfi), 0x0200_2001);
     }
 
     #[test]
