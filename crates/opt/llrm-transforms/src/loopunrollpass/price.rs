@@ -1272,6 +1272,10 @@ fn reads_outer_counter(
                 // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
                 // where the rolled loop is 68 B and 4,181).
                 let mut sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
+                // A constant passed to a call nothing will inline folds in no copy: the
+                // call still runs and takes its arguments in registers (huffman_decode
+                // -O2 m64: `report(decode(t))` in a 12 x 4 nest, 850 B against gcc's 212).
+                sink &= !matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_)) || call_may_fold_arguments(run, inst);
                 // DEVIATE ARM64-UNROLL-PRICE: nor a store into a local array that
                 // stays in memory, which the copies still run (matmul -O2: `a` and
                 // `b` filled by `(i + j) % 3`, read by the rolled `k` loop).
@@ -1304,6 +1308,27 @@ fn reads_outer_counter(
             one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))
         })
     })
+}
+
+/// Whether the arguments of the call `inst` can fold once they are constants:
+/// an intrinsic folds them, a function with a body does where the inliner still
+/// runs and may take it, and any other callee (a declaration, a `noinline`
+/// function, an indirect call's target) runs on its arguments as they come.
+fn call_may_fold_arguments(
+    run: &Run,
+    inst: InstId,
+) -> bool {
+    let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
+    let global = &run.globals[id.0 as usize];
+    if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.")) {
+        return true;
+    }
+    let llrm_mir::module::GlobalKind::Function(callee) = &global.kind else { return false };
+    // The late pass runs after the inliner took what it would take of this function's calls.
+    run.options.inliner_follows
+        && !run.options.target_unrolling
+        && run.callees.get(&id).is_some_and(|summary| summary.defined)
+        && llrm_mir::facts::Facts::of(&callee.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
 }
 
 /// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a
