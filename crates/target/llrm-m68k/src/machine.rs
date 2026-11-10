@@ -489,7 +489,16 @@ impl Tti for M68k {
         if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::cmp_sel(op, ty);
         }
-        Basic.cmp_sel_cost(op, ty, kind)
+        // `BasicTTIImplBase::getCmpSelInstrCost`: a legal operation costs 1
+        // times the type-legalization overhead, `LT.first`: the registers the
+        // type splits into (an `i64` or a `double` two, an `i128` four).
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1454
+        let registers = match ty {
+            Ty::Int(bits) => bits.div_ceil(32).max(1),
+            Ty::Double => 2,
+            Ty::Float | Ty::X87 | Ty::Pointer => 1,
+        };
+        Basic.cmp_sel_cost(op, ty, kind) * i64::from(registers)
     }
 
     fn memory_op_cost(
