@@ -3,7 +3,7 @@
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
-use llrm_z80::expand::{Line, price};
+use llrm_z80::expand::{Line, price, price_emitted};
 
 const DATALAYOUT: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n";
 
@@ -33,4 +33,17 @@ fn a_plain_long_add_keeps_the_carry_ops() {
         let out = text(&ir, "sum", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
         assert!(out.contains("adc hl,"), "{level:?}: the long add has no `adc hl`:\n{out}");
     }
+}
+
+/// -O1 is strict on both axes. `main` of byte_multiply with the generic form of
+/// its long adds is smaller but slower (the program 340 B against 349 B, +13007
+/// T, 1.2%): the regret rule took it, giving up the clocks the carry
+/// ops win. It is taken only where it is no worse on either axis. Priced as the
+/// choice prices it (as emitted, by loop).
+#[test]
+fn the_generic_form_is_taken_at_o1_only_if_no_slower() {
+    let ir = include_str!("data/byte_multiply_o1.ll");
+    let lines = llrm_z80::compile::lines(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    let (bytes, clocks) = price_emitted(&lines, true);
+    assert!(clocks <= 1_082_902, "main is {bytes} B / {clocks} T at -O1, the carry ops' form is 349 B / 1082902 T");
 }
