@@ -1782,6 +1782,20 @@ pub trait Tti {
         false
     }
 
+    /// `TargetTransformInfo::isProfitableToHoist` (the pin's `TargetLowering`
+    /// hook, overridden by AArch64 and PowerPC to keep a fused multiply-add or
+    /// a load pattern): whether `inst`, identical in every arm of a branch,
+    /// should run once before it. Asked by SimplifyCFG's
+    /// `hoistCommonCodeFromSuccessors`.
+    fn is_profitable_to_hoist(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+    ) -> bool {
+        true
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false

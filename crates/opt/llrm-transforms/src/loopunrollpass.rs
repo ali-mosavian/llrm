@@ -110,6 +110,9 @@ pub struct Options {
     /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
     /// `UpperBound` are the target's, not forced off.
     pub target_unrolling: bool,
+    /// The inliner still runs after this pass and may take an internal function (inlining is on and the
+    /// function is not `noinline`): its loops are then left to be priced in the context of each site.
+    pub inliner_follows: bool,
 }
 
 /// What the pass reads and changes.
@@ -2629,6 +2632,8 @@ pub struct LoopFullUnroll {
     /// The pin's `LoopUnrollPass` (`AllowPartial`, `Runtime` and `UpperBound`
     /// from the target) where false is `LoopFullUnrollPass`.
     pub target_unrolling: bool,
+    /// `Options::inliner_follows`.
+    pub inliner_follows: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -2683,6 +2688,7 @@ impl FunctionPass for LoopFullUnroll {
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
+                inliner_follows: self.inliner_follows,
             },
         };
         let changed = unroll_loops(&mut run);
