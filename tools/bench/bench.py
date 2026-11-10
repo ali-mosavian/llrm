@@ -361,7 +361,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     stem, exe, listing, region, want, obj, *more = job
     counted = (listing, more[2]) if len(more) > 2 and more[1] else None  # a reference's map and source: the helpers it links are counted
     if region is None:  # timed only: its output is checked where it is timed
-        data, bss = sizes.data_bytes(obj)
+        data, bss = sizes.data_bytes(obj, exe, listing)
         return {**code_fields(obj, *(counted or ())), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
@@ -379,7 +379,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"error": result.error}
     if got != want:
         return {"error": f"prints {got}, want {want}"}
-    data, bss = sizes.data_bytes(obj)
+    data, bss = sizes.data_bytes(obj, exe, listing)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
         return {"instructions": 0, **code_fields(obj, *(counted or ())), "data_bytes": data, "bss_bytes": bss}
     if result.region.instructions < FOLDED_BELOW:
