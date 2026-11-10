@@ -24,13 +24,8 @@ def last_ops(vals, target):
     """The (bytes, clocks) of each single op that turns `vals` into `target`, found by inverting it."""
     found = []
     for a in vals:
-        if (
-            a << (target.bit_length())
-        ) % M == 0 and a:  # shl: a << k == target for some 1 <= k < 32
-            for k in range(1, 32):
-                if (a << k) % M == target:
-                    found.append((3, 2))
-                    break
+        if any((a << k) % M == target for k in range(1, 32)):
+            found.append((3, 2))
         if (-a) % M == target:
             found.append((2, 1))
         for b in vals:
@@ -42,7 +37,7 @@ def last_ops(vals, target):
     return found
 
 
-def search(target, depth):
+def search(target, depth, invert_last=True):
     """Pareto set (bytes, clocks) of chains of <= depth ops that reach target."""
     target %= M
     best = {}
@@ -53,7 +48,7 @@ def search(target, depth):
             return
         if d == depth:
             return
-        if d == depth - 1:
+        if invert_last and d == depth - 1:
             for ob, oc in last_ops(vals, target):
                 best[(b + ob, c + oc)] = depth
             return
