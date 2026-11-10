@@ -240,6 +240,21 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }
 
+/// `__builtin_parity(unsigned short)` at m32 -O1 was the whole popcount
+/// expansion (21 instructions, 66 B) while m64 had `xor cl, dil; setnp`: the
+/// m32 `expand` list expanded `ctpop` in MIR before selection, so the DAG
+/// combiner never saw a CTPOP to fold to PARITY. The pin keeps it through the
+/// combiner.
+#[test]
+fn the_parity_of_a_word_is_the_parity_flag_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i386-unknown-linux-gnu\"\n\
+                declare i32 @llvm.ctpop.i32(i32)\n\
+                define i32 @f(i16 zeroext %x) {\n  %z = zext i16 %x to i32\n  %c = call i32 @llvm.ctpop.i32(i32 %z)\n  %b = and i32 %c, 1\n  ret i32 %b\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("setnp") && !listing.contains("sub "), "{listing}");
+}
+
 /// An add of a constant to a dword that stays live is a three-address `lea` at
 /// m64 (`LEA64_32r`). It was off there, so each such add cost a `mov` and an
 /// `add`.
