@@ -246,6 +246,7 @@ fn lower_function(
         }
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+    machine.unwind = crate::cfi::Unwind::of(function);
     let optsize = function
         .attrs
         .iter()
@@ -272,6 +273,9 @@ fn lower_function(
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
+        // The body carries the edge odds by block position; no pass between here and the
+        // conversion adds or removes a block.
+        machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
@@ -327,7 +331,10 @@ fn lower_function(
     let blocks = crate::layout::fold(
         blocks,
         &mut tables,
-        &crate::layout::edge_odds(module, function, &program.layout, &machine),
+        &crate::layout::odds_by_label_number(
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            &machine,
+        ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
     );
@@ -343,6 +350,7 @@ fn lower_function(
             blocks,
             variables,
             pool: machine.pool.clone(),
+            unwind: machine.unwind != crate::cfi::Unwind::None,
         },
         written,
     ))

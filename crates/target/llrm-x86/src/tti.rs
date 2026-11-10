@@ -869,6 +869,10 @@ impl Tti for X86 {
         self.tuning.unswitch_threshold
     }
 
+    fn min_jump_table_density(&self) -> Option<u64> {
+        self.tuning.min_jump_table_density
+    }
+
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         match self.real_mode.as_ref() {
             Some(real) => real.recursive_inlining,

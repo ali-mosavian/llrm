@@ -115,5 +115,6 @@ fn an_or_of_a_known_zero_is_the_load_of_its_operand() {
     run(&mut asm);
     let out = asm.text();
     assert!(!out.contains("tya") && !out.contains("ora rc4\n  cmp"), "{out}");
-    assert!(out.contains("sta rc4\n  cmp #5\n"), "{out}");
+    // the `sta rc4` that fed the `ora` is dead once the `ora` is gone: copy propagation (default on) drops it, the pass off keeps it
+    assert!(out.contains("cmp #5\n"), "{out}");
 }

@@ -28,13 +28,13 @@
 //! at the price of a taken `jmp` (Watcom's `SetBranches`), and the fixed point
 //! runs again.
 //!
-//! A call to a procedure of the same segment is a relative displacement filled
-//! in; any other is a relocation. `object_of` turns what the segments hold
-//! into [`llrm_object::Object`]: a reference to a symbol the module defines
-//! becomes a relocation against that symbol with the addend in the code (as
-//! jwasm writes it), anything else is an undefined symbol, and a reference to
-//! a name neither defined nor declared is an error. 16-bit data segments of
-//! the near kind join the `DGROUP` group.
+//! A call to a procedure of the same segment that no other module can replace
+//! is a relative displacement filled in; any other is a relocation. `object_of`
+//! turns what the segments hold into [`llrm_object::Object`]: a reference to a
+//! symbol the module defines becomes a relocation against that symbol with the
+//! addend in the code (as jwasm writes it), anything else is an undefined
+//! symbol, and a reference to a name neither defined nor declared is an error.
+//! 16-bit data segments of the near kind join the `DGROUP` group.
 //!
 //! Code is padded as MC does: an `Align` item (a block's `align` and
 //! `max_skip`) pads with `nops` (`writeNopData`), and each function not tuned
@@ -43,6 +43,13 @@
 //!
 //! `written_in` hands the object to the writer crate of the target's format
 //! (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.
+//!
+//! DEVIATE 1: the pin's MC leaves a call or jump to every global to the linker,
+//! at `-fPIE` and `-fno-pic` too (`R_X86_64_PLT32`, 5 bytes). Ours binds a
+//! definition no other module can replace (`masm::Module::preemptible` lists
+//! the ones that can: weak, and default-visibility at `-fPIC`), as gcc and gas
+//! do for an executable: `jmp f` is 2 bytes. Bar: gcc. Owner: x86-m64; leaves
+//! with the pin's behaviour or when the bar changes.
 //!
 //! # Example
 //! No honest example: its output is the bytes and relocations of an object, not
@@ -1000,6 +1007,7 @@ pub fn _code_by(
         }
         items.push(Encoded::End(end));
     }
+    left_to_the_linker(&mut items, &module.preemptible, module.object.code_model())?;
     near_within_group(&mut items, module.object.code_model());
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
@@ -1301,6 +1309,36 @@ fn resolved_siblings(items: &mut [Encoded]) {
             }
         }
     }
+}
+
+/// A call or jump to a procedure another module may replace at link time stays
+/// a relocation, as for a name defined elsewhere: MC resolves a PC-relative
+/// reference only to a local symbol
+/// ([ELFObjectWriter.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/ELFObjectWriter.cpp#L1391)),
+/// and gcc leaves the `-fPIC` ones to the PLT. Neither this nor `_relaxed`
+/// ever binds such a name here.
+fn left_to_the_linker(
+    items: &mut [Encoded],
+    preemptible: &std::collections::BTreeSet<String>,
+    model: CodeModel,
+) -> Result<(), Unencodable> {
+    if preemptible.is_empty() {
+        return Ok(());
+    }
+    for item in items {
+        let Encoded::Near(near) = item else { continue };
+        if !preemptible.contains(&near.name) {
+            continue;
+        }
+        let opcode = near.opcode(model)?;
+        let mut code = opcode.clone();
+        code.resize(opcode.len() + model.displacement_bytes(), 0);
+        *item = Encoded::Piece(Piece {
+            code,
+            fixups: vec![Fixup::new(opcode.len(), relative(model.displacement_bytes()), near.name.clone())],
+        });
+    }
+    Ok(())
 }
 
 /// Every label's offset, with each jump short unless its target is out of
@@ -2064,6 +2102,7 @@ mod tests {
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
             publics: strings(&["_get"]),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
@@ -2112,6 +2151,7 @@ mod tests {
                 externs: vec![],
                 publics: names.clone(),
                 visibility: Default::default(),
+                preemptible: Default::default(),
                 aliases: vec![],
                 data: vec![],
                 procedures: vec![],
@@ -2156,6 +2196,7 @@ mod tests {
             externs: vec![],
             publics: strings(&["_get"]),
             visibility: std::collections::BTreeMap::from([("_get".to_owned(), llrm_object::Visibility::Hidden)]),
+            preemptible: Default::default(),
             aliases: vec![masm::Alias { name: "_other".into(), target: "_get".into(), binding: Binding::Weak }],
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
@@ -2201,6 +2242,7 @@ mod tests {
                 externs: vec![],
                 publics: strings(&["_a"]),
                 visibility: Default::default(),
+                preemptible: Default::default(),
                 aliases: Vec::new(),
                 data: vec![("_DATA".into(), items)],
                 procedures: vec![],
@@ -2286,6 +2328,7 @@ mod tests {
             ],
             publics: strings(&["_f", "_table"]),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: vec![
                 (
@@ -2422,6 +2465,7 @@ mod tests {
                 externs: vec![],
                 publics: vec![],
                 visibility: Default::default(),
+                preemptible: Default::default(),
                 aliases: Vec::new(),
                 data: vec![],
                 procedures: (0..3)
