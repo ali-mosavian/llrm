@@ -1014,8 +1014,8 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let ir = include_str!("kernels/ir/carry32.ll");
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     // the carry fusion has since turned the compare and its byte into `adc hl,
-    // rr`
-    assert!(out.contains("adc hl, ") && !out.contains("SETCC8"), "{out}");
+    // rr`, or `jr nc` over `inc rr` for a word that adds nothing else
+    assert!((out.contains("adc hl, ") || out.contains("jr nc")) && !out.contains("SETCC8"), "{out}");
 }
 
 /// A call with more arguments than registers was refused: "stack arguments are
