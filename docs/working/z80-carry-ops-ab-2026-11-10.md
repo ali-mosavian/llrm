@@ -1,6 +1,6 @@
 # z80 carry ops: sweep against the release/next tip (2026-11-10)
 
-Base: llc 66d211142341 (tip e5a29af2b2). Candidate: llc b3a2c5c1c2d4 (the PR head's output on the whole corpus at O1/O2/O3/Os/Oz, compared byte for byte). Same pin clang both sides; `sweep.py --ours-only`, ucsim clocks, 115 programs. O3 `fixed_point` has no base row in the tip's sweep (the guard's wall limit read SLOW); its base is the re-run under the CPU limit, 15801 B / 1333493 T.
+Base: tip 4bc9c84d4c, llc d98266581ecb. Candidate: PR head ae71ee4382, llc 4f34f9587753. Five levels, `sweep.py --ours-only` (ucsim clocks), same pin clang both sides, each side built fresh from its tree; compiles that succeeded per level are in the cells column (a program that failed on either side is not counted).
 
 | level | cells | unchanged | better | worse (either axis) | bytes | clocks |
 |---|---|---|---|---|---|---|
