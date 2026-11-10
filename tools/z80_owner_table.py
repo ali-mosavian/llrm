@@ -41,10 +41,33 @@ def is_double(source):
 
 
 def is_volatile_bitfield(source):
-    """A `volatile` object with a bit-field member: a declaration `type name : width;` after a `{` or `;`."""
-    return re.search(r"\bvolatile\b", source) is not None and re.search(
-        r"[{;]\s*(?:(?:unsigned|signed|const|volatile|int|long|short|char|_Bool)\s+)+\w+\s*:\s*\d+\s*;", source
-    ) is not None
+    """A bit-field member of a volatile-qualified object, or a volatile-qualified bit-field.
+
+    A struct or union tag holds a bit-field when its body declares `type name : width;` or names a tag that does. It is
+    volatile when a member of it is declared `volatile`, or an object is: `volatile struct S v;`, `struct S volatile v;`.
+    A volatile object elsewhere in the source, or a bit-field of a plain object, is not enough. A typedef'd tag is not
+    followed: that cell stays ranked."""
+    bodies = {}
+    for m in re.finditer(r"\b(?:struct|union)\s+(\w+)\s*\{([^{}]*)\}", source):
+        bodies[m.group(1)] = m.group(2)
+    field = re.compile(r"(?:^|;)\s*((?:(?:unsigned|signed|const|volatile|int|long|short|char|_Bool)\s+)+)\w+\s*:\s*\d+\s*(?=;)")
+    holds = {tag for tag, body in bodies.items() if field.search(body)}
+    # a tag that holds a member of a tag that holds one
+    grown = True
+    while grown:
+        grown = False
+        for tag, body in bodies.items():
+            if tag not in holds and any(re.search(rf"\b(?:struct|union)\s+{h}\b(?!\s*\{{)", body) for h in holds):
+                holds.add(tag)
+                grown = True
+    for tag, body in bodies.items():
+        for m in field.finditer(body):
+            if re.search(r"\bvolatile\b", m.group(1)):
+                return True
+    return any(
+        re.search(rf"\bvolatile\s+(?:struct|union)\s+{h}\b|\b(?:struct|union)\s+{h}\s+volatile\b", source) is not None
+        for h in holds
+    )
 
 
 def verdict(level, ours, sdcc, double=False, volatile_bitfield=False):

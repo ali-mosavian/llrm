@@ -189,6 +189,17 @@ def test_a_volatile_bitfield_cell_is_not_like_for_like_never_worse_or_dropped():
     assert got["O2"] == t.NOT_LIKE
 
 
+def test_a_plain_volatile_beside_a_plain_bitfield_stays_ranked():
+    """The first predicate fired on any bit-field in a source that mentioned volatile anywhere: this program would have
+    been exempted silently."""
+    mixed = "struct S { unsigned a : 3; };\nstruct S plain;\nvolatile int flag;\n"
+    assert not t.is_volatile_bitfield(mixed)
+    assert t.is_volatile_bitfield("struct S { unsigned a : 3; };\nstruct S volatile v;\n")
+    assert t.is_volatile_bitfield("struct S { volatile unsigned a : 3; };\nstruct S v;\n")
+    nested = "struct S { unsigned a : 3; };\nunion U { long whole; struct S s; };\nvolatile union U u;\n"
+    assert t.is_volatile_bitfield(nested)
+
+
 def test_other_volatile_and_colon_sources_stay_ranked():
     """A ternary, a case label and a plain volatile are not bit-fields."""
     for source in ("volatile int z;\nint f(int x) { return x ? 1 : 64; }\n", "volatile long z;\nint g(int x) { switch (x) { case 1: return 2; } return 0; }\n",
