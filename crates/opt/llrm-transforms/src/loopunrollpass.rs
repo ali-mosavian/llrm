@@ -1831,6 +1831,10 @@ fn try_to_unroll_loop(
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
+            // was worked out in: an earlier loop's remainder guard, read while
+            // counting this loop, is a value its expansion reuses.
+            session.adopt(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             let mut env = crate::loopunrollruntime::Env {
                 context: &mut *run.context,
                 layout: run.layout,
@@ -1848,6 +1852,7 @@ fn try_to_unroll_loop(
                 use_epilog,
             );
             let Some(epilog) = done else {
+                run.scev = session.into_scev();
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
