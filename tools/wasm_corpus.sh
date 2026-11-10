@@ -6,6 +6,7 @@
 # The stub is the same bytes on both sides: `run` calls main and answers a hash of what main reported.
 set -u
 . "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
+. "$(dirname "$0")/wasm_corpus_lib.sh"
 ulimit -v 16777216 # one runaway compile must not take the box
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
@@ -44,18 +45,19 @@ int run(void)
 EOF
 "$clang" --target=wasm32 -O2 -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
 
+# The two sides must compile with the same codegen flags (arm64: 24/72 cells off to one side's -fomit-frame-pointer). Both command lines
+# are taken from what actually ran: ours through a wrapper around the same clang, the pin's from the one list used below.
+pin_flags=(--target=wasm32 -ffreestanding "-$level" $cpu)
+printf '#!/bin/bash\necho "$@" >> "%s/ours.argv"\nexec "%s" "$@"\n' "$out" "$clang" > "$out/clang-wrap"; chmod +x "$out/clang-wrap"
+LLRM_CLANG_WASM=$out/clang-wrap LLRM_CC_TARGET=wasm32 "$llrm_cc" "-$level" $cpu -c "$out/stub.c" -o "$out/stub.l.o" 2> /dev/null ||
+  { echo "wasm_corpus: llrm-cc cannot compile the stub" >&2; exit 2; }
+python3 "$root/tools/wasm_flag_check.py" "$(grep -e '-emit-llvm' "$out/ours.argv" | head -1)" "${pin_flags[@]}" || exit 2
+
 # Section sizes of a relocatable object, summed over its sections of that name.
 section() { wasm-objdump -h "$2" | sed -n "s/^ *$1 start=.*(size=0x\\([0-9a-f]*\\)).*/\\1/p" | while read -r h; do echo $((16#$h)); done; }
 code() { section Code "$1"; }
 # The bytes a cell is judged by: the code and the initialised data it loads (a lookup table, a string).
 image() { echo $(($(code "$1") + $(section Data "$1" | tr -d "\n" | grep . || echo 0))); }
-
-# "result instructions" of one object linked with the stub ($2: the stub object, this program's).
-count() {
-  wasm-ld --no-entry --export=run --allow-undefined "$1" "${2:-$out/stub.o}" -o "$1.wasm" 2>/dev/null || { echo "none 0"; return; }
-  timeout 120 wasm-interp "$1.wasm" -r run --trace > "$1.trace" 2>&1
-  echo "$(sed -n 's/^run() => i32:\(-*[0-9]*\)$/\1/p' "$1.trace" | head -1 | grep . || echo none) $(grep -c '^#' "$1.trace")"
-}
 
 printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' program llrm_B clang_B llrm_instr clang_instr llrm_code clang_code result
 measured=0; unjudged=
@@ -63,7 +65,7 @@ for f in "$@"; do
   n=$(basename "$f" .c)
   LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.l.o" 2> "$out/$n.err" ||
     { printf '%-22s llrm-cc FAIL: %s\n' "$n" "$(head -c 90 "$out/$n.err" | tr '\n' ' ')"; continue; }
-  timeout 300 "$clang" --target=wasm32 -ffreestanding "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
+  timeout 300 "$clang" "${pin_flags[@]}" -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
     { printf '%-22s clang FAIL\n' "$n"; continue; }
   # A program that reads or writes through the `llrm_os_*` layer gets it in memory, with its `// data:` file (the same bytes on
   # both sides); without it the import is unresolved and the run has no result.
@@ -72,12 +74,10 @@ for f in "$@"; do
     cat "$out/stub.c" "$out/$n.os.c" > "$out/$n.stub.c"
     "$clang" --target=wasm32 -O2 -c "$out/$n.stub.c" -o "$out/$n.stub.o" 2> /dev/null && stub="$out/$n.stub.o"
   fi
-  read -r lv li <<< "$(count "$out/$n.l.o" "$stub")"
-  read -r cv ci <<< "$(count "$out/$n.c.o" "$stub")"
-  # A side that did not run (unresolved import, trap) has no result: the row is unjudged, never "same".
-  if [ "${lv:-none}" = none ] || [ "${cv:-none}" = none ]; then ok="n/a(no result: llrm ${lv:-none}, clang ${cv:-none})"
-  elif [ "$lv" = "$cv" ]; then ok=same
-  else ok="DIFFERENT($lv/$cv)"; fi
+  read -r lv li lm <<< "$(count "$out/$n.l.o" "$stub")"
+  read -r cv ci cm <<< "$(count "$out/$n.c.o" "$stub")"
+  # A side that did not run (unresolved import, trap) has no result, and sides on different stubs have nothing to compare: unjudged, never "same".
+  ok=$(judge "$lv" "$cv" "$lm" "$cm")
   printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' "$n" "$(image "$out/$n.l.o")" "$(image "$out/$n.c.o")" "${li:-0}" "${ci:-0}" \
     "$(code "$out/$n.l.o")" "$(code "$out/$n.c.o")" "$ok"
   measured=$((measured + 1))
