@@ -418,6 +418,13 @@ impl ImmShape {
     }
 }
 
+impl Fill {
+    /// Whether it writes all 128 bits; `movi d` and the `.2s` forms write 64.
+    pub fn is_quad(&self) -> bool {
+        !matches!(self, Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Fill {
     Zero,
