@@ -257,8 +257,11 @@ pub struct Tuning {
     /// 183/11556, sfm16_float_cmp 1993/44039 -> 1994/45240, shellsort
     /// 172/11672 -> 176/11993, stft_single 842/49421 -> 844/49421;
     /// trades 2: grep 497/49952 -> 523/49865, quicksort 252/319777 ->
-    /// 261/303228. Open Os row M16-OS-MATMUL-DIVISOR (owner x86-m16, exit
-    /// 2026-11-20): matmul -Os 289 B/23807 clk against 284/23679 at 1000.
+    /// 261/303228. Closed Os row M16-OS-MATMUL-DIVISOR: matmul -Os 289 B/23807
+    /// clk against 284/23679 at 1000 is this weight's price, not a defect.
+    /// The heavier address component evicts v91 from ECX, adding 3 stack
+    /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
+    /// 16601539e87f.
     pub address_reference_milliweight: u32,
     /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
     /// latency exceeds its issue-bound time is not unrolled at run time
