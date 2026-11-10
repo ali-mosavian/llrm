@@ -171,7 +171,10 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
     return objs, "no fixpoint"
 def one(job):
     path, level, lib = job
-    name = path.stem; w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
+    name = path.stem
+    if not path.with_suffix(".out").exists():
+        return name, "NO-OUT", "no .out beside the source: a helper, not a program (counted, not measured)"
+    w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
     want = expected(path.with_suffix(".out"))
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]

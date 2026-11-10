@@ -7,6 +7,11 @@ A file without a gcc column says "clang-only bar" in its header line. After the 
 text-only rule and the size rule, read from the same run."""
 import re
 import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+import corpus_targets  # noqa: E402
 
 MISSING = []
 COLUMNS = {  # side -> (code, data, bss) column names
@@ -20,6 +25,27 @@ COLUMNS = {  # side -> (code, data, bss) column names
 
 PADDED = {"ours": "ours_padded", "llc": "pin_llc_padded", "clang": "pin_clang_padded", "a4": "pin_clang_a4_padded", "gcc": "gcc_padded"}
 OVERSIZE = []  # (file, program, side, code, emitted text): a padding-free code column must not exceed the text the object emitted
+
+
+def source_of(name):
+    """The corpus source of a matrix row's program name (`tests_run_c_NAME` is tests/run/c/NAME.c, `bench_DIR_FILE` is bench/DIR/FILE.c), or None."""
+    if name.startswith("tests_run_c_"):
+        found = REPO / "tests/run/c" / f"{name[len('tests_run_c_'):]}.c"
+    elif name.startswith("bench_"):
+        rest = name[len("bench_"):]
+        half = len(rest) // 2
+        directory, stem = (rest[:half], rest[half + 1:]) if rest[:half] == rest[half + 1:] and rest[half:half + 1] == "_" else (rest.split("_")[0], rest)
+        found = REPO / "bench" / directory / f"{stem if stem != rest else directory}.c"
+    else:
+        return None
+    return found if found.is_file() else None
+
+
+def applies(target, name):
+    """False for a program that is not for `target` (`// targets:` of corpus_targets, e.g. DOS-only): a matrix compiles every program at every level,
+    declared variants or not, and such a row is no cell (rep_tails O1 +739 B and os_more O1 +196 B were counted worse at x86_32-linux)."""
+    source = source_of(name)
+    return source is None or corpus_targets.applies(target, source.read_text(), source)
 
 
 def level_of(path):
@@ -63,7 +89,10 @@ def main(argv):
     for path in argv[1:]:
         t = Table(path)
         for target in sorted({r[0] for r in t.rows}):
-            rs = [r for r in t.rows if r[0] == target]
+            rs = [r for r in t.rows if r[0] == target and applies(target, r[1])]
+            skipped = sorted(r[1] for r in t.rows if r[0] == target and not applies(target, r[1]))
+            if skipped:
+                print(f"n/a\t{level_of(path)}\t{target}\t{len(skipped)} programs, not cells: {' '.join(skipped)}")
             gated = t.has("gcc") and target == "x86_32-linux"
             clang_side = "a4" if gated and t.has("a4") else "clang"  # the a4 and gcc columns exist for x86_32 rows only
             sides = ["ours", clang_side] + (["gcc"] if gated else [])
