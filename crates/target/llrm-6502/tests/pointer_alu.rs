@@ -106,7 +106,7 @@ fn the_folded_ops_compute_what_the_loads_did() {
     }
 }
 
-/// A word run: `x` in rc4:rc5, the result's low byte in A and its high byte in
+/// A word run: `x` in A:X (the second argument after the pointer in rc2:rc3), the result's low byte in A and its high byte in
 /// X.
 fn run_word(
     cpu: Cpu,
@@ -117,7 +117,7 @@ fn run_word(
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
     let main = format!(
-        "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  lda #<{x}\n  sta rc4\n  lda #>{x}\n  sta rc5\n  jsr {name}\n{}",
+        "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  ldx #>{x}\n  lda #<{x}\n  jsr {name}\n{}",
         if high { "  txa\n" } else { "" }
     );
     common::run_on(
