@@ -708,7 +708,8 @@ fn lower(
                     // plus its distance, where one `(zp),Y` offset reaches;
                     // past 255 the address is built (`eliminateFrameIndex`).
                     let at = if code == op::STZP { 0 } else { operands.len().wrapping_sub(2) };
-                    let framed = matches!(code, op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::STZP)
+                    let framed = (matches!(code, op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::STZP)
+                        || crate::pointer_alu::pointer_alu(code).is_some_and(|fold| !fold.indexed))
                         && n.ops
                             .iter()
                             .any(|input| one.dag.nodes()[input.node as usize].opcode == ISD::TargetFrameIndex);

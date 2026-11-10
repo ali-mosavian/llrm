@@ -2583,14 +2583,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// Real mode cannot realign the stack: an over-aligned local is clamped to the
-/// stack alignment (#7706), not refused, and no `and sp` is emitted.
+/// Real mode cannot realign the stack: a local aligned past 32 is refused by name
+/// (#8570), not clamped (#7706); the refusal is the only guard against a wrong
+/// promised alignment, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_clamped_not_refused() {
+fn m16_over_aligned_local_is_refused_by_name() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("and sp,"), "{listing}");
+    let why = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().expect("refused");
+    assert!(why.to_string().contains("an object aligned to 64 needs stack realignment"), "{why}");
 }
 
 /// jwlink turns a far call to the same segment into `push cs; call near` plus
@@ -2697,8 +2697,10 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
-/// it): `lea rdi, [rsp]` is a byte shorter than `[rsp+8]`, so 33 bytes.
+/// add rsp, 32; pop rbx; ret`, but for the local's address: the pin's llc puts
+/// the local at `[rsp+8]` (`lea rdi, [rsp+8]`, 5 bytes, FDE 34 long); ours at
+/// `[rsp]` (FR1, the call pad above it), and the pin's `tryOptimizeLEAtoMOV`
+/// makes that `mov rdi, rsp` (3 bytes, #8601), so 32.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
@@ -2709,7 +2711,7 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     assert_eq!(
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c07089001000\
-             01c0000001c000000000000002100000000410e10440e3083025a0e10410e0800")
+             01c0000001c000000000000002000000000410e10440e308302590e10410e0800")
     );
 }
 
@@ -3369,7 +3371,7 @@ fn omf_record_types(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn omf_of(arguments: &[&str]) -> Vec<u8> {
-    let directory = std::env::temp_dir().join(format!("fsec-{}-{}", std::process::id(), arguments.join("")));
+    let directory = unique_directory("fsec");
     std::fs::create_dir_all(&directory).unwrap();
     let source = directory.join("two.ll");
     std::fs::write(
@@ -3384,7 +3386,30 @@ fn omf_of(arguments: &[&str]) -> Vec<u8> {
     let mut all = vec!["-m16", "-fobject-format=omf", "-o", output.to_str().unwrap()];
     all.extend_from_slice(arguments);
     crate::llc::compile(&flags(&all), &source, None).unwrap();
-    std::fs::read(output).unwrap()
+    let bytes = std::fs::read(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    bytes
+}
+
+/// A directory name no other call in this process shares. `omf_of` named its
+/// directory after its arguments, so the three tests calling it with `&[]`
+/// rewrote one `two.ll`/`two.obj` under each other: 4 to 12 of 40 whole-lib
+/// runs failed, always a function_sections test, each passing alone.
+fn unique_directory(tag: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
+}
+
+#[test]
+fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
+    assert_ne!(unique_directory("t"), unique_directory("t"));
+    let expected = omf_of(&[]);
+    let handles: Vec<_> =
+        (0..8).map(|_| std::thread::spawn(|| (0..4).map(|_| omf_of(&[])).collect::<Vec<_>>())).collect();
+    for handle in handles {
+        assert!(handle.join().unwrap().iter().all(|bytes| *bytes == expected));
+    }
 }
 
 /// The C path wrote one segment for the module's code whatever the program,
@@ -4960,4 +4985,73 @@ fn a_float_equality_as_a_value_is_a_cmpss() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("cmpss xmm0, xmm1, 0"), "{listing}");
     assert!(!listing.contains("setnp") && !listing.contains("ucomiss"), "{listing}");
+}
+
+/// `callee` is `add3`, a default-visibility global the pin's MC never binds
+/// at assembly time (`ELFObjectWriter::isSymbolRefDifferenceFullyResolvedImpl`:
+/// a PC-relative reference resolves only for `STB_LOCAL`). `-fPIC` code must
+/// leave the call and the sibling jump to it to the linker (`R_X86_64_PLT32`):
+/// a shared object may be interposed. Ours filled the displacement in at any
+/// flag, so an interposed `add3` was never reached from `same` and `twice`.
+fn pc_relative_relocs_to_add3(
+    module_flags: &str,
+    linkage: &str,
+) -> Vec<(usize, bool)> {
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+         define {linkage}i64 @add3(i64 %a, i64 %b, i64 %c) #0 {{\n  %t = mul i64 %b, 3\n  %u = add i64 %a, %t\n  \
+         %v = add i64 %u, %c\n  ret i64 %v\n}}\n\
+         define i64 @same(i64 %a, i64 %b, i64 %c) {{\n  %r = tail call i64 @add3(i64 %a, i64 %b, i64 %c)\n  ret i64 %r\n}}\n\
+         define i64 @twice(i64 %a) {{\n  %x = call i64 @add3(i64 %a, i64 1, i64 2)\n  %y = call i64 @add3(i64 %x, i64 3, i64 4)\n  ret i64 %y\n}}\n\
+         attributes #0 = {{ noinline }}\n{module_flags}"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "same").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    let text = object.sections.iter().find(|one| one.role == llrm_object::Role::Text).expect("a text section");
+    text.relocs
+        .iter()
+        .filter(|one| {
+            one.pc_rel
+                && matches!(
+                    one.target,
+                    llrm_object::Target::Symbol(at) if object.symbols[at].name == "add3"
+                )
+        })
+        .map(|one| (one.at, one.pc_rel))
+        .collect()
+}
+
+const PIC_FLAGS: &str = "!llvm.module.flags = !{!0}\n!0 = !{i32 8, !\"PIC Level\", i32 2}\n";
+const PIE_FLAGS: &str =
+    "!llvm.module.flags = !{!0, !1}\n!0 = !{i32 8, !\"PIC Level\", i32 2}\n!1 = !{i32 2, !\"PIE Level\", i32 2}\n";
+const STATIC_FLAGS: &str = "!llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
+
+#[test]
+fn a_call_and_sibling_jump_to_a_default_visibility_global_at_pic_keep_their_plt32() {
+    assert_eq!(pc_relative_relocs_to_add3(PIC_FLAGS, "").len(), 3, "the tail jump and two calls");
+}
+
+#[test]
+fn a_call_and_sibling_jump_at_pie_and_static_are_resolved_without_a_relocation() {
+    for flags in [PIE_FLAGS, STATIC_FLAGS, ""] {
+        assert!(pc_relative_relocs_to_add3(flags, "").is_empty(), "{flags}");
+    }
+}
+
+#[test]
+fn a_hidden_or_internal_callee_at_pic_is_resolved_and_a_weak_one_never_is() {
+    assert!(pc_relative_relocs_to_add3(PIC_FLAGS, "hidden ").is_empty());
+    assert!(pc_relative_relocs_to_add3(PIC_FLAGS, "internal ").is_empty());
+    assert_eq!(
+        pc_relative_relocs_to_add3(STATIC_FLAGS, "weak ").len(),
+        3,
+        "a strong definition elsewhere wins at link time"
+    );
 }

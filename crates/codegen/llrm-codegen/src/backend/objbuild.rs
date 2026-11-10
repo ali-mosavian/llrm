@@ -28,13 +28,13 @@
 //! at the price of a taken `jmp` (Watcom's `SetBranches`), and the fixed point
 //! runs again.
 //!
-//! A call to a procedure of the same segment is a relative displacement filled
-//! in; any other is a relocation. `object_of` turns what the segments hold
-//! into [`llrm_object::Object`]: a reference to a symbol the module defines
-//! becomes a relocation against that symbol with the addend in the code (as
-//! jwasm writes it), anything else is an undefined symbol, and a reference to
-//! a name neither defined nor declared is an error. 16-bit data segments of
-//! the near kind join the `DGROUP` group.
+//! A call to a procedure of the same segment that no other module can replace
+//! is a relative displacement filled in; any other is a relocation. `object_of`
+//! turns what the segments hold into [`llrm_object::Object`]: a reference to a
+//! symbol the module defines becomes a relocation against that symbol with the
+//! addend in the code (as jwasm writes it), anything else is an undefined
+//! symbol, and a reference to a name neither defined nor declared is an error.
+//! 16-bit data segments of the near kind join the `DGROUP` group.
 //!
 //! Code is padded as MC does: an `Align` item (a block's `align` and
 //! `max_skip`) pads with `nops` (`writeNopData`), and each function not tuned
@@ -43,6 +43,13 @@
 //!
 //! `written_in` hands the object to the writer crate of the target's format
 //! (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.
+//!
+//! DEVIATE 1: the pin's MC leaves a call or jump to every global to the linker,
+//! at `-fPIE` and `-fno-pic` too (`R_X86_64_PLT32`, 5 bytes). Ours binds a
+//! definition no other module can replace (`masm::Module::preemptible` lists
+//! the ones that can: weak, and default-visibility at `-fPIC`), as gcc and gas
+//! do for an executable: `jmp f` is 2 bytes. Bar: gcc. Owner: x86-m64; leaves
+//! with the pin's behaviour or when the bar changes.
 //!
 //! # Example
 //! No honest example: its output is the bytes and relocations of an object, not
@@ -64,8 +71,8 @@ use std::fmt;
 use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
 use llrm_object::assembler::AsmBackend;
-use llrm_support::hash::HashSet;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
+use llrm_support::hash::HashSet;
 use llrm_target::object::{CodeModel, Format};
 use llrm_x86::mc::backend::X86Backend;
 
@@ -174,7 +181,9 @@ fn comdat_records(
 ) -> Vec<llrm_object::Comdat> {
     // A member that is not named like its comdat follows the one that is, when
     // the module has it: associative with that member's section.
-    let named = |symbol: &str, comdat: &masm::Comdat| module.comdats.get(&comdat.name).map(|key| comdat_segment(&comdat.name, key)).filter(|_| symbol != comdat.name);
+    let named = |symbol: &str, comdat: &masm::Comdat| {
+        module.comdats.get(&comdat.name).map(|key| comdat_segment(&comdat.name, key)).filter(|_| symbol != comdat.name)
+    };
     let by_name: IndexMap<String, (llrm_object::Selection, Option<String>)> = module
         .comdats
         .iter()
@@ -998,6 +1007,7 @@ pub fn _code_by(
         }
         items.push(Encoded::End(end));
     }
+    left_to_the_linker(&mut items, &module.preemptible, module.object.code_model())?;
     near_within_group(&mut items, module.object.code_model());
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
@@ -1066,10 +1076,11 @@ pub fn _code_by(
 }
 
 /// A far call or jump to a procedure of the group the linker puts in the call's
-/// own segment is `push cs; call near` (a near `jmp`): four bytes (three), where
-/// jwlink's own rewrite of `call far` keeps five and pads one with a `ds`
+/// own segment is `push cs; call near` (a near `jmp`): four bytes (three),
+/// where jwlink's own rewrite of `call far` keeps five and pads one with a `ds`
 /// prefix at one parity and a `nop` that runs at the other (0.60-0.85% of
-/// stft_fixed's executed instructions). The callee returns with `retf` either way.
+/// stft_fixed's executed instructions). The callee returns with `retf` either
+/// way.
 fn near_within_group(
     items: &mut Vec<Encoded>,
     model: CodeModel,
@@ -1141,9 +1152,7 @@ pub fn _items(
         masm::Item::TailIf { condition, callee } => {
             vec![Encoded::Near(Near { name: callee.clone(), tail: true, cond: Some(condition.clone()) })]
         }
-        masm::Item::Semantics(jump)
-            if matches!(jump.op, Operation::Branch | Operation::Jump) && !jump.indirect =>
-        {
+        masm::Item::Semantics(jump) if matches!(jump.op, Operation::Branch | Operation::Jump) && !jump.indirect => {
             let Semantics { name, target, .. } = &**jump;
             let name = name.as_deref().filter(|one| !one.is_empty());
             let Some(target) = target else {
@@ -1220,7 +1229,8 @@ pub fn _encoded(
                 (made.immediate_at, near, addr.disp + value, addr)
             }
             // Beside a memory operand the displacement is the memory's: the
-            // symbol is the sign-extended imm32 (`mov qword ptr [m], offset a`).
+            // symbol is the sign-extended imm32 (`mov qword ptr [m], offset
+            // a`).
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 && beside_memory => {
                 (made.immediate_at, near, addr.disp + value, addr)
             }
@@ -1276,6 +1286,61 @@ pub fn short_reaches(displacement: i64) -> bool {
     (-128..=127).contains(&displacement)
 }
 
+/// A sibling `jmp f` or `jcc f` to a function this object defines is a jump to
+/// a label like any other, so it is relaxed like one: short, and long only
+/// where `f` is out of 8-bit reach. Its displacement was filled in at 4 bytes
+/// whatever the distance. LLVM's `JMP_1` / `JCC_1` start short and
+/// `relaxInstruction` makes them `JMP_4` / `JCC_4` only for a target the
+/// fixup cannot resolve in range
+/// ([X86AsmBackend.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/MCTargetDesc/X86AsmBackend.cpp#L845)).
+/// A call has no short form; a name not defined here stays a relocation.
+fn resolved_siblings(items: &mut [Encoded]) {
+    let defined: std::collections::HashSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Encoded::Label(masm::Label { name }) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    for item in items {
+        if let Encoded::Near(Near { name, tail: true, cond }) = item {
+            if defined.contains(name) {
+                *item = Encoded::Jump(Jump::new(cond.as_deref().unwrap_or("jmp"), name.clone()));
+            }
+        }
+    }
+}
+
+/// A call or jump to a procedure another module may replace at link time stays
+/// a relocation, as for a name defined elsewhere: MC resolves a PC-relative
+/// reference only to a local symbol
+/// ([ELFObjectWriter.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/ELFObjectWriter.cpp#L1391)),
+/// and gcc leaves the `-fPIC` ones to the PLT. Neither this nor `_relaxed`
+/// ever binds such a name here.
+fn left_to_the_linker(
+    items: &mut [Encoded],
+    preemptible: &std::collections::BTreeSet<String>,
+    model: CodeModel,
+) -> Result<(), Unencodable> {
+    if preemptible.is_empty() {
+        return Ok(());
+    }
+    for item in items {
+        let Encoded::Near(near) = item else { continue };
+        if !preemptible.contains(&near.name) {
+            continue;
+        }
+        let opcode = near.opcode(model)?;
+        let mut code = opcode.clone();
+        code.resize(opcode.len() + model.displacement_bytes(), 0);
+        *item = Encoded::Piece(Piece {
+            code,
+            fixups: vec![Fixup::new(opcode.len(), relative(model.displacement_bytes()), near.name.clone())],
+        });
+    }
+    Ok(())
+}
+
 /// Every label's offset, with each jump short unless its target is out of
 /// reach.
 ///
@@ -1285,6 +1350,7 @@ pub fn _relaxed(
     items: &mut [Encoded],
     model: CodeModel,
 ) -> Result<IndexMap<String, i64>, Unencodable> {
+    resolved_siblings(items);
     let labels = llrm_object::assembler::layout(items, &model).map_err(|error| Unencodable(error.0))?;
     let mut named = IndexMap::default();
     for (name, at) in labels {
@@ -1689,7 +1755,11 @@ thread_local! {
 
 /// The items whose offset lies in `range`. Items are pushed at the image's
 /// length, so they are sorted by offset: a search per function, not a scan.
-fn within<'a, T>(items: &'a [T], at: impl Fn(&T) -> usize, range: &std::ops::Range<usize>) -> &'a [T] {
+fn within<'a, T>(
+    items: &'a [T],
+    at: impl Fn(&T) -> usize,
+    range: &std::ops::Range<usize>,
+) -> &'a [T] {
     let at = |item: &T| {
         #[cfg(test)]
         PROBES.with(|probes| probes.set(probes.get() + 1));
@@ -1950,6 +2020,38 @@ mod tests {
         assert_eq!(labels["far"], 3 + 126 + 2 + 200);
     }
 
+    /// A sibling `jmp f` to a function of the same object was `jmp rel32` (5
+    /// bytes) however near `f` lay: its displacement was filled in, so it
+    /// resolved, but only `Jump` items were relaxed. MC starts a resolved
+    /// `JMP_1` short and grows it where the target is out of reach; gcc's 2
+    /// bytes against our 5 were 3 of the 61 bytes tail_calls -Os lost at m64.
+    #[test]
+    fn test_a_resolved_sibling_jump_takes_the_short_form_where_it_reaches() {
+        let near = |tail, cond: Option<&str>| Near { name: "f".into(), tail, cond: cond.map(str::to_owned) };
+        let layout = |item: Near, between: usize, defined: bool| {
+            let mut items = vec![
+                Encoded::Label(masm::Label { name: "g".into() }),
+                Encoded::Near(item),
+                Encoded::Piece(Piece::new(vec![0; between])),
+            ];
+            if defined {
+                items.push(Encoded::Label(masm::Label { name: "f".into() }));
+            }
+            let labels = _relaxed(&mut items, CodeModel::Flat64).unwrap();
+            let code: usize = items.iter().map(|item| _length(item, CodeModel::Flat64)).sum();
+            (code - between, labels.get("f").copied())
+        };
+        // `jmp f` and `je f`: 2 bytes each in reach; 5 and 6 out of it.
+        assert_eq!(layout(near(true, None), 10, true), (2, Some(2 + 10)));
+        assert_eq!(layout(near(true, Some("je")), 10, true), (2, Some(2 + 10)));
+        assert_eq!(layout(near(true, None), 200, true), (5, Some(5 + 200)));
+        assert_eq!(layout(near(true, Some("je")), 200, true), (6, Some(6 + 200)));
+        // A call has no short form, and a name nothing here defines is a
+        // relocation: both stay at 5 and 6.
+        assert_eq!(layout(near(false, None), 10, true).0, 5);
+        assert_eq!(layout(near(true, None), 10, false).0, 5);
+    }
+
     /// A `jcc rel16` (4 bytes) to a label a `jmp` to it is within short reach
     /// of is a short `jcc` to that `jmp` (2): tuned for size, 141 of
     /// QCport's 1333 long conditional jumps. One with no such `jmp`, or one
@@ -2000,6 +2102,7 @@ mod tests {
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
             publics: strings(&["_get"]),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
@@ -2048,6 +2151,7 @@ mod tests {
                 externs: vec![],
                 publics: names.clone(),
                 visibility: Default::default(),
+                preemptible: Default::default(),
                 aliases: vec![],
                 data: vec![],
                 procedures: vec![],
@@ -2092,6 +2196,7 @@ mod tests {
             externs: vec![],
             publics: strings(&["_get"]),
             visibility: std::collections::BTreeMap::from([("_get".to_owned(), llrm_object::Visibility::Hidden)]),
+            preemptible: Default::default(),
             aliases: vec![masm::Alias { name: "_other".into(), target: "_get".into(), binding: Binding::Weak }],
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
@@ -2137,6 +2242,7 @@ mod tests {
                 externs: vec![],
                 publics: strings(&["_a"]),
                 visibility: Default::default(),
+                preemptible: Default::default(),
                 aliases: Vec::new(),
                 data: vec![("_DATA".into(), items)],
                 procedures: vec![],
@@ -2222,6 +2328,7 @@ mod tests {
             ],
             publics: strings(&["_f", "_table"]),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: vec![
                 (
@@ -2327,13 +2434,11 @@ mod tests {
     #[test]
     fn test_a_store_of_a_symbol_to_a_symbol_has_a_fixup_for_each() {
         let regs = crate::backend::registerinfo::test_regs();
-        let cell = ir::Mem {
-            addr: Some(Addr { index: 3, ..Addr::new(Space::External, 0) }),
-            ..ir::Mem::new(None, 8)
-        };
+        let cell = ir::Mem { addr: Some(Addr { index: 3, ..Addr::new(Space::External, 0) }), ..ir::Mem::new(None, 8) };
         let value = ir::Imm { value: 0, width: 8, address: Some(Addr { index: 4, ..Addr::new(Space::External, 0) }) };
         let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(value)]);
-        let names = IndexMap::from_iter([((Space::External, 3), "sink".to_owned()), ((Space::External, 4), "a".to_owned())]);
+        let names =
+            IndexMap::from_iter([((Space::External, 3), "sink".to_owned()), ((Space::External, 4), "a".to_owned())]);
 
         let piece = _encoded(regs, &what, &names, CodeModel::Flat64).unwrap();
 
@@ -2360,6 +2465,7 @@ mod tests {
                 externs: vec![],
                 publics: vec![],
                 visibility: Default::default(),
+                preemptible: Default::default(),
                 aliases: Vec::new(),
                 data: vec![],
                 procedures: (0..3)
@@ -2381,7 +2487,10 @@ mod tests {
             module.object = llrm_target::Target::object(&llrm_x86_m32::M32);
             module
         };
-        fn body_of<'p>(_: &'p masm::Procedure, _: usize) -> Result<Vec<masm::Item<'p>>, String> {
+        fn body_of<'p>(
+            _: &'p masm::Procedure,
+            _: usize,
+        ) -> Result<Vec<masm::Item<'p>>, String> {
             Ok(vec![masm::Item::Callee(masm::Callee {
                 code: vec![masm::InlinePart::Bytes(vec![0x41, 0x42, 0xC3])],
                 ..masm::Callee::new("", false)

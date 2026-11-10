@@ -178,10 +178,19 @@ impl Tti for Wasm {
     /// The pin's `OptSizeThreshold` 50 allows the growth.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
     /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
-    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245), none above.
+    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245). On the whole
+    /// corpus (198 rows, 2026-11-10) 20 -O1 rows were above it, +1 256 B: nine
+    /// of them held inlines the pin prices below zero (next hook).
     /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
     /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// The bound stands down where the pin's own cost is below zero: the pin
+    /// counts the inline as shrinking the caller (uint64_to_float -O1: six
+    /// `classify` calls kept at cost -15..-5, 241 B against the pin's 96).
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
