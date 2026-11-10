@@ -2051,8 +2051,15 @@ impl<'a> Analyzer<'a> {
             _ => false,
         };
         stays
-            && self.site.tti.is_some_and(|tti| tti.inline_size_view().is_some())
+            && self.size_view().is_some()
             && operation.result.is_none_or(|result| self.simplified.get(&result).is_none() && self.offsets.get(&result).is_none())
+    }
+
+    /// The target's byte view of the callee's code, for a speed caller only: a
+    /// size caller keeps the units its -Os bound was fitted in (DEVIATE
+    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14).
+    fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        self.site.tti?.inline_size_view().filter(|_| self.site.caller_size == CallerSize::Speed)
     }
 
     fn code_size_of(
@@ -2060,7 +2067,7 @@ impl<'a> Analyzer<'a> {
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         llrm_mir::instructioncost::instruction_cost(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2081,7 +2088,7 @@ impl<'a> Analyzer<'a> {
         if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
             return sequence;
         }
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let size = llrm_mir::instructioncost::instruction_cost(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2092,7 +2099,7 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
-        (size * tti.call_code_size_percent() + 50) / 100 + self.byval_copy_size()
+        (size * view.as_deref().unwrap_or(tti).call_code_size_percent() + 50) / 100 + self.byval_copy_size()
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2206,7 +2213,7 @@ impl<'a> Analyzer<'a> {
     /// marker: any other use keeps the stores.
     fn folded_caller_stores(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let caller = self.site.caller;
         let mut total = 0;
         for root in self.enabled_sroa.iter() {
@@ -2285,7 +2292,7 @@ impl<'a> Analyzer<'a> {
             return None;
         }
         let tti = self.site.tti?;
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let caller = self.site.caller;
         let callee_id = llrm_mir::memory::callee(self.context, caller, call)?;
         let llrm_mir::module::GlobalKind::Function(callee) = &self.site.module.global(callee_id).kind else { return None };

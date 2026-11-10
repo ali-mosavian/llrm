@@ -836,10 +836,6 @@ impl Tti for X86 {
         self.tuning.inline_size_bytes
     }
 
-    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
-        self.tuning.inline_size_bytes
-    }
-
     fn callee_saved_clocks(&self, peak: usize) -> i64 {
         self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
             (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
@@ -1099,7 +1095,7 @@ impl Tti for X86 {
     /// 14-instruction loop of `idioms.bas` out of ten sites.
     fn call_code_size_percent(&self) -> i64 {
         // The size view prices a call in bytes already: pushes and the pop.
-        if self.tuning.inline_size_bytes { 100 } else { 150 }
+        if self.size_bytes { 100 } else { 150 }
     }
 
     fn float_code_size_percent(&self) -> i64 {

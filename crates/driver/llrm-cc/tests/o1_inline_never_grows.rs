@@ -247,12 +247,12 @@ int main(void)
     assert_eq!(calls, 0, "`bar` is empty after the folds: its call is gone:\n{listing}");
 }
 
-/// At -Os the byte bound stands down where the pin's own cost is negative:
-/// `to_double` folds away at its constant call, but 16 B against a 12 B call
-/// kept it a call, which kept `classify` over the -Os threshold and the
-/// whole program 317 B instead of 60 (uint64_to_float -Os).
+/// A size caller keeps the unit model its -Os bound was fitted in: priced in
+/// bytes, `to_double` (16 B against a 12 B call) stayed a call although the
+/// pin's cost was -30, `classify` stayed over the -Os threshold, and the
+/// program was 317 B instead of 60 (uint64_to_float -Os).
 #[test]
-fn test_m32_os_inline_yields_where_the_pin_counts_the_inline_as_shrinking() {
+fn test_m32_os_inline_keeps_the_units_its_bound_was_fitted_in() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source = std::fs::read_to_string(root.join("tests/run/c/uint64_to_float.c")).unwrap();
     let (listing, _) = compile("yields", &source, "-Os");
