@@ -113,3 +113,35 @@ define void @f() nounwind {
     let asm = text(ir, "f", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(!asm.contains("(ix), #9"), "each store carries the constant:\n{asm}");
 }
+
+const FILL: &str = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
+define void @fill(ptr %p, i16 %n) nounwind {
+entry:
+  %c = icmp eq i16 %n, 0
+  br i1 %c, label %done, label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %j, %loop ]
+  %q = getelementptr i16, ptr %p, i16 %i
+  store i16 4660, ptr %q
+  %j = add i16 %i, 1
+  %e = icmp eq i16 %j, %n
+  br i1 %e, label %done, label %loop
+done:
+  ret void
+}
+"#;
+
+/// fill_nest -O2: the constant was stored from two `ld (hl), n` on every trip,
+/// 6 T a trip more than from a pair held across the loop: +22144 T.
+#[test]
+fn at_speed_a_constant_stored_in_a_loop_is_held_across_it() {
+    let asm = text(FILL, "fill", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!asm.contains("ld (hl), #52"), "the constant is stored from immediates in the loop:\n{asm}");
+}
+
+/// At -Os bytes decide: the two immediates are 4 B, the pair held 5 B.
+#[test]
+fn at_size_a_constant_stored_in_a_loop_stays_an_immediate() {
+    let asm = text(FILL, "fill", 0, &Request::new(Level::Os)).expect("compiles");
+    assert!(asm.contains("ld (hl), #52"), "the constant was held for a byte:\n{asm}");
+}

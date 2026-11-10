@@ -686,6 +686,51 @@ pub fn btst_beats_and_immediate(cpu: Cpu) -> bool {
     BEATS[cpu as usize]
 }
 
+/// Whether `tst.w`/`tst.b Dn` takes no more bytes and no more clocks than
+/// `btst #k,Dn` on `cpu`, read from the timing tables (2 B against 4).
+fn tst_beats_btst(cpu: Cpu) -> bool {
+    use crate::timing::cost;
+    static BEATS: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let clocks = |text: &str, bytes: u32| cost(cpu, text, bytes, false).expect("a priced instruction").clocks;
+            let btst = clocks("btst #15, %d0", 4);
+            clocks("tst.w %d0", 2) <= btst && clocks("tst.b %d0", 2) <= btst
+        })
+    });
+    BEATS[cpu as usize]
+}
+
+/// DEVIATE M68K-BTST-SIGN (owner m68k-lsr-addressing, exit 2026-11-30): the
+/// pin has no counterpart (its `LowerAndToBTST` leaves a constant mask that
+/// fits a `TEST` alone). A mask that is the sign bit of the low byte or word,
+/// `(x & 0x80) != 0` or `(x & 0x8000) != 0` of an `i32`, is the sign of that
+/// part: `tst.b`/`tst.w Dn` (2 B, no copy) and a sign condition, where
+/// `btst #k,Dn` is 4 B and `and.l #imm` 6 B and a copy. Priced from the
+/// tables. Any other single bit stays [`lower_and_to_btst`]'s.
+fn lower_and_to_narrow_sign_test(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+    cpu: Cpu,
+) -> Option<SDValue> {
+    if dag.value_type(and) != EVT::I32 || !tst_beats_btst(cpu) {
+        return None;
+    }
+    let mask = dag.constant(dag.operand(and, 1))?;
+    let vt = match mask {
+        0x80 => EVT::I8,
+        0x8000 => EVT::I16,
+        _ => return None,
+    };
+    // `x & sign == 0` is `part >= 0`; `!= 0` is `part < 0`
+    let part = dag.get_node(ISD::Truncate, vt, &[dag.operand(and, 0)]);
+    let mut zero = dag.get_constant(0, vt);
+    let code = translate_cc(dag, if cc == CondCode::SetEq { CondCode::SetGe } else { CondCode::SetLt }, &mut zero);
+    let flags = emit_cmp(dag, part, zero, code);
+    let code = cc_operand(dag, code);
+    Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
+}
+
 /// `LowerAndToBTST`: `(1 << n) & x` and `(x >> n) & 1` against zero are a bit
 /// test.
 fn lower_and_to_btst(
@@ -743,7 +788,8 @@ fn lower_setcc(
         && dag.is_null_constant(op1)
         && dag.opcode(op0) == ISD::And
         && dag.has_one_use(op0.node)
-        && let Some(test) = lower_and_to_btst(dag, op0, cc, cpu)
+        && let Some(test) =
+            lower_and_to_narrow_sign_test(dag, op0, cc, cpu).or_else(|| lower_and_to_btst(dag, op0, cc, cpu))
     {
         return Some(test);
     }
