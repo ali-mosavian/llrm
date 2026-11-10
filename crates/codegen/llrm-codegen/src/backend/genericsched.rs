@@ -20,6 +20,21 @@
 //! of a bidirectional region): only the heuristics that compare across zones
 //! apply.
 //!
+//! # Reasons (pin d1106deb71cc)
+//! The enum is [`CandReason`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineScheduler.h#L1099); each reason is set at:
+//!
+//! | reason | set at |
+//! |---|---|
+//! | `NoCand`, `Only1`, `FirstValid` | [reset](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineScheduler.h#L1183), [`pickOnlyChoice` picks](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4107), [first candidate](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3970) |
+//! | `PhysReg` | [`tryBiasPhysRegs`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3895), called at [#L3975](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3975) |
+//! | `RegExcess`, `RegCritical` | [#L3981](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3981), [#L3988](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3988) (`tryPressure` [#L3805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3805)) |
+//! | `Stall` | [#L4008](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4008) |
+//! | `Cluster`, `Weak` | [#L4026](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4026), [#L4033](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4033) |
+//! | `RegMax` | [#L4040](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4040) |
+//! | `ResourceReduce`, `ResourceDemand` | [#L4048](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4048), [#L4052](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4052) |
+//! | `TopDepthReduce`, `TopPathReduce`, `BotHeightReduce`, `BotPathReduce` | [`tryLatency`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3488), called at [#L4003](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4003) and [#L4058](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4058) |
+//! | `NodeOrder` | [#L4064](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4064), and in `tryBiasPhysRegs` |
+//!
 //! # Not here
 //! The ready queues, the clock and the resource counts of a zone
 //! (`SchedBoundary`) and the choice of zone (`pickNodeBidirectional`) are the
@@ -118,7 +133,11 @@ pub struct Cand {
 
 impl Cand {
     /// A candidate that has not been compared yet.
-    pub fn new(node: usize, at_top: bool, policy: CandPolicy) -> Cand {
+    pub fn new(
+        node: usize,
+        at_top: bool,
+        policy: CandPolicy,
+    ) -> Cand {
         Cand {
             node,
             at_top,
@@ -159,7 +178,13 @@ pub struct Region {
     pub bias_pregs_extra: bool,
 }
 
-fn try_less(try_val: i64, cand_val: i64, try_cand: &mut Cand, cand: &mut Cand, reason: Reason) -> bool {
+fn try_less(
+    try_val: i64,
+    cand_val: i64,
+    try_cand: &mut Cand,
+    cand: &mut Cand,
+    reason: Reason,
+) -> bool {
     if try_val < cand_val {
         try_cand.reason = reason;
         return true;
@@ -171,7 +196,13 @@ fn try_less(try_val: i64, cand_val: i64, try_cand: &mut Cand, cand: &mut Cand, r
     false
 }
 
-fn try_greater(try_val: i64, cand_val: i64, try_cand: &mut Cand, cand: &mut Cand, reason: Reason) -> bool {
+fn try_greater(
+    try_val: i64,
+    cand_val: i64,
+    try_cand: &mut Cand,
+    cand: &mut Cand,
+    reason: Reason,
+) -> bool {
     if try_val > cand_val {
         try_cand.reason = reason;
         return true;
@@ -196,17 +227,21 @@ fn pressure(
         Pick::Try => {
             try_cand.reason = reason;
             true
-        },
+        }
         Pick::Cand => {
             cand.reason = cand.reason.min(reason);
             true
-        },
+        }
         Pick::Neither => false,
     }
 }
 
 /// `tryLatency` (#L3488).
-fn try_latency(try_cand: &mut Cand, cand: &mut Cand, zone: &Zone) -> bool {
+fn try_latency(
+    try_cand: &mut Cand,
+    cand: &mut Cand,
+    zone: &Zone,
+) -> bool {
     let (try_depth, cand_depth) = (i64::from(try_cand.depth), i64::from(cand.depth));
     let (try_height, cand_height) = (i64::from(try_cand.height), i64::from(cand.height));
     if zone.is_top {
@@ -228,12 +263,21 @@ fn try_latency(try_cand: &mut Cand, cand: &mut Cand, zone: &Zone) -> bool {
 
 /// `tryBiasPhysRegs` (#L3895): a node that defines a physical register its
 /// user copies out, or copies one in, goes next to that copy.
-fn try_bias_phys_regs(try_cand: &mut Cand, cand: &mut Cand, zone: Option<&Zone>, extra: bool) -> bool {
+fn try_bias_phys_regs(
+    try_cand: &mut Cand,
+    cand: &mut Cand,
+    zone: Option<&Zone>,
+    extra: bool,
+) -> bool {
     let (try_bias, cand_bias) = (try_cand.phys_bias, cand.phys_bias);
     if try_greater(i64::from(try_bias), i64::from(cand_bias), try_cand, cand, Reason::PhysReg) {
         return true;
     }
-    if extra && let Some(zone) = zone && try_bias != 0 && try_bias == cand_bias {
+    if extra
+        && let Some(zone) = zone
+        && try_bias != 0
+        && try_bias == cand_bias
+    {
         // Both biased the same way: keep their input order.
         let (try_node, cand_node) = (try_cand.node as i64, cand.node as i64);
         if zone.is_top {
@@ -250,7 +294,12 @@ fn try_bias_phys_regs(try_cand: &mut Cand, cand: &mut Cand, zone: Option<&Zone>,
 /// `cand`. `zone` is the zone both extend, `None` when they are in different
 /// ones. On a win `try_cand.reason` is the heuristic that decided; on a loss
 /// that a heuristic decided, `cand.reason` is lowered to it.
-pub fn try_candidate(cand: &mut Cand, try_cand: &mut Cand, zone: Option<&Zone>, region: &Region) -> bool {
+pub fn try_candidate(
+    cand: &mut Cand,
+    try_cand: &mut Cand,
+    zone: Option<&Zone>,
+    region: &Region,
+) -> bool {
     if cand.reason == Reason::NoCand {
         try_cand.reason = Reason::FirstValid;
         return true;
@@ -279,9 +328,7 @@ pub fn try_candidate(cand: &mut Cand, try_cand: &mut Cand, zone: Option<&Zone>, 
     if try_greater(i64::from(try_cand.cluster_succ), i64::from(cand.cluster_succ), try_cand, cand, Reason::Cluster) {
         return try_cand.reason != Reason::NoCand;
     }
-    if zone.is_some()
-        && try_less(try_cand.weak_left as i64, cand.weak_left as i64, try_cand, cand, Reason::Weak)
-    {
+    if zone.is_some() && try_less(try_cand.weak_left as i64, cand.weak_left as i64, try_cand, cand, Reason::Weak) {
         return try_cand.reason != Reason::NoCand;
     }
     if region.tracks_pressure
@@ -328,7 +375,10 @@ mod tests {
     const BOTTOM: Zone = Zone { is_top: false, curr_mops: 0, scheduled_latency: 0 };
     const TOP: Zone = Zone { is_top: true, curr_mops: 0, scheduled_latency: 0 };
 
-    fn pair(try_node: usize, cand_node: usize) -> (Cand, Cand) {
+    fn pair(
+        try_node: usize,
+        cand_node: usize,
+    ) -> (Cand, Cand) {
         let mut cand = Cand::new(cand_node, false, CandPolicy::default());
         cand.reason = Reason::FirstValid;
         (cand, Cand::new(try_node, false, CandPolicy::default()))

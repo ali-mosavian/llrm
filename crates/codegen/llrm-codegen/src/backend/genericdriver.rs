@@ -17,11 +17,11 @@
 //! L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
 //!
 //! # Not translated
-//! - SB2: pressure is followed bottom-up only; a bidirectional region does
-//!   not track it.
+//! - SB2: pressure is followed bottom-up only; a bidirectional region does not
+//!   track it.
 //! - SB3: `ExitSU` (the region end); the critical path is the deepest root.
-//! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off.
-//!   It is only asked of a model with a micro-op buffer (Cyclone), not the
+//! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
+//!   is only asked of a model with a micro-op buffer (Cyclone), not the
 //!   in-order A510.
 //! - SB5: clusters and macro fusion (`ParentClusterIdx`), and
 //!   `tryBiasPhysRegs`/`reschedulePhysReg` (no region holds a physical
@@ -37,9 +37,15 @@ use crate::backend::schedboundary::{Boundary, Machine, Remainder, Unit};
 /// What follows the pressure of the bottom zone.
 pub trait BottomPressure {
     /// `RPDelta` of placing `node` at the bottom.
-    fn delta(&self, node: usize) -> Delta;
+    fn delta(
+        &self,
+        node: usize,
+    ) -> Delta;
     /// `node` is placed at the bottom.
-    fn place(&mut self, node: usize);
+    fn place(
+        &mut self,
+        node: usize,
+    );
 }
 
 /// `RegionPolicy` (what `initPolicy` and the subtarget's `overrideSchedPolicy`
@@ -65,7 +71,11 @@ impl RegionPolicy {
 }
 
 /// `checkResourceLimit` before a node is scheduled.
-fn resource_limited(l_factor: u32, count: u32, latency: u32) -> bool {
+fn resource_limited(
+    l_factor: u32,
+    count: u32,
+    latency: u32,
+) -> bool {
     i64::from(count) - i64::from(latency) * i64::from(l_factor) > i64::from(l_factor)
 }
 
@@ -115,7 +125,8 @@ impl<'a> Scheduler<'a> {
                 .unwrap_or(0);
         }
         for node in (0..n).rev() {
-            units[node].height = succ_edges[node].iter().map(|&(succ, lat)| units[succ].height + lat).max().unwrap_or(0);
+            units[node].height =
+                succ_edges[node].iter().map(|&(succ, lat)| units[succ].height + lat).max().unwrap_or(0);
         }
         let rem = if machine.has_instr_sched_model() { Remainder::new(machine, &units) } else { Remainder::default() };
         let idle = Cand::new(0, false, CandPolicy::default());
@@ -149,15 +160,21 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `computeRemLatency`.
-    fn rem_latency(&self, zone: &Boundary) -> u32 {
-        let longest = |nodes: &[usize]| {
-            nodes.iter().map(|&node| zone.unscheduled_latency(&self.units[node])).max().unwrap_or(0)
-        };
+    fn rem_latency(
+        &self,
+        zone: &Boundary,
+    ) -> u32 {
+        let longest =
+            |nodes: &[usize]| nodes.iter().map(|&node| zone.unscheduled_latency(&self.units[node])).max().unwrap_or(0);
         zone.dependent_latency().max(longest(&zone.available)).max(longest(&zone.pending))
     }
 
     /// `shouldReduceLatency`.
-    fn should_reduce_latency(&self, zone: &Boundary, rem_latency: &mut Option<u32>) -> bool {
+    fn should_reduce_latency(
+        &self,
+        zone: &Boundary,
+        rem_latency: &mut Option<u32>,
+    ) -> bool {
         if zone.curr_cycle() > self.rem.critical_path {
             return true;
         }
@@ -169,10 +186,17 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `setPolicy`, not post-RA.
-    fn set_policy(&self, zone: &Boundary, other: &Boundary) -> CandPolicy {
+    fn set_policy(
+        &self,
+        zone: &Boundary,
+        other: &Boundary,
+    ) -> CandPolicy {
         let mut policy = CandPolicy::default();
-        let (other_count, other_crit) =
-            if self.machine.has_instr_sched_model() { other.other_resource_count(self.machine, &self.rem) } else { (0, 0) };
+        let (other_count, other_crit) = if self.machine.has_instr_sched_model() {
+            other.other_resource_count(self.machine, &self.rem)
+        } else {
+            (0, 0)
+        };
         let mut rem_latency = None;
         let mut other_limited = false;
         if self.machine.has_instr_sched_model() && other_count != 0 {
@@ -194,7 +218,12 @@ impl<'a> Scheduler<'a> {
         policy
     }
 
-    fn init_candidate(&self, node: usize, at_top: bool, policy: CandPolicy) -> Cand {
+    fn init_candidate(
+        &self,
+        node: usize,
+        at_top: bool,
+        policy: CandPolicy,
+    ) -> Cand {
         let zone = if at_top { &self.top } else { &self.bot };
         let unit = &self.units[node];
         let mut cand = Cand::new(node, at_top, policy);
@@ -209,7 +238,10 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `initResourceDelta`.
-    fn init_resource_delta(&self, cand: &mut Cand) {
+    fn init_resource_delta(
+        &self,
+        cand: &mut Cand,
+    ) {
         if cand.policy.reduce_res_idx == 0 && cand.policy.demand_res_idx == 0 {
             return;
         }
@@ -230,7 +262,11 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `pickNodeFromQueue`: the best of a zone's available nodes.
-    fn pick_from_queue(&self, at_top: bool, policy: CandPolicy) -> Cand {
+    fn pick_from_queue(
+        &self,
+        at_top: bool,
+        policy: CandPolicy,
+    ) -> Cand {
         let zone = if at_top { &self.top } else { &self.bot };
         let view = Self::zone_view(zone);
         let region = self.region();
@@ -282,7 +318,7 @@ impl<'a> Scheduler<'a> {
                 None => {
                     let cand = self.pick_from_queue(true, CandPolicy::default());
                     (cand.node, true, cand.reason)
-                },
+                }
             }
         } else if self.policy.only_bottom_up {
             match self.bot.pick_only_choice(self.machine, &self.units) {
@@ -290,7 +326,7 @@ impl<'a> Scheduler<'a> {
                 None => {
                     let cand = self.pick_from_queue(false, CandPolicy::default());
                     (cand.node, false, cand.reason)
-                },
+                }
             }
         } else {
             self.pick_bidirectional()
@@ -306,7 +342,11 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `schedNode` and `updateQueues`.
-    fn sched_node(&mut self, node: usize, at_top: bool) {
+    fn sched_node(
+        &mut self,
+        node: usize,
+        at_top: bool,
+    ) {
         self.scheduled[node] = true;
         if at_top {
             let cycle = self.top.curr_cycle();
@@ -404,7 +444,10 @@ mod tests {
         )
     }
 
-    fn unit(resource: usize, buffer: u32) -> Unit {
+    fn unit(
+        resource: usize,
+        buffer: u32,
+    ) -> Unit {
         Unit {
             micro_ops: 1,
             writes: vec![WriteRes { idx: resource, release_at_cycle: 1, acquire_at_cycle: 0 }],
@@ -427,15 +470,18 @@ mod tests {
         (graph, machine(buffer), units)
     }
 
-    fn order(buffer: u32, policy: RegionPolicy) -> Vec<usize> {
+    fn order(
+        buffer: u32,
+        policy: RegionPolicy,
+    ) -> Vec<usize> {
         let (graph, machine, units) = diamond(buffer);
         Scheduler::new(&graph, &machine, units, policy, None).schedule().0
     }
 
-    /// pin: `llc -mcpu=generic` (in order) hoists the load and the divides above
-    /// stores that do not feed them; `-mcpu=apple-m1` (out of order) keeps
-    /// source order. The stall of the second divide on the first lets the
-    /// bottom zone place stores meanwhile.
+    /// pin: `llc -mcpu=generic` (in order) hoists the load and the divides
+    /// above stores that do not feed them; `-mcpu=apple-m1` (out of order)
+    /// keeps source order. The stall of the second divide on the first lets
+    /// the bottom zone place stores meanwhile.
     #[test]
     fn test_an_in_order_machine_hoists_a_load_chain_above_independent_stores() {
         for policy in [RegionPolicy::bottom_up(), RegionPolicy::bidirectional(false)] {
@@ -445,10 +491,11 @@ mod tests {
         }
     }
 
-    /// By hand, bottom-up, one-wide: divide 8 is placed first (latest node); divide
-    /// 7 is ready 6 cycles later, so stores 5..1 fill cycles 1-5; at cycle 6 divide 7
-    /// beats store 0 by order, store 0 follows, and the load (ready at 9) comes last.
-    /// Placed 8,5,4,3,2,1,7,0,6; the order is that reversed.
+    /// By hand, bottom-up, one-wide: divide 8 is placed first (latest node);
+    /// divide 7 is ready 6 cycles later, so stores 5..1 fill cycles 1-5; at
+    /// cycle 6 divide 7 beats store 0 by order, store 0 follows, and the
+    /// load (ready at 9) comes last. Placed 8,5,4,3,2,1,7,0,6; the order is
+    /// that reversed.
     #[test]
     fn test_the_stall_of_a_divide_chain_interleaves_stores_between_its_links() {
         assert_eq!(order(0, RegionPolicy::bottom_up()), vec![6, 0, 7, 1, 2, 3, 4, 5, 8]);
@@ -462,11 +509,11 @@ mod tests {
 
     #[test]
     fn test_every_node_is_placed_once_whatever_the_policy() {
-        for policy in [RegionPolicy::bottom_up(), RegionPolicy::bidirectional(false), RegionPolicy {
-            only_top_down: true,
-            only_bottom_up: false,
-            disable_latency: false,
-        }] {
+        for policy in [
+            RegionPolicy::bottom_up(),
+            RegionPolicy::bidirectional(false),
+            RegionPolicy { only_top_down: true, only_bottom_up: false, disable_latency: false },
+        ] {
             for buffer in [0, 192] {
                 let mut got = order(buffer, policy);
                 got.sort_unstable();

@@ -60,7 +60,11 @@ pub struct Machine {
 impl Machine {
     /// `TargetSchedModel::init`: the factors that normalise units, micro-ops
     /// and cycles.
-    pub fn new(issue_width: u32, micro_op_buffer_size: u32, resources: Vec<ProcResource>) -> Machine {
+    pub fn new(
+        issue_width: u32,
+        micro_op_buffer_size: u32,
+        resources: Vec<ProcResource>,
+    ) -> Machine {
         let gcd = |mut a: u32, mut b: u32| {
             while b != 0 {
                 (a, b) = (b, a % b);
@@ -98,7 +102,10 @@ impl Machine {
         self.micro_op_factor
     }
 
-    pub fn resource_factor(&self, idx: usize) -> u32 {
+    pub fn resource_factor(
+        &self,
+        idx: usize,
+    ) -> u32 {
         self.resource_factors[idx]
     }
 }
@@ -131,7 +138,10 @@ pub struct Remainder {
 
 impl Remainder {
     /// `SchedRemainder::init`.
-    pub fn new(machine: &Machine, units: &[Unit]) -> Remainder {
+    pub fn new(
+        machine: &Machine,
+        units: &[Unit],
+    ) -> Remainder {
         let mut rem = Remainder { remaining_counts: vec![0; machine.resources.len()], ..Remainder::default() };
         for unit in units {
             rem.rem_issue_count += unit.micro_ops * machine.micro_op_factor();
@@ -149,7 +159,12 @@ const INVALID_CYCLE: u32 = u32::MAX;
 const READY_LIST_LIMIT: usize = 256;
 
 /// `checkResourceLimit`.
-fn check_resource_limit(l_factor: u32, count: u32, latency: u32, after_sched_node: bool) -> bool {
+fn check_resource_limit(
+    l_factor: u32,
+    count: u32,
+    latency: u32,
+    after_sched_node: bool,
+) -> bool {
     let res_cnt_factor = i64::from(count) - i64::from(latency) * i64::from(l_factor);
     if after_sched_node { res_cnt_factor >= i64::from(l_factor) } else { res_cnt_factor > i64::from(l_factor) }
 }
@@ -176,7 +191,10 @@ pub struct Boundary {
 
 impl Boundary {
     /// `SchedBoundary::init`.
-    pub fn new(machine: &Machine, is_top: bool) -> Boundary {
+    pub fn new(
+        machine: &Machine,
+        is_top: bool,
+    ) -> Boundary {
         let mut reserved_index = Vec::with_capacity(machine.resources.len());
         let mut units = 0;
         for resource in &machine.resources {
@@ -230,17 +248,26 @@ impl Boundary {
     }
 
     /// `getUnscheduledLatency`.
-    pub fn unscheduled_latency(&self, unit: &Unit) -> u32 {
+    pub fn unscheduled_latency(
+        &self,
+        unit: &Unit,
+    ) -> u32 {
         if self.is_top { unit.height } else { unit.depth }
     }
 
     /// `getResourceCount`.
-    pub fn resource_count(&self, idx: usize) -> u32 {
+    pub fn resource_count(
+        &self,
+        idx: usize,
+    ) -> u32 {
         self.executed[idx]
     }
 
     /// `getCriticalCount`.
-    pub fn critical_count(&self, machine: &Machine) -> u32 {
+    pub fn critical_count(
+        &self,
+        machine: &Machine,
+    ) -> u32 {
         if self.zone_crit_res_idx == 0 {
             self.retired_mops * machine.micro_op_factor()
         } else {
@@ -249,30 +276,46 @@ impl Boundary {
     }
 
     /// `getExecutedCount`.
-    pub fn executed_count(&self, machine: &Machine) -> u32 {
+    pub fn executed_count(
+        &self,
+        machine: &Machine,
+    ) -> u32 {
         (self.curr_cycle * machine.latency_factor()).max(self.max_executed)
     }
 
-    fn ready_cycle(&self, unit: &Unit) -> u32 {
+    fn ready_cycle(
+        &self,
+        unit: &Unit,
+    ) -> u32 {
         if self.is_top { unit.top_ready_cycle } else { unit.bot_ready_cycle }
     }
 
     /// `getLatencyStallCycles`: the soft stall of a node that reads an
     /// unbuffered resource.
-    pub fn latency_stall_cycles(&self, unit: &Unit) -> u32 {
+    pub fn latency_stall_cycles(
+        &self,
+        unit: &Unit,
+    ) -> u32 {
         if !unit.is_unbuffered {
             return 0;
         }
         self.ready_cycle(unit).saturating_sub(self.curr_cycle)
     }
 
-    fn is_reserved_group(machine: &Machine, idx: usize) -> bool {
+    fn is_reserved_group(
+        machine: &Machine,
+        idx: usize,
+    ) -> bool {
         let resource = &machine.resources[idx];
         !resource.sub_units.is_empty() && resource.buffer_size == 0
     }
 
     /// `getNextResourceCycleByInstance`, without intervals.
-    fn next_resource_cycle_by_instance(&self, instance: usize, release_at_cycle: u32) -> u32 {
+    fn next_resource_cycle_by_instance(
+        &self,
+        instance: usize,
+        release_at_cycle: u32,
+    ) -> u32 {
         let next_unreserved = self.reserved_cycles[instance];
         // A resource never used is available now.
         if next_unreserved == INVALID_CYCLE {
@@ -321,7 +364,11 @@ impl Boundary {
     }
 
     /// `checkHazard`: the node cannot issue in the current cycle.
-    pub fn check_hazard(&self, machine: &Machine, unit: &Unit) -> bool {
+    pub fn check_hazard(
+        &self,
+        machine: &Machine,
+        unit: &Unit,
+    ) -> bool {
         let uops = unit.micro_ops;
         if self.curr_mops > 0 && self.curr_mops + uops > machine.issue_width {
             return true;
@@ -376,7 +423,11 @@ impl Boundary {
     }
 
     /// `bumpCycle`.
-    pub fn bump_cycle(&mut self, machine: &Machine, mut next_cycle: u32) {
+    pub fn bump_cycle(
+        &mut self,
+        machine: &Machine,
+        mut next_cycle: u32,
+    ) {
         if machine.micro_op_buffer_size == 0 {
             assert!(self.min_ready_cycle < u32::MAX, "MinReadyCycle uninitialized");
             next_cycle = next_cycle.max(self.min_ready_cycle);
@@ -418,7 +469,12 @@ impl Boundary {
     }
 
     /// `bumpNode`: the node is scheduled in this zone.
-    pub fn bump_node(&mut self, machine: &Machine, unit: &Unit, rem: &mut Remainder) {
+    pub fn bump_node(
+        &mut self,
+        machine: &Machine,
+        unit: &Unit,
+        rem: &mut Remainder,
+    ) {
         let inc_mops = unit.micro_ops;
         assert!(
             self.curr_mops == 0 || self.curr_mops + inc_mops <= machine.issue_width,
@@ -432,14 +488,14 @@ impl Boundary {
                 if ready > next_cycle {
                     next_cycle = ready;
                 }
-            },
+            }
             _ => {
                 // The reorder buffer is not modelled: scheduled micro-ops
                 // count as retired; an in-order resource may still stall.
                 if unit.is_unbuffered && ready > next_cycle {
                     next_cycle = ready;
                 }
-            },
+            }
         }
         self.retired_mops += inc_mops;
         if machine.has_instr_sched_model() {
@@ -450,7 +506,9 @@ impl Boundary {
                 // Issue becomes the critical resource once the scaled micro-ops
                 // pass the old one by a cycle.
                 let scaled = i64::from(self.retired_mops * machine.micro_op_factor());
-                if scaled - i64::from(self.resource_count(self.zone_crit_res_idx)) >= i64::from(machine.latency_factor()) {
+                if scaled - i64::from(self.resource_count(self.zone_crit_res_idx))
+                    >= i64::from(machine.latency_factor())
+                {
                     self.zone_crit_res_idx = 0;
                 }
             }
@@ -466,8 +524,13 @@ impl Boundary {
                 // bottom-up: the node's cycle.
                 for entry in &unit.writes {
                     if machine.resources[entry.idx].buffer_size == 0 {
-                        let (until, instance) =
-                            self.next_resource_cycle(machine, unit, entry.idx, entry.release_at_cycle, entry.acquire_at_cycle);
+                        let (until, instance) = self.next_resource_cycle(
+                            machine,
+                            unit,
+                            entry.idx,
+                            entry.release_at_cycle,
+                            entry.acquire_at_cycle,
+                        );
                         self.reserved_cycles[instance] =
                             if self.is_top { until.max(next_cycle + entry.release_at_cycle) } else { next_cycle };
                     }
@@ -508,7 +571,11 @@ impl Boundary {
     }
 
     /// `releasePending`: pending nodes that are ready become visible.
-    pub fn release_pending(&mut self, machine: &Machine, units: &[Unit]) {
+    pub fn release_pending(
+        &mut self,
+        machine: &Machine,
+        units: &[Unit],
+    ) {
         // With nothing available the minimum may be reset.
         if self.available.is_empty() {
             self.min_ready_cycle = u32::MAX;
@@ -534,7 +601,10 @@ impl Boundary {
     }
 
     /// `removeReady`.
-    pub fn remove_ready(&mut self, node: usize) {
+    pub fn remove_ready(
+        &mut self,
+        node: usize,
+    ) {
         if let Some(at) = self.available.iter().position(|&one| one == node) {
             self.available.remove(at);
         } else {
@@ -546,7 +616,11 @@ impl Boundary {
     /// `pickOnlyChoice`: release what is ready, defer what now hits a hazard,
     /// advance the clock until something is available; the node if it is the
     /// only one.
-    pub fn pick_only_choice(&mut self, machine: &Machine, units: &[Unit]) -> Option<usize> {
+    pub fn pick_only_choice(
+        &mut self,
+        machine: &Machine,
+        units: &[Unit],
+    ) -> Option<usize> {
         if self.check_pending {
             self.release_pending(machine, units);
         }
@@ -570,7 +644,11 @@ impl Boundary {
     /// `SchedBoundary::getOtherResourceCount`: the scaled count of the most
     /// used resource of the zone and what remains, and which resource it is
     /// (0 for issue).
-    pub fn other_resource_count(&self, machine: &Machine, rem: &Remainder) -> (u32, usize) {
+    pub fn other_resource_count(
+        &self,
+        machine: &Machine,
+        rem: &Remainder,
+    ) -> (u32, usize) {
         let mut crit_count = rem.rem_issue_count + self.retired_mops * machine.micro_op_factor();
         let mut crit_idx = 0;
         for idx in 1..machine.resources.len() {

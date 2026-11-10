@@ -41,10 +41,10 @@ use std::sync::Arc;
 use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::classes::RegisterClasses;
+use crate::backend::genericdriver::{BottomPressure, RegionPolicy, Scheduler};
 use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
-use crate::backend::genericdriver::{BottomPressure, RegionPolicy, Scheduler};
 use crate::backend::regpressure::{Delta, Model, PressureChange, Region, Tracker};
 use crate::backend::schedboundary::{Machine, ProcResource, Unit};
 use crate::backend::target::Segments;
@@ -289,7 +289,10 @@ impl Graph {
     /// A graph of `n` instructions with the given `(earlier, later, latency)`
     /// edges, for a scheduler test.
     #[cfg(test)]
-    pub(crate) fn from_edges(n: usize, edges: &[(usize, usize, u32)]) -> Graph {
+    pub(crate) fn from_edges(
+        n: usize,
+        edges: &[(usize, usize, u32)],
+    ) -> Graph {
         let mut graph = Graph {
             preds: vec![Vec::new(); n],
             succs: vec![Vec::new(); n],
@@ -872,11 +875,17 @@ struct Followed<'a> {
 }
 
 impl BottomPressure for Followed<'_> {
-    fn delta(&self, node: usize) -> Delta {
+    fn delta(
+        &self,
+        node: usize,
+    ) -> Delta {
         self.tracker.delta(node, &self.critical, &self.region_max)
     }
 
-    fn place(&mut self, node: usize) {
+    fn place(
+        &mut self,
+        node: usize,
+    ) {
         self.tracker.place(node);
         // `updateScheduledPressure`.
         for entry in &mut self.critical {
@@ -908,34 +917,42 @@ pub fn bottom_up(
 ) -> Vec<usize> {
     let n = insns.len();
     let region = tracking.map(|_| Region::of(insns));
-    let mut followed = tracking.zip(region.as_ref()).map(|(tracking, region)| {
-        let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
-        for node in (0..n).rev() {
-            program.place(node);
-        }
-        let region_max = program.max().to_vec();
-        let critical = Tracker::critical_sets(tracking.model, &region_max);
-        Followed {
-            tracker: Tracker::over(
-                tracking.model,
-                region,
-                tracking.live_out.iter().copied(),
-                tracking.live_thru.iter().copied(),
-                true,
-            ),
-            critical,
-            region_max,
-        }
-    });
+    let mut followed = tracking
+        .zip(region.as_ref())
+        .map(
+            |(tracking, region)| {
+                let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+                for node in (0..n).rev() {
+                    program.place(node);
+                }
+                let region_max = program.max().to_vec();
+                let critical = Tracker::critical_sets(tracking.model, &region_max);
+                Followed {
+                    tracker: Tracker::over(
+                        tracking.model,
+                        region,
+                        tracking.live_out.iter().copied(),
+                        tracking.live_thru.iter().copied(),
+                        true,
+                    ),
+                    critical,
+                    region_max,
+                }
+            },
+        );
     let machine = i486_machine();
     let units = vec![Unit { micro_ops: 1, ..Unit::default() }; n];
     let pressure = followed.as_mut().map(|one| one as &mut dyn BottomPressure);
-    let (order, reasons) =
-        Scheduler::new(graph, &machine, units, RegionPolicy::bottom_up(), pressure).schedule();
+    let (order, reasons) = Scheduler::new(graph, &machine, units, RegionPolicy::bottom_up(), pressure).schedule();
     if trace() {
         // Bottom-up picks come last-first.
         for (&node, reason) in order.iter().rev().zip(&reasons) {
-            eprintln!("machinesched pick {node} {:?} {} tracked={}", insns[node].defines, reason.name(), tracking.is_some());
+            eprintln!(
+                "machinesched pick {node} {:?} {} tracked={}",
+                insns[node].defines,
+                reason.name(),
+                tracking.is_some()
+            );
         }
     }
     order
