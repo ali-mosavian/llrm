@@ -149,3 +149,38 @@ j:
     );
     assert!(text.contains("phi i32"), "{text}");
 }
+
+/// The loop-carried web: an integer loaded each trip and read as a float. The
+/// phi was an `i32` fed by two loads, moved from the integer to the float
+/// register on every trip (x86-64: one `movd` per trip in the loop body).
+#[test]
+fn a_loop_carried_web_is_a_float_phi() {
+    let text = after(
+        ARM,
+        "define void @f(ptr %p, ptr %o, i64 %n) {
+entry:
+  %x0 = load i32, ptr %p, align 4
+  br label %loop
+
+loop:
+  %i = phi i64 [ 1, %entry ], [ %i1, %loop ]
+  %m = phi i32 [ %x0, %entry ], [ %nx, %loop ]
+  %f = bitcast i32 %m to float
+  %g = fadd float %f, 1.0
+  %po = getelementptr float, ptr %o, i64 %i
+  store float %g, ptr %po, align 4
+  %pn = getelementptr i32, ptr %p, i64 %i
+  %nx = load i32, ptr %pn, align 4
+  %i1 = add i64 %i, 1
+  %c = icmp ult i64 %i1, %n
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret void
+}
+",
+        ARM_MACHINE(),
+    );
+    assert!(text.contains("phi float"), "{text}");
+    assert!(!text.contains("phi i32"), "{text}");
+}
