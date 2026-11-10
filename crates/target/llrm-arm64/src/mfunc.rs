@@ -474,15 +474,18 @@ pub fn branch_to(label: &str) -> Op {
 /// Whether control leaves `block` by running into the block after it: nothing
 /// in it jumps unconditionally, returns, indexes a table or traps.
 pub fn falls_through(block: &MBlock) -> bool {
-    !block.ops.iter().any(|op| {
-        matches!(
-            op,
-            Op::I(Inst::Branch { link: false, target: Target::Label(_) })
-                | Op::Return { .. }
-                | Op::JumpTable { .. }
-                | Op::I(Inst::Brk { .. })
+    !block
+        .ops
+        .iter()
+        .any(
+            |op| matches!(
+                op,
+                Op::I(Inst::Branch { link: false, target: Target::Label(_) })
+                    | Op::Return { .. }
+                    | Op::JumpTable { .. }
+                    | Op::I(Inst::Brk { .. })
+            ),
         )
-    })
 }
 
 /// The blocks `block` (the `at`th of `count`) can go to, from the labels its
@@ -723,7 +726,8 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
     // source is nearer to it.
     let originals = std::mem::take(&mut function.blocks);
     let mut placed = Vec::with_capacity(originals.len() + edges.len());
-    let next_labels: Vec<Option<String>> = (0..originals.len()).map(|at| originals.get(at + 1).map(|next| next.label.clone())).collect();
+    let next_labels: Vec<Option<String>> =
+        (0..originals.len()).map(|at| originals.get(at + 1).map(|next| next.label.clone())).collect();
     for (at, mut block) in originals.into_iter().enumerate() {
         // The blocks put after it come between it and the block it ran into.
         if edges.iter().any(|(from, _)| *from == at) && falls_through(&block) {

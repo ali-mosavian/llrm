@@ -156,8 +156,8 @@ pub fn edge_odds(
     }
     // The odds of an edge `lower_phis` split are the new block's: the
     // source's edge to it has the probability of the edge it replaced, and its
-    // own edge is certain (`ReplaceUsesOfBlockWith`, MachineBasicBlock.cpp#L1263;
-    // `NMBB->addSuccessor`, #L1276).
+    // own edge is certain (`ReplaceUsesOfBlockWith`,
+    // MachineBasicBlock.cpp#L1263; `NMBB->addSuccessor`, #L1276).
     let place = |label: &str| machine.blocks.iter().position(|block| block.label == label).map(|at| at as u32);
     for (from, to, edge) in &machine.split_edges {
         let (Some(from), Some(to), Some(edge)) = (place(from), place(to), place(edge)) else { continue };
@@ -170,16 +170,20 @@ pub fn edge_odds(
 }
 
 /// The number a block's label ends in (`.Lf.3`): where the selector put the
-/// block, which `fold` calls its id. A block a pass made (`.e1`, `.t1`) has none.
+/// block, which `fold` calls its id. A block a pass made (`.e1`, `.t1`) has
+/// none.
 pub(crate) fn label_number(label: &str) -> Option<u32> {
     label.rsplit('.').next().and_then(|n| n.parse().ok())
 }
 
 /// [`edge_odds`] keyed as `fold` reads it, by label number: the table keyed
-/// by position goes wrong once a block is inserted before another, as `lower_phis`
-/// does beside each source. A block made on an edge has no number, so the edge it
-/// replaced is stated again between the blocks that have one.
-pub fn odds_by_label_number(odds: &Odds, machine: &crate::mfunc::MFunc) -> Odds {
+/// by position goes wrong once a block is inserted before another, as
+/// `lower_phis` does beside each source. A block made on an edge has no number,
+/// so the edge it replaced is stated again between the blocks that have one.
+pub fn odds_by_label_number(
+    odds: &Odds,
+    machine: &crate::mfunc::MFunc,
+) -> Odds {
     let number = |at: u32| label_number(&machine.blocks[at as usize].label);
     let mut out = Odds::default();
     for (&(from, to), &entry) in odds {
