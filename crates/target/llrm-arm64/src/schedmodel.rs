@@ -71,6 +71,9 @@ impl Arm64Model {
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
         let name = insn.what.as_ref()?.name.as_deref()?;
+        if std::env::var_os("LLRM_CLASS_DEBUG").is_some() {
+            eprintln!("CLASS {name} -> {:?}", llvm_names(name).first());
+        }
         let llvm = *llvm_names(name).first()?;
         let opcode = *opcode_numbers().get(llvm)?;
         let shifted = shift_amount(insn).is_some_and(|amount| amount != 0);

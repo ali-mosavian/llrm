@@ -216,6 +216,7 @@ fn view_with(
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
     let wide = crate::regalloc::wide_registers(function);
+    let wide_list: Vec<Reg> = wide.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
@@ -324,6 +325,9 @@ fn view_with(
                 operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
             let mut inst = LirInst::new(kind, operands);
+            if !fused && !zero && matches!(op, Op::I(_) | Op::Copy { .. } | Op::Imm { .. }) {
+                inst.form = crate::lir_body::form_of(function, &mut symbols, &wide_list, &op).map(std::sync::Arc::new);
+            }
             inst.ties = ties;
             inst.origin = origin;
             inst.terminator = terminator;

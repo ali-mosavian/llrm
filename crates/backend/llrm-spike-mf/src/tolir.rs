@@ -337,6 +337,11 @@ impl<T: Target> Converted<T> {
                             reads.extend(memory.iter().copied());
                         }
                         let mut made = (**one).clone().standing_for(one);
+                        if let Some(form) = inst.form.as_ref().and_then(|form| in_body_values::<T>(form, inst, one)) {
+                            made.what = Some(form);
+                        } else if std::env::var_os("LLRM_FORM_DEBUG").is_some() {
+                            eprintln!("NOFORM {:?} form={:?} ops={:?} defines={:?} uses={:?} formd={:?} forms={:?}", inst.kind, inst.form.as_ref().map(|f| f.name.clone()), inst.operands, one.defines, one.uses, inst.form.as_ref().map(|f| f.dests.clone()), inst.form.as_ref().map(|f| f.sources.clone()));
+                        }
                         made.volatile = made.volatile || inst.side_effects;
                         made.memory = inst.memory;
                         if let Some(what) = made.what.as_mut() {
@@ -2611,4 +2616,58 @@ fn place_spill(
     }
     insts.insert(at, spill);
     Ok(())
+}
+
+/// `form` with its values the body's: the k-th def operand of `inst` is the
+/// k-th value `one` defines, the k-th use operand its k-th use (a register the
+/// target reserves is no value). The form names what the target's selector
+/// chose (the scheduler's model reads it); the body's values are what its
+/// graph and pressure read. None where the counts differ or a value has no
+/// operand.
+fn in_body_values<T: Target>(
+    form: &Semantics,
+    inst: &Inst,
+    one: &Insn,
+) -> Option<Semantics> {
+    let (mut defs, mut uses) = (Vec::new(), Vec::new());
+    for operand in &inst.operands {
+        let (list, register) = match operand {
+            Operand::Def(register) => (&mut defs, register),
+            Operand::Use(register) => (&mut uses, register),
+            _ => continue,
+        };
+        match register {
+            Reg::Virt(n) => list.push(*n),
+            Reg::Phys(register) if !T::reserved(T::root(*register)) => list.push(u32::MAX),
+            Reg::Phys(_) => {}
+        }
+    }
+    if defs.len() != one.defines.len() || uses.len() != one.uses.len() {
+        return None;
+    }
+    let numbered = |numbers: Vec<u32>, values: &[u32]| -> std::collections::HashMap<u32, u32> {
+        numbers.into_iter().zip(values.iter().copied()).filter(|(number, _)| *number != u32::MAX).collect()
+    };
+    let (def_map, use_map) = (numbered(defs, &one.defines), numbered(uses, &one.uses));
+    let held = |held: &Held, map: &std::collections::HashMap<u32, u32>| -> Option<Held> {
+        Some(Held { value: *map.get(&held.value)?, ..*held })
+    };
+    let remap = |loc: &Loc, map: &std::collections::HashMap<u32, u32>| -> Option<Loc> {
+        Some(match loc {
+            Loc::Held(each) => Loc::Held(held(each, map)?),
+            Loc::Mem(cell) => {
+                let mut cell = cell.clone();
+                for slot in [&mut cell.base, &mut cell.index, &mut cell.selector] {
+                    if let Some(each) = slot.as_ref() {
+                        *slot = Some(held(each, map)?);
+                    }
+                }
+                Loc::Mem(cell)
+            }
+            other => other.clone(),
+        })
+    };
+    let dests = form.dests.iter().map(|loc| remap(loc, &def_map)).collect::<Option<Vec<_>>>()?;
+    let sources = form.sources.iter().map(|loc| remap(loc, &use_map)).collect::<Option<Vec<_>>>()?;
+    Some(form.with_operands(form.name.clone(), dests, sources))
 }
