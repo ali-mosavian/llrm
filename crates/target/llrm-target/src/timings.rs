@@ -87,9 +87,6 @@ pub struct CpuTable {
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
-    /// Form and reciprocal throughput in thousandths of a clock
-    /// (`MCSchedModel::getReciprocalThroughput`); a form not listed has none.
-    pub recip: Vec<(String, i64)>,
 }
 
 /// A code byte's price in thousandths of a clock at speed: the instruction
@@ -173,7 +170,6 @@ impl Timings {
                 section = match name {
                     "clocks" => "clocks",
                     "latency" => "latency",
-                    "recip" => "recip",
                     other => return Err(format!("{at}: no section [{other}]")),
                 };
                 continue;
@@ -237,7 +233,6 @@ impl Timings {
                     ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
-                    ("recip", form) => table.recip.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
                 }
             }

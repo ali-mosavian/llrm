@@ -815,17 +815,24 @@ pub const fn step_cost(add: i64) -> i64 {
     4 * add
 }
 
-/// What an operation costs in thousandths of a clock on a core that overlaps
-/// instructions: `MCSchedModel::getReciprocalThroughput` per instruction form
-/// summed as `LoopVectorize` sums `TCK_RecipThroughput`, and the latency
-/// `SelectOptimize::computeLoopCosts` chains through a loop's dependences.
-/// The integer clock API of [`OperationCosts`] is unchanged.
+/// How a core that overlaps instructions runs a loop of operations: the resources they occupy, and the latency
+/// of each. `MachineTraceMetrics::Trace::getResourceLength` reads a trace's resource bound as the largest, over
+/// the model's processor resources, of the cycles the instructions put on one over its units, the issue width
+/// being one more resource (micro-ops over `IssueWidth`); `SelectOptimize::computeLoopCosts` chains the
+/// latencies through a loop's dependences. The integer clock API of [`OperationCosts`] is unchanged.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Throughput {
-    /// Reciprocal throughput of each operation, milli-clocks.
-    pub recip: OperationCosts,
-    /// Latency of each operation, milli-clocks.
+    /// Latency of each operation, thousandths of a clock.
     pub latency: OperationCosts,
+    pub resources: Vec<Resource>,
+}
+
+/// One processor resource: `costs` holds, for each operation, the thousandths of a cycle it occupies it, and
+/// `units` how many of it the core has (the issue width, for the resource of micro-ops, whose `costs` count them).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Resource {
+    pub units: i64,
+    pub costs: OperationCosts,
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.

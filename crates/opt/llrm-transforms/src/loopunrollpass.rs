@@ -2712,10 +2712,21 @@ pub fn unroll_function(
     tti: &dyn Tti,
     options: Options,
 ) -> Result<bool, String> {
+    unroll_function_on(module, name, tti, options, None)
+}
+
+/// `unroll_function` for a program of its own for `target`: the machine's costs and throughput model.
+pub fn unroll_function_on(
+    module: &mut llrm_mir::module::Module,
+    name: &str,
+    tti: &dyn Tti,
+    options: Options,
+    target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>,
+) -> Result<bool, String> {
     let layout =
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
-    let outer = llrm_mir::passes::Outer::of(module, None);
+    let outer = llrm_mir::passes::Outer::of(module, target);
     let mut declared = llrm_mir::passes::Declared::of(module);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();

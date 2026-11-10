@@ -16,6 +16,7 @@ pub mod pressure;
 pub mod registers;
 pub mod routines;
 pub mod runtime;
+pub mod schedule;
 pub mod timings;
 pub mod tune;
 pub mod testing;

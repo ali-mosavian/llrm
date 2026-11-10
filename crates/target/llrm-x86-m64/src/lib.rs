@@ -50,23 +50,20 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
 });
 
-/// DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): the x86-64 column's
-/// reciprocal throughputs (`MCSchedModel::getReciprocalThroughput`) and
-/// latencies in thousandths of a clock, each operation the sum of its forms as
-/// the clock table is. A form with no `[recip]` row is priced at its clocks (a
-/// serial one-clock-an-instruction price, the conservative side): the rows
-/// still falling back are listed in `timings.times`.
-fn throughput_model(prefix: i64) -> llrm_mir::target::Throughput {
+/// DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): the x86-64 column's processor resources
+/// (`machine/tune/x86/x86-64.toml` `[schedule]`, the pin's SandyBridgeModel) and latencies, each operation the
+/// sum of its forms as the clock table is. A form the schedule does not list occupies no resource.
+static THROUGHPUT: LazyLock<llrm_mir::target::Throughput> = LazyLock::new(|| {
     let table = TIMINGS.cpu("x86-64").expect("timings.times states the x86-64 column");
     let find = |rows: &[(String, i64)], form: &str| rows.iter().find(|(one, _)| one == form).map(|(_, value)| *value);
-    let clocks = |form: &str| find(&table.clocks, form).unwrap_or(1) * 1000;
-    let recip = |form: &str| find(&table.recip, form).unwrap_or_else(|| clocks(form));
-    let latency = |form: &str| find(&table.latency, form).map_or_else(|| clocks(form), |value| value * 1000);
-    llrm_mir::target::Throughput {
-        recip: OPCOSTS.operations(&recip, prefix * 1000),
-        latency: OPCOSTS.operations(&latency, prefix * 1000),
-    }
-}
+    let latency = |form: &str| 1000 * find(&table.latency, form).or_else(|| find(&table.clocks, form)).unwrap_or(1);
+    let text = llrm_target::tune::X86.iter().find(|(name, _)| *name == "x86-64").map(|(_, text)| *text).expect("the x86-64 tune file");
+    llrm_target::schedule::Schedule::parse(text).expect("x86-64.toml's [schedule] parses").throughput(
+        table.issue,
+        OPCOSTS.operations(&latency, 0),
+        &|price| OPCOSTS.operations(price, 0),
+    )
+});
 
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
@@ -491,7 +488,7 @@ impl llrm_target::Target for M64 {
                     })
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: true })),
-                Some(throughput_model(prices.prefix)),
+                Some(THROUGHPUT.clone()),
             )
         }
     }

@@ -378,17 +378,25 @@ fn priced_verdict(
         Some(tp) => {
             let weight = |block: BlockId| projection.map_or(1, |projection| projection.of(block));
             let trip = throughput::trip(run, &blocks, tp, &weight);
-            let recip = &tp.recip;
             let (trips, be) = (i64::from(trips), i64::from(up.be_insns));
-            let unit = trip.resource / rolled_units.max(1);
-            let control = (trips - 1) * recip.branch + trips * 2 * recip.add;
-            let averaged = trips * (be + 1) * unit;
-            let removed = saved_units * unit
-                + (control - averaged).max(0)
-                + trips * promoted_runs * recip.load
-                + trips * credited_operands * recip.r#move;
-            let milli = throughput::saved(&trip, trips, removed);
-            (((milli + 500) / 1000 - spill_clocks) * runs, (trip.resource, trip.chain))
+            let units = rolled_units.max(1);
+            let removed: Vec<i64> = tp
+                .resources
+                .iter()
+                .zip(&trip.load)
+                .map(|(resource, load)| {
+                    let costs = &resource.costs;
+                    let unit = load / units;
+                    let control = (trips - 1) * costs.branch + trips * 2 * costs.add;
+                    let averaged = trips * (be + 1) * unit;
+                    saved_units * unit
+                        + (control - averaged).max(0)
+                        + trips * promoted_runs * costs.load
+                        + trips * credited_operands * costs.r#move
+                })
+                .collect();
+            let milli = throughput::saved(tp, &trip, trips, &removed);
+            (((milli + 500) / 1000 - spill_clocks) * runs, (throughput::resource_bound(tp, &trip.load), trip.chain))
         }
     };
     why(

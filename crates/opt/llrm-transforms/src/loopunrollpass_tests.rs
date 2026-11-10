@@ -3,7 +3,8 @@
 use llrm_mir::module::Module;
 use llrm_x86::tti::X86;
 
-use super::{Options, unroll_function};
+use super::{Options, unroll_function, unroll_function_on};
+use llrm_mir::target::OperationCosts;
 use crate::testing::{parsed, printed, results};
 
 /// @f's loops, the way the loop pass manager hands them over: simplified, LCSSA
@@ -675,6 +676,8 @@ fn a_priced_unroll_line_names_the_arrays_trips_and_float_file() {
         unit_clocks: 3,
         constant_clocks: 0,
         runs: 1,
+        resource: 0,
+        chain: 0,
     }
     .line();
     for want in ["4 trips", "ints 0", "floats 4", "rmw 2", "spilled 3", "float file 8", "rate 312"] {
@@ -1393,11 +1396,31 @@ done:
     assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
 }
 
+/// SandyBridge's resources as the x86-64 `[schedule]` states them, for the operations a loop of integer
+/// arithmetic, loads and stores is made of: micro-ops over the issue width, the three ALU ports, the
+/// multiplier port, the two load/store address ports, the store-data port and the branch port.
+fn sandy_bridge_throughput() -> llrm_mir::target::Throughput {
+    use llrm_mir::target::{Resource, Throughput};
+    let costs = |add, multiply, load, store, branch, mv| OperationCosts { add, multiply, load, store, branch, r#move: mv, ..OperationCosts::default() };
+    Throughput {
+        latency: costs(1000, 4000, 5000, 1000, 1000, 1000),
+        resources: vec![
+            Resource { units: 4, costs: costs(1000, 3000, 1000, 1000, 1000, 1000) },
+            Resource { units: 3, costs: costs(1000, 1000, 0, 0, 0, 1000) },
+            Resource { units: 1, costs: costs(0, 1000, 0, 0, 0, 0) },
+            Resource { units: 2, costs: costs(0, 0, 1000, 1000, 0, 0) },
+            Resource { units: 1, costs: costs(0, 0, 0, 1000, 0, 0) },
+            Resource { units: 1, costs: costs(0, 0, 0, 0, 1000, 0) },
+        ],
+    }
+}
+
 /// A 16-trip fill of a global byte array whose value folds in every copy
-/// (`(i + 1) * 179 + 85 + zero`, the multiply and add of the counter), unrolled whole at `-O2` with the x86-64 core issuing `width` instructions a clock
-/// and the unroll priced at 600 milliclocks a byte (the test's knob: 55 B added, 87 clocks saved
-/// a clock an instruction, 22 at four); whether the loop is gone.
-fn fill_unrolled_at_issue_width(width: u32) -> bool {
+/// (`(i + 1) * 179 + 85 + zero`, the multiply and add of the counter), unrolled whole at `-O2` with the unroll
+/// priced at 600 milliclocks a byte (the test's knob: 55 B added; 87 clocks saved at a clock an instruction,
+/// about 20 on a core with the SandyBridge resources); with that core's throughput model, or without any;
+/// whether the loop is gone.
+fn fill_unrolled(throughput: bool) -> bool {
     let mut module = parsed(
         "@stream = global [16 x i8] zeroinitializer
 @zero = global i32 0
@@ -1429,8 +1452,7 @@ done:
     crate::loopsimplify::simplified(function);
     crate::testing::closed(&mut module).expect("closes");
     let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, ..llrm_mir::target::Tuning::PIN };
-    let mut tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
-    tti.issue_width = width;
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
     let options = Options {
         opt_level: 2,
         opt_size: false,
@@ -1438,17 +1460,37 @@ done:
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: true,
+        inliner_follows: true,
     };
-    unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    let target = throughput.then(|| {
+        use llrm_target::Target;
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: llrm_x86_m32::layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: llrm_x86_m32::M32.flat_ports(),
+        };
+        llrm_target::described_throughput(&prices, None, None, None, Some(sandy_bridge_throughput()))
+    });
+    unroll_function_on(&mut module, "f", &tti, options, target).expect("unrolls");
     !printed(&module).contains("%i = phi")
 }
 
-/// huffman_decode -O2 at m64: a 16-trip fill of folded constants was priced
-/// "saves 97 clk" at one clock a folded instruction and unrolled, +208 B for 23
-/// clocks run (paired, 13 blocks, ratio spread 1.5%). A core issuing four a clock
-/// frees a quarter of a clock for each, 24: below the bytes' price.
+/// huffman_decode -O2 at m64: a 16-trip fill of folded constants was priced "saves 97 clk" at one clock a
+/// folded instruction and unrolled, +208 B for 23 clocks run (paired, 13 blocks, ratio spread 1.5%). Its
+/// trip is bound by the issue width and the ALU ports, not by a chain: the folded instructions free issue
+/// slots, about a clock for the three removed, so the 55 B stay rolled at 600 milliclocks a byte.
 #[test]
-fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_issues_one_a_clock() {
-    assert!(fill_unrolled_at_issue_width(1), "premise: priced at a clock an instruction, the unroll pays");
-    assert!(!fill_unrolled_at_issue_width(4), "four a clock: the folded instructions free slots, not clocks");
+fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_is_priced_serially() {
+    assert!(fill_unrolled(false), "premise: priced at a clock an instruction, the unroll pays");
+    assert!(!fill_unrolled(true), "the SandyBridge resources: the folded instructions free issue slots, not clocks");
 }
