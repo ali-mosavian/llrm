@@ -1663,6 +1663,19 @@ pub trait Tti {
         0
     }
 
+    /// Clocks a cycle at `narrow_bits` saves per iteration when it doubles a
+    /// value (`shl x, 1`) and tests that value's top bit (`and x, 1 <<
+    /// (narrow_bits - 1)`): the shift leaves the bit in the carry at that
+    /// width only, so the target reads it there and drops the copy and the
+    /// test (m68k `cmpcarry`). Zero where the target has no such flag.
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17).
+    fn shift_out_test_gain(
+        &self,
+        _narrow_bits: u32,
+    ) -> i32 {
+        0
+    }
+
     /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
     /// on every target.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default;

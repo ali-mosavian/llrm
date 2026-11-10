@@ -188,6 +188,23 @@ impl Tti for M68k {
         wide - narrow
     }
 
+    /// The `move.l` copy and `tst` of the old value that `cmpcarry` drops
+    /// when a word or byte `add` doubles it and the carry is its top bit.
+    fn shift_out_test_gain(
+        &self,
+        narrow_bits: u32,
+    ) -> i32 {
+        let size = match narrow_bits {
+            8 => 'b',
+            16 => 'w',
+            _ => return 0,
+        };
+        let clocks = |text: &str| {
+            crate::timing::cost(self.cpu, text, 2, false).ok().map(|one| i32::try_from(one.clocks).unwrap_or(0))
+        };
+        clocks("move.l %d0, %d1").zip(clocks(&format!("tst.{size} %d1"))).map_or(0, |(copy, test)| copy + test)
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the

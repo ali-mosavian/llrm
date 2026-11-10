@@ -25,7 +25,8 @@
 //!   value, zero-extended).
 //!
 //! A connected piece of `S` with a phi is made again at `w` bits when
-//! `Tti::narrowing_gain` finds none of its operations dearer and one cheaper.
+//! `Tti::narrowing_gain` finds none of its operations dearer and one cheaper,
+//! a doubling whose old top bit the piece tests counting `shift_out_test_gain`.
 //! Operands from outside are truncated (constants folded); uses outside read
 //! a `zext` of the narrow value; the `and` masks become a narrow `and` and a
 //! `zext`. The `nuw`/`nsw` flags are dropped: they were about the wide result.
@@ -309,6 +310,30 @@ fn pays(
             return false;
         }
         total += gain;
+    }
+    // A doubling whose old top bit the piece tests: the carry reads it.
+    let top = 1u64 << (bits - 1);
+    for &inst in piece {
+        let instruction = function.instruction(inst);
+        if instruction.opcode != Opcode::Binary(BinaryOp::Shl)
+            || constant_of(context, instruction.operands[1]) != Some(1)
+        {
+            continue;
+        }
+        let Operand::Value(source) = instruction.operands[0] else { continue };
+        let tested = function
+            .users(source)
+            .iter()
+            .any(
+                |used| {
+                    let user = function.instruction(used.user);
+                    user.opcode == Opcode::Binary(BinaryOp::And)
+                        && constant_of(context, user.operands[1 - used.index as usize]) == Some(top)
+                },
+            );
+        if tested {
+            total += tti.shift_out_test_gain(bits);
+        }
     }
     total > 0
 }

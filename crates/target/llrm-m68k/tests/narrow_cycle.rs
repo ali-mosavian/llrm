@@ -109,10 +109,23 @@ fn a_constant_above_the_width_is_dropped_with_the_high_bits() {
     assert!(after.contains("phi i16"), "{after}");
 }
 
-/// On the 68020 a word `add`/`eor` register form costs what the long does:
-/// no gain, so the cycle stays as it was.
+/// Symptom: on the 68020 and 68060 crc16's loop stayed long (`move.l; add.l;
+/// tst.w; bge`, +22 and +17 clk against the best of gcc/clang) because a word
+/// `add` costs what a long does: the win is the carry reading the top bit, so
+/// the copy and the `tst` go.
 #[test]
-fn a_cycle_stays_a_long_where_a_word_is_no_cheaper() {
-    let after = run(&crc_loop(MASKED, "xor i32 %s, 4129"), Cpu::M68020);
+fn a_doubling_whose_top_bit_is_tested_is_a_word_where_a_word_add_costs_the_same() {
+    for cpu in [Cpu::M68020, Cpu::M68060] {
+        let after = run(&crc_loop(MASKED, "xor i32 %s, 4129"), cpu);
+        assert!(after.contains("phi i16"), "{cpu:?}\n{after}");
+    }
+}
+
+/// With another bit tested nothing reads the carry: no cheaper word, so the
+/// cycle stays a long on a CPU where a word `add` costs the same.
+#[test]
+fn a_cycle_testing_another_bit_stays_a_long_where_a_word_is_no_cheaper() {
+    let text = crc_loop(MASKED, "xor i32 %s, 4129").replace("32768", "16384");
+    let after = run(&text, Cpu::M68020);
     assert!(!after.contains("phi i16"), "{after}");
 }
