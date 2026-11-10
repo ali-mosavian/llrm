@@ -26,7 +26,7 @@ while read -r _ tg lvl f; do
     LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_FLAGS:-} ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
     # Code bytes of the object (object_bytes.py: per target; z80/6502 assemble their .s). Never the file's size: a failure is an EMPTY cell.
-    read -r text[$v] dat[$v] < <("$(dirname "$0")/object_bytes.py" "$tg" "$w/$v.o" 2>>"$w/err") || { unset "text[$v]" "dat[$v]"; }
+    read -r text[$v] dat[$v] _ < <(uv run -q --project "$(dirname "$0")/.." python "$(dirname "$0")/object_bytes.py" "$tg" "$w/$v.o" 2>>"$w/err") || { unset "text[$v]" "dat[$v]"; }
     ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s")
   done
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then

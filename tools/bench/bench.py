@@ -1361,6 +1361,9 @@ def main() -> int:
             (args.json / f"shard-{index}.json").write_text(json.dumps({"measured": {"/".join(key): value for key, value in measured.items()}, "programs": args.select}))
         return 0
     if args.references:
+        import flag_parity
+
+        flag_parity.check()  # a reference whose codegen flags differ from ours is refused before it is built, as tools/wasm_flag_check.py does for wasm
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))

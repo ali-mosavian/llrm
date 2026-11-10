@@ -33,6 +33,9 @@ use super::hooks::Cpu;
 use super::pipeline::select_block;
 use crate::target::Z80;
 
+/// The C library routines the runtime has, and the symbols it names them by.
+pub const LIBCALLS: [(&str, &str); 3] = [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")];
+
 /// The builder's view of the Z80: 16-bit pointers, `i8` and `i16` in
 /// registers, a byte shift count, and the `CALL`/`RET_GLUE` nodes of
 /// `own_ids.txt`.
@@ -53,11 +56,7 @@ pub fn builder_target() -> BuilderTarget {
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
-        libcalls: Some(
-            [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")]
-                .map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned()))
-                .to_vec(),
-        ),
+        libcalls: Some(LIBCALLS.map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned())).to_vec()),
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
@@ -76,6 +75,8 @@ pub fn builder_target() -> BuilderTarget {
             sext_bool_add_preferred: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
 }
