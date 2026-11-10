@@ -295,21 +295,6 @@ fn allocated_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<Allocated, String> {
-    let (base, merged) = allocated_search(selected, name, request, duplicate)?;
-    Ok(match merged {
-        Some(merged) => with_variant(Ok(base), merged, name, request, true)?,
-        None => base,
-    })
-}
-
-/// [`allocated_with`] without the merged variant, which is returned to be priced on the schedule that wins
-/// (`lines_of`): the variant wins in one function of ten, and an allocation per schedule is most of its cost.
-fn allocated_search(
-    selected: &Selections,
-    name: &str,
-    request: &Request,
-    duplicate: bool,
-) -> Result<(Allocated, Option<MFunction>), String> {
     SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
     expand::BYTES_FIRST.with(|one| one.set(!matches!(request.level, Level::O2 | Level::O3 | Level::Omax)));
     expand::set_frequencies(&frequencies_of(selected, name));
@@ -320,9 +305,6 @@ fn allocated_search(
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
     let splits = split_loop_constant_stores(&mut split) && hoist_constants(&mut split);
-    // the fourth: the stores of a constant a register held, as immediates (`merge_constant_stores`)
-    let mut merged = function.clone();
-    let merges = merge_constant_stores(&mut merged);
     let base = if hoist_constants(&mut hoisted) {
         // the allocator does not see that a byte of a pair is read in place, so a
         // constant kept across a loop can cost more than making it there, or less:
@@ -343,46 +325,17 @@ fn allocated_search(
     } else {
         allocate(function, name, request.level)
     };
-    let base = (if splits { with_variant(base, split, name, request, false) } else { base })?;
-    Ok((base, merges.then_some(merged)))
-}
-
-/// `best`, or the allocation of `variant` where that is cheaper by `priced_in_loops`. With `strict_o1` a variant
-/// at O1, where the bar is strict on both axes and no rate stands for it, must be no worse on either axis (a byte
-/// for ten clocks is worse than the plain form's on the byte axis).
-fn with_variant(
-    best: Result<Allocated, String>,
-    variant: MFunction,
-    name: &str,
-    request: &Request,
-    strict_o1: bool,
-) -> Result<Allocated, String> {
-    // stays only where it is cheaper than the best so far
-    // the merged variant is priced on its first allocation: the explored choices (`improved`) are three allocations
-    // for a variant that wins in one function of ten
-    let variant = if strict_o1 {
-        allocate_first(variant, name, request.level).map(|(first, ..)| first)
-    } else {
-        allocate(variant, name, request.level)
-    };
-    match (best, variant) {
-        (Ok(base), Ok(split)) => Ok(if variant_wins(&base, &split, request.level, strict_o1) { split } else { base }),
+    if !splits {
+        return base;
+    }
+    // stays only where it is cheaper than the best of the two
+    match (base, allocate(split, name, request.level)) {
+        (Ok(base), Ok(split)) => match (priced_in_loops(&base, request.level), priced_in_loops(&split, request.level)) {
+            (Some(one), Some(other)) if cheaper(request.level, other, one) => Ok(split),
+            _ => Ok(base),
+        },
         (_, Ok(split)) => Ok(split),
         (base, Err(_)) => base,
-    }
-}
-
-/// Whether `variant` replaces `base`: cheaper by `priced_in_loops`; for the merged variant at O1 no worse on either axis.
-fn variant_wins(
-    base: &Allocated,
-    variant: &Allocated,
-    level: Level,
-    strict_o1: bool,
-) -> bool {
-    match (priced_in_loops(base, level), priced_in_loops(variant, level)) {
-        (Some(one), Some(other)) if strict_o1 && level == Level::O1 => other.0 <= one.0 && other.1 <= one.1 && other != one,
-        (Some(one), Some(other)) => cheaper(level, other, one),
-        _ => false,
     }
 }
 
@@ -1567,57 +1520,6 @@ pub fn merge_lone_constant_stores(function: &mut MFunction) -> bool {
     changed
 }
 
-/// The reverse of [`split_loop_constant_stores`]: a constant word made once (`LD16ri`) that stores read from a
-/// pair is stored from the immediate again (`LD16mi`, `LD16fi`: two `ld (hl),n`), the pair gone where no other use
-/// is left. A register held across a loop costs reloads and frame bytes the selection cannot see: the selector
-/// counts the constant's users and takes the pair from two (the pin's `shouldAvoidImmediateInstFormsForSize`), and
-/// this variant is priced against it (`InlineSpiller::reMaterializeFor` re-makes a constant at its use rather than
-/// keep it; here the use is the store itself). Whether anything changed. Linear in the instructions.
-pub fn merge_constant_stores(function: &mut MFunction) -> bool {
-    let mut value_of: llrm_support::hash::HashMap<u32, i64> = llrm_support::hash::HashMap::default();
-    let mut defs: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
-    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        for operand in &inst.operands {
-            if let Operand::Def(Reg::Virt(v)) = operand {
-                *defs.entry(*v).or_default() += 1;
-            }
-        }
-        if let (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(value)]) = (inst.kind, &inst.operands[..]) {
-            value_of.insert(*v, *value as i64);
-        }
-    }
-    let mut changed = false;
-    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        let immediate = match inst.kind {
-            Kind::Op("LD16mr") => "LD16mi",
-            Kind::Op("LD16fr") => "LD16fi",
-            _ => continue,
-        };
-        let Some(Operand::Use(Reg::Virt(v))) = inst.operands.first().cloned() else { continue };
-        let (Some(value), Some(1)) = (value_of.get(&v), defs.get(&v)) else { continue };
-        inst.kind = Kind::Op(immediate);
-        inst.operands[0] = Operand::Imm(*value as _);
-        changed = true;
-    }
-    if changed {
-        let mut used: llrm_support::hash::HashSet<u32> = llrm_support::hash::HashSet::default();
-        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-            for operand in &inst.operands {
-                if let Operand::Use(Reg::Virt(v)) = operand {
-                    used.insert(*v);
-                }
-            }
-        }
-        for block in &mut function.blocks {
-            block.insts.retain(|inst| match (inst.kind, &inst.operands[..]) {
-                (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(_)]) => used.contains(v),
-                _ => true,
-            });
-        }
-    }
-    changed
-}
-
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting
 /// of a trivially rematerializable instruction): `find` made `ld hl, #buf` on
 /// every trip. Where the registers run out the allocator makes the constant
@@ -2605,13 +2507,9 @@ fn lines_of(
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
-    // a schedule's text, its allocation, and the merged variant still to be priced on it
-    type Candidate = (Vec<Line>, Allocated, Option<MFunction>);
-    let compile = |duplicate: bool| -> Result<Candidate, String> {
-        let (allocated, merged) = allocated_search(selected, name, request, duplicate)?;
-        let (function, assignment, slots, reads) = &allocated;
-        let lines = finish(function, assignment, number, slots, reads.clone())?;
-        Ok((lines, allocated, merged))
+    let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
+        let (function, assignment, slots, reads) = allocated_with(selected, name, request, duplicate)?;
+        finish(&function, &assignment, number, &slots, reads)
     };
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,
@@ -2628,9 +2526,9 @@ fn lines_of(
                 (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
             )
         };
-        let kept = if copied.as_ref().is_ok() && alike() { copied.clone() } else { compile(false) };
+        let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
         match (copied, kept) {
-            (Ok(one), Ok(two)) => Ok(if expand::price(&one.0) <= expand::price(&two.0) { one } else { two }),
+            (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
             (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
             (Err(why), Err(_)) => Err(why),
         }
@@ -2641,23 +2539,15 @@ fn lines_of(
     crate::dagisel::pipeline::ILP.with(|one| one.set(true));
     let ilp = scheduled();
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
-    let (lines, allocated, merged) = match (source, ilp) {
+    match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
             let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
-            Ok(if cheaper(request.level, price(&ilp.0), price(&source.0)) { ilp } else { source })
+            Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
-    }?;
-    // the merged variant (`merge_constant_stores`) is priced once, on the schedule that won
-    let lines = match merged.map(|merged| allocate_first(merged, name, request.level)) {
-        Some(Ok((variant, ..))) if variant_wins(&allocated, &variant, request.level, true) => {
-            let (function, assignment, slots, reads) = variant;
-            finish(&function, &assignment, number, &slots, reads).unwrap_or(lines)
-        }
-        _ => lines,
-    };
-    Ok(expand::relax(lines, !matches!(request.level, Level::Os | Level::Oz)))
+    }
+    .map(|lines| expand::relax(lines, !matches!(request.level, Level::Os | Level::Oz)))
 }
 
 /// The function as text: its label, then one line per instruction.
