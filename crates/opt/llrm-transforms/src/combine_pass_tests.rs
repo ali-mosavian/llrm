@@ -167,3 +167,34 @@ fn a_run_that_changed_the_function_preserves_the_cfg_analyses() {
     assert!(printed(&module).contains("[4 x i8]"), "the run changed the body");
     assert_eq!(seen.get(), Some(true));
 }
+
+/// DEVIATE PHICONST needs a target that trades bytes for clocks: with none (the
+/// neutral target, as wasm) the pass leaves a phi of constants with two users
+/// alone even where the level prices bytes (wasm known_loads_walks -O2 +7 B).
+#[test]
+fn phiconst_is_inert_on_a_target_with_no_byte_rate() {
+    const TWO_USERS: &str = "define i32 @f(i1 %c) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %j
+
+b:
+  br label %j
+
+j:
+  %p = phi i32 [ -39797, %a ], [ 39797, %b ]
+  %s = ashr i32 %p, 1
+  %t = add i32 %p, 19898
+  %r = add i32 %s, %t
+  ret i32 %r
+}
+";
+    let mut module = parsed(TWO_USERS);
+    let mut manager = PassManager::default();
+    manager.add(Combine { enabled: true, phi_constant_users: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("ashr"), "{out}");
+}

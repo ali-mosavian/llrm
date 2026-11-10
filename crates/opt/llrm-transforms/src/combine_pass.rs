@@ -66,7 +66,8 @@ impl Analysis for LastRunTracking {
 pub struct Combine {
     /// `Options::combine`: off, the pass changes nothing.
     pub enabled: bool,
-    /// DEVIATE PHICONST: where bytes are priced (-O2, -O3).
+    /// DEVIATE PHICONST: where bytes are priced (-O2, -O3) and the target has
+    /// a rate (`Tti::speed_milliclocks_per_byte`).
     pub phi_constant_users: bool,
 }
 
@@ -102,7 +103,10 @@ impl FunctionPass for Combine {
             combine::TargetHooks {
                 fixed_shift_count: outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
                 select_to_cmp: outer.target().tti().is_some_and(|tti| tti.folds_select_to_cmp()),
-                phi_constant_users: self.phi_constant_users,
+                // Where the target trades bytes for clocks (wasm and the
+                // targets without a rate are strict at every level).
+                phi_constant_users: self.phi_constant_users
+                    && outer.target().tti().is_some_and(|tti| tti.speed_milliclocks_per_byte() != 0),
             },
         );
         last.instcombine.set(true);
