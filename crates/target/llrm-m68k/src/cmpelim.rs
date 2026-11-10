@@ -54,7 +54,7 @@ fn mnemonic(name: &str) -> Option<(&'static str, Option<char>)> {
 }
 
 /// The register a `tst` of a register reads.
-fn tested(inst: &Inst) -> Option<(u32, Option<char>)> {
+pub(crate) fn tested(inst: &Inst) -> Option<(u32, Option<char>)> {
     let Kind::Op(name) = inst.kind else { return None };
     let (mnemonic, size) = mnemonic(name)?;
     match (mnemonic, &inst.operands[..]) {
