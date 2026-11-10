@@ -184,9 +184,14 @@ def variants(directory: Path, every_language: bool = False) -> list[Variant]:
     return out
 
 
+def is_twin_name(name: str) -> bool:
+    """A reference twin's program name (`NAME~SEMANTIC`)."""
+    return "~" in name
+
+
 def is_twin(variant: Variant) -> bool:
     """A reference twin (TWINS): measured, not judged."""
-    return "~" in variant.name
+    return is_twin_name(variant.name)
 
 
 def bar_program(name: str, language: str, present: set[str]) -> str:
