@@ -116,6 +116,7 @@ def test_a_gcc_flag_list_may_differ_from_the_programs_only_by_the_named_translat
         ["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"],  # the program's flag verbatim: gcc keeps inlining called-once functions
         ["-fno-inline", "-mcmodel=medium"],  # one dropped
         ["-fno-inline", "-fwrapv", "-mcmodel=medium", "-fno-unroll-loops"],  # one added
+        ["-fno-inline", "-fwrapv", "-fwrapv", "-mcmodel=medium"],  # one twice
     ],
 )
 def test_any_other_difference_between_gcc_and_the_program_is_refused(gcc):

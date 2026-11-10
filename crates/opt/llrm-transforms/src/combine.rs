@@ -337,6 +337,10 @@ pub struct TargetHooks {
     pub fixed_shift_count: bool,
     /// `Tti::folds_select_to_cmp`.
     pub select_to_cmp: bool,
+    /// DEVIATE PHICONST (`combine_phi.rs`): fold a phi of constants into all
+    /// its users. Off where bytes are strict: a phi of constants costs a move
+    /// per edge.
+    pub phi_constant_users: bool,
 }
 
 pub struct Env<'a> {

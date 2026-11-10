@@ -1,7 +1,9 @@
 //! `cmpi #imm, (sym+n,%pc)` was selected for a compare of a loaded global byte
 //! with a constant; the 68000 has no PC-relative form of `cmpi`, so binutils
 //! rejected the output ("operands mismatch"). The 68000 loads the byte first;
-//! the 68020 keeps the one instruction.
+//! the 68020 keeps the one instruction. The 68010 has no such form either, but
+//! selected from the 68000's tables with the guard written `== M68000`: 14
+//! cells of the corpus at 68010 did not assemble.
 
 use std::process::Command;
 
@@ -59,4 +61,41 @@ fn the_68000_output_assembles() {
 fn the_68020_keeps_the_pc_relative_cmpi() {
     let out = text(Cpu::M68020);
     assert!(has_cmpi_pc(&out), "the 68020 lost its one-instruction compare:\n{out}");
+}
+
+const CPUS: [Cpu; 6] = [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060];
+
+/// The ISA fact as one table: the PC-relative `cmpi` destination exists from
+/// the 68020 on. A CPU between the 68000 and the 68020 (the 68010) got it.
+#[test]
+fn a_pc_relative_cmpi_is_selected_exactly_from_the_68020() {
+    for cpu in CPUS {
+        let out = text(cpu);
+        assert_eq!(has_cmpi_pc(&out), cpu.at_least(Cpu::M68020), "{cpu:?}:\n{out}");
+    }
+}
+
+#[test]
+fn every_cpus_output_assembles_for_that_cpu() {
+    let Some(root) = support::oracle_root() else { return };
+    for cpu in CPUS {
+        let name = llrm_m68k::isa::Cpu::ALL[cpu as usize].name();
+        let source = support::unique_path("cmpi-pc-all-s");
+        let object = support::unique_path("cmpi-pc-all-o");
+        std::fs::write(&source, format!(".text\n{}\n", text(cpu))).unwrap();
+        let output = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-as"))
+            .env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"))
+            .args([&format!("-m{name}"), "-o"])
+            .arg(&object)
+            .arg(&source)
+            .output()
+            .unwrap();
+        std::fs::remove_file(&source).ok();
+        std::fs::remove_file(&object).ok();
+        assert!(
+            output.status.success(),
+            "{name}: binutils rejects the output: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

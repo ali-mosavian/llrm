@@ -538,8 +538,8 @@ fn a_call_and_a_trap_are_barriers() {
     assert!(insns[0].volatile && insns[1].volatile);
 }
 
-/// The side tables stand in for the instruction's own memory operand: a body
-/// rebuilt without them refuses a load rather than inventing one (DEVIATE 5).
+/// A load whose instruction carries no memory operand is refused on the way
+/// back rather than given an invented one.
 #[test]
 fn a_load_rebuilt_without_its_memory_operand_is_refused() {
     let load = Inst::Load {
@@ -549,9 +549,75 @@ fn a_load_rebuilt_without_its_memory_operand_is_refused() {
     };
     let function = function(vec![Op::I(load)]);
     let mut lowered = to_lir(&function).expect("maps");
-    lowered.memory_operands.clear();
+    lowered.body.blocks[0].insns.edit(|insns| {
+        for one in insns.iter_mut() {
+            let mut bare = (**one).clone();
+            bare.memory = None;
+            *one = Arc::new(bare);
+        }
+    });
     let Err(Unmapped(why)) = from_lir(&lowered, &function) else { panic!("rebuilt a load with no memory operand") };
     assert!(why.starts_with("LDR"), "{why}");
+}
+
+/// The shared scheduler's graph ordered a load after every earlier store (the
+/// memory lane is all arm64 stated), so a load from one frame slot waited for
+/// a store to another. The instruction's own memory operand now tells them
+/// apart; the same slot stays ordered.
+#[test]
+fn a_load_from_another_slot_is_not_ordered_after_a_store() {
+    let at = |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let store = |slot: u32| {
+        Op::I(Inst::Store {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let load = |slot: u32, into: u32| {
+        Op::I(Inst::Load {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(into) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let lowered = to_lir(&function(vec![store(1), load(2, 2), load(1, 3)])).expect("maps");
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    let graph = llrm_codegen::backend::machinesched::graph(&lowered.body.blocks[0].insns, Regs(&crate::REGISTER_INFO), 64);
+    assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
+    assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
+}
+
+/// The allocator's own path (`lir_view` -> the spike converter -> the scheduler's
+/// body) carried only the memory lane, so the scheduler's graph ordered a load
+/// after a store to another slot; `lir_body::to_lir`, which the check path
+/// uses, was not the producer the default compile runs.
+#[test]
+fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
+    let at = |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let store = |slot: u32| {
+        Op::I(Inst::Store {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let load = |slot: u32, into: u32| {
+        Op::I(Inst::Load {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(into) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let function = function(vec![store(1), load(2, 2), load(1, 3)]);
+    let registers = Regs(&crate::REGISTER_INFO);
+    let view = crate::lir_view::view(&function);
+    let converted = llrm_spike_mf::tolir::to_lir::<crate::lir_view::Arm64>(&view, registers).expect("converts");
+    let _file = enter(registers);
+    let body = converted.with_effects(&view, registers);
+    let graph = llrm_codegen::backend::machinesched::graph(&body.blocks[0].insns, registers, body.bits);
+    assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
+    assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
 }
 
 /// An arm64 register prints by its file's name. `Debug` was iced's, so `x0`
@@ -718,4 +784,18 @@ fn a_float_register_is_not_a_segment_register() {
     );
     let segment: Vec<_> = complaints.iter().filter(|one| one.contains("segment")).collect();
     assert!(segment.is_empty(), "{segment:?}");
+}
+
+/// The shared MachineSink splits an edge only when its probability is at most 40%
+/// (`SPLIT_EDGE_PROBABILITY_THRESHOLD`). The body carried no odds, so every edge read
+/// as even and the entry -> join edge of a `icmp sgt a, 0` branch (37.5% in the pin)
+/// was never split: a constant stayed in the entry.
+#[test]
+fn the_body_carries_the_edge_odds_by_block_position() {
+    use llrm_mir::blockfrequency::BranchProbability;
+    let mut one = function(vec![Op::I(Inst::Nop)]);
+    one.alloc_odds = Some([((0, 1), (BranchProbability::new(3, 8), 0))].into_iter().collect());
+    let lowered = to_lir(&one).expect("a nop maps");
+    assert_eq!(lowered.body.odds.probability(0, 1), Some(0.375));
+    assert_eq!(lowered.body.odds.probability(1, 0), None);
 }

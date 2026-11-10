@@ -25,14 +25,24 @@ python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; p
 case $kind in c|qcport) python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1], sys.argv[2], bool(sys.argv[3]))" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2 ;; esac
 . "$(dirname "$0")/fresh_compile.sh"
 target=()
-case "${1:-}" in -m[0-9]*) target=("$1") ;; esac
+case "${1:-}" in -*) target=("$1") ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 export base new out root
 export target_flags="${target[*]:-}"
 # llrm-cc takes its target from the environment, not -m, and links unless told -c.
-export cc_target=x86_16-wat; [ "$target_flags" = -m32 ] && cc_target=x86_32-wat
-case $kind in c|qcport) export compile_flags="-c"; export target_flags=""; export LLRM_CC_TARGET=$cc_target ;; *) export compile_flags="" ;; esac
+# An unmapped -m is refused: -m64 once fell through to the m16 default and "m64 same" was an m16 result.
+case $kind in
+c|qcport)
+    case "$target_flags" in
+    ""|-m16) cc_target=x86_16-wat ;;
+    -m32) cc_target=x86_32-wat ;;
+    -m64) cc_target=x86_64-linux ;;
+    *) echo "identity.sh: no llrm-cc target for $target_flags (-m16, -m32, -m64)" >&2; exit 2 ;;
+    esac
+    export cc_target compile_flags="-c" target_flags="" LLRM_CC_TARGET=$cc_target ;;
+*) export compile_flags="" ;;
+esac
 
 one() {
     source=$1; shift
@@ -61,6 +71,9 @@ qcport)
 *) echo "identity.sh: unknown kind $kind" >&2; exit 2 ;;
 esac | xargs -P 8 -L1 bash -c 'one $0 "$@"' | sort > "$out/results"
 cut -d' ' -f1 "$out/results" | uniq -c
+case $kind in c|qcport)
+    echo "identity: target $cc_target; llc base $(md5sum < "$(dirname "$base")/llrm-llc" | cut -c1-12) new $(md5sum < "$(dirname "$new")/llrm-llc" | cut -c1-12); tested $(grep -c '^\(SAME\|DIFF\)' "$out/results"), NOT tested $(grep -c '^REFUSED' "$out/results")" ;;
+esac
 grep -v '^SAME' "$out/results"
 # Rows that all REFUSED compared nothing: two builds that fail alike must not pass.
 grep -q '^SAME' "$out/results" || { echo "identity: no program was compared SAME (every row REFUSED, or none ran)" >&2; exit 1; }
