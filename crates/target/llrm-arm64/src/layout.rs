@@ -114,14 +114,21 @@ pub fn edge_odds(
         },
         function,
     );
-    // A block's label number is its place among the selector's ids, or in
-    // the IR's layout where there are none.
-    let ids: Vec<u32> = if machine.block_ids.is_empty() {
-        function.layout().iter().map(|block| block.0).collect()
+    // A block's place is found by its id: the selector's, kept beside each
+    // block through the passes that insert blocks, or the IR's layout order
+    // among the blocks that are not an edge block.
+    let position: HashMap<u32, u32> = if machine.block_ids.is_empty() {
+        let edges: HashSet<&str> = machine.split_edges.iter().map(|(_, _, edge)| edge.as_str()).collect();
+        let places = (0..machine.blocks.len()).filter(|&at| !edges.contains(machine.blocks[at].label.as_str()));
+        function.layout().iter().map(|block| block.0).zip(places.map(|at| at as u32)).collect()
     } else {
-        machine.block_ids.clone()
+        machine
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(at, block)| machine.block_ids.get(&block.label).map(|&id| (id, at as u32)))
+            .collect()
     };
-    let position: HashMap<u32, u32> = ids.iter().enumerate().map(|(at, &id)| (id, at as u32)).collect();
     let mut odds = Odds::default();
     for &block in function.layout() {
         let Some(&from) = position.get(&block.0) else { continue };
@@ -147,7 +154,51 @@ pub fn edge_odds(
         }
         *index += 1;
     }
+    // The odds of an edge `lower_phis` split are the new block's: the
+    // source's edge to it has the probability of the edge it replaced, and its
+    // own edge is certain (`ReplaceUsesOfBlockWith`,
+    // MachineBasicBlock.cpp#L1263; `NMBB->addSuccessor`, #L1276).
+    let place = |label: &str| machine.blocks.iter().position(|block| block.label == label).map(|at| at as u32);
+    for (from, to, edge) in &machine.split_edges {
+        let (Some(from), Some(to), Some(edge)) = (place(from), place(to), place(edge)) else { continue };
+        if let Some(replaced) = odds.remove(&(from, to)) {
+            odds.insert((from, edge), replaced);
+        }
+        odds.insert((edge, to), (BranchProbability::get_one(), 0));
+    }
     odds
+}
+
+/// The number a block's label ends in (`.Lf.3`): where the selector put the
+/// block, which `fold` calls its id. A block a pass made (`.e1`, `.t1`) has
+/// none.
+pub(crate) fn label_number(label: &str) -> Option<u32> {
+    label.rsplit('.').next().and_then(|n| n.parse().ok())
+}
+
+/// [`edge_odds`] keyed as `fold` reads it, by label number: the table keyed
+/// by position goes wrong once a block is inserted before another, as
+/// `lower_phis` does beside each source. A block made on an edge has no number,
+/// so the edge it replaced is stated again between the blocks that have one.
+pub fn odds_by_label_number(
+    odds: &Odds,
+    machine: &crate::mfunc::MFunc,
+) -> Odds {
+    let number = |at: u32| label_number(&machine.blocks[at as usize].label);
+    let mut out = Odds::default();
+    for (&(from, to), &entry) in odds {
+        if let (Some(from), Some(to)) = (number(from), number(to)) {
+            out.insert((from, to), entry);
+        }
+    }
+    for (from, to, edge) in &machine.split_edges {
+        let place = |label: &str| machine.blocks.iter().position(|block| block.label == label).map(|at| at as u32);
+        let (Some(from_at), Some(to_at), Some(edge_at)) = (place(from), place(to), place(edge)) else { continue };
+        if let (Some(from), Some(to), Some(&entry)) = (number(from_at), number(to_at), odds.get(&(from_at, edge_at))) {
+            out.insert((from, to), entry);
+        }
+    }
+    out
 }
 
 /// The fewest instructions a shared tail has, its jump included
@@ -661,13 +712,11 @@ pub fn fold(
         reachable.iter().map(|&old| successors(old).into_iter().map(|next| dense[&next]).collect()).collect();
     // The IR's block number is the label's last field; a block a pass made
     // has none the odds know.
-    let numbered = |old: usize| blocks[old].label.rsplit('.').next().is_some_and(|n| n.parse::<u32>().is_ok());
+    let numbered = |old: usize| label_number(&blocks[old].label).is_some();
     let ids: Vec<u32> = reachable
         .iter()
         .enumerate()
-        .map(|(new, &old)| {
-            blocks[old].label.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(u32::MAX - new as u32)
-        })
+        .map(|(new, &old)| label_number(&blocks[old].label).unwrap_or(u32::MAX - new as u32))
         .collect();
     // A block made to split a critical edge takes the odds of the edge it
     // splits (the pin carries them through the split).

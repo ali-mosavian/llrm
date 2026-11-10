@@ -1509,6 +1509,8 @@ impl Builder<'_> {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
+            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same first variadic argument
+            self.info.vararg_frame_index = Some(index);
         }
         Ok(())
     }
