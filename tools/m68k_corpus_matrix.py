@@ -217,7 +217,7 @@ class Tools:
     def support(self, cpu: str, level: str) -> str:
         """The compiler-rt archive of this llrm-cc at CPU and LEVEL (built once, cached by compiler binary)."""
         with self.lock:
-            return sweep.build_support(self.cc, self.root, cpu, sweep.cache_dir(self.cc), 4, level)[2]
+            return sweep.build_support(self.cc, self.root, cpu, sweep.cache_dir(self.cc), 4, level, runnable=False)[2]
 
     def build(self, compiler: str, cpu: str, level: str, path: Path, flags: list[str], work: Path) -> tuple[int | None, str, str, int | None]:
         """(code bytes, reason, cause, library bytes) of one program in one column."""
