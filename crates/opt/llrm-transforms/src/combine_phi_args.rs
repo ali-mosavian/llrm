@@ -14,13 +14,13 @@
 //!   user, become the operation applied to a phi of the left operands (or to
 //!   the one left operand all of them share). The new operation goes at the top
 //!   of the phi's block, after the phis.
-//!
-//! - `foldDeadPhiWeb` ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
+//! - `foldDeadPhiWeb`
+//!   ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
 //!   phis used only by other phis, fewer than 16 of them, are deleted.
 //! - The unused induction variable
 //!   ([:1445](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L1445)):
-//!   a phi whose one user is a binary operator, `fneg` or GEP whose one user
-//!   is the phi is poison, which leaves the user dead.
+//!   a phi whose one user is a binary operator, `fneg` or GEP whose one user is
+//!   the phi is poison, which leaves the user dead.
 //!
 //! # Example
 //! ```text
@@ -148,7 +148,10 @@ impl Combiner<'_> {
         let result = self.function.instruction(phi).result?;
         let user = self.function.users(result).only()?.user;
         let next = self.function.instruction(user);
-        if !matches!(next.opcode, Opcode::Binary(_) | Opcode::FNeg | Opcode::GetElementPtr { .. }) {
+        if !matches!(
+            next.opcode,
+            Opcode::Binary(_) | Opcode::FNeg | Opcode::GetElementPtr { .. }
+        ) {
             return None;
         }
         let next_result = next.result?;
