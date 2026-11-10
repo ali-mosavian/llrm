@@ -178,6 +178,14 @@ pub trait Target {
         true
     }
 
+    /// Whether a join that leaves both values the registers they had is
+    /// always taken, without pricing it ([`Target::should_coalesce`] prices
+    /// only what a join takes away, so it says yes). A target whose
+    /// `should_coalesce` can refuse such a join says no.
+    fn joins_unnarrowed_for_free() -> bool {
+        true
+    }
+
     /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`): the pin's order.
     fn joins_loop_carried_first() -> bool {
         false
@@ -231,6 +239,15 @@ pub trait Target {
     /// immutable fixed stack object (`isLoadFromInvariantOrConstantMemory`).
     /// Only a full-width row that takes any register the value may land in.
     fn is_invariant_argument_load(_name: &str) -> bool {
+        false
+    }
+
+    /// Whether an instruction made again by the spiller stops setting the
+    /// flags its original sets: the reader after the original reads that
+    /// original's flags, not those of a copy that stands beside another
+    /// instruction. A target whose loads set the flags in hardware (m68k's
+    /// `move`) says true, and keeps the flags across the copy itself.
+    fn remade_sets_no_flags() -> bool {
         false
     }
 

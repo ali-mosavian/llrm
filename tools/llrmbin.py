@@ -179,15 +179,6 @@ def target_dir(env: dict | None = None, repo: Path = REPO) -> Path:
     return Path(env["CARGO_TARGET_DIR"]) if env.get("CARGO_TARGET_DIR") else repo / "target"
 
 
-if __name__ == "__main__":
-    import sys
-
-    kinds = {"bin": bin_dir, "target": target_dir}
-    if len(sys.argv) != 2 or sys.argv[1] not in kinds:
-        sys.exit("usage: llrmbin.py bin|target")
-    print(kinds[sys.argv[1]]())
-
-
 PINNED_BYTES = 120
 _pins: list[str] = []
 
@@ -246,21 +237,48 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
 
 
+def backends_of(target: str) -> tuple[str, ...]:
+    """The programs beside llrm-cc that compile for `target` (a row of crates/driver/llrm-cc/targets.toml): llrm-llc, and the row's own `llc_program` where it names another. A pair
+    that shares the target's own backend reads SAME on every row of that target, whatever llrm-llc is."""
+    import tomllib
+
+    rows = tomllib.loads((Path(__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
+    if target not in rows:
+        raise SystemExit(f"unknown target {target!r}: not a row of crates/driver/llrm-cc/targets.toml (a misspelled name would read as 'no own backend' and fake an identity pass)")
+    own = rows[target].get("llc_program", "llrm-llc")
+    return ("llrm-llc",) if own == "llrm-llc" else ("llrm-llc", own)
+
+
+def llc_of(cc, name: str = "llrm-llc", environ=None) -> Path:
+    """The backend `cc` runs for `name`, resolved as llrm-cc does (`llc_path`): LLRM_LLC for the default llrm-llc, else the program beside it."""
+    environ = os.environ if environ is None else environ
+    if name == "llrm-llc" and environ.get("LLRM_LLC"):
+        return Path(environ["LLRM_LLC"])
+    return Path(cc).parent / name
+
+
 def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
-    """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
-    row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
-    `same_llc` allows a head that changes only the frontend."""
+    """Prints per side the llrm-cc md5 and the md5 of each backend in `names` it resolves (`llc_of`). SystemExit when the two sides resolve one backend: llrm-cc only drives, so
+    two dists sharing one backend, or one LLRM_LLC naming both, read SAME on every row (z80 identity #8527 compared one llrm-llc with itself). A name missing from either side is
+    skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
+    `same_llc` (--same-ok) allows a head that changes only the frontend."""
     assert_clean_env()
+    resolved = {}
+    for side, cc in (("base", base), ("head", new)):
+        found = {name: llc_of(cc, name) for name in names}
+        resolved[side] = found
+        shown = " ".join(f"{name} {path} md5 {md5(path)[:12]}" if path.is_file() else f"{name} {path} missing" for name, path in found.items())
+        print(f"side {side}: llrm-cc {cc} md5 {md5(cc)[:12]} | {shown}", file=sys.stderr)
     if same_llc:
         return
     for name in names:
-        a, b = Path(base).parent / name, Path(new).parent / name
+        a, b = resolved["base"][name], resolved["head"][name]
         if not (a.is_file() and b.is_file()):
             if required:
                 raise SystemExit(f"missing {name}: {a} or {b} does not exist")
             continue
         if md5(a) == md5(b):
-            raise SystemExit(f"same {name}: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (IDENTITY_SAME_LLC=1 for a frontend-only change).")
+            raise SystemExit(f"same {name}: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (--same-ok / IDENTITY_SAME_LLC=1 for a frontend-only change).")
 
 
 OBJECT = "<object>"
@@ -278,3 +296,21 @@ def with_object(command: list[str]):
     with tempfile.TemporaryDirectory(prefix="llrm-obj-", dir="/tmp") as directory:
         path = Path(directory) / ("o" * (OBJECT_BYTES - len(directory) - len("/.obj")) + ".obj")
         yield [str(path) if one == OBJECT else one for one in command]
+
+
+if __name__ == "__main__":
+    import sys
+
+    kinds = {"bin": bin_dir, "target": target_dir}
+    if len(sys.argv) >= 4 and sys.argv[1] == "sides":  # sides BASE_CC HEAD_CC [--same-ok] [--target T]: exit 2 on one backend
+        rest = sys.argv[4:]
+        try:
+            names = backends_of(rest[rest.index("--target") + 1]) if "--target" in rest else ("llrm-llc",)
+            assert_distinct_llc(sys.argv[2], sys.argv[3], "--same-ok" in rest or bool(os.environ.get("IDENTITY_SAME_LLC")), names)
+        except SystemExit as stop:
+            print(f"llrmbin: {stop}", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(0)
+    if len(sys.argv) != 2 or sys.argv[1] not in kinds:
+        sys.exit("usage: llrmbin.py bin|target | sides BASE_CC HEAD_CC [--same-ok] [--target T]")
+    print(kinds[sys.argv[1]]())

@@ -28,6 +28,14 @@ pub fn text(
     ir: &str,
     request: &Request,
 ) -> Result<String, String> {
+    text_at(ir, &crate::compile::effective(ir, request)?)
+}
+
+/// [`text`] at `request.level` as it stands (no `oz_best_of` choice).
+pub(crate) fn text_at(
+    ir: &str,
+    request: &Request,
+) -> Result<String, String> {
     let program = program(ir, request)?;
     let module = &program.modules[0];
     let spaces = crate::driver::machine().spaces();
@@ -85,4 +93,24 @@ pub fn text(
 
 fn offset(by: i64) -> String {
     if by == 0 { String::new() } else { format!("{by:+}") }
+}
+
+/// The bytes `text` puts in the linked image: `.db`, `.dw` and `.ds` outside `_BSS` (the program's start clears that).
+pub(crate) fn image_bytes(text: &str) -> u32 {
+    let mut bss = false;
+    let mut bytes = 0;
+    for line in text.lines().map(str::trim) {
+        if let Some(area) = line.strip_prefix(".area ") {
+            bss = area.trim() == "_BSS";
+        } else if let Some(list) = line.strip_prefix(".db ") {
+            bytes += list.split(',').count() as u32;
+        } else if line.starts_with(".dw ") {
+            bytes += 2;
+        } else if let Some(size) = line.strip_prefix(".ds ") {
+            if !bss {
+                bytes += size.trim().parse::<u32>().unwrap_or(0);
+            }
+        }
+    }
+    bytes
 }

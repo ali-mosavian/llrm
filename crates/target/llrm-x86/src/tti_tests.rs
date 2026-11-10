@@ -359,8 +359,11 @@ fn real_mode_solves_lsr_in_both_use_orders_and_flat_code_in_one() {
         recursive_inlining: None,
         priced_self_inlining: None,
     };
-    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).lsr_solves_both_use_orders());
+    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real.clone()).lsr_solves_both_use_orders());
     assert!(!X86::of_cpu("i486").unwrap().lsr_solves_both_use_orders());
+    // CIV1: the narrowest integer phi, in real mode only
+    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).congruent_ivs_truncate_to_narrowest_integer());
+    assert!(!X86::of_cpu("i486").unwrap().congruent_ivs_truncate_to_narrowest_integer());
 }
 
 #[test]

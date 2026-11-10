@@ -210,7 +210,10 @@ impl Builder<'_> {
         instruction: &Instruction,
     ) -> Result<(), Refused> {
         let vt = self.type_of(instruction.ty)?;
-        let align = self.layout.align(&self.module.context.types, instruction.ty);
+        let mut align = self.layout.align(&self.module.context.types, instruction.ty);
+        if let Some(cap) = self.target.va_arg_align_cap {
+            align = align.min(u64::from(cap));
+        }
         let root = self.root();
         let list = self.get_value(instruction.operands[0])?;
         let source = self.src_value_of(instruction.operands[0]);
@@ -432,6 +435,13 @@ impl Builder<'_> {
     /// it.
     pub(super) fn has_opt_size(&self) -> bool {
         self.target.opt_size || self.function_has("optsize") || self.function_has("minsize")
+    }
+
+    /// A constant copy is `rep movsb`: `hasMinSize`, or `-Os` on a target
+    /// that says so (DEVIATE REP-MOVS-OS, `Tuning::rep_movs_at_size`).
+    pub(super) fn rep_movsb_copy(&self) -> bool {
+        self.has_min_size()
+            || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
     /// The pin's `hasMinSize` (`-Oz`), as [`Self::has_opt_size`].
@@ -1309,7 +1319,7 @@ impl Builder<'_> {
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
-                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.rep_movsb_copy() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
@@ -1335,12 +1345,13 @@ impl Builder<'_> {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // DEVIATE MEM-1: a length known at run time is `rep movsd`
-                    // inline at speed where the target's tuning says so (the
-                    // pin calls `memcpy`)
+                    // inline at -O2/-O3 where the target's tuning says so (the
+                    // pin calls `memcpy`; -O1 and size keep the call)
                     _ if strings_exist
                         && matches!(which, Intrinsic::MemCpy)
                         && constant.is_none()
                         && !opt_size
+                        && !self.target.bytes_strict
                         && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy()) =>
                     {
                         self.rep_movs_dwords(root, dst, other, size)
@@ -1578,7 +1589,7 @@ impl Builder<'_> {
             );
         // DEVIATE MEM-1: where the target inlines variable copies, a length
         // whose low two bits are known zero (`n << 2`) has no byte tail
-        let inlines = self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
+        let inlines = !self.target.bytes_strict && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
         if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
             || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
         {
@@ -2105,7 +2116,7 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         let chain_in = chain;
         let pointer = self.target.dag.pointer;
-        let block = if self.has_min_size() { 1 } else { alignment };
+        let block = if self.rep_movsb_copy() { 1 } else { alignment };
         let (count, left) = (size / block, size % block);
         let (cx, di, si) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);

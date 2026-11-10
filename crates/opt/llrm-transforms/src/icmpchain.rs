@@ -300,6 +300,7 @@ pub fn folded(
             dom_conditions: None,
             cond_context: None,
             cxt: Some(last),
+            pending_intrinsics: &[],
         };
         if q.instruction_of(cond).is_none() {
             return false;

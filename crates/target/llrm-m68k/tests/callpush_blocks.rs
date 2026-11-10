@@ -1,7 +1,8 @@
-//! A call sequence belongs to one block. Two paths each called `b(x, n)` and met in a block that
-//! cleaned up both; the next cleanup after `b1`'s call was the odd path's own, so `b1`'s pushes
-//! were paired with it and the odd path popped 8 bytes nothing pushed
-//! (`shift_int32_variable` printed the unshifted value at every odd count, 12 cells).
+//! A call sequence belongs to one block. Two paths each called `b(x, n)` and
+//! met in a block that cleaned up both; the next cleanup after `b1`'s call was
+//! the odd path's own, so `b1`'s pushes were paired with it and the odd path
+//! popped 8 bytes nothing pushed (`shift_int32_variable` printed the unshifted
+//! value at every odd count, 12 cells).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,7 +29,10 @@ fn run_with(cpu: &str) {
     let object = support::unique_path("blocks-o");
     let exe = support::unique_path("blocks-exe");
     std::fs::write(&source, format!(".text\n.globl diamonds\n{text}")).unwrap();
-    assert!(tool("as").arg(format!("-m{cpu}")).arg("-o").arg(&object).arg(&source).status().unwrap().success(), "{text}");
+    assert!(
+        tool("as").arg(format!("-m{cpu}")).arg("-o").arg(&object).arg(&source).status().unwrap().success(),
+        "{text}"
+    );
     let linked = tool("gcc")
         .args(["-msoft-float", &format!("-m{cpu}"), "-O1", "-nostdlib", "-static", "-ffreestanding"])
         .arg(fixture("diamond_calls.c"))
@@ -55,8 +59,9 @@ fn a_call_on_each_path_of_a_diamond_keeps_its_own_cleanup_at_68020() {
     run_with("68020");
 }
 
-/// The arguments of a call are pushed before a diamond the call is after (`compare_to_int64`: the `pea 3:w` of
-/// a `__mulsi3`). Pairing a call with a cleanup only from its own block dropped that push too: 4 bytes more.
+/// The arguments of a call are pushed before a diamond the call is after
+/// (`compare_to_int64`: the `pea 25:w` of a `__mulsi3`). Pairing a call with a
+/// cleanup only from its own block dropped that push too: 4 bytes more.
 #[test]
 fn arguments_pushed_before_a_diamond_stay_pushes_at_68000() {
     let ir = std::fs::read_to_string(fixture("diamond_push.ll")).unwrap();

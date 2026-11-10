@@ -43,6 +43,15 @@ impl Cpu {
         self.at_least(Cpu::M68020) && self != Cpu::M68060
     }
 
+    /// Whether `bfffo` is a hardware instruction (DEVIATE M68K-BFFFO, see
+    /// [`super::bfffo`]): the table's row for it, not decoded as emulated.
+    pub fn has_bit_field_find(self) -> bool {
+        let model = crate::isa::Cpu::ALL[self as usize];
+        crate::isa::forms().iter().any(|form| {
+            form.mnemonic == "bfffo" && form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model)
+        })
+    }
+
     /// `Subtarget->atLeastM68020()` and its siblings.
     pub fn at_least(
         self,
@@ -160,9 +169,10 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
     ) -> bool {
         let kind = self.complex[usize::from(pattern)].expect("a complex pattern the table does not name");
         // DEVIATE: the pin's `CMP*pi` and `CMP*qi` rows take a PC-relative
-        // destination, which `cmpi` has only from the 68010 on. Reason:
-        // binutils rejects the output on the 68000. Exit: none, an ISA fact.
-        if self.cpu == Cpu::M68000
+        // destination, which `cmpi` has only from the 68020 on (binutils
+        // rejects `cmpi.l #7,(dst,%pc)` at -m68010: the 68010 selects from the
+        // 68000's tables, which carry the row). Exit: none, an ISA fact.
+        if !self.cpu.at_least(Cpu::M68020)
             && matches!(kind, Complex::Pcd | Complex::Pci | Complex::Pcibd)
             && dag.opcode(root) == m68k_isd::CMP
             && dag.opcode(dag.operand(root, 0).node) == isd::Constant

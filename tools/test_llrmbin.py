@@ -267,3 +267,72 @@ class CleanEnvTests(unittest.TestCase):
         self.assertEqual(llrmbin.assert_clean_env({"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"}), ["LLRM_NO_STACKS=1"])
 
 
+
+
+def test_a_pair_sharing_the_targets_own_backend_is_refused_for_every_row(tmp_path):
+    """The 9-target AVG identity run (2026-11-09) compared dists whose llrm-llc differed; arm64, m68k, z80 and 6502 run their own llrm-<family>-llc, and a pair sharing it
+    reads SAME on every row of that target. `backends_of` reads each row's `llc_program` from targets.toml (a hard-coded list missed arm64-glibc, 65c02-sim65, m68k-68040 ...).
+    Not caught by md5: two worktrees built into one CARGO_TARGET_DIR reuse each other's workspace crates (hashed by relative path) when the outputs are newer than the sources;
+    a stale crate that still compiles gives binaries with differing md5 and the wrong code. Build each tree in its own target dir."""
+    import pytest
+    import tomllib
+
+    rows = tomllib.loads((Path(llrmbin.__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
+    own = {name: row["llc_program"] for name, row in rows.items() if "llc_program" in row and row["llc_program"] != "llrm-llc"}
+    assert own, "no row names its own backend: the table was not read"
+    for name in rows:
+        assert llrmbin.backends_of(name) == (("llrm-llc", own[name]) if name in own else ("llrm-llc",)), name
+    base, head = tmp_path / "base", tmp_path / "head"
+    for name, program in own.items():
+        for folder in (base, head):
+            folder.mkdir(exist_ok=True)
+            (folder / "llrm-cc").write_bytes(folder.name.encode())
+            (folder / "llrm-llc").write_bytes(folder.name.encode())
+            (folder / program).write_bytes(b"one backend")
+        with pytest.raises(SystemExit, match=f"same {program}"):
+            llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=llrmbin.backends_of(name), required=True)
+
+
+def test_a_misspelled_target_name_raises_instead_of_reading_as_no_own_backend():
+    """An unknown name fell back to ("llrm-llc",): `arm4-linux` for `arm64-linux` checked only llrm-llc and a pair sharing llrm-arm64-llc passed the identity run."""
+    import pytest
+
+    for typo in ("arm4-linux", "", "ARM64-LINUX", "m68k"):
+        with pytest.raises(SystemExit, match="unknown target"):
+            llrmbin.backends_of(typo)
+    assert llrmbin.backends_of("arm64-linux") == ("llrm-llc", "llrm-arm64-llc")
+
+
+def test_llrm_llc_in_the_environment_makes_two_sides_one_backend_and_is_refused(tmp_path, monkeypatch, capsys):
+    """z80 identity #8527 compared one llrm-llc with itself: LLRM_LLC names the default backend of both sides, so the llrm-llc beside each llrm-cc was never run and every row read SAME.
+    The guard resolves the backend as llrm-cc does, prints cc and llc md5 per side, and refuses two sides that resolve to one llc unless same_llc."""
+    import pytest
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder in (base, head):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(folder.name.encode())
+        (folder / "llrm-llc").write_bytes(b"llc " + folder.name.encode())
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    out = capsys.readouterr().err
+    assert "base:" in out and "head:" in out and "llc" in out, out
+    monkeypatch.setenv("LLRM_LLC", str(base / "llrm-llc"))
+    monkeypatch.setenv("AB_ALLOW_ENV", "")
+    with pytest.raises(SystemExit, match="same llrm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", same_llc=True)
+
+
+def test_the_sides_command_exits_2_on_one_llc_and_0_with_same_ok(tmp_path):
+    import subprocess, sys
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder in (base, head):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(folder.name.encode())
+        (folder / "llrm-llc").write_bytes(b"one llc")
+    run = lambda *extra: subprocess.run([sys.executable, str(Path(llrmbin.__file__)), "sides", str(base / "llrm-cc"), str(head / "llrm-cc"), *extra], capture_output=True, text=True)
+    refused = run()
+    assert refused.returncode == 2 and "same llrm-llc" in refused.stderr, refused
+    allowed = run("--same-ok")
+    assert allowed.returncode == 0 and "md5" in allowed.stderr, allowed

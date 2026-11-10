@@ -50,7 +50,15 @@ fn allocations(n: usize) -> usize {
     passes.add(Licm { apply: true, speculate: true });
     let before = ALLOCATED.with(Cell::get);
     passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
-    ALLOCATED.with(Cell::get) - before
+    let run = ALLOCATED.with(Cell::get) - before;
+    // A debug build also checks phi arity after a pass (`check_phi_arity`, a map
+    // per block): 4.0 allocations a loop that are not `Licm`'s, and the bound
+    // read 30.25 against 29.0 there. Measured on the result and taken off:
+    // debug and release both read 26.25.
+    let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+    let before = ALLOCATED.with(Cell::get);
+    llrm_mir::passes::check_phi_arity("licm", function);
+    run - (ALLOCATED.with(Cell::get) - before)
 }
 
 #[test]

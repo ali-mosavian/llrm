@@ -43,6 +43,9 @@ pub struct Query<'a> {
     pub cond_context: Option<&'a CondContext>,
     /// `CxtI`: the instruction the query is asked at.
     pub cxt: Option<InstId>,
+    /// Intrinsics a pass has declared and not yet placed in the module (`globals` ends before them): a call of one is still that
+    /// intrinsic, as it is in LLVM the moment `getOrInsertDeclaration` returns. (global index, intrinsic)
+    pub pending_intrinsics: &'a [(u32, crate::valuetracking::pattern::IntrinsicId)],
 }
 
 impl<'a> Query<'a> {
@@ -62,6 +65,7 @@ impl<'a> Query<'a> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -83,6 +87,7 @@ impl<'a> Query<'a> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -208,7 +213,23 @@ impl<'a> Query<'a> {
         &self,
         inst: InstId,
     ) -> Option<crate::valuetracking::pattern::IntrinsicId> {
-        self.callee_function(inst)?.name.intrinsic_id()
+        let Some(global) = self.callee_global(inst) else { return None };
+        match self.globals.get(global as usize) {
+            Some(function) => matches!(function.kind, GlobalKind::Function(_)).then(|| function.name.intrinsic_id()).flatten(),
+            None => self.pending_intrinsics.iter().find(|(id, _)| *id == global).map(|&(_, intrinsic)| intrinsic),
+        }
+    }
+
+    /// The index of the global a call's callee names.
+    fn callee_global(
+        &self,
+        inst: InstId,
+    ) -> Option<u32> {
+        let instruction = self.function.instruction(inst);
+        let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
+        let Operand::Constant(id) = *instruction.operands.last()? else { return None };
+        let ConstantKind::Global(global) = self.context().get(id).kind else { return None };
+        Some(global.0)
     }
 
     /// The function global a call's callee names.

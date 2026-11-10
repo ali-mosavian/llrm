@@ -1,4 +1,4 @@
-reason = "store reference clocks and the stamp (m16 corpus, one run)"
+reason = "re-bless tc/tcpp jpeg_fixed with the 1 G instruction limit"
 blessed = "2026-11-08"
 corpus = "d9a6ce600eda00bd1f7c2729c3bf21b4"
 
@@ -29,17 +29,59 @@ data_bytes = 474
 bss_bytes = 15849
 kernel_ms = 801.9122
 
-[tcpp.O2]
-code_bytes = 3528
+[tc.O1]
+instructions = 431735749
+memory_operands = 27712609
+clocks = 807041458
+code_bytes = 3357
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 5739.5933
+kernel_ms = 5778.6447
 
-[tcpp.Os]
+[tc.O2]
+instructions = 431861107
+memory_operands = 26607227
+clocks = 804794479
+code_bytes = 3423
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5780.3169
+
+[tc.Os]
+instructions = 431735749
+memory_operands = 27712609
+clocks = 807041458
+code_bytes = 3357
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5778.6447
+
+[tcpp.O1]
+instructions = 429109960
+memory_operands = 27692811
+clocks = 805807633
 code_bytes = 3354
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 5743.6192
+kernel_ms = 5743.6199
+
+[tcpp.O2]
+instructions = 428808226
+memory_operands = 26718861
+clocks = 802475245
+code_bytes = 3528
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5739.594
+
+[tcpp.Os]
+instructions = 429109960
+memory_operands = 27692811
+clocks = 805807633
+code_bytes = 3354
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5743.6199
 
 [bc.O2]
 instructions = 327086743

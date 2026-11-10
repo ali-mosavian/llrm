@@ -37,7 +37,7 @@ def flags_of(source: str, target: str = "x86") -> list[str]:
         if line.startswith("// flags:"):
             first = line.removeprefix("// flags:").split("|")[0].split()
             feature = target.startswith("x86")  # -mlong-double-80 and the like are x87 options; other drivers reject them
-            kept = [t for t in first if t.startswith(("-D", "-f")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
+            kept = [t for t in first if t.startswith(("-D", "-f", "-W")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
             break
     return [*kept, *ct.flags_for(target.split("-")[0], source)]
 
@@ -78,7 +78,7 @@ def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int) -> dict[
     result = {}
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(jobs) as pool:
         for target in targets:
-            applicable = [p for p in programs if ct.applies(target, p.read_text())]
+            applicable = [p for p in programs if ct.applies(target, p.read_text(), p)]
             rows = list(pool.map(lambda p: (p.stem, *compile_one(cc, target, p, Path(tmp))), applicable))
             result[target] = {
                 "programs": len(applicable),

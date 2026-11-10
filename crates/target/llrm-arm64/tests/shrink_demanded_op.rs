@@ -1,7 +1,7 @@
 //! `ShrinkDemandedOp` (TargetLowering.cpp L641): an operation whose result is
 //! only read in its low half is made at the narrower type.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 /// `and (add nuw i, 7), 0xffffffff` into a `mul` stayed `add x; and
@@ -14,7 +14,6 @@ define i64 @f(i64 %i, i64 %b, i64 %d, i64 %acc) {\n\
   %a1 = add nuw i64 %i, 1\n  %a2 = and i64 %a1, 4294967295\n  %m1 = mul nsw i64 %a2, %b\n\
   %c7 = add nuw i64 %i, 7\n  %c8 = and i64 %c7, 4294967295\n  %m2 = mul nsw i64 %c8, %d\n\
   %s1 = add i64 %m1, %acc\n  %s2 = add i64 %s1, %m2\n  ret i64 %s2\n}\n";
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(ir, Platform::Linux, true).expect("lowers");
     assert_eq!(asm.matches("add w").count(), 2, "{asm}");
     assert!(!asm.contains("and x"), "{asm}");

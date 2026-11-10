@@ -87,6 +87,10 @@ pub struct RegisterClasses {
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
     /// `Target::leaf_fold_at_size`.
     pub leaf_fold_at_size: bool,
+    /// `Target::cse_keeps_compare_with_live_minuend`.
+    pub cse_keeps_compare_with_live_minuend: bool,
+    /// `Target::cheap_move_immediate`.
+    pub cheap_move_immediate: fn(u8, i64) -> bool,
 }
 
 impl RegisterClasses {
@@ -157,7 +161,8 @@ impl RegisterClasses {
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
-        let xmm = held("xmm");
+        // Scalar floats live in `xmm`, or in `fpr` where the file has no xmm.
+        let xmm = Some(held("xmm")).filter(|set| !set.is_empty()).unwrap_or_else(|| held("fpr"));
         let mut classes = Self {
             pins,
             available: held("gpr"),
@@ -180,6 +185,8 @@ impl RegisterClasses {
             frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
             leaf_fold_at_size: arch.leaf_fold_at_size(),
+            cse_keeps_compare_with_live_minuend: arch.cse_keeps_compare_with_live_minuend(),
+            cheap_move_immediate: arch.cheap_move_immediate(),
         };
         classes.status_word = classes.found_status_word();
         classes

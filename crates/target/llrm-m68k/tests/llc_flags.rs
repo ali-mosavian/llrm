@@ -17,7 +17,8 @@ define i32 @f(i32 %a) {
 ";
 
 fn llc(flags: &[&str]) -> Output {
-    let dir = std::env::temp_dir().join("llrm-llc-flags-m68k");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("f.ll"), IR).unwrap();
     Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"))
@@ -53,4 +54,17 @@ fn a_flag_it_does_not_know_is_an_error_not_a_silent_drop() {
 #[test]
 fn excess_precision_is_taken_as_there_is_none_to_keep() {
     assert!(llc(&["-fexcess-precision=standard"]).status.success());
+}
+
+/// `-fsanitize=bounds` (the `idioms` variant) answered `unrecognized argument`, the
+/// text of a typo. It is refused by name: a sanitizer is never silently dropped.
+#[test]
+fn a_sanitizer_is_refused_by_name() {
+    for flag in ["-fsanitize=bounds", "-fno-sanitize=bounds"] {
+        let done = llc(&[flag]);
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        assert!(!done.status.success(), "{flag}");
+        assert!(stderr.contains(flag) && stderr.contains("sanitizer checks are not implemented"), "{flag}: {stderr}");
+        assert!(!stderr.contains("unrecognized argument"), "{flag}: {stderr}");
+    }
 }
