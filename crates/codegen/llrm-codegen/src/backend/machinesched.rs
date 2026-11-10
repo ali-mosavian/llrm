@@ -1182,7 +1182,15 @@ pub fn scheduled(
                 let slice = &insns[region.clone()];
                 if slice.len() >= 2 {
                     let tracking = made.as_ref().filter(|_| slice.len() > limit / 2).map(|model| {
-                        let mut live_out: Vec<u32> = now.iter().chain(&now87).copied().collect();
+                        // `discoverLiveOut`: the pin finds a live-out value
+                        // only where the region defines
+                        // or reads it, so a value that
+                        // crosses the region untouched is no part of its
+                        // pressure.
+                        let touched: HashSet<u32> =
+                            slice.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
+                        let mut live_out: Vec<u32> =
+                            now.iter().chain(&now87).copied().filter(|value| touched.contains(value)).collect();
                         live_out.sort_unstable();
                         // `initLiveThru`: a live-out value counts unless a def
                         // in the region ties it (two-address).
@@ -2066,5 +2074,44 @@ mod tests {
         let mut sorted = order.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, [0, 1], "every node once");
+    }
+
+    /// A value live across a region that neither reads nor writes it was
+    /// counted in the region's pressure when another region of the block
+    /// touched it: the pin finds live-outs only where the region defines or
+    /// reads them (`discoverLiveOut`). `v7` is made before a call and read
+    /// after the block: the region behind the call peaks at its limit (3) and
+    /// is in no excess. Counting `v7` made the peak 4, a critical set, and the
+    /// third constant moved down to its reader.
+    #[test]
+    fn test_a_value_live_across_a_region_untouched_adds_no_pressure() {
+        use super::scheduled;
+        use crate::model::lir::{LirBlock, LirBody};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = vec![
+            insn(10, semantics(Operation::Move, "mov", vec![held(7)], vec![imm(99)]), vec![7], vec![]),
+            insn(11, semantics(Operation::Call, "call", vec![], vec![]), vec![], vec![]),
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
+            insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
+        ];
+        let after =
+            vec![insn(20, semantics(Operation::Return, "ret", vec![], vec![held(6), held(7)]), vec![], vec![6, 7])];
+        let mut first = LirBlock::new(0, std::mem::take(&mut insns));
+        first.succ = vec![1].into();
+        let mut body = LirBody::new(
+            "across",
+            0,
+            vec![first.into(), LirBlock::new(1, after).into()],
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let defined: Vec<u32> =
+            scheduled(&body, 2, &GenericModel, |_, _| one_set(3)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_eq!(defined, [7, 1, 2, 3, 4, 5, 6], "the region peaks at 3 of 3: no critical set, source order");
     }
 }
