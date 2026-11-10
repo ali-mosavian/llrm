@@ -20,3 +20,9 @@ fn overflow_math_stays_out_until_the_carry_is_folded_into_the_branch() {
     let lowering = machine().lowering().expect("lowering");
     assert!(!lowering.runs_cgp_step(CgpStep::OverflowMath));
 }
+
+#[test]
+fn phi_types_stay_out_until_measured_on_m68k() {
+    let lowering = machine().lowering().expect("lowering");
+    assert!(!lowering.runs_cgp_step(CgpStep::PhiTypes));
+}

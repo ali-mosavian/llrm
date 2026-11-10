@@ -313,6 +313,11 @@ impl FunctionPass for CgpAddr {
                 ),
                 None => false,
             };
+        // `optimizePhiTypes`, after the steps that go instruction by instruction.
+        let phi_types = match lowering_for(analyses, CgpStep::PhiTypes) {
+            Some(lowering) => crate::cgpphitypes::phi_types_optimized(unit.context, &*lowering, unit.function),
+            None => false,
+        };
         if merged || converted {
             // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
@@ -326,6 +331,7 @@ impl FunctionPass for CgpAddr {
             || sunk_casts
             || resunk
             || split
+            || phi_types
             || remainders
             || compares
             || switches

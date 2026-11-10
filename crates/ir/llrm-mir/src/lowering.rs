@@ -107,6 +107,7 @@ pub enum CgpStep {
     CastSinking,
     ExtPromotion,
     SplitStores,
+    PhiTypes,
 }
 
 /// `TargetLowering`'s hooks. Each default is the base class's.
@@ -118,6 +119,15 @@ pub trait Lowering {
         step: CgpStep,
     ) -> bool {
         let _ = step;
+        true
+    }
+
+    /// `shouldConvertPhiType(From, To)`
+    /// ([TargetLowering.h#L3123](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L3123)):
+    /// whether a web of phis loaded, stored or bitcast as `To` is made `To`.
+    /// The base class says yes when both are integers or floats (the only
+    /// types the pass asks about); x86 says no below 64 bits.
+    fn should_convert_phi_type(&self) -> bool {
         true
     }
 

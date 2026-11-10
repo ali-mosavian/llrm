@@ -19,7 +19,8 @@ pub struct M68kLowering;
 /// DEVIATE M68K-CGP-STAGED (owner m68k, exit 2026-11-30): the steps not
 /// listed do not run yet. `OverflowMath` is worse on 18 corpus cells
 /// (+186 B at 68000: the carry of an overflow node feeding a branch is
-/// materialised); the others change nothing and join in a later commit.
+/// materialised); the others change nothing and join in a later commit (`PhiTypes`, added
+/// 2026-11-10, is one: nothing measured on m68k yet).
 pub fn runs(step: CgpStep) -> bool {
     match step {
         CgpStep::Branches
@@ -27,7 +28,8 @@ pub fn runs(step: CgpStep) -> bool {
         | CgpStep::OverflowMath
         | CgpStep::Compares
         | CgpStep::MaskSinking
-        | CgpStep::SplitStores => false,
+        | CgpStep::SplitStores
+        | CgpStep::PhiTypes => false,
         CgpStep::CastSinking | CgpStep::ExtPromotion => true,
     }
 }

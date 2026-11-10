@@ -73,6 +73,11 @@ impl Lowering for X86 {
         llrm_mir::lowering::simple_int(bits)
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L36785
+    fn should_convert_phi_type(&self) -> bool {
+        self.is_64bit
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
     fn prefer_zero_compare_branch(&self) -> bool {
         true
@@ -229,5 +234,12 @@ mod tests {
         assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Integer, Integer));
         assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Float, Float));
         assert!(!x86.is_multi_stores_cheaper_than_bits_merge(Float, Other));
+    }
+
+    /// `X86TargetLowering::shouldConvertPhiType` (L36785): no below 64 bits.
+    #[test]
+    fn test_x86_converts_phi_types_only_at_64_bits() {
+        assert!(X86 { is_64bit: true }.should_convert_phi_type());
+        assert!(!X86 { is_64bit: false }.should_convert_phi_type());
     }
 }

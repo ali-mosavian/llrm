@@ -99,6 +99,7 @@ pub mod cgpmath;
 pub mod cgpmemalign;
 #[cfg(test)]
 mod cgpmemalign_tests;
+pub mod cgpphitypes;
 pub mod cgpretdup;
 pub mod cgpselect;
 pub mod cgpswitch;
