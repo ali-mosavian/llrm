@@ -1100,6 +1100,12 @@ pub(crate) fn picks(
                 }
                 let region_max = program.max().to_vec();
                 let critical = Tracker::critical_sets(tracking.model, &region_max);
+                if trace() {
+                    eprintln!(
+                        "machinesched region n={n} limits={:?} max={region_max:?} critical={critical:?}",
+                        tracking.model.limits
+                    );
+                }
                 Followed {
                     bottom: Tracker::over(
                         tracking.model,
@@ -1249,7 +1255,11 @@ pub fn scheduled(
     // The x87 stack is its own register set with its own limit: its values
     // (those of the float operations) are not counted against the general
     // registers.
-    let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
+    let stack = if sched.x87_stack() {
+        x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()))
+    } else {
+        HashSet::default()
+    };
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
     let mut model = Some(model);
@@ -1291,10 +1301,12 @@ pub fn scheduled(
                     // The x87 stack is the pin's `RFP` register class: a set of
                     // its own with the seven registers
                     // `FP0`-`FP6`.
-                    let set: Rc<[usize]> = Rc::from(vec![model.limits.len()]);
-                    model.limits.push(X87_STACK_LIMIT);
-                    for &value in &stack {
-                        model.count(value, 1, set.clone());
+                    if sched.x87_stack() {
+                        let set: Rc<[usize]> = Rc::from(vec![model.limits.len()]);
+                        model.limits.push(X87_STACK_LIMIT);
+                        for &value in &stack {
+                            model.count(value, 1, set.clone());
+                        }
                     }
                     made = Some(model);
                 }

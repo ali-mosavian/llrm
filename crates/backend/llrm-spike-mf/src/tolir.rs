@@ -247,6 +247,9 @@ impl<T: Target> Converted<T> {
             }
         }
         let limit = T::candidates(T::any()).len();
+        if std::env::var_os("LLRM_SETS_DEBUG").is_some() {
+            eprintln!("SETS {:?} limit {limit}", sets.iter().map(|(c, n)| (format!("{:?}", T::candidates(*c).first()), *n)).collect::<Vec<_>>());
+        }
         let known = function.classes.len() as u32;
         let pins = self.body.pins.clone();
         // The lanes of the file are the ones read while the scheduler runs.

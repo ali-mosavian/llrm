@@ -808,7 +808,7 @@ impl AllocTarget for Arm64 {
     /// (S1) lands.
     fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
         if darwin() {
-            std::rc::Rc::new(llrm_codegen::backend::schedmodel::GenericModel)
+            std::rc::Rc::new(crate::schedmodel::DarwinModel)
         } else {
             std::rc::Rc::new(crate::schedmodel::Arm64Model::generic())
         }

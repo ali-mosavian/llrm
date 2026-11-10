@@ -67,6 +67,12 @@ pub trait SchedulingModel {
         insn: &Insn,
     ) -> u32;
 
+    /// Whether the target has an x87 register stack, a pressure set of its own
+    /// that the float operations' values are counted in (the pin's `RFP`).
+    fn x87_stack(&self) -> bool {
+        true
+    }
+
     /// `getMemOperandsWithOffsetWidth`: the access of `insn`, or `None` where
     /// the target does not say (no clustering for it).
     fn mem_op(

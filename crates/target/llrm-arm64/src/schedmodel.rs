@@ -35,7 +35,7 @@ use std::sync::OnceLock;
 use llrm_codegen::backend::genericdriver::RegionPolicy;
 use llrm_codegen::backend::machinesched::default_def_latency;
 use llrm_codegen::backend::schedboundary::{Machine, ProcResource, Unit, WriteRes};
-use llrm_codegen::backend::schedmodel::{MemBase, MemOp, SchedulingModel};
+use llrm_codegen::backend::schedmodel::{GenericModel, MemBase, MemOp, SchedulingModel};
 use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
@@ -97,6 +97,38 @@ fn shift_amount(insn: &Insn) -> Option<i64> {
     }
 }
 
+/// The model Darwin keeps (SB8): X86.td's `GenericModel` numbers, on a target
+/// with no x87 stack.
+pub struct DarwinModel;
+
+impl SchedulingModel for DarwinModel {
+    fn machine(&self) -> Machine {
+        GenericModel.machine()
+    }
+
+    fn policy(&self) -> RegionPolicy {
+        GenericModel.policy()
+    }
+
+    fn unit(
+        &self,
+        insn: &Insn,
+    ) -> Unit {
+        GenericModel.unit(insn)
+    }
+
+    fn def_latency(
+        &self,
+        insn: &Insn,
+    ) -> u32 {
+        GenericModel.def_latency(insn)
+    }
+
+    fn x87_stack(&self) -> bool {
+        false
+    }
+}
+
 impl SchedulingModel for Arm64Model {
     fn machine(&self) -> Machine {
         let resources = self
@@ -110,6 +142,10 @@ impl SchedulingModel for Arm64Model {
             })
             .collect();
         Machine::new(self.model.issue_width, self.model.micro_op_buffer_size.max(0) as u32, resources)
+    }
+
+    fn x87_stack(&self) -> bool {
+        false
     }
 
     /// `AArch64Subtarget::overrideSchedPolicy`.
