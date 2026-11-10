@@ -295,6 +295,21 @@ fn allocated_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<Allocated, String> {
+    let (base, merged) = allocated_search(selected, name, request, duplicate)?;
+    Ok(match merged {
+        Some(merged) => with_variant(Ok(base), merged, name, request, true)?,
+        None => base,
+    })
+}
+
+/// [`allocated_with`] without the merged variant, which is returned to be priced on the schedule that wins
+/// (`lines_of`): the variant wins in one function of ten, and an allocation per schedule is most of its cost.
+fn allocated_search(
+    selected: &Selections,
+    name: &str,
+    request: &Request,
+    duplicate: bool,
+) -> Result<(Allocated, Option<MFunction>), String> {
     SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
     expand::BYTES_FIRST.with(|one| one.set(!matches!(request.level, Level::O2 | Level::O3 | Level::Omax)));
     expand::set_frequencies(&frequencies_of(selected, name));
@@ -328,8 +343,8 @@ fn allocated_with(
     } else {
         allocate(function, name, request.level)
     };
-    let base = if splits { with_variant(base, split, name, request, false) } else { base };
-    if merges { with_variant(base, merged, name, request, true) } else { base }
+    let base = (if splits { with_variant(base, split, name, request, false) } else { base })?;
+    Ok((base, merges.then_some(merged)))
 }
 
 /// `best`, or the allocation of `variant` where that is cheaper by `priced_in_loops`. With `strict_o1` a variant
@@ -351,15 +366,23 @@ fn with_variant(
         allocate(variant, name, request.level)
     };
     match (best, variant) {
-        (Ok(base), Ok(split)) => match (priced_in_loops(&base, request.level), priced_in_loops(&split, request.level)) {
-            (Some(one), Some(other)) if strict_o1 && request.level == Level::O1 => {
-                if other.0 <= one.0 && other.1 <= one.1 && other != one { Ok(split) } else { Ok(base) }
-            }
-            (Some(one), Some(other)) if cheaper(request.level, other, one) => Ok(split),
-            _ => Ok(base),
-        },
+        (Ok(base), Ok(split)) => Ok(if variant_wins(&base, &split, request.level, strict_o1) { split } else { base }),
         (_, Ok(split)) => Ok(split),
         (base, Err(_)) => base,
+    }
+}
+
+/// Whether `variant` replaces `base`: cheaper by `priced_in_loops`; for the merged variant at O1 no worse on either axis.
+fn variant_wins(
+    base: &Allocated,
+    variant: &Allocated,
+    level: Level,
+    strict_o1: bool,
+) -> bool {
+    match (priced_in_loops(base, level), priced_in_loops(variant, level)) {
+        (Some(one), Some(other)) if strict_o1 && level == Level::O1 => other.0 <= one.0 && other.1 <= one.1 && other != one,
+        (Some(one), Some(other)) => cheaper(level, other, one),
+        _ => false,
     }
 }
 
@@ -2582,9 +2605,13 @@ fn lines_of(
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
-    let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
-        let (function, assignment, slots, reads) = allocated_with(selected, name, request, duplicate)?;
-        finish(&function, &assignment, number, &slots, reads)
+    // a schedule's text, its allocation, and the merged variant still to be priced on it
+    type Candidate = (Vec<Line>, Allocated, Option<MFunction>);
+    let compile = |duplicate: bool| -> Result<Candidate, String> {
+        let (allocated, merged) = allocated_search(selected, name, request, duplicate)?;
+        let (function, assignment, slots, reads) = &allocated;
+        let lines = finish(function, assignment, number, slots, reads.clone())?;
+        Ok((lines, allocated, merged))
     };
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,
@@ -2601,9 +2628,9 @@ fn lines_of(
                 (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
             )
         };
-        let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
+        let kept = if copied.as_ref().is_ok() && alike() { copied.clone() } else { compile(false) };
         match (copied, kept) {
-            (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+            (Ok(one), Ok(two)) => Ok(if expand::price(&one.0) <= expand::price(&two.0) { one } else { two }),
             (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
             (Err(why), Err(_)) => Err(why),
         }
@@ -2614,15 +2641,23 @@ fn lines_of(
     crate::dagisel::pipeline::ILP.with(|one| one.set(true));
     let ilp = scheduled();
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
-    match (source, ilp) {
+    let (lines, allocated, merged) = match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
             let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
-            Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
+            Ok(if cheaper(request.level, price(&ilp.0), price(&source.0)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
-    }
-    .map(|lines| expand::relax(lines, !matches!(request.level, Level::Os | Level::Oz)))
+    }?;
+    // the merged variant (`merge_constant_stores`) is priced once, on the schedule that won
+    let lines = match merged.map(|merged| allocate_first(merged, name, request.level)) {
+        Some(Ok((variant, ..))) if variant_wins(&allocated, &variant, request.level, true) => {
+            let (function, assignment, slots, reads) = variant;
+            finish(&function, &assignment, number, &slots, reads).unwrap_or(lines)
+        }
+        _ => lines,
+    };
+    Ok(expand::relax(lines, !matches!(request.level, Level::Os | Level::Oz)))
 }
 
 /// The function as text: its label, then one line per instruction.
