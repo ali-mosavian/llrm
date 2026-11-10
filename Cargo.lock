@@ -645,6 +645,7 @@ dependencies = [
 name = "llrm-spike-mf"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "llrm-codegen",
  "llrm-lir",
  "llrm-mir",

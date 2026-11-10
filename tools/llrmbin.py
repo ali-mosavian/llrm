@@ -17,7 +17,7 @@ STAMPED = ("llrm-llc",)
 
 # llrm-cc's table row and CPU for a C compile at `bits`, and the variables it reads to find its clang and Open Watcom headers.
 C_ROWS = {16: ("x86_16-wat", "-march=i386"), 32: ("x86_32-wat", "-march=i486")}
-CC_ENV = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16")
+CC_ENV = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16", "HOME", "XDG_CACHE_HOME")  # the last two: llrm-cc finds the Open Watcom tree under the cache dir
 
 
 def c_args(bits: int) -> list[str]:
