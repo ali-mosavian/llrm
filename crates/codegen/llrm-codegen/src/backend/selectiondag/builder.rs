@@ -2407,6 +2407,11 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
+        // This call's own state, taken before the byval copies below: a copy that is a library call is itself a
+        // `lower_call_with` and would otherwise take it (a variadic call's unnamed-argument state sent the
+        // `memcpy` count and source to the stack, and left the call it was for a fixed one).
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2438,8 +2443,6 @@ impl Builder<'_> {
             *value = copy_to;
         }
         let mut outs = Vec::new();
-        let variadic = std::mem::take(&mut self.variadic_call);
-        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {

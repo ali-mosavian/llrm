@@ -26,6 +26,7 @@ fn the_gap_loop_of_a_shellsort_stays_rolled_at_a_low_rate() {
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     unroll_function(module, "bench_shellsort", &tti, options).expect("unrolls");
     let text = llrm_mir::print::module(module);
@@ -54,6 +55,7 @@ fn a_loop_that_saves_most_of_a_clock_a_byte_is_unrolled() {
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     unroll_function(module, "shape", &tti, options).expect("unrolls");
     let text = llrm_mir::print::module(module);
