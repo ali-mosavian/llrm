@@ -446,6 +446,15 @@ class ActiveHolders(Env, unittest.TestCase):
         self.assertTrue(self.admitted(2), "one job on two slot files ate two slots")
         self.assertFalse(self.admitted(1))
 
+    def test_a_job_admitted_but_not_yet_spawned_already_counts(self):
+        """The 1-in-6 failure of the loop: a starter right behind an admitted one found it holding the slot with no record and no child yet, read it as a probe, and took slot 2 (slots 1)."""
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0", LG_TEST_SPAWN_PAUSE="3")
+        self.assertTrue(until(lambda: os.path.isdir(os.path.join(self.slots, "jobs")) and os.listdir(os.path.join(self.slots, "jobs"))))
+        record = os.path.join(self.slots, "jobs", str(first.pid))
+        self.assertEqual(open(record).read().split()[1], "0", "the first job was already spawned: the pause did not hold")
+        second = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_NO_WAIT="1", LG_SETTLE="0", LG_SCAN_EVERY="0")
+        self.assertEqual(second.wait(timeout=10), 75, "a job in the window between admission and spawn did not count")
+
     def test_a_guard_process_holding_a_slot_file_without_a_job_is_a_probe_and_does_not_count(self):
         """The 1-in-4 flake of the suite: twelve LG_NO_WAIT starters arriving together saw each other's probe lock (no prio line for them) as running jobs and all refused (0 of 12 admitted)."""
         os.makedirs(self.slots, exist_ok=True)

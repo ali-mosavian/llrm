@@ -21,6 +21,7 @@ if [ "$1" = --cancel ]; then
   case $id in ''|*[!0-9]*) echo "load_guard: --cancel needs a job id (digits)" >&2; exit 2 ;; esac
   [ -f "$jobs_dir/$id" ] || { echo "load_guard: no recorded job $id" >&2; exit 1; }
   read -r wrapper pgid command < "$jobs_dir/$id"
+  if [ "$pgid" = 0 ] && kill -0 "$wrapper" 2>/dev/null; then echo "load_guard: job $id is starting (no process group yet): retry" >&2; exit 1; fi
   if ! kill -0 "$wrapper" 2>/dev/null || [ "$(ps -o ppid= -p "$pgid" 2>/dev/null | tr -d ' ')" != "$wrapper" ] || [ "$(ps -o pgid= -p "$pgid" 2>/dev/null | tr -d ' ')" != "$pgid" ]; then
     rm -f "$jobs_dir/$id"; echo "load_guard: job $id has finished (its record is stale)" >&2; exit 1
   fi
@@ -150,7 +151,7 @@ admit() {
     for i in $(seq 1 "$widest"); do  # slots beyond the current count stay held by running jobs
       exec {slot_fd}>"$slot_dir/slot.$i"
       if flock -n "$slot_fd"; then
-        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first "$l1"; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; return 0; fi
+        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first "$l1"; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; mkdir -p "$slot_dir/jobs"; echo "$$ 0 $*" > "$slot_dir/jobs/$$"; return 0; fi
         flock -u "$slot_fd"
       else
         slot_busy "$i" && busy=$((busy + 1))
@@ -170,6 +171,8 @@ admit() {
   done
 }
 admit || exit $?
+# The record exists from the moment of admission (pgid 0 until the command is spawned): a slot holder with neither a record nor a child reads as a probe.
+[ -z "${LG_TEST_SPAWN_PAUSE:-}" ] || sleep "$LG_TEST_SPAWN_PAUSE"
 
 # ---- the process tree ------------------------------------------------------
 tree_pgids() {  # tree_pgids ROOT: the process group of ROOT and of every descendant
