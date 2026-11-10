@@ -27,7 +27,6 @@
 //! ```
 
 use llrm_mir::context::ConstantKind;
-use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 
@@ -36,6 +35,7 @@ use super::common::{
     defining_instruction, delete_dead_cascade, emit, get_recurrence_var, int, match_condition, uses_outside,
     zext_or_trunc,
 };
+use super::countdown::count_down_loop;
 use super::process::{Run, cx};
 
 /// What `detectPopcountIdiom` found.
@@ -272,39 +272,7 @@ fn transform_loop_to_popcount(
     //   t = newcnt;
     //   if (x)
     //     do { cnt++; x &= x-1; t--) } while (t > 0);
-    let lb_br = run.function.terminator(body).expect("a loop branch");
-    let lb_cond =
-        defining_instruction(run.function, run.function.instruction(lb_br).operands[0]).expect("matched as a compare");
-    let trip_ty = run.function.operand_type(run.context, trip_cnt).expect("a typed count");
-
-    let first = run.function.iter_block(body).next().expect("a loop body");
-    let tc_phi = run
-        .function
-        .create_instruction(
-            Opcode::Phi,
-            trip_ty,
-            vec![trip_cnt, Operand::Block(preheader)],
-            Flags::default(),
-            Some("tcphi"),
-        );
-    run.function.insert(tc_phi, Position::Before(first)).expect("a placed phi");
-    let tc_phi_value = Operand::Value(run.function.instruction(tc_phi).result.expect("a phi value"));
-    let tc_dec = emit(
-        run.function,
-        lb_cond,
-        Opcode::Binary(BinaryOp::Sub),
-        trip_ty,
-        vec![tc_phi_value, int(run.context, trip_ty, 1)],
-        Flags::NSW,
-        "tcdec",
-    );
-    run.function.set_operands(tc_phi, vec![trip_cnt, Operand::Block(preheader), tc_dec, Operand::Block(body)]);
-
-    let stays = run.function.instruction(lb_br).operands[1] == Operand::Block(body);
-    let predicate = if stays { IntPredicate::Ugt } else { IntPredicate::Sle };
-    run.function.set_opcode(lb_cond, Opcode::ICmp(predicate));
-    run.function.set_operand(lb_cond, 0, tc_dec);
-    run.function.set_operand(lb_cond, 1, int(run.context, trip_ty, 0));
+    count_down_loop(run, preheader, body, trip_cnt, IntPredicate::Ugt, IntPredicate::Sle);
 
     // Step 4: All the references to the original population counter outside
     //  the loop are replaced with the NewCount -- the value returned from

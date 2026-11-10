@@ -525,8 +525,10 @@ fn push(
 
 pub mod build;
 pub mod common;
+pub mod countdown;
 pub mod crc;
 pub mod driver;
+pub mod ffs;
 pub mod hashrecognize;
 pub mod pass;
 pub mod popcount;

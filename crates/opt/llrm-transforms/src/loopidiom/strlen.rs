@@ -27,9 +27,8 @@
 //!   library facts (`getWCharSize`). Exit with D11.
 //! - Calls count as side effects in the body scan, where LLVM lets a call that
 //!   does not write, always returns and does not unwind through.
-//! - `runOnNoncountableLoop`'s shift idioms (`recognizeAndInsertFFS`,
-//!   `recognizeShiftUntilBitTest`, `recognizeShiftUntilZero`,
-//!   `recognizeShiftUntilLessThan`) are owed.
+//! - `runOnNoncountableLoop`'s `recognizeShiftUntilBitTest` and
+//!   `recognizeShiftUntilZero` are owed.
 //!
 //! # Example
 //! ```text
@@ -62,10 +61,12 @@ impl LoopIdiomRecognize {
         &mut self,
         run: &mut Run,
     ) -> bool {
-        // OWED: recognizeAndInsertFFS, recognizeShiftUntilBitTest,
-        // recognizeShiftUntilZero and recognizeShiftUntilLessThan, in this
-        // order, between the population count and the string length.
-        self.recognize_popcount(run) || self.recognize_and_insert_str_len(run)
+        // OWED: recognizeShiftUntilBitTest and recognizeShiftUntilZero, in this
+        // order, between the FFS and the less-than.
+        self.recognize_popcount(run)
+            || self.recognize_and_insert_ffs(run)
+            || self.recognize_shift_until_less_than(run)
+            || self.recognize_and_insert_str_len(run)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L2219
