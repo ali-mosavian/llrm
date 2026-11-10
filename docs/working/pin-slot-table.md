@@ -16,10 +16,10 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 
 | level | MATCH | N/A | EXECUTED | DEVIATE | MISSING | ORDER | slots |
 |---|---|---|---|---|---|---|---|
-| -O1 | 38 | 20 | 10 | 11 | 24 | 1 | 104 |
-| -O2 | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
-| -O3 | 50 | 26 | 10 | 6 | 29 | 0 | 121 |
-| -Os | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
+| -O1 | 38 | 19 | 10 | 12 | 24 | 1 | 104 |
+| -O2 | 50 | 24 | 10 | 6 | 27 | 0 | 117 |
+| -O3 | 50 | 25 | 10 | 7 | 29 | 0 | 121 |
+| -Os | 50 | 24 | 10 | 6 | 27 | 0 | 117 |
 
 At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 2 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
@@ -363,7 +363,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -O1 | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -O1 | Late | loop-vectorize<no-interleave-forced-only;vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -O1 | Late | loop-vectorize<no-interleave-forced-only;vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops of known trip count, no epilogue, no runtime checks, no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec, exit 2026-11-12 18:00Z: epilogue/tail folding, reverse | llrm-arm64-vec, 2026-11-12 |
 | -O1 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O1 | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O1 | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -477,7 +477,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -O2 | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -O2 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -O2 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops of known trip count, no epilogue, no runtime checks, no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec, exit 2026-11-12 18:00Z: epilogue/tail folding, reverse | llrm-arm64-vec, 2026-11-12 |
 | -O2 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O2 | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O2 | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -595,7 +595,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -O3 | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -O3 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -O3 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops of known trip count, no epilogue, no runtime checks, no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec, exit 2026-11-12 18:00Z: epilogue/tail folding, reverse | llrm-arm64-vec, 2026-11-12 |
 | -O3 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -713,7 +713,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -Os | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -Os | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -Os | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops of known trip count, no epilogue, no runtime checks, no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec, exit 2026-11-12 18:00Z: epilogue/tail folding, reverse | llrm-arm64-vec, 2026-11-12 |
 | -Os | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -Os | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -Os | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
