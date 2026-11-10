@@ -20,6 +20,11 @@ class NoReferenceLookup(Exception):
     pass
 
 
+class NoHelperBytes(Exception):
+    """A stored C reference cell with no `helper_bytes`: measured before the library routines a program links were counted, so its
+    `code_bytes` may read smaller than the program is (tc's recpow -O1: 211 B, 399 with its long divide and multiply)."""
+
+
 def rate() -> int:
     """The price of a byte at -O2 in milliclocks: bench.py's own (`rate_for`), read from the m16 timing sheet, never a copy."""
     import bench
@@ -48,7 +53,12 @@ def references(bench: Path, program: str, language: str, level: str) -> dict[str
     if not path.exists():
         raise NoReferenceLookup(f"{program}: no expected.toml and not marked `references = false`")
     table = tomllib.loads(path.read_text())
-    return {name: table[name][level] for name in REFERENCES[language] if level in table.get(name, {})}
+    cells = {name: table[name][level] for name in REFERENCES[language] if level in table.get(name, {})}
+    if language == "c":
+        for name, cell in cells.items():
+            if "helper_bytes" not in cell:
+                raise NoHelperBytes(f"{program} {name}.{level}: no helper_bytes: re-measure with bench.py --references --bless")
+    return cells
 
 
 def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tuple], list[str], list[str]]:
