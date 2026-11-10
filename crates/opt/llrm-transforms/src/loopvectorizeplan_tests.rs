@@ -1,6 +1,7 @@
-//! `choose` against the pinned LLVM's `opt -passes=loop-vectorize` remark ("vectorization width: W,
-//! interleaved count: I") on aarch64, for copy and add loops of each element width and several trip
-//! counts (the rows below are that remark).
+//! `choose` against the pinned LLVM's `opt -passes=loop-vectorize` remark
+//! ("vectorization width: W, interleaved count: I") on aarch64, for copy and
+//! add loops of each element width and several trip counts (the rows below are
+//! that remark).
 
 use llrm_arm64::tti::AArch64;
 use llrm_mir::tti::{ArithOp, Ty};
@@ -19,10 +20,19 @@ fn facts(
         recipes.push(Recipe::Binary { op: ArithOp::Add, lane });
     }
     recipes.push(Recipe::Store { lane, align });
-    LoopFacts { recipes, trip_count, max_safe_width_in_bits: 1 << 40, safe_for_any_vector_width: true, store_load_forward_bits: None, widest_induction_bits: 64, opt_size: false }
+    LoopFacts {
+        recipes,
+        trip_count,
+        max_safe_width_in_bits: 1 << 40,
+        safe_for_any_vector_width: true,
+        store_load_forward_bits: None,
+        widest_induction_bits: 64,
+        opt_size: false,
+    }
 }
 
-/// (element bits, trip count, VF, IC) of the pin, for the copy and for the add form alike.
+/// (element bits, trip count, VF, IC) of the pin, for the copy and for the add
+/// form alike.
 const PIN: &[(u32, u64, u32, u32)] = &[
     (8, 1920, 16, 2),
     (16, 1920, 8, 2),
@@ -46,8 +56,9 @@ fn the_factors_are_the_pins() {
     }
 }
 
-/// The pin vectorizes `trip 1000` of `i16` with a scalar epilogue; this port plans only the loops a
-/// whole number of vector iterations covers (VP3), and says why for the others.
+/// The pin vectorizes `trip 1000` of `i16` with a scalar epilogue; this port
+/// plans only the loops a whole number of vector iterations covers (VP3), and
+/// says why for the others.
 #[test]
 fn a_trip_count_the_factors_do_not_divide_is_not_planned() {
     let tti = AArch64::of_cpu("generic").unwrap();

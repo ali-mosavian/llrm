@@ -2,9 +2,10 @@
 //!
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `LoopVectorizationLegality.cpp`
-//! (`canVectorize`, [L1889](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp#L1889)),
-//! in the pin's order: the loop's CFG (`canVectorizeLoopNestCFG`, L1626),
-//! one block (`canVectorizeWithIfConvert`, L1449), every instruction
+//! (`canVectorize`,
+//! [L1889](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp#L1889)),
+//! in the pin's order: the loop's CFG (`canVectorizeLoopNestCFG`, L1626), one
+//! block (`canVectorizeWithIfConvert`, L1449), every instruction
 //! (`canVectorizeInstrs`, L799: header phis are reductions, inductions or
 //! refused; calls and unwidenable types are refused), a countable trip count,
 //! then the memory accesses (`canVectorizeMemory`, L1193, from
@@ -19,10 +20,11 @@
 //! # DEVIATE rows (features the slice does not need; each exit is its piece)
 //! - LV-D1 outer loops and the VPlan-native path (`canVectorizeOuterLoop`):
 //!   only innermost loops.
-//! - LV-D2 if-conversion (`canVectorizeWithIfConvert`, `blockNeedsPredication`):
-//!   a loop of more than one block is refused, so no block is predicated.
-//! - LV-D3 uncountable and early-exit loops (`isVectorizableEarlyExitLoop`):
-//!   a loop without an exact backedge-taken count is refused.
+//! - LV-D2 if-conversion (`canVectorizeWithIfConvert`,
+//!   `blockNeedsPredication`): a loop of more than one block is refused, so no
+//!   block is predicated.
+//! - LV-D3 uncountable and early-exit loops (`isVectorizableEarlyExitLoop`): a
+//!   loop without an exact backedge-taken count is refused.
 //! - LV-D4 calls and intrinsics (`getVectorIntrinsicIDForCall`, the
 //!   `VFDatabase`): every call is refused.
 //! - LV-D5 fixed-order recurrences and the coerced-AddRec induction retry
@@ -34,7 +36,8 @@
 //!   allows vectorization and reordering.
 
 use llrm_analysis::ivdescriptors::{
-    Analyses, InductionDescriptor, InductionKind, InductionStep, RecurrenceDescriptor, is_induction_phi, is_reduction_phi,
+    Analyses, InductionDescriptor, InductionKind, InductionStep, RecurrenceDescriptor, is_induction_phi,
+    is_reduction_phi,
 };
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::scev::backedge::ExitCountKind;
@@ -54,10 +57,12 @@ pub struct Legality {
     /// The canonical induction when it has the widest induction type; the
     /// vectorizer makes one otherwise.
     pub primary_induction: Option<InstId>,
-    /// `getWidestInductionType`, as its width in bits (`getInductionIntegerTy`: a pointer is the
-    /// pointer-sized integer, an integer narrower than 32 bits is `i32`).
+    /// `getWidestInductionType`, as its width in bits (`getInductionIntegerTy`:
+    /// a pointer is the pointer-sized integer, an integer narrower than 32
+    /// bits is `i32`).
     pub widest_induction_bits: Option<u32>,
-    /// `Hints->setPotentiallyUnsafe`: a floating-point operation without fast-math flags.
+    /// `Hints->setPotentiallyUnsafe`: a floating-point operation without
+    /// fast-math flags.
     pub potentially_unsafe: bool,
 }
 
@@ -73,7 +78,8 @@ pub fn can_vectorize(
     the_loop: Loop,
 ) -> Result<Legality, Refusal> {
     let function = cx.function;
-    // canVectorizeLoopNestCFG -> canVectorizeLoopCFG (L1570), and the sub-loops (none: LV-D1).
+    // canVectorizeLoopNestCFG -> canVectorizeLoopCFG (L1570), and the sub-loops
+    // (none: LV-D1).
     if the_loop.get_loop_preheader(function).is_none() {
         return Err(Refusal("Loop doesn't have a legal pre-header"));
     }
@@ -133,7 +139,8 @@ fn can_vectorize_instrs(
             return Err(Refusal("Did not find one integer induction var"));
         }
     }
-    // A primary induction narrower than the widest is dropped; the vectorizer makes another.
+    // A primary induction narrower than the widest is dropped; the vectorizer
+    // makes another.
     if let Some(primary) = found.primary_induction
         && Some(cx.layout.size_bits(&cx.context.types, cx.function.instruction(primary).ty) as u32)
             != found.widest_induction_bits
@@ -187,10 +194,14 @@ fn can_vectorize_instr(
         return Err(Refusal("Found a non-intrinsic callsite"));
     }
 
-    // The result type is widenable; a cast from an unwidenable type and extractelement are not.
+    // The result type is widenable; a cast from an unwidenable type and
+    // extractelement are not.
     let widenable = data.ty == types.void() || is_valid_element_type(cx, data.ty);
     let bad_cast = matches!(data.opcode, Opcode::Cast(_))
-        && !matches!(data.operands.first(), Some(&operand) if is_valid_element_type_of(cx, function, operand));
+        && !matches!(
+            data.operands.first(),
+            Some(&operand) if is_valid_element_type_of(cx, function, operand)
+        );
     if !widenable || bad_cast || matches!(data.opcode, Opcode::ExtractElement) {
         return Err(Refusal("Found unvectorizable type"));
     }
@@ -205,7 +216,9 @@ fn can_vectorize_instr(
         }
         Opcode::Load { .. } => {}
         // FP math without fast-math flags: `Hints->setPotentiallyUnsafe`.
-        Opcode::Binary(_) | Opcode::FNeg if matches!(types.get(data.ty), Type::Float(_)) && !data.flags.contains(Flags::FAST) => {
+        Opcode::Binary(_) | Opcode::FNeg
+            if matches!(types.get(data.ty), Type::Float(_)) && !data.flags.contains(Flags::FAST) =>
+        {
             found.potentially_unsafe = true;
         }
         _ => {}
@@ -213,8 +226,9 @@ fn can_vectorize_instr(
     Ok(())
 }
 
-/// `addInductionPhi` (L706): record the induction; the widest integer one is the type, and an
-/// integer induction that starts at 0 and steps by 1 may be the primary.
+/// `addInductionPhi` (L706): record the induction; the widest integer one is
+/// the type, and an integer induction that starts at 0 and steps by 1 may be
+/// the primary.
 fn add_induction_phi(
     cx: &Cx,
     se: &mut ScalarEvolution,
@@ -224,7 +238,8 @@ fn add_induction_phi(
 ) {
     let phi_ty = cx.function.instruction(phi).ty;
     let types = &cx.context.types;
-    // `getInductionIntegerTy`, then `getWiderInductionTy`: the new type wins only if strictly wider.
+    // `getInductionIntegerTy`, then `getWiderInductionTy`: the new type wins
+    // only if strictly wider.
     let bits = match types.get(phi_ty) {
         Type::Int(bits) => Some((*bits).max(32)),
         Type::Pointer(space) => Some(cx.layout.pointer(*space).bits),
@@ -233,7 +248,8 @@ fn add_induction_phi(
     if let Some(bits) = bits {
         found.widest_induction_bits = Some(found.widest_induction_bits.map_or(bits, |wide| wide.max(bits)));
     }
-    // Int inductions are special: only one IV; a canonical one starts at 0 and steps by 1.
+    // Int inductions are special: only one IV; a canonical one starts at 0 and
+    // steps by 1.
     let canonical = descriptor.kind == InductionKind::Int
         && const_int_step(se, &descriptor).is_some_and(|step| step.is_one())
         && matches!(descriptor.start_value, Operand::Constant(_))
@@ -265,12 +281,16 @@ fn start_is_zero(
     matches!(&se.node(scev).kind, Kind::Constant(value) if value.is_zero())
 }
 
-/// `VectorType::isValidElementType`: an integer, a floating-point type or a pointer.
+/// `VectorType::isValidElementType`: an integer, a floating-point type or a
+/// pointer.
 fn is_valid_element_type(
     cx: &Cx,
     ty: TypeId,
 ) -> bool {
-    matches!(cx.context.types.get(ty), Type::Int(_) | Type::Float(_) | Type::Pointer(_))
+    matches!(
+        cx.context.types.get(ty),
+        Type::Int(_) | Type::Float(_) | Type::Pointer(_)
+    )
 }
 
 fn is_valid_element_type_of(
@@ -281,8 +301,9 @@ fn is_valid_element_type_of(
     function.operand_type(cx.context, operand).is_some_and(|ty| is_valid_element_type(cx, ty))
 }
 
-/// `canVectorizeMemory` (L1193). Stores to loop-invariant addresses are refused unless a reduction
-/// stores them (the slice has no reduction stores: such a store is refused).
+/// `canVectorizeMemory` (L1193). Stores to loop-invariant addresses are refused
+/// unless a reduction stores them (the slice has no reduction stores: such a
+/// store is refused).
 fn can_vectorize_memory(
     cx: &Cx,
     se: &mut ScalarEvolution,
@@ -291,7 +312,8 @@ fn can_vectorize_memory(
     found: &Legality,
 ) -> Result<(), Refusal> {
     if !lai.can_vectorize_memory() {
-        // canVectorizeIndirectUnsafeDependences: histograms are off in the pin (LV-D6).
+        // canVectorizeIndirectUnsafeDependences: histograms are off in the pin
+        // (LV-D6).
         return Err(Refusal("Can't vectorize due to memory conflicts"));
     }
     if lai.has_load_store_dependence_involving_loop_invariant_address() {
@@ -307,7 +329,8 @@ fn can_vectorize_memory(
         if !is_reduction_store(store) {
             continue;
         }
-        // The address is defined outside the loop (blockNeedsPredication is false: one block).
+        // The address is defined outside the loop (blockNeedsPredication is
+        // false: one block).
         if let Operand::Value(value) = cx.function.instruction(store).operands[1]
             && let llrm_mir::module::ValueDef::Instruction(def) = cx.function.value(value).def
             && the_loop.contains_instruction(cx.function, def)
@@ -316,7 +339,8 @@ fn can_vectorize_memory(
         }
     }
     if lai.has_store_store_dependence_involving_loop_invariant_address() {
-        // Every invariant store must be a reduction's, the later one overwriting the earlier.
+        // Every invariant store must be a reduction's, the later one
+        // overwriting the earlier.
         let mut unhandled: Vec<InstId> = Vec::new();
         for &store in stores {
             if is_reduction_store(store) {

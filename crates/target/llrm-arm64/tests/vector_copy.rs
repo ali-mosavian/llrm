@@ -31,14 +31,17 @@ fn a_vector_copy_is_a_q_load_and_store() {
          \x20 ret void\n}\n",
     );
     let reg = |op: &str| {
-        text.lines().find_map(|l| l.trim().strip_prefix(op)?.trim_start().strip_prefix('q')?.split(',').next().map(str::to_owned))
+        text.lines().find_map(|l| {
+            l.trim().strip_prefix(op)?.trim_start().strip_prefix('q')?.split(',').next().map(str::to_owned)
+        })
     };
     let (loaded, stored) = (reg("ldr"), reg("str"));
     assert!(loaded.is_some() && loaded == stored, "{text}");
 }
 
-/// A copy loop whose store is 80 elements ahead of its load (loop-idiom leaves it alone) stayed
-/// 1920 scalar `ldrh`/`strh` iterations; the vectorizer makes it eight lanes per `ldr q`/`str q`.
+/// A copy loop whose store is 80 elements ahead of its load (loop-idiom leaves
+/// it alone) stayed 1920 scalar `ldrh`/`strh` iterations; the vectorizer makes
+/// it eight lanes per `ldr q`/`str q`.
 #[test]
 fn an_overlapping_copy_loop_runs_on_q_registers() {
     let text = assembly(

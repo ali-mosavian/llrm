@@ -3,14 +3,15 @@
 //!
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `LoopVectorize.cpp`
-//! (`processLoop`, [L7714](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp#L7714))
+//! (`processLoop`,
+//! [L7714](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp#L7714))
 //! over the translated parts: [`can_vectorize`] (`LoopVectorizationLegality`),
 //! [`plan`] (`LoopVectorizationPlanner`) and the execution of the plan
 //! (`VPlan::execute`, `InnerLoopVectorizer`). For each innermost loop of the
-//! function the pass asks legality, extracts the recipes (the loop's
-//! memory accesses and control), asks the planner for VF and IC and, if
-//! both agree, rewrites the loop: each load becomes `IC` wide loads of `VF`
-//! lanes, each store `IC` wide stores of the loaded values (the part `k` at
+//! function the pass asks legality, extracts the recipes (the loop's memory
+//! accesses and control), asks the planner for VF and IC and, if both agree,
+//! rewrites the loop: each load becomes `IC` wide loads of `VF` lanes, each
+//! store `IC` wide stores of the loaded values (the part `k` at
 //! `k * VF` elements past the first), and the induction steps by `VF * IC`.
 //!
 //! # Example
@@ -23,11 +24,11 @@
 //! ```
 //!
 //! # DEVIATE rows
-//! - LVP1 the vector loop is made in place: the scalar induction is the
-//!   vector loop's `index` (the pin makes `vector.ph`, `vector.body`,
-//!   `middle.block` and keeps the scalar loop as the remainder). With no
-//!   remainder (VP3) and a trip count VF x IC divides, the pin's output after
-//!   SimplifyCFG is this loop. Exit: the epilogue (VP3).
+//! - LVP1 the vector loop is made in place: the scalar induction is the vector
+//!   loop's `index` (the pin makes `vector.ph`, `vector.body`, `middle.block`
+//!   and keeps the scalar loop as the remainder). With no remainder (VP3) and a
+//!   trip count VF x IC divides, the pin's output after SimplifyCFG is this
+//!   loop. Exit: the epilogue (VP3).
 //! - LVP2 a loop whose induction value is used after the loop, or whose exit
 //!   test is not `icmp eq`/`ne` of the stepped induction against the trip
 //!   count, is left alone. Exit: the vector trip count and the middle block.
@@ -82,7 +83,8 @@ struct Access {
 /// What the transform needs to rewrite a planned loop.
 struct Widening {
     accesses: Vec<Access>,
-    /// The `add` that steps the induction, and which of its operands is the constant step.
+    /// The `add` that steps the induction, and which of its operands is the
+    /// constant step.
     step: InstId,
     step_operand: usize,
     index_ty: TypeId,
@@ -102,7 +104,8 @@ fn element_ty(
     }
 }
 
-/// The recipes of `header`'s loop, and what the transform rewrites (LVP3), or why not.
+/// The recipes of `header`'s loop, and what the transform rewrites (LVP3), or
+/// why not.
 fn extract(
     cx: &Cx,
     se: &mut ScalarEvolution,
@@ -146,19 +149,26 @@ fn extract(
                 }
             }
             Opcode::GetElementPtr { .. } => {
-                // An address: every use is the pointer of a load or store of this loop, or the base of another address.
+                // An address: every use is the pointer of a load or store of
+                // this loop, or the base of another address.
                 let value = data.result.expect("a gep");
-                let only_addresses = function.users(value).iter().all(|one| {
-                    let user = function.instruction(one.user);
-                    function.parent(one.user) == Some(header)
-                        && match user.opcode {
-                            Opcode::Load { .. } => one.index == 0,
-                            Opcode::Store { .. } => one.index == 1,
-                            // An address built on this one (the base operand).
-                            Opcode::GetElementPtr { .. } => one.index == 0,
-                            _ => false,
-                        }
-                });
+                let only_addresses = function
+                    .users(value)
+                    .iter()
+                    .all(
+                        |one| {
+                            let user = function.instruction(one.user);
+                            function.parent(one.user) == Some(header)
+                                && match user.opcode {
+                                    Opcode::Load { .. } => one.index == 0,
+                                    Opcode::Store { .. } => one.index == 1,
+                                    // An address built on this one (the base
+                                    // operand).
+                                    Opcode::GetElementPtr { .. } => one.index == 0,
+                                    _ => false,
+                                }
+                        },
+                    );
                 if !only_addresses {
                     return Err(Skipped("An address used other than by a load or store"));
                 }
@@ -182,13 +192,17 @@ fn extract(
                 let align = align.unwrap_or(size);
                 let mut stored_load = None;
                 if is_load {
-                    // Every use of the loaded value is a store of this loop (LVP3).
+                    // Every use of the loaded value is a store of this loop
+                    // (LVP3).
                     let value = data.result.expect("a load");
-                    let stored = function.users(value).iter().all(|one| {
-                        function.parent(one.user) == Some(header)
-                            && matches!(function.instruction(one.user).opcode, Opcode::Store { .. })
-                            && one.index == 0
-                    });
+                    let stored = function
+                        .users(value)
+                        .iter()
+                        .all(
+                            |one| function.parent(one.user) == Some(header)
+                                && matches!(function.instruction(one.user).opcode, Opcode::Store { .. })
+                                && one.index == 0,
+                        );
                     if !stored {
                         return Err(Skipped("A loaded value used other than by a store"));
                     }
@@ -212,12 +226,16 @@ fn extract(
                 accesses.push(Access { inst, is_load, element: value_ty, align, stored_load });
             }
             Opcode::Binary(BinaryOp::Add) if inst != step => {
-                // An index offset: only addresses use it (the accesses use the gep, not the sum).
+                // An index offset: only addresses use it (the accesses use the
+                // gep, not the sum).
                 let value = data.result.expect("an add");
                 let offsets_address = matches!(data.operands[1], Operand::Constant(_))
                     && function.users(value).iter().all(|one| {
                         function.parent(one.user) == Some(header)
-                            && matches!(function.instruction(one.user).opcode, Opcode::GetElementPtr { .. })
+                            && matches!(
+                                function.instruction(one.user).opcode,
+                                Opcode::GetElementPtr { .. }
+                            )
                     });
                 if !offsets_address {
                     return Err(Skipped("An instruction the vectorizer does not widen yet"));
@@ -241,11 +259,14 @@ fn extract(
                 }
             }
             Opcode::ICmp(predicate) => {
-                // The exit test: the stepped induction against the trip count (LVP2).
+                // The exit test: the stepped induction against the trip count
+                // (LVP2).
                 let stepped = function.instruction(step).result.map(Operand::Value);
                 let against_trip = |operand: Operand| {
-                    matches!(operand, Operand::Constant(c)
-                        if matches!(cx.context.get(c).kind, ConstantKind::Int(n) if n == u128::from(trip_count)))
+                    matches!(
+                        operand,
+                        Operand::Constant(c) if matches!(cx.context.get(c).kind, ConstantKind::Int(n) if n == u128::from(trip_count))
+                    )
                 };
                 let (a, b) = (data.operands[0], data.operands[1]);
                 let exit_compare = (Some(a) == stepped && against_trip(b)) || (Some(b) == stepped && against_trip(a));
@@ -276,7 +297,8 @@ fn int_constant(
     Operand::Constant(context.int(ty, i128::from(value)))
 }
 
-/// `VPlan::execute` for the plan: IC parts of each access, the induction stepped by VF x IC.
+/// `VPlan::execute` for the plan: IC parts of each access, the induction
+/// stepped by VF x IC.
 fn execute(
     context: &mut llrm_mir::context::Context,
     function: &mut Function,
@@ -298,15 +320,17 @@ fn execute(
             function.instruction(access.inst).operands[1]
         };
         let Operand::Value(pointer_value) = pointer else { unreachable!("an address is a gep") };
-        let gep_flags = function.instruction(match function.value(pointer_value).def {
-            llrm_mir::module::ValueDef::Instruction(def) => def,
-            _ => unreachable!("an address is a gep"),
-        })
-        .flags;
+        let gep_flags = function
+            .instruction(match function.value(pointer_value).def {
+                llrm_mir::module::ValueDef::Instruction(def) => def,
+                _ => unreachable!("an address is a gep"),
+            })
+            .flags;
         let ptr_ty = function.value(pointer_value).ty;
         let mut parts = Vec::new();
         for part in 0..plan.ic {
-            // Part 0 uses the scalar address; part k is k x VF elements on from it.
+            // Part 0 uses the scalar address; part k is k x VF elements on from
+            // it.
             let address = if part == 0 {
                 pointer
             } else {
@@ -450,7 +474,8 @@ impl FunctionPass for LoopVectorize {
     }
 }
 
-/// `LLVM_DEBUG` of LoopVectorize (D3), on `LLRM_DEBUG=loop-vectorize`: the verdict on the loop.
+/// `LLVM_DEBUG` of LoopVectorize (D3), on `LLRM_DEBUG=loop-vectorize`: the
+/// verdict on the loop.
 fn why(
     unit: &passes::Unit,
     outer: &passes::Outer,
@@ -470,7 +495,12 @@ fn has_opt_size(function: &Function) -> bool {
     function
         .attrs
         .iter()
-        .any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+        .any(
+            |attr| matches!(
+                attr,
+                Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        )
 }
 
 #[cfg(test)]

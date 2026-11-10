@@ -51,13 +51,15 @@ macro_rules! corpus {
     };
 }
 
-// The pin's verdicts, in the comment of each: `opt -passes=loop-vectorize -debug-only=loop-vectorize`.
+// The pin's verdicts, in the comment of each: `opt -passes=loop-vectorize
+// -debug-only=loop-vectorize`.
 corpus! {
     // We can vectorize this loop!
     copy => true,
     // We can vectorize this loop! (a symbolic exact trip count)
     symbolic_trip => true,
-    // We can vectorize this loop! (the store to the invariant address is skipped: not a reduction's)
+    // We can vectorize this loop! (the store to the invariant address is
+    // skipped: not a reduction's)
     invariant_store => true,
     // We can vectorize this loop!
     reduction => true,
@@ -69,7 +71,8 @@ corpus! {
     uncountable => false,
 }
 
-/// The canonical induction of a copy loop is its `i`, of the widest type (i64 here).
+/// The canonical induction of a copy loop is its `i`, of the widest type (i64
+/// here).
 #[test]
 fn a_zero_based_unit_step_induction_is_the_primary() {
     let found = verdict(include_str!("../tests/lv/copy.ll")).expect("legal");
