@@ -41,10 +41,12 @@ use std::sync::Arc;
 use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::classes::RegisterClasses;
+use crate::backend::genericdriver::{BottomPressure, RegionPolicy, Scheduler};
 use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
-use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Region, Tracker, try_pressure};
+use crate::backend::regpressure::{Delta, Model, PressureChange, Region, Tracker};
+use crate::backend::schedboundary::{Machine, ProcResource, Unit};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -284,6 +286,29 @@ impl PartialEq for Topo {
 impl Eq for Topo {}
 
 impl Graph {
+    /// A graph of `n` instructions with the given `(earlier, later, latency)`
+    /// edges, for a scheduler test.
+    #[cfg(test)]
+    pub(crate) fn from_edges(
+        n: usize,
+        edges: &[(usize, usize, u32)],
+    ) -> Graph {
+        let mut graph = Graph {
+            preds: vec![Vec::new(); n],
+            succs: vec![Vec::new(); n],
+            latencies: vec![Vec::new(); n],
+            weak_preds: vec![Vec::new(); n],
+            weak_succs: vec![Vec::new(); n],
+            topo: Topo::new(n),
+        };
+        for &(from, to, latency) in edges {
+            graph.preds[to].push(from);
+            graph.latencies[to].push(latency);
+            graph.succs[from].push(to);
+        }
+        graph
+    }
+
     /// Whether `to` follows `from` through the edges, weak ones too
     /// (`ScheduleDAGTopologicalSort::IsReachable`).
     fn reaches(
@@ -840,45 +865,36 @@ pub struct Tracking<'a> {
     pub live_thru: Vec<u32>,
 }
 
-/// `tryCandidate` (MachineScheduler.cpp#L3965) of `GenericScheduler` for a
-/// bottom-up region of a target with no schedule model: `RegExcess`,
-/// `RegCritical` where pressure is tracked, `Weak`, `RegMax` where it is, then
-/// `NodeOrder` (the
-/// later one first). Left out: `tryBiasPhysRegs` (no physical-register copy is
-/// in a region, MS4), stalls, clusters and resources (no model),
-/// and latency, which only `ReduceLatency` turns on and `pickNode` of a
-/// bottom-up region never sets (`NoPolicy`).
-fn try_candidate(
-    try_node: usize,
-    try_delta: &Delta,
-    try_weak: usize,
-    cand_node: usize,
-    cand_delta: &Delta,
-    cand_weak: usize,
-    tracked: bool,
-) -> Option<&'static str> {
-    let pressure = |name, try_p, cand_p| match try_pressure(try_p, cand_p) {
-        Pick::Try => Some(Some(name)),
-        Pick::Cand => Some(None),
-        Pick::Neither => None,
-    };
-    if tracked {
-        for (name, try_p, cand_p) in [
-            ("REG-EXCESS", try_delta.excess, cand_delta.excess),
-            ("REG-CRIT", try_delta.critical_max, cand_delta.critical_max),
-        ] {
-            if let Some(picked) = pressure(name, try_p, cand_p) {
-                return picked;
+/// The bottom zone's pressure, for the driver: the tracker, the region's
+/// critical sets and the maximum of the program order (`RegionCriticalPSets`,
+/// `RegionPressure`).
+struct Followed<'a> {
+    tracker: Tracker<'a>,
+    critical: Vec<PressureChange>,
+    region_max: Vec<u32>,
+}
+
+impl BottomPressure for Followed<'_> {
+    fn delta(
+        &self,
+        node: usize,
+    ) -> Delta {
+        self.tracker.delta(node, &self.critical, &self.region_max)
+    }
+
+    fn place(
+        &mut self,
+        node: usize,
+    ) {
+        self.tracker.place(node);
+        // `updateScheduledPressure`.
+        for entry in &mut self.critical {
+            let most = self.tracker.max()[entry.set] as i32;
+            if most > entry.inc {
+                entry.inc = most;
             }
         }
     }
-    if try_weak != cand_weak {
-        return (try_weak < cand_weak).then_some("WEAK");
-    }
-    if tracked && let Some(picked) = pressure("REG-MAX", try_delta.current_max, cand_delta.current_max) {
-        return picked;
-    }
-    (try_node > cand_node).then_some("ORDER")
 }
 
 /// The order of a region scheduled bottom-up as `GenericScheduler` does for
@@ -887,28 +903,21 @@ fn try_candidate(
 /// `SchedBoundary::releaseNode` never defers a node (`IsBuffered`, and one
 /// micro-op never overfills a cycle) and the latency of an edge does not
 /// order anything: an instruction is available once every reader is placed,
-/// and [`try_candidate`] picks among those. With `tracking` (a region of more
-/// than half the allocatable registers' worth of instructions, `initPolicy`
-/// #L3688) pressure is followed per set.
+/// and [`genericsched::try_candidate`] picks among those. With `tracking` (a
+/// region of more than half the allocatable registers' worth of instructions,
+/// `initPolicy` #L3688) pressure is followed per set.
 ///
-/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited`, which turns on the
-/// height and depth heuristic in a loop whose in-flight micro-ops pass the
-/// buffer (32).
+/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited` (SB4 of
+/// [`genericdriver`]), which turns on the height and depth heuristic in a loop
+/// whose in-flight micro-ops pass the buffer (32).
 pub fn bottom_up(
     insns: &[Arc<Insn>],
     graph: &Graph,
     tracking: Option<&Tracking>,
 ) -> Vec<usize> {
     let n = insns.len();
-    let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
-    let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
-    let mut placed = Vec::with_capacity(n);
-    let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
-    // `RegionPressure` (program order) and `RegionCriticalPSets`.
-    let mut region_max: Vec<u32> = Vec::new();
-    let mut critical: Vec<PressureChange> = Vec::new();
     let region = tracking.map(|_| Region::of(insns));
-    let mut tracker = tracking
+    let mut followed = tracking
         .zip(region.as_ref())
         .map(
             |(tracking, region)| {
@@ -916,69 +925,43 @@ pub fn bottom_up(
                 for node in (0..n).rev() {
                     program.place(node);
                 }
-                region_max = program.max().to_vec();
-                critical = Tracker::critical_sets(tracking.model, &region_max);
-                Tracker::over(
-                    tracking.model,
-                    region,
-                    tracking.live_out.iter().copied(),
-                    tracking.live_thru.iter().copied(),
-                    true,
-                )
+                let region_max = program.max().to_vec();
+                let critical = Tracker::critical_sets(tracking.model, &region_max);
+                Followed {
+                    tracker: Tracker::over(
+                        tracking.model,
+                        region,
+                        tracking.live_out.iter().copied(),
+                        tracking.live_thru.iter().copied(),
+                        true,
+                    ),
+                    critical,
+                    region_max,
+                }
             },
         );
-    while placed.len() < n {
-        let mut best = 0;
-        let mut why = "ONLY1";
-        // `pickOnlyChoice` when only one is available.
-        if available.len() > 1 {
-            why = "FIRST";
-            let deltas: Vec<Delta> = match &tracker {
-                Some(tracker) => available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect(),
-                None => vec![Delta::default(); available.len()],
-            };
-            for candidate in 1..available.len() {
-                if let Some(reason) = try_candidate(
-                    available[candidate],
-                    &deltas[candidate],
-                    weak_left[available[candidate]],
-                    available[best],
-                    &deltas[best],
-                    weak_left[available[best]],
-                    tracker.is_some(),
-                ) {
-                    best = candidate;
-                    why = reason;
-                }
-            }
-        }
-        let node = available.swap_remove(best);
-        if trace() {
-            eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
-        }
-        if let Some(tracker) = &mut tracker {
-            tracker.place(node);
-            // `updateScheduledPressure`.
-            for entry in &mut critical {
-                let most = tracker.max()[entry.set] as i32;
-                if most > entry.inc {
-                    entry.inc = most;
-                }
-            }
-        }
-        placed.push(node);
-        for &before in &graph.weak_preds[node] {
-            weak_left[before] -= 1;
-        }
-        for &before in &graph.preds[node] {
-            waiting[before] -= 1;
-            if waiting[before] == 0 {
-                available.push(before);
-            }
+    let machine = i486_machine();
+    let units = vec![Unit { micro_ops: 1, ..Unit::default() }; n];
+    let pressure = followed.as_mut().map(|one| one as &mut dyn BottomPressure);
+    let (order, reasons) = Scheduler::new(graph, &machine, units, RegionPolicy::bottom_up(), pressure).schedule();
+    if trace() {
+        // Bottom-up picks come last-first.
+        for (&node, reason) in order.iter().rev().zip(&reasons) {
+            eprintln!(
+                "machinesched pick {node} {:?} {} tracked={}",
+                insns[node].defines,
+                reason.name(),
+                tracking.is_some()
+            );
         }
     }
-    placed.reverse();
-    placed
+    order
+}
+
+/// X86.td's `GenericModel`: issue width 4, a micro-op buffer of 32, no
+/// resources.
+fn i486_machine() -> Machine {
+    Machine::new(4, 32, vec![ProcResource { num_units: 0, buffer_size: -1, sub_units: vec![] }])
 }
 
 /// The pre-RA machine scheduler: every region of a block ordered by
@@ -1161,7 +1144,15 @@ pub fn scheduled(
                 let slice = &insns[region.clone()];
                 if slice.len() >= 2 {
                     let tracking = made.as_ref().filter(|_| slice.len() > limit / 2).map(|model| {
-                        let mut live_out: Vec<u32> = now.iter().chain(&now87).copied().collect();
+                        // `discoverLiveOut`: the pin finds a live-out value
+                        // only where the region defines
+                        // or reads it, so a value that
+                        // crosses the region untouched is no part of its
+                        // pressure.
+                        let touched: HashSet<u32> =
+                            slice.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
+                        let mut live_out: Vec<u32> =
+                            now.iter().chain(&now87).copied().filter(|value| touched.contains(value)).collect();
                         live_out.sort_unstable();
                         // `initLiveThru`: a live-out value counts unless a def
                         // in the region ties it (two-address).
@@ -1784,5 +1775,235 @@ mod tests {
         // std's `HashSet<u32>` hashed every pressure query with SipHash.
         let none: [Arc<Insn>; 0] = [];
         let _: crate::support::hash::HashSet<u32> = super::x87_values(none.iter());
+    }
+
+    /// The order `bottom_up` gave before it ran on the `GenericScheduler`
+    /// driver (release/next c682533d86), untracked path: the later node wins a
+    /// tie once fewer weak successors wait, and nothing else decides.
+    fn old_untracked_order(graph: &super::Graph) -> Vec<usize> {
+        let n = graph.succs.len();
+        let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
+        let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+        let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
+        let mut placed = Vec::with_capacity(n);
+        while placed.len() < n {
+            let mut best = 0;
+            for candidate in 1..available.len() {
+                let (try_node, cand_node) = (available[candidate], available[best]);
+                let (try_weak, cand_weak) = (weak_left[try_node], weak_left[cand_node]);
+                let wins = if try_weak != cand_weak { try_weak < cand_weak } else { try_node > cand_node };
+                if wins {
+                    best = candidate;
+                }
+            }
+            let node = available.swap_remove(best);
+            placed.push(node);
+            for &before in &graph.weak_preds[node] {
+                weak_left[before] -= 1;
+            }
+            for &before in &graph.preds[node] {
+                waiting[before] -= 1;
+                if waiting[before] == 0 {
+                    available.push(before);
+                }
+            }
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// The refactor onto the driver must not move an x86 schedule: on random
+    /// dependence graphs with weak edges the i486 machine orders exactly as
+    /// the hand-written loop it replaced (0 of 300 graphs differ).
+    #[test]
+    fn test_bottom_up_on_the_driver_orders_as_the_loop_it_replaced() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for _ in 0..300 {
+            let n = 2 + next(24);
+            let mut edges = Vec::new();
+            for to in 1..n {
+                for from in 0..to {
+                    if next(5) == 0 {
+                        edges.push((from, to, 1 + next(3) as u32));
+                    }
+                }
+            }
+            let mut graph = super::Graph::from_edges(n, &edges);
+            for to in 1..n {
+                for from in 0..to {
+                    if next(9) == 0 && !graph.weak_preds[to].contains(&from) {
+                        graph.weak_preds[to].push(from);
+                        graph.weak_succs[from].push(to);
+                    }
+                }
+            }
+            let insns: Vec<Arc<Insn>> = (0..n)
+                .map(|at| insn(at as i64, semantics(Operation::Move, "x", vec![], vec![]), vec![], vec![]))
+                .collect();
+            assert_eq!(super::bottom_up(&insns, &graph, None), old_untracked_order(&graph), "{edges:?}");
+        }
+    }
+
+    /// The old loop with pressure followed (release/next c682533d86): register
+    /// excess, register critical, weak, register max, then the later node.
+    fn old_tracked_order(
+        insns: &[Arc<Insn>],
+        graph: &super::Graph,
+        tracking: &super::Tracking,
+    ) -> Vec<usize> {
+        use crate::backend::regpressure::{Pick, Region, Tracker, try_pressure};
+        let n = insns.len();
+        let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
+        let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+        let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
+        let region = Region::of(insns);
+        let mut program = Tracker::over(tracking.model, &region, tracking.live_out.iter().copied(), [], false);
+        for node in (0..n).rev() {
+            program.place(node);
+        }
+        let region_max = program.max().to_vec();
+        let mut critical = Tracker::critical_sets(tracking.model, &region_max);
+        let mut tracker = Tracker::over(
+            tracking.model,
+            &region,
+            tracking.live_out.iter().copied(),
+            tracking.live_thru.iter().copied(),
+            true,
+        );
+        let mut placed = Vec::with_capacity(n);
+        while placed.len() < n {
+            let mut best = 0;
+            let deltas: Vec<_> = available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect();
+            for candidate in 1..available.len() {
+                let (try_node, cand_node) = (available[candidate], available[best]);
+                let (try_delta, cand_delta) = (&deltas[candidate], &deltas[best]);
+                let pressure = |try_p, cand_p| match try_pressure(try_p, cand_p) {
+                    Pick::Try => Some(true),
+                    Pick::Cand => Some(false),
+                    Pick::Neither => None,
+                };
+                let wins = pressure(try_delta.excess, cand_delta.excess)
+                    .or_else(|| pressure(try_delta.critical_max, cand_delta.critical_max))
+                    .or_else(|| {
+                        let (try_weak, cand_weak) = (weak_left[try_node], weak_left[cand_node]);
+                        (try_weak != cand_weak).then_some(try_weak < cand_weak)
+                    })
+                    .or_else(|| pressure(try_delta.current_max, cand_delta.current_max))
+                    .unwrap_or(try_node > cand_node);
+                if wins {
+                    best = candidate;
+                }
+            }
+            let node = available.swap_remove(best);
+            tracker.place(node);
+            for entry in &mut critical {
+                let most = tracker.max()[entry.set] as i32;
+                if most > entry.inc {
+                    entry.inc = most;
+                }
+            }
+            placed.push(node);
+            for &before in &graph.weak_preds[node] {
+                weak_left[before] -= 1;
+            }
+            for &before in &graph.preds[node] {
+                waiting[before] -= 1;
+                if waiting[before] == 0 {
+                    available.push(before);
+                }
+            }
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// Same as the untracked oracle with pressure followed: on 300 random
+    /// value graphs and limits of 1 to 4 the driver orders as the loop it
+    /// replaced (0 differ, and the limit does split the picks: some graphs
+    /// order differently from the untracked order).
+    #[test]
+    fn test_bottom_up_with_pressure_orders_as_the_loop_it_replaced() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let mut moved_by_pressure = 0;
+        for _ in 0..300 {
+            let n = 3 + next(6);
+            let insns: Vec<Arc<Insn>> = (0..n)
+                .map(|k| {
+                    let value = k as u32 + 1;
+                    let uses: Vec<u32> = if k == 0 {
+                        vec![]
+                    } else {
+                        (0..1 + next(2))
+                            .map(|_| 1 + next(k) as u32)
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .into_iter()
+                            .collect()
+                    };
+                    let sources =
+                        if uses.is_empty() { vec![imm(k as i64)] } else { uses.iter().map(|&u| held(u)).collect() };
+                    insn(k as i64, semantics(Operation::Binary, "add", vec![held(value)], sources), vec![value], uses)
+                })
+                .collect();
+            let found = super::graph(&insns, regs, 16);
+            let model = one_set(1 + next(4) as u32);
+            let tracking = super::Tracking { model: &model, live_out: vec![n as u32], live_thru: vec![] };
+            let order = super::bottom_up(&insns, &found, Some(&tracking));
+            assert_eq!(order, old_tracked_order(&insns, &found, &tracking), "{insns:?}");
+            moved_by_pressure += usize::from(order != super::bottom_up(&insns, &found, None));
+        }
+        assert!(moved_by_pressure > 0, "pressure never decided a pick: the oracle compares nothing");
+    }
+
+    /// A value live across a region that neither reads nor writes it was
+    /// counted in the region's pressure when another region of the block
+    /// touched it: the pin finds live-outs only where the region defines or
+    /// reads them (`discoverLiveOut`). `v7` is made before a call and read
+    /// after the block: the region behind the call peaks at its limit (3) and
+    /// is in no excess. Counting `v7` made the peak 4, a critical set, and the
+    /// third constant moved down to its reader.
+    #[test]
+    fn test_a_value_live_across_a_region_untouched_adds_no_pressure() {
+        use super::scheduled;
+        use crate::model::lir::{LirBlock, LirBody};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = vec![
+            insn(10, semantics(Operation::Move, "mov", vec![held(7)], vec![imm(99)]), vec![7], vec![]),
+            insn(11, semantics(Operation::Call, "call", vec![], vec![]), vec![], vec![]),
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
+            insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
+        ];
+        let after =
+            vec![insn(20, semantics(Operation::Return, "ret", vec![], vec![held(6), held(7)]), vec![], vec![6, 7])];
+        let mut first = LirBlock::new(0, std::mem::take(&mut insns));
+        first.succ = vec![1].into();
+        let mut body = LirBody::new(
+            "across",
+            0,
+            vec![first.into(), LirBlock::new(1, after).into()],
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let defined: Vec<u32> =
+            scheduled(&body, 2, |_, _| one_set(3)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_eq!(defined, [7, 1, 2, 3, 4, 5, 6], "the region peaks at 3 of 3: no critical set, source order");
     }
 }

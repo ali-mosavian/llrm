@@ -97,15 +97,15 @@ impl Graph<'_> {
         let effect = llrm_analysis::mssa::shadow::effect_of_in(self.accesses, &unit);
         let access = match at {
             Created::Beginning => {
-                self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::Beginning, &effect)?
+                self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::Beginning, &effect)?
             }
             Created::End => {
-                self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::End, &effect)?
+                self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::End, &effect)?
             }
             Created::After(previous) => {
-                self.updater.create_memory_access_after(self.mssa, inst, None, previous, &effect)?
+                self.updater.create_memory_access_after(self.mssa, function, inst, None, previous, &effect)?
             }
-            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, inst, None, next, &effect)?,
+            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, function, inst, None, next, &effect)?,
         };
         if self.mssa.access(access).kind == Kind::Def {
             self.updater.insert_def(self.mssa, function, access, rename_uses);
@@ -233,10 +233,19 @@ fn reassociate(
     // The invariant instruction, then the new one: its opcode and flags, the
     // operands before the invariant one, and those after it.
     let (invariant, rebuilt) = match one {
-        Reassociation::BinaryOp { op, lv, c1, c2, flags, .. } => (
-            (Opcode::Binary(*op), vec![*c1, *c2], *flags, "invariant.op"),
-            (Opcode::Binary(*op), *flags, vec![*lv], vec![]),
-        ),
+        Reassociation::BinaryOp { op, lv, c1, c2, flags, chained, bo0, .. } => {
+            // A link of a chain reads the invariant the one before it made.
+            let (lv, c1) = if *chained {
+                let before = function.instruction(renamed.inst(*bo0));
+                (before.operands[0], before.operands[1])
+            } else {
+                (*lv, *c1)
+            };
+            (
+                (Opcode::Binary(*op), vec![c1, *c2], *flags, "invariant.op"),
+                (Opcode::Binary(*op), *flags, vec![lv], vec![]),
+            )
+        }
         Reassociation::Gep { gep, src, in_bounds } => {
             let (gep, src) = (function.instruction(*gep), function.instruction(*src));
             let (Opcode::GetElementPtr { source: outer }, Opcode::GetElementPtr { source: inner }) =
@@ -285,9 +294,13 @@ fn reassociate(
     let old_result = function.instruction(old).result.ok_or("a reassociated op with no result")?;
     let new_result = function.instruction(new).result.ok_or("a reassociated op with no result")?;
     function.replace_all_uses_with(old_result, Operand::Value(new_result));
-    for gone in std::iter::once(old).chain(one.erased()) {
+    for gone in std::iter::once(old).chain(one.erased().into_iter().map(|one| renamed.inst(one))) {
         graph.erase(function, gone);
         function.erase(gone)?;
+    }
+    if let Reassociation::BinaryOp { .. } = one {
+        renamed.insts.insert(old, new);
+        renamed.values.insert(old_result, Operand::Value(new_result));
     }
     Ok(())
 }

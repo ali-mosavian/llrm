@@ -254,9 +254,9 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// A boolean sign-extends cheaper than it zero-extends (z80: the carry flag is `sbc a, a`, a zero extension is a
     /// branch or a shift), so `add (sext i1 c), x` stays an add where the pin makes it `sub x, (zext i1 c)`
-    /// (`visitADDLikeCommutative`, which x86 prices with `sbb`). DEVIATE Z80-SEXT-BOOL: a target fact the pin has no
-    /// hook for. Owner z80. Exit 2026-12-15.
-    pub sext_bool_add_preferred: bool,
+    /// (`visitADDLikeCommutative`, which x86 prices with `sbb`), for types up to this many bits; 0 is the pin.
+    /// DEVIATE Z80-SEXT-BOOL / 6502-SEXT-BOOL-ADD: a target fact the pin has no hook for. Exit 2026-12-15.
+    pub sext_bool_add_max_bits: u32,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
     /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
@@ -350,7 +350,7 @@ impl Default for DagConfig {
         DagConfig {
             nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
-            sext_bool_add_preferred: false,
+            sext_bool_add_max_bits: 0,
             offset_folding: false,
             global_addresses_constant: false,
             dso_local_symbols: false,

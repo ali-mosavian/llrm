@@ -102,7 +102,7 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, target_names};
+pub use llrm_sdag::{actions, intrinsic_cost, isd, libcalls, lowering, mvt, target_names};
 pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitcast_combine;
@@ -211,6 +211,8 @@ mod bundle_tests;
 mod codecall_tests;
 #[cfg(test)]
 mod combine_avg_tests;
+#[cfg(test)]
+mod combine_parity_tests;
 #[cfg(test)]
 mod dag_function_aggregates_tests;
 #[cfg(test)]
