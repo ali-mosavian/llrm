@@ -229,7 +229,8 @@ fn lower_function(
     let global = module.global(id);
     let function = global.function().ok_or("not a function")?;
     let name = global.name.owned().ok_or("an unnamed function")?;
-    let mut machine = dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
+    let mut machine =
+        dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
     // The shared phases that need SSA see the body as selection made it,
@@ -256,6 +257,8 @@ fn lower_function(
                 llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
             ),
         );
+    crate::condbrtuning::run(&mut machine);
+    dump("CondBrTuning", &machine);
     crate::prepass::run(&mut machine, optsize);
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
@@ -273,8 +276,8 @@ fn lower_function(
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
-        // The body carries the edge odds by block position; no pass between here and the
-        // conversion adds or removes a block.
+        // The body carries the edge odds by block position; no pass between
+        // here and the conversion adds or removes a block.
         machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
