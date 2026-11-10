@@ -1358,8 +1358,9 @@ impl Function {
 
     /// `Instruction::dropPoisonGeneratingAnnotations`: the flags, metadata and
     /// call attributes of `inst` that make its result poison when the
-    /// operands it was proved for change. `ctlz`, `cttz` and `abs` have no
-    /// MIR spelling, so their poison-on-zero operand is not here.
+    /// operands it was proved for change. The poison-on-zero operand of a
+    /// `ctlz`, `cttz` or `abs` call needs a constant: the combiner's
+    /// `drop_poison_generating_annotations` sets it.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Instruction.h#L614>
     pub fn drop_poison_generating_annotations(
         &mut self,

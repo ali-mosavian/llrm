@@ -206,10 +206,30 @@ pub struct M68kLowering {
     /// A global's address is an absolute one, not PC-relative (the medium
     /// model on the 68000 and 68010, the large model).
     pub absolute_data: bool,
+    /// A multiply of two values that fit 16 bits is `mulu.w` / `muls.w`
+    /// ([`prefers_word_multiply`]).
+    pub half_mul: bool,
     /// The CPU and the level's price, which [`super::mulprice`] reads.
     pub cpu: Cpu,
     pub price: crate::timing::Price,
     pub mul: super::mulprice::Chain,
+}
+
+/// Whether `mulu.w` is no slower than `mulu.l` on `cpu`, by the timing
+/// tables; the 68000 and 68010 have no `mulu.l`. `mulu.w` is also two bytes
+/// shorter, so a tie goes to it.
+pub fn prefers_word_multiply(cpu: Cpu) -> bool {
+    use crate::isa::Cpu as Model;
+    use crate::timing::cost_on;
+    let model = match cpu {
+        Cpu::M68000 | Cpu::M68010 => return true,
+        Cpu::M68020 => Model::M68020,
+        Cpu::M68030 => Model::M68030,
+        Cpu::M68040 => Model::M68040,
+        Cpu::M68060 => Model::M68060,
+    };
+    let clocks = |text| cost_on(model, text, 2, false).map(|cost| cost.clocks);
+    matches!((clocks("mulu.w %d1, %d0"), clocks("mulu.l %d1, %d0")), (Ok(word), Ok(long)) if word <= long)
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -239,6 +259,19 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
 
     fn sub_of_sign_extended_bool(&self) -> bool {
         self.short
+    }
+
+    fn mul_of_halves(
+        &self,
+        vt: EVT,
+    ) -> Option<llrm_codegen::backend::selectiondag::dag_combiner::HalfMul> {
+        use super::generated::ids::opcode;
+        (self.half_mul && vt == EVT::I32).then_some(llrm_codegen::backend::selectiondag::dag_combiner::HalfMul {
+            half: EVT::I16,
+            unsigned: u32::from(opcode::UMULd32d16),
+            signed: u32::from(opcode::SMULd32d16),
+            has_full_multiply: !matches!(self.cpu, Cpu::M68000 | Cpu::M68010),
+        })
     }
 
     fn is_indexed_legal(

@@ -1313,7 +1313,10 @@ fn staged(
         saved: pushed,
         vector_saved,
         red_zone: entry.map_or(base.red_zone, |one| one.frame_red_zone),
-        slot_scratch: entry.and_then(|one| target.arch.frame_slot_scratch_of(one)).or(base.slot_scratch),
+        slot_scratch: entry
+            .and_then(|one| target.arch.frame_slot_scratch_of(one))
+            .or(base.slot_scratch)
+            .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
         ..base
     };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for
@@ -1639,4 +1642,14 @@ fn select_in_pool(
         Some(hooks) => hooks.select_function(module, name, arch, cpu, libcalls, contracts, pool),
         None => Err(Unselected("no backend installed (llrm_x86_backend::install)".to_owned())),
     }
+}
+
+/// Whether `convention` keeps `register` for its caller: a one-slot frame's `pop` into it would hand the caller back the pushed value
+/// (`findDeadCallerSavedReg` picks only caller-saved registers; x86 has no register convention keeping ecx, watcall32 does).
+fn keeps(
+    arch: &dyn llrm_target::Target,
+    convention: &llrm_target::calling::Convention,
+    register: RegId,
+) -> bool {
+    convention.preserved.iter().any(|kept| arch.register_named(&kept.full) == register)
 }
