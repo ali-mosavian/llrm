@@ -474,18 +474,15 @@ pub fn branch_to(label: &str) -> Op {
 /// Whether control leaves `block` by running into the block after it: nothing
 /// in it jumps unconditionally, returns, indexes a table or traps.
 pub fn falls_through(block: &MBlock) -> bool {
-    !block
-        .ops
-        .iter()
-        .any(
-            |op| matches!(
-                op,
-                Op::I(Inst::Branch { link: false, target: Target::Label(_) })
-                    | Op::Return { .. }
-                    | Op::JumpTable { .. }
-                    | Op::I(Inst::Brk { .. })
-            ),
+    !block.ops.iter().any(|op| {
+        matches!(
+            op,
+            Op::I(Inst::Branch { link: false, target: Target::Label(_) })
+                | Op::Return { .. }
+                | Op::JumpTable { .. }
+                | Op::I(Inst::Brk { .. })
         )
+    })
 }
 
 /// The blocks `block` (the `at`th of `count`) can go to, from the labels its
@@ -550,9 +547,8 @@ pub fn sequence_copies(
     out
 }
 
-/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are
-/// deleted, and the phi operands that came from them. Selection makes one for
-/// every IR block, such as the `unreachable` default of a `switch`.
+/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are deleted, and the phi operands that
+/// came from them. Selection makes one for every IR block, such as the `unreachable` default of a `switch`.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/UnreachableBlockElim.cpp>
 pub fn remove_unreachable_blocks(function: &mut MFunc) {
     let count = function.blocks.len();
@@ -577,14 +573,10 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
         .map(|(block, _)| block.label.clone())
         .collect();
     let mut at = 0;
-    function
-        .blocks
-        .retain(
-            |_| {
-                at += 1;
-                reached[at - 1]
-            },
-        );
+    function.blocks.retain(|_| {
+        at += 1;
+        reached[at - 1]
+    });
     for block in &mut function.blocks {
         for op in &mut block.ops {
             if let Op::Phi { incoming, .. } = op {
@@ -731,8 +723,7 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
     // source is nearer to it.
     let originals = std::mem::take(&mut function.blocks);
     let mut placed = Vec::with_capacity(originals.len() + edges.len());
-    let next_labels: Vec<Option<String>> =
-        (0..originals.len()).map(|at| originals.get(at + 1).map(|next| next.label.clone())).collect();
+    let next_labels: Vec<Option<String>> = (0..originals.len()).map(|at| originals.get(at + 1).map(|next| next.label.clone())).collect();
     for (at, mut block) in originals.into_iter().enumerate() {
         // The blocks put after it come between it and the block it ran into.
         if edges.iter().any(|(from, _)| *from == at) && falls_through(&block) {

@@ -30,18 +30,15 @@ fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
 }
 
 /// crc -O2: the 8-trip bit loop inside the 9-trip byte loop saves 207 clocks
-/// for 112 B (1.8 clocks a byte): unrolled, 152 B and 262 instructions where
-/// the rolled loop is 88 B and 494 (clang 271, gcc 238). Unrolled it has 4
-/// labels, rolled 6.
+/// for 112 B (1.8 clocks a byte): unrolled, 152 B and 262 instructions where the
+/// rolled loop is 88 B and 494 (clang 271, gcc 238). Unrolled it has 4 labels,
+/// rolled 6.
 #[test]
 fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
 }
 
-fn instructions(
-    source: &str,
-    level: Level,
-) -> usize {
+fn instructions(source: &str, level: Level) -> usize {
     let asm = driver::assembly(source, Platform::Linux, level).expect("lowers");
     asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
 }
@@ -68,8 +65,8 @@ fn loops_carried_between_slots_are_priced_at_o3() {
 /// still rolled loops made by an earlier slot of the loop pass manager
 /// (#8054 runs the pass once for each loop). They were taken for readers that
 /// stay rolled, the array for one that stays in memory, and the update loop
-/// kept rolled: 472 B (128 instructions in the module). Decided with their
-/// nest: 424 B (116). Fewer than 120 instructions.
+/// kept rolled: 472 B (128 instructions in the module). Decided with their nest: 424 B (116).
+/// Fewer than 120 instructions.
 #[test]
 fn loops_an_earlier_slot_unrolled_around_are_decided_with_their_nest() {
     let insns = instructions(include_str!("data/bench_nbody.ll"), Level::O2);
