@@ -1196,6 +1196,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::min_jump_table_density`.
+    fn min_jump_table_density(&self) -> Option<u64> {
+        None
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
