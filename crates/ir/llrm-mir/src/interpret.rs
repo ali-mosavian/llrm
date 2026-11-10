@@ -678,7 +678,7 @@ impl<'m> Machine<'m> {
             // Flat memory: the same address.
             Intrinsic::Window | Intrinsic::Restrict => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
-            Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => {
+            Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy | Intrinsic::VarargAddress => {
                 return unsupported("a variadic argument list");
             }
             Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
@@ -993,6 +993,44 @@ impl<'m> Machine<'m> {
                         Some(at)
                     }
                     Opcode::InsertValue(indices) => Some(insert(value(self, 0)?, indices, value(self, 1)?)),
+                    Opcode::ExtractElement => {
+                        let index = match value(self, 1)? {
+                            Val::Int { bits, .. } => usize::try_from(bits).ok(),
+                            _ => None,
+                        };
+                        Some(match (value(self, 0)?, index) {
+                            (Val::Aggregate(mut lanes), Some(index)) if index < lanes.len() => lanes.swap_remove(index),
+                            _ => Val::Poison,
+                        })
+                    }
+                    Opcode::InsertElement => {
+                        let index = match value(self, 2)? {
+                            Val::Int { bits, .. } => usize::try_from(bits).ok(),
+                            _ => None,
+                        };
+                        let element = value(self, 1)?;
+                        Some(match (value(self, 0)?, index) {
+                            (Val::Aggregate(mut lanes), Some(index)) if index < lanes.len() => {
+                                lanes[index] = element;
+                                Val::Aggregate(lanes)
+                            }
+                            _ => Val::Poison,
+                        })
+                    }
+                    Opcode::ShuffleVector(mask) => {
+                        let (Val::Aggregate(first), Val::Aggregate(second)) = (value(self, 0)?, value(self, 1)?) else {
+                            return undefined("a shuffle of non-vectors");
+                        };
+                        let lanes = mask
+                            .iter()
+                            .map(|&lane| match usize::try_from(lane) {
+                                Ok(lane) if lane < first.len() => first[lane].clone(),
+                                Ok(lane) => second.get(lane - first.len()).cloned().unwrap_or(Val::Poison),
+                                Err(_) => Val::Poison,
+                            })
+                            .collect();
+                        Some(Val::Aggregate(lanes))
+                    }
                     Opcode::Alloca { allocated, align, .. } => {
                         let count = match ops.first() {
                             Some(&one) => match self.operand(&values, one)? {

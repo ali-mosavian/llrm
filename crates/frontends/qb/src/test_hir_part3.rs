@@ -2393,8 +2393,12 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
         .find(|one| one.matches(", 1022").count() == 4)
         .unwrap_or_else(|| panic!("{procedure}"));
     // The pin's loop-reduce leaves this loop five counters too (steps 2, 6, 8,
-    // 18 and 22, ending at 642), on a machine of six: one of them is parked,
-    // in one slot, a store and the reloads that use it.
+    // 18 and 22, ending at 642), on a machine of six. "One of them is parked,
+    // in one slot" is an expectation, not a pin measurement: pin llc at code16
+    // parks two counters on this function and four on a loop of this shape
+    // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
+    // from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");
@@ -2739,7 +2743,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .expect("END")
         .1
         .attrs
-        .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
+        .push(llrm_mir::Attribute::Flag("nounwind".into()));
     llrm_codegen::backend::ehprepare::prepared(&mut emitted.module, &llrm_x86_m16::layout()).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];

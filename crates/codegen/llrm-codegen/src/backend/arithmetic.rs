@@ -29,7 +29,7 @@
 //! Results are kept in the profile, as a multiply is asked about again and
 //! again.
 //!
-//! DEVIATE M1 (AM-M1, priced): the pin's X86 does a scalar constant multiply
+//! DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
 //! by `combineMul`
 //! ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 //! and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power
@@ -44,8 +44,7 @@
 //! pin's, and keeps `imul` at m16 -Os, where they grow 27 of 175 by 3550 B);
 //! QCport m16 -38 B at -O1..-O3, 0 at -Os. Instructions against the pin on the
 //! same IR: lea +471 at -O2 (`docs/working/instruction-gap-vs-pin.md`). Exit:
-//! none while the clocks decide; reviewed with the tuning phase. Owner w-4,
-//! review 2026-12-01.
+//! none while the clocks decide; reviewed with the tuning phase.
 //!
 //! # Example
 //! What the ranking answers on a 486 (`targets::tuned_for(M32, "486")`):
@@ -164,6 +163,40 @@ pub fn chain_by_clocks<'a>(
     Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
 }
 
+/// The encoded size of a chain's operations, to break a tie between chains of
+/// equal clocks: `arch` and the width of the value.
+#[derive(Clone, Copy)]
+struct Bytes<'a> {
+    arch: &'a dyn llrm_target::Target,
+    width: i64,
+}
+
+/// Clocks weigh more than any chain's bytes in a `Bytes` ranking.
+const CLOCK_WEIGHT: i64 = 4096;
+
+/// [`chain_by_clocks`] with ties in clocks broken by encoded bytes: among the
+/// chains of the fewest clocks, the one of fewest bytes (a Pareto choice,
+/// equal clocks and fewer bytes; DEVIATE M32-MUL-O1-CHAIN in
+/// `llrm-x86-m32`). The search ranks `clocks * CLOCK_WEIGHT + bytes`, so a
+/// chain with more clocks never wins on bytes.
+pub fn chain_by_clocks_then_bytes<'a>(
+    number: i64,
+    width: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+    arch: &dyn llrm_target::Target,
+) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    let target = targets::profile(cpu)?;
+    let bytes = Bytes { arch, width };
+    let found = if width == 4 {
+        unremembered_chains(number, target, true, Some(bytes))?
+    } else {
+        unremembered_chains(number, target, false, Some(bytes))?
+    };
+    let Some((chain, clocks)) = found else { return Ok(None) };
+    let prefix = if width == 4 { dword_prefix(target) } else { 0 };
+    Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
+}
+
 /// The chain for a multiply by `number` of `width` bytes in a block `freq`
 /// times as hot as the entry, where the clocks it saves over `imul r,r,imm`
 /// pay for the bytes it adds at `milliclocks_per_byte` (the target's rate at
@@ -245,7 +278,7 @@ fn chains<'a>(
     if let Some(known) = target.multiplies.get(number, with_lea) {
         return Ok(known);
     }
-    let found = unremembered_chains(number, target, with_lea)?;
+    let found = unremembered_chains(number, target, with_lea, None)?;
     target.multiplies.put(number, with_lea, found.clone());
     Ok(found)
 }
@@ -254,18 +287,23 @@ fn unremembered_chains(
     number: i64,
     target: &targets::Profile,
     with_lea: bool,
+    bytes: Option<Bytes>,
 ) -> Result<Option<(Chain, i64)>, String> {
     if number >= -1 || number == i64::MIN {
-        return positive_chains(number, target, with_lea);
+        return positive_chains_ranked(number, target, with_lea, bytes);
     }
+    let rank = |parts: &Chain, price: i64| match bytes {
+        Some(Bytes { arch, width }) => price * CLOCK_WEIGHT + chain_bytes(parts, width, arch),
+        None => price,
+    };
     let alu = cost(target, "alu_rr")?;
     let mut best: Option<(Chain, i64)> = None;
     let mut consider = |parts: Chain, price: i64| {
-        if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
+        if best.as_ref().is_none_or(|(kept_parts, kept)| rank(&parts, price) < rank(kept_parts, *kept)) {
             best = Some((parts, price));
         }
     };
-    if let Some((mut parts, price)) = positive_chains(-number, target, with_lea)? {
+    if let Some((mut parts, price)) = positive_chains_ranked(-number, target, with_lea, bytes)? {
         parts.push(("neg", 0));
         consider(parts, price + alu);
     }
@@ -274,7 +312,7 @@ fn unremembered_chains(
     let m = i64::from(up.trailing_zeros());
     let q = up >> m;
     let shifted =
-        if q == 1 { Some((Vec::new(), cost(target, "mov_rr")?)) } else { positive_chains(q, target, with_lea)? };
+        if q == 1 { Some((Vec::new(), cost(target, "mov_rr")?)) } else { positive_chains_ranked(q, target, with_lea, bytes)? };
     if let Some((mut parts, price)) = shifted {
         parts.extend([("shl", m), ("rsub", 0)]);
         consider(parts, price + shift(target, m)? + alu);
@@ -282,10 +320,11 @@ fn unremembered_chains(
     Ok(best)
 }
 
-fn positive_chains<'a>(
+fn positive_chains_ranked<'a>(
     number: i64,
     cpu: impl Into<ProfileOrName<'a>>,
     with_lea: bool,
+    bytes: Option<Bytes>,
 ) -> Result<Option<(Chain, i64)>, String> {
     let target = targets::profile(cpu)?;
     if number <= 1 {
@@ -393,23 +432,46 @@ fn positive_chains<'a>(
         Ok(total)
     };
 
-    // `min(..., key=clocks)`: the first of equal keys wins.
+    // `min(..., key=clocks)`: the first of equal keys wins; with `bytes`, key
+    // (clocks, bytes).
+    let weigh = |parts: &Chain, price: i64| match bytes {
+        Some(Bytes { arch, width }) => price * CLOCK_WEIGHT + chain_bytes(parts, width, arch),
+        None => price,
+    };
     let mut best: Option<(Vec<(&'static str, i64)>, i64)> = None;
     // Horner's chains first: what they cost bounds the search.
     for parts in [chain(false), chain(true)].into_iter().flat_map(|parts| [parts.clone(), fused(parts)]) {
         let price = clocks(&parts)?;
-        if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
+        if best.as_ref().is_none_or(|(kept_parts, kept)| weigh(&parts, price) < weigh(kept_parts, *kept)) {
             best = Some((parts, price));
         }
     }
-    let shifts = |count: i64| shift(target, count).unwrap_or(i64::MAX / 4);
-    let leas = |scale: i64| lea(scale).filter(|_| scale <= 8);
-    let ops = Ops { shift: &shifts, alu: cost(target, "alu_rr")?, mov: cost(target, "mov_rr")?, lea: &leas };
-    let limit = best.as_ref().map_or(i64::MAX / 4, |(_, price)| *price);
+    // The search ranks what `weigh` ranks: each operation's clocks, scaled,
+    // and its bytes.
+    let scaled = |clocks: i64, op_bytes: i64| match bytes {
+        Some(_) => clocks * CLOCK_WEIGHT + op_bytes,
+        None => clocks,
+    };
+    let (register, immediate_lea) = bytes.map_or((0, 0), |Bytes { arch, width }| {
+        (arch.register_op_bytes(width), 3 + i64::from(width != arch.operand_bytes()))
+    });
+    let shifts = |count: i64| {
+        let clocks = shift(target, count).unwrap_or(i64::MAX / 4 / CLOCK_WEIGHT);
+        scaled(clocks, bytes.map_or(0, |Bytes { arch, width }| arch.shift_op_bytes(count, width)))
+    };
+    let leas = |scale: i64| lea(scale).filter(|_| scale <= 8).map(|clocks| scaled(clocks, immediate_lea));
+    let ops = Ops {
+        shift: &shifts,
+        alu: scaled(cost(target, "alu_rr")?, register),
+        mov: scaled(cost(target, "mov_rr")?, register),
+        lea: &leas,
+        seeded: bytes.is_some(),
+    };
+    let limit = best.as_ref().map_or(i64::MAX / 4, |(parts, price)| weigh(parts, *price));
     let synthesized = synth(number, limit, &mut BTreeMap::new(), &ops).map(|(parts, _)| parts);
     if let Some(parts) = synthesized {
         let price = clocks(&parts)?;
-        if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
+        if best.as_ref().is_none_or(|(kept_parts, kept)| weigh(&parts, price) < weigh(kept_parts, *kept)) {
             best = Some((parts, price));
         }
     }
@@ -431,6 +493,12 @@ struct Ops<'a> {
     mov: i64,
     /// A `lea` of `base + index*scale`, where the target has the scale.
     lea: &'a dyn Fn(i64) -> Option<i64>,
+    /// Whether the copy that seeds a chain not starting with a `lea` is
+    /// counted, as `chains` counts it in a chain's clocks. GCC's search, which
+    /// the clocks-only ranking mirrors, leaves it out; a ranking by (clocks,
+    /// bytes) must count it, or a chain with a seed looks as cheap as one
+    /// without and the search keeps the shorter, slower one.
+    seeded: bool,
 }
 
 /// GCC's `alg_hash` entry (expmed.cc): the chain found for `t` within a limit,
@@ -523,6 +591,8 @@ fn synth(
         if q >= t && q >> q.trailing_zeros() >= t {
             continue;
         }
+        let seed = if ops.seeded && q == 1 && !matches!(tail.first(), Some(("lea" | "flea", _))) { ops.mov } else { 0 };
+        let cost = cost + seed;
         let Some((mut parts, below)) = synth(q, bound - cost, memo, ops) else { continue };
         parts.extend(tail);
         bound = below + cost;
@@ -556,6 +626,33 @@ mod tests {
             cheapest_narrow_chain(3, m32).unwrap().unwrap().0.iter().all(|part| part.0 != "lea"),
             "a word has no lea"
         );
+    }
+
+    /// -O1 chose the first chain of the fewest clocks, whatever its bytes:
+    /// `x * 1664525` was 29 B where another chain of the same clocks is
+    /// shorter (mul_constants -O1: +547 B over the pin). Among the chains of
+    /// the fewest clocks the one of fewest bytes is chosen, never more clocks.
+    #[test]
+    fn test_a_chain_of_equal_clocks_is_the_shorter_one() {
+        let arch = &llrm_x86_m32::M32;
+        let m32 = targets::tuned_for(arch, "486", false).unwrap();
+        let profile = targets::profile(m32).unwrap();
+        let (mut shorter, mut longer) = (0, 0);
+        for number in (2..5000).chain((2..400).map(|n| -n)) {
+            let Some((old, old_clocks)) = unremembered_chains(number, profile, true, None).unwrap() else { continue };
+            let bytes = Some(Bytes { arch, width: 4 });
+            let (new, new_clocks) = unremembered_chains(number, profile, true, bytes).unwrap().expect("one was found");
+            assert!(new_clocks <= old_clocks, "x{number}: {new:?} ({new_clocks}) is slower than {old:?} ({old_clocks})");
+            let (old_bytes, new_bytes) = (chain_bytes(&old, 4, arch), chain_bytes(&new, 4, arch));
+            if new_bytes < old_bytes {
+                shorter += 1;
+            }
+            if new_clocks == old_clocks && new_bytes > old_bytes {
+                longer += 1;
+            }
+        }
+        assert_eq!(longer, 0, "at equal clocks a Pareto choice is never longer");
+        assert!(shorter > 0, "no constant had a shorter chain of equal clocks");
     }
 
     /// An `imul` by a 31-bit constant took 41 clocks on a 486 (Table 10.1 note

@@ -7,6 +7,9 @@
 use llrm_wasm::dag::{ExceptionModel, Options};
 use llrm_wasm::driver;
 
+#[global_allocator]
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
+
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
@@ -43,6 +46,7 @@ fn run() -> i32 {
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if other.starts_with("-f") && driver::pass_flag(other) => {}
             // `bounds` checks nothing in IR (llrm-cc); `stack` needs a C
             // runtime this target lacks.
             "-fsanitize=bounds" | "-fno-sanitize=bounds" | "-fno-sanitize=stack" => {}

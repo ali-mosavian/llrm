@@ -130,13 +130,53 @@ impl Table {
     }
 }
 
+impl Table {
+    /// The table of a file that states `@lanes bytes`: the 32 flag lanes, then a
+    /// lane for each byte of each root. A view covers the bytes `lane / 8 ..
+    /// (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of `rs1`).
+    fn of_bytes(regs: Regs) -> Table {
+        let entries = || regs.table.iter().flatten();
+        let bytes_of = |entry: &llrm_lir::registers::Entry| ((entry.bits / 8).max(1)) as usize;
+        let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
+        for root in entries().filter(|entry| entry.root == entry.id) {
+            let top = entries()
+                .filter(|view| view.root == root.id)
+                .map(|view| (view.lane / 8) as usize + bytes_of(view))
+                .max()
+                .unwrap_or(1);
+            lanes.extend((0..top).map(|byte| (root.id, byte as u32)));
+        }
+        lanes.sort();
+        assert!(lanes.len() <= 128, "{} lanes of a register file are more than a mask holds", lanes.len());
+        let (mut first, mut count, mut bytes) = ([0_u8; REGISTERS], [0_u8; REGISTERS], [0_u8; REGISTERS]);
+        for (bit, lane) in lanes.iter().enumerate() {
+            let slot = lane.0.index();
+            if count[slot] == 0 {
+                first[slot] = u8::try_from(bit).expect("fits");
+            }
+            count[slot] += 1;
+            bytes[slot] = count[slot];
+        }
+        for entry in entries().filter(|entry| entry.root != entry.id) {
+            let root = entry.root.index();
+            let slot = entry.id.index();
+            first[slot] = first[root] + u8::try_from(entry.lane / 8).expect("a byte offset");
+            count[slot] = u8::try_from(bytes_of(entry)).expect("a register is under 256 bytes");
+            bytes[slot] = count[slot];
+        }
+        Table { lanes, first, count, bytes }
+    }
+}
+
 /// The table the file of `regs` stands under: x86's for an x86 file, else one
 /// built once and kept.
 fn table_of(regs: Regs) -> &'static Table {
     static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
     // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
     // one without writes a root whole (arm64's `w` write clears the `x`).
-    if regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0) {
+    if !regs.0.byte_lanes
+        && regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
+    {
         return &X86;
     }
     let key = regs.0 as *const _ as usize;
@@ -144,7 +184,8 @@ fn table_of(regs: Regs) -> &'static Table {
     if let Some((_, table)) = files.iter().find(|(one, _)| *one == key) {
         return table;
     }
-    let table: &'static Table = Box::leak(Box::new(Table::of_file(regs)));
+    let table: &'static Table =
+        Box::leak(Box::new(if regs.0.byte_lanes { Table::of_bytes(regs) } else { Table::of_file(regs) }));
     files.push((key, table));
     table
 }
@@ -172,7 +213,7 @@ thread_local! {
 }
 
 /// The register file's lane table in force until this drops.
-pub struct Guard(Option<&'static Table>);
+pub struct Guard(Option<&'static Table>, #[allow(dead_code)] llrm_lir::registers::NamedBy);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -180,12 +221,20 @@ impl Drop for Guard {
     }
 }
 
+/// Whether `regs` is a file the x86 table serves: byte lanes under a root of
+/// four, the shapes `machinecp` has its fixed units for.
+pub fn is_x86(regs: Regs) -> bool {
+    std::ptr::eq(table_of(regs), &*X86)
+}
+
 /// Makes the lanes of `regs`' file the ones this thread reads. A mask made
 /// under one file is not meaningful under another.
 pub fn enter(regs: Regs) -> Guard {
     let table = table_of(regs);
     let was = ACTIVE.with(|active| active.replace((!std::ptr::eq(table, &*X86)).then_some(table)));
-    Guard(was)
+    // A register prints by its file's name, iced's only for x86.
+    let named = llrm_lir::registers::named_by((!std::ptr::eq(table, &*X86)).then_some(regs.0));
+    Guard(was, named)
 }
 
 fn bit(lane: &Lane) -> Option<u32> {
@@ -531,6 +580,19 @@ mod tests {
 
     /// Every x86 file stands under x86's table, so a pass of an x86 target
     /// reads the lanes it always did.
+    #[test]
+    fn an_x86_register_is_as_wide_in_the_file_as_iced_says() {
+        // `peephole::_lanes` sizes a register by its file; the x86 numbers must
+        // not move by it.
+        for regs in
+            [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
+        {
+            for (id, entry) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0) {
+                assert_eq!(regs.bytes(id), Some(id.size() as i64), "{id:?}");
+            }
+        }
+    }
+
     #[test]
     fn an_x86_file_enters_the_x86_table() {
         for regs in

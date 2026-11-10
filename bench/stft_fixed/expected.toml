@@ -1,17 +1,33 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "eb383f0f0548ff64ed7bdba1160a0d4d"
 
-[bcc.O2]
-code_bytes = 1190
-data_bytes = 15
-bss_bytes = 5122
-kernel_ms = 545.52
-
-[bcc.Os]
+[bcc.O1]
+instructions = 59110805
+memory_operands = 22602916
+clocks = 293949463
 code_bytes = 1224
 data_bytes = 15
 bss_bytes = 5122
-kernel_ms = 820.6333
+kernel_ms = 820.7552
+
+[bcc.O2]
+instructions = 38476628
+memory_operands = 21472587
+clocks = 240986211
+code_bytes = 1190
+data_bytes = 15
+bss_bytes = 5122
+kernel_ms = 545.3988
+
+[bcc.Os]
+instructions = 59110805
+memory_operands = 22602916
+clocks = 293949463
+code_bytes = 1224
+data_bytes = 15
+bss_bytes = 5122
+kernel_ms = 820.6329
 
 [tcpp.O2]
 code_bytes = 1597
@@ -26,10 +42,11 @@ bss_bytes = 5122
 kernel_ms = 9900.6027
 
 [bc.O2]
-code_bytes = 2824
+instructions = 385844394
+memory_operands = 129152086
+code_bytes = 2822
 data_bytes = 31
 bss_bytes = 130
-kernel_ms = 5188.4292
 
 [pds71.O2]
 code_bytes = 2746

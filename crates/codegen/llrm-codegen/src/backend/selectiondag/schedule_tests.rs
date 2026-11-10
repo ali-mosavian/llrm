@@ -95,8 +95,8 @@ fn example() -> (SelectionDAG, SDValue, [SDValue; 7]) {
 /// that precedes it on the chain, would emit wrong code.
 #[test]
 fn every_unit_follows_its_data_and_chain_operands() {
-    let (dag, root, [a, b, c, x, y, s1, s2]) = example();
-    let order = schedule(&dag, root, &Info);
+    let (mut dag, root, [a, b, c, x, y, s1, s2]) = example();
+    let order = schedule(&mut dag, root, &Info);
     assert_eq!(order.len(), 7, "{order:?}");
     for (earlier, later) in [(a, x), (b, x), (x, y), (c, y), (x, s1), (y, s2), (a, b), (b, c), (c, s1), (s1, s2)] {
         assert!(position(&order, earlier) < position(&order, later), "{earlier:?} before {later:?} in {order:?}");
@@ -114,7 +114,7 @@ fn glued_nodes_are_one_unit() {
     let cmp = machine(&mut dag, CMP, &[EVT::I32, EVT::GLUE], &[a, b]);
     let glue = SDValue { node: cmp.node, res: 1 };
     let branch = machine(&mut dag, BR, &[EVT::OTHER], &[chain_of(b), glue]);
-    let order = schedule(&dag, branch, &Info);
+    let order = schedule(&mut dag, branch, &Info);
     let unit = order.iter().find(|unit| unit.nodes.contains(&cmp.node)).expect("scheduled");
     assert_eq!(unit.nodes, [branch.node, cmp.node]);
     assert_eq!(order.len(), 3, "{order:?}");
@@ -126,15 +126,15 @@ fn glued_nodes_are_one_unit() {
 fn nodes_not_reachable_from_the_root_are_not_scheduled() {
     let (mut dag, root, [a, b, ..]) = example();
     let dead = machine(&mut dag, ADD, &[EVT::I32], &[b, a]);
-    let order = schedule(&dag, root, &Info);
+    let order = schedule(&mut dag, root, &Info);
     assert!(order.iter().all(|unit| !unit.nodes.contains(&dead.node)), "{order:?}");
 }
 
 /// Two runs give one order (the queue breaks ties by arrival, not by address).
 #[test]
 fn the_schedule_is_deterministic() {
-    let (dag, root, _) = example();
-    assert_eq!(schedule(&dag, root, &Info), schedule(&dag, root, &Info));
+    let (mut dag, root, _) = example();
+    assert_eq!(schedule(&mut dag, root, &Info), schedule(&mut dag, root, &Info));
 }
 
 const ADC: u32 = 7;
@@ -197,7 +197,7 @@ fn a_unit_waiting_for_flags_backtracks_to_the_reader_of_the_live_ones() {
     let cmov = machine(&mut dag, CMOV, &[EVT::I32], &[add, c, SDValue { node: second.node, res: 1 }]);
     let store_cmov = store(&mut dag, cmov, 5, chain_of(d));
     let root = store(&mut dag, adc, 6, store_cmov);
-    let order = schedule(&dag, root, &FlagsInfo(eflags));
+    let order = schedule(&mut dag, root, &FlagsInfo(eflags));
     let (at_add, at_adc, at_test) = (position(&order, add), position(&order, adc), position(&order, test));
     assert!(at_add < at_adc, "{order:?}");
     assert!(!(at_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
@@ -225,7 +225,7 @@ fn a_flag_definition_wanted_across_a_flag_writer_is_cloned() {
     let cmov = machine(&mut dag, CMOV, &[EVT::I32], &[add, c, SDValue { node: second.node, res: 1 }]);
     let adc = machine(&mut dag, ADC, &[EVT::I32], &[cmov, d, SDValue { node: first.node, res: 1 }]);
     let root = store(&mut dag, adc, 6, chain_of(d));
-    let order = schedule(&dag, root, &FlagsInfo(eflags));
+    let order = schedule(&mut dag, root, &FlagsInfo(eflags));
     let adds: Vec<usize> = (0..order.len()).filter(|&i| order[i].nodes.contains(&add.node)).collect();
     let (at_test, at_adc) = (position(&order, test), position(&order, adc));
     let last_add = *adds.last().expect("scheduled");
@@ -285,8 +285,13 @@ fn a_flag_definition_live_across_a_call_is_recomputed_after_it() {
     let mask = dag.get_register_mask_clobbering(&[eflags]);
     let call = machine(&mut dag, CALL, &[EVT::OTHER], &[chain_of(n), subs, mask]);
     let copy = dag.get_copy_to_phys_reg(call, eflags_id, SDValue { node: subs.node, res: 1 }, None);
-    let bcc = machine(&mut dag, BCC, &[EVT::OTHER], &[SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 }]);
-    let order = schedule(&dag, bcc, &CallInfo(eflags));
+    let bcc = machine(
+        &mut dag,
+        BCC,
+        &[EVT::OTHER],
+        &[SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 }],
+    );
+    let order = schedule(&mut dag, bcc, &CallInfo(eflags));
     let last_subs = (0..order.len()).rev().find(|&i| order[i].nodes.contains(&subs.node)).expect("scheduled");
     assert!(position(&order, call) < last_subs, "the branch reads flags the call clobbered: {order:?}");
     assert!(last_subs < position(&order, bcc), "{order:?}");
@@ -303,7 +308,7 @@ fn target_address_leaves_are_not_scheduled() {
     let slot = dag.get_target_frame_index(EVT::I32, 0);
     let a = machine(&mut dag, LOAD, &[EVT::I32, EVT::OTHER], &[pool, entry]);
     let b = machine(&mut dag, LOAD, &[EVT::I32, EVT::OTHER], &[slot, chain_of(a)]);
-    let order = schedule(&dag, b, &Info);
+    let order = schedule(&mut dag, b, &Info);
     assert_eq!(order.len(), 2, "{order:?}");
 }
 
@@ -373,7 +378,7 @@ fn a_copy_that_clobbers_the_flags_is_not_scheduled_between_the_compare_and_its_b
         );
         let copy = dag.get_copy_to_reg(chain_of(b), 100, a);
         let branch = machine(&mut dag, BR, &[EVT::OTHER], &[copy, SDValue { node: to_flags.node, res: 1 }]);
-        let order = schedule(&dag, branch, &CopyInfo { flags: [flags], clobbers });
+        let order = schedule(&mut dag, branch, &CopyInfo { flags: [flags], clobbers });
         let (at_cmp, at_copy, at_branch) = (position(&order, cmp), position(&order, copy), position(&order, branch));
         (at_cmp < at_copy && at_copy < at_branch, format!("{order:?}"))
     };
@@ -399,7 +404,7 @@ fn a_cycle_among_the_units_stops_the_scheduler_with_a_message() {
     let r = machine(&mut dag, ADD, &[EVT::I32], &[q, a]);
     dag.replace_all_uses_with(p, r);
     let root = store(&mut dag, r, 4, chain_of(a));
-    schedule(&dag, root, &Info);
+    schedule(&mut dag, root, &Info);
 }
 
 struct PressureInfo {
@@ -493,8 +498,9 @@ fn peak_with_limit(
     seed: u64,
     limit: u32,
 ) -> usize {
-    let (dag, root, _) = random_dag(seed);
-    peak_live(&dag, &schedule(&dag, root, &PressureInfo { limit }))
+    let (mut dag, root, _) = random_dag(seed);
+    let units = schedule(&mut dag, root, &PressureInfo { limit });
+    peak_live(&dag, &units)
 }
 
 /// The ILP queue put the unit that adds the least pressure first in every
@@ -539,11 +545,11 @@ fn a_target_without_a_pressure_limit_schedules_as_a_limit_of_zero() {
         }
     }
     for seed in 0..200 {
-        let (dag, root, _) = random_dag(seed);
-        let (zero_dag, zero_root, _) = random_dag(seed);
+        let (mut dag, root, _) = random_dag(seed);
+        let (mut zero_dag, zero_root, _) = random_dag(seed);
         assert_eq!(
-            schedule(&dag, root, &Default),
-            schedule(&zero_dag, zero_root, &PressureInfo { limit: 0 }),
+            schedule(&mut dag, root, &Default),
+            schedule(&mut zero_dag, zero_root, &PressureInfo { limit: 0 }),
             "seed {seed}"
         );
     }
@@ -632,8 +638,8 @@ fn flag_dag(seed: u64) -> (SelectionDAG, SDValue, SDValue, SDValue) {
 fn a_flag_writer_is_not_scheduled_between_a_compare_and_the_branch_that_reads_it() {
     let pref = super::schedule::Preference::Ilp;
     let between = |fixed: bool| {
-        let (dag, branch, cmp, sum) = flag_dag(8);
-        let order = schedule(&dag, branch, &FlagValue { fixed, pref });
+        let (mut dag, branch, cmp, sum) = flag_dag(8);
+        let order = schedule(&mut dag, branch, &FlagValue { fixed, pref });
         let (c, s, b) = (position(&order, cmp), position(&order, sum), position(&order, branch));
         (c < s && s < b, format!("cmp {c} add {s} br {b}"))
     };

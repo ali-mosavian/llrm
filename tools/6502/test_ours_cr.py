@@ -14,6 +14,41 @@ def run(env_rt, script="ours_cr.py"):
     return subprocess.run([sys.executable, os.path.join(HERE, script), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
                           capture_output=True, text=True, env=env, timeout=120)
 
+def header_flags_fn():
+    sys.path.insert(0, HERE)
+    import flagset
+    return flagset.program_flags
+
+class HeaderFlags(unittest.TestCase):
+    """ours_cr compiled every program without its `// flags:` -f options: 24 of 212 programs (12 with
+    -fno-inline-functions, tail_calls among them) were measured inlined when the test says they are not (2026-11-08).
+    Their rows in the tip table, the shift-RMW and trial-unroll A/Bs were withdrawn."""
+    def write(self, header):
+        f = tempfile.NamedTemporaryFile("w", suffix=".c", delete=False); f.write(header + "\nint main(){return 0;}\n"); f.close()
+        self.addCleanup(os.unlink, f.name); return f.name
+    def test_f_options_pass_x86_only_options_drop(self):
+        p = self.write("// flags: -O2 -march=i486 -fno-inline-functions | -O2 -m32 -mabi=sysv -fno-inline-functions -fwrapv")
+        self.assertEqual(header_flags_fn()(p), ["-fno-inline-functions", "-fwrapv"])
+    def test_unknown_option_is_an_error(self):
+        with self.assertRaises(SystemExit): header_flags_fn()(self.write("// flags: -O2 -mfoo=bar"))
+    def test_no_header_no_flags(self):
+        self.assertEqual(header_flags_fn()(self.write("int x;")), [])
+
+class PadSpan(unittest.TestCase):
+    """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
+    a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""
+    def pads(self, value):
+        env = {k: v for k, v in os.environ.items()}
+        env.update(OURS_RT="/nonexistent", OURS_PADS=value)
+        return subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
+                              capture_output=True, text=True, env=env, timeout=120)
+    def test_neighbouring_pads_are_refused(self):
+        r = self.pads("0,1,2,3")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("span", r.stderr)
+    def test_spread_pads_are_accepted(self):
+        self.assertNotIn("span", self.pads("0,37,101,200").stderr)
+
 class OursCr(unittest.TestCase):
     def test_refuses_without_ours_rt(self):
         r = run(None)
@@ -207,5 +242,52 @@ class RtLib(unittest.TestCase):
             lib = os.path.join(tmp, "rt.lib")
             subprocess.run([sys.executable, os.path.join(HERE, "mkrt.py"), CC, lib, os.path.join(tmp, "w")], check=True, capture_output=True, timeout=1200)
             self.assertEqual(self.size(lib) - self.size(None), 3)
+
+RT = os.path.join(HERE, "..", "..", "crates", "target", "llrm-6502", "runtime", "mos_rt.s")
+
+class NoOut(unittest.TestCase):
+    """2026-11-09: tests/run/c holds 8 helper sources with no `.out`; ours_cr died on the first one (FileNotFoundError) and all 12 runs of the
+    #8707 corpus A/B crashed at once. A source without an `.out` is NOT TESTED and counted, never a crash."""
+    def test_a_source_without_an_out_is_counted_as_no_out_not_a_crash(self):
+        import json
+        corpus = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "helper.c").write_text("int f(void) { return 1; }\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", out, "helper"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["helper", "NO-OUT"]])
+        self.assertIn("NO-OUT", done.stdout)
+
+class Runner(unittest.TestCase):
+    """The corpus runner printed "done" after 12 runs that had all crashed: it reads every run's exit status and tsv first."""
+    def go(self, stub_body):
+        work = tempfile.mkdtemp(); stub = os.path.join(work, "stub.py")
+        Path(stub).write_text("import sys\n" + stub_body)
+        env = dict(os.environ, AB_CORPUS_PY=stub, AB_CPUS="6502", AB_LEVELS="O2")
+        return subprocess.run(["bash", os.path.join(HERE, "ab_corpus.sh"), "/nonexistent/llrm-cc", os.path.join(work, "out")],
+                              capture_output=True, text=True, env=env, timeout=60)
+    def test_a_crashing_run_is_failed_and_the_runner_does_not_say_done(self):
+        done = self.go("sys.exit(1)\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("FAILED 6502-O2-off", done.stdout)
+        self.assertNotIn("DONE", done.stdout)
+    def test_runs_that_wrote_their_tables_are_done(self):
+        done = self.go("open(sys.argv[3], 'w').write('p\\tours\\t1\\t1\\n')\n")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "DONE 2 runs"))
+    def real(self, **env):
+        base = {k: v for k, v in os.environ.items() if k not in ("OURS_RT", "AB_CORPUS_PY")}
+        return subprocess.run(["bash", os.path.join(HERE, "ab_corpus.sh"), "/nonexistent/llrm-cc", os.path.join(tempfile.mkdtemp(), "out")],
+                              capture_output=True, text=True, env=dict(base, AB_CPUS="6502", AB_LEVELS="O2", **env), timeout=60)
+    def test_a_missing_runtime_is_named_once_before_any_run(self):
+        """2026-11-10: no OURS_RT crashed all 12 runs, and the runner printed twelve FAILED lines for one cause."""
+        done = self.real()
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("OURS_RT", done.stderr)
+        self.assertNotIn("FAILED", done.stdout)
+    def test_a_runtime_that_is_not_a_file_is_named_too(self):
+        done = self.real(OURS_RT="/nonexistent/mos_rt.s")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("/nonexistent/mos_rt.s", done.stderr)
 
 if __name__ == "__main__": unittest.main()

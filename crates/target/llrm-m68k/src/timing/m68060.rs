@@ -180,7 +180,11 @@ fn ea_time(mode: Mode) -> Option<u32> {
 
 /// The memory operand's mode, else the last register one.
 fn effective(operands: &[Operand]) -> Option<Mode> {
-    let modes: Vec<Mode> = operands.iter().filter_map(mode).collect();
+    // a bare number or symbol is an absolute address in an <ea> position
+    let modes: Vec<Mode> = operands
+        .iter()
+        .filter_map(|operand| if *operand == Operand::Target { Some(Mode::AbsL) } else { mode(operand) })
+        .collect();
     modes
         .iter()
         .copied()
@@ -416,7 +420,8 @@ pub(super) fn clocks(
             by_destination(&tables.bit_field, &format!("{name} (< 5 Bytes)"), Size::L, effective(operands)?)
         }
         ("lea" | "pea", [source, ..]) => {
-            let column = label(mode(source)?, true);
+            // a bare number or symbol is an absolute address
+            let column = label(if *source == Operand::Target { Mode::AbsL } else { mode(source)? }, true);
             tables.lea.cell(&name, "", column, 0)
         }
         ("movem", [Operand::List(registers), memory]) => {

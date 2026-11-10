@@ -9,6 +9,8 @@
 # other 32-bit helpers with operands in mos_rt.s's __sa/__sb, not the C convention.
 set -e
 cd "$(dirname "$0")/.."
+# hand asm by default: f64 mul uses config/6502/mul32x32.s (not reentrant: static cells), 41312 -> 11504 clk. SF_EXTRA= SF_ASM= (set, empty) builds the C.
+SF_EXTRA=${SF_EXTRA--DSF_MUL32X32_6502}; SF_ASM=${SF_ASM-config/6502/mul32x32.s}
 N=${1:-3000}; B=${2:-110}; T=$(mktemp -d); OPT=${OPT:-Os}; SHOW=${SHOW:-0}
 MOS_RT=${MOS_RT:?set MOS_RT to the mos_rt.s runtime}
 for g in gen_vectors64 gen_vectors64_edge; do cc -O2 -ffp-contract=off -DEXT tests/$g.c -o $T/$g; done

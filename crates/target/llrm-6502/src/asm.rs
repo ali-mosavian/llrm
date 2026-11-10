@@ -383,9 +383,14 @@ pub struct Asm {
     pub x_callees: std::collections::BTreeSet<String>,
     /// The function returns nothing in `y`: a `rts` does not read it.
     pub no_y_result: bool,
+    /// The cells a `rts` returns (`rc2`, `rc3` for a long): every other
+    /// caller-saved cell is dead there.
+    pub result_cells: std::collections::BTreeSet<String>,
     /// The routines this function calls with an argument in `y` (see
     /// [`Self::x_callees`]).
     pub y_callees: std::collections::BTreeSet<String>,
+    /// The 65C02 subtarget: `stz` exists.
+    pub cmos: bool,
     /// The place the instructions written from now on get.
     pub place: u32,
     /// What was written since the last newline.
@@ -395,6 +400,42 @@ pub struct Asm {
 impl Asm {
     pub fn new() -> Asm {
         Asm::default()
+    }
+
+    /// A pass's candidate: `self` with `lines` instead. Every other field
+    /// (`a_callees`, the result flags, `result_cells`) decides what the
+    /// cleanup may drop, so all are named: a field added to [`Asm`] fails
+    /// to build here until it is carried.
+    pub fn candidate_from(
+        &self,
+        lines: Vec<Line>,
+    ) -> Asm {
+        let Asm {
+            lines: _,
+            no_a_result,
+            a_callees,
+            no_x_result,
+            x_callees,
+            no_y_result,
+            result_cells,
+            y_callees,
+            cmos,
+            place,
+            pending,
+        } = self;
+        Asm {
+            lines,
+            no_a_result: *no_a_result,
+            a_callees: a_callees.clone(),
+            no_x_result: *no_x_result,
+            x_callees: x_callees.clone(),
+            no_y_result: *no_y_result,
+            result_cells: result_cells.clone(),
+            y_callees: y_callees.clone(),
+            cmos: *cmos,
+            place: *place,
+            pending: pending.clone(),
+        }
     }
 
     /// The lines of `text`.

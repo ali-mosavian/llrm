@@ -163,11 +163,13 @@ fn start_state(
     }
 }
 
-/// The `add.l #imm` rows (an immediate above `addq`'s) that a word add would do.
-pub fn sites(
+/// Calls `visit(block, at, row, bounds)` for every row, with the bounds that
+/// hold before it.
+fn for_each_row(
     function: &MFunction,
     assignment: &Assignment,
-) -> Vec<Site> {
+    mut visit: impl FnMut(usize, usize, &Inst, &State),
+) {
     let following = successors(function);
     let mut predecessors = vec![Vec::new(); function.blocks.len()];
     for (from, targets) in following.iter().enumerate() {
@@ -177,31 +179,41 @@ pub fn sites(
             }
         }
     }
-    let mut out = Vec::new();
     for (block, body) in function.blocks.iter().enumerate() {
         let mut state = start_state(function, assignment, &predecessors, block, CHAIN_DEPTH);
         for (at, inst) in body.insts.iter().enumerate() {
-            if let (Kind::Op("ADD32di"), [Operand::Def(def), Operand::Use(base), Operand::Imm(k)]) =
-                (inst.kind, &inst.operands[..])
-                && (9..=0xFFFF).contains(k)
-                && root(assignment, def) == root(assignment, base)
-            {
-                let bound = bound_of(&state, assignment, base);
-                let sum = u64::from(bound) + *k as u64;
-                if sum <= 0xFFFF {
-                    out.push(Site {
-                        block,
-                        at,
-                        bound,
-                        immediate: *k as u32,
-                        codes_equal: sum < 0x8000,
-                        codes_read: flags_read_after(&body.insts, at),
-                    });
-                }
-            }
+            visit(block, at, inst, &state);
             step(&mut state, assignment, &function.classes, inst);
         }
     }
+}
+
+/// The `add.l #imm` rows (an immediate above `addq`'s) that a word add would do.
+pub fn sites(
+    function: &MFunction,
+    assignment: &Assignment,
+) -> Vec<Site> {
+    let mut out = Vec::new();
+    for_each_row(function, assignment, |block, at, inst, state| {
+        if let (Kind::Op("ADD32di"), [Operand::Def(def), Operand::Use(base), Operand::Imm(k)]) =
+            (inst.kind, &inst.operands[..])
+            && (9..=0xFFFF).contains(k)
+            && root(assignment, def) == root(assignment, base)
+        {
+            let bound = bound_of(state, assignment, base);
+            let sum = u64::from(bound) + *k as u64;
+            if sum <= 0xFFFF {
+                out.push(Site {
+                    block,
+                    at,
+                    bound,
+                    immediate: *k as u32,
+                    codes_equal: sum < 0x8000,
+                    codes_read: flags_read_after(&function.blocks[block].insts, at),
+                });
+            }
+        }
+    });
     out
 }
 
@@ -218,5 +230,61 @@ pub fn narrow_adds(
         };
         function.blocks[site.block].insts[site.at] =
             op_inst("ADD16di", desc, vec![Operand::Def(def), Operand::Use(base), Operand::Imm(k)]);
+    }
+}
+
+/// A `cmpi.l #imm, %dN` that a byte or word compare would do, and the row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompareSite {
+    pub block: usize,
+    pub at: usize,
+    pub row: &'static str,
+}
+
+/// The `cmpi.l` rows whose register is below 256 (65536) and whose immediate
+/// fits a byte (word), where the later rows read only Z and C: the narrow
+/// compare of two such values sets those as the long one does, and N and V
+/// from a different bit.
+pub fn compare_sites(
+    function: &MFunction,
+    assignment: &Assignment,
+) -> Vec<CompareSite> {
+    let mut out = Vec::new();
+    let unsigned_codes = crate::ccr::flag_bit("Z") | crate::ccr::flag_bit("C");
+    for_each_row(function, assignment, |block, at, inst, state| {
+        if let (Kind::Op("CMP32di"), [Operand::Imm(k), Operand::Use(register)]) = (inst.kind, &inst.operands[..])
+            && *k >= 0
+            && flags_read_after(&function.blocks[block].insts, at).is_some_and(|read| read & !unsigned_codes == 0)
+        {
+            let bound = bound_of(state, assignment, register);
+            let row = if bound <= 0xFF && *k <= 0xFF {
+                "CMP8di"
+            } else if bound <= 0xFFFF && *k <= 0xFFFF {
+                "CMP16di"
+            } else {
+                return;
+            };
+            out.push(CompareSite { block, at, row });
+        }
+    });
+    out
+}
+
+/// Rewrites each [`compare_sites`] row to its byte or word form.
+///
+/// DEVIATE: the pin compares at the type's width and narrows only from an
+/// explicit extension (`SimplifySetCC`); gcc compares a masked byte with
+/// `cmpi.b` (hex `v & 15 < 10`: 4 B and 8 clk against 6 and 14 on the 68000).
+/// Reason: best of gcc and clang is the goal. Done after allocation because a
+/// byte view of a live register is a copy while the joins of sub-registers are
+/// off (DEVIATE C13). Exit: none.
+pub fn narrow_compares(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    for site in compare_sites(function, assignment) {
+        let Some(desc) = local::code_of(site.row).and_then(local::desc) else { continue };
+        let operands = function.blocks[site.block].insts[site.at].operands.clone();
+        function.blocks[site.block].insts[site.at] = op_inst(site.row, desc, operands);
     }
 }

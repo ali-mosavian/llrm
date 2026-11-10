@@ -187,6 +187,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llrm.vararg.address`: the address of the calling function's first
+    /// variadic argument, the value `va_start` writes into a list that is one
+    /// pointer (DEVIATE VASTART-PROMOTE).
+    VarargAddress,
     /// `llvm.va_end`: the list its argument points to is no longer read. It
     /// does nothing where the list owns no resource.
     VaEnd,
@@ -564,7 +568,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 85] = [
+const TABLE: [Spec; 86] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -864,6 +868,14 @@ const TABLE: [Spec; 85] = [
         own: None,
     },
     Spec {
+        name: "llrm.vararg.address",
+        intrinsic: Intrinsic::VarargAddress,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
         name: "llvm.va_end",
         intrinsic: Intrinsic::VaEnd,
         overloads: &[Kind::Pointer],
@@ -950,7 +962,7 @@ fn from_intrinsics_td(
 ) {
     let Some(set) = table_set(name) else { return };
     let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
-    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).to_owned())).collect();
+    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).into())).collect();
     if !set.memory.is_empty() {
         function.attrs.push(Attribute::Memory(
             set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -962,8 +974,8 @@ fn from_intrinsics_td(
         let ty = if at == 0 { Some(returns) } else { parameters.get(at as usize - 1).copied() };
         let Some(ty) = ty else { continue };
         let attrs = attrs.iter().filter_map(|attr| match *attr {
-            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.to_owned())),
-            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.to_owned(), value)),
+            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.into())),
+            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.into(), value)),
             // At the argument's own width; `lower == upper` is no range.
             intrinsic_attrs::Attr::Range(lower, upper) => {
                 let bits = types.int_bits(ty)?;
@@ -1020,7 +1032,7 @@ pub fn is_wide_divide(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
@@ -1090,7 +1102,7 @@ impl Intrinsic {
             return Some((vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new()));
         }
         let own = self.spec().own?;
-        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
+        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).into())).collect::<Vec<_>>();
         let mut attrs = flags(own.attrs);
         attrs.push(Attribute::Memory(
             own.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),

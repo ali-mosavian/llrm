@@ -57,6 +57,18 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 
 /// The location of each argument and the bytes the stack ones take; a word's
 /// two bytes are named as their pair.
+///
+/// DEVIATE A-X-ARGS (beyond the pin; owner 6502, exit 2026-11-15): a byte
+/// argument arrives in `a`, then `x`, as in llvm-mos's CC_MOS. The 2026-11-08
+/// corpus A/B (mean clocks over 4 pads, base ca092f05a2) lowers bytes in every
+/// changed program. Clocks worse, each by one page-crossing cliff on one pad
+/// (the change is a byte shorter, so code after it moves across a page; the
+/// instruction counts are equal or lower): O2 rep_tails +235, word_compares
+/// +40, int_compared_with_float +54, huffman_decode +36; O1 word_compares +40,
+/// huffman_decode +1; Os huffman_decode +5, memory_expansion +47437 for -214 B.
+/// A counted loop whose bound arrives in `a` keeps its index in `a` (`tax; sta
+/// buf,x; clc; adc #1; cmp rc2`): the allocator does not price `inx` against
+/// `adc #1`, as for a bound loaded from a global.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
@@ -148,9 +160,20 @@ pub fn lower_call(
         chain = dag.get_token_factor(&stores);
     }
     let mut glue = None;
-    for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target else { continue };
-        let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
+    // `a` and `x` last: moving a constant or a byte into a cell goes through `a`
+    let (a, x) = (abi::register("a"), abi::register("x"));
+    let late = |register: llrm_lir::registers::RegId| u8::from(register == x) + 2 * u8::from(register == a);
+    let mut copies: Vec<_> = outs
+        .iter()
+        .zip(&targets)
+        .filter_map(|(out, &target)| match target {
+            Location::Register(register) => Some((register, out.value)),
+            Location::Stack(_) => None,
+        })
+        .collect();
+    copies.sort_by_key(|&(register, _)| late(register));
+    for (register, value) in copies {
+        let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
     }

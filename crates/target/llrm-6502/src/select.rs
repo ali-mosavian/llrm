@@ -72,6 +72,9 @@ struct Cells<'a> {
     /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy
     /// goes through `a`.
     deferred: Vec<MInst>,
+    /// The unit being lowered ends in a call: its copies into `a`, `x` and `y`
+    /// are arguments (`lower_call` puts them last) and stay in place.
+    in_call: bool,
     /// The successors the current block branches to by label, for the edge
     /// blocks.
     branched_to: llrm_support::hash::HashSet<u32>,
@@ -226,18 +229,34 @@ pub fn function_items_with_places(
         fixed,
         saved: HashMap::default(),
         deferred: Vec::new(),
+        in_call: false,
         branched_to: Default::default(),
     };
     let mut body: Vec<Item> = vec![Item::Label(name.to_owned())];
     let mut edges: Vec<Item> = Vec::new();
-    for inst in cells.frame.prologue() {
-        body.push(Item::Inst(inst));
-    }
+    let mut prologue = Some(cells.frame.prologue());
     for one in blocks {
-        body.push(Item::Label(block_label(name, one.block.0)));
         let mut values: HashMap<(u32, u8), Operand> = HashMap::default();
+        // the frame's stack adjust goes through `a`: an argument that arrives
+        // in `a` or `x` is copied out before it, and the prologue is
+        // then outside the first block
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
+            if prologue.is_some() && ["a", "x"].contains(&from) {
+                let cell = cell_for(&mut cells, 8);
+                cells.virtual_regs.insert(vreg, cell.clone());
+                body.push(Item::Inst(copy(8, cell, Operand::reg(from))));
+            }
+        }
+        for inst in prologue.take().into_iter().flatten() {
+            body.push(Item::Inst(inst));
+        }
+        body.push(Item::Label(block_label(name, one.block.0)));
+        for &(register, vreg) in &one.live_ins {
+            let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
+            if cells.virtual_regs.contains_key(&vreg) {
+                continue;
+            }
             let bits = if from.starts_with("rs") { 16 } else { 8 };
             let cell = cell_for(&mut cells, bits);
             cells.virtual_regs.insert(vreg, cell.clone());
@@ -249,6 +268,15 @@ pub fn function_items_with_places(
         let split = one.edges.iter().any(|edge| edge.to.is_some());
         cells.branched_to.clear();
         for unit in &one.units {
+            cells.in_call = unit
+                .nodes
+                .iter()
+                .any(
+                    |&node| matches!(
+                        one.dag.nodes()[node as usize].opcode,
+                        ISD::Machine(code) if [op::JSR, op::JSRI].contains(&(code as u16))
+                    ),
+                );
             for &node in unit.nodes.iter().rev() {
                 if matches!(
                     one.dag.nodes()[node as usize].opcode,
@@ -326,7 +354,189 @@ pub fn function_items_with_places(
         }
     }
     body.extend(edges);
-    Ok((body, (cells.bytes, cells.words), places))
+    Ok((expand_selects(name, body), (cells.bytes, cells.words), places))
+}
+
+/// `EmitInstrWithCustomInserter` for `SELECT_CC`: every `SETCC8`, `CMOV8` and
+/// `CMOV16` becomes a head that branches over a block holding the true arm's
+/// move, so the blocks are real ones for everything after selection (the pin
+/// splits the machine block at the pseudo into head, true and join blocks and
+/// makes a phi of the two values,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L38957>).
+///
+/// The result is a cell of its own written on both edges, as the phi's copies
+/// write it (the false arm before the branch, the true arm in the new block),
+/// and copied to the select's result after the join: the pin's phi result is a
+/// fresh register, and where the result goes (a memory cell, a loop-carried
+/// register) is the coalescer's to join or not. With the result written in its
+/// destination on both edges, a memory destination was stored twice
+/// (`fletcher`: +4 B, +80 cy).
+///
+/// A constant an arm takes is loaded into the result in that arm: the pin's
+/// phi copy of a constant is a `MOV32ri` made in the predecessor, and
+/// `MachineSink` moves one into the block of the edge that reads it
+/// (`machine_sink_in_place` keeps a rematerializable instruction where it is:
+/// DEVIATE there). The load stays in its block where something else reads it.
+///
+/// DEVIATE 6502-SELECT-1: the expansion is on the item list, before the
+/// builder makes the machine function, not on machine blocks. Reason: this
+/// target has no shared machine function to split. Exit: the day the 6502
+/// reaches the shared flow (`crate::dagisel` into `llrm_codegen`).
+///
+/// DEVIATE 6502-SELECT-2: for `BCC` and `BCS` the compare is made before the
+/// head's move (`spill::COMPARE`), where the pin copies at the end of the
+/// block, after the compare (`findPHICopyInsertPoint`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/PHIElimination.cpp>).
+/// For the other conditions the compare is redone at the branch, after the
+/// move: a load or a transfer sets N and Z. Reason: the flags are not
+/// allocated, so the carry alone survives a move. Exit: 2026-11-20, a
+/// generated flags description (see `compare_before_step`).
+///
+/// DEVIATE 6502-SELECT-3: the new blocks' labels are `<fn>_cm<n>`, not
+/// `_b<n>`: the loop depth of a block is read from the last `_b<n>` label
+/// (`timing`), and a block made here is as deep as the block it was cut from.
+/// Reason: the depth table is the IR's. Exit: a depth table of the machine
+/// blocks.
+fn expand_selects(
+    name: &str,
+    items: Vec<Item>,
+) -> Vec<Item> {
+    const BRANCHES: [u16; 6] = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL];
+    let sunk = sole_use_constants(&items);
+    let mut out = Vec::with_capacity(items.len());
+    let mut made = 0;
+    for (at, item) in items.into_iter().enumerate() {
+        let Item::Inst(inst) = &item else {
+            out.push(item);
+            continue;
+        };
+        if sunk.defs.contains(&at) {
+            continue;
+        }
+        // (result, first value, second value, the condition under which the
+        // second is taken, move)
+        let o = &inst.operands;
+        // the result is made in a cell of its own and copied to the select's
+        // result after the join, as the pin's phi result is a fresh register
+        // that the allocator may or may not join with where it goes
+        let fresh = |prefix: &str| Operand::Reg(format!("{prefix}_sel{}_{name}", made + 1));
+        let (moves, code, copied) = match (inst.opcode, o.as_slice()) {
+            (op::SETCC8, [d, Operand::Imm(code), ..]) => {
+                let s = fresh("v");
+                let load = |value| MInst::new(op::LDI8, vec![s.clone(), Operand::Imm(value)]);
+                ((load(1), load(0)), *code, copy(8, d.clone(), s))
+            }
+            (op::CMOV8, [d, f, t, Operand::Imm(code), ..]) => {
+                let s = fresh("v");
+                let arm = |v: &Operand| sunk.value(at, v, &s, op::LDI8, 8);
+                ((arm(f), arm(t)), *code ^ 1, copy(8, d.clone(), s.clone()))
+            }
+            (op::CMOV16, [d, f, t, Operand::Imm(code), ..]) => {
+                let s = fresh("w");
+                let arm = |v: &Operand| sunk.value(at, v, &s, op::LDI16, 16);
+                ((arm(f), arm(t)), *code ^ 1, copy(16, d.clone(), s.clone()))
+            }
+            _ => {
+                out.push(item);
+                continue;
+            }
+        };
+        made += 1;
+        let (join, arm) = (format!("{name}_cm{made}"), format!("{name}_cm{made}t"));
+        let place = |mut m: MInst| {
+            m.origin = inst.origin;
+            Item::Inst(m)
+        };
+        // the head's move runs after the compare where the branch reads only C
+        // (`BCC`, `BCS`): a load or a transfer sets N and Z, not C
+        if matches!(BRANCHES[code as usize], op::BCC | op::BCS) {
+            out.push(place(MInst::new(spill::COMPARE, vec![Operand::Imm(i64::from(code))])));
+        }
+        out.push(place(moves.0));
+        out.push(place(MInst::new(BRANCHES[code as usize], vec![Operand::Label(join.clone())])));
+        out.push(Item::Label(arm));
+        out.push(place(moves.1));
+        out.push(Item::Label(join));
+        out.push(place(copied));
+    }
+    out
+}
+
+/// The constants (`LDI8`, `LDI16`) written once that a select reads.
+struct SoleUse {
+    /// The item positions of the constant definitions that move into an arm.
+    defs: std::collections::HashSet<usize>,
+    /// (select position, cell) -> the constant's value.
+    uses: HashMap<(usize, String), i64>,
+}
+
+impl SoleUse {
+    /// The arm's move into `d`: a load when `v` is such a constant, else a
+    /// copy.
+    fn value(
+        &self,
+        at: usize,
+        v: &Operand,
+        d: &Operand,
+        load: u16,
+        bits: u32,
+    ) -> MInst {
+        match v {
+            Operand::Reg(name) => match self.uses.get(&(at, name.clone())) {
+                Some(value) => MInst::new(load, vec![d.clone(), Operand::Imm(*value)]),
+                None => copy(bits, d.clone(), v.clone()),
+            },
+            _ => copy(bits, d.clone(), v.clone()),
+        }
+    }
+}
+
+fn sole_use_constants(items: &[Item]) -> SoleUse {
+    // occurrences of each cell, a word and its high half counted as one, and
+    // how many instructions write it
+    let base = |name: &str| name.strip_suffix("+1").unwrap_or(name).to_owned();
+    let mut seen: HashMap<String, usize> = HashMap::default();
+    let mut written: HashMap<String, usize> = HashMap::default();
+    for item in items {
+        let Item::Inst(inst) = item else { continue };
+        for (at, o) in inst.operands.iter().enumerate() {
+            if let Operand::Reg(name) = o {
+                *seen.entry(base(name)).or_default() += 1;
+                if at == 0 {
+                    *written.entry(base(name)).or_default() += 1;
+                }
+            }
+        }
+    }
+    let mut loads: HashMap<String, (usize, i64)> = HashMap::default();
+    for (at, item) in items.iter().enumerate() {
+        let Item::Inst(inst) = item else { continue };
+        if let (op::LDI8 | op::LDI16, [Operand::Reg(d), Operand::Imm(value)]) = (inst.opcode, inst.operands.as_slice())
+            && (d.starts_with("v_") || d.starts_with("w_"))
+            && written[&base(d)] == 1
+        {
+            loads.insert(d.clone(), (at, *value));
+        }
+    }
+    let mut sunk = SoleUse { defs: Default::default(), uses: HashMap::default() };
+    for (at, item) in items.iter().enumerate() {
+        let Item::Inst(inst) = item else { continue };
+        if let (op::CMOV8 | op::CMOV16, [_, f, t, ..]) = (inst.opcode, inst.operands.as_slice()) {
+            for v in [f, t] {
+                if let Operand::Reg(name) = v
+                    && let Some(&(def, value)) = loads.get(name)
+                    && def < at
+                {
+                    // the load moves when the select is its only reader
+                    if seen[&base(name)] == 2 {
+                        sunk.defs.insert(def);
+                    }
+                    sunk.uses.insert((at, name.clone()), value);
+                }
+            }
+        }
+    }
+    sunk
 }
 
 /// The frame: the fixed objects (the stack arguments, at the offsets the
@@ -560,10 +770,12 @@ fn lower(
             let from = location(module, name, one, at(2), values, cells)?;
             let bits = one.dag.value_type(at(2)).size_in_bits();
             let copy = copy(bits, to.clone(), from);
-            if matches!(
-                &to,
-                Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
-            ) {
+            if !cells.in_call
+                && matches!(
+                    &to,
+                    Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
+                )
+            {
                 cells.deferred.push(copy);
                 return Ok(Vec::new());
             }
@@ -678,7 +890,8 @@ fn lower(
                     // plus its distance, where one `(zp),Y` offset reaches;
                     // past 255 the address is built (`eliminateFrameIndex`).
                     let at = if code == op::STZP { 0 } else { operands.len().wrapping_sub(2) };
-                    let framed = matches!(code, op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::STZP)
+                    let framed = (matches!(code, op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::STZP)
+                        || crate::pointer_alu::pointer_alu(code).is_some_and(|fold| !fold.indexed))
                         && n.ops
                             .iter()
                             .any(|input| one.dag.nodes()[input.node as usize].opcode == ISD::TargetFrameIndex);

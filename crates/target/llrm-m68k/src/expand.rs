@@ -70,7 +70,33 @@ fn frame_op(
     let mask = |registers: &[RegId]| {
         registers.iter().filter_map(|one| mask_bit(REGISTER_INFO.root(*one))).fold(0i64, |all, bit| all | 1 << bit)
     };
+    // one `move.l` a register, in `movem`'s memory order: the registers of the
+    // highest address are pushed first, and popped last
+    let order = |registers: &[RegId]| {
+        let mut ranked: Vec<(u32, RegId)> =
+            registers.iter().filter_map(|one| mask_bit(REGISTER_INFO.root(*one)).map(|bit| (bit, *one))).collect();
+        ranked.sort_by_key(|(bit, _)| *bit);
+        ranked
+    };
+    match op {
+        FrameOp::PushEach { registers } => {
+            for (_, one) in order(registers).into_iter().rev() {
+                let opcode = if is_address(one) { "MOV32ea" } else { "MOV32ed" };
+                out.push(mc::Inst { opcode, operands: vec![R(reg::SP), R(one)] });
+            }
+            return;
+        }
+        FrameOp::PopEach { registers } => {
+            for (_, one) in order(registers) {
+                let opcode = if is_address(one) { "MOV32ao" } else { "MOV32do" };
+                out.push(mc::Inst { opcode, operands: vec![R(one), R(reg::SP)] });
+            }
+            return;
+        }
+        _ => {}
+    }
     out.push(match op {
+        FrameOp::PushEach { .. } | FrameOp::PopEach { .. } => unreachable!("handled above"),
         FrameOp::Link { bytes } => mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(-bytes)] },
         FrameOp::Unlink => mc::Inst { opcode: "UNLK", operands: vec![R(reg::A6)] },
         FrameOp::SubSp(bytes) => sp_adjust(-bytes, short),
@@ -132,8 +158,15 @@ fn frame_ops(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
     short: bool,
+    size: bool,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
-    frame_ops_priced(layout, push_frame, |ops| frame_cost_with(ops, cpu, short))
+    frame_ops_choosing(
+        layout,
+        push_frame,
+        true,
+        |ops| frame_cost_with(ops, cpu, short),
+        |bytes, clocks| crate::timing::order(cpu, size, clocks, bytes as u32),
+    )
 }
 
 /// [`frame_ops`] with the price of a sequence, `(bytes, clocks)`, given: a test
@@ -143,20 +176,57 @@ pub fn frame_ops_priced(
     push_frame: bool,
     cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
+    frame_ops_choosing(layout, push_frame, false, cost, |_, clocks| (0, i64::from(clocks)))
+}
+
+/// [`frame_ops_priced`] that also weighs a `move.l` a register (`each`) beside
+/// the one `movem`: of the frames no larger and no slower than the pin's, the
+/// one `key(bytes, clocks)` of its two halves ranks lowest, the `movem` push
+/// on a tie.
+///
+/// DEVIATE from the pin, which has neither: gcc pushes each register. At two
+/// registers the bytes are equal and the clocks lower from the 68020 on
+/// (68020: `movem` pair 34, four `move.l` 22; 68040 9 against 4). From three
+/// registers `movem` is smaller and stays (fnptr +4 B, partition 040 +8 B in
+/// the first A/B). Exit: none.
+pub fn frame_ops_choosing(
+    layout: &frame::Layout,
+    push_frame: bool,
+    each: bool,
+    cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
+    key: impl Fn(usize, u32) -> (i64, i64),
+) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
-    let pushed = if push_frame { layout.push_prologue().zip(layout.push_epilogue()) } else { None };
-    let Some((opening, closing)) = pushed else {
-        return Ok((pin_opening, pin_closing));
-    };
+    let mut pushed = Vec::new();
+    if push_frame {
+        pushed.extend(layout.push_prologue().zip(layout.push_epilogue()));
+        if each {
+            pushed.extend(layout.push_each_prologue().zip(layout.push_each_epilogue()));
+        }
+    }
     let no_worse = |ours: &[FrameOp], pin: &[FrameOp]| -> Result<bool, String> {
         let ((ours_bytes, ours_clocks), (pin_bytes, pin_clocks)) = (cost(ours)?, cost(pin)?);
         Ok(ours_bytes <= pin_bytes && ours_clocks <= pin_clocks)
     };
-    if no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)? {
-        Ok((opening, closing))
-    } else {
-        Ok((pin_opening, pin_closing))
+    let mut best: Option<((i64, i64), (Vec<FrameOp>, Vec<FrameOp>))> = None;
+    // the first candidate that passes is the `movem` push; a later one must not
+    // be larger than it (strict on bytes: no m68k byte rate is derived)
+    let mut bytes_limit = usize::MAX;
+    for (opening, closing) in pushed {
+        if !(no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)?) {
+            continue;
+        }
+        let ((ob, oc), (cb, cc)) = (cost(&opening)?, cost(&closing)?);
+        if ob + cb > bytes_limit {
+            continue;
+        }
+        bytes_limit = bytes_limit.min(ob + cb);
+        let ranked = key(ob + cb, oc + cc);
+        if best.as_ref().is_none_or(|(held, _)| ranked < *held) {
+            best = Some((ranked, (opening, closing)));
+        }
     }
+    Ok(best.map_or((pin_opening, pin_closing), |(_, frame)| frame))
 }
 
 /// A line of the function: a block's label (its layout index) or an
@@ -226,8 +296,102 @@ pub fn finish(
     finish_with(function, assignment, number, slots, cpu, push_frame, false, None)
 }
 
+/// What the frame is laid out from, and so what a frame index is at.
+pub(crate) struct FrameInputs {
+    fixed: Vec<i32>,
+    objects: Vec<Object>,
+    used: Vec<RegId>,
+    has_calls: bool,
+    short: bool,
+    /// The frame indices, in the order of `objects`.
+    pub(crate) frame_indices: Vec<i32>,
+}
+
+impl FrameInputs {
+    pub(crate) fn of(
+        insts: &[&crate::mfunc::Inst],
+        function: &MFunction,
+        assignment: &Assignment,
+        slots: &[i32],
+        short: bool,
+    ) -> Self {
+        // a tail call has no call sequence: it leaves the frame it is in
+        let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
+        // the callee-saved registers the allocation used, in `CSR_STD` order
+        let used: Vec<RegId> = frame::callee_saved()
+            .into_iter()
+            .filter(|saved| {
+                insts
+                    .iter()
+                    .flat_map(|inst| &inst.operands)
+                    .any(
+                        |operand| match operand {
+                            Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == *saved,
+                            _ => false,
+                        },
+                    )
+            })
+            .collect();
+        let fixed: Vec<i32> = function.fixed.keys().rev().copied().collect();
+        let mut objects: Vec<Object> = fixed
+            .iter()
+            .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
+            .collect();
+        // the static allocas, then the spill slots, are locals after the fixed
+        // objects (`getStackSlotRange`: one long each)
+        objects.extend(function.locals.iter().map(|&(_, size, align)| Object {
+            size,
+            align,
+            offset: 0,
+            callee_saved: false,
+            dead: false,
+        }));
+        objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
+        let frame_indices: Vec<i32> = fixed
+            .iter()
+            .copied()
+            .chain(function.locals.iter().map(|local| local.0))
+            .chain(slots.iter().copied())
+            .collect();
+        FrameInputs { fixed, objects, used, has_calls, short, frame_indices }
+    }
+
+    /// The laid-out frame for a call area of `max_call_frame` bytes.
+    pub(crate) fn layout(
+        &self,
+        max_call_frame: i64,
+    ) -> frame::Layout {
+        frame::layout(&Function {
+            fixed: self.fixed.len(),
+            objects: self.objects.clone(),
+            saved: self.used.clone(),
+            max_call_frame,
+            stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
+            adjusts_stack: self.has_calls,
+            ..Function::default()
+        })
+    }
+}
+
+/// The largest `ADJCALLSTACKDOWN` among `insts` whose sequence `kept` keeps.
+pub(crate) fn call_area(
+    insts: &[&crate::mfunc::Inst],
+    kept: &dyn Fn(usize) -> bool,
+) -> i64 {
+    insts
+        .iter()
+        .enumerate()
+        .filter(|(at, inst)| inst.kind == Kind::Op("ADJCALLSTACKDOWN") && kept(*at))
+        .filter_map(|(_, inst)| match inst.operands.first() {
+            Some(Operand::Imm(bytes)) => Some(*bytes),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
-/// finds that cheaper: `pushes` is `Some(size)` to allow it.
+/// finds that cheaper: `pushes` is `Some(price)` to allow it.
 pub fn finish_with(
     function: &MFunction,
     assignment: &Assignment,
@@ -236,8 +400,17 @@ pub fn finish_with(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
     short: bool,
-    pushes: Option<bool>,
+    pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
+    if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
+        // the fold proved its range for the stack depth it could foresee; call
+        // cleanups left owed grow the depth, which only emission knows:
+        // a function that overflows keeps its `lea`s
+        match finish_with(&folded, assignment, number, slots, cpu, push_frame, short, pushes) {
+            Err(why) if why == crate::frameindexed::OUT_OF_RANGE => {}
+            done => return done,
+        }
+    }
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
         .iter()
@@ -258,103 +431,68 @@ pub fn finish_with(
             _ => None,
         })
         .collect();
-    // a tail call has no call sequence: it leaves the frame it is in
-    let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
-    // the callee-saved registers the allocation used, in `CSR_STD` order
-    let used: Vec<RegId> = frame::callee_saved()
-        .into_iter()
-        .filter(|saved| {
-            insts
-                .iter()
-                .flat_map(|inst| &inst.operands)
-                .any(
-                    |operand| match operand {
-                        Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == *saved,
-                        _ => false,
-                    },
-                )
-        })
-        .collect();
-    let fixed: Vec<i32> = function.fixed.keys().rev().copied().collect();
-    let mut objects: Vec<Object> = fixed
-        .iter()
-        .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
-        .collect();
-    // the static allocas, then the spill slots, are locals after the fixed
-    // objects (`getStackSlotRange`: one long each)
-    objects.extend(function.locals.iter().map(|&(_, size, align)| Object {
-        size,
-        align,
-        offset: 0,
-        callee_saved: false,
-        dead: false,
-    }));
-    objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
-    let frame_indices: Vec<i32> =
-        fixed.iter().copied().chain(function.locals.iter().map(|local| local.0)).chain(slots.iter().copied()).collect();
-    let call_area = |kept_sequences: &dyn Fn(usize) -> bool| -> i64 {
-        insts
-            .iter()
-            .enumerate()
-            .filter(|(at, inst)| inst.kind == Kind::Op("ADJCALLSTACKDOWN") && kept_sequences(*at))
-            .filter_map(|(_, inst)| match inst.operands.first() {
-                Some(Operand::Imm(bytes)) => Some(*bytes),
-                _ => None,
-            })
-            .max()
-            .unwrap_or(0)
-    };
-    let frame_of = |max_call_frame: i64| {
-        frame::layout(&Function {
-            fixed: fixed.len(),
-            objects: objects.clone(),
-            saved: used.clone(),
-            max_call_frame,
-            stack_align: if short { frame::SHIPPED_STACK_ALIGN } else { 0 },
-            adjusts_stack: has_calls,
-            ..Function::default()
-        })
-    };
+    let inputs = FrameInputs::of(&insts, function, assignment, slots, short);
+    let frame_indices = &inputs.frame_indices;
+    let call_area = |kept_sequences: &dyn Fn(usize) -> bool| call_area(&insts, kept_sequences);
+    let frame_of = |max_call_frame: i64| inputs.layout(max_call_frame);
+    let wants_size = pushes == Some(crate::timing::Price::Size);
     let pushes = match pushes {
-        Some(size) => crate::callpush::plan(&insts, &blocks, assignment, cpu, size, short, |max_call_frame| {
-            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short)?;
+        Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, |max_call_frame| {
+            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
             frame_cost_with(&[opening, closing].concat(), cpu, short)
         })?,
         None => crate::callpush::Plan::default(),
     };
     let layout = frame_of(call_area(&|at| pushes.keeps_frame(at)));
     let mut out = Vec::new();
-    let (opening, closing) = frame_ops(&layout, cpu, push_frame, short)?;
+    let (opening, closing) = frame_ops(&layout, cpu, push_frame, short, wants_size)?;
     opening.iter().for_each(|op| frame_op(op, &mut out, short));
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
     let mut marks: Vec<(usize, Row)> = Vec::new();
-    // The frame is made by the opening ops: the next row ends the prologue.
-    let mut frame_made = !opening.is_empty();
+    // The first row with a line ends the prologue, whether or not the opening
+    // ops made a frame (the pin flags a frameless function's too; #7199 made
+    // this one frameless).
+    let mut frame_made = true;
     let mut last_origin = 0u32;
     let mut block_top = false;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
+    // the bytes of finished calls' arguments still on the stack: their cleanups
+    // wait for the next instruction that needs the stack pointer as it is
+    let mut owed = 0i64;
+    let mut last_block = 0usize;
     // the values of the stores whose pushes wait for the call, by offset
     let mut waiting: Vec<(i64, usize)> = Vec::new();
-    let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
+    let blocks: Vec<usize> = kept.iter().map(|(at, _)| *at).collect();
+    let mut block_of = blocks.iter().copied().peekable();
     let mut shown = 0usize;
     // the operands of `inst` as the printer has them, with `pushed` bytes
     // more on the stack than the frame accounts for
     let convert = |inst: &crate::mfunc::Inst, pushed: i64| -> Result<Vec<mc::Operand>, String> {
         let mut converted = Vec::new();
-        let mut it = inst.operands.iter().peekable();
-        while let Some(operand) = it.next() {
+        let indexed_base = match inst.kind {
+            Kind::Op(name) => crate::scaledindex::memory_at(name).map(|(base, _)| base),
+            Kind::Copy => None,
+        };
+        let mut it = inst.operands.iter().enumerate().peekable();
+        while let Some((position, operand)) = it.next() {
             converted.push(match operand {
                 Operand::Def(r) | Operand::Use(r) => mc::Operand::Reg(physical(*r, assignment)),
                 Operand::Imm(value) => {
                     // a frame index follows the displacement it adds to
-                    if let Some(Operand::Frame(index)) = it.peek() {
+                    if let Some((_, Operand::Frame(index))) = it.peek() {
                         let at = frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
                         let (base, disp) = layout.address(at);
                         it.next();
-                        converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
+                        let shown = value + disp + if base == Base::Sp { pushed } else { 0 };
+                        // the displacement of an indexed operand is 8 bits;
+                        // `pushed` is known only here
+                        if indexed_base == Some(position + 1) && i8::try_from(shown).is_err() {
+                            return Err(crate::frameindexed::OUT_OF_RANGE.to_owned());
+                        }
+                        converted.push(mc::Operand::Imm(shown));
                         converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
                         continue;
                     }
@@ -373,6 +511,9 @@ pub fn finish_with(
     // the push of argument store `store`, `pushed` bytes down: of its value,
     // or of the memory the load folded into it reads
     let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
+        if let Some((base, offset)) = pushes.address_push(store) {
+            return Ok(crate::callpush::address_push(base, offset));
+        }
         match pushes.folded_load(store) {
             Some(load) => {
                 let Kind::Op(name) = insts[load].kind else { return Err("a folded load is an instruction".to_owned()) };
@@ -381,14 +522,59 @@ pub fn finish_with(
                 let opcode = crate::callpush::memory_push(name).ok_or("a folded load has a push")?;
                 Ok(mc::Inst { opcode, operands })
             }
+            None if matches!(insts[store].kind, Kind::Op("CLR32p" | "CLR32j")) => {
+                // a `clr.l` store has no value operand: it stores zero
+                Ok(crate::callpush::push_of_sized(&mc::Operand::Imm(0), wants_size))
+            }
             None => {
                 let operands = convert(insts[store], pushed)?;
-                Ok(crate::callpush::push_of(operands.last().ok_or("a push of nothing")?))
+                Ok(crate::callpush::push_of_sized(operands.last().ok_or("a push of nothing")?, wants_size))
             }
         }
     };
+    // Whether the stack pointer must be as the frame has it before the call
+    // that takes the arguments pushed at `from`: a block change or such an
+    // instruction comes first, and the cleanups owed would then pop these
+    // arguments instead of the earlier call's.
+    let pays_before_call = |from: usize| -> bool {
+        for next in from..insts.len() {
+            if blocks[next] != blocks[from] {
+                return true;
+            }
+            let inst = insts[next];
+            if inst.call {
+                return false;
+            }
+            if pushes.is_dropped(next)
+                || pushes.is_push(next)
+                || pushes.is_down(next)
+                || pushes.deferred_offset(next).is_some()
+                || pushes.cleanup(next).is_some()
+            {
+                continue;
+            }
+            if inst.terminator
+                || inst.barrier
+                || matches!(
+                    inst.kind,
+                    Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                )
+                || crate::callpush::names_sp(inst, assignment)
+            {
+                return true;
+            }
+        }
+        true
+    };
     for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
+        if owed > 0 && at != last_block {
+            // a block is entered with the stack as its predecessors left it
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
+        }
+        last_block = at;
         while shown <= at {
             if targeted.contains(&shown) {
                 flush(&mut out, &mut marks, &mut lines);
@@ -413,6 +599,21 @@ pub fn finish_with(
         if inst.origin != 0 {
             last_origin = inst.origin;
         }
+        if owed > 0
+            && (pushes.is_push(index) || (pushes.flushes(index) && !waiting.is_empty()))
+            && pays_before_call(index)
+        {
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
+        }
+        if pushes.flushes(index) {
+            waiting.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, store) in waiting.drain(..) {
+                out.push(push_for(store, pushed)?);
+                pushed += 4;
+            }
+        }
         let operands = convert(inst, pushed)?;
         if pushes.is_dropped(index) {
             continue;
@@ -420,13 +621,6 @@ pub fn finish_with(
         if let Some(offset) = pushes.deferred_offset(index) {
             waiting.push((offset, index));
             continue;
-        }
-        if inst.call && !waiting.is_empty() {
-            waiting.sort_by(|a, b| b.0.cmp(&a.0));
-            for (_, store) in waiting.drain(..) {
-                out.push(push_for(store, pushed)?);
-                pushed += 4;
-            }
         }
         if pushes.is_push(index) {
             out.push(push_for(index, pushed)?);
@@ -437,9 +631,28 @@ pub fn finish_with(
             continue;
         }
         if let Some(bytes) = pushes.cleanup(index) {
-            frame_op(&FrameOp::AddSp(bytes), &mut out, short);
-            pushed -= bytes;
+            if function.returns_twice {
+                frame_op(&FrameOp::AddSp(bytes), &mut out, short);
+                pushed -= bytes;
+            } else {
+                owed += bytes;
+            }
             continue;
+        }
+        // an instruction that reads the stack pointer as the frame has it, or
+        // leaves the block, finds the cleanups done
+        if owed > 0
+            && (inst.terminator
+                || inst.barrier
+                || matches!(
+                    inst.kind,
+                    Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                )
+                || crate::callpush::names_sp(inst, assignment))
+        {
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
         }
         match inst.kind {
             Kind::Copy => {

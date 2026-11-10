@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Allocate one function's pre-allocation LIR with the pin and with llrm, on the same input.
 
-    check.py FUNCTION FILE.c [llrm-c flags]      # default flags: -m32 -mabi=sysv -march=i486 -O2
+    check.py FUNCTION FILE.c [llrm-cc flags]      # default flags: -m32 -mabi=sysv -march=i486 -O2
 
-llrm-c prints the function as MIR (`LLRM_MIR_PRINT`); the pin's `llc -run-pass=greedy,virtregrewriter` allocates it; the stack
+llrm-cc prints the function as MIR (`LLRM_MIR_PRINT`); the pin's `llc -run-pass=greedy,virtregrewriter` allocates it; the stack
 references of the pin's result (spill stores, reloads, argument reads) is counted next to what llrm's spiller recorded for the same input (stores, reloads, folded reloads). Only the
 integer forms `backend/mirprint.rs` knows are printed; any other instruction is named and the run stops.
 """
@@ -21,7 +21,7 @@ LLC = Path(os.environ.get("LLC") or Path.home() / "scratch/llvm-build/bin/llc")
 
 
 def llrm_c() -> str:
-    return os.environ.get("LLRM_C") or str(REPO / "target/debug/llrm-c")
+    return os.environ.get("LLRM_C") or str(REPO / "target/debug/llrm-cc")
 
 
 def spill_counts(stderr: str) -> dict[str, int]:

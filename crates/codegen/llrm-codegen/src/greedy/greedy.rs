@@ -402,6 +402,13 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> i64 {
         0
     }
+    /// DEVIATE C5: see `TargetInstrInfo::encoding_class`.
+    fn encoding_class(
+        &self,
+        _phys: RegId,
+    ) -> Option<u8> {
+        None
+    }
     /// `TRI->getCSRFirstUseCost(MF)`: what the first use of a callee-saved
     /// register costs in entry-block executions (X86: `push` and `pop`).
     fn csr_first_use_cost(&self) -> u32 {
@@ -419,6 +426,21 @@ pub trait GreedyEnv: SpillWeightEnv {
     /// restore cost more than a spill. Exit: none, a target knob.
     fn csr_spill_first(&self) -> bool {
         false
+    }
+    /// DEVIATE CSR5: where code is sized in bytes, whether spilling `virt`
+    /// (`reads` instructions read it, `writes` write it; `def_reads_registers`: a
+    /// definition of it reads a register) is shorter than the
+    /// first use of the callee-saved `phys`, counted in static bytes, not
+    /// frequency. None: the pin's rule. Exit: none, a target knob.
+    fn csr_spill_costs_less(
+        &self,
+        _virt: u32,
+        _phys: RegId,
+        _reads: u32,
+        _writes: u32,
+        _def_reads_registers: bool,
+    ) -> Option<bool> {
+        None
     }
 }
 
@@ -539,6 +561,19 @@ fn decision_line(
     verdict: &str,
 ) -> String {
     format!("dec v{reg} stage={stage:?} size={size} w={weight:.4} -> {verdict}")
+}
+
+/// One line of `LLRM_GREEDY_DECISIONS` for `tryEvict`: why `virt` may or may
+/// not take `phys` by evicting what holds it (`verdict`: the interfering
+/// interval and the rule that denied or allowed it). Two builds' lines diff to
+/// the first eviction that changed; without them a spill the pin avoids by
+/// evicting a lighter interval cannot be told from a split.
+fn eviction_line(
+    virt: u32,
+    phys: &str,
+    verdict: &str,
+) -> String {
+    format!("  evict? v{virt} {phys}: {verdict}")
 }
 
 type RecolorStack = Vec<(Rc<LiveInterval>, RegId)>;
@@ -768,11 +803,18 @@ impl<'a> RAGreedy<'a> {
             let decision = self.select_or_split(&virt_reg, &mut split_vregs);
             if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
                 let verdict = match &decision {
-                    Select::Reg(phys) => format!("assign {phys:?}"),
+                    Select::Reg(phys) => format!("assign {}", self.matrix.tri().name(*phys)),
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
-                eprintln!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
+                eprintln!(
+                    "  hint {:?} prio {:#x}",
+                    self.simple_hint(virt_reg.reg()).map(|hint| match hint {
+                        Hint::Phys(phys) => self.matrix.tri().name(phys),
+                        Hint::Virt(virt) => format!("v{virt}"),
+                    }),
+                    self.get_priority(&virt_reg)
+                );
                 eprintln!(
                     "{}",
                     decision_line(
@@ -1035,8 +1077,10 @@ impl<'a> RAGreedy<'a> {
         Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
     }
 
-    /// DEVIATE C5 (no number yet; exit: re-evaluated against the pin at
-    /// 2026-11-20 with the other numbered DEVIATEs). Pin: `tryAssign` takes the
+    /// DEVIATE C5 (owner greedy-subreg; exit 2026-12-05: replaced by a general
+    /// rule or kept with a new number). Without it the m32+m64 bench has 17
+    /// rows worse, +299 B (grep O2 +48, matmul +32, nbody_fixed +32); it costs
+    /// 30.9 M Ir on memory_expansion O2 (0.3%). Pin: `tryAssign` takes the
     /// first free register of the allocation order
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L532>),
     /// whatever its encoding costs. Evidence: m64 O2 frames 243 B against
@@ -1063,6 +1107,9 @@ impl<'a> RAGreedy<'a> {
         let class =
             |this: &Self, reg: RegId| (this.env.reg_cost(reg), is_unused_callee_saved_reg(this.env, &this.matrix, reg));
         let (mut best, mut best_bytes, kind) = (first, bytes(self.env, first), class(self, first));
+        // Registers of one encoding class take the same bytes: price each once.
+        let mut priced = ClassPrices::default();
+        priced.seed(self.env.encoding_class(first), best_bytes);
         let mut after = false;
         for (reg, is_hint) in order.iter() {
             if reg == first {
@@ -1072,7 +1119,7 @@ impl<'a> RAGreedy<'a> {
             if !after || is_hint || class(self, reg) != kind {
                 continue;
             }
-            let one = bytes(self.env, reg);
+            let one = priced.price(self.env.encoding_class(reg), || bytes(self.env, reg));
             if one < best_bytes && self.matrix.check_interference(virt, reg) == InterferenceKind::Free {
                 (best, best_bytes) = (reg, one);
             }
@@ -1184,6 +1231,18 @@ impl<'a> RAGreedy<'a> {
     /// `canEvictInterferenceBasedOnCost` (RegAllocEvictionAdvisor.cpp#L207):
     /// all interferences between `virt` and `phys` can be evicted for less
     /// than `max_cost` (updated when true).
+    /// The `LLRM_GREEDY_DECISIONS` line of one eviction check ([`eviction_line`]).
+    fn trace_eviction(
+        &self,
+        virt: &Rc<LiveInterval>,
+        phys: RegId,
+        verdict: impl FnOnce() -> String,
+    ) {
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("{}", eviction_line(virt.reg(), &self.matrix.tri().name(phys), &verdict()));
+        }
+    }
+
     fn can_evict_interference_based_on_cost(
         &mut self,
         virt: &Rc<LiveInterval>,
@@ -1194,6 +1253,7 @@ impl<'a> RAGreedy<'a> {
     ) -> bool {
         // It is only possible to evict virtual register interference.
         if self.matrix.check_interference(virt, phys) > InterferenceKind::VirtReg {
+            self.trace_eviction(virt, phys, || "a fixed range holds it".to_owned());
             return false;
         }
         let is_local = virt.empty() || self.lis.interval_is_in_one_mbb(virt).is_some();
@@ -1207,6 +1267,7 @@ impl<'a> RAGreedy<'a> {
             // If there is 10 or more interferences, chances are one is heavier.
             let interferences = self.matrix.query_vregs(virt.reg(), &virt.range, unit, EVICT_INTERFERENCE_CUTOFF);
             if interferences.len() >= EVICT_INTERFERENCE_CUTOFF {
+                self.trace_eviction(virt, phys, || format!("{} or more interferences", EVICT_INTERFERENCE_CUTOFF));
                 return false;
             }
             // Check if any interfering live range is heavier than MaxWeight.
@@ -1217,20 +1278,26 @@ impl<'a> RAGreedy<'a> {
                 // virtual register is one that we
                 // have scavenged a physical register for.
                 if fixed.contains(&intf_reg) {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} is fixed (last-chance recoloring)"));
                     return false;
                 }
                 // Never evict spill products. They cannot split or spill.
                 if self.extra.get_stage(intf_reg) == LiveRangeStage::Done {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} is a spill product"));
                     return false;
                 }
                 let urgent = self.is_urgent_eviction(virt, &intf);
                 // Only evict older cascades or live ranges without a cascade.
                 let intf_cascade = self.extra.get_cascade(intf_reg);
                 if cascade == intf_cascade {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} has the same cascade {cascade}"));
                     return false;
                 }
                 if cascade < intf_cascade {
                     if !urgent {
+                        self.trace_eviction(virt, phys, || {
+                            format!("v{intf_reg} has a newer cascade {intf_cascade} than {cascade}, not urgent")
+                        });
                         return false;
                     }
                     // We permit breaking cascades for urgent evictions. It
@@ -1252,6 +1319,9 @@ impl<'a> RAGreedy<'a> {
                 cost.max_weight = cost.max_weight.max(intf.weight());
                 // Abort if this would be too expensive.
                 if cost.at_least(max_cost) {
+                    self.trace_eviction(virt, phys, || {
+                        format!("v{intf_reg} w={:.4} costs at least the best so far", intf.weight())
+                    });
                     return false;
                 }
                 if urgent {
@@ -1259,6 +1329,9 @@ impl<'a> RAGreedy<'a> {
                 }
                 // Apply the eviction policy for non-urgent evictions.
                 if !self.should_evict(virt, is_hint, &intf, breaks_hint) {
+                    self.trace_eviction(virt, phys, || {
+                        format!("v{intf_reg} w={:.4} is not lighter than v{} w={:.4}", intf.weight(), virt.reg(), virt.weight())
+                    });
                     return false;
                 }
                 // If !MaxCost.isMax(), then we're just looking for a cheap
@@ -1271,10 +1344,12 @@ impl<'a> RAGreedy<'a> {
                     && self.lis.interval_is_in_one_mbb(&intf).is_some()
                     && !self.can_reassign(&intf, phys)
                 {
+                    self.trace_eviction(virt, phys, || format!("local v{intf_reg} cannot move"));
                     return false;
                 }
             }
         }
+        self.trace_eviction(virt, phys, || format!("ok, evicts up to w={:.4}", cost.max_weight));
         *max_cost = cost;
         true
     }
@@ -1438,7 +1513,12 @@ impl<'a> RAGreedy<'a> {
         cost_per_use_limit: u8,
         fixed: &HashSet<u32>,
     ) -> Option<RegId> {
-        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed)?;
+        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed);
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            let verdict = best.map_or_else(|| "none".to_owned(), |phys| self.matrix.tri().name(phys));
+            eprintln!("  try evict v{} -> {verdict}", virt.reg());
+        }
+        let best = best?;
         self.evict_interference(virt, best, new_vregs);
         Some(best)
     }
@@ -1494,6 +1574,16 @@ impl<'a> RAGreedy<'a> {
             original: &self.original,
             hints: &mut self.hints,
         };
+        if OPT_SIZE.with(std::cell::Cell::get) && virt.is_spillable() {
+            let (reads, writes, def_reads) = splitter.static_accesses(virt);
+            if splitter.env.csr_spill_costs_less(virt.reg(), phys, reads, writes, def_reads) == Some(true) {
+                // A split would only make the register this range is not
+                // worth: spill it.
+                splitter.extra.set_stage(virt.reg(), LiveRangeStage::Spill);
+                *cost_per_use_limit = 1;
+                return None;
+            }
+        }
         if stage == LiveRangeStage::Spill && virt.is_spillable() {
             // We choose spill over using the CSR for the first time if the
             // spill cost is lower than CSRCost.
@@ -1813,6 +1903,39 @@ impl<'a> RAGreedy<'a> {
     }
 }
 
+/// DEVIATE C5's prices of one vreg's candidate registers, one per encoding
+/// class (`TargetInstrInfo::encoding_class`).
+#[derive(Default)]
+struct ClassPrices(Vec<(u8, i64)>);
+
+impl ClassPrices {
+    fn seed(
+        &mut self,
+        class: Option<u8>,
+        bytes: i64,
+    ) {
+        if let Some(class) = class {
+            self.0.push((class, bytes));
+        }
+    }
+
+    /// The bytes of a register of `class`, from `compute` unless the class has
+    /// been priced; a register with no class is always priced.
+    fn price(
+        &mut self,
+        class: Option<u8>,
+        compute: impl FnOnce() -> i64,
+    ) -> i64 {
+        let Some(class) = class else { return compute() };
+        if let Some(&(_, known)) = self.0.iter().find(|(one, _)| *one == class) {
+            return known;
+        }
+        let bytes = compute();
+        self.0.push((class, bytes));
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1823,6 +1946,28 @@ mod tests {
     use crate::greedy::matrix::NoFixed;
     use crate::greedy::spill::SimpleSpiller;
     use crate::greedy::virtregmap::RegisterInfo;
+
+    /// C5 priced every candidate register of a vreg by walking all its
+    /// instructions (137 k `encoding_bytes` calls, 23.6 M Ir on
+    /// memory_expansion O2); eight candidates of two classes are two prices.
+    #[test]
+    fn test_candidates_of_one_class_are_priced_once() {
+        let mut prices = ClassPrices::default();
+        prices.seed(Some(0), 0);
+        let mut computed = 0;
+        for class in [0, 1, 1, 0, 1, 1, 0, 1] {
+            prices.price(Some(class), || {
+                computed += 1;
+                i64::from(class)
+            });
+        }
+        assert_eq!(computed, 1, "class 0 was seeded; class 1 priced once");
+        prices.price(None, || {
+            computed += 1;
+            0
+        });
+        assert_eq!(computed, 2, "a register without a class is always priced");
+    }
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -1830,6 +1975,12 @@ mod tests {
     /// reads: it names the interval, its stage, size and weight, and the
     /// outcome. A sys.c function's allocation changed by one removed copy, and
     /// no line said which interval it was (v127, w 0.4365 to 0.3018).
+    #[test]
+    fn test_an_eviction_line_names_the_interval_the_register_and_the_rule() {
+        let line = eviction_line(289, "ECX", "v545 w=6404.0000 is not lighter than v289 w=4717.0000");
+        assert_eq!(line, "  evict? v289 ECX: v545 w=6404.0000 is not lighter than v289 w=4717.0000");
+    }
+
     #[test]
     fn test_a_decision_line_names_the_interval_its_stage_weight_and_outcome() {
         let line = decision_line(127, LiveRangeStage::Split, 1, 0.30180937, "assign EBX");

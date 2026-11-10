@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regenerates the checked-in DAG selector tables from the pin's own tblgen.
 #
-#   tools/dagisel/regen.sh [OUT_DIR]   # default: crates/backend/llrm-dagisel/src/generated
+#   tools/dagisel/regen.sh [OUT_DIR [X86_OUT_DIR]]
+#     defaults: crates/backend/llrm-dagisel/src/generated and crates/target/llrm-x86-dagisel/src/generated
 #
 # DAGISEL_GEN names a built llrm-dagisel-gen to use instead of cargo run.
 # LLVM_SRC is a checkout of the pin and LLVM_BUILD a build of it that has bin/llvm-tblgen.
@@ -12,6 +13,7 @@ LLVM_SRC=${LLVM_SRC:-$HOME/work/personal/llvm-project}
 LLVM_BUILD=${LLVM_BUILD:-$HOME/scratch/llvm-build-assert}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${1:-$ROOT/crates/backend/llrm-dagisel/src/generated}
+X86_OUT=${2:-$ROOT/crates/target/llrm-x86-dagisel/src/generated}
 if [ -z "${WORK:-}" ]; then WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT; fi
 mkdir -p "$WORK"
 
@@ -26,6 +28,10 @@ X=$S/lib/Target/X86
 "$LLVM_BUILD/bin/llvm-tblgen" -gen-dag-isel -I"$X" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" -I"$ROOT/tools/dagisel" \
   -omit-comments "$ROOT/tools/dagisel/m16.td" -o "$WORK/X86GenDAGISel_m16.inc"
 
+# The pin's FastISel rows: the same X86.td, `-gen-fast-isel`.
+"$LLVM_BUILD/bin/llvm-tblgen" -gen-fast-isel -I"$X" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" \
+  -omit-comments "$X/X86.td" -o "$WORK/X86GenFastISel.inc"
+
 # Only the tables name matcher symbols; the predicate code after them names types too.
 sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/X86GenDAGISel.inc" "$WORK/X86GenDAGISel_m16.inc" |
   grep -oE '\b(ISD|X86ISD|MVT|X86|TargetOpcode|MCRegister)::[A-Za-z0-9_]+' | sort -u |
@@ -36,9 +42,15 @@ sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/X86GenDAGISel.inc" "$WORK/X86Gen
   -omit-comments "$ROOT/tools/dagisel/m16.td" -o "$WORK/X86GenInstrInfo.inc"
 python3 -I "$ROOT/tools/dagisel/instrinfo.py" "$WORK/X86GenInstrInfo.inc" "$WORK/instrinfo.txt" "$WORK/instr_symbols.txt"
 
+# The pin's memory fold tables, which the scheduler's unfold reads backwards; their opcodes are symbols too.
+"$LLVM_BUILD/bin/llvm-tblgen" -gen-x86-fold-tables -I"$X" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" \
+  -omit-comments "$X/X86.td" -o "$WORK/X86GenFoldTables.inc"
+sed -n '/^static const X86FoldTableEntry Table2Addr/,/^static const X86FoldTableEntry BroadcastTable1/p' "$WORK/X86GenFoldTables.inc" |
+  grep -oE '\bX86::[A-Za-z0-9_]+' | sort -u > "$WORK/fold_symbols.txt"
+
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u > "$WORK/members.txt"
 extras=$(cat "$ROOT/tools/dagisel/extra_symbols.txt")
-{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; echo "$extras"; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
+{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt" "$WORK/fold_symbols.txt"; echo "$extras"; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
 # The OPC_* and OPFL_* enums are protected members of SelectionDAGISel, and its header will not compile alone: copy the text.
 sed -n '/enum BuiltinOpcodes {/,/^  };/p;/^  enum {/,/^  };/p' "$S/include/llvm/CodeGen/SelectionDAGISel.h" > "$WORK/enums.cpp"
 sed 's/.*/P(&);/' "$WORK/members.txt" > "$WORK/members.cpp"
@@ -56,6 +68,6 @@ g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" -I"$X" -I"$LLVM_BUILD/l
 # Numbers for the X86ISD nodes m16.td defines; the pin's headers do not have them.
 cat "$ROOT/tools/dagisel/own_ids.txt" >> "$WORK/ids.txt"
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$X86_OUT"
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
-"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --inc-m16 "$WORK/X86GenDAGISel_m16.inc" --out "$OUT" --extras "$ROOT/tools/dagisel/extra_symbols.txt" --instrinfo "$WORK/instrinfo.txt"
+"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --inc-m16 "$WORK/X86GenDAGISel_m16.inc" --fastisel-inc "$WORK/X86GenFastISel.inc" --out "$OUT" --x86-out "$X86_OUT" --extras "$ROOT/tools/dagisel/extra_symbols.txt" --instrinfo "$WORK/instrinfo.txt" --fold-tables "$WORK/X86GenFoldTables.inc"

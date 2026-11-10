@@ -674,6 +674,8 @@ mod tests {
             effects: base.effects,
             cache: Default::default(),
             views: base.views,
+            byte_lanes: base.byte_lanes,
+            ties_by_row: base.ties_by_row,
         })))
     }
 

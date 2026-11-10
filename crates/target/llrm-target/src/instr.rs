@@ -20,6 +20,13 @@ pub struct Dialect {
     pub assembler_column: bool,
     /// The flags an arithmetic instruction writes: what a rule's `any` reads.
     pub arithmetic: Vec<String>,
+    /// The letters an opcode file's placeholders take at each width:
+    /// `letters.g = { 32 = "W", 64 = "X" }` (arm64's general register widths).
+    /// A placeholder's first character names the axis of the widths column it
+    /// reads (`{zn}` reads axis `z`, with letters of its own).
+    pub letters: Vec<(String, Vec<(u32, String)>)>,
+    /// The opcode file beside the instruction file, where the family has one.
+    pub opcodes: Option<String>,
 }
 
 impl Dialect {
@@ -84,7 +91,38 @@ impl Dialect {
         if let Some(missing) = arithmetic.iter().find(|name| !flags.iter().any(|(one, _)| one == *name)) {
             return Err(format!("dialect.toml: `arithmetic` names no flag `{missing}`"));
         }
+        let letters = table
+            .get("letters")
+            .and_then(toml::Value::as_table)
+            .map(|axes| {
+                axes.iter()
+                    .map(|(axis, widths)| {
+                        let axis = axis.clone();
+                        let widths = widths
+                            .as_table()
+                            .ok_or_else(|| format!("dialect.toml: `letters.{axis}` is no table"))?
+                            .iter()
+                            .map(|(bits, letter)| {
+                                let bits = bits
+                                    .parse::<u32>()
+                                    .map_err(
+                                        |_| format!("dialect.toml: `letters.{axis}` width `{bits}` is no number"),
+                                    )?;
+                                let letter = letter
+                                    .as_str()
+                                    .ok_or_else(|| format!("dialect.toml: `letters.{axis}.{bits}` is no string"))?;
+                                Ok((bits, letter.to_owned()))
+                            })
+                            .collect::<Result<Vec<_>, String>>()?;
+                        Ok((axis, widths))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
         Ok(Self {
+            letters,
+            opcodes: table.get("opcodes").and_then(toml::Value::as_str).map(str::to_owned),
             file: table.get("file").and_then(toml::Value::as_str).ok_or("dialect.toml: no `file`")?.to_owned(),
             registers: strings("registers")?,
             widths,
@@ -305,11 +343,243 @@ pub fn pinned(
     parse_rows(text, dialect, |pinned| pinned != "-")
 }
 
+/// The Rust source of the `Row` that says what `form` reads, writes, is tied
+/// and pinned to, and does to the flags: what a target's `rows()` returns.
+pub fn row_source(form: &Form) -> String {
+    let list = |names: &[String]| names.iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ");
+    let kinds = form
+        .dests
+        .iter()
+        .chain(&form.sources)
+        .map(|one| format!("{:?}", if one.tied.is_some() { "r" } else { one.kinds.as_str() }))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ties = form
+        .sources
+        .iter()
+        .enumerate()
+        .filter_map(|(at, one)| one.tied.map(|dest| format!("({at}, {dest})")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let pins = form
+        .fixed
+        .iter()
+        .map(|(side, at, root)| format!("({}, {at}, {root:?})", *side == Side::Dest))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Row {{ reads: &[{}], writes: &[{}], kinds: &[{kinds}], width: {}, ties: &[{ties}], pins: &[{pins}], flags_read: {:#x}, flags_written: {:#x} }}",
+        list(&form.reads),
+        list(&form.writes),
+        form.widths.first().copied().unwrap_or(0),
+        form.flags_read,
+        form.flags_written
+    )
+}
+
+/// `pub fn rows(name, dests, sources)`: the rows of every form, keyed by the
+/// form's name and its operand counts, after `header`.
+pub fn rows_source<'a>(
+    forms: impl IntoIterator<Item = &'a Form>,
+    header: &str,
+) -> String {
+    let mut by_key: Vec<((String, usize, usize), Vec<String>)> = Vec::new();
+    for form in forms {
+        let value = row_source(form);
+        let key = (form.name.clone(), form.dests.len(), form.sources.len());
+        match by_key.iter_mut().find(|(one, _)| *one == key) {
+            Some((_, values)) => {
+                if !values.contains(&value) {
+                    values.push(value);
+                }
+            }
+            None => by_key.push((key, vec![value])),
+        }
+    }
+    let mut code = String::from(header);
+    code.push_str("pub fn rows(name: &str, dests: usize, sources: usize) -> &'static [Row] {\n    match (name, dests, sources) {\n");
+    for ((name, dests, sources), values) in &by_key {
+        code.push_str(&format!("        ({name:?}, {dests}, {sources}) => &[{}],\n", values.join(", ")));
+    }
+    code.push_str("        _ => &[],\n    }\n}\n");
+    code
+}
+
+/// A form of an opcode file: the name the selector uses, the LLVM opcodes it
+/// stands for (one, or the alternatives `[A|B]` lists), and the form.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Opcode {
+    pub name: String,
+    pub llvm: Vec<String>,
+    pub form: Form,
+}
+
+/// The forms of an opcode file (`opcodes.instr`): the columns of `parse` with
+/// the assembler column holding LLVM's opcode, and the name and that column
+/// templates. `{g}` and `{f}` are the dialect's letters at each width of the
+/// widths column (`g32,g64,f16`: axes by prefix, every combination);
+/// `{a|b|c}` in both is one alternative per row, in step; `[A|B]` in the
+/// assembler column lists the opcodes one row may be (`LDRSH[W|X]ui`).
+pub fn parse_opcodes(
+    text: &str,
+    dialect: &Dialect,
+) -> Result<Vec<Opcode>, String> {
+    let file = dialect.opcodes.as_deref().unwrap_or(&dialect.file);
+    let mut with_column = dialect.clone();
+    with_column.assembler_column = true;
+    let mut out = Vec::new();
+    for (index, raw) in text.lines().enumerate() {
+        let line = index + 1;
+        let content = raw.split('#').next().unwrap_or("").trim();
+        if content.is_empty() {
+            continue;
+        }
+        let columns: Vec<&str> = content.split_whitespace().collect();
+        if columns.len() != 10 {
+            return Err(format!("{file}:{line}: {} columns, not 10", columns.len()));
+        }
+        let (name, llvm) = (columns[0], columns[9]);
+        let mut axes: Vec<(char, Vec<u32>)> = Vec::new();
+        if columns[3] != "-" {
+            for item in columns[3].split(',') {
+                let axis = item.chars().next().unwrap_or(' ');
+                let bits: u32 = item[axis.len_utf8()..]
+                    .parse()
+                    .map_err(|_| format!("{file}:{line}: width `{item}` is not an axis letter and a number"))?;
+                match axes.iter_mut().find(|(one, _)| *one == axis) {
+                    Some((_, list)) => list.push(bits),
+                    None => axes.push((axis, vec![bits])),
+                }
+            }
+        }
+        let steps = alternatives(name).max(alternatives(llvm));
+        let steps = if steps == 0 { 1 } else { steps };
+        let mut combos: Vec<Vec<(char, u32)>> = vec![Vec::new()];
+        for (axis, list) in &axes {
+            combos = combos
+                .iter()
+                .flat_map(|so_far| {
+                    list.iter().map(move |bits| {
+                        let mut next = so_far.clone();
+                        next.push((*axis, *bits));
+                        next
+                    })
+                })
+                .collect();
+        }
+        for combo in &combos {
+            for step in 0..steps {
+                let spell = |template: &str| -> Result<String, String> {
+                    let mut text = String::new();
+                    let mut rest = template;
+                    while let Some(open) = rest.find('{') {
+                        text.push_str(&rest[..open]);
+                        let close = rest[open..]
+                            .find('}')
+                            .map(|at| open + at)
+                            .ok_or_else(|| format!("{file}:{line}: `{template}` has an unclosed `{{`"))?;
+                        let inside = &rest[open + 1..close];
+                        if inside.contains('|') {
+                            let list: Vec<&str> = inside.split('|').collect();
+                            text.push_str(list.get(step).ok_or_else(|| {
+                                format!("{file}:{line}: `{template}`: alternative {step} of `{{{inside}}}` is missing")
+                            })?);
+                        } else if let Some(axis) = inside.chars().next().filter(|axis| axis.is_ascii_alphabetic()) {
+                            let bits =
+                                combo.iter().find(|(one, _)| *one == axis).map(|(_, bits)| *bits).ok_or_else(|| {
+                                    format!("{file}:{line}: `{{{inside}}}` has no `{axis}` width in the row")
+                                })?;
+                            let letter = dialect
+                                .letters
+                                .iter()
+                                .find(|(one, _)| one == inside)
+                                .and_then(|(_, list)| list.iter().find(|(width, _)| *width == bits))
+                                .map(|(_, letter)| letter.as_str())
+                                .ok_or_else(|| format!("{file}:{line}: no letter for `{inside}` at {bits} bits"))?;
+                            text.push_str(letter);
+                        } else {
+                            return Err(format!("{file}:{line}: `{{{inside}}}` is no placeholder"));
+                        }
+                        rest = &rest[close + 1..];
+                    }
+                    text.push_str(rest);
+                    Ok(text)
+                };
+                let (name, llvm) = (spell(name)?, spell(llvm)?);
+                let (first, alternatives) = match (llvm.find('['), llvm.find(']')) {
+                    (Some(open), Some(close)) if open < close => {
+                        let (head, tail) = (&llvm[..open], &llvm[close + 1..]);
+                        let all: Vec<String> =
+                            llvm[open + 1..close].split('|').map(|one| format!("{head}{one}{tail}")).collect();
+                        (all[0].clone(), all)
+                    }
+                    (None, None) => (llvm.clone(), vec![llvm.clone()]),
+                    _ => return Err(format!("{file}:{line}: `{llvm}` has an unmatched `[` or `]`")),
+                };
+                let width = combo.first().map_or("-".to_owned(), |(_, bits)| bits.to_string());
+                let synthesized = format!(
+                    "{name} {} {} {width} {} {} {} {} {} {first}",
+                    columns[1], columns[2], columns[4], columns[5], columns[6], columns[7], columns[8]
+                );
+                let mut forms = parse(&synthesized, &with_column).map_err(|error| format!("{file}:{line}: {error}"))?;
+                for form in forms.drain(..) {
+                    out.push(Opcode {
+                        name: form.name.clone(),
+                        llvm: alternatives.clone(),
+                        form: Form { line, ..form },
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn alternatives(template: &str) -> usize {
+    template
+        .split('{')
+        .skip(1)
+        .filter_map(|part| part.split('}').next())
+        .filter(|inside| inside.contains('|'))
+        .map(|inside| inside.split('|').count())
+        .max()
+        .unwrap_or(0)
+}
+
+thread_local! {
+    static PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has read a forms text, for the test that a
+/// text is read once however many readers ask.
+pub fn parsed() -> usize {
+    PARSED.with(std::cell::Cell::get)
+}
+
+/// [`parse`], once per distinct text: the DAG tables and the register classes
+/// each read the same forms (the classes only the pinned rows, through
+/// [`pinned`], a second scan of every row for 0.6 M Ir). A target's text is
+/// read with its own dialect.
+pub fn shared(
+    text: &str,
+    dialect: &Dialect,
+) -> Result<std::sync::Arc<Vec<Form>>, String> {
+    static FORMS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<Form>>>>> =
+        std::sync::LazyLock::new(Default::default);
+    if let Some(found) = FORMS.lock().expect("the forms lock").get(text) {
+        return Ok(std::sync::Arc::clone(found));
+    }
+    let forms = std::sync::Arc::new(parse(text, dialect)?);
+    FORMS.lock().expect("the forms lock").insert(text.to_owned(), std::sync::Arc::clone(&forms));
+    Ok(forms)
+}
+
 fn parse_rows(
     text: &str,
     d: &Dialect,
     keep: impl Fn(&str) -> bool,
 ) -> Result<Vec<Form>, String> {
+    PARSED.with(|count| count.set(count.get() + 1));
     let file = &d.file;
     let mut forms = Vec::new();
     for (index, raw) in text.lines().enumerate() {
@@ -390,6 +660,53 @@ fn parse_rows(
 
 #[cfg(test)]
 mod tests {
+    /// A dialect with letters, as arm64's opcode file reads.
+    fn letters() -> Dialect {
+        Dialect::parse(
+            "file = \"arm64.instr\"\nregisters = [\"x0\"]\nwidths = [16, 32, 64]\n\
+             [flags]\nZ = 4\n[letters]\ng = { 32 = \"W\", 64 = \"X\" }\nf = { 16 = \"H\", 32 = \"S\", 64 = \"D\" }\n",
+        )
+        .expect("a dialect")
+    }
+
+    fn names(text: &str) -> Vec<String> {
+        parse_opcodes(text, &letters()).expect("parses").into_iter().map(|one| one.name).collect()
+    }
+
+    /// One row names every combination of its axes' widths, an opcode file's
+    /// template standing for the lines nobody should copy by hand.
+    #[test]
+    fn an_opcode_row_names_every_combination_of_its_widths() {
+        assert_eq!(names("ADD{g}ri binary r/r,i,i g32,g64 alu - - - -/- ADD{g}ri"), ["ADDWri", "ADDXri"]);
+        let both = names("FCVTZS{g}{f}r unary r/x g32,g64,f16,f32,f64 fp_cvt - - - -/- FCVTZS{g}{f}r");
+        assert_eq!(both.len(), 6);
+        assert!(both.contains(&"FCVTZSXHr".to_owned()) && both.contains(&"FCVTZSWDr".to_owned()));
+    }
+
+    /// An alternative of the name goes with the same alternative of the opcode;
+    /// `[A|B]` lists the opcodes one name may be.
+    #[test]
+    fn alternatives_go_in_step_and_a_bracket_lists_opcodes() {
+        let rows = parse_opcodes(
+            "LDRX.{ui|pre} move r/m - load - - - -/- LDRX{ui|pre}\nLDRSH.ui move r/m - load - - - -/- LDRSH[W|X]ui",
+            &letters(),
+        )
+        .expect("parses");
+        assert_eq!((rows[0].name.as_str(), rows[0].llvm.clone()), ("LDRX.ui", vec!["LDRXui".to_owned()]));
+        assert_eq!((rows[1].name.as_str(), rows[1].llvm.clone()), ("LDRX.pre", vec!["LDRXpre".to_owned()]));
+        assert_eq!(rows[2].llvm, ["LDRSHWui", "LDRSHXui"]);
+    }
+
+    /// A placeholder with no width in the row, or no letter for it, is an
+    /// error naming the line.
+    #[test]
+    fn a_placeholder_without_a_letter_names_its_line() {
+        let error = parse_opcodes("ADD{g}ri binary r/r,i,i - alu - - - -/- ADD{g}ri", &letters()).unwrap_err();
+        assert!(error.contains(":1:") && error.contains("{g}"), "{error}");
+        let error = parse_opcodes("ADD{g}ri binary r/r,i,i g16 alu - - - -/- ADD{g}ri", &letters()).unwrap_err();
+        assert!(error.contains("no letter for `g` at 16 bits"), "{error}");
+    }
+
     use super::*;
 
     /// A dialect with an assembler column, as x86's.
@@ -399,6 +716,19 @@ mod tests {
              [flags]\nCF = 16\nZF = 4\n",
         )
         .expect("a dialect")
+    }
+
+    /// The DAG tables and the register classes each read the x86 forms: two
+    /// reads of one text per compile. However often a text is asked, it is
+    /// read once.
+    #[test]
+    fn test_a_forms_text_is_read_once_however_often_it_is_asked() {
+        let text = "forms_once_probe binary r/r,r 32 alu_rr - - - -/- Add_{w}";
+        let before = parsed();
+        for _ in 0..20 {
+            assert_eq!(shared(text, &dialect()).expect("parses").len(), 1);
+        }
+        assert_eq!(parsed() - before, 1);
     }
 
     /// A shift, condition or extension operand was refused as "not made of the

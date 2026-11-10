@@ -18,4 +18,4 @@ pub mod isd;
 pub mod libcalls;
 pub mod lowering;
 pub mod mvt;
-pub mod x86isd;
+pub mod target_names;

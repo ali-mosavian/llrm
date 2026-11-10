@@ -48,7 +48,7 @@ fn int(
 }
 
 fn align(value: Option<u64>) -> Vec<Attribute> {
-    value.map(|bytes| Attribute::Int("align".to_owned(), bytes)).into_iter().collect()
+    value.map(|bytes| Attribute::Int("align".into(), bytes)).into_iter().collect()
 }
 
 /// A call of `name` (type `ty`) with `arguments`, placed before `before`.

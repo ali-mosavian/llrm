@@ -110,7 +110,7 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     if (fdb_of(channel))
         qb_error(BE_FILEOPEN);
     path_of(name, path);
-    str_tmp_free(name);
+    str_free_if_tmp(name);
     if (record_length == -1)
         record_length = DEFAULT_RECORD;
     if (record_length <= 0)
@@ -164,7 +164,7 @@ void B_KILL(SD *name)
     long result;
 
     path_of(name, path);
-    str_tmp_free(name);
+    str_free_if_tmp(name);
     for (at = 0; path[at]; at++)
         if (path[at] == '*' || path[at] == '?') {
             kill_matches(path);
@@ -188,8 +188,8 @@ void B_NAME(SD *old, SD *new_name)
 
     path_of(old, from);
     path_of(new_name, to);
-    str_tmp_free(old);
-    str_tmp_free(new_name);
+    str_free_if_tmp(old);
+    str_free_if_tmp(new_name);
     result = llrm_os_rename((os_path)from, (os_path)to);
     if (result >= 0)
         return;
@@ -214,7 +214,7 @@ static void directory_call(SD *name, enum DirectoryCall call)
     long result;
 
     path_of(name, path);
-    str_tmp_free(name);
+    str_free_if_tmp(name);
     if (call == DIR_MAKE)
         result = llrm_os_mkdir((os_path)path);
     else if (call == DIR_CHANGE)

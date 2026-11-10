@@ -6,6 +6,9 @@ import sys, re, os, json, tempfile, shutil, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
+# OURS_CPU=65c02: the 65C02 target and cc65 target
+CPU = os.environ.get("OURS_CPU", "6502")
+SIM = "sim" + CPU
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
 CORPUS = Path(os.environ.get("OURS_CORPUS", HERE.parents[1] / "tests" / "run" / "c"))
@@ -18,6 +21,10 @@ TYPES = [f"-D__{n}_TYPE__={t}" for n, t in (("INT8", "signed char"), ("UINT8", "
 INSNS = os.environ.get("SIM65_INSNS", os.path.expanduser("~/scratch/cc65-v2.19-src/sim65-insns"))
 PADS = [int(x) for x in os.environ.get("OURS_PADS", os.environ.get("OURS_PAD", "0")).split(",")]
 PAD = PADS[0]
+if len(PADS) > 1 and max(PADS) - min(PADS) < 64:
+    # sim65 charges a cycle per page crossing, which moves with the code's address: pads within a few bytes of
+    # each other see one layout (wide_shift_by_one: 607,141 at pads 0..16 and 619,097 at 200, 2026-11-08)
+    sys.exit(f"OURS_PADS={PADS}: the pads span {max(PADS) - min(PADS)} bytes; they must span 64 or more to sample page crossings")
 # the runtime (mos_rt.s) of the tree under test: there is no default, a stale one hid 8 link failures and could skew an A/B
 if not os.environ.get("OURS_RT"):
     sys.exit("ours_cr: OURS_RT is not set: name the mos_rt.s of the tree under test (one per side of an A/B)")
@@ -42,7 +49,8 @@ def reachable_runtime(text):
             blocks[-1][1] += line + "\n"
         if line.startswith(".export"): pending += line + "\n"
     by = {n: i for i, (n, _) in enumerate(blocks)}
-    toks = lambda t: [by[x] for x in re.split(r"[^A-Za-z0-9_]", t) if x in by]
+    # a name in a comment is not a reference (the Rust port reads code only)
+    toks = lambda t: [by[x] for line in t.splitlines() for x in re.split(r"[^A-Za-z0-9_]", line.split(";")[0]) if x in by]
     want = [False] * len(blocks); q = list(toks(text))
     while q:
         i = q.pop()
@@ -132,8 +140,8 @@ def bytes_of(mapfile, objs=()):
     return tot
 def base_members(work):
     w = Path(tempfile.mkdtemp(prefix="base-", dir=work)); (w / "d.s").write_text(driver()); (w / "f.s").write_text(".export main\nmain: rts\nrc0=$80\nrc1=$81\nrc2=$82\nrc3=$83\nrc4=$84\nrc5=$85\n")
-    k = sh(["cl65", "-t", "sim6502", "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
-    return set(re.findall(r"sim6502\.lib\((\w+)\.o\)", (w / "x.map").read_text()))
+    k = sh(["cl65", "-t", SIM, "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
+    return set(re.findall(SIM + r"\.lib\((\w+)\.o\)", (w / "x.map").read_text()))
 def split_output(stdout):
     """sim65 prints "<n> cycles" straight after the program's output; the driver ends its dump with a newline so a last byte that is an ASCII digit is not read as part of n."""
     m = re.search(rb"\n(\d+) cycles\n$", stdout)
@@ -141,13 +149,14 @@ def split_output(stdout):
 
 sys.path.insert(0, str(HERE))
 import crlib
+from flagset import CORPUS_COMMON, program_flags
 RTDIR = Path(os.environ.get("RT_DIR", HERE.parents[1] / "runtime" / "compiler-rt"))
 def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the runtime routines the program and the modules name
     """Add the compiler-rt member of every symbol the link leaves unresolved, until it links."""
     objs = []; have = set(); mods = ""; index = crlib.index(RTDIR)
     for _ in range(12):
         (w / "f.s").write_text(".autoimport +\n" + asm_text(mods))
-        k = sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+        k = sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode == 0: return objs, None
         und = sorted(set(re.findall(r"Unresolved external '(\w+)'", k.stderr)))
         new = {index[u] for u in und if u in index} - have
@@ -156,18 +165,21 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
             stem = file.replace("/", "_")[:-2]
             text = crlib.member(RTDIR, cc, file, flags)
             have.add(file); (w / (stem + ".s")).write_text(".autoimport +\n" + text); mods += text
-            a = sh(["ca65", "-t", "sim6502", "-o", stem + ".o", stem + ".s"], w)
+            a = sh(["ca65", "-t", SIM, "-o", stem + ".o", stem + ".s"], w)
             if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
             objs.append(stem + ".o")
     return objs, "no fixpoint"
 def one(job):
     path, level, lib = job
-    name = path.stem; w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
+    name = path.stem
+    if not path.with_suffix(".out").exists():
+        return name, "NO-OUT", "no .out beside the source: a helper, not a program (counted, not measured)"
+    w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
     want = expected(path.with_suffix(".out"))
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", "-fsigned-char", "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, f"--target={CPU}-sim65", flag, "-S", "-w", *CORPUS_COMMON, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:
@@ -187,11 +199,11 @@ def one(job):
         (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm)
     out = []
     for dump in (True, False):
-        k = sh(["cl65", "-t", "sim6502", *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+        k = sh(["cl65", "-t", SIM, *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode:
             und = sorted(set(re.findall(r"Unresolved external '(\w+)'", k.stderr)))
             return name, "LINK", (" ".join(und) or k.stderr[-100:])[:140]
-        alien = set(re.findall(r"sim6502\.lib\((\w+)\.o\)", (w / "x.map").read_text())) - BASE
+        alien = set(re.findall(SIM + r"\.lib\((\w+)\.o\)", (w / "x.map").read_text())) - BASE
         if alien:
             return name, "ALIEN", "links the cc65 library: " + ",".join(sorted(alien))
         try:
@@ -210,14 +222,14 @@ def one(job):
     # is not the program's clocks. Mean over the other paddings of code.
     for pad in PADS[1:]:
         (w / "f.s").write_text(".autoimport +\n" + f'.segment "CODE"\n.res {pad}\n' + asm + runtime(asm + modtext))
-        k = sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+        k = sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode:
             return name, "LINK", k.stderr[-100:]
         r = sh(["sim65", "-c", "-x", "4000000000", "x.bin"], w, timeout=120, text=False)
         cycles.append(int(re.search(rb"(\d+) cycles", r.stdout).group(1)))
     # executed instructions and bytes of the first layout (the padding is not the program's bytes)
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + runtime(asm + modtext))
-    sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+    sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
     nb = bytes_of(w / "x.map", objs)
     ins = sh([INSNS, "-c", "-x", "4000000000", "x.bin"], w, timeout=300, text=False)
     m = re.search(rb"(\d+) instructions", ins.stdout + ins.stderr)

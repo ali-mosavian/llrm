@@ -67,7 +67,7 @@ fn test_only_omax_searches_every_shape() {
 #[test]
 fn each_level_selects_gcc_s_passes() {
     // (scalar passes, last call inlined, inlines at all, pre, sibling calls,
-    // fill, peel, unswitch, copies may grow)
+    // fill, unswitch)
     let row = |level: &str| {
         let o = pipeline(&[level]);
         (
@@ -77,18 +77,16 @@ fn each_level_selects_gcc_s_passes() {
             o.pre,
             o.sibcalls,
             o.loopidioms,
-            o.peel,
             o.unswitch,
-            o.limits.grows,
             o.unroll,
         )
     };
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
     // -O1 inlines as the pin's does (225, #3249).
-    assert_eq!(row("-O1"), (scalar, true, true, false, true, true, false, false, false, true));
-    assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
-    assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
+    assert_eq!(row("-O1"), (scalar, true, true, false, true, true, false, true));
+    assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, true));
+    assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
     assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
@@ -108,16 +106,12 @@ fn each_level_selects_gcc_s_passes() {
         (225, 225, 250)
     );
     let max = pipeline(&["-Omax"]);
-    assert_eq!(max.limits, Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() });
-    assert_eq!(pipeline(&["-O3"]).limits.max_unroll_iterations, 16, "only -Omax lifts the trip cap");
-    assert_eq!((max.inline, max.unroll, max.peel), (Threshold { cp_clone: true, ..Threshold::new(250) }, true, true));
+    assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
+    assert_eq!((max.inline, max.unroll), (Threshold { cp_clone: true, ..Threshold::new(250) }, true));
     let os = pipeline(&["-Os"]);
-    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
+    assert_eq!((os.inline, os.unroll), (Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!(
-        (oz.limits.grows, oz.inline, oz.unroll, oz.peel),
-        (false, Threshold::default().for_min_size(), false, false)
-    );
+    assert_eq!((oz.inline, oz.unroll), (Threshold::default().for_min_size(), false));
     assert!(parsed(&["-O4"]).is_err());
 }
 
@@ -149,7 +143,6 @@ fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
     assert_eq!(options.inline, Threshold::new(0));
-    assert_eq!(pipeline(&["-O2", "-fno-peel-loops", "-fpeel-loops"]).peel, true);
     assert_eq!(pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline, Threshold::default());
     let error = parsed(&["-fno-vectorize"]).unwrap_err();
     assert!(error.contains("-fno-vectorize") && error.contains("-funroll-loops"), "{error}");
@@ -444,4 +437,27 @@ fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
     assert!(options.cgpaddr);
     assert!(apply_pass_flag(&mut options, "-fno-llrm-cgpaddr"));
     assert!(!options.cgpaddr);
+}
+
+/// `Options::peel` was read nowhere: `-fno-peel-loops` and `-fpeel-loops`
+/// changed no object on x86_64, x86_32, m68k or arm64. A drop-in driver keeps
+/// taking the switches of gcc and clang that it ignores, so both stay accepted
+/// and change nothing.
+#[test]
+fn fpeel_loops_and_fno_peel_loops_are_accepted_and_change_nothing() {
+    let mut options = pipeline(&["-O2"]);
+    let before = options.clone();
+    assert!(apply_pass_flag(&mut options, "-fno-peel-loops"));
+    assert!(apply_pass_flag(&mut options, "-fpeel-loops"));
+    assert_eq!(options, before);
+}
+
+/// llrm-nib took its `-f` flags through `Flags::take`, not `apply_pass_flag`:
+/// `-fno-peel-loops` was refused there ("unknown option") and `--dump` exited 2
+/// after the peel switch was deleted. Both paths take both switches.
+#[test]
+fn flags_take_accepts_fpeel_loops_and_fno_peel_loops() {
+    let mut flags = Flags::default();
+    assert_eq!(flags.take(&["-fno-peel-loops".to_owned()], &mut 0), Ok(true));
+    assert_eq!(flags.take(&["-fpeel-loops".to_owned()], &mut 0), Ok(true));
 }

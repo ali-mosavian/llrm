@@ -20,14 +20,13 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::instr::{InstrDesc, OperandDesc};
 pub use llrm_spike_mf as mf;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::reg as pin;
@@ -289,7 +288,10 @@ impl Emitter<'_> {
             _ => None,
         };
         let n = self.dag.node(SDValue { node, res: 0 });
-        let unsupported = || "SUBREG_TO_REG of anything but a cleared low word".to_owned();
+        let unsupported = || "SUBREG_TO_REG of anything but a cleared low word or a rotated low word".to_owned();
+        if let Some(rotate) = n.ops.iter().copied().find(|op| name_of(self, *op) == Some("ROL16di")) {
+            return self.rotated_low_word(node, rotate, into);
+        }
         let clear = n.ops.iter().copied().find(|op| name_of(self, *op) == Some("CLR16dd")).ok_or_else(unsupported)?;
         let extract = *self.dag.node(clear).ops.first().ok_or_else(unsupported)?;
         let swap = *self.dag.node(extract).ops.first().ok_or_else(unsupported)?;
@@ -317,6 +319,45 @@ impl Emitter<'_> {
         mask.ties = vec![(0, 1)];
         into.push(mask);
         // the mask sets the codes the cleared word (`CLR16dd`) was to set
+        self.flags_from = None;
+        Ok(())
+    }
+
+    /// `SUBREG_TO_REG (ROL16di (EXTRACT_SUBREG x) k)`: the pin's `bswap`
+    /// rotates the low word of a register in place (`rol.w #8, dn; swap dn;
+    /// rol.w #8, dn`), the high word staying as it was. Sub-register lanes
+    /// are the pin's coalescer's, not this allocator's: it is the register
+    /// rotated by `rol.w`, one definition tied to its source, and the dead
+    /// extract and 16-bit rotate are dropped.
+    fn rotated_low_word(
+        &mut self,
+        node: u32,
+        rotate: SDValue,
+        into: &mut Vec<Inst>,
+    ) -> Result<(), String> {
+        let unsupported = || "SUBREG_TO_REG of a rotate that is not of a sub-register".to_owned();
+        let rol = self.dag.node(rotate);
+        let (extract, amount) = (*rol.ops.first().ok_or_else(unsupported)?, *rol.ops.get(1).ok_or_else(unsupported)?);
+        let ISD::Machine(code) = self.dag.opcode(rotate) else { return Err(unsupported()) };
+        let desc = local::desc(code as u16).ok_or("ROL16di: no description")?;
+        let ISD::Machine(extract_code) = self.dag.opcode(extract) else { return Err(unsupported()) };
+        if opcode_name(extract_code) != Some("EXTRACT_SUBREG") {
+            return Err(unsupported());
+        }
+        let base = *self.dag.node(extract).ops.first().ok_or_else(unsupported)?;
+        let Some(Operand::Use(source)) = self.operand(base)? else { return Err(unsupported()) };
+        let Some(amount) = self.operand(amount)? else { return Err(unsupported()) };
+        let dead: Vec<Reg> =
+            [rotate, extract].iter().filter_map(|v| self.values.get(&(v.node, v.res)).copied()).collect();
+        into.retain(|inst| {
+            !matches!(
+                inst.operands.first(),
+                Some(Operand::Def(reg)) if dead.contains(reg)
+            )
+        });
+        let dst = self.new_reg(Class::Dr32);
+        self.values.insert((node, 0), dst);
+        into.push(op_inst("ROL16di", desc, vec![Operand::Def(dst), Operand::Use(source), amount]));
         self.flags_from = None;
         Ok(())
     }
@@ -497,7 +538,11 @@ impl Emitter<'_> {
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
-                into.push(op_inst(name, desc, operands));
+                let mut inst = op_inst(name, desc, operands);
+                // a volatile access keeps its place among the others
+                // (`hasOrderedMemoryRef`): no pass folds, moves or merges it
+                inst.side_effects |= self.dag.volatile_accesses.contains(&node);
+                into.push(inst);
                 if self.save.contains(&node) {
                     let kept = self.new_reg(Class::Dr16);
                     // not a `Copy`: the allocator takes a copy for the same
@@ -798,6 +843,7 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         }
         let (otherwise, join) = (next_id, next_id + 1);
         next_id += 2;
+        function.move_odds(function.blocks[at].id, join);
         let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join)]);
         jump.terminator = true;
         jump.reads_flags = true;

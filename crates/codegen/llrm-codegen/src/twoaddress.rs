@@ -95,6 +95,7 @@ pub const MAX_DATA_FLOW_EDGE: usize = 10;
 /// make them follow.
 pub struct BodyFacts {
     state: std::cell::RefCell<State>,
+    regs: Option<llrm_lir::registers::Regs>,
 }
 
 struct Slot {
@@ -322,7 +323,15 @@ impl BodyFacts {
             }
             state.blocks.push(kept);
         }
-        Self { state: std::cell::RefCell::new(state) }
+        Self { state: std::cell::RefCell::new(state), regs: body.registers }
+    }
+
+    /// Whether `what` is tied here: the rule of the body's target.
+    fn ties(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        crate::backend::twoaddr::ties_in(self.regs, what)
     }
 
     /// The instructions that define or read `value`, and whether each defines
@@ -785,8 +794,8 @@ pub fn three_address(
 /// ecx, [eax - 5]`. Off at `-Os` ([`ThreeAddress::Dwords`]): the result takes
 /// one of the four byte-capable registers, and 11 m32 -Os cells grew from the
 /// spill that cost (greedy's region split of the shift count, not the lea).
-/// Exit 2026-11-20, or when greedy lands that split fix: re-run the 11 cells
-/// with it on; remove when the pin does the same.
+/// Owner x87. Exit 2026-11-20, or when greedy lands that split fix: re-run the
+/// 11 cells with it on; remove when the pin does the same.
 fn narrow_lea(
     mode: ThreeAddress,
     width: u32,
@@ -841,9 +850,20 @@ pub struct Commuter<'a> {
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
     leas: llrm_support::hash::HashSet<u32>,
+    /// DEVIATE TA-LC on (`Profile::commute_loop_carried`).
+    loop_carried: bool,
 }
 
 impl<'a> Commuter<'a> {
+    /// The walk with DEVIATE TA-LC on or off.
+    pub fn with_loop_carried(
+        mut self,
+        on: bool,
+    ) -> Self {
+        self.loop_carried = on;
+        self
+    }
+
     /// The walk of `block`, at its first instruction.
     pub fn new(
         facts: &'a BodyFacts,
@@ -868,6 +888,7 @@ impl<'a> Commuter<'a> {
             dst: HashMap::default(),
             processed: Default::default(),
             leas: Default::default(),
+            loop_carried: false,
         }
     }
 
@@ -957,7 +978,7 @@ impl<'a> Commuter<'a> {
             return Some((one, true, Mapped::Value(dst.value)));
         }
         // A tied use: the result is the first source's register.
-        if let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))
+        if let Some(what) = one.what.as_ref().filter(|what| self.facts.ties(what))
             && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
             && first.value == reg
         {
@@ -1142,7 +1163,7 @@ impl<'a> Commuter<'a> {
         def: u32,
     ) -> Option<u32> {
         let one = self.facts.insn(key);
-        let what = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
+        let what = one.what.as_ref().filter(|what| self.facts.ties(what))?;
         match (&what.dests[0], &what.sources[0]) {
             (Loc::Held(dst), Loc::Held(src)) if dst.value == def => Some(src.value),
             _ => None,
@@ -1302,6 +1323,17 @@ impl<'a> Commuter<'a> {
                 return false;
             }
         }
+        // DEVIATE TA-LC (owner anyisa, exit 2026-11-27): the pin's bail below
+        // is a profitability heuristic, not a correctness rule. Where the
+        // result is copied back into C (the loop's back-edge copy), tying C
+        // costs no copy, whatever read C had in between (`x &= x - 1`: the pin
+        // keeps `mov tmp, x` every iteration).
+        if self.loop_carried
+            && self.is_rev_copy_chain(c, a, MAX_DATA_FLOW_EDGE)
+            && !self.is_rev_copy_chain(b, a, MAX_DATA_FLOW_EDGE)
+        {
+            return true;
+        }
         // A use of C between its last definition and here: leave it.
         let (clear_c, last_def_c) = self.no_use_after_last_def(c, dist);
         if !clear_c {
@@ -1377,7 +1409,7 @@ impl<'a> Commuter<'a> {
         let mi = Arc::clone(&work[at]);
         // Only an instruction the pass would untie: tied, and writing another
         // value than it reads.
-        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let Some(what) = mi.what.as_ref().filter(|what| self.facts.ties(what)) else { return false };
         let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
             return false;
         };
@@ -1401,7 +1433,7 @@ impl<'a> Commuter<'a> {
         }
         // `isTwoAddrUse`: a kill that ties `reg` itself stays.
         if let Some(what) = kill.what.as_ref()
-            && crate::backend::twoaddr::ties(what)
+            && self.facts.ties(what)
             && matches!(
                 what.sources.first(),
                 Some(Loc::Held(held)) if held.value == reg
@@ -1539,7 +1571,7 @@ impl<'a> Commuter<'a> {
         only_x87_load: bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
-        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let Some(what) = mi.what.as_ref().filter(|what| self.facts.ties(what)) else { return false };
         let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
             return false;
         };
@@ -1563,7 +1595,7 @@ impl<'a> Commuter<'a> {
             return false;
         }
         if let Some(what) = kill.what.as_ref()
-            && crate::backend::twoaddr::ties(what)
+            && self.facts.ties(what)
             && matches!(
                 what.sources.first(),
                 Some(Loc::Held(held)) if held.value == reg

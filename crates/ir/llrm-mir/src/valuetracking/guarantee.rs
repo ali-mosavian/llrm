@@ -295,7 +295,7 @@ fn is_null_pointer(
 /// `Operator::hasPoisonGeneratingFlags()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L23>
-fn has_poison_generating_flags(
+pub fn has_poison_generating_flags(
     q: &Query,
     op: Operator,
 ) -> bool {

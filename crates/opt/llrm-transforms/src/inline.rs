@@ -135,8 +135,8 @@
 //! Library of [`crate::interprocedural`], which runs it once every body has
 //! reached its fixed point, then sends each changed body back through the
 //! pipeline (`inline<N>`, `ipa-inline<N>.`; `LLRM_DEBUG=inline` logs each
-//! verdict). Off at -O0; the threshold is 90 at -O1 and -Og, 225 at -O2, 250 at
-//! -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
+//! site: caller, callee, cost, threshold, verdict). Off at -O0; the threshold is the pin's
+//! 225 at -O1 and -O2, 250 at -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
 //!
 //! # Needs
 //! [`crate::profit`] (operation prices, block frequencies),
@@ -266,6 +266,8 @@ pub struct Candidate {
     pub self_calls: Option<f64>,
     /// How many calls of itself the body has.
     pub self_sites: usize,
+    /// Tried because the pin's threshold alone refused a hot site (INL-HOT).
+    pub hot: bool,
 }
 
 /// What a caller says of itself that bounds what may be copied into it.
@@ -571,6 +573,24 @@ pub(crate) fn grown(
 pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     let graph = CallGraph::new(module);
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
+}
+
+/// Those of `recursive` that call themselves from exactly one place (a linear
+/// recursion), found in one walk of their bodies: the question REC-9 asks at
+/// every call site is a set lookup.
+pub fn linear_recursive(
+    module: &Module,
+    recursive: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    recursive
+        .iter()
+        .copied()
+        .filter(|&id| {
+            body(module, id).is_some_and(|function| {
+                function.walk().filter(|&(_, one)| callee(&module.context, function, one) == Some(id)).count() == 1
+            })
+        })
+        .collect()
 }
 
 /// Whether `body` may be copied as a function of its own (a recursive one

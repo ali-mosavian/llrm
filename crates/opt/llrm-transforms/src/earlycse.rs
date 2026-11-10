@@ -389,10 +389,45 @@ impl MemorySsaView for Translated<'_> {
     }
 }
 
+/// The function a walk reads and edits: the body itself until the first
+/// edit, then a copy of it that the edits go to. The view, the analyses and
+/// the memory graph keep reading the body as it was (EC-1: the pin edits in
+/// place and keeps MemorySSA current with an updater; with none here, those
+/// readers need the old body, and 15 of 22 runs on the corpus edit nothing).
+struct Edited<'a> {
+    live: &'a Function,
+    copy: Option<Function>,
+}
+
+impl<'a> Edited<'a> {
+    fn of(live: &'a Function) -> Self {
+        Self { live, copy: None }
+    }
+
+    /// The body to edit: copied on the first call.
+    fn edit(&mut self) -> &mut Function {
+        let live = self.live;
+        self.copy.get_or_insert_with(|| live.clone())
+    }
+
+    /// The edited body, if there was an edit.
+    fn into_copy(self) -> Option<Function> {
+        self.copy
+    }
+}
+
+impl std::ops::Deref for Edited<'_> {
+    type Target = Function;
+
+    fn deref(&self) -> &Function {
+        self.copy.as_ref().unwrap_or(self.live)
+    }
+}
+
 /// One walk of a function.
 struct Walk<'a> {
     context: &'a Context,
-    function: &'a mut Function,
+    function: Edited<'a>,
     /// The function as it was, which `mssa` describes.
     view: &'a View<'a>,
     mssa: Box<dyn MemorySsaView + 'a>,
@@ -578,7 +613,7 @@ impl Walk<'_> {
                 if op.result.is_none() || self.marker(inst) {
                     return None;
                 }
-                let effects = memory::of(self.context, self.callees, self.function, inst);
+                let effects = memory::of(self.context, self.callees, &self.function, inst);
                 if effects.reads || effects.writes {
                     return None;
                 }
@@ -606,7 +641,7 @@ impl Walk<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        memory::callee(self.context, self.function, inst)
+        memory::callee(self.context, &self.function, inst)
             .and_then(|global| self.view.globals.get(global.0 as usize))
             .and_then(|global| global.name.as_deref())
             .is_some_and(|name| name.starts_with("llrm."))
@@ -617,7 +652,7 @@ impl Walk<'_> {
         &self,
         inst: InstId,
     ) -> Option<llrm_mir::intrinsics::Intrinsic> {
-        memory::callee(self.context, self.function, inst)
+        memory::callee(self.context, &self.function, inst)
             .and_then(|global| self.view.globals.get(global.0 as usize))
             .and_then(|global| global.name.as_deref())
             .and_then(llrm_mir::intrinsics::Intrinsic::named)
@@ -637,7 +672,7 @@ impl Walk<'_> {
         inst: InstId,
         name: &str,
     ) -> bool {
-        memory::callee(self.context, self.function, inst)
+        memory::callee(self.context, &self.function, inst)
             .and_then(|global| self.view.globals.get(global.0 as usize))
             .and_then(|global| global.name.as_deref())
             .is_some_and(|one| one == name)
@@ -654,7 +689,7 @@ impl Walk<'_> {
         if self.marker(inst) {
             return None;
         }
-        let effects = memory::of(self.context, self.callees, self.function, inst);
+        let effects = memory::of(self.context, self.callees, &self.function, inst);
         if effects.reads == effects.writes {
             return None;
         }
@@ -740,7 +775,7 @@ impl Walk<'_> {
     ) -> bool {
         match self.function.instruction(inst).opcode {
             Opcode::Load { .. } => true,
-            Opcode::Call(_) | Opcode::Invoke(_) => memory::of(self.context, self.callees, self.function, inst).reads,
+            Opcode::Call(_) | Opcode::Invoke(_) => memory::of(self.context, self.callees, &self.function, inst).reads,
             _ => false,
         }
     }
@@ -752,7 +787,7 @@ impl Walk<'_> {
         match self.function.instruction(inst).opcode {
             Opcode::Store { .. } => true,
             Opcode::Load { volatile, .. } => volatile,
-            Opcode::Call(_) | Opcode::Invoke(_) => memory::of(self.context, self.callees, self.function, inst).writes,
+            Opcode::Call(_) | Opcode::Invoke(_) => memory::of(self.context, self.callees, &self.function, inst).writes,
             _ => false,
         }
     }
@@ -880,7 +915,7 @@ impl Walk<'_> {
         let Some(to) = self.definer(to) else { return };
         let flags = self.function.instruction(to).flags.intersect(self.function.instruction(from).flags);
         if flags != self.function.instruction(to).flags {
-            self.function.set_flags(to, flags);
+            self.function.edit().set_flags(to, flags);
         }
     }
 
@@ -895,7 +930,7 @@ impl Walk<'_> {
             return false;
         }
         op.result.is_none_or(|result| self.function.users(result).is_empty())
-            && !crate::dead::_kept(self.context, self.callees, self.function, inst)
+            && !crate::dead::_kept(self.context, self.callees, &self.function, inst)
     }
 
     /// `replaceDominatedUsesWith(Curr, TorF, DT, BasicBlockEdge(Pred, BB))`:
@@ -917,7 +952,7 @@ impl Walk<'_> {
                 self.function.parent(one.user).is_some_and(|home| self.tree.dominates(block, home))
             };
             if dominated && !self.function.is_erased(one.user) {
-                self.function.set_operand(one.user, one.index as usize, with);
+                self.function.edit().set_operand(one.user, one.index as usize, with);
                 changed = true;
             }
         }
@@ -1071,14 +1106,14 @@ impl Walk<'_> {
                 self.view.globals,
                 self.view.layout,
                 Some(self.analyses),
-                self.function,
+                &self.function,
                 inst,
             ) {
                 let result = self.function.instruction(inst).result;
                 if let Some(result) = result
                     && !self.function.users(result).is_empty()
                 {
-                    self.function.replace_value(result, value);
+                    self.function.edit().replace_value(result, value);
                     changed = true;
                 }
                 if self.dead(inst) {
@@ -1099,7 +1134,7 @@ impl Walk<'_> {
                 if let Some(&found) = self.values.lookup(&key) {
                     self.combine_flags(inst, found);
                     if let Some(result) = self.function.instruction(inst).result {
-                        self.function.replace_value(result, found);
+                        self.function.edit().replace_value(result, found);
                     }
                     self.remove(inst);
                     changed = true;
@@ -1132,7 +1167,7 @@ impl Walk<'_> {
                         self.combine_metadata(in_val.def, inst);
                     }
                     if let Some(result) = self.function.instruction(inst).result {
-                        self.function.replace_value(result, value);
+                        self.function.edit().replace_value(result, value);
                     }
                     self.remove(inst);
                     changed = true;
@@ -1155,7 +1190,7 @@ impl Walk<'_> {
                     if let Some(result) = self.function.instruction(inst).result
                         && let Some(kept) = self.function.instruction(earlier).result
                     {
-                        self.function.replace_value(result, Operand::Value(kept));
+                        self.function.edit().replace_value(result, Operand::Value(kept));
                     }
                     self.remove(inst);
                     changed = true;
@@ -1173,7 +1208,7 @@ impl Walk<'_> {
                 if let Some(&found) = self.geps.lookup(&key) {
                     self.combine_flags(inst, found);
                     if let Some(result) = self.function.instruction(inst).result {
-                        self.function.replace_value(result, found);
+                        self.function.edit().replace_value(result, found);
                     }
                     self.remove(inst);
                     changed = true;
@@ -1236,7 +1271,7 @@ impl Walk<'_> {
         kept: InstId,
         removed: InstId,
     ) {
-        crate::local::combine_metadata_for_cse(self.view.metadata, self.function, kept, removed, false);
+        crate::local::combine_metadata_for_cse(self.view.metadata, self.function.edit(), kept, removed, false);
     }
 
     /// `EarlyCSE::run`
@@ -1323,19 +1358,19 @@ impl FunctionPass for EarlyCse {
         let outer = std::rc::Rc::clone(analyses.outer());
         let accesses = self.memory_ssa.then(|| std::rc::Rc::new(Accesses::lazy()));
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
-        // MemorySSA describes the function as it is now; the walk changes
-        // `unit.function`, which this copy does not follow. The context needs
-        // no copy: the walk only interns constants, which `Context::int` does
-        // through `&self`.
-        let before = unit.function.fork();
+        // MemorySSA describes the function as it is now; the walk edits a copy
+        // of it made at the first edit (`Edited`), which the view does not
+        // follow. The context needs no copy: the walk only interns constants,
+        // which `Context::int` does through `&self`.
+        let before: &Function = unit.function;
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let view = View::within(unit.context, unit.layout, &before, &outer).with_shape(&shape);
+        let view = View::within(unit.context, unit.layout, before, &outer).with_shape(&shape);
         let simplifier = FunctionAnalyses::of_declared(
             unit.context,
             view.globals,
             view.metadata,
             view.layout,
-            &before,
+            before,
             outer.assume_declared(),
         );
         let shape = view.shape();
@@ -1349,15 +1384,18 @@ impl FunctionPass for EarlyCse {
                     Ok(held) => {
                         (held.mssa.clone(), held.accesses(unit.context, unit.layout, unit.function, analyses).ok())
                     }
-                    Err(_) => (Mssa::build(&before, &shape.dominance, &shadow::effect_of_in(accesses, &view)), None),
+                    Err(_) => (Mssa::build(before, &shape.dominance, &shadow::effect_of_in(accesses, &view)), None),
                 };
                 (Box::new(Translated::new(&view, accesses, mssa)), kept_accesses)
             }
             None => (Box::new(Detached), None),
         };
+        // The walk and everything that reads the body as it was end in this
+        // block, which frees the body for the edited copy to be put back.
+        let (changed, copy, updated) = {
         let mut walk = Walk {
             context: unit.context,
-            function: unit.function,
+            function: Edited::of(before),
             view: &view,
             mssa: view_of_memory,
             callees: outer.callees(),
@@ -1374,19 +1412,26 @@ impl FunctionPass for EarlyCse {
         };
         let changed = walk.run();
         let gone = std::mem::take(&mut walk.gone);
-        let function = walk.function;
+        let mut function = walk.function;
+        let mut mssa = walk.mssa;
         for inst in gone.into_iter().rev() {
             if !function.is_erased(inst) {
-                walk.mssa.remove_memory_access(function, inst);
-                function.erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
+                mssa.remove_memory_access(&function, inst);
+                function.edit().erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
             }
+        }
+        let updated = if changed { mssa.into_mssa() } else { None };
+        (changed, function.into_copy(), updated)
+        };
+        if let Some(copy) = copy {
+            *unit.function = copy;
         }
         if !changed {
             return PreservedAnalyses::all();
         }
-        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
-        if let (Some(updated), Some(accesses)) = (walk.mssa.into_mssa(), kept_accesses) {
-            analyses.replace::<MemorySsa>(&*function, Ok(Rc::new(MssaGraph::new(updated, Some(accesses)))));
+        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>().preserve_cfg();
+        if let (Some(updated), Some(accesses)) = (updated, kept_accesses) {
+            analyses.replace::<MemorySsa>(&*unit.function, Ok(Rc::new(MssaGraph::new(updated, Some(accesses)))));
             preserved = preserved.preserve_updated::<MemorySsa>();
         }
         preserved

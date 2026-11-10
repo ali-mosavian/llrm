@@ -97,7 +97,7 @@ fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
     assert!(flat.cost("pop_seg").is_err() && real.cost("call_near").is_err());
 }
 
-/// The CPU a compile is priced for with none asked is the target's: llrm-c took
+/// The CPU a compile is priced for with none asked is the target's: llrm-cc took
 /// the 386 for every target, so a flat compile with no `-march` died on a CPU
 /// its tables do not have. Asking for another names the target's own.
 #[test]
@@ -254,13 +254,34 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// `sadd.sat(load a, load b)`: the flag add was cloned for the shift that reads
+/// the sum, and the load of `b` stayed folded in one of them (`add rcx, [rsi]`)
+/// so the cell was read twice and the copy of the sum took a `mov`
+/// (sat_builtins m64 -O2, +32 B). The pin's scheduler unfolds the load first,
+/// then clones: one load of each cell, a `lea` for the sum, the flag add on
+/// registers.
+#[test]
+fn a_saturating_add_of_two_loads_reads_each_cell_once_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %a, ptr %b) {\n  %x = load i64, ptr %a\n  %y = load i64, ptr %b\n\
+                \x20 %r = call i64 @llvm.sadd.sat.i64(i64 %x, i64 %y)\n  ret i64 %r\n}\n\
+                declare i64 @llvm.sadd.sat.i64(i64, i64)\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("[rsi]").count(), 1, "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("lea r") && line.contains("+")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("add") && line.contains('[')), "{listing}");
+}
+
 /// A symbol's address passed to a call, read by a loop and passed to a call
 /// again is made once for the first call and the loop, and again for the last
 /// call, as the pin has it (`lea` into a callee-saved register, then a `lea`
 /// into `rdi` at the end). It was made three times: CSE4 refused the share.
 /// Since #6878 (cpu-model unroll preferences) the pin runtime-unrolls this
 /// loop by 8: the address is made for the first call, the unrolled loop, the
-/// remainder loop and the last call.
+/// remainder loop and the last call. Since #7955 (DEVIATE PIE64, exit
+/// 2026-12-15) `@sym + reg` is not one address here, as it is to the pin, so
+/// the unroll is by 4: 4 + 1 loads. Back to 9 when PIE64 goes.
 #[test]
 fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -277,7 +298,7 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     // The first call's argument and the loop's address, then the last call's.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
     assert_eq!(made, 4, "{listing}");
-    assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
+    assert_eq!(listing.matches("movzx").count(), 5, "unrolled by 4 (DEVIATE PIE64) plus the remainder loop: {listing}");
 }
 
 /// A symbol's address passed to four calls in one block was made four times
@@ -736,15 +757,60 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 
 /// A `select` of a loaded value stopped the matcher at m64 ("node transform
 /// `GetOppositeBranchCondition` is not translated"): the table folds the load
-/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`). The pin's
+/// X86CmovConversion then turns a `cmov` with a memory operand into a branch
+/// over the load (`x86-cmov-converter-force-mem-operand` is on), outside a loop
+/// too: `mov rax, rcx; cmp; jl; mov rax, [rdi]; ret`, as the pin's llc has it.
 #[test]
-fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
+fn a_select_of_a_loaded_value_is_a_branch_over_the_load() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
     let (built, _) = compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(!lines.iter().any(|line| line.starts_with("cmov")), "{listing}");
+    assert!(lines.iter().any(|line| line.starts_with("jl ")), "{listing}");
+    assert!(lines.contains(&"mov rax, qword ptr [rdi]"), "{listing}");
+}
+
+/// `c ? 48 : 32` (a difference of 16) was two `mov`s and a `cmov`: the pin's
+/// `combineSelectOfTwoConstants` is `zext(c) * 16 + 32`, a `setl`, a `shl` and
+/// an `or` (word_compare_branches -Os m64: +37 B against the pin).
+#[test]
+fn a_select_of_two_constants_a_power_of_two_apart_is_a_shifted_setcc() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x, i32 %y) {\n  %c = icmp slt i32 %x, %y\n  %r = select i1 %c, i32 48, i32 32\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("cmov")), "{listing}");
+}
+
+/// A compare folded a volatile load into its memory operand, and the flags made
+/// again for a later reader re-emitted it: `vv[j]` read once in the source was
+/// read three times (`cmp ecx, [rdx+rax*4]` each), word_compare_branches -Os.
+/// The cells must be read exactly twice, once per volatile load.
+#[test]
+fn a_volatile_load_folded_into_a_compare_is_read_once() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @vv = global [16 x i32] zeroinitializer, align 16\n\
+                define i32 @f(i32 %0, i32 %1) {\n\
+                  %3 = sext i32 %0 to i64\n  %4 = getelementptr inbounds [4 x i8], ptr @vv, i64 %3\n\
+                  %5 = load volatile i32, ptr %4, align 4\n  %6 = sext i32 %1 to i64\n\
+                  %7 = getelementptr inbounds [4 x i8], ptr @vv, i64 %6\n  %8 = load volatile i32, ptr %7, align 4\n\
+                  %9 = icmp ult i32 %5, %8\n  %10 = zext i1 %9 to i32\n  %11 = icmp ugt i32 %5, %8\n\
+                  %12 = select i1 %11, i32 4, i32 2\n  %13 = or disjoint i32 %12, %10\n  %14 = or disjoint i32 %13, 8\n\
+                  %15 = select i1 %9, i32 %13, i32 %14\n  %16 = icmp slt i32 %5, %8\n  %17 = icmp sgt i32 %5, %8\n\
+                  %18 = select i1 %16, i32 48, i32 32\n  %19 = select i1 %17, i32 0, i32 %18\n\
+                  %20 = or disjoint i32 %15, %19\n  %21 = or disjoint i32 %20, 64\n  %22 = select i1 %17, i32 %21, i32 %20\n\
+                  %23 = add nuw nsw i32 %22, 128\n  %24 = select i1 %16, i32 %20, i32 %23\n  ret i32 %24\n}\n";
+    let (built, _) = compiled(&flags(&["-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let reads = listing.lines().filter(|line| line.contains("ptr [")).count();
+    assert_eq!(reads, 2, "{listing}");
 }
 
 /// Setting a bit of an `i64` by a variable index stopped the emitter
@@ -1008,6 +1074,72 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
     assert!(listing.contains("_main") && listing.contains("_report"), "{listing}");
 }
 
+/// A 700-byte constant copy at m32 -Os was a call of `memcpy`; the pin's llc
+/// writes `rep movsb` at `minsize`, gcc -Os inlines it too (memory_expansion
+/// 23405 B against 22295 and 22749): +1110 B, half of the 88 cells worse than
+/// the pin at the same rules. DEVIATE REP-MOVS-OS.
+#[test]
+fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+                define void @f(ptr align 1 %d, ptr align 1 %s) optsize {\n\
+                \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 1 %s, i32 700, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
+}
+
+/// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
+/// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
+/// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.
+#[test]
+fn a_small_immediate_at_m32_os_is_push_pop() {
+    let text = |attrs: &str, value: i32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f() {attrs} {{\n  ret i32 {value}\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str, value: i32| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs, value), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize", 40);
+    assert!(at_os.contains("pushd 40") && at_os.contains("pop eax"), "{at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize", 40);
+    assert!(marked.contains("pushd 40") && marked.contains("pop eax"), "{marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "", 40);
+    assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
+    let wide = listing(&["-mabi=sysv", "-Os"], "optsize", 4000);
+    assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
+}
+
+/// A signed divide by 1024 is `idiv` at m32 -Os and -Oz (a `minsize` function too), the
+/// `sar; shr; add; sar` sequence at -O2: 4 Os cells -131 B (jpeg_fixed -45). The pin keeps the
+/// `idiv` at minsize only (`isIntDivCheap`); -Os is a DEVIATION. DEVIATE SDIV-POW2-OS.
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
+    let text = |attrs: &str| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f(i32 %x) {attrs} {{\n  %q = sdiv i32 %x, 1024\n  ret i32 %q\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize");
+    assert!(at_os.contains("idiv"), "-Os: {at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize");
+    assert!(marked.contains("idiv"), "minsize function: {marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "");
+    assert!(!at_speed.contains("idiv") && at_speed.contains("sar"), "-O2: {at_speed}");
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.
@@ -1268,7 +1400,9 @@ fn the_trap_intrinsics_select_or_are_refused_by_name() {
         );
         compiled(&flags(&["-m32"]), &text, "f")
     };
-    for (name, call, wanted) in [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")] {
+    for (name, call, wanted) in
+        [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")]
+    {
         let (built, _) = one(name, call).unwrap_or_else(|why| panic!("{name}: {why}"));
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
         assert!(listing.contains(wanted), "{name}: {listing}");
@@ -1436,7 +1570,7 @@ fn stdcall_is_refused_by_name() {
 }
 
 /// At m16 an unmarked function takes the register-size convention (`_f@3`,
-/// callee clobbers CX and DX), as llrm-c's did, and `main` is Watcom's `main_`.
+/// callee clobbers CX and DX), as llrm-cc's did, and `main` is Watcom's `main_`.
 /// `-mabi=watcom` forced on the Watcom row made every function save BX, CX and
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
@@ -1482,7 +1616,7 @@ fn m16_library_calls_are_the_watcom_register_convention() {
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,
-/// `retf`) where llrm-c entered it by a near call: 3 bytes a call site, 1 a
+/// `retf`) where llrm-cc entered it by a near call: 3 bytes a call site, 1 a
 /// return, the growth of the programs that call a static helper often. One
 /// whose address is taken stays far.
 #[test]
@@ -1710,7 +1844,7 @@ fn no_inline_takes_the_source_name_under_every_abi() {
 }
 
 /// `-fsanitize=stack` reached llrm-llc from llrm-cc and did nothing for IR:
-/// llrm-c marked the functions it compiled, an IR module's were never marked,
+/// llrm-cc marked the functions it compiled, an IR module's were never marked,
 /// so `stackover.c` ran off the stack instead of ending in "Stack Overflow!".
 #[test]
 fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
@@ -2002,8 +2136,293 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
+/// The COFF object of `text` (a Windows x86-64 module) built with the pin's
+/// section model.
+fn windows_object(text: &str) -> llrm_debug::Described {
+    let text = format!("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n{text}");
+    let (built, format) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    assert_eq!(format, llrm_target::object::Format::Coff);
+    llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+}
+
+/// A `linkonce_odr` function in a comdat was written into the one `.text`
+/// with every other function, so the linker kept every copy and could not
+/// drop the duplicates other objects define. The pin (llc d1106deb71) writes
+/// it as a section of its own, flagged COMDAT, selection `any`.
+#[test]
+fn a_comdat_function_and_global_are_comdat_sections() {
+    let object = windows_object(
+        "$f = comdat any\n$v = comdat largest\n\
+         @v = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
+    );
+    let at = |name: &str| {
+        object
+            .symbols
+            .iter()
+            .find(|one| one.name == name)
+            .and_then(
+                |one| match one.definition {
+                    llrm_object::Definition::Defined { section, .. } => Some(section),
+                    llrm_object::Definition::Undefined => None,
+                },
+            )
+    };
+    let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
+    assert_eq!(selection(at("f").unwrap()), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+    assert_eq!(selection(at("v").unwrap()), Some(llrm_object::Selection::Largest), "{:?}", object.comdats);
+    // controls: a function with no comdat stays in the plain code section,
+    // apart from f's
+    assert_eq!(selection(at("h").unwrap()), None);
+    assert_ne!(at("h"), at("f"));
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    // IMAGE_SCN_LNK_COMDAT in a section header: 2 headers carry it
+    let sections = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+    let flagged = (0..sections)
+        .filter(|n| u32::from_le_bytes(bytes[20 + 40 * n + 36..20 + 40 * n + 40].try_into().unwrap()) & 0x1000 != 0)
+        .count();
+    assert_eq!(flagged, 2);
+}
+
+/// A COMDAT global of zeros moved to `_BSS` after the COMDAT recorded its range
+/// in `_DATA`: `llrm-llc` panicked ("range end index 6 out of range"). The pin
+/// writes it as a `.bss` section flagged COMDAT, selection `any`, and the
+/// global after it keeps its own `.data` section.
+#[test]
+fn a_comdat_global_of_zeros_is_a_bss_comdat_section() {
+    let object = windows_object(
+        "$z = comdat any\n$w = comdat any\n\
+         @z = linkonce_odr dso_local global i32 0, comdat, align 4\n\
+         @w = linkonce_odr dso_local global [2 x i32] [i32 1, i32 2], comdat, align 4\n\
+         define i32 @f() {\n  %a = load i32, ptr @z\n  %b = load i32, ptr @w\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
+    let (z, w) = (section("z"), section("w"));
+    // the writer drops the `$name` suffix: `.bss$z` is `.bss` in the file
+    assert_eq!((object.sections[z].name.as_str(), object.sections[z].role), (".bss$z", llrm_object::Role::Bss));
+    assert_eq!(selection(z), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+    assert_eq!(object.sections[w].name, ".data$w");
+    assert_eq!(selection(w), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+}
+
+/// A comdat of several members folded its globals into one section and gave
+/// its function a comdat of its own: the linker could keep one object's `k` and
+/// another's `g`. The pin writes the member named like the comdat as the comdat
+/// section, selection `any`, and every other member as its own section,
+/// associative with it.
+#[test]
+fn the_members_of_a_comdat_are_associative_with_its_named_member() {
+    let object = windows_object(
+        "$k = comdat any\n\
+         @k = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         @m = linkonce_odr dso_local global i32 9, comdat($k), align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat($k) {\n  ret i32 %a\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let record = |section: usize| {
+        object.comdats.iter().find(|one| one.section == section).map(|one| (one.selection, one.associated))
+    };
+    let key = section("k");
+    assert_eq!(record(key), Some((llrm_object::Selection::Any, None)), "{:?}", object.comdats);
+    for member in ["m", "g"] {
+        assert_ne!(section(member), key, "{member} shares the key's section");
+        assert_eq!(
+            record(section(member)),
+            Some((llrm_object::Selection::Associative, Some(key))),
+            "{member}: {:?}",
+            object.comdats
+        );
+    }
+}
+
+/// The symbol of a COMDAT function or global was written as a static
+/// (storage class 3): the linker saw a private name in each object and kept
+/// every copy. The pin writes it external (class 2).
+#[test]
+fn a_comdat_symbol_is_external_and_a_static_stays_static() {
+    let object = windows_object(
+        "$g = comdat any\n$v = comdat any\n\
+         @v = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define internal i32 @s(i32 %a) {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  %r = call i32 @s(i32 %a)\n  ret i32 %r\n}\n",
+    );
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let mut classes = std::collections::BTreeMap::new();
+    let mut at = 0;
+    while at < count {
+        let row = &bytes[table + 18 * at..table + 18 * (at + 1)];
+        if row[..4] != [0; 4] {
+            let name = String::from_utf8_lossy(&row[..8]).trim_end_matches('\0').to_owned();
+            classes.insert(name, row[16]);
+        }
+        at += 1 + row[17] as usize;
+    }
+    let class = |name: &str| classes.get(name).copied();
+    assert_eq!((class("g"), class("v"), class("h")), (Some(2), Some(2), Some(2)), "{classes:?}");
+    // control: an internal function stays a static (class 3), if it is kept at
+    // all
+    assert_ne!(class("s"), Some(2), "{classes:?}");
+}
+
+/// The object of `text` for `triple`, built as `windows_object` builds one.
+fn object_for(
+    triple: &str,
+    format: llrm_target::object::Format,
+    text: &str,
+) -> llrm_debug::Described {
+    let text = format!("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"{triple}\"\n{text}");
+    let (built, found) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    assert_eq!(found, format);
+    llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+}
+
+const WEAK_IR: &str = "@u = weak_odr dso_local global i32 7, align 4\n\
+     define weak_odr dso_local i32 @wf(i32 %a) {\n  ret i32 %a\n}\n\
+     define dso_local i32 @h() {\n  %v = load i32, ptr @u\n  ret i32 %v\n}\n";
+
+/// A `weak_odr` function and global were written local: `nm` showed `t` and
+/// `d` where the pin shows `W` and `V`, and the linker saw a private name.
+#[test]
+fn a_weak_definition_is_a_weak_symbol_in_an_elf_object() {
+    let object = object_for("x86_64-unknown-linux-gnu", llrm_target::object::Format::Elf, WEAK_IR);
+    let binding = |name: &str| object.symbols.iter().find(|one| one.name == name).map(|one| one.binding);
+    assert_eq!(
+        (binding("wf"), binding("u"), binding("h")),
+        (Some(llrm_object::Binding::Weak), Some(llrm_object::Binding::Weak), Some(llrm_object::Binding::Public)),
+    );
+}
+
+/// The pin writes a weak definition outside a COMDAT as a weak external
+/// (class 0x69, search-alias aux) that names a default symbol
+/// `.weak.NAME.default.UNIQUE` in the definition's section, UNIQUE the first
+/// strong external symbol of the object.
+#[test]
+fn a_weak_definition_is_a_weak_external_with_a_default_in_a_coff_object() {
+    let object = windows_object(WEAK_IR);
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let strings = table + 18 * count;
+    let name = |row: &[u8]| {
+        if row[..4] == [0; 4] {
+            let at = strings + u32::from_le_bytes(row[4..8].try_into().unwrap()) as usize;
+            let end = bytes[at..].iter().position(|b| *b == 0).unwrap();
+            String::from_utf8_lossy(&bytes[at..at + end]).into_owned()
+        } else {
+            String::from_utf8_lossy(&row[..8]).trim_end_matches('\0').to_owned()
+        }
+    };
+    let mut rows = Vec::new();
+    let mut at = 0;
+    while at < count {
+        let row = &bytes[table + 18 * at..table + 18 * (at + 1)];
+        rows.push((at, name(row), u16::from_le_bytes([row[12], row[13]]), row[16], row[17]));
+        at += 1 + row[17] as usize;
+    }
+    let index = |wanted: &str| rows.iter().find(|one| one.1 == wanted).map(|one| one.0);
+    for weak in ["wf", "u"] {
+        let row = rows.iter().find(|one| one.1 == weak).unwrap_or_else(|| panic!("{weak} in {rows:?}"));
+        // section 0, class WEAK_EXTERNAL, one aux
+        assert_eq!((row.2, row.3, row.4), (0, 105, 1), "{weak}: {rows:?}");
+        let aux = &bytes[table + 18 * (row.0 + 1)..table + 18 * (row.0 + 2)];
+        let tag = u32::from_le_bytes(aux[..4].try_into().unwrap()) as usize;
+        assert_eq!(index(&format!(".weak.{weak}.default.h")), Some(tag), "{rows:?}");
+        assert_eq!(u32::from_le_bytes(aux[4..8].try_into().unwrap()), 3, "search alias");
+    }
+    // control: the strong function is a plain external
+    let strong = rows.iter().find(|one| one.1 == "h").unwrap();
+    assert_eq!((strong.2 != 0, strong.3), (true, 2));
+}
+
+/// A COMDAT function's `.pdata` row and `.xdata` were in the object's one
+/// `.pdata` and `.xdata`: where the linker kept another object's copy of the
+/// function and dropped this one's code, the row stayed and pointed into
+/// the dropped section. The pin writes both as sections associative with the
+/// function's code (selection 5, number of the code section).
+#[test]
+fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
+    let object = windows_object(
+        "$f = comdat any\n\
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
+    );
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    let code = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let follows: Vec<(&str, usize)> = object
+        .comdats
+        .iter()
+        .filter(|one| one.selection == llrm_object::Selection::Associative)
+        .map(|one| (object.sections[one.section].name.as_str(), one.associated.unwrap()))
+        .collect();
+    assert_eq!(follows, [(".xdata", code("f")), (".pdata", code("f"))], "{:?}", object.comdats);
+    // control: h is not in a comdat, so its data stays in the shared pair
+    let shared = |name: &str| object.sections.iter().enumerate().filter(|(_, one)| one.name == name).count();
+    assert_eq!((shared(".xdata"), shared(".pdata")), (2, 2));
+}
+
+/// Every function got an `.xdata` block and a `.pdata` row, a frameless leaf
+/// too (12 bytes of `.pdata` each); the pin (llc d1106deb71) writes both only
+/// for a function with a `.seh_*` prologue, so a leaf cost 20 bytes the pin's
+/// object does not carry.
+#[test]
+fn a_frameless_leaf_gets_no_unwind_data_as_the_pin_writes_none() {
+    let object = windows_object(
+        "define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n\
+         define dso_local i32 @framed(i32 %a) uwtable {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
+    );
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    let size = |name: &str| object.sections.iter().find(|one| one.name == name).map_or(0, |one| one.image.len());
+    // one row for `framed`; control: that row is there, so the leaf's absence
+    // is not an empty table
+    assert_eq!(size(".pdata"), 12, "{:?}", object.sections.iter().map(|one| &one.name).collect::<Vec<_>>());
+    assert!(size(".xdata") >= 4);
+    let rows = object.sections.iter().find(|one| one.name == ".pdata").unwrap().relocs.len();
+    assert_eq!(rows, 3);
+}
+
+/// An object with only frameless leaves has no unwind sections at all, as the
+/// pin's has none.
+#[test]
+fn an_object_of_leaves_has_no_unwind_sections() {
+    let object = windows_object("define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n");
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    assert!(object.sections.iter().all(|one| one.name != ".xdata" && one.name != ".pdata"));
+}
+
 /// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
-fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
+fn tail_call_listing(
+    abi: &str,
+    signature: &str,
+    arguments: &str,
+) -> String {
     // a variadic call names its callee's type: `i32 (i32, ...) @g`
     let text = format!(
         "{SYSV}declare i32 @g{signature}\ndefine i32 @f(i32 %x) {{\n  %r = tail call i32 {} @g({arguments})\n  ret i32 %r\n}}\n",
@@ -2015,7 +2434,8 @@ fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
 
 /// A variadic tail call under Win64 became `jmp g`; the pin keeps `call g`
 /// then `ret` (`isEligibleForSiblingCallOpt`: no variadic sibling call when
-/// either side is Win64). SysV, and a Win64 call of a fixed signature, still jump.
+/// either side is Win64). SysV, and a Win64 call of a fixed signature, still
+/// jump.
 #[test]
 fn a_win64_variadic_tail_call_stays_a_call() {
     let jumps = |listing: &str| listing.lines().any(|line| line.trim().starts_with("jmp g"));
@@ -2163,13 +2583,39 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// There is no pin alignment at 16 bits: an over-aligned local is refused with
-/// its reason, not compiled off its alignment.
+/// Real mode cannot realign the stack: a local aligned past 32 is refused by name
+/// (#8570), not clamped (#7706); the refusal is the only guard against a wrong
+/// promised alignment, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_refused() {
+fn m16_over_aligned_local_is_refused_by_name() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let error = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
-    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+    let why = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().expect("refused");
+    assert!(why.to_string().contains("an object aligned to 64 needs stack realignment"), "{why}");
+}
+
+/// jwlink turns a far call to the same segment into `push cs; call near` plus
+/// a pad byte, a `ds` prefix at one parity and an executed `nop` at the other
+/// (0.60-0.85% of stft_fixed's executed instructions, 47 sites). The object
+/// writer states the near form itself where the callee is in the call's own
+/// segment: four bytes, no pad, nothing to execute.
+#[test]
+fn a_far_call_inside_its_own_segment_is_push_cs_and_a_near_call() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+                define cc 1005 i32 @g(i32 %a) addrspace(1) noinline {\n  %r = mul i32 %a, 3\n  ret i32 %r\n}\n\
+                define cc 1005 i32 @f(i32 %a) addrspace(1) {\n  %r = call cc 1005 addrspace(1) i32 @g(i32 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
+    let (built, format) = compiled(&flags(&["-m16", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
+    )
+    .unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!has(&[0x9A, 0, 0, 0, 0]), "a far call to g is left to the linker: {listing}");
+    assert!(has(&[0x0E, 0xE8]), "push cs; call near: {listing} {bytes:02x?}");
 }
 
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
@@ -2251,8 +2697,10 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
-/// it): `lea rdi, [rsp]` is a byte shorter than `[rsp+8]`, so 33 bytes.
+/// add rsp, 32; pop rbx; ret`, but for the local's address: the pin's llc puts
+/// the local at `[rsp+8]` (`lea rdi, [rsp+8]`, 5 bytes, FDE 34 long); ours at
+/// `[rsp]` (FR1, the call pad above it), and the pin's `tryOptimizeLEAtoMOV`
+/// makes that `mov rdi, rsp` (3 bytes, #8601), so 32.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
@@ -2263,7 +2711,7 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     assert_eq!(
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c07089001000\
-             01c0000001c000000000000002100000000410e10440e3083025a0e10410e0800")
+             01c0000001c000000000000002000000000410e10440e308302590e10410e0800")
     );
 }
 
@@ -2791,6 +3239,112 @@ fn a_row_on_the_same_line_as_the_row_before_is_not_a_statement() {
     }
 }
 
+/// Two read-modify-writes of one word with another in between (`counts[12]++;
+/// counts[14]++; counts[12]++`, split_loops -O3): the first store is dead once
+/// the second has the first's value, so the pin's DAG combiner drops it and
+/// the pair is one `add word ptr [counts+24], 2`. Ours kept both stores, the
+/// value in a register (`mov eax, dword ptr`, `lea ecx, [rax+1]`, `mov word
+/// ptr, cx`, ..., `add eax, 2`, `mov word ptr, ax`). The statement-level DSE
+/// is off here: it removes the first store before the DAG sees it.
+#[test]
+fn a_store_the_next_to_the_same_word_overwrites_is_dropped_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @c = internal global [64 x i16] zeroinitializer, align 16\n\
+                define void @f() {\n\
+                  %a = load i16, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  %a1 = add i16 %a, 1\n\
+                  store i16 %a1, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  %b = load i16, ptr getelementptr inbounds (i8, ptr @c, i64 28), align 4\n\
+                  %b1 = add i16 %b, 1\n\
+                  store i16 %b1, ptr getelementptr inbounds (i8, ptr @c, i64 28), align 4\n\
+                  %c = load i16, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  %c1 = add i16 %c, 1\n\
+                  store i16 %c1, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-fno-tree-dse"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let stores = listing.lines().filter(|line| line.trim().starts_with("mov word ptr")).count();
+    assert!(
+        listing.lines().any(|line| line.trim().starts_with("add word ptr") && line.trim().ends_with(", 2")),
+        "{listing}"
+    );
+    assert_eq!(stores, 0, "{listing}");
+}
+
+/// `select a, true, freeze b` of two compares is `(x^c)|(y^c) != 0` at x86: the
+/// freeze is pushed through the compare (`visitFREEZE`), where kept it hid the
+/// `or` of compares from `foldLogicOfSetCCs` and left two `setne`, an `or`, a
+/// `movzx` and an `and 1` (memcpy_runtime -O3 m32, 1084 -> 1101 B).
+#[test]
+fn an_or_of_two_compares_with_one_constant_is_one_setne_at_m32() {
+    let ir = "target datalayout = \"@m32-datalayout@\"\n\
+              target triple = \"i686-pc-linux-gnu\"\n\
+              @to = global [8 x i8] zeroinitializer\n\
+              define i32 @f(i32 %acc) {\n  %p = load i8, ptr @to\n  \
+              %q = load i8, ptr getelementptr (i8, ptr @to, i32 2)\n  \
+              %a = icmp ne i8 %p, -86\n  %b = icmp ne i8 %q, -86\n  \
+              %c = select i1 %a, i1 true, i1 %b\n  %z = zext i1 %c to i32\n  \
+              %r = add i32 %z, %acc\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), ir, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("setne").count(), 1, "{listing}");
+    assert!(!listing.contains("and ecx, 1"), "{listing}");
+}
+
+/// `br (select i1 %u, i1 %bit, i1 false)` is combined as the pin does: the
+/// `brcond` is visited first and `rebuildSetCC` makes `setne(select, -1)`
+/// before the select becomes an `and`. A select made an `and` ahead of the
+/// DAG left `xor(and, -1)`, which De Morgan turned into `setae` + `or`: a
+/// second flag in a spill slot (switch_table_holes -O2 m32, 122 -> 132 B).
+/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172
+/// clk.
+#[test]
+fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m64() {
+    let ir = "target datalayout = \"@m64-datalayout@\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
+              declare void @a()\ndeclare void @b()\n\
+              define void @f(i32 %x) {\n  %u = icmp ult i32 %x, 14\n  %t = trunc i32 %x to i16\n  \
+              %s = lshr i16 8707, %t\n  %bit = trunc i16 %s to i1\n  \
+              %c = select i1 %u, i1 %bit, i1 false\n  br i1 %c, label %t1, label %e\nt1:\n  \
+              call void @a()\n  ret void\ne:\n  call void @b()\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), ir, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("setae"), "the compare was inverted:\n{listing}");
+    assert!(!listing.lines().any(|l| l.trim().starts_with("or ")), "the and became an or:\n{listing}");
+}
+
+/// `icmp ult` before `icmp ne` joined by `and` and branched on: the pin keeps
+/// each compare's IR order through De Morgan (`SDLoc(N00)`, `SDLoc(N01)`), so
+/// the source-order scheduler emits `cmp ecx, 7` before `cmp eax, 204`. Ours
+/// gave both flipped compares the branch's order and emitted them the other
+/// way round (jpeg -O2, +59 B of spill in `bench_jpeg_fixed_`). `swapped`
+/// is the same with the compares in the other order.
+#[test]
+fn the_compares_of_a_negated_and_keep_their_ir_order_at_m32() {
+    let ir = |first: &str, second: &str| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i686-pc-linux-gnu\"\n\
+             declare void @a()\ndeclare void @b()\n\
+             define void @f(i32 %x) {{\n  %s = add nsw i32 %x, -201\n  {first}\n  {second}\n  \
+             %c = and i1 %n, %u\n  br i1 %c, label %t, label %e\nt:\n  call void @a()\n  ret void\ne:\n  \
+             call void @b()\n  ret void\n}}\n"
+        )
+    };
+    let ult = "%u = icmp ult i32 %s, 7";
+    let ne = "%n = icmp ne i32 %x, 204";
+    let order = |text: String| -> Vec<&'static str> {
+        let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let first = listing.lines().position(|l| l.trim().starts_with("cmp ecx, 7")).unwrap();
+        let second = listing.lines().position(|l| l.trim().starts_with("cmp eax, 204")).unwrap();
+        vec![if first < second { "ult first" } else { "ne first" }]
+    };
+    assert_eq!(order(ir(ult, ne)), ["ult first"]);
+    assert_eq!(order(ir(ne, ult)), ["ne first"]);
+}
+
 /// The copy that puts a call's argument in its register is of the call's line
 /// (the pin's `COPY` has the call's `DebugLoc`). Ours had none, so every case
 /// block of a switch began with a line-0 row: 5 of them in 8 cases.
@@ -2817,7 +3371,7 @@ fn omf_record_types(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn omf_of(arguments: &[&str]) -> Vec<u8> {
-    let directory = std::env::temp_dir().join(format!("fsec-{}-{}", std::process::id(), arguments.join("")));
+    let directory = unique_directory("fsec");
     std::fs::create_dir_all(&directory).unwrap();
     let source = directory.join("two.ll");
     std::fs::write(
@@ -2832,7 +3386,30 @@ fn omf_of(arguments: &[&str]) -> Vec<u8> {
     let mut all = vec!["-m16", "-fobject-format=omf", "-o", output.to_str().unwrap()];
     all.extend_from_slice(arguments);
     crate::llc::compile(&flags(&all), &source, None).unwrap();
-    std::fs::read(output).unwrap()
+    let bytes = std::fs::read(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    bytes
+}
+
+/// A directory name no other call in this process shares. `omf_of` named its
+/// directory after its arguments, so the three tests calling it with `&[]`
+/// rewrote one `two.ll`/`two.obj` under each other: 4 to 12 of 40 whole-lib
+/// runs failed, always a function_sections test, each passing alone.
+fn unique_directory(tag: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
+}
+
+#[test]
+fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
+    assert_ne!(unique_directory("t"), unique_directory("t"));
+    let expected = omf_of(&[]);
+    let handles: Vec<_> =
+        (0..8).map(|_| std::thread::spawn(|| (0..4).map(|_| omf_of(&[])).collect::<Vec<_>>())).collect();
+    for handle in handles {
+        assert!(handle.join().unwrap().iter().all(|bytes| *bytes == expected));
+    }
 }
 
 /// The C path wrote one segment for the module's code whatever the program,
@@ -3174,6 +3751,81 @@ fn a_branch_on_a_negated_bool_global_is_one_compare_at_m64() {
     assert!(listing.contains("cmp byte ptr bad, 1"), "{listing}");
 }
 
+/// The exit flag of a probe loop (`phi i1` from a compare) read by a branch
+/// whose true successor follows was `not cl; test cl, 1; je`, and `and cl, 1;
+/// cmp cl, 1` once rebuilt (x_hash `-Os` m32, +5 B on the pin): the phi
+/// register knew nothing of its bits. The pin's `ComputePHILiveOutRegInfo`
+/// tells it `i1`.
+#[test]
+fn a_branch_on_an_inverted_bool_phi_is_not_negated_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @keys = global [256 x i32] zeroinitializer\n\
+                @vals = global [256 x i32] zeroinitializer\n\
+                define void @f(i32 %n, i32 %k, i32 %s0) {\n\
+                e:\n  %p = getelementptr [4 x i8], ptr @keys, i32 %s0\n  %v = load i32, ptr %p\n\
+                \x20 %c0 = icmp eq i32 %v, -1\n  %m0 = icmp eq i32 %v, %k\n  %o0 = or i1 %c0, %m0\n\
+                \x20 br i1 %o0, label %j, label %h\n\
+                h:\n  br label %lp\n\
+                lp:\n  %s = phi i32 [ %s1, %lp ], [ %s0, %h ]\n  %a = add i32 %s, 1\n  %s1 = and i32 %a, 255\n\
+                \x20 %q = getelementptr [4 x i8], ptr @keys, i32 %s1\n  %w = load i32, ptr %q\n\
+                \x20 %c1 = icmp eq i32 %w, -1\n  %m1 = icmp eq i32 %w, %k\n  %o1 = or i1 %c1, %m1\n\
+                \x20 br i1 %o1, label %j, label %lp\n\
+                j:\n  %i = phi i32 [ %s0, %e ], [ %s1, %lp ]\n  %fl = phi i1 [ %c0, %e ], [ %c1, %lp ]\n\
+                \x20 br i1 %fl, label %ins, label %upd\n\
+                ins:\n  %pk = getelementptr [4 x i8], ptr @keys, i32 %i\n  store i32 %k, ptr %pk\n\
+                \x20 %pv = getelementptr [4 x i8], ptr @vals, i32 %i\n  store i32 %n, ptr %pv\n  br label %x\n\
+                upd:\n  %pu = getelementptr [4 x i8], ptr @vals, i32 %i\n  %o = load i32, ptr %pu\n\
+                \x20 %t = add i32 %o, %n\n  store i32 %t, ptr %pu\n  br label %x\n\
+                x:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("not ") && !listing.contains("and cl, 1"), "{listing}");
+    assert!(listing.contains("test cl, cl"), "{listing}");
+}
+
+/// `while (env(i, line) >= 0 && len > 8 && line[0]=='C' && ... line[7]=='=')`
+/// as an unrotated loop: the eight byte loads of `line` stayed in the block
+/// above the chain, `mov r8, [esp+k]` held across the branches (os_execute m32
+/// -Os); the pin sinks each into the chain block that compares it.
+#[test]
+fn byte_loads_of_a_chain_sink_into_their_compare_blocks_at_m32() {
+    let mut body = String::new();
+    for (at, byte) in [67, 79, 77, 83, 80, 69, 67, 61].iter().enumerate() {
+        let prev = if at == 0 { "%big".to_owned() } else { format!("%c{}", at - 1) };
+        body += &format!(
+            "  %p{at} = getelementptr inbounds i8, ptr %buf, i32 {at}\n  %v{at} = load i8, ptr %p{at}\n\
+             \x20 %e{at} = icmp eq i8 %v{at}, {byte}\n  %c{at} = select i1 {prev}, i1 %e{at}, i1 false\n"
+        );
+    }
+    let text = format!(
+        "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+         declare i32 @env(i32, ptr)\ndeclare void @hit()\n\
+         define void @f() optsize {{\n  %buf = alloca [96 x i8]\n  br label %lp\nlp:\n\
+         \x20 %i = phi i32 [ 0, %0 ], [ %n, %chain ]\n  %len = call i32 @env(i32 %i, ptr %buf)\n\
+         \x20 %ok = icmp sgt i32 %len, -1\n  br i1 %ok, label %chain, label %out\nchain:\n\
+         \x20 %big = icmp ugt i32 %len, 8\n{body}  %n = add i32 %i, 1\n  br i1 %c7, label %yes, label %lp\n\
+         yes:\n  call void @hit()\n  ret void\nout:\n  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("mov dl, byte ptr"), "{listing}");
+    assert!(listing.matches("cmp byte ptr").count() >= 8, "{listing}");
+}
+
+/// `n % 5 == 0` was the divide's multiply-high, `shr`, `lea` and a compare of
+/// the product with `n` (7 instructions); the pin's `buildUREMEqFold` is one
+/// multiply by the inverse and a compare against `floor((2^32-1)/5)`.
+#[test]
+fn an_unsigned_remainder_compared_to_a_constant_is_a_multiply_and_a_compare_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+                define i1 @f(i32 %n) {\n  %r = urem i32 %n, 5\n  %c = icmp eq i32 %r, 0\n  ret i1 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("cmp eax, 858993460"), "{listing}");
+    assert!(!listing.contains("shr ") && !listing.contains("div "), "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
@@ -3212,7 +3864,7 @@ fn the_call_pad_lies_above_the_locals_at_m64() {
 /// -O3 unroll-and-jam never fired on x86-64: the outer loop's size (28) was
 /// held to `BasicTTIImpl`'s 28-micro-op loop buffer, so the count was 0
 /// (particle: 15850 cycles; gcc's jam of two outer trips, 10262). Jammed, the
-/// copies of `px += vx` share one load of `vx`: `px += 3 * vx`.
+/// copies of `px += vx` share one load of `vx`.
 #[test]
 fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3231,22 +3883,35 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
                 \x20 %i1 = add nuw nsw i64 %i, 1\n  %e = icmp eq i64 %i1, 101\n  br i1 %e, label %next, label %inner\n\
                 next:\n  %t1 = add nuw nsw i16 %t, 1\n  %f = icmp eq i16 %t1, 101\n  br i1 %f, label %done, label %outer\n\
                 done:\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    // Jammed by three: `px += 3 * vx` is `lea r, [v+v]` then `add r, v`.
-    let tripled = listing.lines().map(str::trim).filter(|line| {
-        line.strip_prefix("lea ")
-            .and_then(|rest| rest.split_once('['))
-            .and_then(|(_, inside)| inside.strip_suffix(']'))
-            .and_then(|inside| inside.split_once('+'))
-            .is_some_and(|(a, b)| a == b)
-    });
-    assert!(tripled.count() >= 2, "{listing}");
+    // The symptom, not the factor: the copies of `px += vx` share one load of
+    // `vx` and add it to itself (`add r, r`: x2 for two copies, UJ3's divisor
+    // of the 100 outer trips), where an unjammed nest loads `vx` and `vy` once
+    // per trip and doubles nothing.
+    let shape = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let lines = listing.lines().map(str::trim);
+        let doubled = lines
+            .clone()
+            .filter(|line| {
+                line.strip_prefix("add ")
+                    .and_then(|rest| rest.split_once(", "))
+                    .is_some_and(|(a, b)| a == b && !a.starts_with("word"))
+            })
+            .count();
+        let loads = lines.filter(|line| line.starts_with("movzx") && line.contains("ptr [")).count();
+        (doubled, loads, listing)
+    };
+    let (doubled, loads, listing) = shape("-O3");
+    assert!(doubled >= 2 && loads == 2, "{listing}");
+    // Control: without the jam (-O2) nothing is doubled.
+    let (doubled, _, listing) = shape("-O2");
+    assert_eq!(doubled, 0, "{listing}");
 }
 
-/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
-/// (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B); -O3 keeps 150
-/// (m32's rectwo and bintree are worse with 450 there).
+/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass
+/// allowed (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B);
+/// -O3 keeps 150 (m32's rectwo and bintree are worse with 450 there).
 #[test]
 fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3565,17 +4230,19 @@ fn a_parent_of_an_unrolled_loop_is_folded_by_indvars_at_m64_o3() {
 }
 
 /// A 31-byte struct copy at m64 -Os was a `call memcpy` (the real-mode string
-/// rule counted it as eight dwords); the pin copies it as two overlapping
-/// 16-byte pieces (memory_expansion Os, 8 insns -> 5 per copy).
+/// rule counted it as eight dwords); it is now whichever of two overlapping 16-byte pieces (16 B) or the call
+/// (14 B with the arguments) is smaller (DEVIATE MEM-OS, #7892): here the call, and never a mix of both.
 #[test]
-fn a_31_byte_copy_at_m64_os_is_two_16_byte_pieces() {
+fn a_31_byte_copy_at_m64_os_is_the_cheaper_of_pieces_and_a_call() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
                 define void @f(ptr %d, ptr %s) optsize {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 31, i1 false)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.matches("movups").count() == 4 && !listing.contains("call"), "{listing}");
+    let call = listing.contains("memcpy");
+    let pieces = listing.matches("movups").count();
+    assert!((call && pieces == 0) || (!call && pieces == 4), "{listing}");
 }
 
 /// A 136-byte local read through an index at m64: the red zone put `-0x80` on
@@ -3852,7 +4519,8 @@ fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
         rest.split(']').next()?.parse().ok()
     };
     let saves: Vec<i64> = lines.iter().filter_map(offset).collect();
-    let reloads = lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
+    let reloads =
+        lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
     assert!(saves.len() >= 2 && reloads == saves.len(), "{win}");
     assert!(saves.iter().all(|at| at % 16 == 0), "movaps faults off a 16-byte boundary: {win}");
     let sysv = listing_of("-mabi=sysv");
@@ -3869,7 +4537,11 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     // The frame register lies the pushes and the `sub` above the stack pointer.
-    let pushes = lines.iter().take_while(|l| !l.starts_with("sub rsp")).filter(|l| l.starts_with("push") && **l != "push rbp").count() as i64;
+    let pushes = lines
+        .iter()
+        .take_while(|l| !l.starts_with("sub rsp"))
+        .filter(|l| l.starts_with("push") && **l != "push rbp")
+        .count() as i64;
     let sub: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap();
     let distance = 8 * pushes + sub;
     let number = |l: &str, open: &str| -> i64 {
@@ -3878,8 +4550,11 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     };
     let saves: Vec<i64> =
         lines.iter().filter(|l| l.starts_with("movaps xmmword ptr [rsp+")).map(|l| number(l, "[rsp")).collect();
-    let reloads: Vec<i64> =
-        lines.iter().filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp")).map(|l| number(l, "[rbp")).collect();
+    let reloads: Vec<i64> = lines
+        .iter()
+        .filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp"))
+        .map(|l| number(l, "[rbp"))
+        .collect();
     assert!(!saves.is_empty(), "{listing}");
     assert_eq!(reloads, saves.iter().map(|at| at - distance).collect::<Vec<_>>(), "{listing}");
 }
@@ -3916,7 +4591,10 @@ fn a_win64_variadic_function_homes_its_register_arguments_for_va_start() {
     let below: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap_or(0);
     for (at, register) in [(16, "rdx"), (24, "r8"), (32, "r9")] {
         let home = format!("mov qword ptr [rsp+{}], ", at + below);
-        assert!(lines.iter().any(|l| l.starts_with(&home)), "{register} not homed {at} above the return address: {listing}");
+        assert!(
+            lines.iter().any(|l| l.starts_with(&home)),
+            "{register} not homed {at} above the return address: {listing}"
+        );
     }
     assert!(!listing.contains("test al"), "SysV register save area: {listing}");
     // Win64 has no red zone: nothing is written below the stack pointer.
@@ -3984,9 +4662,8 @@ fn a_win64_function_with_an_unprobed_shape_is_refused() {
 #[test]
 fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
     let listing_of = |mask: u64| {
-        let body = format!(
-            "define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n"
-        );
+        let body =
+            format!("define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n");
         let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &format!("{SYSV}{body}"), "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
@@ -3998,4 +4675,410 @@ fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
     let low = listing_of(0x0000_FFFF_FFFF_FFFF);
     assert!(low.contains("shl rdi, 16"), "{low}");
     assert!(!low.contains("and ") && !low.contains("movabs"), "{low}");
+}
+
+/// ZIMM priced `0x9E3779B9` at one instruction in a size build too, so
+/// ConstantHoisting kept every `mov r32, imm32` (5 B) where one register
+/// copy (3 B) did: `mul_constants` -Os +30 B.
+#[test]
+fn a_zero_extended_constant_used_many_times_in_a_size_build_is_materialized_once_at_m64() {
+    // Eight loops, each seeded with the same constant, as `mul_constants` has.
+    let loops: String = (0..8)
+        .map(|i| {
+            format!(
+                "pre{i}:\n  br label %l{i}\n\
+                 l{i}:\n  %x{i} = phi i64 [ 2654435769, %pre{i} ], [ %n{i}, %l{i} ]\n\
+                 \x20 %c{i} = phi i64 [ 0, %pre{i} ], [ %d{i}, %l{i} ]\n\
+                 \x20 %m{i} = mul i64 %x{i}, 1664525\n  %n{i} = add i64 %m{i}, 1013904223\n\
+                 \x20 %d{i} = add i64 %c{i}, 1\n  %e{i} = icmp eq i64 %d{i}, 200\n\
+                 \x20 br i1 %e{i}, label %o{i}, label %l{i}\n\
+                 o{i}:\n  call void @g(i64 %n{i})\n  br label %pre{next}\n",
+                next = i + 1
+            )
+        })
+        .collect();
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         declare void @g(i64)\n\
+         define void @f() optsize {{\nentry:\n  br label %pre0\n{loops}pre8:\n  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let loads = listing.lines().filter(|line| line.contains("0x9e3779b9") || line.contains("2654435769")).count();
+    assert_eq!(loads, 1, "{listing}");
+}
+
+/// ZIMM priced `0xFF000000` and `0x80000000` at one instruction each, so
+/// ConstantHoisting never made them candidates and lost the pin's base and
+/// offset (`div_constants_long` -O3 +16 B, `constant_hoisting_shares_a_wide_
+/// compare_constant64.c` +4 B).
+#[test]
+fn two_neighbouring_zero_extended_constants_share_a_base_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(i64 %a, i64 %b) {\n\
+                \x20 %x = shl i64 %a, 1\n  %c1 = icmp ugt i64 %x, 4278190080\n\
+                \x20 %y = shl i64 %b, 1\n  %c2 = icmp ugt i64 %y, 4278190080\n\
+                \x20 %p = sub i64 2147483648, %a\n  %q = sub i64 2147483648, %b\n\
+                \x20 %c3 = icmp ult i64 %p, %q\n  %r1 = or i1 %c1, %c2\n  %r = xor i1 %r1, %c3\n  ret i1 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("2130706432"), "{listing}");
+}
+
+/// A lone zero-extended constant read in both arms of a branch stays two
+/// `mov r32, imm32`: one in the entry would be a register held across the
+/// branch (a same-block pair is merged by ISel whatever the pass does).
+#[test]
+fn a_lone_zero_extended_constant_in_two_blocks_is_not_hoisted_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @h1(i1)\n declare void @h2(i1)\n\
+                define void @f(i64 %a, i64 %b, i1 %c) {\n\
+                \x20 br i1 %c, label %t, label %e\n\
+                t:\n  %x = shl i64 %a, 1\n  %r1 = icmp ugt i64 %x, 4278190080\n  call void @h1(i1 %r1)\n  ret void\n\
+                e:\n  %y = shl i64 %b, 1\n  %r2 = icmp ugt i64 %y, 4278190080\n  call void @h2(i1 %r2)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("4278190080").count(), 2, "{listing}");
+}
+
+/// The mask of a `select c, 0, K` was hoisted beside `0xFFFFFFFF` as a `lea`
+/// held in a register through the loop, pushing the loop's temporaries to
+/// `r8`/`r9` (`crc` -O1 147 -> 162 B). Kept attached it is `and eax, imm32`.
+#[test]
+fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x, i64 %n) {\n\
+                entry:\n  %a = xor i64 %x, 4294967295\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %i2, %loop ]\n\
+                \x20 %v = phi i64 [ %a, %entry ], [ %nv, %loop ]\n\
+                \x20 %b = and i64 %v, 1\n  %c = icmp eq i64 %b, 0\n\
+                \x20 %m = select i1 %c, i64 0, i64 3988292384\n  %s = lshr i64 %v, 1\n\
+                \x20 %nv = xor i64 %s, %m\n  %i2 = add i64 %i, 1\n  %e = icmp eq i64 %i2, %n\n\
+                \x20 br i1 %e, label %exit, label %loop\n\
+                exit:\n  %r = xor i64 %nv, 4294967295\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("306674911"), "{listing}");
+}
+
+/// Position-independent m64: a symbol defined elsewhere is reached through
+/// the GOT, as the pin does (`X86Subtarget::classifyGlobalReference` is
+/// `MO_GOTPCREL` for a declaration that is not `dso_local`): the address is
+/// one `mov r64, [rip + g@GOTPCREL]` and the value a second load. Every symbol
+/// was assumed `dso_local` (`dag_function.rs`), so the read was the single
+/// `mov eax, [rip + g]` of a static link and the extern read flattered every
+/// cell by one load.
+#[test]
+fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = external global i32\n\
+                define i32 @f() {\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // masm names a symbol operand without brackets: `dword ptr g` is the
+    // direct read; the GOT form reads through a register (`ptr [r..]`). The
+    // first version counted `[` and read 0 loads for the direct listing.
+    assert!(!listing.contains("ptr g"), "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("mov eax, dword ptr [")), "{listing}");
+}
+
+/// A call to a function defined elsewhere stays a direct `call` (the linker
+/// makes the PLT entry), and a global defined in the module is read directly:
+/// only an undefined data symbol goes through the GOT.
+#[test]
+fn a_call_and_a_defined_global_at_m64_pie_stay_direct() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @d = global i32 5\n\
+                declare i32 @ext()\n\
+                define i32 @f() {\n  %a = load i32, ptr @d\n  %b = call i32 @ext()\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("ptr d") && listing.contains("call ext"), "{listing}");
+}
+
+/// `zext(icmp eq (and i64 x, 0x80000000), 0) + y` (the last step of `__clzsi2`)
+/// compiled to `and edi, 0x80000000; cmp rdi, 1; adc eax, 0` (13 B); the pin
+/// tests the narrow sign bit (`(and X, 2^k) == 0` is `(trunc X) >= 0`,
+/// `foldSetCCWithAnd`) and shifts it down: `not; shr 31; add` (7 B, -8 B at
+/// sfm16_float_cmp -Os).
+#[test]
+fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i64 %x, i32 %y) optsize {\n\
+                \x20 %a = and i64 %x, 2147483648\n  %c = icmp eq i64 %a, 0\n  %z = zext i1 %c to i32\n\
+                \x20 %r = add nuw nsw i32 %y, %z\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("adc") && listing.contains("setns"), "{listing}");
+}
+
+/// The pin's `combineMul` covers i64 as well as i32: `x * 40` is `lea; shl`. Ours returned early for i64 and kept
+/// `imul r64, r64, imm`; 100+ products in mul_constants -O2 became `movabs` + `imul` (+450 B over the pin llc).
+/// `add(mul(add(A, CA), CM), CB)` folds only when `CA*CM + CB` is a legal add immediate (`isInt<32>` on x86). Ours
+/// had no check: the unrolled LCG chain of mul_constants became 64-bit `mov` constants and `imul r, r` (+875 B at -O2/-O3).
+#[test]
+fn a_mul_add_chain_is_not_folded_into_a_64_bit_immediate_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x0, i64 %t0, i64 %n) {\nentry:\n  br label %l\nl:\n  \
+                %v2 = phi i64 [ %x0, %entry ], [ %v11, %l ]\n  %v3 = phi i64 [ 0, %entry ], [ %v23, %l ]\n  \
+                %v4 = phi i64 [ %t0, %entry ], [ %r, %l ]\n  %v5 = mul i64 %v2, 1664525\n  \
+                %v6 = add i64 %v5, 1013904223\n  %v7 = mul i64 %v4, 961\n  %v8 = mul i64 %v6, 93\n  \
+                %v9 = add i64 %v8, %v7\n  %v10 = mul i64 %v6, 1664525\n  %v11 = add i64 %v10, 1013904223\n  \
+                %v12 = mul i64 %v11, 3\n  %r = add i64 %v12, %v9\n  %v23 = add nuw nsw i64 %v3, 2\n  \
+                %v24 = icmp eq i64 %v23, %n\n  br i1 %v24, label %out, label %l\nout:\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let wide = listing.split(|c: char| !c.is_ascii_digit()).filter(|n| n.len() >= 11).count();
+    assert_eq!(wide, 0, "{listing}");
+}
+
+#[test]
+fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x) {\n  %r = mul i64 %x, 40\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("imul"), "{listing}");
+}
+
+/// A call through a pointer pinned the frame register at m64 (`hasOpaqueSPAdjustment`
+/// read "the callee may pop"), though no m64 convention pops: rbp was never a value
+/// register, so memfuncs_runtime -O2 spent REX-prefixed r12-r15 where the pin has rbp (+111 B).
+#[test]
+fn a_function_calling_through_a_pointer_uses_rbp_as_a_value_register_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %p, ptr %fp) {\nentry:\n  \
+                %a = load volatile i64, ptr %p\n  %p1 = getelementptr i64, ptr %p, i64 1\n  %b = load volatile i64, ptr %p1\n  \
+                %p2 = getelementptr i64, ptr %p, i64 2\n  %c = load volatile i64, ptr %p2\n  %p3 = getelementptr i64, ptr %p, i64 3\n  %d = load volatile i64, ptr %p3\n  \
+                %p4 = getelementptr i64, ptr %p, i64 4\n  %e = load volatile i64, ptr %p4\n  %p5 = getelementptr i64, ptr %p, i64 5\n  %g = load volatile i64, ptr %p5\n  \
+                call void %fp()\n  \
+                store volatile i64 %a, ptr %p\n  store volatile i64 %b, ptr %p\n  store volatile i64 %c, ptr %p\n  \
+                store volatile i64 %d, ptr %p\n  store volatile i64 %e, ptr %p\n  store volatile i64 %g, ptr %p\n  ret i64 0\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rbp"), "{listing}");
+}
+
+/// A volatile `memcpy` kept eight-byte pieces at m64 (the 16-byte pieces carried no volatile mark, so the second
+/// read of the same source could be forwarded from the first); the pin copies it as `v4i32` pieces, each a volatile
+/// access (double_to_uint64 -O2: 80 bytes, ten pairs for five).
+#[test]
+fn a_volatile_copy_is_made_of_16_byte_pieces_and_each_is_read_and_written_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %src, ptr %d1, ptr %d2) {\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d1, ptr align 16 %src, i64 16, i1 true)\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d2, ptr align 16 %src, i64 16, i1 true)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pieces = listing.matches("movups").count() + listing.matches("movaps").count();
+    assert_eq!(pieces, 4, "{listing}");
+}
+
+/// The pin tail-calls the library routine of a `memmove`/`memcpy`/`memset` that ends a function (`jmp memmove`); ours
+/// pushed a slot, called, popped and returned: three bytes in each of the two hundred wrappers of memory_expansion
+/// (+4201 B at -O2).
+#[test]
+fn a_memmove_ending_a_function_is_a_tail_call_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  \
+                tail call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 300, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp memmove") && !listing.contains("call memmove"), "{listing}");
+}
+
+/// `memcpycall` rebuilt a large `memcpy` as a plain call and dropped the `tail` marker, so the call kept its
+/// `push; call; pop; ret` where the pin jumps (memory_expansion -O2: ten `cp*` wrappers, +3 B each).
+#[test]
+fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  \
+                tail call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 600, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
+}
+
+/// `x_matmul_f` (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes): its
+/// innermost loop indexes `B[k][j]` of `double B[12][12]`, so it makes at most 12 trips. gcc peels it;
+/// the pin cannot know the bound and kept 3 `fmul` (392 B, about 7,000 clocks over gcc at -O3).
+#[test]
+fn a_loop_bounded_by_the_object_it_indexes_is_peeled_at_m32_o3() {
+    let text = include_str!("tests_data/matmul_f.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O3", "-march=i486"]), text, "bench_x_matmul_f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
+    assert!(bench.matches("fmul").count() >= 12, "{listing}");
+}
+
+/// An `i64` select of two constants was branched in MIR before the DAG saw it
+/// (`jne; xor; mov; jmp; xor; mov 2`, compare_to_int64 -Os); the pin gives
+/// `setne; add eax, eax` (type legalization splits the select, isel folds it).
+#[test]
+fn an_i64_select_of_constants_is_no_branch_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i64 @f(i32 %a, i32 %b) optsize {\n  %c = icmp eq i32 %a, %b\n\
+                  %s = select i1 %c, i64 0, i64 2\n  ret i64 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("setne") && !listing.contains("\n    jne") && !listing.contains("jmp"), "{listing}");
+}
+
+/// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
+/// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
+/// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
+#[test]
+fn a_convert_in_a_loop_is_preceded_by_a_xorps_of_its_register() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %n) {\nentry:\n  br label %l\n\
+                l:\n  %i = phi i32 [ 0, %entry ], [ %i1, %l ]\n  %s = phi float [ 1.0, %entry ], [ %s1, %l ]\n\
+                  %c = sitofp i32 %i to float\n  %s1 = fadd float %s, %c\n  %i1 = add i32 %i, 1\n\
+                  %d = icmp eq i32 %i1, %n\n  br i1 %d, label %x, label %l\n\
+                x:\n  ret float %s1\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let (xor, convert) = (listing.find("xorps"), listing.find("cvtsi2ss"));
+    assert!(xor.is_some() && xor < convert, "{listing}");
+}
+
+/// `movd eax, xmm0` writes the whole of `rax`, but the zero extension that followed was `mov eax, eax` (the pin: none).
+/// The check took every `MOV*rr` for a register copy, `MOVPDI2DIrr` among them: 2 in sfm16_float_i2f's loop, 4 per
+/// iteration there.
+#[test]
+fn a_float_bits_zero_extended_at_m64_is_one_movd() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(float %x) {\n  %u = bitcast float %x to i32\n  %z = zext i32 %u to i64\n  ret i64 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movd"), "{listing}");
+    assert!(!listing.contains("movzx"), "{listing}");
+}
+
+/// A float `==` used as a value was `ucomiss; setnp; sete; and; movzx` (the pin: `cmpeqss; movd; and 1`, one
+/// instruction fewer and no flag reads; the `combineCompareEqual` combine was not translated). int_compared_with_float
+/// -Os m64: 274 B against the pin's 268.
+#[test]
+fn a_float_equality_as_a_value_is_a_cmpss() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(float %a, float %b) {\n  %c = fcmp oeq float %a, %b\n  %z = zext i1 %c to i32\n  ret i32 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("cmpss xmm0, xmm1, 0"), "{listing}");
+    assert!(!listing.contains("setnp") && !listing.contains("ucomiss"), "{listing}");
+}
+
+/// `callee` is `add3`, a default-visibility global the pin's MC never binds
+/// at assembly time (`ELFObjectWriter::isSymbolRefDifferenceFullyResolvedImpl`:
+/// a PC-relative reference resolves only for `STB_LOCAL`). `-fPIC` code must
+/// leave the call and the sibling jump to it to the linker (`R_X86_64_PLT32`):
+/// a shared object may be interposed. Ours filled the displacement in at any
+/// flag, so an interposed `add3` was never reached from `same` and `twice`.
+fn pc_relative_relocs_to_add3(
+    module_flags: &str,
+    linkage: &str,
+) -> Vec<(usize, bool)> {
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+         define {linkage}i64 @add3(i64 %a, i64 %b, i64 %c) #0 {{\n  %t = mul i64 %b, 3\n  %u = add i64 %a, %t\n  \
+         %v = add i64 %u, %c\n  ret i64 %v\n}}\n\
+         define i64 @same(i64 %a, i64 %b, i64 %c) {{\n  %r = tail call i64 @add3(i64 %a, i64 %b, i64 %c)\n  ret i64 %r\n}}\n\
+         define i64 @twice(i64 %a) {{\n  %x = call i64 @add3(i64 %a, i64 1, i64 2)\n  %y = call i64 @add3(i64 %x, i64 3, i64 4)\n  ret i64 %y\n}}\n\
+         attributes #0 = {{ noinline }}\n{module_flags}"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "same").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    let text = object.sections.iter().find(|one| one.role == llrm_object::Role::Text).expect("a text section");
+    text.relocs
+        .iter()
+        .filter(|one| {
+            one.pc_rel
+                && matches!(
+                    one.target,
+                    llrm_object::Target::Symbol(at) if object.symbols[at].name == "add3"
+                )
+        })
+        .map(|one| (one.at, one.pc_rel))
+        .collect()
+}
+
+const PIC_FLAGS: &str = "!llvm.module.flags = !{!0}\n!0 = !{i32 8, !\"PIC Level\", i32 2}\n";
+const PIE_FLAGS: &str =
+    "!llvm.module.flags = !{!0, !1}\n!0 = !{i32 8, !\"PIC Level\", i32 2}\n!1 = !{i32 2, !\"PIE Level\", i32 2}\n";
+const STATIC_FLAGS: &str = "!llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
+
+#[test]
+fn a_call_and_sibling_jump_to_a_default_visibility_global_at_pic_keep_their_plt32() {
+    assert_eq!(pc_relative_relocs_to_add3(PIC_FLAGS, "").len(), 3, "the tail jump and two calls");
+}
+
+#[test]
+fn a_call_and_sibling_jump_at_pie_and_static_are_resolved_without_a_relocation() {
+    for flags in [PIE_FLAGS, STATIC_FLAGS, ""] {
+        assert!(pc_relative_relocs_to_add3(flags, "").is_empty(), "{flags}");
+    }
+}
+
+#[test]
+fn a_hidden_or_internal_callee_at_pic_is_resolved_and_a_weak_one_never_is() {
+    assert!(pc_relative_relocs_to_add3(PIC_FLAGS, "hidden ").is_empty());
+    assert!(pc_relative_relocs_to_add3(PIC_FLAGS, "internal ").is_empty());
+    assert_eq!(
+        pc_relative_relocs_to_add3(STATIC_FLAGS, "weak ").len(),
+        3,
+        "a strong definition elsewhere wins at link time"
+    );
+}
+
+/// A 16-trip loop of calls in an internal function that nothing will inline
+/// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
+/// early unroll leaves an internal function's loops to be priced at each
+/// inlined site, and no site came. huffman_decode -O3 at m64: `decode` copied
+/// 17 calls of `getbit`, 443 B against gcc's 137, 2099 B in all against 1184
+/// and 27% over gcc in clocks plus bytes.
+#[test]
+fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o3() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @h()\n\
+                define internal i32 @f(i32 %x) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i32 [ 1, %entry ], [ %j, %loop ]\n  %c = phi i32 [ %x, %entry ], [ %d, %loop ]\n\
+                  %b = call i32 @h()\n  %s = shl i32 %c, 1\n  %d = add i32 %s, %b\n  %j = add i32 %i, 1\n\
+                  %t = icmp ult i32 %j, 17\n  br i1 %t, label %loop, label %done\n\
+                done:\n  ret i32 %d\n}\n\
+                define i32 @g(i32 %x) {\n  %r = call i32 @f(i32 %x)\n  ret i32 %r\n}\n";
+    let calls_of_h = |arguments: &[&str]| {
+        let (built, _) = compiled(&flags(arguments), text, "g").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().matches("call h").count()
+    };
+    let off = ["-m64", "-O3", "--isel=dag", "-fno-inline-functions", "-fno-inline-functions-called-once"];
+    assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
+    let on = ["-m64", "-O3", "--isel=dag"];
+    assert!(calls_of_h(&on) >= 1);
 }

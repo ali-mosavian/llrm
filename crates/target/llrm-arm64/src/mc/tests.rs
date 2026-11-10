@@ -275,6 +275,16 @@ fn branches() {
     all.push(Inst::Svc { imm16: 0x80 });
     all.push(Inst::VectorMov { rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::VectorMov { rd: Vreg(31), rn: Vreg(30) });
+    for (subtract, set_flags, width) in [
+        (false, false, Width::W),
+        (false, true, Width::W),
+        (true, false, Width::X),
+        (true, true, Width::X),
+        (false, true, Width::X),
+        (true, false, Width::W),
+    ] {
+        all.push(Inst::AddCarry { op: AddSub { subtract, set_flags }, width, rd: Gpr(3), rn: Gpr(17), rm: Gpr(29) });
+    }
     all.push(Inst::Brk { imm16: 1 });
     all.push(Inst::Nop);
     for (page, offset) in [(false, 0), (false, 1023), (false, -1048576), (true, 0), (true, 4096), (true, -8192)] {

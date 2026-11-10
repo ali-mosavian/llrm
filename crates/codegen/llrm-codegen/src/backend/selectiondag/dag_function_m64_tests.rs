@@ -25,6 +25,28 @@ entry:
     assert!(add.dests.iter().all(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.width == 8)), "{add:?}");
 }
 
+/// `s * 7 + b` on a quadword was `lea [s*8+0]; sub; add` (three, and a lea with
+/// a four-byte displacement): `combineAdd`'s hidden LEA was translated for
+/// `i32` only, the pin has it for `i32` and `i64`. It is `lea [b+s*8]; sub s`
+/// (switch_table_holes m64 -O2, +39 B).
+#[test]
+fn an_m64_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define i64 @f(i64 %s, i64 %b) {
+  %m = mul i64 %s, 7
+  %t = add i64 %m, %b
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "add"), "the add is folded into the lea: {names:?}");
+    assert!(names.iter().any(|n| n == "lea") && names.iter().any(|n| n == "sub"), "{names:?}");
+}
+
 /// A seven-argument call at m64 came out with 4-byte values and the 32-bit
 /// `ESP` (`mov r, ESP`), and was refused. It now passes six arguments in the
 /// registers `calling.toml` lists and the seventh on the stack at `RSP`.
@@ -50,12 +72,12 @@ entry:
     assert_eq!(registers, expected);
     // The argument area is a multiple of 16: a call finds the stack aligned
     // (printf crashed in `movaps` with the 8-byte area).
-    let sub = insns
+    let setup = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.name.as_deref() == Some("sub"))
+        .find(|w| w.name.as_deref() == Some("call_frame_setup"))
         .expect("the area reserved");
-    assert!(matches!(sub.sources[1], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{sub:?}");
+    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{setup:?}");
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
@@ -1385,4 +1407,25 @@ entry:
     let names: Vec<_> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
     assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
+}
+
+/// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
+/// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
+/// compiled to `add; adc` and `xor eax, eax` (u128 max + 1 reported no overflow).
+#[test]
+fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)
+define i1 @f(i128 %a, i128 %b) {
+  %r = call {i128, i1} @llvm.uadd.with.overflow.i128(i128 %a, i128 %b)
+  %o = extractvalue {i128, i1} %r, 1
+  ret i1 %o
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "adc"), "the high halves are added with the carry of the low: {names:?}");
 }

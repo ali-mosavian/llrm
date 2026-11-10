@@ -78,7 +78,7 @@
 //!
 //! # Example
 //! No honest example: the pipeline is the order of the passes, not one rewrite,
-//! and no one function shows it. `llrm-c --dump DIR` writes the module after
+//! and no one function shows it. `llrm-cc --dump DIR` writes the module after
 //! each stage (`NN-stage.ll`) and, for each body, each changed step of the
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, sccp, simpleloopunswitch, simplifycfg,
     switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -154,7 +154,7 @@ pub struct Options {
     /// The library routines the compile states the program links (the pin's
     /// `TargetLibraryInfo`, which it reads from the triple: here the front
     /// end's profile states them, as the ABI chosen by `-mabi` spells and
-    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// calls them). DEVIATE D11: llrm-cc states `strlen` for `-m32` under the
     /// System V convention only, llrm-qb and llrm-nib none, so no other
     /// compile forms a call of a library routine. Exit: a `Target::library`
     /// of each target that states its routines. Owner w-6, exit 2026-11-30.
@@ -176,6 +176,17 @@ pub struct Options {
     /// the path that lacks it: gcc's `-ftree-pre`, -O2 and up. Without it
     /// `gvn` only removes what is redundant on every path (`-ftree-fre`, -O1).
     pub pre: bool,
+    /// The pin's `JumpThreadingPass` slots (`jumpthreading@668`, `@809`) run
+    /// where `pre` is off too (-O1): its -O2 pipeline runs them,
+    /// `buildO1FunctionSimplificationPipeline` does not. gcc's
+    /// `-fthread-jumps`.
+    ///
+    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04, or
+    /// when the pin's -O1 gains it): a target's driver row may turn it on at
+    /// -O1 (`thread_jumps_at_o1` in llrm-cc's targets.toml); no row does but
+    /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
+    /// (bsearch -O1: a re-test and a loop-carried copy of the result).
+    pub thread_jumps: bool,
     /// A switch that only picks constants is a load from an array: gcc's
     /// `-ftree-switch-conversion`, -O2 and up.
     pub switch_conversion: bool,
@@ -250,7 +261,6 @@ pub struct Options {
     /// (`OnlyWhenForced`). -Os keeps it on: the unroller's own size threshold
     /// of 0 stops the copies.
     pub loop_unrolling: bool,
-    pub peel: bool,
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
@@ -284,9 +294,7 @@ pub struct Options {
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
-    /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a
-    /// complete copy of a loop may grow the code is `limits.grows`, which
-    /// gcc lets only -O3 do.)
+    /// Code size outranks speed where they conflict: -Os and -Oz.
     pub for_size: bool,
     /// The target's price of a code byte at speed counts
     /// (`Tti::speed_milliclocks_per_byte`): -O2 and -O3. -O1 and -Os gate
@@ -296,8 +304,6 @@ pub struct Options {
     /// header
     /// ([LoopRotation.cpp#L80](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopRotation.cpp#L80)).
     pub has_min_size: bool,
-    /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
-    pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
     /// (`-fallocation-search`; -Omax: gcc and LLVM allocate once).
     pub search: bool,
@@ -324,6 +330,7 @@ impl Default for Options {
             forward: true,
             drop_loads: true,
             pre: true,
+            thread_jumps: false,
             drop_stores: true,
             sink: true,
             spare_loads: false,
@@ -340,7 +347,6 @@ impl Default for Options {
             unroll: true,
             second_inline: false,
             loop_unrolling: true,
-            peel: true,
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
@@ -354,7 +360,6 @@ impl Default for Options {
             for_size: false,
             speed_rate: true,
             has_min_size: false,
-            expensive: true,
             switch_conversion: true,
             jump_tables: true,
             lower_switches: true,
@@ -377,42 +382,33 @@ impl Options {
     /// inliner (`getInlineParamsFromOptLevel`: 225 as -O2,
     /// PassBuilderPipelines.cpp L968), no allocation search or second route
     /// (compile -34% on d_faces), value numbering that inserts nothing, and
-    /// no sibling calls, peeling or unswitching. Pattern fill is
+    /// no sibling calls or unswitching. Pattern fill is
     /// on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
     /// PassBuilderPipelines.cpp L562), the user's decision of 2026-10-10
     /// (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
-            limits: Limits { grows: false, ..Self::default().limits },
             inline: inline::Threshold::default(),
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             pre: false,
-            peel: false,
+            thread_jumps: false,
             loop_unrolling: false,
             unswitch: false,
-            expensive: false,
             switch_conversion: false,
             speed_rate: false,
             ..Self::default()
         }
     }
 
-    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a
-    /// complete copy of a loop still must not grow the code
-    /// (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and
-    /// `-fpeel-loops` only).
+    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill.
+    /// Same as [`Options::default`]: whether a complete copy may grow the code
+    /// is the unroller's own size threshold, not an option here.
     pub fn standard() -> Self {
-        Self {
-            limits: Limits { grows: false, ..Self::default().limits },
-            peel: false,
-            unswitch: false,
-            ..Self::default()
-        }
+        Self::default()
     }
 
-    /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
-    /// code, and the larger inline threshold; the copy budget is LLVM's -O3
+    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the copy budget is LLVM's -O3
     /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
     /// clones: the pin makes none, and they grew recchop 1541 lines against
     /// 171.
@@ -426,13 +422,11 @@ impl Options {
         }
     }
 
-    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the
-    /// target's unroll budget, loops of up to 64 trips copied out completely
-    /// (gcc's `max-completely-peel-times` is 16; clang has no cap) and a 250
+    /// -Omax: every pass the default has on, LLVM's -O3 budgets and a 250
     /// inline threshold.
     pub fn aggressive() -> Self {
         Self {
-            limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
+            limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
             unroll_and_jam: true,
@@ -447,7 +441,7 @@ impl Options {
     /// `inlinehint`, as the pin holds it (audit row 3: mirrored).
     pub fn size() -> Self {
         Self {
-            limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
+            limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default().for_size(),
             for_size: true,
             ..Self::default()
@@ -485,7 +479,6 @@ impl Options {
     pub fn min_size() -> Self {
         Self {
             unroll: false,
-            peel: false,
             has_min_size: true,
             inline: inline::Threshold::default().for_min_size(),
             ..Self::size()
@@ -510,14 +503,13 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
-            "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
@@ -656,7 +648,7 @@ impl FunctionPass for Slot {
         let count = |unit: &Unit| -> i64 {
             unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
         };
-        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+        if !llrm_support::env_flag!("W2_SLOT_COUNT") {
             return self.inner.run(unit, analyses);
         }
         let before = count(unit);
@@ -701,14 +693,129 @@ impl FunctionPass for Together {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let mut changed = false;
+        let mut cfg = true;
         for part in &mut self.parts {
             let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
+                cfg &= preserved.cfg_preserved();
                 analyses.invalidate(unit.function, &preserved);
             }
         }
+        match (changed, cfg) {
+            (false, _) => PreservedAnalyses::all(),
+            (true, true) => PreservedAnalyses::none().preserve_cfg(),
+            (true, false) => PreservedAnalyses::none(),
+        }
+    }
+}
+
+/// What a [`PerLoop`] left behind: the function as the group ended, so that the
+/// slots after the head can tell their work is done.
+type Fused = std::rc::Rc<std::cell::Cell<Option<llrm_mir::module::Mark>>>;
+
+/// LPM2's passes (indvars, loop-deletion, loop-unroll-full, indvars on the
+/// loops the unroll made) as the loop pass manager runs them: loop by loop,
+/// each loop through every pass before the next loop is looked at, so an
+/// unrolled loop is gone, and an earlier loop's exit test already rewritten,
+/// when the next loop's `indvars` asks what dominates it. The slot is the
+/// first of them (`indvars@738`) and runs all of `parts`, the loops being
+/// those the function has when it starts, in the order the unroll visits
+/// them. The slots after it, [`AfterGroup`], find the function as the group
+/// left it and do nothing.
+struct PerLoop {
+    head: Box<dyn FunctionPass>,
+    parts: Vec<Box<dyn FunctionPass>>,
+    fused: Fused,
+}
+
+impl FunctionPass for PerLoop {
+    fn name(&self) -> &'static str {
+        self.head.name()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.head.translations()
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.head.adds_memory_operations() || self.parts.iter().any(|part| part.adds_memory_operations())
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.parts.iter().fold(self.head.reads(), |all, part| all.with(part.reads()))
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let headers: Vec<llrm_mir::module::BlockId> = analyses
+            .get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function)
+            .get_loops_in_reverse_sibling_preorder()
+            .iter()
+            .rev()
+            .map(|one| one.get_header())
+            .collect();
+        let mut changed = false;
+        for header in headers {
+            let found = analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function);
+            if !unit.function.is_placed(header) || !found.is_loop_header(header) {
+                continue;
+            }
+            let _scope = crate::loopfilter::only(&[header]);
+            for part in std::iter::once(&mut self.head).chain(self.parts.iter_mut()) {
+                let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
+                if !preserved.are_all_preserved() {
+                    changed = true;
+                    analyses.invalidate(unit.function, &preserved);
+                }
+            }
+        }
+        self.fused.set(Some(unit.function.mark()));
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// A slot after the head of a [`PerLoop`]: run by the group already, it is
+/// skipped while the function is as the group left it, and runs as itself
+/// otherwise (alone, or after something else changed the function).
+struct AfterGroup {
+    inner: Box<dyn FunctionPass>,
+    fused: Fused,
+}
+
+impl FunctionPass for AfterGroup {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.inner.adds_memory_operations()
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.inner.reads()
+    }
+
+    fn wants_sizes(&self) -> bool {
+        self.inner.wants_sizes()
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        if self.fused.get() == Some(unit.function.mark()) {
+            return PreservedAnalyses::all();
+        }
+        self.inner.run(unit, analyses)
     }
 }
 
@@ -749,7 +856,10 @@ pub(crate) fn llvm_order(
             Box::new(Together {
                 name,
                 parts: vec![
-                    Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }),
+                    Box::new(crate::combine_pass::Combine {
+                        enabled: applied.options.combine,
+                        phi_constant_users: applied.options.prices_bytes(),
+                    }),
                     Box::new(crate::simplifylibcalls::SimplifyLibCalls::with_routines(applied.options.library.clone())),
                 ],
             }),
@@ -821,6 +931,8 @@ pub(crate) fn llvm_order(
                         },
                     }),
                 ),
+                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a one-pointer `va_list` is a slot SROA can promote.
+                slot("vastart@1178", Box::new(crate::vastart::VaStart)),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
             ]
@@ -868,6 +980,7 @@ pub(crate) fn llvm_order(
                     duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                     size: applied.options.prefers_size(),
                     check_exit_count: true,
+                    free_guard: false,
                 }),
             ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
@@ -916,11 +1029,13 @@ pub(crate) fn llvm_order(
             slot(
                 "unroll@1476",
                 Box::new(loopunrollpass::LoopFullUnroll {
-                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_level: unroll_level(&applied.options),
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
+                    inliner_follows: true,
                     created: Default::default(),
+                    decided: Default::default(),
                 }),
             ),
             sroa("sroa@1494"),
@@ -990,6 +1105,7 @@ pub(crate) fn llvm_order(
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
                         check_exit_count: false,
+                        free_guard: false,
                     }),
                 ));
             }
@@ -1009,6 +1125,40 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            let decided: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            // LPM2 runs loop by loop (`PerLoop`): the slot of indvars runs the
+            // passes of the slots after it too, each of which then finds its
+            // work done.
+            let fused: Fused = Default::default();
+            let deletion = || -> Box<dyn FunctionPass> {
+                Box::new(crate::loopidiom::pass::AfterDeletion {
+                    deletion: loopdeletion::LoopDeletion,
+                    idiom: crate::loopidiom::pass::LoopIdiom {
+                        for_size: size,
+                        ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                    },
+                })
+            };
+            let unroll = || -> Box<dyn FunctionPass> {
+                Box::new(loopunrollpass::LoopFullUnroll {
+                    opt_level: unroll_level(&applied.options),
+                    opt_size: size,
+                    only_when_forced: !applied.options.loop_unrolling,
+                    target_unrolling: false,
+                    inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
+                    created: std::rc::Rc::clone(&created),
+                    decided: std::rc::Rc::clone(&decided),
+                })
+            };
+            let on_created = || -> Box<dyn FunctionPass> {
+                Box::new(indvars::IndVarsOnCreated { created: std::rc::Rc::clone(&created) })
+            };
+            let tails: Vec<Box<dyn FunctionPass>> =
+                [("loopdeletion@749", deletion()), ("unroll@753", unroll()), ("indvars@753", on_created())]
+                    .into_iter()
+                    .filter(|(name, _)| applied.options.wanted(name))
+                    .map(|(_, pass)| pass)
+                    .collect();
             list.extend([
                 slot(
                     "loopidiom@737",
@@ -1019,30 +1169,19 @@ pub(crate) fn llvm_order(
                     }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
                 slot(
-                    "loopdeletion@749",
-                    Box::new(crate::loopidiom::pass::AfterDeletion {
-                        deletion: loopdeletion::LoopDeletion,
-                        idiom: crate::loopidiom::pass::LoopIdiom {
-                            for_size: size,
-                            ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
-                        },
+                    "indvars@738",
+                    Box::new(PerLoop {
+                        head: Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size }),
+                        parts: tails,
+                        fused: std::rc::Rc::clone(&fused),
                     }),
                 ),
-                slot(
-                    "unroll@753",
-                    Box::new(loopunrollpass::LoopFullUnroll {
-                        opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
-                        opt_size: size,
-                        only_when_forced: !applied.options.loop_unrolling,
-                        target_unrolling: false,
-                        created: std::rc::Rc::clone(&created),
-                    }),
-                ),
+                slot("loopdeletion@749", Box::new(AfterGroup { inner: deletion(), fused: std::rc::Rc::clone(&fused) })),
+                slot("unroll@753", Box::new(AfterGroup { inner: unroll(), fused: std::rc::Rc::clone(&fused) })),
                 // The loops the unroll made go on to LPM2's passes: indvars on
                 // them.
-                slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
+                slot("indvars@753", Box::new(AfterGroup { inner: on_created(), fused })),
                 sroa("sroa@776"),
             ]);
             // Not in the pin's `default<O1>` (a pipeline of its own); `pre` is
@@ -1094,8 +1233,17 @@ pub(crate) fn llvm_order(
     };
     list.into_iter()
         .filter(|one| applied.options.wanted(one.name()))
-        .filter(|one| applied.options.pre || !crate::parity::ABSENT_AT_O1.contains(&one.name()))
+        .filter(|one| {
+            applied.options.pre
+                || (applied.options.thread_jumps && is_jump_threading(one.name()))
+                || !crate::parity::ABSENT_AT_O1.contains(&one.name())
+        })
         .collect()
+}
+
+/// The slots of `JumpThreadingPass` (`Options::thread_jumps`).
+fn is_jump_threading(name: &str) -> bool {
+    matches!(name, "jumpthreading@668" | "jumpthreading@809")
 }
 
 /// The order, from the pipeline itself rather than beside it, then the
@@ -1135,6 +1283,48 @@ pub fn timed() {
         function: |name, run| debug::in_function(name, run),
         count: |what, hit| debug::counted(what, hit),
     });
+}
+
+/// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
+/// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
+/// -O1 rule `unroll_never_grows_at_o1` never ran.
+fn unroll_level(options: &Options) -> u32 {
+    if !options.pre {
+        1
+    } else if options.limits.target_percent >= 200 {
+        3
+    } else {
+        2
+    }
+}
+
+/// The `-O<text>` words every driver takes. A driver maps each to its own mid-end `Options`;
+/// `Omax` is `Options::aggressive()` there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LevelName {
+    O0,
+    O1,
+    O2,
+    O3,
+    Omax,
+    Os,
+    Oz,
+}
+
+impl LevelName {
+    /// The level `-O<text>` names; a bare `-O` is -O1, as in gcc.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Ok(match text {
+            "0" => Self::O0,
+            "" | "1" => Self::O1,
+            "2" => Self::O2,
+            "3" => Self::O3,
+            "max" => Self::Omax,
+            "s" => Self::Os,
+            "z" => Self::Oz,
+            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz")),
+        })
+    }
 }
 
 /// `program` through the pipeline.
@@ -1183,12 +1373,59 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
     Ok(())
 }
 
+/// An `alloca` asking more than the target's frames keep and no more than it
+/// accepts (`Machine::kept_stack_align`, `max_alloca_align`) is clamped to what
+/// they keep; one asking more than it accepts is refused by name. Alignment is
+/// the explicit one, else the type's, as known-bits reads it.
+pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
+    let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
+    if kept.is_none() && max.is_none() {
+        return Ok(());
+    }
+    // The passes that raise an alloca's alignment stop at the datalayout's
+    // stack alignment (`tryEnforceAlignment`); no frame here keeps more.
+    if let Some(kept) = kept {
+        let held = program.layout.stack_align;
+        program.layout.stack_align = Some(held.map_or(kept, |held| held.min(kept)));
+    }
+    let layout = program.layout.clone();
+    for module in &mut program.modules {
+        let names: Vec<String> = module
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration())
+            .filter_map(|(_, global, _)| global.name.as_deref().map(str::to_owned))
+            .collect();
+        for name in names {
+            let (context, function) = module.function_mut(&name).expect("a defined function");
+            for block in function.layout().to_vec() {
+                for inst in function.iter_block(block).collect::<Vec<_>>() {
+                    let llrm_mir::opcode::Opcode::Alloca { allocated, align, .. } = function.instruction(inst).opcode
+                    else {
+                        continue;
+                    };
+                    let wanted = align.unwrap_or_else(|| layout.align(&context.types, allocated));
+                    if let Some(max) = max.filter(|max| wanted > *max) {
+                        return Err(format!(
+                            "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"
+                        ));
+                    }
+                    if let Some(kept) = kept.filter(|kept| wanted > *kept) {
+                        function.set_alloca_align(inst, kept);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
     refuse_vectors(program)?;
+    constrain_allocas(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
@@ -1235,6 +1472,9 @@ pub fn recorded(
             manager.compute::<GlobalsAA>();
             manager.compute::<GlobalsModRefAnalysis>();
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
+            // `Tti::inline_trial_light_simplify`: the SZ2 trial's copy goes through the
+            // cleanup list, not the whole one.
+            let mut light = Fixed::linear(&walked("walk"), Phase::Cleanup);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
                 speed_rate: applied.options.prices_bytes(),
@@ -1246,8 +1486,8 @@ pub fn recorded(
                 }),
                 simplify: Box::new(move |module, analyses, id, stage| {
                     TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
-                    rerun(module, analyses, id, &mut simplify, true)
-                        .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                    let list = if stage == crate::walk::TRIAL_LIGHT { &mut light } else { &mut simplify };
+                    rerun(module, analyses, id, list, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
                     TRIGGER.with(|trigger| trigger.borrow_mut().clear());
                 }),
             });
@@ -1291,6 +1531,13 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         late,
         pipeline: Box::new(move |module, analyses, id, stage| {
+            // The pin runs nothing over a body `DeadArgumentEliminationPass`
+            // changed: the late function pipeline, which every body goes
+            // through, finds what the lost argument leaves (PassBuilderPipelines.cpp,
+            // `buildModuleOptimizationPipeline` follows the module pass).
+            if stage == "ipa-deadargs." {
+                return;
+            }
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
                 // The stage that only retargets loads and stores of globals
@@ -1299,7 +1546,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if stage == "ipsccp." { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));
@@ -1389,9 +1636,16 @@ pub fn recorded(
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
-    // Last, as the old drivers rotated in lowering: unroll and peel refuse
-    // a rotated loop.
-    manager.add(rotate::Rotate { proven: true, copy: false });
+    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
+    // proven to run is entered at its body at -Oz (target opt-in). Owner z80, exit 2026-11-30.
+    if applied.options.has_min_size {
+        manager.add(looprotate::LoopRotate {
+            duplicate_headers: false,
+            size: true,
+            check_exit_count: false,
+            free_guard: true,
+        });
+    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") && !llvm_motion(applied) {
@@ -1413,8 +1667,8 @@ pub fn recorded(
         manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
-    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(crate::cgpselect::SelectArms);
+    if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
@@ -1477,7 +1731,7 @@ fn mark_for_size(
             }
             for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
                 if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
-                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                    function.attrs.push(Attribute::Flag(name.into()));
                 }
             }
         }
@@ -1498,6 +1752,11 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
+        // LSR; it does nothing for a target whose TTI does not enable it.
+        if applied.options.wanted("looptermfold") {
+            passes.push(Box::new(crate::looptermfold::LoopTermFold { size: applied.options.prefers_size() }));
+        }
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
@@ -1514,6 +1773,12 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // nothing for a target that counts no loop in hardware.
         if applied.options.wanted("hardwareloops") {
             passes.push(Box::new(crate::hardwareloops::HardwareLoops));
+        }
+        // `TargetPassConfig::addIRPasses` (pin l.874): ConstantHoisting
+        // follows LSR; it hoists nothing for a target whose constants all
+        // cost the basic one.
+        if applied.options.wanted("constanthoisting") {
+            passes.push(Box::new(crate::constanthoisting::ConstantHoisting));
         }
     }
     passes

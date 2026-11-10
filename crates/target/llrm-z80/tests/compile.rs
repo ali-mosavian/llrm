@@ -3,7 +3,7 @@
 use llrm_z80::compile::{allocated, lines, machine_function, text};
 use llrm_z80::driver::{Level, Request};
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8";
 
 fn compiled(
     body: &str,
@@ -270,7 +270,7 @@ fn a_flag_reader_after_a_clobber_reads_the_flags_of_its_compare() {
 /// for a value made in `a` read the pointer operand.
 #[test]
 fn a_byte_in_a_is_stored_through_any_pair() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
         define void @cp(ptr %a, ptr %b, ptr %c) {\n  %v = load i8, ptr %c\n  store i8 %v, ptr %b\n  %w = load i8, ptr %a\n  store i8 %w, ptr %c\n  ret void\n}\n";
     let out = text(ir, "cp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld (de), a") && out.contains("ld (bc), a") && !out.contains("ex de, hl"), "{out}");
@@ -663,7 +663,7 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
 /// None", which refused every 64-bit divide by a constant in the C corpus.
 #[test]
 fn a_word_compare_nothing_reads_is_not_emitted() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @g = external global i64\n\
               define i1 @f() {\n  %a = load i64, ptr @g\n  %c = icmp ult i64 %a, 4294967297\n  ret i1 %c\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -715,7 +715,7 @@ fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
 /// lost to SDCC on bytes, clocks and instructions with it.
 #[test]
 fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borrow() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %d = sub i16 %x, %y\n  ret i16 %d\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl"), "{out}");
@@ -977,7 +977,7 @@ fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
 #[test]
 fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("mulhi3"), "{out}");
@@ -997,7 +997,7 @@ fn a_word_shifted_left_in_hl_is_doublings() {
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
 #[test]
 fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @r = external global i16\n\
               declare i16 @g()\n\
               define void @f() {\n  %v = call i16 @g()\n  store volatile i16 %v, ptr @r\n  ret void\n}\n";
@@ -1020,12 +1020,14 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
 
 /// A call with more arguments than registers was refused: "stack arguments are
 /// not expanded yet". 8 functions of the C corpus beyond the 23 rows hit it.
-/// The caller reserves the area, stores through IX and pops it after the call.
+/// The caller reserves the area, stores through IX and pops it after the call;
+/// a call that the return follows leaves it to the `ld sp, ix` of the return.
 #[test]
 fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let ir = include_str!("kernels/ir/stackargs.ll");
     let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("push bc") && out.contains("pop bc") && out.contains("(ix), "), "{out}");
+    assert!(out.contains("push bc") && out.contains("(ix), "), "{out}");
+    assert!(out.contains("pop bc") || out.contains("ld sp, ix"), "{out}");
 }
 
 /// A frame object out of the byte displacement of IX was refused: "frame object
@@ -1054,7 +1056,7 @@ fn a_call_through_a_pointer_puts_the_address_in_iy() {
 /// when both are zero: `ld a, h; or a, l`.
 #[test]
 fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @r = external global i8\n\
               define void @count16(i16 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i16 [ %n, %entry ], [ %i1, %loop ]\n  store volatile i8 1, ptr @r\n  %i1 = add i16 %i, -1\n  %c = icmp eq i16 %i1, 0\n  br i1 %c, label %done, label %loop\ndone:\n  ret void\n}\n";
     let out = text(ir, "count16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -1066,7 +1068,7 @@ fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
 /// the 23 rows hit it.
 #[test]
 fn a_freeze_is_a_copy() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %x, i8 %b) {\n  %c = icmp eq i8 %b, 0\n  %n = sub nsw i16 0, %x\n  %s = select i1 %c, i16 %x, i16 %n\n  %f = freeze i16 %s\n  %d = sdiv i16 %f, 3\n  %m = mul i16 %d, 3\n  %r = sub i16 %f, %m\n  ret i16 %r\n}\n";
     text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
 }
@@ -1137,7 +1139,8 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
 
 /// `w >> 8` of a spilled word reloaded both bytes and then overwrote the low
 /// one (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0`): 3 B and 19 T
-/// a site, 11 sites in div_constants_short. Only the high byte is loaded now.
+/// a site, 11 sites in div_constants_short. The byte is now moved or reloaded
+/// alone; the word is spilled by `push`/`pop` (f: 105 B with slots, 84 B).
 #[test]
 fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     let ir = include_str!("kernels/ir/reload_high_lane.ll");
@@ -1147,7 +1150,111 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
         .windows(4)
         .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
     assert!(!dead, "{out}");
-    assert!(lines.windows(2).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0"), "{out}");
+    let byte = lines.windows(2).any(|w| (w[0].starts_with("ld e, -") || w[0] == "ld e, d") && w[1] == "ld d, #0");
+    assert!(byte, "{out}");
+}
+
+/// `w >> 29` of a spilled long reloaded the whole high word (`ld e, -8(ix)` / `ld d, -7(ix)`), then `ld e, d` threw the
+/// low byte away: 3 B and 19 T a site, in every `shape == k ? w >> n` of div_constants. A shift of 8 or more reads one byte.
+#[test]
+fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
+    let ir = include_str!("kernels/ir/reload_high_lane_far.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let dead = lines
+        .windows(4)
+        .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
+    assert!(!dead, "{out}");
+    // The byte is reloaded alone, or copied where the word's high half is still in `d`.
+    assert!(
+        lines.windows(3).any(|w| (w[0].starts_with("ld e, -") || w[0] == "ld e, d") && w[1] == "ld d, #0" && w[2] == "srl e"),
+        "{out}"
+    );
+}
+
+/// A byte or word rotated (`llvm.fshl` of one value twice) was refused at -O2, `CannotSelect(Rotl)`: neither type had an
+/// action for the rotates, and the legalizer did not expand them. Both widths and both directions compile, to shifts and an `or`.
+#[test]
+fn a_byte_or_word_rotate_compiles_to_shifts() {
+    let ir = include_str!("kernels/ir/rotate_small.ll");
+    for name in ["rotl8", "rotr16", "rotr16_by_nine"] {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(out.contains("or a, "), "{name}: {out}");
+    }
+}
+
+/// A bit loaded and branched on at once (`while (!bad)`, `bad` a flag the program only sets to 1) was a byte made into a
+/// 0 or 1 by a diamond of jumps, then tested again: 14 instructions where `and a, (hl)` already sets the flag.
+#[test]
+fn a_loaded_bit_is_branched_on_without_a_diamond() {
+    let ir = include_str!("kernels/ir/bit_load_branch.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("xor a, a"), "{out}");
+    assert!(out.contains("and a, (hl)"), "{out}");
+}
+
+/// A long compared with a constant was the xor of each half with it, the halves or-ed, each step written back to a
+/// pair: 8 instructions for `a == 0`, 17 for `a == K`. The bytes' differences accumulate in the accumulator.
+#[test]
+fn a_long_equality_with_a_constant_accumulates_its_bytes_in_a() {
+    let ir = include_str!("kernels/ir/wide_equality.ll");
+    let function = |name: &str| {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        out.lines().map(|line| line.trim().to_owned()).collect::<Vec<_>>()
+    };
+    let writes_back = |lines: &[String]| {
+        lines.iter().filter(|line| line.len() == 7 && line.starts_with("ld ") && line.ends_with(", a")).count()
+    };
+    let zero = function("zero");
+    assert!(zero.windows(4).any(|w| w[0].starts_with("ld a, ") && w[1..].iter().all(|l| l.starts_with("or a, "))), "{zero:#?}");
+    let constant = function("eqk");
+    assert!(writes_back(&constant) <= 3, "{constant:#?}");
+}
+
+/// A volatile long's low bits replaced (`and` then `or` of the low byte) wrote the byte back twice: `and a, #248; ld e, a;
+/// or a, #5; ld e, a`. The first write is never read.
+#[test]
+fn a_masked_then_set_byte_is_written_back_once() {
+    let ir = include_str!("kernels/ir/volatile_field_store.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "store_low_bits", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        let written_back = lines.iter().filter(|line| line.len() == 7 && line.starts_with("ld ") && line.ends_with(", a")).count();
+        assert_eq!(written_back, 1, "{level:?}: {lines:#?}");
+    }
+}
+
+/// A loop that fills an array is a `memset.pattern` the pin prices at 4 and this target expands into a loop of 30 to 60
+/// bytes: an external `fill` was inlined into its caller at -Os (pattern_fill, +82 B) while its own copy stayed.
+#[test]
+fn a_fill_loop_stays_a_call_at_size() {
+    let ir = include_str!("kernels/ir/fill_loop_callee.ll");
+    let out = text(ir, "caller", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("_fill") && !out.contains("ld (hl)"), "{out}");
+}
+
+/// A long returned with a signed range (`range(i32 -128, 128)`) had its high word made again from the low word's sign
+/// (`add a, a; sbc a, a; ...`, seven instructions a caller) though the call had returned it.
+#[test]
+fn a_call_result_with_a_signed_range_keeps_the_returned_high_word() {
+    let ir = include_str!("kernels/ir/call_result_in_range.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sbc a, a"), "{level:?}: {out}");
+    }
+}
+
+/// `memory_expansion` at -Os was refused ("a conditional return in a function
+/// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
+/// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
+/// function (two 700-byte arrays) keeps the jump.
+#[test]
+fn an_early_return_in_a_function_with_a_frame_compiles() {
+    let ir = include_str!("kernels/ir/conditional_return_with_frame.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "lc1", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("pop ix"), "{level:?}: {out}");
+    }
 }
 
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
@@ -1431,7 +1538,8 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
 
 /// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
 /// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
-/// first, and stays a loop at -Oz.
+/// first, and stays a loop at -Oz. At -Oz the late LoopRotate (#8138, Z80-ROT)
+/// rotates it where the guard folds away: a `djnz` loop.
 #[test]
 fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
     let ir = include_str!("kernels/ir/sum4.ll");
@@ -1700,11 +1808,30 @@ fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
     }
 }
 
+/// A word divided and taken the remainder of by the same operands was a divide,
+/// a multiply and a subtract (`x % d` as `x - (x / d) * d`: `__udivhi3`,
+/// `__mulhi3`, 14 B a site more than the remainder call). They are one call;
+/// the routine leaves the quotient in `de` and the remainder in `hl`.
+#[test]
+fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
+    for (ops, call) in [(["udiv", "urem"], "call __udivhi3"), (["sdiv", "srem"], "call __divremhi4")] {
+        for attr in ["", "optsize"] {
+            let ir = format!(
+                "define i16 @f(i16 %a, i16 %b) {attr} {{\n  %q = {} i16 %a, %b\n  %r = {} i16 %a, %b\n  %s = add i16 %q, %r\n  ret i16 %s\n}}",
+                ops[0], ops[1]
+            );
+            let out = compiled(&ir, "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call) && !out.contains("__mulhi3"), "{ops:?} {attr}: {out}");
+        }
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
-/// -Os). A function tuned for size calls `__mulsi3`; the others keep the
-/// halves.
+/// -Os). A function calls `__mulsi3`, tuned for size or not (the halves
+/// cost more bytes and more T-states: phi_slot_unknown_arm -O1).
 #[test]
 fn a_function_tuned_for_size_calls_the_long_multiply() {
     let body = |attr: &str| {
@@ -1715,7 +1842,7 @@ fn a_function_tuned_for_size_calls_the_long_multiply() {
     let out = compiled(&body("optsize"), "f");
     assert!(out.contains("call __mulsi3"), "{out}");
     let out = compiled(&body(""), "f");
-    assert!(!out.contains("__mulsi3"), "{out}");
+    assert!(out.contains("call __mulsi3"), "{out}");
 }
 
 /// The routine is 57 B: one small multiply in a module called it at -Os and
@@ -1821,6 +1948,7 @@ fn a_long_step_of_one_is_a_zero_test_and_a_conditional_step() {
     }
 }
 
+/// (-Os calls the size routine `__s_divsi3`, #7527.)
 /// The divisor's high word of a long divide went on the stack as `push bc`
 /// (a reserved slot) and two stores into it from `ix`: 10 B for the word, and
 /// 60 B in each `div_constants_long` function. It is `ld rr, #0; push rr`.
@@ -1831,7 +1959,7 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
     let out = text(&ir, "q", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     let call =
-        lines.iter().position(|l| l.contains("call __divsi3")).unwrap_or_else(|| panic!("no divide call\n{out}"));
+        lines.iter().position(|l| l.contains("call __s_divsi3")).unwrap_or_else(|| panic!("no divide call\n{out}"));
     let push = lines[..call].iter().rposition(|l| l.starts_with("push")).unwrap_or_else(|| panic!("no push\n{out}"));
     let pair = lines[push].trim_start_matches("push ");
     assert_eq!(lines[push - 1], format!("ld {pair}, #0"), "{out}");
@@ -1943,4 +2071,288 @@ fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
     assert!(internal.starts_with("_sum:\n"), "{internal}");
     let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(external.starts_with("_digits::\n"), "{external}");
+}
+
+/// A byte of growth is worth 3 T from -O2 (z80 `speed_inline_milliclocks_per_byte`): `scale`, a 100-trip loop that
+/// stays for other callers, is not copied into `caller` for the one jump the copy saves. (-O1 prices no byte in
+/// clocks: `a_rate_that_binds_from_o2_leaves_o1_to_the_pin`; since the O1 trials, `from` is copied at -O1 because
+/// the caller shrinks, `a_refused_inline_that_shrinks_the_caller_is_tried_at_o1`.)
+#[test]
+fn the_speed_rate_refuses_a_big_copy_at_o2() {
+    let text = text(include_str!("kernels/ir/scale_call.ll"), "caller", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(text.contains("jp _scale"), "{text}");
+}
+
+/// -O1 kept the size bound's refusals: `fives` (cost -40, folds into `main`) stayed a call, 498 B and 3,534 T against
+/// SDCC's 367 B and 2,548 T. Refused sites are tried inline as at -Os: the copy folds, 259 B and 355 T.
+#[test]
+fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
+    let ir = include_str!("kernels/ir/struct_odd_sizes.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("call _fives") && !out.contains("call _three"), "{out}");
+}
+
+/// A byte shifted by five or more took `sla`/`srl` a step each (`word << 13` of a volatile bit field: `ld b, c;
+/// ld c, #0; sla b` x5, 12 B and 48 T); `a` rotated round the shorter way and masked is 8 B and 27 T
+/// (volatile_bitfield, 6 sites).
+#[test]
+fn a_byte_shifted_far_rotates_through_a_and_masks() {
+    let ir = |op: &str, ty: &str, n: u32| {
+        format!(
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+             define {ty} @f({ty} %x) {{\n  %y = {op} {ty} %x, {n}\n  ret {ty} %y\n}}\n"
+        )
+    };
+    for (op, ty, n, rotates) in [("shl", "i16", 13, "rrca\n\trrca\n\trrca\n\tand a, #224"), ("shl", "i8", 6, "rrca\n\trrca\n\tand a, #192")] {
+        let out = text(&ir(op, ty, n), "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains(rotates) && !out.contains("sla") && !out.contains("add a, a"), "{op} {ty} {n}\n{out}");
+    }
+}
+
+/// A test that tail-calls one function or falls on to a second test was `jr nz, L; L1: jp _h; L:` (sibling_call_callees:
+/// 5 B where `jp z, _h` is 3).
+#[test]
+fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
+    let ir = include_str!("kernels/ir/sibling_call_callees.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("jp z, _h") && !out.contains("jr nz") && !out.contains("jp nz"), "{out}");
+}
+
+/// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
+/// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
+/// where `ld b, #129` does.
+#[test]
+fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+              define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
+              define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
+              define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
+    let ors = |name| text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let constant = ors("or_const");
+    assert!(constant.contains("#130") && !constant.contains("or a,"), "{constant}");
+    let word = ors("or_word");
+    assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
+    let both = ors("and_word");
+    assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
+}
+
+/// The sign of a sign mask is the mask: widening `a` right after `sbc a, a` (0 or 255) ran `rla; sbc a, a` again
+/// (high_byte's signed_high, 2 B and 8 T).
+#[test]
+fn a_sign_mask_widens_without_taking_its_sign_again() {
+    let ir = include_str!("kernels/ir/high_byte.ll");
+    let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("rla").count(), 1, "{out}");
+}
+
+/// A dense switch of three targets became bit tests, `1 << x` and a mask per target, and the Z80's shift by a variable
+/// count is a call: two `__ashlhi3` calls (each tens of clocks) to pick among eight cases. `isOperationLegal(SHL)`
+/// is false here, so the pin builds no bit tests.
+#[test]
+fn a_dense_switch_builds_no_bit_tests_where_a_variable_shift_is_a_call() {
+    let ir = include_str!("kernels/ir/switch_dense_bit_tests.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("__ashlhi3"), "{out}");
+    }
+}
+
+/// Eight dense cases to three targets were a compare tree. The DAG builder
+/// now plans a jump table: one range check, `jp (hl)`, and the `.dw` table
+/// (kept by the branch folder, which took `jp (hl)` for a jump to its first
+/// block and dropped the table's label).
+#[test]
+fn a_dense_switch_jumps_through_a_table() {
+    let ir = include_str!("kernels/ir/switch_jump_table_dispatch.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("jp (hl)").count(), 1, "{out}");
+    assert_eq!(out.matches(".dw ").count(), 8, "{out}");
+    assert!(out.contains("_JT0:"), "{out}");
+    assert_eq!(out.matches("sbc a, #0").count(), 1, "one range check: {out}");
+}
+
+/// The block that follows a switch gets its case tested last, so it falls
+/// through. The block made for a phi edge sat between them, so no case was
+/// moved and div_constants_{long,short,ulong} reloaded a value per site
+/// (+24..+98 B): case 1 (the next block) is tested last, not first.
+#[test]
+fn a_switch_looks_past_phi_edge_blocks_for_the_next_block() {
+    let ir = include_str!("kernels/ir/switch_next_past_phi_edge.ll");
+    let out = text(ir, "h", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let tests: Vec<&str> = out.lines().map(str::trim).filter(|line| line.starts_with("cp a, #")).collect();
+    assert_eq!(tests, ["cp a, #3", "cp a, #2", "cp a, #1"], "{out}");
+}
+
+/// A long multiply in a function not tuned for size was four word multiplies
+/// and their sums inline, bigger and slower than the routine: phi_slot_unknown_arm
+/// -O1 980 B and 3.95M T, 664 B and 3.04M T called; idioms -O2 7763 B. A module
+/// with two or more of them calls `__mulsi3` at every level.
+#[test]
+fn a_long_multiply_calls_the_routine_at_every_level() {
+    let ir = include_str!("kernels/ir/long_multiply_call.ll");
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let out = text(ir, "g", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(out.matches("call __mulsi3").count(), 2, "{level:?}: {out}");
+        assert!(!out.contains("__mulhi3"), "{level:?}: {out}");
+    }
+}
+
+/// A long multiplied by a constant of the form `2^k +- 1` stays shifts and an
+/// add where the module calls `__mulsi3` for its other multiplies: called, the
+/// `x * 3` of an `i64` was a call per half (compare_to_int64: +8k T of 37k).
+#[test]
+fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+              define i64 @f(i64 %a) {\n  %m = mul i64 %a, 3\n  ret i64 %m\n}\n\
+              define i32 @g(i32 %a, i32 %b, i32 %c) {\n  %m = mul i32 %a, %b\n  %n = mul i32 %m, %c\n  ret i32 %n\n}";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("__mulsi3"), "{out}");
+    let out = text(ir, "g", 1, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call __mulsi3").count(), 2, "{out}");
+}
+
+/// A signed order of two words that are not constants biased both (`ld a, h` / `xor a, #128` / `ld b, a`, twice)
+/// to compare them unsigned: 9 B and 34 T before the subtract. The sign of the difference, corrected where it
+/// overflowed (`jp po` / `xor a, #128` / `rlca`), needs one bias: huffman_decode's `code > maxcode[..]`.
+#[test]
+fn a_signed_word_order_is_the_difference_corrected_for_overflow() {
+    let ir = include_str!("kernels/ir/signed_word_compare.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains("jp po") && out.contains("rlca"), "{level:?}: {out}");
+        assert_eq!(out.matches("xor a, #128").count(), 1, "{level:?}: {out}");
+    }
+}
+
+/// `x * 36` shifted a copy of `x` in bc (`sla c`/`rl b`, 4 B a bit): 17 B.
+/// The shifts belong in hl: 8 B.
+#[test]
+fn a_word_times_a_shifted_factor_shifts_in_hl() {
+    let ir = include_str!("kernels/ir/mul_word_by_shifted_factor.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sla c") && !out.contains("rl b"), "{level:?}: {out}");
+        assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
+    }
+}
+
+/// `ld c, l; ld b, h` then `sla c; rl b` twice (4 B a bit) with `hl` dead:
+/// 8 B of doublings, and a table index of `x * 36` 16 B. The doublings belong
+/// in `hl` before the copy: 2 B.
+#[test]
+fn a_copy_of_hl_shifted_with_hl_dead_shifts_in_hl_first() {
+    let ir = include_str!("kernels/ir/shift_copy_of_hl_when_dead.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sla c") && !out.contains("rl b"), "{level:?}: {out}");
+        assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
+    }
+}
+
+/// `llvm.is.constant` reached the backend at -O0 and the compile was refused
+/// (`intrinsic call llvm.is.constant.i16`; builtins_table -O0 failed).
+#[test]
+fn is_constant_is_lowered_at_o0() {
+    let ir = include_str!("kernels/ir/is_constant_o0.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}
+
+/// The `i32` scale of `llvm.smul.fix.sat.i16` is illegal on a 16-bit target
+/// and had no expand case: refused with `Unsupported { op: SMulFixSat, ty: I32,
+/// what: "expand operand" }` (fixed_point, every level).
+#[test]
+fn a_fixed_point_multiply_with_an_i32_scale_compiles() {
+    let ir = include_str!("kernels/ir/mul_fix_sat_i16.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+    }
+}
+
+/// `llvm.frameaddress` has no lowering; it was tail called as a symbol named
+/// `llvm$2eframeaddress$2ep0` (silent wrong code). Now a refusal naming it.
+#[test]
+fn an_intrinsic_nobody_lowered_is_refused_by_name() {
+    let ir = include_str!("kernels/ir/frameaddress_refused.ll");
+    for level in [Level::O0, Level::O2] {
+        let why = text(ir, "f", 0, &Request::new(level)).expect_err("a refusal");
+        assert!(why.contains("llvm.frameaddress"), "{level:?}: {why}");
+    }
+}
+
+/// A call with 18 B of stack arguments was refused ("18 bytes of stack
+/// arguments"; five programs). It compiles, and each of the nine words is
+/// pushed: no reserve, no store through `ix` or `iy`, whose sum came first.
+#[test]
+fn a_large_stack_argument_area_is_pushed_not_a_refusal() {
+    let ir = include_str!("kernels/ir/stack_args_nine_words.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(out.matches("push bc").count(), 9, "{level:?}: {out}");
+        assert!(!out.contains("(ix)") && !out.contains("(iy)") && !out.contains("ld iy, #-18"), "{level:?}: {out}");
+    }
+}
+
+/// A function with `...` was refused ("CannotSelect VAStart", then "VAEnd"; `variadic.c`, `long_double_variadic.c`),
+/// and `va_start` is the address of the first unnamed argument: above the return address and the saved ix.
+#[test]
+fn va_start_names_the_first_unnamed_argument_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+    }
+}
+
+/// The unnamed words of a call passed in the registers the named ones left free, where the callee reads them from the
+/// stack. Both go on the stack, pushed in reverse, though the second would fit in de.
+#[test]
+fn the_unnamed_arguments_of_a_variadic_call_go_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let caller = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(caller.matches("push").count(), 2, "{level:?}: both unnamed words are pushed\n{caller}");
+    }
+}
+
+/// A long shifted by a variable on each arm of a diamond, a library call per arm, panicked in `tail_calls` ("attempt to
+/// subtract with overflow", a block of only the bare stack release); the soft-float member `fix_usi` could not be built.
+#[test]
+fn a_library_call_on_each_arm_of_a_diamond_compiles() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+              define i32 @f(i1 %c, i32 %x, i16 %n) {\n  %k = zext i16 %n to i32\n  br i1 %c, label %a, label %b\n\
+              a:\n  %s = shl i32 %x, %k\n  br label %j\nb:\n  %t = lshr i32 %x, %k\n  br label %j\n\
+              j:\n  %p = phi i32 [ %s, %a ], [ %t, %b ]\n  ret i32 %p\n}\n";
+    for level in [Level::O0, Level::O1, Level::Os, Level::O2] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("ret"), "{level:?}: {out}");
+    }
+}
+
+/// `(float)1L` was 0xCF800000 and `(long)(float)100000L` INT_MIN: in `__floatsisf` the sign mask of the argument,
+/// `x >> 31` of a spilled long, shared register `a` with its high byte; `use_lanes_in_place` removed the load of that
+/// byte (`ld a, d`) because only a physical use of `a` stopped it, so `add a, a; sbc a, a` shifted a stale `a`.
+#[test]
+fn the_high_byte_is_loaded_into_a_before_its_sign_is_taken() {
+    let ir = include_str!("kernels/ir/long_sign_byte_shared_register.ll");
+    for level in [Level::Os, Level::O2] {
+        let out = text(ir, "__floatsisf", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        let sign = lines.iter().position(|line| *line == "add a, a").unwrap_or_else(|| panic!("{level:?}: no sign step\n{out}"));
+        assert!(lines[..sign].contains(&"ld a, d"), "{level:?}: `add a, a` reads a stale a\n{out}");
+    }
+}
+
+/// `(a & 0x80000000) != 0` as a branch condition with a phi after it (the soft-float library's `x < 0 ? -m : m`) was
+/// refused in the legalizer: `SetCCCarry` with the low words' borrow folded to a constant (`x - 0` never borrows),
+/// which the Custom lowering did not take ("Unsupported SetCCCarry I1 convert node to libcall"; 19 of 24 soft-float
+/// members, every level above -O0). The sign is one `bit 7, d`.
+#[test]
+fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
+    let ir = include_str!("kernels/ir/long_compare_folded_borrow.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "sign_branch", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("bit 7, d"), "{level:?}: {out}");
+    }
 }

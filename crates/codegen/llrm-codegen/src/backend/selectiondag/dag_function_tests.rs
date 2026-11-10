@@ -326,7 +326,7 @@ fn a_chain_of_word_operations_has_no_casts_between_them() {
 fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
     use std::sync::Arc;
 
-    use super::emit::EmitBlock;
+    use super::emit_api::EmitBlock;
     use crate::model::ir::{Held, Loc, Operation, Semantics};
     use crate::model::lir::Insn;
     let defining = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
@@ -811,6 +811,32 @@ define i32 @f(i32 %a) {
     assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
 }
 
+/// -O1 turned `x * 1664525` into eight `lea`/`shl` steps (29 B against the
+/// pin's 6-byte `imul`): mul_constants +547 B, x_spill_store_order +54 B,
+/// urem_eq +99 B over the pin. -O1 is strict in bytes and clocks (no rate to
+/// trade them), so it is the pin's `combineMul` alone: `x * 1664525` stays the
+/// `imul`, `x * 5` is one `lea`.
+#[test]
+fn at_m32_o1_a_multiply_is_the_pins_combine_mul_alone() {
+    let imuls_of = |constant: u32| {
+        let module = crate::testing::module(&format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {{
+  %r = mul i32 %a, {constant}
+  ret i32 %r
+}}
+"
+        ))
+        .expect("parses");
+        let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu").clone();
+        cpu.speed_rate = false;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count()
+    };
+    assert_eq!(imuls_of(1664525), 1, "-O1: the imul, as the pin");
+    assert_eq!(imuls_of(5), 0, "-O1: one lea");
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]
@@ -1201,6 +1227,27 @@ define i32 @f(float %x) {
     let insns = done.body.insns();
     let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
     assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
+}
+
+/// `bitcast (xor (bitcast double %x to i64), signbit) to double` (`__negdf2`) kept
+/// the integer xor: 20 B on wasm against the pin's `f64.neg`, 7 B. It is `fneg`
+/// (`fchs` on x87), as `foldBitcastedFPLogic` has it.
+#[test]
+fn a_sign_bit_xor_of_a_double_bits_is_fneg() {
+    let ir = "target datalayout = \"@m32-datalayout@\"
+define double @f(double %x) {
+  %i = bitcast double %x to i64
+  %n = xor i64 %i, -9223372036854775808
+  %d = bitcast i64 %n to double
+  ret double %d
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.iter().any(|n| n.starts_with("fchs")), "{seen:?}");
 }
 
 /// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
@@ -1698,6 +1745,21 @@ hi:
     assert_eq!(made, 1, "{made} branch probability calculations for one function");
 }
 
+/// `selected_in` asked `Profile::target` for a cost model seven times a
+/// function, each one cloning the price tables (41 M Ir, 2.5% of a tiny600
+/// -O0 compile, 3005 calls for 601 functions).
+#[test]
+fn test_a_selection_builds_one_cost_model() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let text = format!("{layout}define i32 @f(i32 %a, i32 %b) {{\nentry:\n  %m = mul i32 %a, %b\n  ret i32 %m\n}}\n");
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::MachineModels);
+    let module = crate::testing::module(&text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    let built = llrm_mir::counts::get(llrm_mir::counts::Event::MachineModels) - before;
+    assert!(built <= 3, "{built} cost models built for one function");
+}
+
 /// A volatile `double` constant store at m32 was split into two `i32` stores
 /// once `store_fp_constant_as_i64` was on (float_conversions_loop +4 B over the
 /// pin's `fld; fstp`): the pin splits only a simple store (`ST->isSimple()`).
@@ -1769,4 +1831,57 @@ entry:
     )
     .expect("selected");
     assert!(got.iter().any(|n| n == "and") && got.iter().any(|n| n == "or"), "{got:?}");
+}
+
+const TIMES_ELEVEN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %m = mul i32 %a, 11
+  ret i32 %m
+}
+";
+
+/// At `-Os` the pin splits `x * 11` into `lea; lea` (8 B) where gcc keeps the
+/// 3-byte `imul` (x_gcd -Os, DEVIATE MUL-OS): m32 keeps one `imul` at `-Os`,
+/// and splits it at speed.
+#[test]
+fn at_os_a_multiply_by_eleven_stays_one_imul_on_m32() {
+    let module = crate::testing::module(TIMES_ELEVEN).expect("parses");
+    let imuls = |size: bool| {
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", size).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count()
+    };
+    assert_eq!(imuls(true), 1, "-Os: one imul");
+    assert_eq!(imuls(false), 0, "speed: the chain");
+}
+
+/// `x * 5` is one 3-byte `lea` against a 3-byte `imul` (bintree, particle -Os:
+/// the `imul` kept, 0 B saved, +55% clocks): a tie takes the chain.
+#[test]
+fn at_os_a_multiply_that_ties_in_bytes_takes_the_chain_on_m32() {
+    let module = crate::testing::module(&TIMES_ELEVEN.replace("11", "5")).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    assert_eq!(imuls, 0, "a tie in bytes is the chain's");
+}
+
+/// `t[3 * i]` on `int` is `mul i, 12` feeding an add: the `shl 2` folds into the
+/// address scale, so the chain is one `lea` (bintree -Os: `imul` kept, 0 B saved,
+/// +40k clk): the chain wins.
+#[test]
+fn at_os_a_multiply_whose_shift_folds_into_an_address_takes_the_chain_on_m32() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %t, i32 %a) {
+  %m = mul i32 %a, 12
+  %p = getelementptr i8, ptr %t, i32 %m
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    assert_eq!(imuls, 0, "the scale folds, so the chain ties the imul");
 }

@@ -14,8 +14,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
-DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
-CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-S", "-emit-llvm"]
+DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"'
+sys.path.insert(0, str(ROOT / "tools"))
+import external_flags  # noqa: E402  the one neutral flag set of every external bar (tools/external_flags.py)
+
+CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *external_flags.flags("none"), "-S", "-emit-llvm"]
 LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
 CRT0 = f"""\t.module crt0
 \t.globl _main
@@ -99,12 +102,14 @@ def reported(out):
 
 
 def program_flags(src):
-    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types."""
+    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types: any alternative
+    of any `// flags:` line names an x86 mode (`-m32`, `-mabi=sysv`, `-march=i*`), a line `// x86-widths: WHY` says so (the
+    other tools read only `// flags:`; a `-m64` there would move a program from the default m16 to m64), or it uses `long double`."""
     text = src.read_text()
-    first = text.splitlines()[0] if text.startswith("// flags:") else ""
-    tokens = first.removeprefix("// flags:").split("|")[0].split()
-    keep = [t for t in tokens if t.startswith("-f") and not t.startswith("-fsanitize")]
-    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith("-march=i") for t in tokens) or "long double" in text
+    lines = [line.removeprefix("// flags:") for line in text.splitlines() if line.startswith("// flags:")]
+    tokens = [t for line in lines for alternative in line.split("|") for t in alternative.split()]
+    keep = [t for t in (lines[0].split("|")[0].split() if lines else []) if t.startswith("-f") and not t.startswith("-fsanitize")]
+    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith(("-march=i", "-march=pentium")) for t in tokens) or "long double" in text or "\n// x86-widths:" in text
     return keep, x86
 
 
@@ -158,6 +163,13 @@ def one(job):
     return name, "WRONG", f"value {first}: got {got[first] if first < len(got) else 'none'}, want {want[first] if first < len(want) else 'none'}"
 
 
+def selected(src, names=()):
+    """The programs of `src` that are for the z80: with an expected output, named if names are given, and not tagged for other targets by `// targets:` (stackover, an x86 recursion test, ran to the timeout)."""
+    import corpus_targets
+    found = sorted(p for p in Path(src).glob("*.c") if p.with_suffix(".out").exists() and corpus_targets.applies("z80-sdcc", p.read_text()))
+    return [p for p in found if p.stem in names] if names else found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("names", nargs="*")
@@ -171,9 +183,7 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--src", default=str(ROOT / "tests/run/c"))
     args = ap.parse_args()
-    sources = sorted(p for p in Path(args.src).glob("*.c") if p.with_suffix(".out").exists())
-    if args.names:
-        sources = [p for p in sources if p.stem in args.names]
+    sources = selected(Path(args.src), args.names)
     work = tempfile.mkdtemp(prefix="z80prog-")
     try:
         args.libc = libc_library(work)
@@ -193,4 +203,5 @@ def main():
     sys.exit(1 if any(v in ("WRONG", "HALT") for _, v, _ in results) else 0)
 
 
-main()
+if __name__ == "__main__":
+    main()

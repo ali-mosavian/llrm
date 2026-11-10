@@ -6,7 +6,7 @@
 use llrm_z80::dagisel::function::select_function;
 use llrm_z80::dagisel::hooks::Cpu;
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8";
 
 /// The functions that were refused, with why; empty when everything selects.
 fn refused(cases: &[(String, String)]) -> Vec<String> {

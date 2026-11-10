@@ -90,6 +90,7 @@ fn a_symbols_visibility_is_its_st_other() {
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     };
     assert_eq!(others(&write::<Plain>(&object).unwrap(), 3), [0, 2, 3]);
