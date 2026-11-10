@@ -877,6 +877,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether the -O1 unroll walk may peel a loop (the pin does, under
+    /// `-funroll-loops`). A peel copies the loop body, which -O1 on a
+    /// bytes-strict target cannot pay for.
+    fn peels_at_o1(&self) -> bool {
+        true
+    }
+
     /// `Tuning::second_ipsccp`.
     fn second_ipsccp(&self) -> bool {
         false
