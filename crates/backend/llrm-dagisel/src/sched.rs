@@ -57,10 +57,10 @@ pub struct ReadAdvance {
     pub cycles: i32,
 }
 
-/// `MCSchedClassDesc` with its table slices resolved.
+/// `MCSchedClassDesc` with its table slices resolved. The pin's `Name` is
+/// debug-only there and left out here.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassData {
-    pub name: &'static str,
     pub num_micro_ops: u16,
     pub begin_group: bool,
     pub end_group: bool,
@@ -68,6 +68,25 @@ pub struct ClassData {
     pub write_proc_res: &'static [WriteProcRes],
     pub write_latency: &'static [WriteLatency],
     pub read_advance: &'static [ReadAdvance],
+}
+
+/// `ClassRow::flags` bits.
+const BEGIN_GROUP: u8 = 1;
+const END_GROUP: u8 = 2;
+const RETIRE_OOO: u8 = 4;
+
+/// A distinct class as generated: spans `(at, len)` into the model's pools, which
+/// models share.
+#[derive(Clone, Copy, Debug)]
+pub struct ClassRow {
+    pub num_micro_ops: u16,
+    pub flags: u8,
+    pub proc_at: u16,
+    pub proc_len: u8,
+    pub lat_at: u16,
+    pub lat_len: u8,
+    pub adv_at: u16,
+    pub adv_len: u8,
 }
 
 /// The TIIPredicates a variant class tests
@@ -96,8 +115,10 @@ pub enum SchedClass {
     /// The model marks a write of the opcode `Unsupported`: the CPU does not
     /// run it (LSE atomics).
     Unsupported,
-    Resolved(ClassData),
-    Variant(&'static [VariantArm]),
+    /// Index in `SchedModel::class_rows`; classes with the same numbers share a row.
+    Resolved(u16),
+    /// `len` arms from `at` in `SchedModel::variant_arms`.
+    Variant { at: u16, len: u8 },
 }
 
 /// What the model says about an opcode.
@@ -105,7 +126,7 @@ pub enum SchedClass {
 pub enum Modeled {
     Unmodeled,
     Unsupported,
-    Class(&'static ClassData),
+    Class(ClassData),
 }
 
 /// `MCSchedModel`.
@@ -123,6 +144,11 @@ pub struct SchedModel {
     pub complete_model: bool,
     /// `(opcode, class)` by opcode.
     pub opcode_class: &'static [(u16, u16)],
+    pub write_proc_res: &'static [WriteProcRes],
+    pub write_latency: &'static [WriteLatency],
+    pub read_advance: &'static [ReadAdvance],
+    pub variant_arms: &'static [VariantArm],
+    pub class_rows: &'static [ClassRow],
     /// Indexed by resource number; entry 0 is the invalid unit.
     pub resources: &'static [ProcResource],
     /// `(class, row)` by class, the classes the opcodes reach.
@@ -148,6 +174,22 @@ impl SchedModel {
         Some(&self.classes[at].1)
     }
 
+    fn data(
+        &self,
+        row: &ClassRow,
+    ) -> ClassData {
+        let span = |at: u16, len: u8| at as usize..at as usize + len as usize;
+        ClassData {
+            num_micro_ops: row.num_micro_ops,
+            begin_group: row.flags & BEGIN_GROUP != 0,
+            end_group: row.flags & END_GROUP != 0,
+            retire_ooo: row.flags & RETIRE_OOO != 0,
+            write_proc_res: &self.write_proc_res[span(row.proc_at, row.proc_len)],
+            write_latency: &self.write_latency[span(row.lat_at, row.lat_len)],
+            read_advance: &self.read_advance[span(row.adv_at, row.adv_len)],
+        }
+    }
+
     /// `resolveSchedClass`: the data of `opcode`'s class, a variant followed by
     /// `holds`. `None` when the opcode is not in the table, so a caller
     /// counts what is missing.
@@ -156,19 +198,19 @@ impl SchedModel {
         opcode: u16,
         holds: &mut dyn FnMut(SchedPred) -> bool,
     ) -> Option<Modeled> {
-        match self.class(self.class_of(opcode)?)? {
+        let modeled = |class: &SchedClass| match class {
             SchedClass::Unmodeled => Some(Modeled::Unmodeled),
             SchedClass::Unsupported => Some(Modeled::Unsupported),
-            SchedClass::Resolved(data) => Some(Modeled::Class(data)),
-            SchedClass::Variant(arms) => {
+            SchedClass::Resolved(row) => Some(Modeled::Class(self.data(&self.class_rows[*row as usize]))),
+            SchedClass::Variant { .. } => None,
+        };
+        match self.class(self.class_of(opcode)?)? {
+            SchedClass::Variant { at, len } => {
+                let arms = &self.variant_arms[*at as usize..*at as usize + *len as usize];
                 let arm = arms.iter().find(|arm| arm.pred.is_none_or(&mut *holds))?;
-                match self.class(arm.class)? {
-                    SchedClass::Unmodeled => Some(Modeled::Unmodeled),
-                    SchedClass::Unsupported => Some(Modeled::Unsupported),
-                    SchedClass::Resolved(data) => Some(Modeled::Class(data)),
-                    SchedClass::Variant(_) => None,
-                }
+                modeled(self.class(arm.class)?)
             }
+            class => modeled(class),
         }
     }
 }
