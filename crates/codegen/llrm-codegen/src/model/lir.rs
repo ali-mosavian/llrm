@@ -185,6 +185,9 @@ pub struct Insn {
     /// A load of memory that never changes (a constant global:
     /// `isDereferenceableInvariantLoad`).
     pub invariant: bool,
+    /// What its load or store reaches (`MachineMemOperand`), where the target
+    /// knows; none: it may reach anything (`Insn::may_alias`).
+    pub memory: Option<crate::model::memref::MemRef>,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// It joins two words into one dword (DEVIATE PAIR1: the `or`/`shrd` of a
@@ -572,6 +575,7 @@ impl Insn {
             rematerialized,
             volatile,
             invariant,
+            memory,
             reads_complete,
             pair,
             disjoint,
@@ -610,6 +614,7 @@ impl Insn {
             rematerialized: rematerialized.clone(),
             volatile: volatile.clone(),
             invariant: invariant.clone(),
+            memory: memory.clone(),
             reads_complete: reads_complete.clone(),
             pair: pair.clone(),
             disjoint: disjoint.clone(),
@@ -809,6 +814,7 @@ impl Insn {
             rematerialized: false,
             volatile: false,
             invariant: false,
+            memory: None,
             reads_complete: false,
             pair: None,
             disjoint: false,
@@ -879,6 +885,23 @@ impl Insn {
     #[must_use]
     pub fn volatile(&self) -> bool {
         self.volatile
+    }
+
+    /// `MachineInstr::mayAlias` of two memory accesses (MachineInstr.cpp#L1558):
+    /// a call may; two loads do not; an access whose object a target did not say
+    /// may reach the other's. Ask it of accesses only.
+    #[must_use]
+    pub fn may_alias(
+        &self,
+        other: &Insn,
+    ) -> bool {
+        if self.call.is_some() || other.call.is_some() {
+            return true;
+        }
+        match (&self.memory, &other.memory) {
+            (Some(one), Some(two)) => (one.store || two.store) && one.may_alias(two),
+            _ => true,
+        }
     }
 
     /// Whether it loads memory that never changes.
@@ -1525,6 +1548,10 @@ pub struct LirBody {
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
+    /// The names the addresses and memory operands of this body refer to, by
+    /// index (`LirAddr::index`, `Object::Global`): kept with the body so a copy
+    /// made by a shared phase still says what they name.
+    pub symbols: Arc<Vec<String>>,
     /// The argument bytes the callee of each indirect call pops, by the call's
     /// address (`callframe`'s `call_frame_destroy N, M`): the stack depth after
     /// it, which `masm` cannot read from a call it does not name.
@@ -1726,6 +1753,7 @@ impl LirBody {
             notes: Arc::default(),
             placed: Arc::default(),
             arguments_in_cells: Arc::default(),
+            symbols: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
         }
@@ -1802,6 +1830,7 @@ impl LirBody {
             notes: Arc::clone(&self.notes),
             placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
+            symbols: Arc::clone(&self.symbols),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
         }
@@ -2340,5 +2369,45 @@ mod tests {
         odds.rerouted(1, &[2, 3], 2, &[(4, 1.0 / 16.0)]);
 
         assert!(odds.taken[&(1, 4)] > 0, "the split edge has {} units", odds.taken[&(1, 4)]);
+    }
+    fn access(
+        store: bool,
+        slot: i64,
+    ) -> crate::model::lir::Insn {
+        let mut one = crate::model::lir::Insn::new(0, None, None, vec![], vec![]);
+        one.memory = Some(crate::model::memref::MemRef {
+            object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+            offset: Some(0),
+            bytes: Some(4),
+            store,
+        });
+        one
+    }
+
+    /// `MachineInstr::mayAlias`: two loads never alias; a store and an access
+    /// of another object do not; a call and an access with no operand may.
+    #[test]
+    fn test_may_alias_follows_the_pins_order_of_questions() {
+        assert!(!access(false, 1).may_alias(&access(false, 1)), "two loads");
+        assert!(!access(true, 1).may_alias(&access(false, 2)), "another object");
+        assert!(access(true, 1).may_alias(&access(false, 1)), "the same object");
+        let bare = crate::model::lir::Insn::new(1, None, None, vec![], vec![]);
+        assert!(access(false, 1).may_alias(&bare), "no operand says nothing");
+        let mut call = access(false, 2);
+        call.call = Some(Arc::new(crate::model::lir::CallMemory {
+            effects: Default::default(),
+            private: Vec::new(),
+            disturbs: Default::default(),
+            block: false,
+        }));
+        assert!(access(false, 1).may_alias(&call), "a call");
+    }
+
+    /// A copy made to say something else (`with_what`) was built field by field:
+    /// the memory operand must come with it.
+    #[test]
+    fn test_a_copy_with_other_semantics_keeps_its_memory_operand() {
+        let one = access(true, 3);
+        assert_eq!(one.with_what(None).memory, one.memory);
     }
 }
