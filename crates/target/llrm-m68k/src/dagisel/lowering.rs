@@ -123,7 +123,12 @@ pub fn target_lowering_with(
     set(&[Mul, SDiv, UDiv], &[MVT::I32], wide);
     set(&[Mul], &[MVT::I64], Action::LibCall);
     set(&[SRem, URem], &[MVT::I8, MVT::I16], Action::Legal);
-    set(&[SRem, URem], &[MVT::I32], Action::LibCall);
+    // DEVIATE M68K-REM32 (owner m68k, exit 2026-11-27): from the 68020 there
+    // is a 32-bit divide, so `x % y` is `x - (x / y) * y` (the legalizer's own
+    // `ExpandNode` for SREM/UREM) and links no `__modsi3`; gcc divides
+    // inline. The pin keeps `LibCall` on every CPU (M68kISelLowering.cpp
+    // L100).
+    set(&[SRem, URem], &[MVT::I32], if m68020 { Action::Expand } else { Action::LibCall });
     for op in [UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi] {
         set(&[op], &[MVT::I8], Action::Promote);
         set(&[op], &[MVT::I16], Action::Legal);
