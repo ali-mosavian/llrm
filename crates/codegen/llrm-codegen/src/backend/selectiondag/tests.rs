@@ -33,6 +33,7 @@ mod ctcount;
 mod dead_load;
 mod demanded_bits;
 mod div_by_constant;
+mod multiply_high_order;
 mod div_cheap;
 mod expand_node;
 mod ext_of_load;

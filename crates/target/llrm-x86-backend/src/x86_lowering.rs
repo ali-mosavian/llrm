@@ -171,6 +171,10 @@ pub struct X86Lowering<'a> {
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
+    /// The target's `mul` reads the length of its r/m operand (the 486's
+    /// early-out): `Some(flat)`, `flat` for the 32- and 64-bit address modes.
+    /// DEVIATE SD444 ([`CombineHooks::multiply_high_magic_first`]).
+    pub multiply_early_out: Option<bool>,
 }
 
 /// The sheet, the target and the block a constant multiply is priced against.
@@ -314,6 +318,29 @@ impl CombineHooks for X86Lowering<'_> {
     /// (m16, m32) `can_do(Mul, i64)` refuses it.
     fn widen_multiply_high_any_width(&self) -> bool {
         true
+    }
+
+    /// DEVIATE SD444: a division's full-width magic goes to `EAX`, so the
+    /// dividend is the r/m operand whose length the 486 reads (the rule of
+    /// `x86_mul::magic_is_wider`, asked here where the dividend still has its
+    /// known bits). The pin's order, magic as the r/m operand, is kept where
+    /// the multiply has no early-out.
+    fn multiply_high_magic_first(
+        &self,
+        dag: &SelectionDAG,
+        signed: bool,
+        dividend: SDValue,
+        magic: SDValue,
+    ) -> bool {
+        let Some(flat) = self.multiply_early_out else { return false };
+        let Some(value) = dag.constant(magic) else { return false };
+        if dag.constant(dividend).is_some() {
+            return false;
+        }
+        let width = dag.value_type(dividend).size_in_bits();
+        let all = u64::MAX.checked_shr(u64::BITS - width.min(u64::BITS)).unwrap_or(0);
+        let known_zero = llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, dividend).zero as u64 & all;
+        llrm_x86_dagisel::x86_mul::magic_is_wider(value as i64, width, signed, flat, known_zero)
     }
 
     /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 +

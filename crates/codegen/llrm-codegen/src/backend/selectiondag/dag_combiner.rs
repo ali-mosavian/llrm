@@ -523,6 +523,24 @@ pub trait CombineHooks {
         false
     }
 
+    /// Whether `BuildUDIV`/`BuildSDIV` put the magic factor first in the
+    /// multiply-high, so the dividend is the operand a target that reads one
+    /// operand's length (the 486's `mul` early-out) reads. The pin's order is
+    /// (dividend, magic). DEVIATE SD444 (owner w2, exit 2026-12-20; upstream
+    /// check: gcc `expand_mult_highpart` and i386 `mult_bit` at each pin bump):
+    /// off by default. Asked here, not at selection, because only here the
+    /// dividend is still a node whose known bits give its length (a `urem`
+    /// result has its leading zeros; once expanded to `x - q*c` it has none).
+    fn multiply_high_magic_first(
+        &self,
+        _dag: &SelectionDAG,
+        _signed: bool,
+        _dividend: SDValue,
+        _magic: SDValue,
+    ) -> bool {
+        false
+    }
+
     /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >=
     /// c` is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
     /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
