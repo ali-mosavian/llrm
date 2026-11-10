@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 263 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 264 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -81,6 +81,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
 | combine_select_bit_test | `foldSelectBitTest`: `select (icmp eq (and x, 2^k), 0), TC, FC` as the `and` shifted and combined with a constant. | Named by `combine_visit_select`. | [combine_select_bit_test](combine_select_bit_test.md) |
 | combine_select_bools | `foldSelectOfBools`: a `select` of `i1` as a logical operation. | Named by `combine_visit_select`. | [combine_select_bools](combine_select_bools.md) |
+| combine_select_cttz_ctlz | `foldSelectInstWithICmp`'s count-zeros step: a select that guards `cttz` or `ctlz` against a zero input is the intrinsic with its zero case defined. | `visitSelectInst`, after `canonicalizeSPF`. | [combine_select_cttz_ctlz](combine_select_cttz_ctlz.md) |
 | combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. | Named by `combine_visit_select`. | [combine_select_ext_const](combine_select_ext_const.md) |
 | combine_select_fabs | `foldSelectWithFCmpToFabs`: `x < 0.0 ? -x : x` is `fabs(x)` where the user ignores the sign of zero and of a NaN. | Named by `combine_visit_select`. | [combine_select_fabs](combine_select_fabs.md) |
 | combine_select_into_op | `foldSelectIntoOp`: `select c, (op x, y), x` as `op x, (select c, y, identity)`. | Named by `combine_visit_select`. | [combine_select_into_op](combine_select_into_op.md) |
@@ -93,7 +94,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | combine_sub | `InstCombinerImpl::visitSub`: the integer subtraction folds. | `combine::visit` (the `Sub` arm). | [combine_sub](combine_sub.md) |
 | combine_switch | InstCombine's `switch`: `InstCombinerImpl::visitSwitchInst` ([InstructionCombining.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L4470)). | `combine` (its dispatch on `Opcode::Switch`). | [combine_switch](combine_switch.md) |
-| combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`. | [combine_visit_select](combine_visit_select.md) |
+| combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`. | [combine_visit_select](combine_visit_select.md) |
 | combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. | Named by `combine`, `combine_casted_logic`. | [combine_xor](combine_xor.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. | Named by `condtocond`, `simplifycfg`. | [condstores](condstores.md) |
 | condtocond | A conditional branch in an empty block that a conditional branch predecessor shares a destination with, folded into the predecessor: LLVM's [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773). | Named by `simplifycfg`. | [condtocond](condtocond.md) |
