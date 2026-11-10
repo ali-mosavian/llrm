@@ -33,9 +33,9 @@ Os: all worse Os cells are group C (beyond the pin, no vector). Pin rule `getEpi
 | # | piece | state | size | moves |
 |---|---|---|---|---|
 | P0 | MIR vector type, extract/insert/shuffle, splat constants | done (#7658, #7628) | - | - |
-| P1 | DAG `MVT` v16i8/v8i16/v4i32/v2i64 (+v4f32/v2f64), `ScalarizeVector` action, builder gate. SD13 retires for these | `alim/m64-vec-poc` 0d730c08a6 has it for x86 (6 files, 100 lines); reuse | +arm64 TLI list ~60 lines | prerequisite |
-| P2 | arm64 backend: q register class + 16-byte spills (regalloc), LDRQui/STRQui/LDPQi/STPQi, MOVI/DUP, ADDv patterns from the pin's .td (`features.toml` drops vector types today: regenerate with the slice's types only) | `VectorMov` only | ~0.8k hand + regenerated tables | prerequisite |
-| P3 | `has_vector_mir()` true for arm64; turn mid-end `int_bits().expect` panics hit by vectors into refusals (VECT-LATE ruling 11-06) | flag exists, false everywhere | ~100 lines | prerequisite |
+| P1 | DAG `MVT` v16i8/v8i16/v4i32/v2i64 (+v4f32/v2f64), `ScalarizeVector` action, builder gate. SD13 retires for these | **done** for the four 128-bit int vectors, behind `LLRM_ARM64_VECTORS` (b040175b96); x86 stays refused | - | prerequisite |
+| P2 | arm64 backend: q register class + 16-byte spills (regalloc), LDRQui/STRQui/LDPQi/STPQi, MOVI/DUP, ADDv patterns from the pin's .td (`features.toml` drops vector types today: regenerate with the slice's types only) | **done for load/store**: tables regenerated with `[types] live`, `ldr/str q` select and run under qemu. Open: q spills, ldp/stp q, MOVI/DUP/ADDv (NEON-gated: needs `isNeonAvailable` true, which un-prunes scalar NEON patterns, so A/B it) | ~0.6k left | prerequisite |
+| P3 | `has_vector_mir()` true for arm64; turn mid-end `int_bits().expect` panics hit by vectors into refusals (VECT-LATE ruling 11-06) | **flag done**; panics not yet audited (needed once the vectorizer emits other ops) | ~100 lines | prerequisite |
 | P4 | `AArch64TTIImpl` vector hooks: getMemoryOpCost, getArithmeticInstrCost, getMaxInterleaveFactor, getMinTripCount... (`tti.rs` has `vector_register_bits` = 128 only) | missing | ~0.4k | prerequisite |
 | P5 | LoopVectorize slice: legality (LAA exists), planner (VF from widest type, IC), VPlan widening of load/store/splat/IV, trip-count check, middle block, scalar epilogue, optsize rules | missing; LoopVectorize.cpp 8330 + Legality 2048 + VPlan* ~17k pruned by feature | ~1.5k | **group M** |
 | P6 | post-vectorize cleanup arms: shuffle-of-shuffle (reverse copy), simplifycfg fold of the min-iter check at constant trip count | pass exists, no vector arms | ~200 | reverse loop of scroll |
@@ -45,3 +45,9 @@ Os: all worse Os cells are group C (beyond the pin, no vector). Pin rule `getEpi
 Forward consecutive i16/i8 copy and fill loops (P1-P3 on hand IR, then P5 without reverse). Cells: scroll (copy loops 1 and 4, fill loop 2), sieve and bintree (zero fill). Reverse loop 3 stays scalar until P6 (dated DEVIATE: shipping it without the shuffle fold emits rev64+ext pairs).
 
 Gates: fail-first test per piece; scalar corpora md5-identical (the vector VT is only created from a vector IR type); A/B on `ccn` for bytes and executed instructions.
+
+## Progress (b040175b96)
+- Fail-first: `tests/vector_copy.rs` was red on release/next ("@copy: a <8 x i16> value"), then "CannotSelect Store" until the tables were regenerated; now `ldr q16,[x1]` / `str q16,[x0]`. Generator test `a_live_type_overrides_a_dead_prefix`.
+- Run check: a `<8 x i16>` volatile copy loop (`ldr q16,[x10,x11]` / `str q16,[x9,x11]`) copies 1920 elements correctly under qemu (bad=0). Non-volatile it becomes `memcpy` by loop-idiom, as the pin does.
+- Identity: 72 objects (36 bench programs, O2 and Os, `ccn`) byte-identical to release/next fd74ab9c6b with the flag off.
+- Not done: P4 (TTI), P5 (vectorizer), so no cell has moved yet. Next: P4+P5 for scroll's forward copy loops, then P6.
