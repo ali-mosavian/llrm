@@ -66,6 +66,7 @@ pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
         pointer: Pointer::Pcrel4,
         address: 8,
+        slot: 8,
         return_column: 16,
         code_alignment: 1,
         return_saved: true,
@@ -120,6 +121,7 @@ pub fn eh_target32() -> EhTarget<'static> {
     EhTarget {
         pointer: Pointer::Pcrel4,
         address: 4,
+        slot: 4,
         return_column: 8,
         code_alignment: 1,
         return_saved: true,
