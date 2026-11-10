@@ -62,16 +62,48 @@ fn a_one_bit_mask_against_zero_is_a_btst_not_a_copy_and_an_and() {
     }
 }
 
-/// crc16's `crc & 0x8000` (bench/library/crc16.ll): the whole kernel, 78 B
-/// against gcc's 76 at Os on every CPU.
+/// crc16's `crc & 0x8000` (bench/library/crc16.ll) is the sign of the low word:
+/// `tst.w` (2 B, 4 clk on the 68000) where `btst #15` is 4 B, 10 clk and the
+/// first form was `and.l #32768` (6 B, 16 clk). At O1 that was 4972 clk against
+/// gcc's 4200 on the 68000.
 #[test]
-fn crc16_tests_its_top_bit_with_btst() {
+fn crc16_tests_its_top_bit_with_tst_w() {
     let ir = include_str!("../bench/library/crc16.ll");
     for name in ["68000", "68020"] {
-        for level in [Level::O2, Level::Os] {
+        for level in [Level::O1, Level::O2, Level::Os] {
             let out = assembly(ir, cpu_of(name).unwrap(), level).expect("compiles");
-            assert!(out.contains("btst\t#15"), "{name} {level:?}:\n{out}");
-            assert!(!out.contains("and.l\t#32768"), "{name} {level:?}:\n{out}");
+            assert!(out.contains("tst.w"), "{name} {level:?}:\n{out}");
+            assert!(!out.contains("btst\t#15") && !out.contains("and.l\t#32768"), "{name} {level:?}:\n{out}");
+        }
+    }
+}
+
+/// The sign bit of the low word or byte, `(x & 0x8000) != 0`, is
+/// `tst.w`/`tst.b` and a sign branch on every CPU and level: no `btst`, no
+/// `and`, no copy.
+#[test]
+fn the_top_bit_of_a_narrow_width_is_a_tst_of_that_width() {
+    for (mask, tst) in [(0x8000, "tst.w"), (0x80, "tst.b")] {
+        for name in CPUS {
+            for level in [Level::O1, Level::O2, Level::Os] {
+                let out = assembly(&test_of(mask, false), cpu_of(name).unwrap(), level).expect("compiles");
+                assert!(out.contains(tst), "{name} {level:?} {mask:#x}: no {tst}:\n{out}");
+                assert!(!out.contains("btst") && !out.contains("and.l"), "{name} {level:?} {mask:#x}:\n{out}");
+            }
+        }
+    }
+}
+
+/// The premise, from the tables: at every CPU `tst.w`/`tst.b` Dn is no dearer
+/// than `btst #k,Dn` in bytes (2 against 4) or clocks.
+#[test]
+fn tst_takes_no_more_bytes_or_clocks_than_btst_on_every_cpu() {
+    for name in CPUS {
+        let cpu = cpu_of(name).unwrap();
+        let btst = cost(cpu, "btst #15, %d0", 4, false).unwrap().clocks;
+        for tst in ["tst.w %d0", "tst.b %d0"] {
+            let clocks = cost(cpu, tst, 2, false).unwrap().clocks;
+            assert!(clocks <= btst, "{name}: {tst} {clocks} clk against btst {btst} clk");
         }
     }
 }
@@ -152,10 +184,50 @@ define i32 @f(i32 %x) {{
     }
 }
 
-/// crc16 with its `btst #15` still returns the result worked out by hand
+/// `tst.w` reads only the low word: with bit 15 set and the bits above set or
+/// clear the test is true, with bit 15 clear (bit 16 or 31 set) it is false.
+#[test]
+fn a_tst_w_tests_the_bit_15_and_nothing_above_it() {
+    use llrm_m68k::compile::{Options, items_with, text_with};
+    use llrm_m68k::dagisel::hooks::Cpu;
+    use llrm_m68k::object::{executable, start, write_executable};
+    let ir = format!(
+        r#"{DATALAYOUT}
+define i32 @f(i32 %x) {{
+  %m = and i32 %x, 32768
+  %c = icmp eq i32 %m, 0
+  %r = select i1 %c, i32 9, i32 7
+  ret i32 %r
+}}
+"#
+    );
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let asm = text_with(&module, "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(asm.contains("tst.w"), "{asm}");
+    let Some(qemu) = support::qemu() else { return };
+    for (x, want) in [
+        (0x8000, 7),
+        (0x7FFF, 9),
+        (0, 9),
+        (0xFFFF_FFFFu32 as i64, 7),
+        (0x10000, 9),
+        (0x8000_8000u32 as i64, 7),
+        (0x7FFF_7FFF, 9),
+    ] {
+        let mut all = start("f", &[x]);
+        all.extend(items_with(&module, "f", Cpu::M68000, Options::default()).expect("compiles"));
+        let path = support::unique_path("tstw");
+        write_executable(&path, &executable(&all).unwrap()).unwrap();
+        let code = support::run(&qemu, &[], &path);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(code, Some(want), "x = {x:#x}\n{asm}");
+    }
+}
+
+/// crc16 with its `tst.w` still returns the result worked out by hand
 /// (`library_table`: 152 over 9 bytes of the data block).
 #[test]
-fn crc16_with_btst_returns_the_hand_worked_result() {
+fn crc16_with_tst_w_returns_the_hand_worked_result() {
     use llrm_m68k::compile::{Options, items_with};
     use llrm_m68k::dagisel::hooks::Cpu;
     use llrm_m68k::kernels::{Arg, program_with_data};

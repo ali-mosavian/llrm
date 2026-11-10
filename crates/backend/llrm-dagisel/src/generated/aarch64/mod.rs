@@ -3,3 +3,4 @@
 pub mod ids;
 pub mod instrinfo;
 pub mod aarch64_apple_m1;
+pub mod sched;

@@ -48,6 +48,7 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 ## Numbered gaps
 
 - ARM64-EIC-1: no `MachineEarlyIfConversion`/`MachineTraceMetrics` (pin: `aarch64-enable-early-ifcvt` on). `div_constants_long`: pin IR has 28 selects, the asm 121 `csel`/`cset`/`cinc`-family instructions, ours 35 and 35; the extra ones are made by the machine pass from `br` chains the pin IR still has. Programs with more in the pin than ours: 9 of 159 built (7 FAIL rows excluded); `div_constants_{long,short,ulong}` hold 284 of the 298 pin instructions, the other six 14. Exit: step 6 (~3,000 pin lines, not worth writing twice).
+- ARM64-REALIGN, ARM64-DBGVALUE-NOTES and ARM64-SCHED-HOIST are rows of `docs/working/above-main-rows.md` (owner, exit and numbers there).
 
 ## Order of work
 

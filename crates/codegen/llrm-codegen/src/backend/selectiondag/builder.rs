@@ -404,6 +404,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with `getMinimumJumpTableDensity` stated at every level.
+    pub fn with_min_jump_table_density(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.min_jump_table_density = percent;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,
@@ -1509,6 +1518,8 @@ impl Builder<'_> {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
+            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same first variadic argument
+            self.info.vararg_frame_index = Some(index);
         }
         Ok(())
     }
@@ -2396,6 +2407,11 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
+        // This call's own state, taken before the byval copies below: a copy that is a library call is itself a
+        // `lower_call_with` and would otherwise take it (a variadic call's unnamed-argument state sent the
+        // `memcpy` count and source to the stack, and left the call it was for a fixed one).
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2427,8 +2443,6 @@ impl Builder<'_> {
             *value = copy_to;
         }
         let mut outs = Vec::new();
-        let variadic = std::mem::take(&mut self.variadic_call);
-        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
