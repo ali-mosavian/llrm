@@ -34,10 +34,13 @@
 //! `zext`. The `nuw`/`nsw` flags are dropped: they were about the wide result.
 //!
 //! ```text
-//!   %p = phi i32 [ %a, %e ], [ %r, %l ]      %p = phi i16 [ %a.n, %e ], [ %r.n, %l ]
-//!   %b = and i32 %p, 32768                   %b = and i16 %p, -32768
-//!   %s = shl i32 %p, 1                       %s = shl i16 %p, 1
-//!   %r = select i1 %c, i32 %x, i32 %s        %r.n = select i1 %c, i16 %x.n, i16 %s
+//!   %p = phi i32 [ %a, %e ], [ %r, %l ]
+//!   %s = shl i32 %p, 1
+//!   %r = select i1 %c, i32 %x, i32 %s
+//!
+//!   %p = phi i16 [ %a.n, %e ], [ %r, %l ]
+//!   %s = shl i16 %p, 1
+//!   %r = select i1 %c, i16 %x.n, i16 %s
 //! ```
 //!
 //! # See also

@@ -1671,9 +1671,10 @@ pub trait Tti {
     /// at a narrower native width (read through `and` masks, `trunc`s and
     /// values known zero above it) is carried at that width (`narrowcycle`),
     /// when [`Tti::narrowing_gain`] prices every operation of it no dearer, the
-    /// whole cheaper and no axis dearer, the extensions at its uses counted. `TruncInstCombine` starts from a `trunc` and wants every
-    /// value of its graph unused outside it; a phi cycle read by a mask and a
-    /// compare of masked bits has neither. Off by default.
+    /// whole cheaper and no axis dearer, the extensions at its uses counted.
+    /// `TruncInstCombine` starts from a `trunc` and wants every value of its
+    /// graph unused outside it; a phi cycle read by a mask and a compare of
+    /// masked bits has neither. Off by default.
     /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17).
     fn narrows_demanded_cycles(&self) -> bool {
         false
