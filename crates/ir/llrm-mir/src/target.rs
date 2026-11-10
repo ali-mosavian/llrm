@@ -544,6 +544,13 @@ pub trait Machine {
         None
     }
 
+    /// An `alloca` aligned beyond this is kept at its alignment, the frame
+    /// realigning the stack pointer for it, instead of clamped to
+    /// [`Machine::kept_stack_align`]; none: every excess is clamped.
+    fn realigned_above(&self) -> Option<u64> {
+        None
+    }
+
     /// The largest `alloca` alignment this target accepts; none: it realigns
     /// its stack. A larger one is a named refusal at pipeline entry.
     fn max_alloca_align(&self) -> Option<u64> {

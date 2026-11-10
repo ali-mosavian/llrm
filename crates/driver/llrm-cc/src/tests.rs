@@ -451,6 +451,21 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
 
+/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do (6502-UNROLL-O1): float_in_place_update
+/// kept a two-trip float loop at -O1, 9441 B against 19 B at -Os. Other levels are as before, and
+/// a command line that names either spelling is obeyed.
+#[test]
+fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let clang = |row: &str, line: &str| clang_flags(&table[row], &built(line));
+    for row in ["6502-sim65", "65c02-sim65", "6502-cc65", "65c02-cc65"] {
+        assert!(clang(row, "-O1 -S x.c").iter().any(|f| f == "-funroll-loops"), "{row}");
+        for line in ["-O2 -S x.c", "-Os -S x.c", "-O1 -fno-unroll-loops -S x.c"] {
+            assert!(!clang(row, line).iter().any(|f| f == "-funroll-loops"), "{row} {line}");
+        }
+    }
+}
+
 /// The pin's -O1 pipeline has no JumpThreadingPass (JUMPTHREAD-O1), so clang's
 /// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
 /// clk against gcc's 614). The m68k rows give their backend `-fthread-jumps`
