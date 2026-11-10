@@ -75,6 +75,8 @@ pub fn builder_target() -> BuilderTarget {
             sext_bool_add_preferred: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
 }
