@@ -417,6 +417,8 @@ mod tests {
     fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
         assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
         assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+        // -O1 prices what is emitted (`clear` -O1: 96 B / 577 T priced before them, 548 T after)
+        assert!(!priced_before_peepholes(Level::O1));
     }
 
     /// The push and pop form is smaller and dearer in weighted clocks: kept at
