@@ -264,3 +264,16 @@ fn a_pushed_zero_and_a_short_absolute_pea_are_priced() {
         assert_eq!(clocks(cpu, &gnu("clrl %sp@-")), clr, "{cpu:?} clr.l -(%sp)");
     }
 }
+
+/// A register list that ends at `%fp` (`movem.l %d2-%d7/%a2-%fp, -(%sp)`, a
+/// function that keeps eleven registers) was "not in the tables": every
+/// executed run of such a prologue or epilogue was left out of a program's
+/// clocks, on both sides of a comparison (nbody_single: `?2`).
+#[test]
+fn a_register_list_ending_at_the_frame_pointer_is_priced() {
+    assert_eq!(clocks(Cpu::M68000, "movem.l %d2-%d7/%a2-%fp, -(%sp)"), 8 + 8 * 11);
+    assert_eq!(
+        clocks(Cpu::M68020, "movem.l (%sp)+, %d2-%d7/%a2-%fp"),
+        clocks(Cpu::M68020, "movem.l (%sp)+, %d2-%d7/%a2-%a6")
+    );
+}

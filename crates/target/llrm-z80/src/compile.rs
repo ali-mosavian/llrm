@@ -301,25 +301,40 @@ fn allocated_with(
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
-    if !hoist_constants(&mut hoisted) {
-        return allocate(function, name, request.level);
-    }
-    // the allocator does not see that a byte of a pair is read in place, so a
-    // constant kept across a loop can cost more than making it there, or less:
-    // the hoisted loop stays unless the plain one is cheaper by the loop's
-    // weighted cost. The other choices are explored on both: lz4c -O2 wants
-    // the plain one's (exploring only the better first allocation made it 442
-    // B against 427).
-    let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
-    match (plain, with) {
-        (Ok(plain), Ok(with)) => {
-            match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
-                (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
-                _ => Ok(with),
+    // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
+    let mut split = function.clone();
+    let splits = split_loop_constant_stores(&mut split) && hoist_constants(&mut split);
+    let base = if hoist_constants(&mut hoisted) {
+        // the allocator does not see that a byte of a pair is read in place, so a
+        // constant kept across a loop can cost more than making it there, or less:
+        // the hoisted loop stays unless the plain one is cheaper by the loop's
+        // weighted cost. The other choices are explored on both: lz4c -O2 wants
+        // the plain one's (exploring only the better first allocation made it 442
+        // B against 427).
+        match (allocate(function.clone(), name, request.level), allocate(hoisted, name, request.level)) {
+            (Ok(plain), Ok(with)) => {
+                match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
+                    (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
+                    _ => Ok(with),
+                }
             }
+            (_, Ok(with)) => Ok(with),
+            (plain, Err(_)) => plain,
         }
-        (_, Ok(with)) => Ok(with),
-        (plain, Err(_)) => plain,
+    } else {
+        allocate(function, name, request.level)
+    };
+    if !splits {
+        return base;
+    }
+    // stays only where it is cheaper than the best of the two
+    match (base, allocate(split, name, request.level)) {
+        (Ok(base), Ok(split)) => match (priced_in_loops(&base, request.level), priced_in_loops(&split, request.level)) {
+            (Some(one), Some(other)) if cheaper(request.level, other, one) => Ok(split),
+            _ => Ok(base),
+        },
+        (_, Ok(split)) => Ok(split),
+        (base, Err(_)) => base,
     }
 }
 
@@ -604,6 +619,9 @@ fn allocate_once(
         if std::env::var("LLRM_NO_Z80_CARRY").is_err() {
             crate::forward::carry_pairs_across_edges(&mut function);
         }
+    }
+    if std::env::var("LLRM_NO_Z80_COMMUTE").is_err() {
+        crate::commute::commute_to_the_dying_source(&mut function);
     }
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
@@ -1398,6 +1416,49 @@ pub fn spills_first(
             first += 1;
         }
     }
+}
+
+/// A constant word stored from an immediate in a loop (`LD16mi`, `LD16fi`) is the constant and a store from a
+/// register again, so [`hoist_constants`] can hold it across the loop: 6 T a trip cheaper, a byte or two more
+/// (3 B once and 2 B a store against 4 B). The variant stays only where `priced_in_loops` says it is cheaper.
+/// The selector chose the immediate form without a loop depth to see, as the pin's x86 does (`imm_su` counts
+/// users only); this is the frequency-aware half, beyond the pin (row Z80-IMM-LOOP). Linear in the instructions.
+/// Whether anything was split.
+fn split_loop_constant_stores(function: &mut MFunction) -> bool {
+    let mut changed = false;
+    let cfg = Cfg::new(function);
+    let in_loop: Vec<bool> = (0..function.blocks.len()).map(|b| cfg.loops().iter().any(|(_, body)| body[b])).collect();
+    for (b, _) in in_loop.iter().enumerate().filter(|(_, in_loop)| **in_loop) {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            let inst = &mut function.blocks[b].insts[at];
+            let (store, Some(Operand::Imm(value))) = (
+                match inst.kind {
+                    Kind::Op("LD16mi") => "LD16mr",
+                    Kind::Op("LD16fi") => "LD16fr",
+                    _ => {
+                        at += 1;
+                        continue;
+                    }
+                },
+                inst.operands.first().cloned(),
+            ) else {
+                at += 1;
+                continue;
+            };
+            let constant = function.classes.len() as u32;
+            function.classes.push(crate::mfunc::Class::Gr16);
+            inst.kind = Kind::Op(store);
+            inst.operands[0] = Operand::Use(Reg::Virt(constant));
+            let mut made = Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(constant)), Operand::Imm(value)]);
+            made.rematerializable = true;
+            made.cheap_as_move = true;
+            function.blocks[b].insts.insert(at, made);
+            changed = true;
+            at += 2;
+        }
+    }
+    changed
 }
 
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting

@@ -10,7 +10,7 @@ fn test_a_sub_nsw_guard_folds_to_a_signed_compare_of_its_operand() {
     let text = include_str!("fixtures/shift_guard_chain.ll");
     let mut module = llrm_mir::parse::module(text).expect("parses");
     let mut manager = PassManager::default();
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     let after = llrm_mir::print::module(&module);
     assert!(!after.contains("samesign ugt i32 %30, 31"), "{after}");

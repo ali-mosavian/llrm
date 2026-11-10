@@ -644,6 +644,17 @@ mod tests {
             // `visitSwitchInst`'s `switch (X << C)` is `switch X` when the
             // `shl` is `nuw` or `nsw`; the `shl` is read, never rewritten.
             "combine_switch.rs",
+            // `count_down_loop` makes `tcdec = tcphi - 1` with `nsw`
+            // (`transformLoopToCountable`); it reads no flag off an existing
+            // instruction.
+            "countdown.rs",
+            // `recognizeShiftUntilBitTest` copies the `shl`'s `nuw`/`nsw` to
+            // the shifts it makes and reads them to pick the safe one; it
+            // changes no existing instruction's flags.
+            "shiftbit.rs",
+            // `detectShiftUntilZeroIdiom` reads the shift amount's `add`
+            // flags; the instruction is read, never rewritten.
+            "shiftzero.rs",
             // `zeromerge` makes one `inbounds` GEP per member of the new
             // `alloca` it builds (llrm only); it reads no flag off an
             // existing instruction.
