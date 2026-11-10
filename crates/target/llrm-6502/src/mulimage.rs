@@ -31,7 +31,8 @@ pub fn library_bytes(routine: &str) -> u32 {
         }
         inside &= !word.starts_with(".endmacro");
     }
-    let priced = |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
+    let priced =
+        |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
     fn code<'a>(routine: &str) -> &'a str {
         let marker = format!("\n{routine}:");
         let start = crate::RUNTIME.find(&marker).unwrap_or_else(|| panic!("no `{routine}` in mos_rt.s")) + 1;
@@ -41,10 +42,15 @@ pub fn library_bytes(routine: &str) -> u32 {
     }
     let text = code(routine);
     let own = priced(text);
-    let tail = text.lines().map(|line| line.split(';').next().unwrap_or("").trim()).filter(|line| !line.is_empty()).next_back();
+    let tail = text
+        .lines()
+        .map(|line| line.split(';').next().unwrap_or("").trim())
+        .filter(|line| !line.is_empty())
+        .next_back();
     match tail.and_then(|line| line.strip_prefix("jmp ")) {
         Some(label) if !label.starts_with('@') => {
-            let from = crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
+            let from =
+                crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
             let body = &crate::RUNTIME[from..];
             let end = body.find("\n  rts").unwrap_or_else(|| panic!("`{label}` has no rts")) + "\n  rts".len();
             own + priced(&body[..end])
@@ -53,9 +59,24 @@ pub fn library_bytes(routine: &str) -> u32 {
     }
 }
 
-/// Selects the sized functions that call `__mulsi3` again with every multiply
-/// by a constant expanded, and keeps those when no call is left in the module
-/// and the code grows by less than the routine.
+/// A 32-bit multiply call, in clocks (`__mulsi3`, sim65): what each removed
+/// call is worth when the bytes it costs are priced at speed.
+const CALL_CLOCKS: i64 = 2200;
+/// Clocks one byte is worth at -O2/-O3: the matrix's price.
+const CLOCKS_PER_BYTE: i64 = 3;
+
+/// Selects the functions that call `__mulsi3` again with every multiply by a
+/// constant expanded, and keeps those when no call is left in the module and
+/// the level pays for the growth:
+/// - -Os/-Oz (sized functions only): the growth is less than the routine, so
+///   the bytes fall;
+/// - -O1 (bytes are strict, clocks free): the same, so no byte rises;
+/// - -O2/-O3: the same, or the clocks the removed calls save (one execution
+///   each, 2,200 a call) are at least 3 per byte the module grows.
+///
+/// DEVIATE 6502-MUL-SYNTH: see `dagisel::combine::synthesized_mul`; the
+/// decision is the module's because the routine is linked once, for all its
+/// calls.
 ///
 /// `from_module[i]` is whether `selections[i]` was selected from `module`
 /// itself (not from a copy of it with loops or paged indexing).
@@ -66,14 +87,16 @@ pub fn expand_when_unshared(
     from_module: &[bool],
     request: &Request,
 ) -> Result<(), String> {
-    if !matches!(request.level, Level::Os | Level::Oz) || selections.iter().all(|one| one.mul_calls() == 0) {
+    let at_size = matches!(request.level, Level::Os | Level::Oz);
+    if matches!(request.level, Level::O0) || selections.iter().all(|one| one.mul_calls() == 0) {
         return Ok(());
     }
     let mut again = Vec::new();
     let mut left = 0;
+    let mut removed = 0;
     for (at, (name, selection)) in names.iter().zip(selections.iter()).enumerate() {
         let function = module.named(name).and_then(|id| module.global(id).function());
-        if selection.mul_calls() == 0 || !from_module[at] || !function.is_some_and(is_sized) {
+        if selection.mul_calls() == 0 || !from_module[at] || (at_size && !function.is_some_and(is_sized)) {
             left += selection.mul_calls();
             continue;
         }
@@ -81,6 +104,7 @@ pub fn expand_when_unshared(
         other.zero_page = request.platform.zero_page;
         other.tuning = request.level.tuning();
         left += other.mul_calls();
+        removed += selection.mul_calls() as i64 - other.mul_calls() as i64;
         again.push((at, other));
     }
     if left != 0 {
@@ -94,7 +118,9 @@ pub fn expand_when_unshared(
     for (at, other) in &again {
         growth += bytes(&names[*at], other)? - bytes(&names[*at], &selections[*at])?;
     }
-    if growth < i64::from(library_bytes("__mulsi3")) {
+    let net = growth - i64::from(library_bytes("__mulsi3"));
+    let pays = net < 0 || (!at_size && request.level != Level::O1 && removed * CALL_CLOCKS >= CLOCKS_PER_BYTE * net);
+    if pays {
         for (at, other) in again {
             selections[at] = other;
         }

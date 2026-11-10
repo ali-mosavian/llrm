@@ -12,14 +12,12 @@
 //! calls) needs none. Reason: frame objects wait for the 6502 machine function.
 //! Exit: M4.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
-use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::context::ConstantKind;
@@ -27,6 +25,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_support::hash::HashMap;
 
 use super::call::{CALL, MosCalling, RET_GLUE};
 use super::hooks::Cpu;
@@ -112,7 +111,10 @@ impl Selection {
             .iter()
             .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
             .filter(|(one, node)| {
-                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
+                matches!(
+                    one.dag.nodes()[*node as usize].opcode,
+                    ISD::Machine(code) if code as u16 == op::MUL32
+                )
             })
             .count()
     }
@@ -162,7 +164,7 @@ pub fn select_function_with(
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, (cpu, sized), &mut info, &mut selected)?;
+        select_built(Some((function, block)), block, built, (cpu, sized, inline_multiplies), &mut info, &mut selected)?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -230,11 +232,11 @@ fn select_built(
     top: Option<(&Function, BlockId)>,
     block: BlockId,
     mut built: BlockDag,
-    (cpu, sized): (Cpu, bool),
+    (cpu, sized, synthesize): (Cpu, bool, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
-    let units = select_block(&mut built.dag, cpu, sized).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, sized, synthesize).map_err(|why| format!("{why:?}"))?;
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges
@@ -271,7 +273,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, (cpu, sized), info, selected)?;
+        select_built(None, extra, made, (cpu, sized, synthesize), info, selected)?;
     }
     Ok(())
 }

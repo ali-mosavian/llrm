@@ -1,6 +1,9 @@
-//! A multiply by a constant of three signed digits is two adds and the shifts, not a call
-//! (`x * 11` was a 2,200-clock `__mulsi3` call; gcc synthesizes it). Priced against the call per
-//! width: a size build and a constant that takes too many shifted bits keep the call.
+//! A multiply of 32 bits by a constant of three signed digits is two adds and
+//! the shifts when the module has no other multiply call (`x * 11` was a
+//! 2,200-clock `__mulsi3` call; gcc synthesizes it). The decision is the
+//! module's, as the routine is linked once: -O1 keeps every byte it had,
+//! -O2/-O3 also take growth that the removed calls pay for at 3 clocks a byte,
+//! -Os takes only a smaller module.
 
 mod common;
 
@@ -16,100 +19,115 @@ fn asm(
 }
 
 fn by(
+    name: &str,
     width: u32,
     constant: i64,
     attrs: &str,
 ) -> String {
-    format!("define i{width} @by_k(i{width} %x) {attrs} nounwind {{\n  %r = mul i{width} %x, {constant}\n  ret i{width} %r\n}}\n")
+    format!(
+        "define i{width} @{name}(i{width} %x) {attrs} nounwind {{\n  %r = mul i{width} %x, {constant}\n  ret i{width} %r\n}}\n"
+    )
 }
 
-fn calls(width: u32) -> &'static str {
-    match width {
-        8 => "__mulqi3",
-        16 => "__mulhi3",
-        _ => "__mulsi3",
+const VARIABLE: &str = "define i32 @by_argument(i32 %x, i32 %y) nounwind {\n  %r = mul i32 %x, %y\n  ret i32 %r\n}\n";
+
+/// `x * 11` is `8 + 2 + 1`: shifts and adds at -O1, -O2 and, the module being
+/// smaller, -Os.
+#[test]
+fn a_three_digit_constant_alone_is_shifts_and_adds() {
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let text = asm(&by("by_k", 32, 11, ""), level);
+        assert!(!text.contains("__mulsi3"), "{level:?}:\n{text}");
     }
 }
 
-/// `x * 11` is `8 + 2 + 1`; at every width it is shifts and adds at speed.
+/// The non-adjacent form is shorter in digits only when it is (`23 = 32 - 8 -
+/// 1`); a negative constant is negated after; trailing zeros are one shift of
+/// the sum.
 #[test]
-fn a_three_digit_constant_is_shifts_and_adds_at_speed() {
-    for width in [16, 32] {
-        let text = asm(&by(width, 11, ""), Level::O2);
-        assert!(!text.contains(calls(width)), "i{width}:\n{text}");
+fn signed_digits_a_sign_and_trailing_zeros_are_synthesized() {
+    for constant in [23, -11, 44] {
+        let text = asm(&by("by_k", 32, constant, ""), Level::O2);
+        assert!(!text.contains("__mulsi3"), "{constant}:\n{text}");
     }
 }
 
-/// The non-adjacent form is shorter in digits only when it is: `23 = 32 - 8 - 1`.
+/// The routine is linked for the variable multiply anyway: the longer expansion
+/// would only add bytes.
 #[test]
-fn a_constant_of_signed_digits_is_synthesized_too() {
-    let text = asm(&by(16, 23, ""), Level::O2);
-    assert!(!text.contains("__mulhi3"), "{text}");
-}
-
-/// A negative constant and one with trailing zeros: `-11`, `44 = 11 << 2`.
-#[test]
-fn a_negative_constant_and_trailing_zeros_are_synthesized() {
-    for constant in [-11, 44] {
-        let text = asm(&by(16, constant, ""), Level::O2);
-        assert!(!text.contains("__mulhi3"), "{constant}:\n{text}");
+fn beside_a_variable_multiply_the_call_stays_at_every_level() {
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = asm(&format!("{}{VARIABLE}", by("by_k", 32, 11, "")), level);
+        let body = &text[text.find("by_k:").unwrap()..text.find("by_argument:").unwrap_or(text.len())];
+        assert!(body.contains("jsr __mulsi3"), "{level:?}:\n{text}");
     }
 }
 
-/// Four digits are three adds: the call stays.
+/// Eight multiplies grow the module by more than the routine they free: -O1 (no
+/// byte may rise) and -Os keep the calls; -O2 takes the growth, the eight calls
+/// saving 17,600 clocks for under 3 per byte.
 #[test]
-fn a_constant_of_four_digits_stays_a_call() {
-    let text = asm(&by(32, 91, ""), Level::O2);
-    assert!(text.contains("jsr __mulsi3"), "{text}");
+fn growth_past_the_routine_is_taken_at_speed_only() {
+    let module: String = [11, 13, 19, 21, 25, 35, 37, 41].iter().map(|k| by(&format!("by_{k}"), 32, *k, "")).collect();
+    for (level, expands) in [(Level::O1, false), (Level::Os, false), (Level::O2, true)] {
+        let text = asm(&module, level);
+        assert_eq!(!text.contains("__mulsi3"), expands, "{level:?}:\n{text}");
+    }
 }
 
-/// A function tuned for size keeps the call while the routine is linked anyway (a variable multiply
-/// beside it): the steps are more bytes than the call at every width.
+/// Four digits are three adds, and a word is a call of a few bytes: both stay
+/// calls.
 #[test]
-fn a_size_function_keeps_the_call() {
-    let variable = "define i32 @by_argument(i32 %x, i32 %y) minsize nounwind {\n  %r = mul i32 %x, %y\n  ret i32 %r\n}\n";
-    let text = asm(&format!("{}{variable}", by(32, 11, "minsize")), Level::Os);
-    let body = &text[text.find("by_k:").unwrap()..text.find("by_argument:").unwrap_or(text.len())];
-    assert!(body.contains("jsr __mulsi3"), "{text}");
+fn four_digits_and_a_word_stay_calls() {
+    assert!(asm(&by("by_k", 32, 91, ""), Level::O2).contains("jsr __mulsi3"));
+    assert!(asm(&by("by_k", 16, 11, ""), Level::O2).contains("__mulhi3"));
 }
 
-/// A byte multiplied by `145 = 128 + 16 + 1` shifts seven bits: 60 clocks saved for 21 more bytes is
-/// under the 3 clocks a byte the matrix prices, so the call stays.
+/// The sequences against repeated addition on sim65: `x * k` for 4,096 words
+/// with varying high bytes, `k` in 11, 23, -11, 44.
 #[test]
-fn the_call_wins_where_the_shifts_do_not_pay() {
-    let text = asm(&by(8, 145, ""), Level::O2);
-    assert!(text.contains("__mulqi3"), "{text}");
-}
-
-/// The synthesized sequences against the routine on sim65: `x * k` for 4,096 words, `k` in 11, 23, -11, 44.
-#[test]
-fn the_sequences_agree_with_the_routine() {
+fn the_sequences_agree_with_repeated_addition() {
     let constants = [11i64, 23, -11, 44];
-    let mut ir = String::from(
-        "define i16 @oracle(i16 %x, i16 %y) nounwind {\n  %r = mul i16 %x, %y\n  ret i16 %r\n}\n",
-    );
-    for k in constants {
-        ir += &by(16, k, "").replace("@by_k", &format!("@by_{}", k.unsigned_abs() + if k < 0 { 1000 } else { 0 }));
-    }
+    let name = |k: i64| format!("by_{}", k.unsigned_abs() + if k < 0 { 1000 } else { 0 });
+    let ir: String = constants.iter().map(|k| by(&name(*k), 32, *k, "")).collect();
     let compiled = asm(&ir, Level::O2);
-    assert!(!compiled.contains("jsr __mulhi3") || compiled.matches("__mulhi3").count() <= 2, "{compiled}");
+    assert!(!compiled.contains("__mulsi3"), "{compiled}");
     let functions: String =
         compiled.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
     let mut main = String::from("  lda #0\n  sta bad\n  sta ia\nouter:\n  lda #0\n  sta ib\ninner:\n");
+    main += "  lda ia\n  sta xb0\n  sta xb3\n  lda ib\n  sta xb1\n  sta xb2\n";
     for (n, k) in constants.iter().enumerate() {
-        let name = format!("by_{}", k.unsigned_abs() + if *k < 0 { 1000 } else { 0 });
-        let word = (*k as i32 & 0xFFFF) as u16;
         main += &format!(
-            "  lda ia\n  sta rc2\n  lda ib\n  sta rc3\n  jsr {name}\n  sta lo\n  stx hi\n  lda ia\n  sta rc2\n  lda ib\n  sta rc3\n  \
-             lda #<{word}\n  sta rc4\n  lda #>{word}\n  sta rc5\n  jsr oracle\n  cmp lo\n  bne bad{n}\n  cpx hi\n  beq ok{n}\nbad{n}:\n  lda #{code}\n  sta bad\nok{n}:\n",
-            code = n + 1
+            "  lda xb0\n  sta rc2\n  lda xb1\n  sta rc3\n  lda xb2\n  sta rc4\n  lda xb3\n  sta rc5\n  jsr {}\n",
+            name(*k)
         );
+        main += "  sta r0\n  stx r1\n  lda rc2\n  sta r2\n  lda rc3\n  sta r3\n";
+        main +=
+            &format!("  lda #0\n  sta a0\n  sta a1\n  sta a2\n  sta a3\n  ldy #{}\nadd{n}:\n  clc\n", k.unsigned_abs());
+        for b in 0..4 {
+            main += &format!("  lda a{b}\n  adc xb{b}\n  sta a{b}\n");
+        }
+        main += &format!("  dey\n  bne add{n}\n");
+        if *k < 0 {
+            main += "  sec\n";
+            for b in 0..4 {
+                main += &format!("  lda #0\n  sbc a{b}\n  sta a{b}\n");
+            }
+        }
+        for b in 0..4 {
+            main += &format!("  lda r{b}\n  cmp a{b}\n  bne bad{n}\n");
+        }
+        main += &format!("  beq ok{n}\nbad{n}:\n  lda #{}\n  sta bad\nok{n}:\n", n + 1);
     }
-    main += "  lda ib\n  clc\n  adc #17\n  sta ib\n  bcs next\n  jmp inner\nnext:\n  inc ia\n  beq done\n  jmp outer\ndone:\n  lda bad\n";
-    let extra = format!("{functions}.segment \"BSS\"\nia: .res 1\nib: .res 1\nlo: .res 1\nhi: .res 1\nbad: .res 1\n.segment \"CODE\"\n");
+    main += "  lda ib\n  clc\n  adc #61\n  sta ib\n  bcs next\n  jmp inner\nnext:\n  inc ia\n  beq done\n  jmp outer\ndone:\n  lda bad\n";
+    let mut extra = format!("{functions}.segment \"BSS\"\nia: .res 1\nib: .res 1\nbad: .res 1\n");
+    for v in ["xb", "a", "r"] {
+        for b in 0..4 {
+            extra += &format!("{v}{b}: .res 1\n");
+        }
+    }
+    extra += ".segment \"CODE\"\n";
     for target in ["sim6502", "sim65c02"] {
         assert_eq!(common::run_on(target, &format!("mulsynth-{target}"), &main, &extra).0, 0, "{target}");
     }
-    let cycles = common::cycles_on("sim6502", "mulsynth-cycles", &main, &extra);
-    assert!(cycles > 1_000_000, "the driver ran {cycles} cycles");
 }

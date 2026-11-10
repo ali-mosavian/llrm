@@ -10,16 +10,20 @@
 //! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
 //! `visit_mul`.
 
-use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
 
+use super::lowering::mosisd;
+
 /// `sized`: the function is tuned for size (`optsize`, `minsize`).
+/// `synthesize`: the module-level re-selection of `mulimage` is running, which
+/// may expand a multiply by three signed digits.
 pub struct MosCombines {
     pub sized: bool,
+    pub synthesize: bool,
 }
 
 /// The combines after legalization: only the shared-shift answer, which every
@@ -133,7 +137,10 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC)
+        matches!(
+            op,
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC
+        )
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -163,7 +170,7 @@ impl CombineHooks for MosCombines {
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
-            ISD::Mul => decompose_mul(dag, node, self.sized),
+            ISD::Mul => decompose_mul(dag, node, self.sized, self.synthesize),
             // the combiner offers every target node to the hook
             _ => None,
         }
@@ -186,7 +193,10 @@ fn range_on_low_byte(
     let (sum, bound) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(sum) != EVT::I16
         || dag.opcode(sum) != ISD::Add
-        || !matches!(dag.node(dag.operand(node, 2)).data, NodeData::CondCode(CondCode::SetULt))
+        || !matches!(
+            dag.node(dag.operand(node, 2)).data,
+            NodeData::CondCode(CondCode::SetULt)
+        )
     {
         return None;
     }
@@ -298,9 +308,9 @@ fn low_bit_in_carry(
     Some(SDValue { node: sum.node, res: 0 })
 }
 
-/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
-/// borrow of `a - b`, subtracted from `x` by a subtract with borrow. A split
-/// 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
+/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes:
+/// the borrow of `a - b`, subtracted from `x` by a subtract with borrow. A
+/// split 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
 /// compare was a chain of its own and its result a byte.
 ///
 /// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
@@ -323,14 +333,15 @@ fn borrow_of_ult(
             .into_iter()
             .map(|(x, e)| (dag.operand(node, x), dag.operand(node, e)))
             .find(|&(_, e)| dag.opcode(e) == ISD::SignExtend)?,
-        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => {
-            (dag.operand(node, 0), dag.operand(node, 1))
-        }
+        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => (dag.operand(node, 0), dag.operand(node, 1)),
         _ => return None,
     };
     let compare = dag.operand(extended, 0);
     if dag.opcode(compare) != ISD::SetCC
-        || !matches!(dag.node(dag.operand(compare, 2)).data, NodeData::CondCode(CondCode::SetULt))
+        || !matches!(
+            dag.node(dag.operand(compare, 2)).data,
+            NodeData::CondCode(CondCode::SetULt)
+        )
     {
         return None;
     }
@@ -502,48 +513,8 @@ fn carry_in(
 }
 
 /// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
-/// What a multiply by a constant costs as a call and as steps, per width in bytes, for [`synthesized_mul`].
-/// The call: `(bytes at the call site, clocks of the call and the routine)`, from sim65 (`__mulqi3` 117 and
-/// `__mulhi3` 270 clocks a call over 100 calls, 2026-11-10; `__mulsi3` 2,200 and 59 B, the figures of
-/// `decompose_mul`). A step is a pass over each byte of the value: a shifted bit is `asl` and `rol`s (2 B and
-/// 5 clocks a byte), an add is `clc` and `lda`/`adc`/`sta` a byte (1 + 6 B, 2 + 9 clocks a byte).
-struct MulPrice;
-
-const MUL_PRICE: MulPrice = MulPrice;
-
-impl MulPrice {
-    /// The matrix prices a byte at 3 clocks at speed.
-    const CLOCKS_PER_BYTE: u32 = 3;
-
-    fn call(
-        &self,
-        bytes: u32,
-    ) -> (u32, u32) {
-        match bytes {
-            1 => (7, 117),
-            2 => (6, 270),
-            _ => (59, 2200),
-        }
-    }
-
-    /// Whether `shifted` bits and `adds` adds of a `bytes`-wide value save more clocks than
-    /// [`Self::CLOCKS_PER_BYTE`] for each byte they add to the call.
-    fn pays(
-        &self,
-        bytes: u32,
-        shifted: u32,
-        adds: u32,
-    ) -> bool {
-        let inline_bytes = adds * (1 + 6 * bytes) + shifted * 2 * bytes;
-        let inline_clocks = adds * (2 + 9 * bytes) + shifted * 5 * bytes;
-        let (call_bytes, call_clocks) = self.call(bytes);
-        let saved = call_clocks.saturating_sub(inline_clocks);
-        saved > 0 && saved >= Self::CLOCKS_PER_BYTE * inline_bytes.saturating_sub(call_bytes)
-    }
-}
-
-/// The signed binary digits of an odd `m` with no two neighbours set (the non-adjacent form), lowest
-/// first: `(exponent, +1 or -1)`.
+/// The signed binary digits of an odd `m` with no two neighbours set (the
+/// non-adjacent form), lowest first: `(exponent, +1 or -1)`.
 fn non_adjacent_form(mut m: u128) -> Vec<(u32, bool)> {
     let mut digits = Vec::new();
     let mut exponent = 0;
@@ -560,16 +531,21 @@ fn non_adjacent_form(mut m: u128) -> Vec<(u32, bool)> {
 }
 
 /// `x * m` for an odd `m` of three signed digits, as two adds in Horner form:
-/// `(((x << a) +- x) << b) +- x`, then `<< zeros`, negated for a negative constant. Fewer
-/// shifted bits of the two forms (binary `8 + 2 + 1`, or non-adjacent `16 - 4 - 1`).
+/// `(((x << a) +- x) << b) +- x`, then `<< zeros`, negated for a negative
+/// constant. Fewer shifted bits of the two forms (binary `8 + 2 + 1`, or
+/// non-adjacent `16 - 4 - 1`).
 ///
-/// DEVIATE 6502-MUL-SYNTH: the pin decomposes `2^N +- 2^M` only and leaves the general case as a
-/// TODO ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024):
-/// "a target set limit on number of ops and a callback to determine that sequence"). Here the limit
-/// is two adds. Source: gcc's `synth_mult` (expmed.cc), bounded. Priced per width against the call
-/// (`MUL_PRICE`): the three steps cost more bytes than the call at every width and save more than
-/// 3 clocks a byte, so a size build keeps the call. Owner: llrm-target-6502. Exit: 2026-12-01, when
-/// the shared combine reads the sequence from a target hook.
+/// DEVIATE 6502-MUL-SYNTH: the pin decomposes `2^N +- 2^M` only and leaves the
+/// general case as a TODO
+/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024):
+/// "a target set limit on number of ops and a callback to determine that
+/// sequence"). Here the limit is two adds, on a 32-bit value (`__mulsi3`, 2,200
+/// clocks a call; a byte or word multiply is a call of a few bytes and the
+/// steps cost 7 to 38). Source: gcc's `synth_mult` (expmed.cc), bounded. It
+/// runs only in `mulimage`'s re-selection, which keeps it when no multiply call
+/// is left in the module and the bytes and clocks of the level pay. Owner:
+/// llrm-target-6502. Exit: 2026-12-01, when the shared combine reads the
+/// sequence from a target hook.
 fn synthesized_mul(
     dag: &mut SelectionDAG,
     x: SDValue,
@@ -577,9 +553,9 @@ fn synthesized_mul(
     zeros: u32,
     negative: bool,
     vt: EVT,
-    sized: bool,
+    synthesize: bool,
 ) -> Option<SDValue> {
-    if sized {
+    if !synthesize || vt != EVT::I32 {
         return None;
     }
     let binary: Vec<(u32, bool)> = (0..128).filter(|bit| magnitude >> bit & 1 == 1).map(|bit| (bit, true)).collect();
@@ -593,10 +569,6 @@ fn synthesized_mul(
     digits.reverse(); // highest exponent first
     let width = vt.size_in_bits();
     if digits[0].0 + zeros >= width {
-        return None;
-    }
-    let steps = digits[0].0 + zeros;
-    if !MUL_PRICE.pays(width / 8, steps, 2) {
         return None;
     }
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
@@ -632,6 +604,7 @@ fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
     sized: bool,
+    synthesize: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I8 && vt != EVT::I16 && vt != EVT::I32 {
@@ -651,7 +624,7 @@ fn decompose_mul(
     let (add, bits) = match (magnitude - 1, magnitude + 1) {
         (below, _) if below.is_power_of_two() => (true, below),
         (_, above) if above.is_power_of_two() => (false, above),
-        _ => return synthesized_mul(dag, x, magnitude, zeros, signed < 0, vt, sized),
+        _ => return synthesized_mul(dag, x, magnitude, zeros, signed < 0, vt, synthesize),
     };
     let k = bits.trailing_zeros();
     if k + zeros >= width {
