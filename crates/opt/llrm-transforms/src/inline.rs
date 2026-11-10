@@ -1033,10 +1033,15 @@ fn outlives_the_copy(
     false
 }
 
-/// `CloneAndPruneFunctionInto`: the copy of a body's entry is simplified as the
-/// arguments make constants of it, so an alloca of the entry whose count was
-/// the argument's (`int a[n]`) has a constant one and is static: it goes to the
-/// caller's entry, and the copy has no dynamic alloca to bracket.
+/// `CloneAndPruneFunctionInto`
+/// ([CloneFunction.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L77)):
+/// every instruction of the copy is simplified as the arguments make constants of
+/// it, so a call the copy brings carries the constants the pin's cost model sees
+/// (`hold(1)` copies `churn(c1, c2, c3, c4)`, not `churn(add 1 K, ...)`), and an alloca of the
+/// entry whose count was the argument's (`int a[n]`) has a constant one and is
+/// static: it goes to the caller's entry, and the copy has no dynamic alloca to bracket.
+/// DEVIATE: the pin also prunes the blocks a folded branch condition leaves dead and folds phis
+/// while it clones; here the Simplify list that follows does.
 fn fold_entry_allocas(
     context: &Context,
     function: &mut Function,
@@ -1047,22 +1052,26 @@ fn fold_entry_allocas(
 ) {
     let entry = body.entry();
     let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
-    let copies: Vec<(InstId, bool)> = originals
+    let copies: Vec<(InstId, bool, bool)> = originals
         .zip(&made.copies)
-        .filter(|&((block, _), _)| Some(block) == entry)
-        .map(|((_, inst), &copy)| (copy, matches!(body.instruction(inst).opcode, Opcode::Alloca { .. })))
+        .map(|((block, inst), &copy)| {
+            let alloca = matches!(body.instruction(inst).opcode, Opcode::Alloca { .. });
+            (copy, alloca, Some(block) == entry)
+        })
         .collect();
-    if !copies.iter().any(|&(copy, alloca)| alloca && !is_static_alloca(context, function, copy)) {
-        return;
-    }
-    for &(copy, alloca) in &copies {
-        if alloca {
+    for &(copy, alloca, _) in &copies {
+        if alloca || function.instruction(copy).opcode == Opcode::Phi {
             continue;
         }
         let Some(result) = function.instruction(copy).result else { continue };
         if let Some(folded) = llrm_mir::simplify::simplify_instruction(context, layout, function, copy) {
             function.replace_all_uses_with(result, folded);
         }
+    }
+    let copies: Vec<(InstId, bool)> =
+        copies.into_iter().filter(|&(_, _, in_entry)| in_entry).map(|(copy, alloca, _)| (copy, alloca)).collect();
+    if !copies.iter().any(|&(copy, alloca)| alloca && !is_static_alloca(context, function, copy)) {
+        return;
     }
     let first = anchor
         .filter(|&one| function.parent(one).is_some())
