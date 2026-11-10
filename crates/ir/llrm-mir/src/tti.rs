@@ -917,9 +917,18 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4):
+    /// `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
+    }
+
+    /// DEVIATE VASTART-PROMOTE: the slot every stack argument takes where `va_arg` is left in the IR as an instruction
+    /// (clang writes it for targets without a `va_arg` lowering of its own) and `va_list` is one pointer: each read
+    /// loads the pointer, loads the value, steps the pointer by the type's size (alignment capped to the slot) and
+    /// stores it back, so SROA can keep the pointer in a register. `None`: `va_arg` stays an instruction.
+    fn va_arg_slot(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE SETCC-TREE-BRANCH: `Tuning::branch_compare_trees_at_size`.
@@ -1156,6 +1165,11 @@ pub trait Tti {
     /// Tuning `constant_hoisting`.
     fn constant_hoisting(&self) -> bool {
         false
+    }
+
+    /// `Tuning::min_jump_table_density`.
+    fn min_jump_table_density(&self) -> Option<u64> {
+        None
     }
 
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's

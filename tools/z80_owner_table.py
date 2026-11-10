@@ -21,6 +21,9 @@ LEVELS = [("1", "O1"), ("s", "Os"), ("z", "Oz"), ("2", "O2"), ("3", "O3")]
 STRICT = {"O1", "Os", "Oz"}
 RATE = 3  # T-states per byte at O2/O3
 UNRANKED = "UNRANKED (double: ours f64 vs SDCC f32)"
+# SDCC touches only the bytes of a volatile bit-field; the pin keeps the container's width (a volatile load is never
+# narrowed), so the two programs make different accesses to the object (ruling 2026-11-10, volatile_bitfield).
+NOT_LIKE = "NOT-LIKE-FOR-LIKE (volatile bit-field access width)"
 
 
 def read_pairs(path):
@@ -37,7 +40,37 @@ def is_double(source):
     return re.search(r"\bdouble\b", source) is not None
 
 
-def verdict(level, ours, sdcc, double=False):
+def is_volatile_bitfield(source):
+    """A bit-field member of a volatile-qualified object, or a volatile-qualified bit-field.
+
+    A struct or union tag holds a bit-field when its body declares `type name : width;` or names a tag that does. It is
+    volatile when a member of it is declared `volatile`, or an object is: `volatile struct S v;`, `struct S volatile v;`.
+    A volatile object elsewhere in the source, or a bit-field of a plain object, is not enough. A typedef'd tag is not
+    followed: that cell stays ranked."""
+    bodies = {}
+    for m in re.finditer(r"\b(?:struct|union)\s+(\w+)\s*\{([^{}]*)\}", source):
+        bodies[m.group(1)] = m.group(2)
+    field = re.compile(r"(?:^|;)\s*((?:(?:unsigned|signed|const|volatile|int|long|short|char|_Bool)\s+)+)\w+\s*:\s*\d+\s*(?=;)")
+    holds = {tag for tag, body in bodies.items() if field.search(body)}
+    # a tag that holds a member of a tag that holds one
+    grown = True
+    while grown:
+        grown = False
+        for tag, body in bodies.items():
+            if tag not in holds and any(re.search(rf"\b(?:struct|union)\s+{h}\b(?!\s*\{{)", body) for h in holds):
+                holds.add(tag)
+                grown = True
+    for tag, body in bodies.items():
+        for m in field.finditer(body):
+            if re.search(r"\bvolatile\b", m.group(1)):
+                return True
+    return any(
+        re.search(rf"\bvolatile\s+(?:struct|union)\s+{h}\b|\b(?:struct|union)\s+{h}\s+volatile\b", source) is not None
+        for h in holds
+    )
+
+
+def verdict(level, ours, sdcc, double=False, volatile_bitfield=False):
     """The cell's verdict. `ours` is (B, T) or None; `sdcc` {variant: (B, T)}."""
     if ours is None:
         return "UNMEASURED"
@@ -45,6 +78,8 @@ def verdict(level, ours, sdcc, double=False):
         return "NO-SDCC"
     if double:
         return UNRANKED
+    if volatile_bitfield:
+        return NOT_LIKE
     best_b = min(b for b, _ in sdcc.values())
     best_t = min(t for _, t in sdcc.values())
     d_b, d_t = ours[0] - best_b, ours[1] - best_t
@@ -106,7 +141,7 @@ def rows(ours, sdcc, sources):
                     REFUSED.append((prog, name, k, why))
                     del s[k]
             double = is_double(sources.get(prog, ""))
-            v = verdict(name, o, s, double)
+            v = verdict(name, o, s, double, is_volatile_bitfield(sources.get(prog, "")))
             if o is None or not s:
                 out.append((prog, name, o[0] if o else "", o[1] if o else "", "", "", "", "", "", "", v, "", len(s)))
                 continue

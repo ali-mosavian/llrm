@@ -396,7 +396,7 @@ class SizeTests(unittest.TestCase):
             run = mock.Mock(error=None, output=b"1\n", region=mock.Mock(instructions=50, memory_operands=2))
             with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
                 got = bench.measure(("p", exe, exe, "f", ["1"], obj))
-        self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 0, 40))
+        self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 40, 0))
 
 
     def test_a_kernel_main_never_calls_because_its_value_folded_is_a_folded_row_not_an_error(self):
@@ -489,7 +489,7 @@ class TimedOnlyTests(unittest.TestCase):
             obj.write_bytes(test_sizes.object_with(12))
             with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
-        self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
+        self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 40, "bss_bytes": 0})
 
     def test_a_cell_that_calls_library_helpers_says_its_bytes_exclude_them(self):
         """qlight bcc -O2 read 216 B beside ours 389: the long divides were helpers outside code_bytes, unsaid."""
@@ -1206,7 +1206,7 @@ def test_a_kernel_folded_to_a_constant_is_an_error_not_a_row(tmp_path, monkeypat
 
     monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["15007"])
-    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj, *image: (0, 0))
     monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
     monkeypatch.setattr(bench.sizes, "is_elf", lambda obj: False)  # the stubbed object is never written
     monkeypatch.setattr(bench.sizes, "externs", lambda obj: [])
@@ -1253,7 +1253,7 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
     monkeypatch.setattr(bench.icount, "run", fake_run)
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
-    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj, *image: (0, 0))
     monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
     monkeypatch.setattr(bench.sizes, "is_elf", lambda obj: False)  # the stubbed object is never written
     monkeypatch.setattr(bench.sizes, "externs", lambda obj: [])

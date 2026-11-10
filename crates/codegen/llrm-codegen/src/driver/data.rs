@@ -474,6 +474,7 @@ mod tests {
             externs: Vec::new(),
             publics: Vec::new(),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: vec![("_DATA".into(), Vec::new())],
             procedures: Vec::new(),

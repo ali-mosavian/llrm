@@ -2105,7 +2105,8 @@ pub fn emit(
     }
     emitter.mf.blocks.extend(joined);
     emitter.mf.pool = emitter.pool.take();
-    emitter.mf.block_ids = first.layout.clone();
+    emitter.mf.block_ids =
+        emitter.mf.blocks.iter().zip(&first.layout).map(|(block, &id)| (block.label.clone(), id)).collect();
     emitter.mf.edge_probs = first.edge_probs.clone();
     Ok(emitter.mf)
 }

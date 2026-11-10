@@ -2,9 +2,9 @@
 shared tools read it from here and hold no x86 decoder of their own (tests/target_facts.rs)."""
 
 
-def is_pad(one) -> bool:
+def is_pad(one, bits: int = 32) -> bool:
     """An instruction that does nothing and is what an assembler's `.p2align` writes: a nop of any length, or `mov`, `xchg` or `lea` of a register
-    onto itself (`mov esi,esi`, `lea esi,[esi+0]`)."""
+    onto itself (`mov esi,esi`, `lea esi,[esi+0]`). In 64-bit code a dword register moved onto itself clears the register's upper half: code."""
     from iced_x86 import Mnemonic, OpKind
 
     if one.mnemonic == Mnemonic.NOP:
@@ -12,12 +12,21 @@ def is_pad(one) -> bool:
     if one.op_count != 2 or one.op0_kind != OpKind.REGISTER:
         return False
     if one.mnemonic in (Mnemonic.MOV, Mnemonic.XCHG):
+        if bits == 64 and one.op0_register in dword_registers():
+            return False
         return one.op1_kind == OpKind.REGISTER and one.op0_register == one.op1_register
     if one.mnemonic == Mnemonic.LEA:
         from iced_x86 import Register
 
         return one.op1_kind == OpKind.MEMORY and one.memory_base == one.op0_register and one.memory_index == Register.NONE and one.memory_displacement == 0
     return False
+
+
+def dword_registers() -> frozenset:
+    from iced_x86 import Register
+
+    names = ("EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI", *(f"R{n}D" for n in range(8, 16)))
+    return frozenset(getattr(Register, name) for name in names)
 
 
 def padding(content: bytes, bits: int) -> tuple[int, int]:
@@ -38,7 +47,7 @@ def padding(content: bytes, bits: int) -> tuple[int, int]:
             at += 1
             continue
         at += one.len
-        if is_pad(one):
+        if is_pad(one, bits):
             run += one.len
         else:
             total += pad_of(run, one.ip)
