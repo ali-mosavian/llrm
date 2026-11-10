@@ -197,9 +197,11 @@ impl TargetLoweringInfo {
 
     /// AArch64: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
     /// and a shift amount is an `i64`
-    /// (`AArch64TargetLowering::getSetCCResultType`).
+    /// (`AArch64TargetLowering::getSetCCResultType`). The 128-bit integer
+    /// vectors are in `FPR128` (`addQRTypeForNEON`); the builder makes one only
+    /// where `DagConfig::vectors` is on.
     pub fn aarch64() -> TargetLoweringInfo {
-        TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false)
+        TargetLoweringInfo::new(&[MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], false)
             .with_set_cc_result(MVT::I32)
             .with_shift_amount_type(MVT::I64)
             .with_legal_f128()
@@ -339,7 +341,8 @@ mod tests {
         assert!(TargetLoweringInfo::x86_64_sse2().is_type_legal(v));
         assert_eq!(TargetLoweringInfo::x86_64().type_conversion(v), (TypeAction::ScalarizeVector, EVT::I8));
         assert_eq!(TargetLoweringInfo::x86_32().type_action(EVT::Simple(MVT::V2I64)), TypeAction::ScalarizeVector);
-        assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V4I32)), TypeAction::ScalarizeVector);
+        assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V4I32)), TypeAction::Legal);
+        assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V16I8)), TypeAction::Legal);
     }
 
     /// Every target compared into an `i8`; AArch64 compares into an `i32`.

@@ -234,14 +234,32 @@ pub fn pin_vt(vt: EVT) -> Vt {
         // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
         // no pattern asks for it (SD540).
         EVT::Simple(MVT::I128) => mvt::v4i32,
+        EVT::Simple(MVT::V16I8) => mvt::v16i8,
+        EVT::Simple(MVT::V8I16) => mvt::v8i16,
+        EVT::Simple(MVT::V4I32) => mvt::v4i32,
+        EVT::Simple(MVT::V2I64) => mvt::v2i64,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
     }
 }
 
-/// The inverse of [`pin_vt`] for the types a pattern can ask for.
-fn our_vt(vt: Vt) -> EVT {
+/// The inverse of [`pin_vt`] for the types a pattern can ask for. Where the target has
+/// vectors (`DagConfig::vectors`) `v4i32` is the vector, not the x86 opaque 16 bytes.
+fn our_vt(vt: Vt, vectors: bool) -> EVT {
+    if vectors {
+        if let Some(found) = [
+            (mvt::v16i8, MVT::V16I8),
+            (mvt::v8i16, MVT::V8I16),
+            (mvt::v4i32, MVT::V4I32),
+            (mvt::v2i64, MVT::V2I64),
+        ]
+        .into_iter()
+        .find(|(p, _)| *p == vt)
+        {
+            return EVT::Simple(found.1);
+        }
+    }
     [
         (mvt::i1, EVT::I1),
         (mvt::i8, EVT::I8),
@@ -998,7 +1016,7 @@ impl Dag for DagisAdapter<'_> {
         value: i64,
         vt: Vt,
     ) -> PinValue {
-        theirs(self.dag.get_constant_with(value as u128, our_vt(vt), true, false))
+        theirs(self.dag.get_constant_with(value as u128, our_vt(vt, self.dag.config().vectors), true, false))
     }
     fn convert_to_target(
         &mut self,
@@ -1024,7 +1042,7 @@ impl Dag for DagisAdapter<'_> {
         register: u16,
         vt: Vt,
     ) -> PinValue {
-        let node = self.register_node(our_vt(vt), register);
+        let node = self.register_node(our_vt(vt, self.dag.config().vectors), register);
         theirs(node)
     }
     fn copy_to_reg(
@@ -1047,7 +1065,7 @@ impl Dag for DagisAdapter<'_> {
         vt: Vt,
         glue: PinValue,
     ) -> u32 {
-        let vt = our_vt(vt);
+        let vt = our_vt(vt, self.dag.config().vectors);
         let reg = self.register_node(vt, register);
         self.dag.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[ours(chain), reg, ours(glue)]).node
     }
@@ -1058,7 +1076,7 @@ impl Dag for DagisAdapter<'_> {
         vt: Vt,
         glue: Option<PinValue>,
     ) -> u32 {
-        let vt = our_vt(vt);
+        let vt = our_vt(vt, self.dag.config().vectors);
         let mut ops = vec![ours(chain), ours(register)];
         ops.extend(glue.map(ours));
         let vts: &[EVT] = if glue.is_some() { &[vt, EVT::OTHER, EVT::GLUE] } else { &[vt, EVT::OTHER] };
@@ -1077,7 +1095,8 @@ impl Dag for DagisAdapter<'_> {
         vts: &[Vt],
         operands: &[PinValue],
     ) -> u32 {
-        let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
+        let vectors = self.dag.config().vectors;
+        let vts: Vec<EVT> = vts.iter().copied().map(|v| our_vt(v, vectors)).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         self.dag.intern(ISD::Machine(u32::from(opcode)), &vts, &ops, SDNodeFlags::default(), NodeData::None).node
     }
@@ -1088,7 +1107,8 @@ impl Dag for DagisAdapter<'_> {
         vts: &[Vt],
         operands: &[PinValue],
     ) -> (u32, Vec<u32>) {
-        let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
+        let vectors = self.dag.config().vectors;
+        let vts: Vec<EVT> = vts.iter().copied().map(|v| our_vt(v, vectors)).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
@@ -1329,14 +1349,14 @@ impl AddrDag for DagisAdapter<'_> {
             pin::ANY_EXTEND => ISD::AnyExtend,
             other => panic!("the address folds never make pin opcode {other}"),
         };
-        theirs(self.dag.get_node(isd, our_vt(vt), &ops))
+        theirs(self.dag.get_node(isd, our_vt(vt, self.dag.config().vectors), &ops))
     }
     fn get_constant(
         &mut self,
         value: i64,
         vt: Vt,
     ) -> PinValue {
-        theirs(self.dag.get_constant(value as u128, our_vt(vt)))
+        theirs(self.dag.get_constant(value as u128, our_vt(vt, self.dag.config().vectors)))
     }
     fn is_non_temporal(
         &self,
@@ -1351,7 +1371,7 @@ impl AddrDag for DagisAdapter<'_> {
     ) -> PinValue {
         theirs(self.dag.intern(
             ISD::TargetFrameIndex,
-            &[our_vt(vt)],
+            &[our_vt(vt, self.dag.config().vectors)],
             &[],
             SDNodeFlags::default(),
             NodeData::FrameIndex(index),

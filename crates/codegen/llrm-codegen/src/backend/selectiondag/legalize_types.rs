@@ -261,6 +261,11 @@ impl<'a> TypeLegalizer<'a> {
                     self.soften_float_result(value)?;
                     return Ok(true);
                 }
+                // The builder creates a vector only where a register class holds it.
+                TypeAction::ScalarizeVector => {
+                    let op = self.dag.node(value).opcode;
+                    return Err(LegalizeError::Unsupported { op, ty: vt, what: "vector with no register class" });
+                }
             }
         }
         Ok(false)
@@ -284,6 +289,10 @@ impl<'a> TypeLegalizer<'a> {
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
                 TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
+                TypeAction::ScalarizeVector => {
+                    let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
+                    return Err(LegalizeError::Unsupported { op, ty: operand_vt, what: "vector with no register class" });
+                }
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);

@@ -159,6 +159,7 @@ macro_rules! imm_predicates {
 }
 
 imm_predicates! {
+    imm_u64_eq_0 => |i| (i as u64) == 0;
     imm_u64_lt_2 => |i| (i as u64) < 2;
     imm_u64_lt_4 => |i| (i as u64) < 4;
     imm_u64_lt_8 => |i| (i as u64) < 8;
@@ -173,6 +174,9 @@ imm_predicates! {
     imm_u32_lt_256 => |i| (i as u32) < 256;
     imm_u32_lt_65536 => |i| (i as u32) <= u32::from(u16::MAX);
     imm_u32_le_63 => |i| (i as u32) <= 63;
+    imm_u32_1_to_8 => |i| (i as u32) > 0 && (i as u32) < 9;
+    imm_mask_low_8 => |i| (i & 0xff) == 0xff;
+    imm_mask_low_16 => |i| (i & 0xffff) == 0xffff;
     imm_u32_1_to_16 => |i| (i as u32) > 0 && (i as u32) < 17;
     imm_u32_1_to_32 => |i| (i as u32) > 0 && (i as u32) < 33;
     imm_u32_1_to_64 => |i| (i as u32) > 0 && (i as u32) < 65;

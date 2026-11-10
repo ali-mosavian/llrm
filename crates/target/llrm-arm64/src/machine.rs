@@ -79,7 +79,18 @@ pub struct Arm64Machine {
     pub platform: Platform,
 }
 
+/// Whether vector values are taken (ARM64-VEC POC, DEVIATE VECT-LATE): off unless
+/// `LLRM_ARM64_VECTORS` is set, so no scalar compile can change.
+pub fn vectors_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_ARM64_VECTORS").is_some_and(|v| !v.is_empty()))
+}
+
 impl Machine for Arm64Machine {
+    fn has_vector_mir(&self) -> bool {
+        vectors_enabled()
+    }
+
     fn foreign_span(
         &self,
         _selectors: (i64, i64),
