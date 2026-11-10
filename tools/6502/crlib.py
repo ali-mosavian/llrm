@@ -7,6 +7,9 @@ import re, subprocess, threading
 from pathlib import Path
 
 GROUPS = ["int64", "f32", "f32_64", "f64", "clz"]
+# Hand-written members that config/6502/config.h tells the link to include: f64 mul and div call __mul32x32 (SF_MUL32X32_6502) at every level
+# but -O2 folds away, and no group above defines it (float_in_place_update at -O1: Unresolved external '__mul32x32', 2026-11-10).
+ASM_MEMBERS = ["config/6502/mul32x32.s"]
 _LOCK = threading.Lock()
 _INDEX = {}
 _MEMBERS = {}
@@ -22,11 +25,18 @@ def index(rt):
             for line in out.stdout.splitlines():
                 symbol, file, _ = (line.split("\t") + ["", ""])[:3]
                 _INDEX[rt].setdefault(symbol, file)
+            for file in ASM_MEMBERS:
+                for line in (rt / file).read_text().splitlines():
+                    if line.startswith(".export"):
+                        for symbol in line[len(".export"):].split(";")[0].split(","):
+                            _INDEX[rt].setdefault(symbol.strip(), file)
         return _INDEX[rt]
 
 def member(rt, cc, file, flags, target="6502-sim65"):
     """ca65 text of `file` compiled for the 6502 with `flags` (the program's level), cached. Exports are cut to the globals the index names:
     llrm-cc exports statics too, and two members would then define the same helper."""
+    if file in ASM_MEMBERS:
+        return (rt / file).read_text()
     key = (rt, cc, file, tuple(flags), target)
     with _LOCK:
         if key in _MEMBERS:

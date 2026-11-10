@@ -47,6 +47,7 @@ use crate::combine::{Combiner, Visit};
 use crate::combine_phi::UB_IMPLYING;
 use crate::combine_select_bit_test::{select_bit_test, select_icmp_and_and};
 use crate::combine_select_bools::select_of_bools;
+use crate::combine_select_cttz_ctlz::select_cttz_ctlz;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_fabs::select_fcmp_to_fabs;
 use crate::combine_select_into_op::select_into_op;
@@ -74,6 +75,7 @@ const FOLDS: &[Fold] = &[
     bool_to_extension,
     select_fcmp_to_fabs,
     select_with_icmp,
+    select_cttz_ctlz,
     select_icmp_and_and,
     select_bit_test,
     select_op_op,

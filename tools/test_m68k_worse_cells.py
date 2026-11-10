@@ -142,6 +142,31 @@ class Report(unittest.TestCase):
         self.assertIn("dB=+2 B dT=n/a", line)
 
 
+class LinkedSize(unittest.TestCase):
+    """The matrix counted a program's object, so a compiler-rt helper that one column linked was invisible
+    (bitcount_idioms 68000 O2 read ours 386 B against gcc 378 B while gcc linked 30 B more)."""
+
+    def row(self, compiler, code, library="", note=""):
+        return ("m68k-68000", "bitcount_idioms", "O2", compiler, code, "", "", note, library)
+
+    def test_a_reference_that_links_a_helper_is_judged_on_the_linked_size(self):
+        rows = [self.row("ours", 386, 0), self.row("gcc", 378, 30), self.row("clang", 400, 0)]
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+
+    def test_ours_linking_a_helper_counts_it(self):
+        rows = [self.row("ours", 372, 28), self.row("gcc", 378, 0), self.row("clang", 672, 0)]
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+
+    def test_a_reference_with_an_unresolved_helper_is_one_sided_not_judged(self):
+        rows = [self.row("ours", 386, 0), self.row("gcc", 300, "", "unresolved helpers: __paritysi2"), self.row("clang", 672, 0)]
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+        self.assertEqual(one_sided(tsv(*rows)), [("m68k-68000", "bitcount_idioms", "O2", "gcc")])
+
+    def test_ours_with_an_unresolved_helper_is_missing(self):
+        rows = [self.row("ours", 386, "", "unresolved helpers: __x"), self.row("gcc", 378, 0), self.row("clang", 380, 0)]
+        self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "bitcount_idioms", "O2")])
+
+
 if __name__ == "__main__":
     unittest.main()
 
