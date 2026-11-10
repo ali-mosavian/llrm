@@ -261,7 +261,7 @@ fn add_induction_phi(
 }
 
 /// `ID.getConstIntStepValue()`.
-fn const_int_step(
+pub(crate) fn const_int_step(
     se: &ScalarEvolution,
     descriptor: &InductionDescriptor,
 ) -> Option<llrm_analysis::scev::ap::Ap> {

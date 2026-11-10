@@ -55,3 +55,34 @@ fn a_forward_dependence_bounds_the_widening() {
     assert_eq!(count(&text, "store <8 x i16>"), 1, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
 }
+
+/// A copy loop whose induction starts at 8 (exit at 1928) was refused as "No
+/// canonical induction variable"; the pin widens it like the zero-start loop
+/// (VF 8, IC 2): its vector loop counts from its own canonical IV.
+#[test]
+fn an_induction_that_starts_past_zero_is_widened() {
+    let text = run(include_str!("../tests/lv/start8.ll"));
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
+}
+
+/// A fill of an invariant value was refused as "A stored value that is not a
+/// loaded one"; the pin broadcasts it in the preheader and stores the splat
+/// (VF 8, IC 2: remark on `tests/lv/fill.ll`).
+#[test]
+fn a_fill_with_an_invariant_value_stores_a_splat() {
+    let text = run(include_str!("../tests/lv/fill.ll"));
+    assert_eq!(count(&text, "store <8 x i16> %broadcast.splat"), 2, "{text}");
+    assert_eq!(count(&text, "insertelement <8 x i16> poison, i16 %x, i64 0"), 1, "{text}");
+    assert_eq!(count(&text, "store i16"), 0, "{text}");
+}
+
+/// The same fill of a constant needs no instruction: the stores take the
+/// constant splat (the pin prints `splat (i16 7)`).
+#[test]
+fn a_fill_with_a_constant_stores_a_constant_splat() {
+    let text = run(include_str!("../tests/lv/fill_const.ll"));
+    assert_eq!(count(&text, "store <8 x i16> <i16 7,"), 2, "{text}");
+    assert_eq!(count(&text, "insertelement"), 0, "{text}");
+}

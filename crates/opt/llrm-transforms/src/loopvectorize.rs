@@ -43,13 +43,14 @@
 
 use llrm_analysis::aggregate::AggregateAA;
 use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::ivdescriptors::InductionKind;
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_analysis::typebasedaa::TypeBasedAA;
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -58,7 +59,7 @@ use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::tti::Ty;
 use llrm_mir::types::{Type, TypeId};
 
-use crate::loopvectorizelegality::{Legality, can_vectorize};
+use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step};
 use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, plan};
 
 /// `LoopVectorizePass`.
@@ -78,6 +79,8 @@ struct Access {
     align: u64,
     /// For a store, the load whose value it stores.
     stored_load: Option<InstId>,
+    /// For a store of a loop-invariant value, that value (a splat).
+    splat: Option<Operand>,
 }
 
 /// What the transform needs to rewrite a planned loop.
@@ -88,6 +91,8 @@ struct Widening {
     step: InstId,
     step_operand: usize,
     index_ty: TypeId,
+    /// Where a splat of an invariant value is made.
+    preheader: BlockId,
 }
 
 /// Why a loop is left alone (LV: Not vectorizing: ...).
@@ -111,11 +116,19 @@ fn extract(
     se: &mut ScalarEvolution,
     the_loop: Loop,
     legality: &Legality,
-    trip_count: u64,
 ) -> Result<(Vec<Recipe>, Widening), Skipped> {
     let function = cx.function;
     let header = the_loop.get_header();
-    let primary = legality.primary_induction.ok_or(Skipped("No canonical induction variable"))?;
+    // The pin's VPlan makes its own canonical IV, so the original induction may
+    // start anywhere: an integer one stepping by one is all the widening needs.
+    let primary = legality
+        .inductions
+        .iter()
+        .find(|(_, descriptor)| {
+            descriptor.kind == InductionKind::Int && const_int_step(se, descriptor).is_some_and(|step| step.is_one())
+        })
+        .map(|(phi, _)| *phi)
+        .ok_or(Skipped("No integer induction that steps by one"))?;
     if !legality.reductions.is_empty() {
         return Err(Skipped("Reductions are not widened yet"));
     }
@@ -128,6 +141,7 @@ fn extract(
         .ok_or(Skipped("The induction has no step instruction"))?;
     let index_ty = function.instruction(primary).ty;
     let strides = SymbolicStrideMap::default();
+    let preheader = the_loop.get_loop_preheader(function).ok_or(Skipped("The loop has no preheader"))?;
 
     let used_outside = |inst: InstId| -> bool {
         function
@@ -136,6 +150,14 @@ fn extract(
             .is_some_and(|value| function.users(value).iter().any(|one| function.parent(one.user) != Some(header)))
     };
 
+    // Defined before the loop (a constant, an argument, an outer value).
+    let invariant = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(def) => function.parent(def) != Some(header),
+            _ => true,
+        },
+        _ => true,
+    };
     let mut recipes = Vec::new();
     let mut accesses: Vec<Access> = Vec::new();
     let mut step_operand = None;
@@ -191,6 +213,7 @@ fn extract(
                 let size = cx.layout.size_bits(&cx.context.types, value_ty) / 8;
                 let align = align.unwrap_or(size);
                 let mut stored_load = None;
+                let mut splat = None;
                 if is_load {
                     // Every use of the loaded value is a store of this loop
                     // (LVP3).
@@ -208,22 +231,35 @@ fn extract(
                     }
                     recipes.push(Recipe::Load { lane, align });
                 } else {
-                    let stored = match data.operands[0] {
+                    let operand = data.operands[0];
+                    let loaded = match operand {
                         Operand::Value(value) => match function.value(value).def {
                             llrm_mir::module::ValueDef::Instruction(def)
                                 if matches!(function.instruction(def).opcode, Opcode::Load { .. })
                                     && function.parent(def) == Some(header) =>
                             {
-                                def
+                                Some(def)
                             }
-                            _ => return Err(Skipped("A stored value that is not a loaded one")),
+                            _ => None,
                         },
-                        _ => return Err(Skipped("A stored value that is not a loaded one")),
+                        _ => None,
                     };
-                    stored_load = Some(stored);
+                    if let Some(def) = loaded {
+                        stored_load = Some(def);
+                    } else if invariant(operand) {
+                        // A fill: the pin broadcasts a live-in value.
+                        if let Operand::Constant(c) = operand
+                            && !matches!(cx.context.get(c).kind, ConstantKind::Int(_) | ConstantKind::Zero)
+                        {
+                            return Err(Skipped("A stored constant that is not an integer"));
+                        }
+                        splat = Some(operand);
+                    } else {
+                        return Err(Skipped("A stored value that is neither loaded nor loop-invariant"));
+                    }
                     recipes.push(Recipe::Store { lane, align });
                 }
-                accesses.push(Access { inst, is_load, element: value_ty, align, stored_load });
+                accesses.push(Access { inst, is_load, element: value_ty, align, stored_load, splat });
             }
             Opcode::Binary(BinaryOp::Add) if inst != step => {
                 // An index offset: only addresses use it (the accesses use the
@@ -259,19 +295,14 @@ fn extract(
                 }
             }
             Opcode::ICmp(predicate) => {
-                // The exit test: the stepped induction against the trip count
-                // (LVP2).
+                // The exit test: the stepped induction against a loop-invariant
+                // bound (LVP2). The constant trip count (VP3) fixes where the
+                // widened induction meets it.
                 let stepped = function.instruction(step).result.map(Operand::Value);
-                let against_trip = |operand: Operand| {
-                    matches!(
-                        operand,
-                        Operand::Constant(c) if matches!(cx.context.get(c).kind, ConstantKind::Int(n) if n == u128::from(trip_count))
-                    )
-                };
                 let (a, b) = (data.operands[0], data.operands[1]);
-                let exit_compare = (Some(a) == stepped && against_trip(b)) || (Some(b) == stepped && against_trip(a));
+                let exit_compare = (Some(a) == stepped && invariant(b)) || (Some(b) == stepped && invariant(a));
                 if !exit_compare || !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
-                    return Err(Skipped("The exit test is not the stepped induction against the trip count"));
+                    return Err(Skipped("The exit test is not the stepped induction against a loop-invariant bound"));
                 }
                 saw_exit_compare = true;
             }
@@ -286,7 +317,7 @@ fn extract(
     if accesses.is_empty() {
         return Err(Skipped("No memory access to widen"));
     }
-    Ok((recipes, Widening { accesses, step, step_operand, index_ty }))
+    Ok((recipes, Widening { accesses, step, step_operand, index_ty, preheader }))
 }
 
 fn int_constant(
@@ -295,6 +326,42 @@ fn int_constant(
     value: u64,
 ) -> Operand {
     Operand::Constant(context.int(ty, i128::from(value)))
+}
+
+/// `Builder.CreateVectorSplat(vf, scalar)` in the preheader: a constant
+/// splat, or the `insertelement` + `shufflevector` the pin hoists
+/// (`broadcast.splatinsert`, `broadcast.splat`).
+fn broadcast(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    preheader: BlockId,
+    vector_ty: TypeId,
+    vf: u32,
+    scalar: Operand,
+) -> Operand {
+    if let Operand::Constant(c) = scalar {
+        let kind = match context.get(c).kind.clone() {
+            ConstantKind::Int(0) | ConstantKind::Zero => ConstantKind::Zero,
+            _ => ConstantKind::Aggregate(vec![c; vf as usize]),
+        };
+        return Operand::Constant(context.constant(Constant { ty: vector_ty, kind }));
+    }
+    let before = Position::Before(function.terminator(preheader).expect("a terminated preheader"));
+    let poison = Operand::Constant(context.constant(Constant { ty: vector_ty, kind: ConstantKind::Poison }));
+    let zero = Operand::Constant(context.int(context.types.intern(Type::Int(64)), 0));
+    let inserted =
+        function.create_instruction(Opcode::InsertElement, vector_ty, vec![poison, scalar, zero], Flags::default(), Some("broadcast.splatinsert"));
+    function.insert(inserted, before).expect("the preheader");
+    let inserted = Operand::Value(function.instruction(inserted).result.expect("an insertelement"));
+    let shuffled = function.create_instruction(
+        Opcode::ShuffleVector(vec![0; vf as usize]),
+        vector_ty,
+        vec![inserted, poison],
+        Flags::default(),
+        Some("broadcast.splat"),
+    );
+    function.insert(shuffled, before).expect("the preheader");
+    Operand::Value(function.instruction(shuffled).result.expect("a shufflevector"))
 }
 
 /// `VPlan::execute` for the plan: IC parts of each access, the induction
@@ -310,6 +377,7 @@ fn execute(
     };
     let mut wide: Vec<(InstId, Vec<ValueId>)> = Vec::new();
     let mut erased: Vec<InstId> = Vec::new();
+    let mut splats: Vec<(Operand, Operand)> = Vec::new();
     for access in &widening.accesses {
         let before = Position::Before(access.inst);
         let void_ty = function.instruction(widening.accesses.iter().find(|one| !one.is_load).expect("a store").inst).ty;
@@ -356,12 +424,24 @@ fn execute(
                 function.insert(load, before).expect("the access's block");
                 parts.push(function.instruction(load).result.expect("a load"));
             } else {
-                let source = access.stored_load.expect("a store of a load");
-                let value = wide.iter().find(|(old, _)| *old == source).expect("the load comes first").1[part as usize];
+                let value = match (access.stored_load, access.splat) {
+                    (Some(source), _) => Operand::Value(
+                        wide.iter().find(|(old, _)| *old == source).expect("the load comes first").1[part as usize],
+                    ),
+                    (None, Some(scalar)) => match splats.iter().find(|(one, _)| *one == scalar) {
+                        Some((_, made)) => *made,
+                        None => {
+                            let made = broadcast(context, function, widening.preheader, vector_ty, plan.vf, scalar);
+                            splats.push((scalar, made));
+                            made
+                        }
+                    },
+                    (None, None) => unreachable!("a store stores a load or a splat"),
+                };
                 let store = function.create_instruction(
                     Opcode::Store { align: Some(access.align), volatile: false },
                     void_ty,
-                    vec![Operand::Value(value), address],
+                    vec![value, address],
                     Flags::default(),
                     None,
                 );
@@ -437,7 +517,7 @@ impl FunctionPass for LoopVectorize {
                     }
                 };
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
-                let (recipes, widening) = match extract(&cx, se, found, &legality, trip_count) {
+                let (recipes, widening) = match extract(&cx, se, found, &legality) {
                     Ok(found) => found,
                     Err(Skipped(reason)) => {
                         why(unit, &outer, header, &format!("recipes: {reason}"));
