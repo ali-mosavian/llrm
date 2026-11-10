@@ -2596,6 +2596,10 @@ mod palette_tests {
 /// pin stores after the def inside the bundle, before the terminator
 /// (`InlineSpiller::insertSpill`, `std::next(MI)`; SplitKit
 /// `findInsertLocation` likewise stays before the first terminator).
+///
+/// DEVIATE (row S2-BUNDLE-SPILL): an LIR bundle has no position inside it, so
+/// the store is moved here instead of made inside. Exit: 2026-12-01, or when
+/// bundles carry inside positions.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1277-L1299>
 fn place_spill(
     insts: &mut Vec<Inst>,
