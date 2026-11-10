@@ -1,0 +1,45 @@
+//! A constant word several nodes share is loaded into a pair once (3 B and 3 B once against 5 B a store), whichever
+//! store is selected first.
+
+use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+use llrm_z80::compile::{merge_constant_stores, text};
+use llrm_z80::driver::{Level, Request};
+use llrm_z80::regalloc::Class;
+
+/// particle's `bench_particle`: `vz[i] = 1` and the loop counter's initial 1 share the word 1.
+const PARTICLE: &str = include_str!("data/imm_shared_store.ll");
+
+/// -Os moved 15 B with the order the DAG is selected in: the choice for the second of two stores of one constant read
+/// the DAG after the first was selected (`hasOneUse`). The users are counted before selection now, two stores take the
+/// pair, and the variant that stores the immediates again is priced against it: particle keeps its smaller form
+/// (`ld (hl), #1` / `ld (hl), #0`) whichever order selects.
+#[test]
+fn a_shared_constant_word_is_stored_as_immediates_where_that_is_smaller() {
+    let body = text(PARTICLE, "bench_particle", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(body.contains("ld (hl), #1"), "the immediate stores of the shared word 1 were lost:\n{body}");
+}
+
+/// A constant made once and stored from a pair twice becomes two immediate stores, and its `ld rr,nn` goes.
+#[test]
+fn stores_from_a_made_constant_become_immediate_stores() {
+    let store = |slot| Inst::new(Kind::Op("LD16fr"), vec![Operand::Use(Reg::Virt(0)), Operand::Frame(slot), Operand::Imm(0)]);
+    let mut f = MFunction::new("f");
+    f.classes = vec![Class::Gr16];
+    let make = Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(0)), Operand::Imm(1)]);
+    f.blocks = vec![Block { id: 0, insts: vec![make, store(0), store(1)], phis: Vec::new() }];
+    assert!(merge_constant_stores(&mut f));
+    let kinds: Vec<Kind> = f.blocks[0].insts.iter().map(|inst| inst.kind).collect();
+    assert_eq!(kinds, [Kind::Op("LD16fi"), Kind::Op("LD16fi")]);
+    assert_eq!(f.blocks[0].insts[0].operands[0], Operand::Imm(1));
+}
+
+const ONE_STORE: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+    target triple = \"msp430\"\n\
+    define void @f(ptr %p) {\n  store volatile i16 1, ptr %p\n  ret void\n}\n";
+
+/// One store of the constant stays two immediates: 5 B against 3 B and 3 B.
+#[test]
+fn a_constant_word_stored_once_is_two_immediates() {
+    let body = text(ONE_STORE, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(body.contains("ld (hl), #1"), "{body}");
+}

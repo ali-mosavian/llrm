@@ -304,6 +304,9 @@ fn allocated_with(
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
     let splits = split_loop_constant_stores(&mut split) && hoist_constants(&mut split);
+    // the fourth: the stores of a constant a register held, as immediates (`merge_constant_stores`)
+    let mut merged = function.clone();
+    let merges = merge_constant_stores(&mut merged);
     let base = if hoist_constants(&mut hoisted) {
         // the allocator does not see that a byte of a pair is read in place, so a
         // constant kept across a loop can cost more than making it there, or less:
@@ -324,12 +327,26 @@ fn allocated_with(
     } else {
         allocate(function, name, request.level)
     };
-    if !splits {
-        return base;
-    }
-    // stays only where it is cheaper than the best of the two
-    match (base, allocate(split, name, request.level)) {
+    let base = if splits { with_variant(base, split, name, request, false) } else { base };
+    if merges { with_variant(base, merged, name, request, true) } else { base }
+}
+
+/// `best`, or the allocation of `variant` where that is cheaper by `priced_in_loops`. With `strict_o1` a variant
+/// at O1, where the bar is strict on both axes and no rate stands for it, must be no worse on either axis (a byte
+/// for ten clocks is worse than the plain form's on the byte axis).
+fn with_variant(
+    best: Result<Allocated, String>,
+    variant: MFunction,
+    name: &str,
+    request: &Request,
+    strict_o1: bool,
+) -> Result<Allocated, String> {
+    // stays only where it is cheaper than the best so far
+    match (best, allocate(variant, name, request.level)) {
         (Ok(base), Ok(split)) => match (priced_in_loops(&base, request.level), priced_in_loops(&split, request.level)) {
+            (Some(one), Some(other)) if strict_o1 && request.level == Level::O1 => {
+                if other.0 <= one.0 && other.1 <= one.1 && other != one { Ok(split) } else { Ok(base) }
+            }
             (Some(one), Some(other)) if cheaper(request.level, other, one) => Ok(split),
             _ => Ok(base),
         },
@@ -1468,6 +1485,57 @@ fn split_loop_constant_stores(function: &mut MFunction) -> bool {
             function.blocks[b].insts.insert(at, made);
             changed = true;
             at += 2;
+        }
+    }
+    changed
+}
+
+/// The reverse of [`split_loop_constant_stores`]: a constant word made once (`LD16ri`) that stores read from a
+/// pair is stored from the immediate again (`LD16mi`, `LD16fi`: two `ld (hl),n`), the pair gone where no other use
+/// is left. A register held across a loop costs reloads and frame bytes the selection cannot see: the selector
+/// counts the constant's users and takes the pair from two (the pin's `shouldAvoidImmediateInstFormsForSize`), and
+/// this variant is priced against it (`InlineSpiller::reMaterializeFor` re-makes a constant at its use rather than
+/// keep it; here the use is the store itself). Whether anything changed. Linear in the instructions.
+pub fn merge_constant_stores(function: &mut MFunction) -> bool {
+    let mut value_of: llrm_support::hash::HashMap<u32, i64> = llrm_support::hash::HashMap::default();
+    let mut defs: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Def(Reg::Virt(v)) = operand {
+                *defs.entry(*v).or_default() += 1;
+            }
+        }
+        if let (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(value)]) = (inst.kind, &inst.operands[..]) {
+            value_of.insert(*v, *value as i64);
+        }
+    }
+    let mut changed = false;
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        let immediate = match inst.kind {
+            Kind::Op("LD16mr") => "LD16mi",
+            Kind::Op("LD16fr") => "LD16fi",
+            _ => continue,
+        };
+        let Some(Operand::Use(Reg::Virt(v))) = inst.operands.first().cloned() else { continue };
+        let (Some(value), Some(1)) = (value_of.get(&v), defs.get(&v)) else { continue };
+        inst.kind = Kind::Op(immediate);
+        inst.operands[0] = Operand::Imm(*value as _);
+        changed = true;
+    }
+    if changed {
+        let mut used: llrm_support::hash::HashSet<u32> = llrm_support::hash::HashSet::default();
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand {
+                    used.insert(*v);
+                }
+            }
+        }
+        for block in &mut function.blocks {
+            block.insts.retain(|inst| match (inst.kind, &inst.operands[..]) {
+                (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(_)]) => used.contains(v),
+                _ => true,
+            });
         }
     }
     changed
