@@ -292,6 +292,21 @@ pub fn shift_amount_mod(
     Some(dag.get_node(dag.opcode(node), vt, &[first, new_amount]))
 }
 
+/// `tryShiftAmountMod` at selection: every shift left in the DAG, once the
+/// last combine has run. In the combiner it let the known-bits fold read the
+/// bare `~zext n` of `(~zext n) & 63` as a shift by 2^32 or more.
+pub fn shift_amounts_mod(dag: &mut SelectionDAG) {
+    for id in dag.node_ids() {
+        let node = SDValue { node: id, res: 0 };
+        if !matches!(dag.opcode(node), ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr) || !dag.has_users(node) {
+            continue;
+        }
+        if let Some(new) = shift_amount_mod(dag, node) {
+            dag.replace_all_uses_with(node, new);
+        }
+    }
+}
+
 /// `performConditionalSubCombine`: `x - csel(0, q, cc, flags)` where the flags
 /// are the `SUBS x, q` is a `csel` between `x` and the difference the `SUBS`
 /// already computed.

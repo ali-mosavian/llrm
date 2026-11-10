@@ -1,4 +1,5 @@
 // flags: -O2
+// targets: !int16
 // Loops clang turns into ctpop (clear the lowest set bit), cttz and ctlz (shift until a bit shows): the counts reach the backend through the mid-end, not a builtin.
 extern void report(long value);
 

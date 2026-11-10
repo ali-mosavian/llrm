@@ -8,9 +8,12 @@
 //! pointer in a register). Here `va_start(ap)` becomes `store
 //! llrm.vararg.address(), ap`, `va_end(ap)` is dropped (it does nothing for
 //! such a list) and `va_copy(d, s)` becomes a load and a store; `ap` is then
-//! an ordinary slot that SROA promotes.
+//! an ordinary slot that SROA promotes. Where clang leaves `va_arg` an IR
+//! instruction (m68k: `Tti::va_arg_slot`), it is the load, the load of the
+//! value, the step by its size and the store the selector's `expandVAArg`
+//! makes, written here so the list slot has no user SROA cannot see through.
 //!
-//! DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): the pin lowers
+//! DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4): the pin lowers
 //! the intrinsics in selection only. Off unless
 //! `Tuning::promote_va_list`. Exit: the target states `va_list` as a value
 //! the pin's mem2reg understands, or the pin does.
@@ -53,6 +56,7 @@ impl FunctionPass for VaStart {
         if !outer.target().tti().is_some_and(|tti| tti.promote_va_list()) {
             return PreservedAnalyses::all();
         }
+        let slot = outer.target().tti().and_then(|tti| tti.va_arg_slot());
         let calls: Vec<(InstId, Intrinsic)> = unit
             .function
             .walk()
@@ -61,8 +65,19 @@ impl FunctionPass for VaStart {
                 matches!(one, Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy).then_some((inst, one))
             })
             .collect();
-        if calls.is_empty() {
+        let reads: Vec<InstId> = match slot {
+            Some(_) => unit
+                .function
+                .walk()
+                .filter_map(|(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::VaArg).then_some(inst))
+                .collect(),
+            None => Vec::new(),
+        };
+        if calls.is_empty() && reads.is_empty() {
             return PreservedAnalyses::all();
+        }
+        for inst in reads {
+            read_lowered(unit, inst, slot.expect("reads exist only with a slot"));
         }
         let pointer = unit.context.types.ptr(0);
         for (inst, which) in calls {
@@ -126,4 +141,39 @@ fn store(
     let void = unit.function.instruction(before).ty;
     let one = unit.function.create_instruction(Opcode::Store { align: None, volatile: false }, void, vec![value, address], Flags::default(), None);
     unit.function.insert(one, Position::Before(before)).expect("a placed call");
+}
+
+/// `%v = va_arg ptr %ap, ty` as `%p = load ptr, %ap; %v = load ty, %p; %n = gep i8, %p, size; store %n, %ap`: the
+/// selector's `expandVAArg` with the alignment capped to the slot, so the list pointer is never rounded.
+fn read_lowered(
+    unit: &mut Unit,
+    inst: InstId,
+    slot: u32,
+) {
+    let (ty, list) = {
+        let one = unit.function.instruction(inst);
+        (one.ty, one.operands[0])
+    };
+    let types = &unit.context.types;
+    let align = unit.layout.align(types, ty).min(u64::from(slot));
+    // `expandVAArg`: a power-of-two scalar steps by its store size, else the size rounded to the alignment
+    let bytes = unit.layout.store_size(types, ty);
+    let step = if bytes.is_power_of_two() { bytes } else { bytes.next_multiple_of(align.max(1)) };
+    let pointer = unit.context.types.ptr(0);
+    let width = unit.layout.offset_bits(0);
+    let (index_type, byte) = (unit.context.types.int(width), unit.context.types.int(8));
+    let void = unit.context.types.void();
+    let place = |unit: &mut Unit, opcode: Opcode, ty, operands: Vec<Operand>| {
+        let one = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        unit.function.insert(one, Position::Before(inst)).expect("a placed instruction");
+        unit.function.instruction(one).result.map(Operand::Value)
+    };
+    let at = place(unit, Opcode::Load { align: None, volatile: false }, pointer, vec![list]).expect("a pointer");
+    let value = place(unit, Opcode::Load { align: Some(align), volatile: false }, ty, vec![at]).expect("a value");
+    let amount = Operand::Constant(unit.context.int(index_type, step as i128));
+    let next = place(unit, Opcode::GetElementPtr { source: byte }, pointer, vec![at, amount]).expect("a pointer");
+    place(unit, Opcode::Store { align: None, volatile: false }, void, vec![next, list]);
+    let result = unit.function.instruction(inst).result.expect("a va_arg value");
+    unit.function.replace_all_uses_with(result, value);
+    unit.function.erase(inst).expect("a va_arg of no uses");
 }

@@ -1,5 +1,6 @@
-//! At -Os, a run of stores of one literal becomes the literal loaded once into
-//! a dead register, then register stores.
+//! At -Os (and at -O1 on a target that allows it), a run of stores of one
+//! literal becomes the literal loaded once into a dead register, then register
+//! stores.
 //!
 //! # How it works
 //! `mov dword ptr [bp-8],0` is 8 bytes, `mov [bp-8],eax` is 4 and the one `xor
@@ -121,15 +122,26 @@ pub fn shared(
     classes: &RegisterClasses,
 ) -> LirBody {
     let regs = body.regs();
-    // -O1 keeps clocks strict: the shared load is a clock a call (queens +512,
-    // lru +3 clocks at -O1).
-    if !cpu.size && !(cpu.share_literal_stores && cpu.speed_rate) {
+    // Where the target allows it (`share_literal_stores`) a run is also shared
+    // at -O1, where bytes decide (`Profile::bytes_strict`).
+    if !cpu.size && !(cpu.share_literal_stores && (cpu.speed_rate || cpu.bytes_strict())) {
         return body.clone();
     }
     // DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): at -O2/-O3 the load costs
     // a clock a run, so a run is shared only outside any cycle (it runs
     // once a call) and where its bytes at the speed rate outweigh that
-    // clock.
+    // clock. DEVIATE ISS2 (owner x87, exit 2026-11-20, ruled 2026-11-09): at
+    // -O1 the same rule with no rate, so a run outside any cycle is shared
+    // where it saves a byte (nbody -O1 kept 24 immediate stores of its f64
+    // constants, +82 B against gcc's 427 B with 3.8% fewer clocks; the pin
+    // keeps them too). Every changed cell is slower by the `xor` (executed
+    // clocks, tests/run/c at m32 -O1, cell +clk -B): bitcount_u32 +1 -2,
+    // bitcount_u64 +1 -6, clzll_ctzll_64 +3 -6, div_constants_long +14 -28,
+    // div_constants_short +12 -24, div_constants_ulong +10 -20,
+    // double_across_a_call_result +1 -6, fcmp_all +1 -3, frameless +1 -2,
+    // memfuncs_runtime +1 -2, memory_expansion +69 -1944, register_upper_half
+    // +1 -2, spill_store_order +5 -2, u64_shift_select_arms +1 -2,
+    // wrapv_overflow_check +1 -6. No cell above +14 clk but memory_expansion.
     let speed = !cpu.size;
     let cyclic = if speed { blocks_in_cycles(body) } else { Default::default() };
     let rate = if speed && cpu.speed_rate { cpu.speed_milliclocks_per_byte() } else { 0 };

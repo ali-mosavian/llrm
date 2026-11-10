@@ -185,6 +185,12 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether a caller with a `byval` parameter makes no tail call (the pin's `isEligibleForTailCallOptimization`:
+    /// the parameter is a pointer into the argument area a tail call would reuse).
+    fn byval_parameter_blocks_tail_call(&self) -> bool {
+        false
+    }
+
     /// Whether the hook places a call in calling convention `cc` (LLVM's
     /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
     /// as the pin's `CCAssignFnForCall` rejects what it has no table for.

@@ -8,8 +8,8 @@ use std::process::Command;
 /// `object_extent_loop` reported 33564 for 82).
 #[test]
 fn a_call_has_only_its_own_stack_arguments_pushed() {
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
@@ -58,13 +58,13 @@ fn a_call_has_only_its_own_stack_arguments_pushed() {
     }
 }
 
-/// Nine stack words were reserved by one sum and stored through `ix` (`ld bc, #112;
-/// ld -2(ix), c; ld -1(ix), b`: 9 B / 31 T a word) because only areas up to
-/// 16 B were pushed. Each is `ld bc, #k; push bc`, the last argument first.
+/// Nine stack words were reserved by one sum and stored through `ix` (`ld bc,
+/// #112; ld -2(ix), c; ld -1(ix), b`: 9 B / 31 T a word) because only areas up
+/// to 16 B were pushed. Each is `ld bc, #k; push bc`, the last argument first.
 #[test]
 fn a_stack_area_over_sixteen_bytes_is_pushed_last_argument_first() {
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80-wide");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     let args: Vec<String> = (101..=112).map(|k| format!("i16 {k}")).collect();
     std::fs::write(
@@ -104,8 +104,8 @@ fn a_stack_area_over_sixteen_bytes_is_pushed_last_argument_first() {
 /// The stores are chained top word first, so every one is a push.
 #[test]
 fn stack_arguments_that_the_scheduler_would_reorder_are_pushed() {
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80-order");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
@@ -129,5 +129,85 @@ fn stack_arguments_that_the_scheduler_would_reorder_are_pushed() {
             lines.windows(2).all(|pair| pair != ["push bc", "push bc"]),
             "{level}: a reserved area (push bc, push bc, ...) is stored into instead of pushed:\n{text}"
         );
+    }
+}
+
+/// Fourteen volatile loads passed in source order: the last argument is pushed
+/// first, so every value is live in reverse and spills; each stack word was
+/// loaded, spilled, reloaded and pushed (17 B a word). Stored in place from
+/// the spill (6 B a word) the call is smaller and faster; a call with few
+/// spilled words keeps its pushes, which are 1 B where a store is 6.
+#[test]
+fn spilled_stack_words_are_stored_in_place_and_held_ones_are_pushed() {
+    let call = |args: usize| {
+        let calls = vec!["i16"; args].join(", ");
+        let loads: String = (0..args)
+            .map(|i| {
+                format!(
+                    "  %p{i} = getelementptr [{args} x i16], ptr @v, i16 0, i16 {i}\n  %a{i} = load volatile i16, ptr %p{i}\n"
+                )
+            })
+            .collect();
+        let values = (0..args).map(|i| format!("i16 %a{i}")).collect::<Vec<_>>().join(", ");
+        format!(
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
+             @v = global [{args} x i16] zeroinitializer\ndeclare void @f({calls})\n\
+             define void @g() {{\n{loads}  call void @f({values})\n  ret void\n}}\n"
+        )
+    };
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
+    let pushes = |args: usize, level: &str| {
+        let source = dir.join(format!("g{args}.ll"));
+        std::fs::write(&source, call(args)).unwrap();
+        let out = dir.join(format!("g{args}.s"));
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
+            .args(["-S", level, "-o", out.to_str().unwrap(), source.to_str().unwrap()])
+            .output()
+            .expect("the driver runs");
+        assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = std::fs::read_to_string(out).unwrap();
+        text.lines().filter(|line| line.trim() == "push bc").count()
+    };
+    for level in ["-O2", "-Os"] {
+        assert_eq!(pushes(14, level), 0, "{level}: spilled stack words are reloaded to be pushed");
+        assert!(pushes(10, level) >= 4, "{level}: a call with few spilled words lost its pushes");
+    }
+}
+
+/// With a 200 B local the area lies past -128 of `ix`: each stored word became
+/// `ld iy, #k; add iy, sp` and two stores (fcmp_all -Oz, 18366 B to 18654 B;
+/// here 13 sums where the pushes need one). The pushes stay.
+#[test]
+fn a_frame_deeper_than_ix_reaches_keeps_the_pushes() {
+    let args = 14;
+    let calls = vec!["i16"; args].join(", ");
+    let loads: String = (0..args)
+        .map(|i| {
+            format!(
+                "  %p{i} = getelementptr [{args} x i16], ptr @v, i16 0, i16 {i}\n  %a{i} = load volatile i16, ptr %p{i}\n"
+            )
+        })
+        .collect();
+    let values = (0..args).map(|i| format!("i16 %a{i}")).collect::<Vec<_>>().join(", ");
+    let ir = format!(
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
+         @v = global [{args} x i16] zeroinitializer\ndeclare void @f({calls})\ndeclare void @use(ptr)\n\
+         define void @g() {{\n  %big = alloca [200 x i8]\n  call void @use(ptr %big)\n{loads}  call void @f({values})\n  ret void\n}}\n"
+    );
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
+    let source = dir.join("g.ll");
+    std::fs::write(&source, ir).unwrap();
+    for level in ["-O2", "-Os"] {
+        let out = dir.join("g.s");
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
+            .args(["-S", level, "-o", out.to_str().unwrap(), source.to_str().unwrap()])
+            .output()
+            .expect("the driver runs");
+        assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = std::fs::read_to_string(out).unwrap();
+        let sums = text.lines().filter(|line| line.trim() == "add iy, sp").count();
+        assert!(sums <= 2, "{level}: {sums} stack-pointer sums through iy:\n{text}");
     }
 }

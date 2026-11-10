@@ -51,7 +51,7 @@ fn allocations_of(n: usize, tail: &str) -> usize {
     text += "  ret void\n}\n";
     let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = PassManager::default();
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     let before = ALLOCATED.with(Cell::get);
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     ALLOCATED.with(Cell::get) - before

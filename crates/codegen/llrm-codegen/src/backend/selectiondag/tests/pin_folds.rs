@@ -1136,3 +1136,18 @@ fn an_and_with_a_sum_of_a_not_stays_where_the_target_has_no_and_not() {
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Add);
 }
+
+/// `select_cc` on a compare of two constants made `get_setcc` fold the compare to a constant, and `visit_setcc` read
+/// the operands of that constant: `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`) at O1 on
+/// arm64. The pin's `SimplifySelectCC` takes the arm the constant compare names.
+#[test]
+fn a_select_cc_on_a_constant_compare_is_the_arm_it_names() {
+    let mut dag = dag();
+    let (x, y) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let (one, two) = (dag.get_constant(1, EVT::I32), dag.get_constant(2, EVT::I32));
+    let cc = dag.get_cond_code(CondCode::SetLt);
+    let root = dag.get_node(ISD::SelectCC, EVT::I32, &[one, two, x, y, cc]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.get_root(), x, "1 < 2 picks the true arm");
+}

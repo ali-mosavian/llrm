@@ -50,6 +50,13 @@ impl Target for Arm64 {
         "arm64"
     }
 
+    /// `isCheapImmediate` (AArch64InstrInfo.cpp#L1385): a 32-bit constant is
+    /// always cheap; a 64-bit one when `expandMOVImm` makes it in two
+    /// instructions or fewer.
+    fn cheap_move_immediate(&self) -> fn(u8, i64) -> bool {
+        crate::expand_imm::cheap_move_immediate
+    }
+
     fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
         &crate::mc::Arm64Objects
     }
@@ -91,6 +98,37 @@ impl Target for Arm64 {
 
     fn aligned_calls(&self) -> bool {
         CALLING.native().aligned_calls
+    }
+
+    /// The x86 machine phases the pin has no AArch64 pass for
+    /// (`AArch64PassConfig`,
+    /// [AArch64TargetMachine.cpp#L821](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp#L821)
+    /// to L959, adds none of them) or whose facts arm64 lacks. AArch64 does run
+    /// `MachineCombiner`, `PeepholeOptimizer`, `MachineCSE`, `MachineSink`,
+    /// the coalescer, the allocator and the generic post-RA passes: those stay.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("FarIndirectCalls", "x86 real-mode far calls; AArch64 has no segmented call"),
+            ("LoadFold", "x86 memory operands on ALU forms; AArch64 is load/store, only loads and stores touch memory"),
+            ("CmpAsSub", "X86TargetLowering::EmitCmp; AArch64 selection reuses SUBS itself (emitComparison)"),
+            ("CmovConversion", "X86CmovConversion; the pin's AArch64 has EarlyIfConverter and CondBrTuning instead"),
+            ("MaskByAnd", "DEVIATE MA1, movzx versus and: x86 forms, and arm64 states no clocks"),
+            ("X86OptimizeLEAs", "x86 lea; AArch64 has no scaled-address arithmetic instruction"),
+            ("CallFrameOpt", "X86CallFrameOptimization turns movs into pushes; AArch64 has no push"),
+            ("PushFold", "x86 push of a memory operand; AArch64 has no push"),
+            ("FlagsCopy", "X86FlagsCopyLowering; AArch64 keeps NZCV in a register the allocator sees"),
+            ("FixupSetCC", "X86FixupSetCC, setcc then movzx; AArch64 has cset"),
+            ("FloatUnhoist", "x87 stack"),
+            ("FloatFold", "x87 stack"),
+            ("FloatSink", "x87 stack"),
+            ("FloatPrep", "x87 stack"),
+            ("FloatAlloc", "x87 stack; scalar floating point lives in the v registers the greedy allocator assigns"),
+            ("VectorSaves", "Win64 xmm6-15 saves; AArch64's d8-d15 are saved by its frame lowering"),
+            ("FixupBW", "X86FixupBWInsts, partial-register loads; AArch64 loads zero-extend"),
+            ("FixupLEAs", "X86FixupLEAs"),
+            ("LeafFold", "DEVIATE LEAF-FOLD-OS, an x86 -Os join; arm64 states leaf_fold_at_size false"),
+            ("BreakFalseDeps", "x86 partial-register dependency breaking; the pin's AArch64 adds no such pass"),
+        ]
     }
 
     fn frame_register(&self) -> RegId {
@@ -203,6 +241,25 @@ impl Target for Arm64 {
         _width: i64,
     ) -> i64 {
         8
+    }
+
+    /// Issue width and ordering from the pin's scheduling models: `generic` is
+    /// Cortex-A510's, in order and three wide
+    /// ([AArch64SchedA510.td#L19](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64SchedA510.td#L19)),
+    /// `apple-m1` is Cyclone's, out of order and six wide
+    /// ([AArch64SchedCyclone.td#L15](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64SchedCyclone.td#L15)).
+    /// No clocks: arm64 prices through `cost_model` (tti.rs), so a pass that
+    /// asks the profile for a form's clocks is told it has none.
+    fn cpu_table(
+        &self,
+        name: &str,
+    ) -> Option<llrm_target::timings::CpuTable> {
+        let (issue, in_order) = match name {
+            "generic" => (3, true),
+            "apple-m1" => (6, false),
+            _ => return None,
+        };
+        Some(llrm_target::timings::CpuTable { issue, in_order, ..Default::default() })
     }
 
     fn default_cpu(&self) -> &'static str {
@@ -326,7 +383,9 @@ mod tests {
         let names: Vec<&str> = classes.available.iter().map(|one| REGISTER_INFO.name(*one).unwrap()).collect();
         assert_eq!(names.first(), Some(&"x0"));
         assert!(!names.contains(&"x29") && !names.contains(&"sp") && names.contains(&"x28"), "{names:?}");
-        assert!(classes.xmm.is_empty());
+        // No xmm in the file: floats are confined to the fpr class, v0..v31.
+        let float: Vec<RegId> = (0..=31).map(|n| register(&format!("v{n}"))).collect();
+        assert_eq!(classes.xmm, float);
     }
 
     /// A `double` took the stack (the file named no float argument registers):
@@ -348,8 +407,9 @@ mod tests {
     /// pointers, floats at their own size): the trait's defaults answer.
     #[test]
     fn the_trait_defaults_answer_what_arm64_does_not_state() {
-        assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("generic")), (None, 0, None));
-        // An unsupported default is loud: the error names the target and the method.
+        assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("nonesuch")), (None, 0, None));
+        // An unsupported default is loud: the error names the target and the
+        // method.
         let refusal = |text: Result<_, String>| -> String { text.map(|_: ()| ()).unwrap_err() };
         assert_eq!(
             refusal(Arm64.divide_routine(true, true).map(drop)),
@@ -358,6 +418,46 @@ mod tests {
         assert!(refusal(Arm64.huge_fill_routine(4).map(drop)).starts_with("arm64: huge_fill_routine"));
         assert!(refusal(Arm64.huge_copy_routine(false).map(drop)).starts_with("arm64: huge_copy_routine"));
         assert_eq!((Arm64.float_width(4), Arm64.float_width(8)), (4, 8));
+    }
+
+    /// `flow::machine_with` stopped at its CPU profile (no `cpu_table`:
+    /// "unknown CPU target"), then at `cost("movzx")`, then at
+    /// `Segments::of` asking a flat machine for a data segment. The
+    /// pipeline is now built from arm64's own inputs; a profile without
+    /// clocks says so by name.
+    #[test]
+    fn machine_with_builds_for_arm64_and_a_missing_clock_is_named() {
+        use llrm_codegen::backend::{classes::RegisterClasses, cpu::tuned_for, peep::Rules, target::Segments};
+        let profile = tuned_for(&Arm64, "generic", false).expect("generic has a profile");
+        assert_eq!((profile.issue_width, profile.in_order), (3, true));
+        assert!(profile.cost("movzx").unwrap_err().contains("has no cost for movzx"));
+        let regs = llrm_lir::registers::Regs(Arm64.registers());
+        let segments = Segments::of(&Arm64.machine(), regs, Arm64.operand_bytes());
+        assert_eq!(segments.data, None);
+        let phases = llrm_codegen::flow::machine_with(
+            &Default::default(),
+            None,
+            None,
+            None,
+            false,
+            profile,
+            &segments,
+            &std::rc::Rc::new(RegisterClasses::of(&Arm64)),
+            &Rules::NONE,
+            &Arm64.frame_registers(),
+            llrm_codegen::backend::shadow::Selector::Old,
+            &Arm64.omitted_phases().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
+        println!("{} phases: {}", names.len(), names.join(" "));
+        assert_eq!(names.len(), 27, "47 phases less the 20 omitted");
+        for (name, why) in Arm64.omitted_phases() {
+            assert!(!names.contains(name) && !why.is_empty(), "{name}");
+        }
+        for kept in ["MachineCombiner", "PeepholeOptimizer", "MachineCSE", "Coalescer", "RegAlloc", "ControlFlow"] {
+            assert!(names.contains(&kept), "{kept}");
+        }
     }
 
     /// The shared passes' prices are the private driver's: one `Arm64Machine`.

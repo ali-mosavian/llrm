@@ -66,3 +66,15 @@ Wider sweep (`run.py`, `applies`-kept corpus, 116 programs): O2 and Os, base and
 | recmany_o1 | Oz | 750 / 32329350 | 750 / 32329350 | none | - |
 
 WORSE than base on an axis: none
+
+## Z80-ARGPUSH-SPILL (spilled stack words stored in place)
+
+Same harness, base = release/next `62ed3db6e0`, new = + `spilled_args.rs`. Only one cell moves (static counts, -m32-forced): the other 12 are identical at Os/O2/O1/Oz.
+
+| cell | level | before B / T | after B / T | best SDCC B / T |
+|---|---|---|---|---|
+| os_locals_between_pushes (static) | Os | 938 / 131113 | 891 / 130373 | 1201 / 80170 |
+| os_locals_between_pushes (static) | O2, O1 | 1262 / 45609 | 1215 / 44869 | 1201 / 80170 |
+| os_locals_between_pushes (static) | Oz | 946 / 131221 | 899 / 130481 | 1201 / 80170 |
+
+Corpus identity (assembly md5, base vs head, own compiler each side; `tests/run/c` programs `applies` keeps for z80, 117, at O1/O2/Os/Oz = 468 cells): 452 identical; 16 not tested on both sides (bench_io does not build with clang, fixed_point is refused by the backend: `SMulFixSat`, 4 levels each); 1 mover. double_to_int64 O1: 355 -> 346 B code, executed (ucsim, correct output): 1077 -> 1068 B linked, 82310 -> 82219 T. A first head moved fcmp_all Oz 18366 -> 18654 B (stores through `ld iy, #k; add iy, sp` in a frame deeper than ix reaches); the store form now needs the area within -128 of ix, and fcmp_all is identical again.

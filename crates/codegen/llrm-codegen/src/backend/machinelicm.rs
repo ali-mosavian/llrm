@@ -307,7 +307,7 @@ fn candidate(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.spread.is_empty()
-        && !crate::backend::machinesink::as_cheap_as_a_move(one)
+        && !crate::backend::machinesink::as_cheap_as_a_move(one, classes.cheap_move_immediate)
 }
 
 /// An x86 instruction as the shared pass reads it.
