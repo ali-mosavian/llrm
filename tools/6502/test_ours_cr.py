@@ -117,6 +117,18 @@ class Members(unittest.TestCase):
             size = int(open(out).read().split("\t")[2])
         self.assertLess(size, 4000, f"{size} B: the link carried routines the program does not call")
 
+    def test_the_f64_mul_hook_links_at_O1(self):
+        """float_in_place_update at -O1 failed to link on both CPUs: __muldf3 calls the hand-written __mul32x32, which no member defined
+        (Unresolved external '__mul32x32'); -O2 folds the float code away and linked, so the sweeps never saw it (2026-11-10)."""
+        for cpu in ("6502", "65c02"):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "o.tsv")
+                r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O1", out, "float_in_place_update"],
+                                   capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0", "OURS_CPU": cpu}, timeout=600)
+                self.assertEqual(r.returncode, 0, r.stderr[-300:])
+                rows = open(out).read().splitlines()
+            self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
+
     def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
         import crlib
