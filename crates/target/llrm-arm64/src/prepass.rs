@@ -52,8 +52,9 @@ fn pure(op: &Op) -> bool {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
         }
-        // A load from the GOT: the slot is constant memory, so a store in the loop does not
-        // change it (the pin: `PseudoSourceValue::GOT` is constant, `MachineLICM` hoists it).
+        // A load from the GOT: the slot is constant memory, so a store in the
+        // loop does not change it (the pin: `PseudoSourceValue::GOT` is
+        // constant, `MachineLICM` hoists it).
         Op::I(Inst::Load { addr: Addr::PageOffset { got: true, .. }, .. }) => {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
@@ -454,7 +455,8 @@ fn sink(
                     continue;
                 }
                 let Some(register) = defined(op) else { continue };
-                // The zero register is a constant (`isConstantPhysReg`), not a value some definition makes.
+                // The zero register is a constant (`isConstantPhysReg`), not a
+                // value some definition makes.
                 let once = |one: &Reg| definitions.get(one) == Some(&1) || *one == Reg::Gpr(Gpr::R31);
                 if !once(&register) || !(zero || op.defs_and_uses().1.iter().all(once)) {
                     continue;
@@ -634,7 +636,8 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// `register` already reads `earlier`.
 ///
 /// Heuristics 1 (a cheap operation across non-adjacent blocks) and 3 (phi
-/// readers) follow the pin ([MachineCSE.cpp#L435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L435));
+/// readers) follow the pin
+/// ([MachineCSE.cpp#L435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L435));
 /// within one block equal operations always merge (one DAG node in the pin).
 ///
 /// DEVIATE: at `optsize` they always merge (a shared constant is the smaller
@@ -842,7 +845,8 @@ fn invariants(
                         .1
                         .iter()
                         .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
-                    // The zero register is a constant, not a value the loop could change.
+                    // The zero register is a constant, not a value the loop
+                    // could change.
                     && op.defs_and_uses().1.iter().all(|used| used.is_virtual() || *used == Reg::Gpr(Gpr::R31));
                 if invariant {
                     inside_defs.remove(&defined(&op).expect("a definition"));
@@ -1407,12 +1411,7 @@ mod tests {
             },
             MBlock {
                 label: "next".into(),
-                ops: vec![
-                    add(d, b, c),
-                    copy(phi, d),
-                    Op::Return { uses: vec![Reg::Gpr(Gpr(phi))], tail: None },
-                ]
-                .into(),
+                ops: vec![add(d, b, c), copy(phi, d), Op::Return { uses: vec![Reg::Gpr(Gpr(phi))], tail: None }].into(),
             },
         ];
         run(&mut function, false);
@@ -1520,10 +1519,11 @@ mod tests {
         assert_eq!((made(1), made(2)), (1, 0), "{function:#?}");
     }
 
-    /// A phi's constant reaches its edge through copies (`Imm`, `copy`, `copy`),
-    /// and the copies kept the sink from moving it: `movz w9, #1` ran in the
-    /// entry of the `power` of recpow at -O2, took `x9` and not `x0`, and cost
-    /// a `mov x0, x9` on every return (+4.2% net against the pin).
+    /// A phi's constant reaches its edge through copies (`Imm`, `copy`,
+    /// `copy`), and the copies kept the sink from moving it: `movz w9, #1`
+    /// ran in the entry of the `power` of recpow at -O2, took `x9` and not
+    /// `x0`, and cost a `mov x0, x9` on every return (+4.2% net against the
+    /// pin).
     #[test]
     fn a_constant_reaching_its_edge_through_copies_is_made_on_that_edge() {
         let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
@@ -1641,7 +1641,8 @@ mod tests {
             gpr: Gpr(31),
             fpr: Vreg(80),
         });
-        let sum = Op::I(Inst::FpBinary { op: FpBinary::Add, size: FpSize::S, rd: Vreg(81), rn: Vreg(80), rm: Vreg(80) });
+        let sum =
+            Op::I(Inst::FpBinary { op: FpBinary::Add, size: FpSize::S, rd: Vreg(81), rn: Vreg(80), rm: Vreg(80) });
         function.blocks[1].ops.insert(0, sum);
         function.blocks[1].ops.insert(0, zero);
         function.blocks[2].ops = vec![Op::Return { uses: vec![Reg::Fpr(Vreg(81))], tail: None }].into();
