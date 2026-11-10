@@ -317,7 +317,11 @@ fn pays(
         // An `and` with the narrow mask is a zero extension: at the narrow
         // width it is gone, and the `zext` at its users is counted below.
         let kept = if op == BinaryOp::And && constant == Some(mask(bits) as u64) { 0 } else { bits };
-        let gain = tti.narrowing_gain(op, wide, kept, constant);
+        let dies = match instruction.operands[0] {
+            Operand::Value(source) => function.users(source).into_iter().count() == 1,
+            _ => true,
+        };
+        let gain = tti.narrowing_gain(op, wide, kept, constant, dies);
         if gain.clocks < 0 || gain.bytes < 0 {
             return false;
         }

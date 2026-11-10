@@ -153,3 +153,36 @@ exit:
     let after = run(&text, Cpu::M68000);
     assert!(!after.contains("phi i8"), "{after}");
 }
+
+/// Symptom: stft_single/stft_fixed still grew 2 B at 68000 after the exits
+/// were costed: the bit-reversal loop's `x & 1` became `move.l %d3, %d4;
+/// and.b #1, %d4` (6 B) from `moveq #1, %d4; and.l %d3, %d4` (4 B), because
+/// `x` lives on and an immediate form overwrites its operand.
+#[test]
+fn a_cycle_whose_immediate_ands_copy_a_live_operand_stays_a_long() {
+    let text = format!(
+        "{LAYOUT}define i32 @f(i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %r = phi i32 [ 0, %entry ], [ %m, %loop ]
+  %x = phi i32 [ %n, %entry ], [ %y, %loop ]
+  %s = shl i32 %r, 1
+  %b = and i32 %x, 1
+  %o = or i32 %s, %b
+  %m = and i32 %o, 255
+  %y = lshr i32 %x, 1
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 8
+  br i1 %go, label %loop, label %exit
+exit:
+  %out = phi i32 [ %m, %loop ]
+  %v = and i32 %out, 255
+  ret i32 %v
+}}
+"
+    );
+    let after = run(&text, Cpu::M68000);
+    assert!(!after.contains("phi i8"), "{after}");
+}

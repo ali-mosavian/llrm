@@ -141,6 +141,7 @@ impl M68k {
         op: llrm_mir::opcode::BinaryOp,
         bits: u32,
         constant: Option<u64>,
+        source_dies: bool,
     ) -> Option<(i32, i32)> {
         use llrm_mir::opcode::BinaryOp;
         let size = size_letter(bits)?;
@@ -170,13 +171,21 @@ impl M68k {
                 let width = if long { u64::MAX >> 32 } else { (1u64 << bits) - 1 };
                 let value = value & width;
                 let small = value <= 8 || width - value < 8;
+                // The immediate forms overwrite their operand: one that lives
+                // on is copied first.
+                let (copy_clocks, copy_bytes) =
+                    if source_dies { (0, 0) } else { (self.clocks("move.l %d1, %d0", 2)?, 2) };
                 if matches!(op, BinaryOp::Add | BinaryOp::Sub) && small {
-                    form(format!("addq.{size} #4, %d0"), 2);
+                    if let Some(clocks) = self.clocks(&format!("addq.{size} #4, %d0"), 2) {
+                        forms.push((clocks + copy_clocks, 2 + copy_bytes));
+                    }
                 }
-                form(format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 });
+                if let Some(clocks) = self.clocks(&format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 }) {
+                    forms.push((clocks + copy_clocks, if long { 6 } else { 4 } + copy_bytes));
+                }
                 let signed = if long { value as u32 as i32 } else { 0 };
-                if long && (-128..=127).contains(&signed) {
-                    // moveq + register form
+                if long && op != BinaryOp::Sub && (-128..=127).contains(&signed) {
+                    // moveq + register form: the operation commutes
                     if let (Some(load), Some(clocks)) =
                         (self.clocks("moveq #1, %d1", 2), self.clocks(&register(mnemonic), 2))
                     {
@@ -236,8 +245,9 @@ impl Tti for M68k {
         wide_bits: u32,
         narrow_bits: u32,
         constant: Option<u64>,
+        source_dies: bool,
     ) -> llrm_mir::tti::Saving {
-        let gone = |bits| if bits == 0 { Some((0, 0)) } else { self.op_price(op, bits, constant) };
+        let gone = |bits| if bits == 0 { Some((0, 0)) } else { self.op_price(op, bits, constant, source_dies) };
         let (Some(wide), Some(narrow)) = (gone(wide_bits), gone(narrow_bits)) else {
             return llrm_mir::tti::Saving::default();
         };

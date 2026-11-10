@@ -1680,14 +1680,17 @@ pub trait Tti {
     }
 
     /// What `op` at `narrow_bits` saves against `wide_bits` (negative: dearer);
-    /// `constant` is its constant operand; `narrow_bits` 0 is the operation
-    /// gone. Zero where the target does not price it apart.
+    /// `constant` is its constant operand, `source_dies` whether the other
+    /// operand has no use after it (a two-address target copies it
+    /// otherwise); `narrow_bits` 0 is the operation gone. Zero where the
+    /// target does not price it apart.
     fn narrowing_gain(
         &self,
         _op: crate::opcode::BinaryOp,
         _wide_bits: u32,
         _narrow_bits: u32,
         _constant: Option<u64>,
+        _source_dies: bool,
     ) -> Saving {
         Saving::default()
     }
