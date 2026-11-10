@@ -85,9 +85,10 @@ thread_local! {
     static KEPT: std::cell::Cell<Option<Box<Scratch>>> = const { std::cell::Cell::new(None) };
 }
 
-/// The capacity the buffers kept for the next selection hold.
-#[cfg(test)]
-pub(crate) fn kept_capacity() -> usize {
+/// The capacity the buffers kept for the next selection hold (read by the
+/// x86 table's tests).
+#[doc(hidden)]
+pub fn kept_capacity() -> usize {
     let kept = KEPT.take();
     let capacity = kept.as_ref().map_or(0, |one| one.node_stack.capacity() + one.match_scopes.capacity());
     KEPT.set(kept);

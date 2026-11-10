@@ -11,7 +11,7 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
    `d_faces qbq-llrm` number, a `Deletes:` or `Reverts:` line naming every path whose
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
 3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
-4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
+4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean, and `cargo check --bins` of the root package compiles;
 5. the changed .rs files are formatted (tools/fmt.sh);
 5b. no file under crates, runtime or tools is ignored by git (build caches excepted): a bare `target` ignore hid crates/target/**;
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
@@ -158,7 +158,7 @@ def warning_failures(
     """`RUSTFLAGS="-D warnings" cargo check -p <crates> --tests`: its errors, one line each (a dead-code error refused a landing)."""
     if not packages:
         return []
-    # A package whose tests exist only with a feature (llrm-c's `toolchain`) is checked with it: without, its lib tests are a compile_error.
+    # A package whose tests exist only with a feature (llrm-cc's `toolchain`) is checked with it: without, its lib tests are a compile_error.
     features = [f"{package}/{feature}" for package in packages for feature in parity_smoke.LIB_FEATURES.get(package, ())]
     command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)], *(["--features", ",".join(features)] if features else [])])
     done = run(command, cwd=root, capture_output=True, text=True, env={**(env or {}), "RUSTFLAGS": "-D warnings"})
@@ -166,6 +166,23 @@ def warning_failures(
         return []
     errors = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.startswith("error")]
     return [f"cargo check -D warnings: {line[:160]}" for line in errors[:8]] or ["cargo check -D warnings failed"]
+
+
+def bin_failures(
+    root: Path,
+    packages: list[str],
+    run=subprocess.run,
+    env: dict | None = None,
+) -> list[str]:
+    """`cargo check --bins` of the root package, for a PR that changes any crate: a struct field added in a crate left `src/bin/llrm-mir.rs`
+    without it (#8829), and `cargo build --bins` then failed and left stale llrm-cc/llrm-llc in the target dir."""
+    if not packages:
+        return []
+    done = run(slotted(["cargo", "check", "-q", "--bins"]), cwd=root, capture_output=True, text=True, env=env)
+    if not done.returncode:
+        return []
+    errors = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.startswith("error")]
+    return [f"cargo check --bins: {line[:160]}" for line in errors[:8]] or ["cargo check --bins failed"]
 
 
 def lib_failures(
@@ -295,6 +312,7 @@ def precheck(
     why += ignored_sources(root)
     packages = changed_packages(root, files)
     why += warning_failures(root, packages, run, dict(os.environ))
+    why += bin_failures(root, packages, run, dict(os.environ))
     why += lib_failures(root, packages, files, base, run, on_base)
     why += scanner_failures(root, files, base, run)
     why += docs_failures(root, base)

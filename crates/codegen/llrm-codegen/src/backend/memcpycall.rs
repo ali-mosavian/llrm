@@ -91,6 +91,7 @@ pub fn expanded(
     convention: u32,
     symbol: &str,
     inline_variable: bool,
+    rep_movsb: bool,
 ) -> Result<(), String> {
     let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
     // SSE2 is x86-64's baseline, so its pieces are 16 bytes
@@ -106,15 +107,17 @@ pub fn expanded(
         .map_or(4, |layout| if layout.pointer(0).bits == 64 { 16 } else { 4 });
     let mut any = false;
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        any |= calls(context, function, call, widest, inline_variable);
+        any |= calls(context, function, call, widest, inline_variable, rep_movsb);
         Ok(())
     })?;
     if !any {
         return Ok(());
     }
+    // The routine's result is dropped, as `getMemcpy`'s void `RetTy` has it: a copy ending the function is then a
+    // sibling call (the caller's void return matches).
     let (pointer, word, returns) = {
         let types = &module.context.types;
-        (types.ptr(0), types.int(32), types.ptr(0))
+        (types.ptr(0), types.int(32), types.void())
     };
     let ty = module
         .context
@@ -132,7 +135,7 @@ pub fn expanded(
     };
     let reference = module.reference(id);
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        if !calls(context, function, call, widest, inline_variable) {
+        if !calls(context, function, call, widest, inline_variable, rep_movsb) {
             return Ok(());
         }
         let instruction = function.instruction(call).clone();
@@ -150,17 +153,22 @@ pub fn expanded(
                 Operand::Value(function.instruction(made).result.expect("a value"))
             }
         };
+        // `EmitTargetCodeForMemcpy`'s `isTailCall`: the call is a tail call as the intrinsic was.
+        let tail = match &instruction.opcode {
+            Opcode::Call(original) => original.tail,
+            _ => Default::default(),
+        };
         let info = CallInfo {
             function_type: ty,
             calling_convention: convention,
             return_attrs: Vec::new(),
             argument_attrs: vec![Vec::new(); 3],
             attrs: Vec::new(),
-            tail: Default::default(),
+            tail,
         };
         let made = function.create_instruction(
             Opcode::Call(Box::new(info)),
-            pointer,
+            returns,
             vec![dst, src, len, Operand::Constant(reference)],
             Flags::default(),
             None,
@@ -177,6 +185,7 @@ fn calls(
     call: llrm_mir::module::InstId,
     widest: u64,
     inline_variable: bool,
+    rep_movsb: bool,
 ) -> bool {
     let instruction = function.instruction(call);
     let Opcode::Call(info) = &instruction.opcode else { return false };
@@ -201,6 +210,12 @@ fn calls(
             instruction.operands.get(3),
             Some(Operand::Constant(flag)) if matches!(context.get(*flag).kind, ConstantKind::Int(1))
         );
+        // `hasMinSize`: `rep movsb` for any constant size and alignment;
+        // `rep_movsb` says a target takes it at `-Os` too (DEVIATE
+        // REP-MOVS-OS).
+        if rep_movsb || llrm_mir::memory::has(&function.attrs, "minsize") {
+            return false;
+        }
         let limit =
             if llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize") {
                 4

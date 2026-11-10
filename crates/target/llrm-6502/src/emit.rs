@@ -50,6 +50,11 @@ pub mod spill {
     /// The end of a block IR `unreachable` closes (a call that never
     /// returns): control does not fall into the next block. Prints nothing.
     pub const UNREACHABLE: u16 = 0xF004;
+    /// The compare of the carry branch that follows, redone here (operand: the
+    /// branch's condition code), so what `select::expand_selects` puts between
+    /// them runs after the compare, as a phi copy does in the pin. Prints
+    /// nothing.
+    pub const COMPARE: u16 = 0xF005;
 }
 
 #[derive(Clone, Debug)]
@@ -222,6 +227,14 @@ pub fn expand(
             };
             byte3(&mut out, "clc", "adc", &d, &a, &b);
         }
+        // the ninth bit of the sum is C: `ror` brings it back as bit 7
+        op::AVGFLOORU8 | op::AVGCEILU8 => {
+            let (d, a, b) = simple(o)?;
+            writeln!(out, "  {}", if inst.opcode == op::AVGFLOORU8 { "clc" } else { "sec" }).unwrap();
+            copy_byte(&mut out, "a", &a);
+            writeln!(out, "  adc {b}\n  ror a").unwrap();
+            copy_byte(&mut out, &d, "a");
+        }
         op::SUB8 | op::SUBO8 => {
             let (d, a, b) = if inst.opcode == op::SUB8 {
                 simple(o)?
@@ -233,17 +246,26 @@ pub fn expand(
         // The carry in is already in C.
         op::ADDOC8 => byte3(&mut out, "", "adc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
         op::SUBOC8 => byte3(&mut out, "", "sbc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
-        op::AND8 => {
-            let (d, a, b) = simple(o)?;
-            byte3(&mut out, "", "and", &d, &a, &b);
-        }
-        op::OR8 => {
-            let (d, a, b) = simple(o)?;
-            byte3(&mut out, "", "ora", &d, &a, &b);
-        }
-        op::XOR8 => {
-            let (d, a, b) = simple(o)?;
-            byte3(&mut out, "", "eor", &d, &a, &b);
+        // an op reading its second operand through a pointer: `ldy #off; op
+        // (p),y`, a lane at a time
+        code if crate::pointer_alu::pointer_alu(code).is_some() => {
+            let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
+            let ((lo, hi), off) = (word(&o[fold.ptr])?, if fold.indexed { 0 } else { imm(&o[fold.ptr + 1])? });
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
+            let (mnemonic, lanes) = (fold.mnemonic.to_lowercase(), if fold.word { 2 } else { 1 });
+            if let Some(carry) = fold.carry {
+                writeln!(out, "  {}", carry.to_lowercase()).unwrap();
+            }
+            for lane in 0..lanes {
+                let (dest, from) = if fold.word {
+                    let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[fold.a])?);
+                    if lane == 0 { (dl, al) } else { (dh, ah) }
+                } else {
+                    (reg(&o[0])?.to_owned(), reg(&o[fold.a])?.to_owned())
+                };
+                let y = if fold.indexed { reg(&o[fold.ptr + 1])?.to_owned() } else { format!("#{}", off + lane) };
+                writeln!(out, "  ldy {y}\n  lda {from}\n  {mnemonic} ({lo}),y\n  sta {dest}").unwrap();
+            }
         }
         op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {
             let (carry, mnemonic) = match inst.opcode {
@@ -400,6 +422,26 @@ pub fn expand(
                 }
             }
         }
+        // one bit crosses between two words, through the carry of a shift
+        // a byte shifted right by one: the bit that left stays in the carry
+        op::SRL1C8 => {
+            let (d, a): (String, String) = (reg(&o[0])?.into(), reg(&o[2])?.into());
+            copy_byte(&mut out, "a", &a);
+            writeln!(out, "  lsr a").unwrap();
+            copy_byte(&mut out, &d, "a");
+        }
+        op::FSHL1 | op::FSHR1 => {
+            let ((dl, dh), (al, ah), (bl, bh)) = (word(&o[0])?, word(&o[1])?, word(&o[2])?);
+            if inst.opcode == op::FSHL1 {
+                copy_byte(&mut out, &dl, &al);
+                copy_byte(&mut out, &dh, &ah);
+                writeln!(out, "  lda {bh}\n  asl a\n  rol {dl}\n  rol {dh}").unwrap();
+            } else {
+                copy_byte(&mut out, &dl, &bl);
+                copy_byte(&mut out, &dh, &bh);
+                writeln!(out, "  lda {al}\n  lsr a\n  ror {dh}\n  ror {dl}").unwrap();
+            }
+        }
         // rs0 += n; the carry runs from the low byte to the high.
         op::ADJSP => {
             let n = imm(&o[0])? as u16;
@@ -450,11 +492,12 @@ pub fn expand(
             copy_byte(&mut out, &rl, "rc6");
             copy_byte(&mut out, &rh, "rc7");
         }
-        op::UMUL8X8 => {
+        op::UMUL8X8 | op::SMUL8X8 => {
             let (dl, dh) = word(&o[0])?;
             copy_byte(&mut out, "rc2", reg(&o[1])?);
             copy_byte(&mut out, "rc3", reg(&o[2])?);
-            writeln!(out, "  jsr __umulqihi3").unwrap();
+            let routine = if inst.opcode == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" };
+            writeln!(out, "  jsr {routine}").unwrap();
             copy_byte(&mut out, &dl, "a");
             copy_byte(&mut out, &dh, "x");
         }
@@ -531,6 +574,15 @@ pub fn expand(
             let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
             writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
         }
+        // the words' compare, then the high words subtract with its borrow
+        op::CMP32 => {
+            let ((al, ah), (bl, bh), (cl, ch), (dl, dh)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
+            writeln!(
+                out,
+                "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}"
+            )
+            .unwrap();
+        }
         // Z only if both bytes are equal: the first mismatch leaves Z clear.
         op::CMPZ16 => {
             *labels += 1;
@@ -602,7 +654,7 @@ pub fn expand(
         spill::LOAD_CARRY => writeln!(out, "  lda {}\n  lsr a", reg(&o[0])?).unwrap(),
         spill::SAVE_FLAGS => writeln!(out, "  php\n  pla\n  sta {}", reg(&o[0])?).unwrap(),
         spill::LOAD_FLAGS => writeln!(out, "  lda {}\n  pha\n  plp", reg(&o[0])?).unwrap(),
-        spill::UNREACHABLE => {}
+        spill::UNREACHABLE | spill::COMPARE => {}
         other => return Err(format!("opcode {other} has no expansion")),
     }
     Ok(out)

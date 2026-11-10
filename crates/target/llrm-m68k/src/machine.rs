@@ -42,12 +42,42 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    /// Frames keep what the shipped targets ask for (m68k Linux, AmigaOS and
+    /// TOS: 4) and nothing realigns them (`frame.rs`): an object asking more
+    /// is clamped to it, so the optimizer never folds `ptr & 7` to 0 on a
+    /// frame that gives an address ending in 4.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::SHIPPED_STACK_ALIGN as u64)
+    }
+
+    /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
+    /// preferred one, so locals of those are accepted (and clamped to what the
+    /// frame keeps). An object aligned further is kept: the frame realigns
+    /// the stack pointer for it (`frame::Layout`).
+    fn max_alloca_align(&self) -> Option<u64> {
+        None
+    }
+
+    fn realigned_above(&self) -> Option<u64> {
+        Some(crate::frame::REALIGN_ABOVE as u64)
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::lowering::M68kLowering))
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }
 
     fn costs(&self) -> OperationCosts {
         OperationCosts::default()
+    }
+
+    /// Code bytes per operation at this CPU ([`crate::opcosts`]); clocks are
+    /// still one per operation.
+    fn size_costs(&self) -> OperationCosts {
+        crate::opcosts::size_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
     }
 
     /// `d0`..`d7`, `a0`..`a5`.
@@ -79,7 +109,18 @@ pub struct M68k {
     /// The processor the code is for; the 68000 where none is given.
     pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
+    ///
+    /// DEVIATE M68K-TTI-SCALED (owner m68k, review 2026-12-20): the pin's
+    /// `isLegalAddressingMode` is the base class's, which allows `2*r` alone
+    /// and no scale of 4 or 8
+    /// ([TargetLoweringBase.cpp#L2139-L2171](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetLoweringBase.cpp#L2139-L2171));
+    /// the 68020 addresses `(d8, An, Xn*2/4/8)` in one instruction. A hardware
+    /// fact, so the exit is the pin giving M68k its own hook.
     pub scaled_index: bool,
+    /// `CodeSize` in bytes of code, which the inliner counts a callee with
+    /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
+    /// pin's units, where it is false.
+    pub code_size_bytes: bool,
 }
 
 impl M68k {
@@ -90,6 +131,69 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(crate::dagisel::lowering::VA_SLOT)
+    }
+
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
+    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k runs:
+    /// legal 1, custom 2, expanded `SingleCallCost`, by the table the lowering itself
+    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An intrinsic
+    /// that translation does not reach keeps the trait's price.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        _: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        if let Some(Ty::Int(bits)) = ret {
+            thread_local! {
+                static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+                    const { std::cell::RefCell::new(Vec::new()) };
+            }
+            let lowering = LOWERING.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some((_, one)) = cache.iter().find(|(cpu, _)| *cpu == self.cpu) {
+                    return one.clone();
+                }
+                let made = Rc::new(crate::dagisel::lowering::target_lowering_with(self.cpu, true));
+                cache.push((self.cpu, made.clone()));
+                made
+            });
+            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review 2026-12-20): the pin
+            // prices an expansion at 1 under `TCK_CodeSize` (one call); the loop unroller asks
+            // that kind, so a `smul.fix.sat` that expands to dozens of instructions read as
+            // one and the 3x3 loops of `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
+            // Here an expansion costs the same under every kind.
+            let _ = kind;
+            let code_size = false;
+            if let Some(cost) = llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size) {
+                return Cost::of(cost);
+            }
+        }
+        if llrm_mir::tti::is_free_intrinsic(name) {
+            Cost::FREE
+        } else {
+            llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID)
+        }
+    }
+
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        true
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the
@@ -116,6 +220,33 @@ impl Tti for M68k {
         "M68k"
     }
 
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(crate::sizes::call_sequence(self.cpu, shape, kind))
+    }
+
+    fn callee_frame_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        crate::sizes::callee_frame(self.cpu, shape, kind)
+    }
+
+    /// A size build refuses an inline of a callee that stays when it grows
+    /// the code (SZ1): the callee's bytes against the call sequence's.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// The inliner counts a callee in bytes of code (`sizes`).
+    fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
+        Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
+    }
+
     /// `TargetLoweringBase::isLegalAddressingMode`.
     fn is_legal_addressing_mode(
         &self,
@@ -136,19 +267,50 @@ impl Tti for M68k {
         }
     }
 
-    /// The per-target override of `SCEVCheapExpansionBudget`: a limit that
-    /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
-    /// replacing a compare with in a function built for size; the guard and
-    /// the second counter cost more bytes than the compare saved.
+    /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
+    /// limit that costs a single operation (`n - 1`) is repaid by the counter
+    /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more
+    /// (`smax(n, 1)`) is not. Measured at -Os on the matrix at 0, 1 and the
+    /// pin's 4: 1 shrinks partition and memset (4 and 2 B) and changes no
+    /// other cell; 4 grows arrmax, arrsum, copy, countgt, fib and sum by 6 to
+    /// 14 B. The same value serves every level, so no `optsize` split.
+    /// DEVIATE (value; owner m68k, exit none: a per-target table value; the
+    /// pin's budget is 4).
     fn lftr_expansion_budget(
         &self,
-        optsize: bool,
+        _optsize: bool,
     ) -> u32 {
-        // DEVIATE 18 (exit 2026-11-12): from the 68020 on, a `cmp.l` with a
-        // memory limit costs little more than the `subq` of a counter, so the
-        // `smax` guard of the rewritten exit (8 B) is not repaid. The 68000
-        // keeps the pin's 4: there the compare is 10 clk per trip dearer.
-        if optsize || self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 0 } else { 4 }
+        1
+    }
+
+    /// DEVIATE M68K-LSR-FRAME (owner m68k-lsr-addressing, exit none while the
+    /// backend folds `(d8,%sp,Xn)`, `frameindexed.rs`): a stack slot is `%sp`
+    /// and a displacement, so as the base of an address it takes no register.
+    /// The pin counts every `alloca` as one (`llc -debug-only=loop-reduce`,
+    /// d1106deb: 7 regs for 4 stack arrays and 3 IVs). Its M68k has no TTI, so
+    /// the default registers-first order keeps one pointer IV per array (6
+    /// regs); its x86 shares one index (`reg(%a) + 1*reg({0,+,4})`) because
+    /// `X86TTIImpl::isLSRCostLess` ranks instructions first (4 against 7,
+    /// [X86TargetTransformInfo.cpp#L7202](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)),
+    /// not because the slot is free.
+    ///
+    /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
+    /// index-versus-pointer cost via Tti (no per-program patch):
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
+    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
+    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
+    ///   cost the same clocks.
+    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12): pin-faithful.
+    ///   The pin's LSR picks the single IV with a compare for double_to_uint64's
+    ///   loops (`llc -print-after=loop-reduce`); our earlier two-IV
+    ///   end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os, 68020 O1
+    ///   +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B against
+    ///   gcc 330 and clang 386, so below the bar. Closes through the LSR size
+    ///   model (the exit compare's `moveq`+`cmp` is in `insns`, which the
+    ///   registers-first order ignores).
+    fn frame_address_is_free(&self) -> bool {
+        true
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
@@ -188,6 +350,9 @@ impl Tti for M68k {
         ty: Ty,
         kind: CostKind,
     ) -> Cost {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
+            return crate::sizes::cmp_sel(op, ty);
+        }
         Basic.cmp_sel_cost(op, ty, kind)
     }
 
@@ -198,6 +363,9 @@ impl Tti for M68k {
         kind: CostKind,
         indexed: bool,
     ) -> Cost {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
+            return crate::sizes::memory(op, ty, indexed);
+        }
         Basic.memory_op_cost(op, ty, kind, indexed)
     }
 
@@ -206,6 +374,9 @@ impl Tti for M68k {
         phi: bool,
         kind: CostKind,
     ) -> Cost {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
+            return crate::sizes::control_flow(phi);
+        }
         Basic.cf_instr_cost(phi, kind)
     }
 
@@ -242,6 +413,9 @@ impl Tti for M68k {
         from: Ty,
         kind: CostKind,
     ) -> Cost {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
+            return crate::sizes::cast(op, to, from);
+        }
         Basic.cast_cost(op, to, from, kind)
     }
 
@@ -292,16 +466,33 @@ impl Tti for M68k {
         left: OperandInfo,
         right: OperandInfo,
     ) -> Cost {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
+            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020));
+        }
         // DEVIATE: the pin's base class prices a multiply or divide it expands
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
         // line). Past 32 bits the m68k makes a library call of it, and the
         // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
         // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
-        if matches!(op, ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem)
+        if matches!(
+            op,
+            ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
+        )
             && matches!(ty, Ty::Int(bits) if bits > 32)
         {
             return Cost::EXPENSIVE;
         }
         Basic.arithmetic_cost(op, ty, kind, left, right)
+    }
+}
+
+#[cfg(test)]
+mod lftr_tests {
+    use super::*;
+    /// DEVIATE LFTR1: following the pin's step-one rule left byte-loops of
+    /// stride 2..8 unreduced and cost bytes; the knob must stay on here.
+    #[test]
+    fn lftr_counts_any_constant_stride() {
+        assert!(M68k::default().lftr_any_stride());
     }
 }

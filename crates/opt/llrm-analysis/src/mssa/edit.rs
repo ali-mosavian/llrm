@@ -42,6 +42,34 @@ impl Mssa {
         self.accesses[value as usize].phi_users.push(phi);
     }
 
+    /// `MemoryPhi::setIncomingBlock`.
+    pub(crate) fn set_incoming_block(
+        &mut self,
+        phi: AccessId,
+        index: usize,
+        block: BlockId,
+    ) {
+        self.accesses[phi as usize].incoming[index].0 = block;
+    }
+
+    /// `MemoryPhi::unorderedDeleteIncomingIf`: the edges `drop` says go, each
+    /// replaced by the last one, as the pin orders them.
+    pub(crate) fn unordered_delete_incoming_if(
+        &mut self,
+        phi: AccessId,
+        mut drop: impl FnMut(AccessId, BlockId) -> bool,
+    ) {
+        let mut at = 0;
+        while at < self.accesses[phi as usize].incoming.len() {
+            let (block, value) = self.accesses[phi as usize].incoming[at];
+            if drop(value, block) {
+                self.unordered_delete_incoming_value(phi, at);
+            } else {
+                at += 1;
+            }
+        }
+    }
+
     /// One edge of `phi` less in the uses of `value`.
     fn drop_phi_user(
         &mut self,

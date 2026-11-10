@@ -49,6 +49,12 @@ def SDTZ80Cmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SD
 def Z80setcc : SDNode<"Z80ISD::SETCC", SDTZ80Setcc>;
 def Z80cmov : SDNode<"Z80ISD::CMOV", SDTZ80Cmov>;
 def Z80cmp : SDNode<"Z80ISD::CMP", SDTZ80Cmp>;
+// The compare of the next word of a long: a - b - carry, the carry the flags of the word before's compare. The last
+// operand is 1 for a signed order, which the carry is then made to hold.
+def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
+def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
+// The signed order of two words: the carry holds the sign of a - b corrected for overflow.
+def Z80cmps : SDNode<"Z80ISD::CMPS", SDTZ80Cmp>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
 def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -62,6 +68,10 @@ def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SD
 // 65536 bytes).
 def SDTZ80Ldir : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>]>;
 def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, SDNPMayStore]>;
+// A fill of a constant count: the byte stored at the pointer, then `ldir` copying it forward over the next count bytes
+// (so the count is one less than the bytes filled, and nonzero). `de` is made from the pointer by the expansion.
+def SDTZ80Fill : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>]>;
+def Z80ldfill : SDNode<"Z80ISD::LDFILL", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
 // A store to SP + offset in the call frame the callseq opens. The Z80 has no SP-relative store, so the pseudo is
 // expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
 def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
@@ -182,6 +192,12 @@ def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm
 def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d, imm:$v)]>;
 }
 
+// A constant with one user. Several stores of it load it into a pair once (3 B and 20 T each after), which beats
+// 5 B and 26 T a store from two users. The pin's `imm_su` (`shouldAvoidImmediateInstFormsForSize`) counts the users
+// the same way, but only at optsize: x86 prices an immediate store as a register one.
+// DEVIATE Z80-IMM-USES: not gated on optsize. Owner llrm-z80-c, exit 2026-11-30.
+def imm_one_use : PatLeaf<(imm), [{ return N->hasOneUse(); }]>;
+
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
   def LD8rm : Z80Inst<(outs GR8:$d), (ins HLR:$p), "ld $d, ($p)", [(set i8:$d, (load i16:$p))]>;
@@ -196,6 +212,8 @@ let mayLoad = 1, Defs = [A] in
   def LD16rm : Z80Inst<(outs GR16:$d), (ins HLR:$p), "ld16 $d, ($p)", [(set i16:$d, (load i16:$p))]>;
 let mayStore = 1 in
   def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
+  // A constant word: two `ld (hl),n`, no pair to load first (x86's MOV16mi).
+  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm_one_use:$v), i16:$p)]>;
 let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;
@@ -244,6 +262,10 @@ def CMOV16 : Z80Inst<(outs GR16:$d), (ins GR16:$f0, GR16:$t, i8imm:$cc, Flags:$f
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JP : Z80Inst<(outs), (ins brtarget:$t), "jp $t", [(br bb:$t)]>;
 
+// A jump through a table: the word loaded from it is in HL.
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in
+  def JPHL : Z80Inst<(outs), (ins HLR:$p), "jp ($p)", [(brind i16:$p)]>;
+
 let isCall = 1 in
   def CALL : Z80Inst<(outs), (ins calltarget:$t), "call $t", [(Z80call tglobaladdr:$t)]>;
 // a routine the selector names itself (the libcall of a fill or copy of unknown size)
@@ -282,6 +304,8 @@ let mayStore = 1 in {
   def LD8fr : Z80Inst<(outs), (ins GR8:$s, i16imm:$fi, i16imm:$o), "ld $o($fi), $s", []>;
   def LD8fi : Z80Inst<(outs), (ins i8imm:$v, i16imm:$fi, i16imm:$o), "ld $o($fi), $v", []>;
   def LD16fr : Z80Inst<(outs), (ins GR16:$s, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $s", []>;
+  // A constant word: two `ld d(ix), n` (4 B and 19 T each; from a pair 3 B and 19 T), so a constant with one user only.
+  def LD16fi : Z80Inst<(outs), (ins i16imm:$v, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $v", []>;
 }
 def : Pat<(i8 (load frameindex:$fi)), (LD8rf (to_tframeindex $fi), 0)>;
 def : Pat<(i8 (load (add frameindex:$fi, imm:$o))), (LD8rf (to_tframeindex $fi), imm:$o)>;
@@ -291,6 +315,8 @@ def : Pat<(store (i8 imm:$v), frameindex:$fi), (LD8fi imm:$v, (to_tframeindex $f
 def : Pat<(store (i8 imm:$v), (add frameindex:$fi, imm:$o)), (LD8fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR8:$s, frameindex:$fi), (LD8fr GR8:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR8:$s, (add frameindex:$fi, imm:$o)), (LD8fr GR8:$s, (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store (i16 imm_one_use:$v), frameindex:$fi), (LD16fi imm:$v, (to_tframeindex $fi), 0)>;
+def : Pat<(store (i16 imm_one_use:$v), (add frameindex:$fi, imm:$o)), (LD16fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR16:$s, frameindex:$fi), (LD16fr GR16:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR16:$s, (add frameindex:$fi, imm:$o)), (LD16fr GR16:$s, (to_tframeindex $fi), imm:$o)>;
 
@@ -320,9 +346,15 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in
   def LDIRG : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldirg $d, $s, $n", [(Z80ldirg i16:$d, i16:$s, i16:$n)]>;
 let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
   def LDIR : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldir $d, $s, $n", []>;
+// The byte as an immediate (`ld (hl), n`) or in a (`ld (hl), a`), then `ld e,l; ld d,h; inc de; ldir`.
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in {
+  def LDFILLi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, (i8 imm:$v), i16:$n)]>;
+  def LDFILLr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, i8:$v, i16:$n)]>;
+}
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
+def : Pat<(i16 (Z80wrapper tjumptable:$a)), (LD16ri tjumptable:$a)>;
 
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
@@ -340,3 +372,14 @@ def : Pat<(i16 (xor (shl GR16:$x, (i8 8)), GR16:$y)),
 // A byte loaded and widened: the load, and a zero high byte.
 def : Pat<(i16 (zextloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
 def : Pat<(i16 (extloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
+
+// The next word of a long compare: sbc of the two byte pairs with the carry of the compare before, the carry out the
+// long's borrow. Last in the file so the other instructions keep their numbers.
+let Defs = [A] in {
+  def CP16C : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, i16:$b, i8:$c, (i8 imm:$s)))]>;
+  def CP16Ci : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, (i16 imm:$b), i8:$c, (i8 imm:$s)))]>;
+}
+
+// A signed word compare of two registers: the sign of a - b, corrected where the subtract overflowed, into the carry.
+let Defs = [A] in
+  def CP16S : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16s $a, $b", [(set i8:$f, (Z80cmps i16:$a, i16:$b))]>;

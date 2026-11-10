@@ -38,7 +38,7 @@ KNOWN = HERE / "qcport_sweep_known.toml"
 
 @contextlib.contextmanager
 def object_file():
-    """An object path to compile to. llrm-c writes the object only for an `.o` or `.obj` output and the assembly text for any other, `/dev/null` included, so a
+    """An object path to compile to. llrm-cc writes the object only for an `.o` or `.obj` output and the assembly text for any other, `/dev/null` included, so a
     sweep that compiled to the null device never reached the encoder: ui/console.c died there for days while the sweep counted 0 failed."""
     with tempfile.TemporaryDirectory(prefix="sweep-") as directory:
         yield str(Path(directory) / "out.obj")
@@ -113,7 +113,7 @@ def extra_jobs(root: Path = ROOT) -> list[tuple[str, Path, str, str]]:
     machines = [f"-m{mode}" for mode in sorted(found & set(FRONT_END_MODES))]
     benches = [(tool, root / f"bench/bintree/bintree.{ext}", machine, level) for tool, ext in (("llrm-nib", "nib"), ("llrm-qb", "bas")) for machine in machines for level in LEVELS]
     # Borland's call-boundary fixtures (C): an `interrupt` handler with nine register parameters was refused for four days (#2936) because nothing compiled it outside a lib test.
-    callconv = [("llrm-c", source, "-m16", level) for source in sorted((root / "tests/fixtures/callconv/c").glob("*.c")) for level in ("-O1", "-O2")]
+    callconv = [("llrm-cc", source, "-m16", level) for source in sorted((root / "tests/fixtures/callconv/c").glob("*.c")) for level in ("-O1", "-O2")]
     return benches + [("llrm-qb", source, machine, level) for source in qb_flat_programs(root) for machine in machines if not (machine == "-m32" and m16_only(source)) for level in ("-O1", "-O2")] + callconv
 
 
@@ -182,7 +182,7 @@ def first_bad(commits: list[str], is_bad) -> str:
 
 
 def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
-    """(sha, subject) of the first first-parent squash after `good` on which `repro` (a compile of the failing module) fails; `build(sha)` returns the llrm-c path."""
+    """(sha, subject) of the first first-parent squash after `good` on which `repro` (a compile of the failing module) fails; `build(sha)` returns the llrm-cc path."""
     shas = subprocess.run(["git", "log", "--first-parent", "--reverse", "--format=%H", f"{good}..origin/{BRANCH}"], cwd=ROOT, capture_output=True, text=True).stdout.split()
 
     def bad(sha: str) -> bool | None:
@@ -198,15 +198,15 @@ def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
 
 
 def worktree_build(sha: str) -> Path:
-    """llrm-c at `sha`: one worktree, one target, incremental release builds under buildslot at nice 10."""
+    """llrm-cc at `sha`: one worktree, one target, incremental release builds under buildslot at nice 10."""
     tree = Path.home() / "scratch/qcport-sweep-tree"
     if not tree.exists():
         subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), sha], cwd=ROOT, check=True)
     subprocess.run(["git", "checkout", "-q", "--detach", sha], cwd=tree, check=True)
     env = {**os.environ, "CARGO_TARGET_DIR": str(Path.home() / "scratch/qcport-sweep-target")}
     env.pop("RUSTFLAGS", None)
-    subprocess.run(["nice", "-n", "10", str(Path.home() / ".local/bin/buildslot"), "cargo", "build", "--release", "-q", "--bin", "llrm-c"], cwd=tree, env=env, check=True)
-    return Path(env["CARGO_TARGET_DIR"]) / "release/llrm-c"
+    subprocess.run(["nice", "-n", "10", str(Path.home() / ".local/bin/buildslot"), "cargo", "build", "--release", "-q", "--bin", "llrm-cc"], cwd=tree, env=env, check=True)
+    return Path(env["CARGO_TARGET_DIR"]) / "release/llrm-cc"
 
 
 def issue_text(why: str, where: list[tuple[str, str]], head: str, first: tuple[str, str] | None) -> tuple[str, str]:
@@ -215,7 +215,7 @@ def issue_text(why: str, where: list[tuple[str, str]], head: str, first: tuple[s
     mods = ", ".join(sorted({f'{m} {l}' for m, l in where})[:12])
     body = (
         f"TL;DR: compiling QCport's {module}.c at {level} fails on release/next {head[:9]}: `{why}`.\n\n"
-        f"Repro: `llrm-c {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /tmp/out.obj` "
+        f"Repro: `llrm-cc {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /tmp/out.obj` "
         f"(QCPORT=~/scratch/qcport/src, QCPORT_INC=~/scratch/qctc/inc).\n\nFails: {mods}{' ...' if len(where) > 12 else ''}.\n"
         + (f"\nFirst bad squash (first-parent bisection): {first[0][:9]} {first[1]}\n" if first else "")
     )
@@ -231,7 +231,7 @@ def main() -> int:
     args = parser.parse_args()
     qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
-    compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
+    compiler = (args.bin or llrmbin.bin_dir()) / "llrm-cc"
     # The binary names what was swept: origin/release/next moves during a run, and a report must not name a sha it did not test.
     head, dirty = stamp.read(compiler)
     failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)

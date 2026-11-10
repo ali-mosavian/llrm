@@ -24,7 +24,7 @@ TL;DR: POC, not for feat/parity until decided. Target `x86-m64` (ELF64, System V
 
 1. SSE: `float`/`double` in `xmm` registers (a vector register class for the allocator, SysV classification of floats and aggregates, constants, compares, `va_arg` of doubles). x87 stays for `long double`.
 2. `.eh_frame` and CFI from `X86FrameLowering`; `.rodata` for string constants (they sit in `.data`).
-3. The mid-end finds that are not this target's: recursive functions inlined into themselves (fib is 8x clang's size; the clocks inliner's recursive peel, owner cycles-queue-quiet-host).
+3. The mid-end finds that are not this target's: recursive functions inlined into themselves (fib is 8x clang's size; the clocks inliner's recursive peel, owner x86-m64).
 4. Jump tables (position independent: a table of offsets), timings from the scheduling model.
 
 ## Order (dates are targets)

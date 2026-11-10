@@ -43,6 +43,8 @@
 //! only 0 then has a product of 0. Without it a byte-stepped loop kept a second
 //! counter beside the byte index (examples/dot m16: `dec cx` and a spill).
 //! Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.
+//! Not at size: the doubled limit costs an `add` and a `cmp` over the `dec`
+//! (m16 -Os corpus: idioms +51 B, idiom_edges +15, none smaller).
 
 use std::collections::BTreeMap;
 
@@ -108,7 +110,7 @@ fn collect_subexprs(
     };
     match se.node(s).kind.clone() {
         ScevKind::Add(operands) => {
-            for op in operands {
+            for op in operands.iter().copied() {
                 if let Some(remainder) = collect_subexprs(se, cx, op.scev, c, ops, l, depth + 1) {
                     let r = times(se, c, remainder);
                     ops.push(r);
@@ -597,7 +599,8 @@ impl Collection<'_, '_> {
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
             let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
-            let odd = (factor & 1 == 1 && counter_alone) || self.factor_keeps_zero(se, cx, &base, factor, bits);
+            let odd = (factor & 1 == 1 && counter_alone)
+                || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -1233,6 +1236,7 @@ impl Collection<'_, '_> {
             as_written: false,
             other_register_units: self.pressure_units(),
             size: self.size,
+            across_call: self.across_call,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }

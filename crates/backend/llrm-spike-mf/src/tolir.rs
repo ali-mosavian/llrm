@@ -29,10 +29,10 @@
 //! coalescing the copies `eliminateRegSequence` makes
 //! (RegisterCoalescer.cpp#L464). Exit: the lane model, 2026-11-30.
 //!
-//! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
-//! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
-//! loop branch heuristic); every other branch is even. Exit: the odds the
-//! front end knows (the IR's branch weights).
+//! DEVIATE 2: a target whose `MFunction` states no odds (`odds` is `None`)
+//! gets 31 in 32 to stay on a branch with one edge that stays in its loop and
+//! one that leaves (LLVM's loop branch heuristic); every other branch is
+//! even. Exit: each target states the IR's edge probabilities.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -103,11 +103,8 @@ impl<T: Target> Converted<T> {
         let kind_infos = infos.clone();
         let kinds = Rc::new(RefCell::new(UseKindTable::default()));
         let priced = Rc::clone(&kinds);
-        let palettes = self
-            .orders
-            .iter()
-            .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
-            .collect();
+        let palettes = shared_palettes(&self.orders);
+        let originals = palettes.clone();
         let (body, palettes, joined) = llrm_codegen::coalescer::env::coalesce(
             &self.body,
             palettes,
@@ -117,6 +114,8 @@ impl<T: Target> Converted<T> {
             joins_pinned,
             T::joins_sub_registers(),
             T::joins_lanes(),
+            T::joins_loop_carried_first(),
+            T::joins_unnarrowed_for_free(),
             registers,
             Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
@@ -171,11 +170,11 @@ impl<T: Target> Converted<T> {
                     copy_frequency: join.copy_frequency,
                 })
             })),
-            Some(Box::new(is_literal_move)),
-            Some(Box::new(|literal, source, destination, size| {
+            Some(Box::new(|one: &Insn| is_cheap_move::<T>(one))),
+            Some(Box::new(|literal, source, destination, size, alone| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
                     (source.iter().copied().collect(), destination.iter().copied().collect());
-                T::literal_move_wins(literal, &source, &destination, size)
+                literal_remat_wins::<T>(literal, &source, &destination, size, alone)
             })),
             Box::new(move |one, value| {
                 // which of the instruction's operand slots name the value: the
@@ -215,7 +214,10 @@ impl<T: Target> Converted<T> {
             }),
         );
         for (value, order) in self.orders.iter_mut() {
-            if let Some(allowed) = palettes.get(value) {
+            // A set no join narrowed is the one it started as.
+            if let Some(allowed) =
+                palettes.get(value).filter(|now| !originals.get(value).is_some_and(|was| Rc::ptr_eq(now, was)))
+            {
                 order.retain(|register| allowed.contains(register));
             }
         }
@@ -227,12 +229,12 @@ impl<T: Target> Converted<T> {
     /// (`machinesched::scheduled`): each value counts against the pressure set
     /// of its class, whose limit is the registers the class may take.
     ///
-    /// DEVIATE MS6: memory is one lane, a load reads it and a store writes it,
-    /// so no access moves past a store (the pin asks alias analysis).
+    /// Memory is ordered by what each access says it reaches (`Inst::memory`,
+    /// `Insn::may_alias`); an access that says nothing stays ordered with all
+    /// (was DEVIATE MS6, retired 2026-11-09).
     /// DEVIATE MS7: the graph's latencies are the shared defaults, not the
     /// CPU's scheduling model (the pin's generic scheduler reads
-    /// `SchedModel`). Exit for both: an arm64 `SchedModel` and alias queries
-    /// on the spike function.
+    /// `SchedModel`). Exit: an arm64 `SchedModel`.
     pub fn schedule(
         &mut self,
         function: &MFunction<T::Class>,
@@ -289,7 +291,7 @@ impl<T: Target> Converted<T> {
     /// and writes the registers its pinned values stand for, the status flags
     /// (one lane) where it reads or sets them, and memory (one more lane)
     /// where it loads or stores; one with side effects is a barrier.
-    fn with_effects(
+    pub fn with_effects(
         &self,
         function: &MFunction<T::Class>,
         registers: Regs,
@@ -336,6 +338,7 @@ impl<T: Target> Converted<T> {
                         }
                         let mut made = (**one).clone().standing_for(one);
                         made.volatile = made.volatile || inst.side_effects;
+                        made.memory = inst.memory;
                         if let Some(what) = made.what.as_mut() {
                             if what.op == Operation::Nothing && inst.may_store {
                                 what.op = Operation::Binary;
@@ -388,6 +391,7 @@ impl<T: Target> Converted<T> {
             tri: &self.tri,
             lane_pins: true,
             size: false,
+            carry_slot_indexes: true,
         }
     }
 }
@@ -401,7 +405,20 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
-    let widths: Vec<u32> = function.classes.iter().map(|class| class_width::<T>(registers, *class)).collect();
+    // A class's width once, not once per register of it.
+    let mut width_of: Vec<(T::Class, u32)> = Vec::new();
+    let widths: Vec<u32> = function
+        .classes
+        .iter()
+        .map(|class| match width_of.iter().find(|(known, _)| known == class) {
+            Some((_, width)) => *width,
+            None => {
+                let width = class_width::<T>(registers, *class);
+                width_of.push((*class, width));
+                width
+            }
+        })
+        .collect();
     let successors = successors(function);
     let reachable = reachable(&successors);
     let mut made = Made {
@@ -413,6 +430,7 @@ pub fn to_lir<T: Target>(
         values: IndexMap::default(),
         origin: Vec::new(),
         symbols: Vec::new(),
+        block_at: block_positions(function),
         marker: PhantomData::<T>,
     };
     // every physical register is a value before the first instruction, so a
@@ -426,6 +444,7 @@ pub fn to_lir<T: Target>(
     let whole_homes = whole_homes::<T>(function);
     let mut foldable: Vec<Option<(&'static str, usize)>> = Vec::new();
     let clobbered_by_spills = T::spill_clobbers();
+    let mut orders_by_class = Orders::<T>::new(&clobbered_by_spills);
     let mut infos: Vec<(&'static str, Vec<OperandInfo>)> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
@@ -439,7 +458,7 @@ pub fn to_lir<T: Target>(
                 // one copy per part, each with the origin of the `PACK`; the
                 // part is still hinted the lane of the register its whole is
                 // copied to (the join may not reach it: a loop's phi)
-                let (_, mut own, ..) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+                let (_, mut own, ..) = operand_infos::<T>(inst, &function.classes, &mut orders_by_class);
                 hint_lanes::<T>(inst, &whole_homes, registers, &mut own);
                 for (k, lane) in lanes.into_iter().enumerate() {
                     let ordinal = made.origin.len() as i64;
@@ -452,7 +471,7 @@ pub fn to_lir<T: Target>(
                         .iter()
                         .filter(|info| info.def || info.index == k)
                         .cloned()
-                        .map(|info| OperandInfo { index: 0, ..info })
+                        .map(|info| OperandInfo { index: 0, lane: Some((lane.bytes, lane.offset)), ..info })
                         .collect();
                     infos.push((COPY, part));
                     insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
@@ -463,7 +482,7 @@ pub fn to_lir<T: Target>(
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
-            let (name, mut own, sources, dests) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+            let (name, mut own, sources, dests) = operand_infos::<T>(inst, &function.classes, &mut orders_by_class);
             hint_lanes::<T>(inst, &whole_homes, registers, &mut own);
             infos.push((name, own));
             // A copy, spill or reload overwrites the flags a compare set, and
@@ -486,7 +505,7 @@ pub fn to_lir<T: Target>(
                     // the bundle is one instruction to greedy: both ask for it
                     // (the compare's operands come first in it, then the
                     // reader's, after the compare's sources and dests)
-                    let (_, read, ..) = operand_infos::<T>(next, &function.classes, &clobbered_by_spills);
+                    let (_, read, ..) = operand_infos::<T>(next, &function.classes, &mut orders_by_class);
                     let compare = infos.last_mut().expect("the compare's own");
                     compare.0 = BUNDLE;
                     compare
@@ -516,20 +535,27 @@ pub fn to_lir<T: Target>(
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
-    loop_branch_odds(&mut body);
+    match &function.odds {
+        Some(odds) => stated_odds(&mut body, function, odds),
+        None => loop_branch_odds(&mut body),
+    }
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
-        let mut order = T::candidates(*class);
-        order.retain(|register| !clobbered_by_spills.contains(register));
-        orders.insert(v as u32 + 1, order);
+        orders.insert(v as u32 + 1, orders_by_class.of(*class).clone());
     }
     for (value, register) in &made.pins {
         orders.insert(*value, vec![*register]);
     }
     let caller_saved: BTreeSet<RegId> = T::caller_saved().into_iter().collect();
     let mut saved: Vec<RegId> = Vec::new();
+    // Each class once: a class seen again adds nothing the first time did not.
+    let mut seen: Vec<T::Class> = Vec::new();
     for class in &function.classes {
+        if seen.contains(class) {
+            continue;
+        }
+        seen.push(*class);
         for root in T::candidates(*class) {
             if !caller_saved.contains(&T::root(root)) && !saved.contains(&root) {
                 saved.push(root);
@@ -551,16 +577,46 @@ pub fn to_lir<T: Target>(
             foldable,
             infos,
             clobbered: clobbered_by_spills,
+            buffers: call_result_buffers::<T>(function),
             marker: PhantomData,
         },
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
+            size_bytes: T::size_bytes(),
             csr_cost_scale: T::csr_cost_scale(),
             csr_spill_first: T::csr_spill_first(),
             register_cost: T::register_cost,
         },
     })
+}
+
+/// Where each block id is, read once: a branch names its target by id.
+fn block_positions<C>(function: &MFunction<C>) -> llrm_support::hash::HashMap<u32, i64> {
+    BLOCK_WALKS.with(|walks| walks.set(walks.get() + function.blocks.len()));
+    let mut at = llrm_support::hash::HashMap::default();
+    for (position, block) in function.blocks.iter().enumerate() {
+        at.entry(block.id).or_insert(position as i64);
+    }
+    at
+}
+
+/// The odds the `MFunction` states, by block number in `body`. An edge with
+/// none shares what the others leave (`getSuccProbability`).
+fn stated_odds<C>(
+    body: &mut LirBody,
+    function: &MFunction<C>,
+    odds: &crate::placement::Odds,
+) {
+    for block in body.blocks.iter() {
+        let from = function.blocks[block.at as usize].id;
+        for &to in block.succ.iter() {
+            let id = function.blocks[to as usize].id;
+            if let Some((probability, _)) = odds.get(&(from, id)) {
+                body.odds.taken.insert((block.at, to), probability.get_numerator());
+            }
+        }
+    }
 }
 
 /// The edge odds of a branch with one edge that stays in its innermost loop
@@ -600,6 +656,38 @@ fn class_width<T: Target>(
     T::candidates(class).first().and_then(|root| registers.bytes(T::view(*root, class))).map_or(1, |bytes| bytes as u32)
 }
 
+/// The registers greedy may give a virtual register of each class, minus the
+/// ones a spill clobbers: the target is asked once per class, not once per
+/// register or operand.
+struct Orders<T: Target> {
+    clobbered: Vec<RegId>,
+    by_class: Vec<(T::Class, Vec<RegId>)>,
+}
+
+impl<T: Target> Orders<T> {
+    fn new(clobbered: &[RegId]) -> Self {
+        Self { clobbered: clobbered.to_vec(), by_class: Vec::new() }
+    }
+
+    /// The order for `class`; the classes in the order they were first asked
+    /// for.
+    fn of(
+        &mut self,
+        class: T::Class,
+    ) -> &Vec<RegId> {
+        let at = match self.by_class.iter().position(|(known, _)| *known == class) {
+            Some(at) => at,
+            None => {
+                let mut order = T::candidates(class);
+                order.retain(|register| !self.clobbered.contains(register));
+                self.by_class.push((class, order));
+                self.by_class.len() - 1
+            }
+        };
+        &self.by_class[at].1
+    }
+}
+
 struct Made<'f, T: Target> {
     function: &'f MFunction<T::Class>,
     registers: Regs,
@@ -612,6 +700,8 @@ struct Made<'f, T: Target> {
     /// The symbols the function's operands name, in order of first use: the
     /// number a symbol's `Imm` carries as its address.
     symbols: Vec<String>,
+    /// The position of the block each id names (the first, if one repeats).
+    block_at: llrm_support::hash::HashMap<u32, i64>,
     marker: PhantomData<T>,
 }
 
@@ -793,7 +883,7 @@ impl<T: Target> Made<'_, T> {
                     sources.push(Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, i64::from(*slot))), 0)));
                 }
                 Operand::Block(id) => {
-                    target = self.function.blocks.iter().position(|block| block.id == *id).map(|at| at as i64);
+                    target = self.block_at.get(id).copied();
                 }
                 Operand::Def(_) => {}
             }
@@ -863,7 +953,10 @@ impl<T: Target> Made<'_, T> {
             insn.early_clobbers = insn.defines.clone();
         }
         if inst.call {
-            insn.clobbers = T::caller_saved().into_iter().collect();
+            insn.clobbers = match &inst.call_clobbers {
+                Some(known) => known.as_ref().clone(),
+                None => T::caller_saved().into_iter().collect(),
+            };
             // The call writes each clobbered register it names: a value that
             // lives across it cannot be the register, and a read after it
             // sees what the call left.
@@ -929,6 +1022,13 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
 
 thread_local! {
     static OPERAND_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BLOCK_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many blocks this thread has walked to resolve branch targets, for a
+/// test to bound it.
+pub fn block_walks() -> usize {
+    BLOCK_WALKS.with(std::cell::Cell::get)
 }
 
 /// How many instructions this thread has read the whole operand table of (the
@@ -982,6 +1082,10 @@ struct OperandInfo {
     /// What the instruction costs in each, aligned with `order`
     /// (`Target::operand_cost`).
     costs: Vec<u32>,
+    /// For the part of a lane-built pair: the bytes and offset of the lane the
+    /// copy writes. A copy greedy makes beside it, of the whole pair, is
+    /// another instruction.
+    lane: Option<(u32, u32)>,
 }
 
 impl OperandInfo {
@@ -1000,7 +1104,7 @@ impl OperandInfo {
             }
             _ => None,
         };
-        Self { def, index, hint, order, costs }
+        Self { def, index, hint, order, costs, lane: None }
     }
 
     /// The cheapest this instruction is in any of `registers` it prices.
@@ -1030,8 +1134,15 @@ fn operands_in<'a>(
     if what.name.as_deref() != Some(name) {
         return Vec::new();
     }
+    let lane_dest = |bytes: u32, offset: u32| {
+        matches!(
+            what.dests.first(),
+            Some(Loc::Held(held)) if held.width == bytes && held.offset == offset
+        )
+    };
     infos
         .iter()
+        .filter(|info| info.lane.is_none_or(|(bytes, offset)| lane_dest(bytes, offset)))
         .filter_map(|info| {
             let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
             match loc {
@@ -1131,26 +1242,21 @@ fn hint_lanes<T: Target>(
 fn operand_infos<T: Target>(
     inst: &Inst,
     classes: &[T::Class],
-    clobbered: &[RegId],
+    orders: &mut Orders<T>,
 ) -> (&'static str, Vec<OperandInfo>, usize, usize) {
     let Kind::Op(name) = inst.kind else { return ("", Vec::new(), 0, 0) };
     let (mut sources, mut dests) = (0, 0);
     let mut infos = Vec::new();
-    let order_of = |v: u32| {
-        let mut order = T::candidates(classes[v as usize]);
-        order.retain(|register| !clobbered.contains(register));
-        order
-    };
     for (at, operand) in inst.operands.iter().enumerate() {
         match operand {
             Operand::Use(Reg::Virt(v)) => {
-                infos.push(OperandInfo::new::<T>(inst, at, false, sources, order_of(*v)));
+                infos.push(OperandInfo::new::<T>(inst, at, false, sources, orders.of(classes[*v as usize]).clone()));
                 sources += 1;
             }
             Operand::Use(Reg::Phys(register)) if !T::reserved(T::root(*register)) => sources += 1,
             Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => sources += 1,
             Operand::Def(Reg::Virt(v)) => {
-                infos.push(OperandInfo::new::<T>(inst, at, true, dests, order_of(*v)));
+                infos.push(OperandInfo::new::<T>(inst, at, true, dests, orders.of(classes[*v as usize]).clone()));
                 dests += 1;
             }
             Operand::Def(Reg::Phys(register)) if !T::reserved(T::root(*register)) => dests += 1,
@@ -1173,10 +1279,22 @@ pub struct SpikeInstrInfo<T: Target> {
     infos: Vec<(&'static str, Vec<OperandInfo>)>,
     /// `Target::spill_clobbers`: no value is held in one.
     clobbered: Vec<RegId>,
+    /// `call_result_buffers`: frame objects a call fills and loads read back.
+    buffers: BTreeSet<i64>,
     marker: PhantomData<T>,
 }
 
 impl<T: Target> SpikeInstrInfo<T> {
+    /// A load of one of `buffers`: any other load of a frame slot is a local
+    /// variable that other instructions write.
+    fn is_known_buffer_load(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        is_buffer_load::<T>(one)
+            && one.what.as_ref().and_then(frame_cell).is_some_and(|addr| self.buffers.contains(&addr.disp))
+    }
+
     fn operands_of(
         &self,
         one: &Insn,
@@ -1237,23 +1355,309 @@ impl<T: Target> SpikeInstrInfo<T> {
     }
 }
 
+/// Whether the coalescer makes the literal `literal` again for a copy from a
+/// value in `source` to one in `destination`. DEVIATE C10
+/// (register_coalescer.rs): at -Os a constant that stays read (`!alone`) is not
+/// made again unless the target says the move is no longer than the copy; the
+/// target's price decides the rest.
+pub fn literal_remat_wins<T: Target>(
+    literal: &Insn,
+    source: &[RegId],
+    destination: &[RegId],
+    size: bool,
+    alone: bool,
+) -> bool {
+    (!size || alone || T::literal_move_is_copy_sized(literal))
+        && T::literal_move_wins(literal, source, destination, size)
+}
+
+/// [`is_literal_move`], or the cheap move that reads registers
+/// ([`Target::remat_reads_registers`]): the pin's `isReMaterializable` takes a
+/// virtual-register use and `allUsesAvailableAt` asks at the copy whether it
+/// still holds (the callers do).
+fn is_cheap_move<T: Target>(one: &Insn) -> bool {
+    is_literal_move(one)
+        || (T::remat_reads_registers() && is_move_with_reads(one, false))
+        || (T::remats_symbol_addresses() && one.uses.is_empty() && is_move_with_reads(one, true))
+}
+
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
 fn is_literal_move(one: &Insn) -> bool {
+    one.uses.is_empty() && is_move_with_reads(one, false)
+}
+
+/// [`is_literal_move`] that may read registers: the registers it reads, then
+/// the identity of the operation.
+fn is_move_with_reads(
+    one: &Insn,
+    symbol: bool,
+) -> bool {
     let Some(what) = one.what.as_ref() else { return false };
     one.defines.len() == 1
-        && one.uses.is_empty()
         && one.group.is_none()
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.clobbers.is_empty()
-        && one.symbol != Some(true)
+        && (symbol || one.symbol != Some(true))
+        // a lane def makes part of its value: making it again does not
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
         && what.op == Operation::Move
         && matches!(
             what.dests.as_slice(),
             [Loc::Held(held)] if held.value == one.defines[0]
         )
-        && matches!(what.sources.as_slice(), [Loc::Imm(_)])
+        && matches!(
+            what.sources.as_slice(),
+            [reads @ .., Loc::Imm(_)] if reads.iter().all(|loc| matches!(loc, Loc::Held(held) if one.uses.contains(&held.value)))
+        )
+}
+
+/// One register written by a load of a frame slot of an incoming argument.
+fn is_frame_load<T: Target>(one: &Insn) -> bool {
+    is_named_frame_load(one, T::is_invariant_argument_load)
+}
+
+/// One register written by a load of a frame object a call fills
+/// (`call_result_buffers`).
+fn is_buffer_load<T: Target>(one: &Insn) -> bool {
+    is_named_frame_load(one, T::is_buffer_load)
+}
+
+fn is_named_frame_load(
+    one: &Insn,
+    named: fn(&str) -> bool,
+) -> bool {
+    let Some(what) = one.what.as_ref() else { return false };
+    what.name.as_deref().is_some_and(named)
+        && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
+        && !one.volatile
+        && matches!(
+            what.dests.as_slice(),
+            [Loc::Held(held)] if held.value == one.defines[0]
+        )
+        && frame_cell(what).is_some()
+}
+
+/// The frame slot a load reads: its one memory source, the rest immediates (the
+/// displacement a pin row names beside it).
+fn frame_cell(what: &Semantics) -> Option<Addr> {
+    let mut found = None;
+    for place in &what.sources {
+        match place {
+            Loc::Mem(cell) if found.is_none() => found = cell.addr.filter(|addr| addr.space == Space::Frame),
+            Loc::Imm(imm) if imm.address.is_none() => {}
+            _ => return None,
+        }
+    }
+    found
+}
+
+/// The values defined once by a load of an incoming stack argument (a frame
+/// slot below zero) that nothing in `body` writes or takes the address of.
+fn incoming_argument_loads<T: Target>(body: &LirBody) -> BTreeSet<u32> {
+    let incoming = |addr: Addr| addr.space == Space::Frame && addr.disp < 0;
+    let mut written: BTreeSet<i64> = BTreeSet::new();
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Address(a) if a.addr.is_some_and(incoming) => return BTreeSet::new(),
+                Loc::Imm(imm) if imm.address.is_some_and(incoming) => return BTreeSet::new(),
+                _ => {}
+            }
+        }
+        for place in &what.dests {
+            if let Loc::Mem(cell) = place {
+                if let Some(addr) = cell.addr.filter(|addr| incoming(*addr)) {
+                    written.insert(addr.disp);
+                }
+            }
+        }
+        if what.op == Operation::Address {
+            if let Some(addr) = what.sources.iter().find_map(|place| match place {
+                Loc::Mem(cell) => cell.addr.filter(|addr| incoming(*addr)),
+                _ => None,
+            }) {
+                written.insert(addr.disp);
+            }
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_frame_load::<T>(one))
+        .filter_map(|one| {
+            let Some(what) = one.what.as_ref() else { return None };
+            let addr = frame_cell(what).filter(|addr| incoming(*addr))?;
+            (!written.contains(&addr.disp) && definitions.get(&one.defines[0]) == Some(&1)).then_some(one.defines[0])
+        })
+        .collect()
+}
+
+/// The values defined once by a load of a buffer, with the cell each reads.
+fn buffer_loads<T: Target>(
+    body: &LirBody,
+    buffers: &BTreeSet<i64>,
+) -> Vec<(u32, (i64, u32))> {
+    if buffers.is_empty() {
+        return Vec::new();
+    }
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_buffer_load::<T>(one))
+        .filter_map(|one| {
+            let what = one.what.as_ref()?;
+            let addr = frame_cell(what).filter(|addr| buffers.contains(&addr.disp))?;
+            let Some(Loc::Held(held)) = what.dests.first() else { return None };
+            (definitions.get(&one.defines[0]) == Some(&1)).then(|| (one.defines[0], (addr.disp, held.width)))
+        })
+        .collect()
+}
+
+/// DEVIATE R-BUF1 (owner greedy-subreg, exit 2026-11-20): the frame objects a
+/// call fills and only loads read, each load straight after that call. The
+/// pin remakes a load only from an immutable object. Here the address of the
+/// object is stored once into the arguments of one call (copies aside) and
+/// reaches nothing else, so that call is the one write to the object; every
+/// load of it follows that call in its block with no call between, so a value
+/// loaded is the object's content wherever the value lives, and a load made
+/// again where it is read gives the same value.
+fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
+    let mut found = BTreeSet::new();
+    let mut frames: BTreeSet<i32> = BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let Some(frame) = T::frame_address(inst) {
+            frames.insert(frame);
+        }
+    }
+    // uses of each virtual register in the whole function
+    let mut uses: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Use(Reg::Virt(v)) = operand {
+                *uses.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    'frames: for frame in frames {
+        let mut taker: Option<(usize, usize)> = None;
+        let mut loads: Vec<(usize, usize)> = Vec::new();
+        for (b, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                if !inst.operands.iter().any(|o| matches!(o, Operand::Frame(f) if *f == frame)) {
+                    continue;
+                }
+                if T::frame_address(inst) == Some(frame) {
+                    if taker.replace((b, i)).is_some() {
+                        continue 'frames;
+                    }
+                } else if let Kind::Op(name) = inst.kind
+                    && T::is_buffer_load(name)
+                    && inst.operands.iter().any(|o| matches!(o, Operand::Def(_)))
+                {
+                    loads.push((b, i));
+                } else {
+                    continue 'frames;
+                }
+            }
+        }
+        let Some((tb, ti)) = taker else { continue };
+        // the address, from its definition to the first call
+        let block = &function.blocks[tb];
+        let mut holders: BTreeSet<u32> = BTreeSet::new();
+        let mut in_window = 0usize;
+        let mut call = None;
+        let mut spreads = false;
+        let takes = &block.insts[ti];
+        let mut phys_holders = false;
+        for operand in &takes.operands {
+            match operand {
+                Operand::Def(Reg::Virt(v)) => {
+                    holders.insert(*v);
+                }
+                Operand::Def(Reg::Phys(_)) => phys_holders = true,
+                _ => {}
+            }
+        }
+        for (i, inst) in block.insts.iter().enumerate().skip(ti + 1) {
+            if inst.call {
+                call = Some(i);
+                break;
+            }
+            let reads: Vec<(usize, Reg)> = inst
+                .operands
+                .iter()
+                .enumerate()
+                .filter_map(|(at, o)| if let Operand::Use(r) = o { Some((at, *r)) } else { None })
+                .collect();
+            let reads_address = reads
+                .iter()
+                .any(
+                    |(_, r)| match r {
+                        Reg::Virt(v) => holders.contains(v),
+                        Reg::Phys(_) => phys_holders,
+                    },
+                );
+            if !reads_address {
+                continue;
+            }
+            let is_copy = inst.kind == Kind::Copy;
+            let is_store = inst.may_store && !inst.operands.iter().any(|o| matches!(o, Operand::Def(_)));
+            if !is_copy && !is_store {
+                spreads = true;
+            }
+            for (_, r) in &reads {
+                if let Reg::Virt(v) = r {
+                    if holders.contains(v) {
+                        in_window += 1;
+                    }
+                }
+            }
+            if is_copy {
+                for operand in &inst.operands {
+                    if let Operand::Def(Reg::Virt(v)) = operand {
+                        holders.insert(*v);
+                    }
+                }
+            }
+        }
+        let Some(call) = call else { continue };
+        let total: usize = holders.iter().map(|v| uses.get(v).copied().unwrap_or(0)).sum();
+        if spreads || total != in_window {
+            continue;
+        }
+        // every load follows the call in its block, with no call between
+        for (b, i) in &loads {
+            let ok = *b == tb && *i > call && !function.blocks[*b].insts[call + 1..*i].iter().any(|inst| inst.call);
+            if !ok {
+                continue 'frames;
+            }
+        }
+        found.insert(i64::from(frame));
+    }
+    found
 }
 
 /// How wide `insn` holds `value`.
@@ -1306,22 +1710,48 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_literal_move(one)
+        is_cheap_move::<T>(one) || is_frame_load::<T>(one) || self.is_known_buffer_load(one)
     }
 
     fn is_trivially_re_materializable(
         &self,
         def: &Insn,
-        _invariant: bool,
+        invariant: bool,
     ) -> bool {
-        self.remat_shape(def)
+        let r = is_cheap_move::<T>(def) || (invariant && (is_frame_load::<T>(def) || self.is_known_buffer_load(def)));
+        r
     }
 
     fn argument_loads(
         &self,
-        _body: &LirBody,
+        body: &LirBody,
     ) -> BTreeSet<u32> {
-        BTreeSet::new()
+        let mut found = incoming_argument_loads::<T>(body);
+        found.extend(buffer_loads::<T>(body, &self.buffers).into_iter().map(|(value, _)| value));
+        found
+    }
+
+    fn argument_load_defs(
+        &self,
+        body: &LirBody,
+    ) -> BTreeSet<(i64, u32)> {
+        buffer_loads::<T>(body, &self.buffers).into_iter().map(|(_, cell)| cell).collect()
+    }
+
+    fn remat_load_cell(
+        &self,
+        one: &Insn,
+    ) -> Option<(i64, u32)> {
+        let addr = frame_cell(one.what.as_ref()?).filter(|addr| self.buffers.contains(&addr.disp))?;
+        self.is_known_buffer_load(one).then(|| {
+            (
+                addr.disp,
+                one.what.as_ref().and_then(|w| w.dests.first()).map_or(0, |d| match d {
+                    Loc::Held(held) => held.width,
+                    _ => 0,
+                }),
+            )
+        })
     }
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
@@ -1363,6 +1793,52 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         cell: &Mem,
     ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
+        // A straight COPY folds as a load or a store
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L794>):
+        // the spilled end is the slot, the other end stays a register.
+        // A pinned end (`requires`/`delivers`) is a register this converter
+        // numbers, not the allocator: 6502 copied `rs0` into a slot as
+        // `lda rc18446744073709551603`.
+        if one.group.is_none()
+            && one.def_lanes.is_empty()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && self.is_plain_move(what)
+            && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
+            && dest.width == source.width
+            && dest.width as u32 == cell.width
+            && dest.value != source.value
+            && self.class_of(dest.value) == self.class_of(source.value)
+        {
+            if dest.value == reg {
+                return Some(self.store_reg_to_stack_slot(one, source.value, cell));
+            }
+            if source.value == reg {
+                return Some(self.load_reg_from_stack_slot(one, dest.value, cell));
+            }
+        }
+        if one.group.is_none()
+            && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(_)))
+            && what.name.as_deref().is_some_and(T::is_zero_def)
+            && let [Loc::Held(held)] = what.dests.as_slice()
+            && held.value == reg
+            && held.width as u32 <= cell.width
+        {
+            // A spilled zero is stored as the zero register: the definition
+            // becomes the store.
+            let mut out = (**one).clone();
+            out.what = Some(Semantics {
+                dests: vec![Loc::Mem(Mem { width: held.width as u32, ..cell.clone() })],
+                sources: Vec::new(),
+                ..what.clone()
+            });
+            out.defines.retain(|value| *value != reg);
+            out.spill_store = true;
+            // The store is not the definition it was cloned from: `from_lir`
+            // must not look it up among the function's definitions.
+            out.rematerialized = false;
+            return Some(Arc::new(out));
+        }
         let (name, at) = self.foldable.get((one.at / 2) as usize).copied().flatten()?;
         if what.name.as_deref() != Some(name) || one.group.is_some() {
             return None;
@@ -1437,6 +1913,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 pub struct SpikeRegisterInfo {
     pub copy_cost: u32,
     pub csr_first_use_cost: u32,
+    pub size_bytes: Option<llrm_codegen::greedy::targetinfo::SizeBytes>,
     pub csr_cost_scale: u32,
     pub csr_spill_first: bool,
     pub register_cost: fn(RegId) -> u8,
@@ -1456,6 +1933,10 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
 
     fn csr_cost_scale(&self) -> u32 {
         self.csr_cost_scale
+    }
+
+    fn size_bytes(&self) -> Option<&llrm_codegen::greedy::targetinfo::SizeBytes> {
+        self.size_bytes.as_ref()
     }
 
     fn csr_spill_first(&self) -> bool {
@@ -1741,9 +2222,8 @@ pub fn from_lir<T: Target>(
             .get(&held.value)
             .is_some_and(|wide| registers.bytes(*wide).is_some_and(|bytes| bytes > i64::from(held.width)));
         if (lane_values.contains(&held.value) || narrower) && !pinned.contains_key(&held.value) {
-            let found = placed_at
-                .get(&held.value)
-                .and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            let found =
+                placed_at.get(&held.value).and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
             match found {
                 Some(register) => return Reg::Phys(register),
                 None => {
@@ -1762,7 +2242,11 @@ pub fn from_lir<T: Target>(
             let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
                 continue;
             };
-            if insn.defines.len() == 1 && insn.uses.is_empty() {
+            // A definition the target marks rematerializable may read a value
+            // (arm64's `add x, y, #n`): the spiller makes it again where it is
+            // read, and it is no less a definition for the register it uses.
+            let remakable = original.blocks[origin.0].insts[origin.1].rematerializable;
+            if insn.defines.len() == 1 && (insn.uses.is_empty() || remakable) {
                 definitions.entry(format!("{:?}{:?}", what.name, what.sources)).or_insert(*origin);
             }
         }
@@ -1781,19 +2265,49 @@ pub fn from_lir<T: Target>(
                 locs.iter().filter_map(|loc| if let Loc::Held(held) = loc { Some(held.value) } else { None }).collect()
             };
             if (insn.spill_store || insn.spill_reload) && !insn.rematerialized {
-                let value =
-                    held(&what.dests).into_iter().chain(held(&what.sources)).next().ok_or("a spill of nothing")?;
+                let value = held(&what.dests).into_iter().chain(held(&what.sources)).next();
                 let cell = what
                     .dests
                     .iter()
                     .chain(&what.sources)
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
                 let slot = slot_of(cell.ok_or_else(|| format!("a spill with no cell: {what:?}"))?);
-                let register = number(value, &mut classes);
-                let class = classes[match register {
-                    Reg::Virt(v) => v as usize,
-                    Reg::Phys(_) => 0,
-                }];
+                let Some(value) = value else {
+                    // A zero stored from the zero register
+                    // (`fold_memory_operand`).
+                    let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
+                    place_spill(&mut insts, made)?;
+                    if !slots.iter().any(|(one, _)| *one == slot) {
+                        slots.push((slot, T::any()));
+                    }
+                    continue;
+                };
+                // named as every other instruction names the value (by lane
+                // for a byte of a wider register): `drop_self_copies` counts
+                // the readers of a register by name
+                let named = what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
+                    .ok_or("a spill of no value")?;
+                let numbered = number(value, &mut classes);
+                // A pinned value is no virtual register: its class is one that
+                // holds its register (vreg 0's class made a
+                // spill of `hl` a byte store, `ld -4(ix), hl`).
+                let class = match numbered {
+                    Reg::Virt(v) => classes[v as usize],
+                    Reg::Phys(register) => classes
+                        .iter()
+                        .copied()
+                        .find(|class| T::candidates(*class).contains(&register))
+                        .unwrap_or_else(T::any),
+                };
+                let register = if T::spills_named_by_lane() {
+                    lane_or_number(&named, &mut classes, &mut number)
+                } else {
+                    numbered
+                };
                 let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
                 let made = if let Some(offset) = lane {
                     T::spill_store_lane(class, register, slot, offset)
@@ -1802,7 +2316,7 @@ pub fn from_lir<T: Target>(
                 } else {
                     T::spill_load(class, register, slot)
                 };
-                insts.push(made.ok_or("the target states no spill form")?);
+                place_spill(&mut insts, made.ok_or("the target states no spill form")?)?;
                 // a lane store says nothing of the slot's size
                 if lane.is_none() && !slots.iter().any(|(one, _)| *one == slot) {
                     slots.push((slot, class));
@@ -1843,15 +2357,20 @@ pub fn from_lir<T: Target>(
                     .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;
             }
             let source = &original.blocks[from].insts[inst];
-            // a copy into a lane of a pair: a move into the register of that lane
+            // a copy into a lane of a pair: a move into the register of that
+            // lane
             if name == Some(COPY) && !insn.def_lanes.is_empty() {
-                let (Some(Loc::Held(to)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
-                    return Err("a lane copy that does not move a value".into());
-                };
-                let dest = lane_or_number(to, &mut classes, &mut number);
-                let from = lane_or_number(source, &mut classes, &mut number);
-                insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
-                continue;
+                // a source that is no value (a physical register) stays as
+                // written
+                if let Some(Loc::Held(source)) = what.sources.first() {
+                    let Some(Loc::Held(to)) = what.dests.first() else {
+                        return Err("a lane copy that does not move a value".into());
+                    };
+                    let dest = lane_or_number(to, &mut classes, &mut number);
+                    let from = lane_or_number(source, &mut classes, &mut number);
+                    insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
+                    continue;
+                }
             }
             // a copy a split made stands beside an instruction and claims none
             // of its bytes, whatever that instruction is
@@ -1878,6 +2397,9 @@ pub fn from_lir<T: Target>(
             )?;
             for (stand_in, slot) in folds {
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
+            }
+            if insn.rematerialized && T::remade_sets_no_flags() {
+                made.sets_flags = false;
             }
             insts.push(made);
         }
@@ -1924,13 +2446,52 @@ pub fn allocate_greedy<T: Target>(
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    let name = function.name.clone();
     let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
-    match first {
+    let result = match first {
         Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
-            allocate_greedy_pinned::<T>(function, registers, size, false).map_err(|_| why)
+            let second = allocate_greedy_pinned::<T>(function, registers, size, false);
+            if second.is_ok() {
+                record_refusal(&name, &why, true);
+            }
+            second.map_err(|_| why)
         }
         other => other,
+    };
+    if let Err(why) = &result {
+        record_refusal(&name, why, false);
     }
+    result
+}
+
+/// A function greedy would not take as it was, for the audit of silent
+/// fallbacks: a target that answers a refusal with another allocator, or with
+/// a second try, shows nothing else.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Refusal {
+    pub function: String,
+    pub why: String,
+    /// Allocated on a second try (DEVIATE PJ1) rather than refused.
+    pub retried: bool,
+}
+
+static REFUSALS: std::sync::Mutex<Vec<Refusal>> = std::sync::Mutex::new(Vec::new());
+
+fn record_refusal(
+    function: &str,
+    why: &str,
+    retried: bool,
+) {
+    if llrm_support::env_flag!("LLRM_GREEDY_REFUSALS") {
+        eprintln!("greedy refusal: @{function}: {why}{}", if retried { " (allocated on the second try)" } else { "" });
+    }
+    let one = Refusal { function: function.to_owned(), why: why.to_owned(), retried };
+    REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(one);
+}
+
+/// The refusals since the last call, oldest first.
+pub fn take_refusals() -> Vec<Refusal> {
+    std::mem::take(&mut *REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
 }
 
 fn allocate_greedy_pinned<T: Target>(
@@ -1960,4 +2521,94 @@ fn allocate_greedy_pinned<T: Target>(
     crate::spill::share_slots(&mut back.function, &mut back.slots);
     *function = back.function;
     Ok((back.assignment, back.slots))
+}
+
+/// The registers each value may take as sets, one set for all the values
+/// that start with the same order (a class's values do): a set is built once
+/// per distinct order, not once per value (arm64 shellsort: 700 values, 8
+/// classes).
+fn shared_palettes(orders: &IndexMap<u32, Vec<RegId>>) -> IndexMap<u32, Rc<BTreeSet<RegId>>> {
+    let mut interned: llrm_support::hash::HashMap<&[RegId], Rc<BTreeSet<RegId>>> = Default::default();
+    orders
+        .iter()
+        .map(|(value, order)| {
+            let set = interned.entry(order.as_slice()).or_insert_with(|| Rc::new(order.iter().copied().collect()));
+            (*value, Rc::clone(set))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod lane_def_tests {
+    use super::*;
+
+    fn literal(lane: bool) -> Insn {
+        let what = Semantics {
+            dests: vec![Loc::Held(Held { value: 5, width: 1, offset: 0 })],
+            sources: vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut one = Insn::new(0, Some((0, 0)), Some(what), vec![5], Vec::new());
+        if lane {
+            one.def_lanes = vec![(5, ValueLanes::at(0, 1))];
+            one.partial_defs = vec![5];
+        }
+        one
+    }
+
+    /// The low byte of a pair, written alone, was taken for the pair: the
+    /// spiller made it again where the pair was read and dropped the high
+    /// byte written beside it (`mul_constants` -O2 summed a stale byte).
+    #[test]
+    fn a_byte_written_into_a_pair_is_not_a_literal_to_make_again() {
+        assert!(is_literal_move(&literal(false)));
+        assert!(!is_literal_move(&literal(true)));
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    /// A set was built for every value, a few hundred times the sets a
+    /// function's classes need, and every join cloned them: 4 M of the
+    /// 64 M arm64 shellsort's allocation costs. Values of one order share one
+    /// set; an order of its own gets its own.
+    #[test]
+    fn test_values_of_one_order_share_one_palette() {
+        let first = vec![RegId::AX, RegId::BX];
+        let second = vec![RegId::AX];
+        let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
+        for value in 1..=700u32 {
+            orders.insert(value, if value % 100 == 0 { second.clone() } else { first.clone() });
+        }
+        let palettes = shared_palettes(&orders);
+        let distinct: std::collections::HashSet<*const BTreeSet<RegId>> = palettes.values().map(Rc::as_ptr).collect();
+        assert_eq!(distinct.len(), 2, "one set per distinct order");
+        assert_eq!(palettes[&1].iter().copied().collect::<Vec<_>>(), first);
+        assert_eq!(palettes[&100].iter().copied().collect::<Vec<_>>(), second);
+    }
+}
+
+/// A spill goes in before the terminators the block has so far. A def that
+/// shares a bundle with its terminator (`LDI` and the `BEQ` that reads its
+/// flags) is one instruction to greedy, which stores it after the bundle; the
+/// pin stores after the def inside the bundle, before the terminator
+/// (`InlineSpiller::insertSpill`, `std::next(MI)`; SplitKit
+/// `findInsertLocation` likewise stays before the first terminator).
+///
+/// DEVIATE (row S2-BUNDLE-SPILL): an LIR bundle has no position inside it, so
+/// the store is moved here instead of made inside. Exit: 2026-12-01, or when
+/// bundles carry inside positions.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1277-L1299>
+fn place_spill(
+    insts: &mut Vec<Inst>,
+    spill: Inst,
+) -> Result<(), String> {
+    let at = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+    if at < insts.len() && spill.sets_flags && insts[at..].iter().any(|inst| inst.reads_flags) {
+        return Err("a spill between a flag setter and the terminator that reads the flags".into());
+    }
+    insts.insert(at, spill);
+    Ok(())
 }

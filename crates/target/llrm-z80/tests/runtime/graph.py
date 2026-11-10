@@ -33,6 +33,14 @@ with tempfile.TemporaryDirectory() as w:
     if size != (0x790 - 0x78E) + (0x914 - 0x790):
         print(f"__modsi3 counted as {size} B, the divide under its truncated map name is missing")
         ok = False
+# a routine of another object (the soft-float library) is already in the image: charging its map extent again made
+# float_bits 8335 B against an image of 6946
+with tempfile.TemporaryDirectory() as w:
+    open(f"{w}/x.map", "w").write("00000786  __adddf3 |    000007A0  __modsi3 |    000007B0  __udivmod |    00000914  __udivdi3\n")
+    size = ns["runtime_bytes"](w, {"__modsi3": {"__udivmodsi4"}}, "call __adddf3\ncall __modsi3", {"__modsi3", "__udivmodsi4"})
+    if size != (0x914 - 0x7A0):
+        print(f"a library routine was charged again: {size} B, not {0x914 - 0x7A0}")
+        ok = False
 # the size family of the long long divide must not reach the speed family's code: `neg64` sat under `__moddi3`, the
 # size entries reached it, and -Os counted 368 B of fast paths it never runs
 for entry in ("__s_udivdi3", "__s_umoddi3", "__s_divdi3", "__s_moddi3"):

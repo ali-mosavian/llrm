@@ -68,6 +68,7 @@ fn object(fix: Fix) -> Object {
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     }
 }

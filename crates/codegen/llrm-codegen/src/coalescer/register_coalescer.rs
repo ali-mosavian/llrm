@@ -23,8 +23,9 @@
 //! of a constant again only where the source has no other reader, so its own
 //! move goes. Fact: elsewhere it replaced a 2-byte copy with a 3 to 5 byte
 //! move and cost 40 of 813 sources +1,383 bytes (`regparm3_matrix_*` up to
-//! +89) for -0.8% executed instructions. Exit: the allocator gives the constant
-//! back as a copy where its register is wanted.
+//! +89) for -0.8% executed instructions. Applies only where the target states
+//! no price for the move (`prices_remat`); x86 does, by encoded bytes. Exit:
+//! every target prices it, or the allocator gives the constant back as a copy.
 //!
 //! DEVIATE C6 (no number): `updateRegDefsUses` sets no `undef` flags: an
 //! instruction here has none, and a read of no live value is a bug of the
@@ -144,6 +145,22 @@ impl State {
     }
 }
 
+/// DEVIATE C13, the part left on: a target that joins no copy between widths
+/// still joins the low part of a value that lives on past the copy. The narrow
+/// range lies inside the wide one, so the join lengthens nothing and adds no
+/// interference; `v8 = COPY v32` before a byte store of `v8` while `v32` is
+/// read later.
+fn joins_inside_wide_value(
+    lis: &mut LiveIntervals,
+    cp: &CoalescerPair,
+) -> bool {
+    if cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg()) || has_lane_defs(lis, cp.src_reg()) {
+        return false;
+    }
+    let narrow = lis.interval(cp.src_reg()).range.clone();
+    lis.interval(cp.dst_reg()).range.covers(&narrow)
+}
+
 /// `joinCopy`.
 pub fn join_copy(
     lis: &mut LiveIntervals,
@@ -158,7 +175,7 @@ pub fn join_copy(
     };
     // DEVIATE C13: with the joins between widths off, such a copy is as it
     // was before they existed: no pair, nothing below touches it.
-    if cp.is_partial() && !env.joins_sub_registers() {
+    if cp.is_partial() && !env.joins_sub_registers() && !joins_inside_wide_value(lis, &cp) {
         return JoinResult::Rejected;
     }
     if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
@@ -227,9 +244,9 @@ pub fn join_copy(
         return join_lane(lis, env, state, current_erased, &cp, copy, block);
     }
     // DEVIATE C14: `JoinVals` has no lane masks, so a join of whole values
-    // that have lane defs is refused (series step 4).
+    // that have lane defs renames and recomputes (series step 4).
     if !cp.is_partial() && (has_lane_defs(lis, cp.src_reg()) || has_lane_defs(lis, cp.dst_reg())) {
-        return JoinResult::Rejected;
+        return join_whole_with_lanes(lis, env, state, current_erased, &cp, copy, block);
     }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
@@ -293,6 +310,42 @@ fn has_lane_defs(
     value: u32,
 ) -> bool {
     lis.operands(value).iter().any(|operand| operand.is_def && operand.lanes != Operand::ALL)
+}
+
+/// The join of a whole-value copy where a side has lane defs. DEVIATE C14: the
+/// pin's `JoinVals` carries lane masks; here the join is refused where the two
+/// ranges are live together anywhere but from the copy (the destination's
+/// value is the source's there), and made by renaming `src` to `dst` and
+/// computing the interval afresh. Exit: `JoinVals` with lane masks (series
+/// step 4, 2026-11-24).
+fn join_whole_with_lanes(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+    block: usize,
+) -> JoinResult {
+    // A pinned value's interval is not computed afresh from its defs.
+    if env.keeps(cp.src_reg()) || env.keeps(cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg()).range.clone();
+    if lanes_overlap(&dst, &src, &copy_at) {
+        return JoinResult::Rejected;
+    }
+    env.narrow(cp.dst_reg(), cp.src_reg());
+    let _ = current_erased;
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), None, None, false);
+    lis.remove_interval(cp.src_reg());
+    lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
+    JoinResult::Joined
 }
 
 /// The join of a lane copy: `src` is the bytes `cp.lanes()` of `dst`. DEVIATE
@@ -478,7 +531,9 @@ fn update_reg_defs_uses(
         let mut renamed = at_lane.renamed(&|value| if value == src { dst } else { value });
         if partial.is_some() && old.defines.contains(&src) {
             let at = lis.indexes.get_instruction_index(key);
-            let reads = keeps_rest || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
+            // the lanes a copy keeps are not read when this instruction
+            // defines them itself: another lane of `dst` was joined here first
+            let reads = (keeps_rest && !old.defines.contains(&dst)) || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
             if reads && !renamed.partial_defs.contains(&dst) {
                 let mut made = (*renamed).clone();
                 made.partial_defs.push(dst);
@@ -487,7 +542,12 @@ fn update_reg_defs_uses(
         }
         if let Some(lanes) = lanes.filter(|_| old.defines.contains(&src)) {
             let mut made = (*renamed).clone();
-            made.def_lanes.push((dst, lanes));
+            // one entry per def of `dst`, in the order of the defs: this def
+            // stands after the defs of `dst` that come before it
+            let at = old.defines.iter().position(|v| *v == src).unwrap_or(0);
+            let before = old.defines[..at].iter().filter(|v| **v == dst).count();
+            let place = made.def_lanes.iter().enumerate().filter(|(_, (v, _))| *v == dst).nth(before).map_or(made.def_lanes.len(), |(i, _)| i);
+            made.def_lanes.insert(place, (dst, lanes));
             renamed = Arc::new(made);
         }
         // `setReg` rewrites the operand where it stands: the instruction keeps
@@ -562,10 +622,11 @@ fn re_materialize_def(
     }
     // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
     // (3 to 5) and pays for itself only where the source's own move goes.
-    if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
+    let alone = lis.operands(src.value).len() <= 2;
+    if env.tuned_for_size() && !env.prices_remat() && !alone {
         return false;
     }
-    if !env.remat_wins(&def_insn, src.value, dst.value) {
+    if !env.remat_wins(&def_insn, src.value, dst.value, alone) {
         return false;
     }
     let block = lis.indexes.get_mbb_from_index(&at);

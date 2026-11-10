@@ -19,8 +19,83 @@
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::reg;
 
+/// A copy of one virtual register into another of a class the source's meets, each
+/// defined once, is read through its source: the high word of a long added to
+/// itself (`x + x`) is copied after the low word's add, and the matcher
+/// takes only operands made before it.
+fn read_through_copies(function: &mut MFunction) -> bool {
+    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            for operand in &inst.operands {
+                if let Operand::Def(Reg::Virt(v)) = operand {
+                    *defs.entry(*v).or_default() += 1;
+                }
+            }
+        }
+        for phi in &block.phis {
+            if let Reg::Virt(v) = phi.result {
+                *defs.entry(v).or_default() += 1;
+            }
+        }
+    }
+    let mut alias = std::collections::HashMap::<u32, u32>::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) = (inst.kind, &inst.operands[..])
+                && defs.get(to) == Some(&1)
+                && defs.get(from) == Some(&1)
+                && <crate::regalloc::Z80Registers as llrm_spike_mf::Target>::meet(
+                    function.classes[*to as usize],
+                    function.classes[*from as usize],
+                ) == Some(function.classes[*from as usize])
+            {
+                alias.insert(*to, *from);
+            }
+        }
+    }
+    if alias.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for block in &mut function.blocks {
+        for phi in &mut block.phis {
+            for (_, incoming) in &mut phi.incoming {
+                if let Reg::Virt(v) = incoming
+                    && let Some(&from) = alias.get(v)
+                {
+                    *v = from;
+                    changed = true;
+                }
+            }
+        }
+        for inst in &mut block.insts {
+            if inst.kind == Kind::Copy && matches!(inst.operands[..], [Operand::Def(Reg::Virt(to)), _] if alias.contains_key(&to)) {
+                continue;
+            }
+            for operand in &mut inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand
+                    && let Some(&from) = alias.get(v)
+                {
+                    *v = from;
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// Fuses the long adds and subtracts of `function` into `adc` / `sbc`.
 pub fn use_the_carry(function: &mut MFunction) -> bool {
+    let carries = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(|inst| inst.kind == Kind::Op("SETCC8") && matches!(inst.operands[..], [_, Operand::Imm(3), _]));
+    if carries {
+        read_through_copies(function);
+    }
     // every read of a virtual register in the function: the byte and the sums
     // go with the instructions only if nothing outside them reads them (a
     // condition byte is carried across blocks by a copy)
@@ -67,6 +142,9 @@ struct Found {
     /// The low op's result copy: the new pair goes behind it.
     low_out: usize,
     subtract: bool,
+    /// A `cp16c` that reads the compare's flags too (a long's order chained
+    /// on this word): the compare stays, ahead of it.
+    chained: Option<usize>,
 }
 
 fn virt(operand: &Operand) -> Option<u32> {
@@ -161,11 +239,19 @@ fn recognised(
         let Some(low) = low else { continue };
         let low_out = low + 1;
         // the compare's flags are read by the byte alone
-        let others = insts[cp + 1..]
-            .iter()
-            .enumerate()
-            .take_while(|(_, i)| !i.sets_flags)
-            .any(|(at, i)| i.reads_flags && cp + 1 + at != set);
+        // (the instruction that sets them again may read them first: `cp16c`)
+        let (mut others, mut chained) = (false, None);
+        for (at, i) in insts[cp + 1..].iter().enumerate() {
+            if i.reads_flags && cp + 1 + at != set {
+                match i.kind {
+                    Kind::Op("CP16C" | "CP16Ci") => chained = Some(cp + 1 + at),
+                    _ => others = true,
+                }
+            }
+            if i.sets_flags {
+                break;
+            }
+        }
         if others {
             continue;
         }
@@ -237,6 +323,7 @@ fn recognised(
             last: [into, f],
             low_out,
             subtract,
+            chained,
         });
     }
     None
@@ -248,7 +335,8 @@ fn apply(
     found: Found,
 ) {
     let flags = Reg::Phys(reg::FLAGS);
-    let Found { high, added: commuted, hoist, carry, last, low_out, subtract } = found;
+    let Found { high, added: commuted, hoist, carry, last, low_out, subtract, chained } = found;
+    let kept = chained.map(|at| (insts[carry[0]].clone(), insts[at].clone()));
     // the low op now leaves its carry for the pair behind it
     let low = low_out - 1;
     insts[low].operands.push(Operand::Def(flags));
@@ -291,4 +379,11 @@ fn apply(
     }
     added.extend([high_in, wide, result]);
     insts.splice(behind..behind, added);
+    // the compare the chain reads, again, right before it
+    if let Some((compare, reader)) = kept {
+        let at = insts.iter().position(|i| i.kind == reader.kind && i.operands == reader.operands);
+        if let Some(at) = at {
+            insts.insert(at, compare);
+        }
+    }
 }

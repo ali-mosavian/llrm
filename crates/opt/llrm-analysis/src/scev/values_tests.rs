@@ -56,7 +56,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
 /// gains one, `create_scev` must translate it.
 #[test]
 fn test_the_intrinsics_createscev_models_and_mir_lacks_are_not_mir_intrinsics() {
-    for name in ["llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"] {
+    for name in ["llvm.annotation", "llvm.ptr.annotation", "llvm.vscale"] {
         assert!(llrm_mir::intrinsics::Intrinsic::named(name).is_none(), "{name} is a MIR intrinsic now: translate it");
     }
 }
@@ -334,4 +334,49 @@ fn test_the_unsigned_saturating_intrinsics_are_modelled() {
         ["%r\t((-1 * (%x umin %y)) + %x)", "%s\t(((-1 + (-1 * %y)) umin %x) + %y)<nuw>"],
         "{printed}"
     );
+}
+
+/// `start.loop.iterations` is its argument and `loop.decrement.reg` a `sub`
+/// for SCEV (createSCEV, ScalarEvolution.cpp#L8326; MatchBinaryOp, #L5322).
+/// MIR gained both, and each stayed an unknown: a hardware loop's counter had
+/// no trip count.
+#[test]
+fn test_start_loop_iterations_is_its_argument_and_loop_decrement_reg_a_sub() {
+    use llrm_mir::module::Operand;
+
+    use super::{Cx, ScalarEvolution};
+
+    let text = "declare i32 @llvm.start.loop.iterations.i32(i32)\n\
+        declare i32 @llvm.loop.decrement.reg.i32.i32(i32, i32)\n\
+        define i32 @f(i32 %n) {\n\
+        entry:\n\
+          %s = call i32 @llvm.start.loop.iterations.i32(i32 %n)\n\
+          %d = call i32 @llvm.loop.decrement.reg.i32.i32(i32 %n, i32 1)\n\
+          %m = sub i32 %n, 1\n\
+          ret i32 %d\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let (_, _, function) = module.functions().find(|(_, _, function)| !function.layout().is_empty()).expect("a body");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let tree = llrm_mir::domtree::DomTree::of(function);
+    let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
+    let assumptions = llrm_mir::valuetracking::AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let labels = llrm_mir::print::value_labels(function);
+    let value = |name: &str| {
+        let (id, _) = labels.iter().find(|(_, label)| label.as_str() == name).expect("a value");
+        Operand::Value(id)
+    };
+    let (n, s, d, m) = (value("n"), value("s"), value("d"), value("m"));
+    assert_eq!(se.get_scev(&cx, s), se.get_scev(&cx, n), "start.loop.iterations is its argument");
+    assert_eq!(se.get_scev(&cx, d), se.get_scev(&cx, m), "loop.decrement.reg is n - 1");
 }

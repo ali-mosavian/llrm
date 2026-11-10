@@ -170,11 +170,21 @@ fn nearest_common_dominator(
 /// changes the IR that `IvUsers` was built over. Cost: d_faces -O2, 38
 /// constructions against the pin's 32, about 0.5 M of 16.8 M instructions (3%).
 /// Exit: reuse `IvUsers` across the IR edit. Owner w-5. Review 2026-11-19.
+/// A compare the edit moved or copied is a use of its own: the set is no longer
+/// carried then (`carry_exit_test` judged it against program order, which the
+/// walk no longer uses).
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
 /// the plan, or none where the loop is left as it is. `marked` are the exit
 /// tests already edited to take the post-incremented value; none until the
 /// first look has found edits to make.
 #[allow(clippy::too_many_arguments)]
+/// Function flag: LSR chose end-biased formulae (DEVIATE LG3) that differ from
+/// the pin's solution somewhere in the function.
+pub const END_BIASED_FIRED: &str = "llrm-end-biased";
+/// Function flag, set by a driver that builds the function both ways: LSR makes
+/// no end-biased formulae for it.
+pub const NO_END_BIASED: &str = "llrm-no-end-biased";
+
 fn plan_loop(
     context: &Context,
     layout: &DataLayout,
@@ -211,7 +221,13 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let env_users = Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral };
+    let env_users = Env {
+        safe_to_speculate: &safe_to_speculate,
+        ephemeral: &is_ephemeral,
+        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
+        // wide loop grew tail_calls by 354 bytes.
+        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+    };
     let mut users = match carried {
         Some(users) => {
             users.assert_current(se, &cx, &env_users);
@@ -261,6 +277,8 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
+    // DEVIATE LU13: the loop calls and the target's call takes every register.
+    let across_call = tti.lsr_call_clobbers_registers() && crate::lsr_collect::loop_calls(&cx, tti, header);
     // The loop's register units do not change between the two builds.
     let units = std::cell::Cell::new(None);
     let build = |se: &mut ScalarEvolution| {
@@ -274,6 +292,7 @@ fn plan_loop(
             }
         };
         lsr.size = size;
+        lsr.across_call = across_call;
         llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
         lsr.chain_uses = chains.inc_set.clone();
         lsr.collect_interesting_types_and_factors(se, &users);
@@ -301,8 +320,12 @@ fn plan_loop(
     let pin_counts = counts(&lsr);
     // DEVIATE LG3's formulae (beyond the pin) join the space before its
     // narrowing, as the formulae they share registers with do.
-    lsr.generate_end_biased(se);
+    // `llrm-no-end-biased`: the driver builds this function without them.
+    if !llrm_mir::memory::has(&function.attrs, NO_END_BIASED) {
+        lsr.generate_end_biased(se);
+    }
     let beyond = counts(&lsr) != pin_counts;
+    let mut differs = false;
     narrowed(se, &mut lsr);
     let (mut solution, cost) = lsr.solve_with_cost(se);
     if beyond {
@@ -313,7 +336,10 @@ fn plan_loop(
         // less than the one with them, or where theirs adds a base to the
         // counter in an address the pin's does not, on a target that
         // cannot fold it: they save a compare, which that add outweighs
-        // (wasm's copy epilog, jpeg_fixed `emit`).
+        // (wasm's copy epilog, jpeg_fixed `emit`), or where theirs saves
+        // neither a counter nor a register: the pin's formula already shares
+        // the exit test's, and a hoisted end base is only setup (wasm sieve,
+        // whose stores merge into one, -O2 507 B against the pin's 500).
         narrowed(se, &mut pin);
         let (pin_solution, pin_cost) = pin.solve_with_cost(se);
         // A target with no register-plus-register address (wasm) pays an add
@@ -321,22 +347,28 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        let spent = cost.c.insns + cost.c.setup_cost;
+        let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+                        || spent > saved
+                        || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;
             solution = pin_solution;
+        } else {
+            differs = !pin_solution.is_empty();
         }
     }
     if solution.is_empty() {
         return planned(None);
     }
     let mut plan = lsr.into_plan(solution);
+    plan.end_biased_differs = differs;
     plan.chains = chains.chains;
     planned(Some(plan))
 }
@@ -404,9 +436,8 @@ pub fn reduced_held(
     let mut mark = function.mark();
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
-        headers.reverse();
-        headers
+        // The order the code generator's legacy loop pass manager runs LSR in.
+        env.loops.get_loops_in_legacy_visit_order().iter().map(|one| one.get_header()).collect()
     };
     for header in headers {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);
@@ -441,20 +472,21 @@ pub fn reduced_held(
                     size,
                 ) {
                     Outcome::Planned(None) => break,
-                    Outcome::Edit(edits, mut users) => {
+                    Outcome::Edit(edits, users) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         let applied = lsr_prepare::apply(function, &context.types, header, &edits);
-                        marked = Some(applied.marked.clone());
-                        // A moved or copied test is the same use; `OptimizeMax`
-                        // makes a new compare, so its users are made again.
-                        if edits.iter().all(|edit| edit.max.is_none()) {
-                            let ok = applied.moved.iter().all(|&test| users.carry_exit_test(function, test, None))
-                                && applied
-                                    .copied
-                                    .iter()
-                                    .all(|&(old, copy)| users.carry_exit_test(function, old, Some(copy)));
-                            carried = ok.then_some(users);
+                        // An edit that moves or copies no compare leaves the
+                        // uses as they were. A compare
+                        // it moved or copied changed its operand's
+                        // use list, so the uses are made again over the edited
+                        // loop.
+                        if edits.iter().all(|edit| edit.max.is_none())
+                            && applied.moved.is_empty()
+                            && applied.copied.is_empty()
+                        {
+                            carried = Some(users);
                         }
+                        marked = Some(applied.marked);
                         changed = true;
                         continue;
                     }
@@ -467,6 +499,9 @@ pub fn reduced_held(
                     }
                     Outcome::Planned(Some(plan)) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSolutions);
+                        if plan.end_biased_differs && !llrm_mir::memory::has(&function.attrs, END_BIASED_FIRED) {
+                            function.attrs.push(llrm_mir::opcode::Attribute::Flag(END_BIASED_FIRED.into()));
+                        }
                         plan
                     }
                 };

@@ -55,7 +55,7 @@
 //! counterpart: N/A.
 //!
 //! DEVIATE R2 (no number yet): no isel producer of `flags_copy`/`flags_restore`
-//! exists, so tests hand-build LIR; owner w-5, review 2026-11-19, exit an isel
+//! exists, so tests hand-build LIR; owner anyisa, review 2026-11-19, exit an isel
 //! producer.
 //!
 //! # Example
@@ -129,13 +129,13 @@ const ALIASES: [(&str, &str); 14] = [
 ];
 
 /// A condition code by its canonical name.
-fn cond(name: &str) -> Option<&'static str> {
+pub(crate) fn cond(name: &str) -> Option<&'static str> {
     let name = ALIASES.iter().find(|(from, _)| *from == name).map_or(name, |(_, to)| to);
     OPPOSITES.iter().flat_map(|&(a, b)| [a, b]).find(|one| *one == name)
 }
 
 /// `GetOppositeBranchCondition`.
-fn opposite(cond: &str) -> &'static str {
+pub(crate) fn opposite(cond: &str) -> &'static str {
     OPPOSITES
         .iter()
         .find_map(|&(a, b)| {

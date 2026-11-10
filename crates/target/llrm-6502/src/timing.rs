@@ -322,6 +322,19 @@ pub fn estimate_calling(
     routines: &[(&str, u64)],
     depth_of: Option<&dyn Fn(u32) -> u32>,
 ) -> Result<Estimate, String> {
+    let weight = depth_of.map(|depth_of| move |block| 10u64.pow(depth_of(block).min(3)));
+    estimate_weighted(cpu, text, routines, weight.as_ref().map(|weight| weight as &dyn Fn(u32) -> u64))
+}
+
+/// [`estimate_calling`] with the weight of block `n` given outright: how many
+/// times it runs per run of the function, which a loop with a proven trip count
+/// knows and a loop depth guesses at as ten.
+pub fn estimate_weighted(
+    cpu: Cpu,
+    text: &str,
+    routines: &[(&str, u64)],
+    weight_of: Option<&dyn Fn(u32) -> u64>,
+) -> Result<Estimate, String> {
     let expanded = expand_macros(text);
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
     // the first line of each label, found once: a lookup per branch is a scan
@@ -435,7 +448,7 @@ pub fn estimate_calling(
         out.bytes += cost.bytes;
         let called = routines.iter().find(|(name, _)| mnemonic == "jsr" && operand.trim() == *name).map_or(0, |r| r.1);
         out.cycles += (u64::from(cost.cycles + taken) + called)
-            * 10u64.pow(block.zip(depth_of).map_or(depth[at], |(block, depth_of)| depth_of(block)).min(3));
+            * block.zip(weight_of).map_or_else(|| 10u64.pow(depth[at].min(3)), |(block, weight_of)| weight_of(block));
     }
     Ok(out)
 }

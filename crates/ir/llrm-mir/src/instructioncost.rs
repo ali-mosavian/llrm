@@ -311,6 +311,10 @@ pub fn instruction_cost_with(
                 Cost::FREE
             }
         }
+        // BasicTTIImpl::getInstructionCost prices these through getVectorInstrCost and
+        // getShuffleCost; the model has no vector type yet (VECTORS-1 PR-D), so
+        // they are invalid, never cheap.
+        Opcode::ExtractElement | Opcode::InsertElement | Opcode::ShuffleVector(_) => Cost::INVALID,
         Opcode::Alloca { .. } => {
             if is_static_alloca(function, inst) {
                 Cost::FREE

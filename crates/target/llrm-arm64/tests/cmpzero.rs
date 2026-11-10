@@ -1,11 +1,10 @@
 //! `AArch64InstrInfo::substituteCmpToZero`: a compare with zero of a value made
 //! in the same block goes into the instruction that made it.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 fn assembly(ir: &str) -> String {
-    driver::set_isel_mode(IselMode::Dag);
     driver::assembly(ir, Platform::Linux, true).expect("lowers")
 }
 

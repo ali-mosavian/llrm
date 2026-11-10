@@ -187,7 +187,7 @@ def test_no_binary_is_built_with_the_legacy_feature(monkeypatch, tmp_path):
     """The c-legacy/wccq feature goes with the Watcom frontend: a build that still asks for it fails once the feature is gone."""
     asked = []
     monkeypatch.setattr(pgo.subprocess, "run", lambda command, **_: asked.append(command))
-    pgo.cargo(tmp_path, tmp_path, "", "llrm-c")
+    pgo.cargo(tmp_path, tmp_path, "", "llrm-cc")
     pgo.cargo(tmp_path, tmp_path, "", "llrm-llc")
     assert all("--features" not in command for command in asked), asked
     builds = [line for line in (pgo.ROOT / ".github/workflows/pgo.yml").read_text().splitlines() if "cargo build" in line]

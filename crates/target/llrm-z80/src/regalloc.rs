@@ -130,9 +130,9 @@ impl Target for Z80Registers {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
-    // DEVIATE 3b-1 (owner greedy-subreg, exit 11-10): off until the split
-    // editor copies by lane (a pair built across blocks lost its stack copy:
-    // lz4c -Oz returned 0x3131).
+    // DEVIATE 3b-1 (owner greedy-subreg, exit 2026-11-12): both off until the
+    // split editor copies by lane. Lowering alone: +505 lines at -O2; with
+    // joins `mul_constants` -O2 summed a stale byte.
     fn lowers_lanes() -> bool {
         false
     }
@@ -226,8 +226,29 @@ impl Target for Z80Registers {
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
     }
 
+    /// Worse rows (owner greedy-subreg, exit 2026-12-05; net -1083 B O2, -2636 B Os): O2 mem_length_boundaries_m32 +12,
+    /// sat_sub_u64_shared_compare +3, switch_peeled_table +4; Os mem_length_boundaries_m32 +1, sat_sub_u64_shared_compare
+    /// +1, rep_tails +2, wide_shift_by_one +3. Allocation shifts after a remade address; clocks unpriced.
+    fn remats_symbol_addresses() -> bool {
+        true
+    }
+
     fn spills_lanes() -> bool {
         true
+    }
+
+    /// `LEAFI` puts the address of a frame object in a register.
+    fn frame_address(inst: &Inst) -> Option<i32> {
+        if inst.kind != Kind::Op("LEAFI") {
+            return None;
+        }
+        inst.operands.iter().find_map(|o| if let Operand::Frame(f) = o { Some(*f) } else { None })
+    }
+
+    /// A load of a frame object the call before it filled is made again where
+    /// it is read (`call_result_buffers`).
+    fn is_buffer_load(name: &str) -> bool {
+        matches!(name, "LD16rf" | "LD8rf")
     }
 
     fn spill_store_lane(

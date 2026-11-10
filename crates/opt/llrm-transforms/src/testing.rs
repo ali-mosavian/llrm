@@ -162,6 +162,10 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `Tti::narrows_counters`.
+    pub narrows_counters: bool,
+    /// `Tti::sinks_unused_invariants`.
+    pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
     pub cheap_ctlz: bool,
@@ -171,6 +175,8 @@ pub struct Tuned {
     pub price_fills: bool,
     /// No constant memset is stored inline: every fill is a `rep stos`.
     pub rep_fills: bool,
+    /// `Tti::second_ipsccp`.
+    pub second_ipsccp: bool,
 }
 
 use llrm_mir::tti;
@@ -179,15 +185,22 @@ use llrm_mir::tti;
 #[derive(Default)]
 pub struct Flagged {
     pub exit_ne: bool,
+    pub narrows_counters: bool,
+    pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
     pub cheap_ctlz: bool,
     pub fast_sqrt: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
+    pub second_ipsccp: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
+    fn second_ipsccp(&self) -> bool {
+        self.second_ipsccp
+    }
+
     fn have_fast_sqrt(
         &self,
         ty: tti::Ty,
@@ -197,6 +210,14 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn prefers_exit_ne(&self) -> bool {
         self.exit_ne
+    }
+
+    fn narrows_counters(&self) -> bool {
+        self.narrows_counters
+    }
+
+    fn sinks_unused_invariants(&self) -> bool {
+        self.sinks_invariants
     }
 
     fn has_cmov(&self) -> bool {
@@ -325,13 +346,23 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
+        (self.exit_ne
+            || self.narrows_counters
+            || self.sinks_invariants
+            || self.no_global_base
+            || self.cheap_ctlz
+            || self.fast_sqrt
+            || self.second_ipsccp)
+            .then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
+                narrows_counters: self.narrows_counters,
+                sinks_invariants: self.sinks_invariants,
                 no_cmov: false,
                 no_global_base: self.no_global_base,
                 cheap_ctlz: self.cheap_ctlz,
                 fast_sqrt: self.fast_sqrt,
+                second_ipsccp: self.second_ipsccp,
             }) as _
         })
     }
@@ -428,4 +459,47 @@ pub fn closed_named(
 ) -> Result<bool, String> {
     let (context, function) = module.function_mut(name).expect("the function");
     crate::lcssa::closed(context, &layout(), function)
+}
+
+/// Asks for the manager's MemorySSA and says nothing else; `forgets` returns
+/// `none()`, as a pass that edited without naming what it kept.
+pub struct AsksMssa {
+    pub forgets: bool,
+}
+
+impl llrm_mir::passes::FunctionPass for AsksMssa {
+    fn name(&self) -> &'static str {
+        "asks-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        if self.forgets {
+            llrm_mir::passes::PreservedAnalyses::none()
+        } else {
+            llrm_mir::passes::PreservedAnalyses::all()
+        }
+    }
+}
+
+/// The MemorySSA computations (hits, misses) a pipeline of `passes` makes over
+/// `text`, each pass checked by `verify_invalidation` against a fresh build.
+pub fn mssa_misses_over(
+    text: &str,
+    passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>,
+) -> (u64, u64) {
+    let mut module = parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.verify_invalidation = true;
+    for pass in passes {
+        manager.add_boxed(pass);
+    }
+    let before = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("mssa");
+    (after.0 - before.0, after.1 - before.1)
 }

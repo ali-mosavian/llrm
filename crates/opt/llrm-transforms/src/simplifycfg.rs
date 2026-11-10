@@ -110,10 +110,10 @@
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
 //!   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
 //!   (`FoldInstsToUnreachable`): the `noreturn` call is ported
-//!   (`insts_folded_to_unreachable`); `assume(false)` and the store to null
-//!   are not. Exit 2026-12-01. The store reads the target's
-//!   `NullPointerIsDefined`, which the MIR has no flag for. `invoke`,
-//!   `catchswitch` and `indirectbr` do not exist in the MIR.
+//!   (`insts_folded_to_unreachable`); `assume(false)` and the store to null are
+//!   not. Exit 2026-12-01. The store reads the target's `NullPointerIsDefined`,
+//!   which the MIR has no flag for. `invoke`, `catchswitch` and `indirectbr` do
+//!   not exist in the MIR.
 //! - D4. No branch weights: the MIR has none, so the case weights
 //!   `ConstantFoldTerminator` merges and the `!prof` it sets are not kept.
 //!   `!make.implicit` is not a MIR kind. There is no `DomTreeUpdater`; as at
@@ -186,10 +186,10 @@ use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 
@@ -502,7 +502,7 @@ fn block_simplified(
     let mut changed = terminator_folded(context, callees, function, block, true);
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
-    if undefpred::removed(context, spec, function, block) {
+    if undefpred::removed(context, spec, declared, function, block) {
         return true;
     }
     changed |= cfg::merged_into_predecessor(function, block);
@@ -524,7 +524,7 @@ fn block_simplified(
     let acted = match terminator_kind(function, block) {
         // Each fold of `simplifyCondBranch` returns `requestResimplify()`.
         Terminator::Conditional => {
-            let acted = cond_branch_simplified(options, context, spec, function, block, folded, headers);
+            let acted = cond_branch_simplified(options, context, spec, declared, function, block, folded, headers);
             *resimplify |= acted;
             acted
         }
@@ -554,6 +554,8 @@ thread_local! {
     pub(crate) static PREDECESSOR_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The blocks `cond_branch_simplified` visited.
     pub(crate) static CONDITIONAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The blocks `insts_folded_to_unreachable` listed whole.
+    pub(crate) static BLOCKS_LISTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The kind of terminator ending a block, as `simplifyOnce` dispatches on it.
@@ -585,6 +587,7 @@ fn cond_branch_simplified(
     options: &Options,
     context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
     folded: &mut bool,
@@ -601,7 +604,10 @@ fn cond_branch_simplified(
     if function.is_placed(block) && dominating_condition_folded(context, spec, function, block) {
         return true;
     }
-    if options.speculate_blocks && function.is_placed(block) && branchtocommon::folded(context, spec, function, block) {
+    if options.speculate_blocks
+        && function.is_placed(block)
+        && branchtocommon::folded(context, spec, declared, function, block)
+    {
         return true;
     }
     if function.is_placed(block) && branch_hoisted(options, context, spec, function, block) {
@@ -830,26 +836,26 @@ fn branch_speculated(
 pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let mut headers = IdSet::new();
     let Some(entry) = function.entry() else { return headers };
-    // 0 unseen, 1 on the walk's path, 2 done.
-    let mut state: IdMap<BlockId, u8> = IdMap::new();
-    state.insert(entry, 1);
+    // 0 unseen, 1 on the walk's path, 2 done; by block number.
+    let mut state = vec![0u8; function.block_capacity()];
+    state[entry.0 as usize] = 1;
     let mut path = vec![(entry, function.successors(entry), 0usize)];
     while let Some((block, successors, next)) = path.last_mut() {
         let Some(&successor) = successors.get(*next) else {
-            state.insert(*block, 2);
+            state[block.0 as usize] = 2;
             path.pop();
             continue;
         };
         *next += 1;
-        match state.get(&successor) {
-            Some(1) => {
+        match state[successor.0 as usize] {
+            1 => {
                 headers.insert(successor);
             }
-            Some(_) => {}
-            None => {
-                state.insert(successor, 1);
+            0 => {
+                state[successor.0 as usize] = 1;
                 path.push((successor, function.successors(successor), 0));
             }
+            _ => {}
         }
     }
     headers
@@ -1226,16 +1232,31 @@ fn insts_folded_to_unreachable(
     function: &mut Function,
     block: BlockId,
 ) -> bool {
-    let insts: Vec<InstId> = function.iter_block(block).collect();
-    let Some(&last) = insts.last() else { return false };
     let stops = |inst: InstId| {
         let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
         info.tail != Tail::MustTail
-            && (Facts::of(&info.attrs).contains(Fact::NoReturn)
+            && (Facts::states(&info.attrs, Fact::NoReturn)
                 || llrm_mir::memory::callee(context, function, inst)
                     .and_then(|target| callees.get(&target))
                     .is_some_and(|summary| summary.no_return))
     };
+    // Most blocks hold no call that stops: found without listing the block.
+    let mut walk = function.iter_block(block).peekable();
+    let mut found = false;
+    while let Some(inst) = walk.next() {
+        if walk.peek().is_some() && stops(inst) {
+            found = true;
+            break;
+        }
+    }
+    drop(walk);
+    if !found {
+        return false;
+    }
+    #[cfg(test)]
+    BLOCKS_LISTED.with(|one| one.set(one.get() + 1));
+    let insts: Vec<InstId> = function.iter_block(block).collect();
+    let Some(&last) = insts.last() else { return false };
     let Some(at) = insts.iter().position(|&inst| inst != last && stops(inst)) else { return false };
     let cut = &insts[at + 1..];
     if cut.len() == 1 && function.instruction(last).opcode == Opcode::Unreachable {

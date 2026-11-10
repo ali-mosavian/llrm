@@ -16,7 +16,8 @@ use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::{DagConfig, SelectionDAG};
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -56,7 +57,12 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
-        ..BuilderTarget::m16()
+        // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin turns `add (sext i1 c), x` into
+        // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is an `sbc` chain; a word compared with its bound
+        // gained an `ldx #255` and a swapped `cmp` from it (`a_compare_against_a_word_boundary_...`). The add stays up to
+        // 16 bits; wider, the sign bytes of the add read a cell (`adc rc22`, 3 clk) where the pin's `sbc #0` is 2.
+        dag: DagConfig { sext_bool_add_max_bits: 16, ..BuilderTarget::for_pointer_bits(16).dag },
+        ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)
 }
@@ -103,6 +109,20 @@ pub struct Selection {
     pub source: Option<(String, Option<u32>)>,
 }
 
+impl Selection {
+    /// The calls of `__mulsi3` it makes.
+    pub fn mul_calls(&self) -> usize {
+        use super::generated::ids::opcode as op;
+        self.blocks
+            .iter()
+            .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
+            .filter(|(one, node)| {
+                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
+            })
+            .count()
+    }
+}
+
 /// Function `name` of `module`, block by block in layout order.
 ///
 /// DEVIATE: static allocas share no frame object (no stack coloring) and none
@@ -112,6 +132,22 @@ pub fn select_function(
     module: &Module,
     name: &str,
     cpu: Cpu,
+) -> Result<Selection, String> {
+    select_function_with(module, name, cpu, false)
+}
+
+/// Whether `function` is tuned for size (`optsize` or `minsize`).
+pub fn is_sized(function: &Function) -> bool {
+    ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name))
+}
+
+/// [`select_function`]; `inline_multiplies` expands every `x * c` that can be
+/// shifts and an add, as a function not tuned for size does.
+pub fn select_function_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    inline_multiplies: bool,
 ) -> Result<Selection, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -127,10 +163,11 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
+    let sized = is_sized(function) && !inline_multiplies;
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, cpu, &mut info, &mut selected)?;
+        select_built(Some((function, block)), block, built, (cpu, sized, inline_multiplies), &mut info, &mut selected)?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -198,11 +235,11 @@ fn select_built(
     top: Option<(&Function, BlockId)>,
     block: BlockId,
     mut built: BlockDag,
-    cpu: Cpu,
+    (cpu, sized, synthesize): (Cpu, bool, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
-    let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, sized, synthesize).map_err(|why| format!("{why:?}"))?;
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges
@@ -239,7 +276,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, info, selected)?;
+        select_built(None, extra, made, (cpu, sized, synthesize), info, selected)?;
     }
     Ok(())
 }

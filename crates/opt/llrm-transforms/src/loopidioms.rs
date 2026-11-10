@@ -22,7 +22,7 @@
 //!   here it is priced from the target's table, so a word fill is `rep stosw`
 //!   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
 //!   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
-//!   near 16 trips with the segment setup; owner w-5). A loop with several
+//!   near 16 trips with the segment setup; owner w12). A loop with several
 //!   fills to bytes no other reaches is a memset each; fills that tile adjacent
 //!   bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
@@ -869,7 +869,7 @@ fn _hoist(
             Operand::Constant(context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
         let mut argument_attrs = vec![Vec::new(); 4];
         if let Some(align) = align {
-            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".into(), align));
         }
         let info = CallInfo {
             function_type,
@@ -1021,7 +1021,7 @@ fn _pays(
 /// What one trip of the loop through `blocks` costs, in `costs`' units. In
 /// bytes the loop's counter work is the step and its branch: the phi is a
 /// register, the address an operand, the test the step's flags.
-fn trip_cost<'a>(
+pub(crate) fn trip_cost<'a>(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
@@ -1036,7 +1036,7 @@ fn trip_cost<'a>(
 /// `trip_cost` in clocks: a jump to the next block is the layout's and runs
 /// nothing, so a trip pays for its one conditional branch (matmul nib -O2: the
 /// row-zeroing nest has two `br`s and one `jne`).
-fn trip_clocks<'a>(
+pub(crate) fn trip_clocks<'a>(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
@@ -1077,7 +1077,8 @@ fn trip_total<'a>(
 /// pin lowers that copy to a libc call, which llrm has none of: the string
 /// instruction takes ES, three registers, the count split in dwords and odd
 /// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
-/// 16 bytes over the loop each).
+/// 16 bytes over the loop each). Owner w2, exit 2026-11-20: the DAG's
+/// variable-length copy (MEM-1) prices it at m16 as it does at m32.
 pub(crate) fn variable_copy_pays(
     context: &Context,
     layout: &DataLayout,
@@ -1477,7 +1478,7 @@ fn _filled(
         .filter(|align| *align != u64::MAX);
     let mut argument_attrs = vec![Vec::new(); 4];
     if let Some(align) = dest_align {
-        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".into(), align));
     }
     let info = CallInfo {
         function_type,

@@ -308,10 +308,10 @@ b0:
     assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
 }
 
-/// A float and an int of one size in one slot are not reinterpreted (isel
-/// selects no such bitcast): the slot stays in memory.
+/// A float and an int of one size in one slot are reinterpreted, as the pin's
+/// `canConvertValue` has it: the slot is promoted to a bitcast.
 #[test]
-fn test_a_float_read_as_an_int_is_not_bitcast() {
+fn test_a_float_read_as_an_int_is_bitcast() {
     let after = sroa(
         "define i32 @f(float %x) {
 b0:
@@ -322,7 +322,7 @@ b0:
 }
 ",
     );
-    assert!(after.contains("alloca") && !after.contains("bitcast"), "{after}");
+    assert!(!after.contains("alloca") && after.contains("bitcast"), "{after}");
 }
 
 /// An i32 stored whole and its first byte loaded: the store is cut into a
@@ -677,9 +677,10 @@ fn test_a_double_stored_whole_and_read_by_halves_is_widened_and_promoted() {
         Sroa,
     );
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
-    // 16-bit: i64 is not native, the slot stays.
+    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and isel
+    // moves the double through the stack (float_bits -Os m32 132 -> 68 B).
     let after = sroa(F);
-    assert!(after.contains("alloca"), "{after}");
+    assert!(!after.contains("alloca"), "{after}");
 }
 
 const X64: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -797,4 +798,62 @@ j:
     );
     assert!(preserved.contains("alloca"), "{preserved}");
     assert!(!after.contains("alloca") && !after.contains("store"), "{after}");
+}
+
+/// Asks for the loops of the function and changes nothing.
+struct AsksForShape;
+
+impl llrm_mir::passes::FunctionPass for AsksForShape {
+    fn name(&self) -> &'static str {
+        "asks-for-shape"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// A split that left every block and edge as they were dropped the loops and
+/// dominators the manager held, as `SROAPass::run` keeps them
+/// (`preserveSet<CFGAnalyses>`): memexp -O2 derived 2,397 shapes, 161 of the
+/// drops after SROA alone. Here the second ask derived a second shape.
+#[test]
+fn test_a_split_that_leaves_the_cfg_keeps_the_shape() {
+    let mut module = module(
+        "define i32 @f(i32 %a, i32 %n) {
+b0:
+  %s = alloca { i32, i32 }
+  %p0 = getelementptr { i32, i32 }, ptr %s, i32 0, i32 0
+  %p1 = getelementptr { i32, i32 }, ptr %s, i32 0, i32 1
+  store i32 %a, ptr %p0
+  store i32 %n, ptr %p1
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i32 %i, 1
+  %k = icmp slt i32 %j, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  %x = load i32, ptr %p0
+  %y = load i32, ptr %p1
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(AsksForShape);
+    manager.add(SroaModifyCfg);
+    manager.add(AsksForShape);
+    let before = llrm_analysis::cfg::shapes_derived();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    assert!(!llrm_mir::print::module(&module).contains("alloca"), "the split did not happen");
+    assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "a split that left the CFG dropped the shape");
 }

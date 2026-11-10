@@ -84,6 +84,7 @@ pub fn builder_target(
             add_to_or_disjoint: true,
             // `WebAssemblySubtarget::useAA`
             use_aa: true,
+            fp_stack: false,
             ..DagConfig::default()
         },
         tuning: crate::machine::TUNING,
@@ -107,7 +108,7 @@ pub fn builder_target(
             big_endian: false,
             calling: Some(calling(width, features)),
         }),
-        ..BuilderTarget::m64()
+        ..BuilderTarget::for_pointer_bits(64)
     }
 }
 
@@ -253,7 +254,15 @@ pub fn select_function(
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
     let mut visited = llrm_support::hash::HashSet::default();
-    for &block in function.layout() {
+    // `SelectAllBasicBlocks`: reverse post-order, so a block is built after
+    // the blocks that dominate it and reads what their phis know. A block no
+    // path reaches follows, in layout order.
+    let at: std::collections::HashMap<_, _> =
+        function.layout().iter().enumerate().map(|(at, &block)| (block, at)).collect();
+    let mut order = llrm_mir::blockorder::reverse_post_order_traversal(function);
+    let reached: llrm_support::hash::HashSet<_> = order.iter().copied().collect();
+    order.extend(function.layout().iter().copied().filter(|block| !reached.contains(block)));
+    for block in order {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values
             // do once all its predecessors are selected.
@@ -275,18 +284,26 @@ pub fn select_function(
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
-        let phis = built
-            .phi_updates
-            .iter()
-            .map(|&(phi, src)| {
-                let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
-                    return Err("a phi that is no instruction".to_owned());
-                };
-                let to = function.parent(def).ok_or("a phi outside a block")?.0;
-                let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
-                Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        // A phi of two registers (an `i128`, an `f128`) is updated part by part: the k-th source goes to the k-th register of the phi
+        let mut seen: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+        let mut phis = Vec::new();
+        for &(phi, src) in &built.phi_updates {
+            let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
+                return Err("a phi that is no instruction".to_owned());
+            };
+            let to = function.parent(def).ok_or("a phi outside a block")?.0;
+            let base = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            let part = seen.entry(phi).or_insert(0);
+            let dst = *info.part_regs(base, *part + 1).last().expect("a register");
+            *part += 1;
+            let phi_type = function.value(phi).ty;
+            let ty = if super::is_wide(module.context.types.get(phi_type)) {
+                ValType::I64
+            } else {
+                super::value_type(module, phi_type, width)?
+            };
+            phis.push(PhiCopy { to, dst, src, ty });
+        }
         let probs = llrm_mir::loopinfo::children(function, block)
             .enumerate()
             .map(|(at, to)| (to.0, bpi.get_edge_probability(function, block, at).get_numerator()))
@@ -298,7 +315,7 @@ pub fn select_function(
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;
-            machine_layout.push(id.0);
+            machine_layout.push((at[&block], id.0));
             // `addSuccessorWithProb`: the edges the builder made of a switch
             // are the machine blocks' own; the IR's apply to a block it left
             // alone.
@@ -333,6 +350,11 @@ pub fn select_function(
             });
         }
     }
+    // Selected in reverse post-order, emitted in layout order; the sort is
+    // stable, so the blocks a switch was split into follow their block.
+    machine_layout.sort_by_key(|&(at, _)| at);
+    selected.sort_by_key(|block| at[&llrm_mir::module::BlockId(block.origin)]);
+    let machine_layout: Vec<u32> = machine_layout.into_iter().map(|(_, id)| id).collect();
     let mut frame = statics;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     let declared: Vec<(u32, i32)> = function
@@ -439,4 +461,27 @@ fn static_frame(
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
     let colors = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
     Ok((sizes.iter().map(|&(_, size, align)| (size as u64, align as u64)).collect(), colors.colors))
+}
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    use super::*;
+
+    /// Every target's datalayout names the stack alignment its frames keep, or the passes that raise an alloca to its type's preferred
+    /// alignment have no bound. wasm declares S128 (the pin's string) and keeps 16.
+    #[test]
+    fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
+        // The pin clang's strings (d1106deb71cc), not ours read back.
+        for (width, pin) in [
+            (Width::W32, "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"),
+            (Width::W64, "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"),
+        ] {
+            llrm_target::testing::assert_stack_facts(
+                "wasm",
+                &crate::layout(width).datalayout,
+                WasmArch { width }.stack_alignment() as u64,
+                Some(pin),
+            );
+        }
+    }
 }

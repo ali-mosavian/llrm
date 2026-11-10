@@ -27,6 +27,8 @@ pub mod z80isd {
     use super::{ISD, ids};
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
+    pub const CMPC: ISD = ISD::Target(ids::CMPC);
+    pub const CMPS: ISD = ISD::Target(ids::CMPS);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -45,7 +47,9 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
+    let mut tl = TargetLowering::empty(
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
+    );
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -93,8 +97,11 @@ pub fn target_lowering() -> TargetLowering {
     // loop is half the word's.
     set(&[Mul, SDiv, UDiv, SRem, URem], &[MVT::I8, MVT::I16], Action::LibCall);
     set(&[ShlParts, SrlParts, SraParts], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[MulHS, MulHU, UMulLoHi, SMulLoHi, SDivRem, UDivRem], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
+    // no rotate or funnel shift instruction: shifts and an or (`expandROT`, `expandFunnelShift`)
+    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
@@ -102,8 +109,14 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Undef, Poison], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
     set(&[ZeroExtend, AnyExtend, SignExtend], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SetCC, Select], &[MVT::I8, MVT::I16], Action::Custom);
+    // a long's order is the chain of its words' compares (`lower_setcc_carry`)
+    set(&[SetCCCarry], &[MVT::I1, MVT::I8, MVT::I16], Action::Custom);
     // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
     set(&[Load, Store], &[MVT::I1], Action::Custom);
+    // `va_start` stores the address of the first unnamed argument (`lower_vastart_frame_index`); the rest of a
+    // `va_list` is a pointer the generic expansions walk
+    set(&[VAStart], &[MVT::Other], Action::Custom);
+    set(&[VAEnd, VACopy], &[MVT::Other], Action::Expand);
     for (vt, names) in [
         (MVT::I8, ["__mulqi3", "__divqi3", "__udivqi3", "__modqi3", "__umodqi3"]),
         (MVT::I16, ["__mulhi3", "__divhi3", "__udivhi3", "__modhi3", "__umodhi3"]),
@@ -131,6 +144,27 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_size_libcall_name(op, MVT::I32, name);
     }
     tl.set_size_shift_call(8, 10);
+    // the long divide has a smaller routine for a function tuned for size
+    // (one step per dividend bit, registers alone: 76 B against 391)
+    for (op, name) in
+        [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divsi3", "__s_udivsi3", "__s_modsi3", "__s_umodsi3"])
+    {
+        tl.set_size_libcall_name(op, MVT::I32, name);
+    }
+    // a word divide and remainder of the same operands are one call too
+    // (`lower_divrem_word`)
+    for (op, name) in [(SDivRem, "__divremhi4"), (UDivRem, "__udivhi3")] {
+        tl.set_operation_action(op, MVT::I16, Action::Custom);
+        tl.set_libcall_name(op, MVT::I16, name);
+    }
+    // a divide and a remainder of the same long operands are one call, the
+    // remainder stored through an address (`ExpandDivRemLibCall`; the pin's
+    // `useDivRem` pairs them where the type is Custom, `lower_divrem`)
+    for (op, name, small) in [(SDivRem, "__divremsi4", "__s_divremsi4"), (UDivRem, "__udivremsi4", "__s_udivremsi4")] {
+        tl.set_operation_action(op, MVT::I32, Action::Custom);
+        tl.set_libcall_name(op, MVT::I32, name);
+        tl.set_size_libcall_name(op, MVT::I32, small);
+    }
     // the long long divide has a smaller routine (one step per dividend bit)
     // for a function tuned for size
     for (op, name) in
@@ -141,12 +175,22 @@ pub fn target_lowering() -> TargetLowering {
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    // equality of a long is the bytes' xors or-ed in the accumulator
+    tl.set_byte_equality(true);
+    tl.set_assert_sext_keeps_high(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
+    // a jump table: the word at table + 2 * index, jumped to (`ExpandNode` of BR_JT)
+    tl.set_operation_action(BrJT, MVT::Other, Action::Expand);
+    tl.set_operation_action(JumpTable, MVT::I16, Action::Custom);
     tl
 }
 
 /// The custom lowerings.
-pub struct Z80Lowering;
+pub struct Z80Lowering {
+    /// The function is tuned for size: the small routines
+    /// (`set_size_libcall_name`).
+    pub sized: bool,
+}
 
 impl Z80Lowering {
     /// A shift by a constant is selected as it is; by a variable it is the call
@@ -184,6 +228,126 @@ impl Z80Lowering {
     }
 }
 
+/// `ExpandDivRemLibCall` for a word: the routine returns the quotient in `de`
+/// and the remainder in `hl`, the registers of a long result; the divide
+/// routine `__udivhi3` leaves both there already, the signed one is
+/// `__divremhi4`.
+fn lower_divrem_word(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use super::call::{Ext, In, Out, lower_call};
+    let signed = dag.opcode(node) == ISD::SDivRem;
+    let name = if signed { "__divremhi4" } else { "__udivhi3" };
+    let ext = if signed { Ext::Sign } else { Ext::Zero };
+    let outs: Vec<Out> = (0..2)
+        .map(|at| Out {
+            value: dag.operand(node, at),
+            ext,
+            pointer: false,
+            arg_vt: EVT::I16,
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        })
+        .collect();
+    let ins =
+        vec![
+            In { vt: EVT::I16, pointer: false, arg_vt: EVT::I32, split: true, sret: false, ext: Ext::Any, byval: None };
+            2
+        ];
+    let callee = dag.get_target_external_symbol(EVT::I16, name);
+    let root = dag.entry_node();
+    let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+    let [quotient, remainder] = values[..] else { return None };
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I16], &[quotient, remainder]))
+}
+
+impl Z80Lowering {
+    /// `ExpandDivRemLibCall`: one call to the routine that returns the
+    /// quotient and stores the remainder through the address it is given, the
+    /// last argument; the remainder is loaded back after the call.
+    fn lower_divrem(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out, lower_call};
+        let signed = dag.opcode(node) == ISD::SDivRem;
+        let name = match (signed, self.sized) {
+            (true, false) => "__divremsi4",
+            (false, false) => "__udivremsi4",
+            (true, true) => "__s_divremsi4",
+            (false, true) => "__s_udivremsi4",
+        };
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let cell = dag.create_stack_temporary(4, 1);
+        let mut outs = Vec::new();
+        for at in 0..2 {
+            let value = dag.operand(node, at);
+            for word in 0..2u128 {
+                let part = if word == 0 {
+                    value
+                } else {
+                    let by = dag.get_constant(16, EVT::I8);
+                    dag.get_node(ISD::Srl, EVT::I32, &[value, by])
+                };
+                let part = dag.get_node(ISD::Truncate, EVT::I16, &[part]);
+                outs.push(Out {
+                    value: part,
+                    ext,
+                    pointer: false,
+                    arg_vt: EVT::I32,
+                    split: true,
+                    variadic: false,
+                    sret: false,
+                    byval: None,
+                });
+            }
+        }
+        outs.push(Out {
+            value: dag.get_frame_index(EVT::I16, cell),
+            ext: Ext::Any,
+            pointer: true,
+            arg_vt: EVT::I16,
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        });
+        let ins = vec![
+            In {
+                vt: EVT::I16,
+                pointer: false,
+                arg_vt: EVT::I32,
+                split: true,
+                sret: false,
+                ext: Ext::Any,
+                byval: None
+            };
+            2
+        ];
+        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let root = dag.entry_node();
+        let (chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        let [lo, hi] = values[..] else { return None };
+        let quotient = dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
+        let address = dag.get_frame_index(EVT::I16, cell);
+        let info = MemInfo {
+            mem_vt: EVT::I32,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let remainder = dag.get_load(EVT::I32, chain, address, info);
+        Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I32, EVT::I32], &[quotient, remainder]))
+    }
+}
+
 impl Hooks for Z80Lowering {
     fn lower_operation(
         &mut self,
@@ -193,12 +357,19 @@ impl Hooks for Z80Lowering {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
             ISD::Sub => Some(lower_sub(dag, node)),
+            ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I32 => self.lower_divrem(dag, node),
+            ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I16 => lower_divrem_word(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCCCarry => lower_setcc_carry(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::SignExtendInReg => lower_sign_extend_inreg(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::JumpTable => lower_jump_table(dag, node),
+            ISD::VAStart => {
+                llrm_codegen::backend::selectiondag::target_calling::lower_vastart_frame_index(dag, node, EVT::I16, 1)
+            }
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,
@@ -271,7 +442,15 @@ impl Hooks for Z80Lowering {
             EVT::I64 => Vec::new(),
             _ => {
                 vec![
-                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any, byval: None };
+                    In {
+                        vt: part_vt,
+                        pointer: false,
+                        arg_vt: ret,
+                        split: ret == EVT::I32,
+                        sret: false,
+                        ext: Ext::Any,
+                        byval: None
+                    };
                     if ret == EVT::I32 { 2 } else { 1 }
                 ]
             }
@@ -414,6 +593,16 @@ fn lower_global_address(
     Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[address]))
 }
 
+/// `LowerJumpTable`: `WRAPPER` of the table's address.
+fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let table = dag.get_target_jump_table(EVT::I16, index);
+    Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[table]))
+}
+
 fn cc_operand(
     dag: &mut SelectionDAG,
     code: u128,
@@ -537,6 +726,24 @@ fn compare(
         let (code, a, b) = translate_cc(dag, cc, op0, op1);
         return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
     }
+    // A signed order of two words that are not constants: the subtract's sign
+    // corrected for overflow (6 B) where biasing both operands costs 8.
+    // DEVIATE Z80-CMP16S-ROW (owner z80, exit 2026-11-15): compare_to_int64
+    // +19 B / +416 T at -O1..-O3 (allocation after the one site; 917 B against
+    // SDCC's 1589 B).
+    if vt == EVT::I16 && dag.constant(op0).is_none() && dag.constant(op1).is_none() {
+        let (code, a, b) = match cc {
+            SetLt => (cond::C, op0, op1),
+            SetGe => (cond::NC, op0, op1),
+            SetGt => (cond::C, op1, op0),
+            SetLe => (cond::NC, op1, op0),
+            _ => {
+                let (code, a, b) = translate_cc(dag, cc, op0, op1);
+                return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
+            }
+        };
+        return (code, dag.get_node(z80isd::CMPS, EVT::I8, &[a, b]));
+    }
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
     (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]))
 }
@@ -568,13 +775,48 @@ fn lower_setcc(
     Some(dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `LowerSETCCCARRY`: the high words' compare takes the borrow of the low
+/// words' (`cp16`, then `cp16c`), the order read from the carry. A signed order
+/// has the carry made to hold the sign corrected for overflow.
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    // The low words' subtract folded to no borrow (`x - 0` never borrows): the high compare stands alone.
+    if dag.constant(borrow) == Some(0) && matches!(dag.value_type(high), EVT::I8 | EVT::I16) {
+        let (code, flags) = compare(dag, cond_of(dag, dag.operand(node, 3)), high, other);
+        let code = cc_operand(dag, code);
+        return Some(dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]));
+    }
+    if dag.opcode(borrow) != ISD::USubO || dag.value_type(high) != EVT::I16 {
+        return None;
+    }
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let code = match cc {
+        CondCode::SetULt | CondCode::SetLt => cond::C,
+        CondCode::SetUGe | CondCode::SetGe => cond::NC,
+        _ => return None,
+    };
+    let signed = dag.get_constant(matches!(cc, CondCode::SetLt | CondCode::SetGe) as u128, EVT::I8);
+    let carry = dag.get_node(z80isd::CMP, EVT::I8, &[low, below]);
+    let flags = dag.get_node(z80isd::CMPC, EVT::I8, &[high, other, carry, signed]);
+    let code = cc_operand(dag, code);
+    Some(dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]))
+}
+
 /// The code and flags a condition value branches on: a lowered compare, or the
 /// value tested against zero (`NE`).
 fn condition(
     dag: &mut SelectionDAG,
     value: SDValue,
 ) -> (SDValue, SDValue) {
-    let value = if dag.opcode(value) == ISD::SetCC { lower_setcc(dag, value).unwrap_or(value) } else { value };
+    let value = match dag.opcode(value) {
+        ISD::SetCC => lower_setcc(dag, value).unwrap_or(value),
+        ISD::SetCCCarry => lower_setcc_carry(dag, value).unwrap_or(value),
+        _ => value,
+    };
     if dag.opcode(value) == z80isd::SETCC {
         return (dag.operand(value, 0), dag.operand(value, 1));
     }
@@ -599,6 +841,7 @@ fn is_condition_tree(
     match dag.opcode(value) {
         ISD::Constant => true,
         ISD::SetCC => matches!(dag.value_type(operand(0)), EVT::I8 | EVT::I16) || (tree(0) && tree(1)),
+        ISD::SetCCCarry => true,
         ISD::Truncate => matches!(dag.value_type(operand(0)), EVT::I8 | EVT::I16),
         ISD::Freeze => tree(0),
         ISD::Select => tree(1) && tree(2),
@@ -624,6 +867,10 @@ fn condition_byte(
                 Some(lowered) => lowered,
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
+            ISD::SetCCCarry => match lower_setcc_carry(dag, value) {
+                Some(lowered) => lowered,
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
             // a multi-result lowering's wrapper (`lower_bit_load`): the bit it
             // holds
             ISD::MergeValues => {
@@ -637,6 +884,11 @@ fn condition_byte(
                 let one = dag.get_constant(1, EVT::I8);
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
             }
+            // a bit loaded and tested at once: the byte read, masked
+            ISD::Load => match lower_bit_load(dag, value) {
+                Some(lowered) => condition_byte(dag, lowered),
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
             ISD::Freeze => {
                 let bit = dag.operand(value, 0);
                 condition_byte(dag, bit)

@@ -38,8 +38,10 @@
 //! Not translated: a compare redundant with another compare or subtract
 //! (`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`), `isUseDefConvertible`
 //! (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
-//! the flag source, the backward scan into a single predecessor, `MOV32r0`
-//! motion and the NF variants (APX).
+//! the flag source, the backward scan into a single predecessor and the NF
+//! variants (APX). A zero (`MOV32r0`) between the source and the compare moves
+//! above the source ([L5640](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L5640)),
+//! so it can be an `xor`.
 //!
 //! # Example
 //! A subtract whose result nothing reads, ahead of a branch on the flags:
@@ -58,6 +60,7 @@
 //! A machine phase on SSA after MachineSink and ahead of MachineCombiner (the
 //! pin's `addMachineSSAOptimization` order), at every level but -O0.
 
+use crate::backend::machinesched::zero_move;
 use std::sync::Arc;
 
 use crate::backend::lanes::Lanes;
@@ -256,25 +259,37 @@ fn flags_reused(body: &LirBody) -> LirBody {
         .map(|block| {
             let insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
             let mut gone: Vec<usize> = Vec::new();
+            // `(zero, def)`: a `mov r, 0` between the flag source and the
+            // compare goes ahead of the source (`Movr0Inst`).
+            let mut hoisted: Vec<(usize, usize)> = Vec::new();
             for at in 0..insns.len() {
                 if let Some(value) = compared_with_zero(&insns[at])
-                    && reusable(body, block, &insns, at, value, &reads, &flags)
+                    && let Some(def) = reusable(body, block, &insns, at, value, &reads, &flags)
                 {
                     gone.push(at);
+                    // the zero nearest the compare, once per source
+                    if let Some(zero) = (def + 1..at).rev().find(|&between| zero_move(&insns[between]))
+                        && !hoisted.iter().any(|(moved, _)| *moved == zero)
+                    {
+                        hoisted.push((zero, def));
+                    }
                 }
             }
             if gone.is_empty() {
                 return block.clone();
             }
             changed = true;
-            block.with_insns(
-                insns
-                    .iter()
-                    .enumerate()
-                    .filter(|(at, _)| !gone.contains(at))
-                    .map(|(_, one)| Arc::clone(one))
-                    .collect::<Vec<_>>(),
-            )
+            let mut out: Vec<Arc<Insn>> = Vec::with_capacity(insns.len());
+            for (at, one) in insns.iter().enumerate() {
+                if gone.contains(&at) || hoisted.iter().any(|(zero, _)| *zero == at) {
+                    continue;
+                }
+                for (zero, _) in hoisted.iter().filter(|(_, def)| *def == at) {
+                    out.push(Arc::clone(&insns[*zero]));
+                }
+                out.push(Arc::clone(one));
+            }
+            block.with_insns(out)
         })
         .collect();
     if changed { body.with_blocks(blocks) } else { body.clone() }
@@ -303,7 +318,7 @@ fn reusable(
     value: u32,
     reads: &HashMap<u32, usize>,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
-) -> bool {
+) -> Option<usize> {
     // the scan back from the compare: no other writer of the flags before the
     // definition of the value
     let mut defined = None;
@@ -318,18 +333,18 @@ fn reusable(
         }
         match flags(one) {
             Some((_, writes)) if writes.is_empty() => {}
-            _ => return false,
+            _ => return None,
         }
     }
-    let Some(def) = defined else { return false };
-    let Some((_, sets)) = defines_flags(&insns[def], reads) else { return false };
+    let def = defined?;
+    let (_, sets) = defines_flags(&insns[def], reads)?;
     let width = |loc: &Loc| match loc {
         Loc::Held(held) => Some(held.width),
         _ => None,
     };
     let compared = insns[at].what.as_ref().and_then(|what| what.sources.first()).and_then(width);
     if compared != insns[def].what.as_ref().and_then(|what| what.dests.first()).and_then(width) {
-        return false;
+        return None;
     }
     // the scan forward from the compare: the readers of the flags read only
     // what the definition sets, until something writes them again. A write of
@@ -339,23 +354,21 @@ fn reusable(
         if one.is_meta() {
             continue;
         }
-        let Some((reads, writes)) = flags(one) else {
-            return false;
-        };
+        let (reads, writes) = flags(one)?;
         if !reads.is_disjoint(&pending) {
             let named = one.what.as_ref().and_then(|what| what.name.as_deref());
             if !named.is_some_and(|name| reads_what_it_sets(name, sets)) {
-                return false;
+                return None;
             }
         }
         pending = pending.minus(&writes);
         if pending.is_empty() {
-            return true;
+            return Some(def);
         }
     }
     // not written again in the block: a successor must write them before it
     // reads them
-    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending))
+    block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending)).then_some(def)
 }
 
 /// Whether the block at `at` writes every one of `pending` before it reads any.
@@ -590,7 +603,7 @@ fn folded_use(
 /// to fold.
 ///
 /// Not translated: the other instructions `foldMemoryOperand` knows (`imul`,
-/// the extends, the x87 forms), a load whose result is read twice.
+/// the extends, the x87 forms, `test r, imm`), a load whose result is read twice.
 pub fn loads_folded(body: &LirBody) -> LirBody {
     let mut reads: HashMap<u32, usize> = HashMap::default();
     for block in &body.blocks {
@@ -684,6 +697,29 @@ fn load_folded(
         let mut folded = one.clone();
         folded.what =
             Some(Semantics { name: Some("cmp".into()), sources: vec![Loc::Mem(cell.clone()), zero], ..what.clone() });
+        folded.uses.retain(|&used| used != load);
+        folded.uses.extend(def.uses.iter().copied());
+        folded.widths.retain(|&(used, _)| used != load);
+        folded.widths.extend(def.widths.iter().copied());
+        return Some((folded, load));
+    }
+    // `cmp r, imm` of a waiting load is `cmp [m], imm` (`foldMemoryOperandImpl`:
+    // CMP*ri becomes CMP*mi).
+    if (what.op, name) == (Operation::Compare, "cmp")
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && !what.indirect
+        && let [Loc::Held(first), Loc::Imm(imm)] = &what.sources[..]
+        && imm.address.is_none()
+        && let Some(&at) = loads.get(&first.value)
+        && let Some(Loc::Mem(cell)) = insns[at].what.as_ref().and_then(|w| w.sources.first())
+        && first.width == cell.width
+    {
+        let load = first.value;
+        let def = &insns[at];
+        let mut folded = one.clone();
+        folded.what = Some(Semantics { sources: vec![Loc::Mem(cell.clone()), Loc::Imm(imm.clone())], ..what.clone() });
         folded.uses.retain(|&used| used != load);
         folded.uses.extend(def.uses.iter().copied());
         folded.widths.retain(|&(used, _)| used != load);
@@ -1241,6 +1277,25 @@ mod tests {
         assert!(load.defines.is_empty() && load.uses.is_empty());
         assert!(matches!(cmp.what.as_ref().unwrap().sources[..], [Loc::Mem(_), Loc::Held(_)]));
         assert_eq!(cmp.uses, [7, 3]);
+    }
+
+    /// `mov cl, [rsp+k]; cmp cl, 0x43` stayed two instructions and a register,
+    /// the pin's `cmp byte ptr [rsp+k], 0x43` (os_execute m64 -Os, eight of
+    /// them, +23 B).
+    #[test]
+    fn test_a_load_read_once_by_a_compare_with_an_immediate_is_its_operand() {
+        let cell = llrm_lir::Mem::new(None, 1);
+        let byte = |value| Loc::Held(Held { value, width: 1, offset: 0 });
+        let load = insn(0, Operation::Move, "mov", vec![byte(8)], vec![Loc::Mem(cell)], vec![8], vec![]);
+        let imm = Loc::Imm(Imm { value: 0x43, width: 1, address: None });
+        let body = body_of(vec![
+            load,
+            insn(1, Operation::Compare, "cmp", vec![], vec![byte(8), imm], vec![], vec![8]),
+            insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = loads_folded(&body);
+        assert!(matches!(done.blocks[0].insns[1].what.as_ref().unwrap().sources[..], [Loc::Mem(_), Loc::Imm(_)]));
+        assert!(done.blocks[0].insns[1].uses.is_empty());
     }
 
     /// A load read twice, or with a store between it and its reader, stays.

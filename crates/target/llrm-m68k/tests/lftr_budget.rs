@@ -18,8 +18,12 @@ fn a_size_build_keeps_the_loop_compare_and_has_no_guard() {
     assert!(!out.contains("cmpi.l\t#1"), "a guard around the loop:\n{out}");
 }
 
+/// The speed build used to keep the guard at the 68000 (budget 4); an `smax`
+/// limit is not worth a second counter at any CPU or level. The test once
+/// looked for `cmpi.l #1`, which the output no longer spells.
 #[test]
-fn a_speed_build_keeps_the_pins_test_replacement() {
+fn a_speed_build_keeps_the_loop_compare_too() {
     let out = at(Level::O2);
-    assert!(out.contains("cmpi.l\t#1"), "no smax guard at -O2:\n{out}");
+    assert!(out.contains("cmp.l"), "the loop is not a compare:\n{out}");
+    assert!(!out.contains("subq.l\t#1, %d"), "a second counter beside the limit:\n{out}");
 }

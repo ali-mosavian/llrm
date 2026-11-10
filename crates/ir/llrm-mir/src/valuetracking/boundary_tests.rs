@@ -8,18 +8,17 @@ fn rejects(text: &str) -> bool {
     parse::module(text).is_err()
 }
 
-/// MIR types vectors and verifies element-wise operations on them, but has no
-/// lane operation, and no front end or lowering of llrm produces or selects a
-/// vector value. ValueTracking's `DemandedElts` is therefore not translated:
-/// a vector value claims nothing (see `known::compute_known_bits`).
+/// MIR has the lane operations (VECTORS-1 PR-A) but ValueTracking's
+/// `DemandedElts` is still not translated: a lane operation's result claims
+/// nothing (see `known::compute_known_bits`), so no pass folds on it.
 #[test]
-fn mir_has_no_lane_operations() {
+fn lane_operations_parse_and_claim_nothing() {
     for lane in [
         "%x = extractelement <4 x i32> %a, i32 0",
         "%x = insertelement <4 x i32> %a, i32 1, i32 0",
         "%x = shufflevector <4 x i32> %a, <4 x i32> %a, <4 x i32> zeroinitializer",
     ] {
-        assert!(rejects(&format!("define void @f(<4 x i32> %a) {{\n  {lane}\n  ret void\n}}\n")), "{lane}");
+        assert!(!rejects(&format!("define void @f(<4 x i32> %a) {{\n  {lane}\n  ret void\n}}\n")), "{lane}");
     }
 }
 

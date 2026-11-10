@@ -6,11 +6,11 @@
 //! a byte offset for Y. `(add ptr, c)` with `0 <= c < 256` gives `ptr` and `c`;
 //! any other address is its own pointer at offset 0.
 
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::generated::{ids::isd as own, instrinfo, mos_mos6502, mos_w65c02};
 
@@ -55,18 +55,47 @@ impl MosHooks {
 }
 
 /// `SelectIndirect`: the pointer and the byte offset.
-fn select_indirect<D: Dag>(
+fn select_indirect<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
 ) {
-    let (base, offset) = match (dag.opcode(value.node) == isd::ADD).then(|| dag.constant(dag.operand(value.node, 1))) {
+    // A sum that is also wanted as a value (the pointer a loop steps) is the
+    // address as it is: folding its constant instead keeps the old pointer
+    // alive beside the new one, a copy of the pair each trip.
+    let folds = dag.opcode(value.node) == isd::ADD && !dag.has_materializing_use(value);
+    let (base, offset) = match folds.then(|| dag.constant(dag.operand(value.node, 1))) {
         Some(Some(c)) if (0..256).contains(&c) => (dag.operand(value.node, 0), c),
         _ => (value, 0),
     };
     let offset = dag.target_constant(offset, mvt::i8);
+    // A frame object stays an object (`rc0` plus its offset once the frame is
+    // laid out), not a pointer value built by `LEASP16`: the address becomes a
+    // `TargetFrameIndex`, as x86's `getAddressOperands` makes it.
+    let base = match dag.frame_index(base) {
+        Some(index) => dag.target_frame_index(index, mvt::i16),
+        None => base,
+    };
     results.push((base, None));
     results.push((offset, None));
+}
+
+/// `SelectPointer`: `SelectIndirect` for an address that is a pointer. A
+/// global's address (or a constant) is left to the absolute forms: `lda g+36`
+/// is one instruction where a pointer pair is four to build, and the folds into
+/// an ALU op have no absolute form for every carry op.
+fn select_pointer<D: AddrDag>(
+    dag: &mut D,
+    value: SDValue,
+    results: &mut Vec<(SDValue, Option<u32>)>,
+) -> bool {
+    let base = if dag.opcode(value.node) == isd::ADD { dag.operand(value.node, 0) } else { value };
+    let fixed = |dag: &D, v: SDValue| dag.opcode(v.node) == own::WRAPPER || dag.constant(v).is_some();
+    if fixed(dag, value) || fixed(dag, base) {
+        return false;
+    }
+    select_indirect(dag, value, results);
+    true
 }
 
 /// `SelectPlain`: a pointer with no constant to add and no frame object, as
@@ -248,6 +277,7 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
                 select_indirect(dag, value, results);
                 true
             }
+            Some("SelectPointer") => select_pointer(dag, value, results),
             Some("SelectPlain") => select_plain(dag, value, results),
             Some("SelectAbs") => select_abs(dag, value, results),
             Some("SelectAbsX") => select_absx(dag, value, results),

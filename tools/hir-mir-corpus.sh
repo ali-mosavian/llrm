@@ -35,7 +35,10 @@ for source in $(find "$root/tests/fixtures/nib" -name '*.nib' | sort); do
     echo "frontend fails: $name"
   fi
 done
-echo "programs: $(ls "$out"/*.frontend | wc -l), emitted: $(ls "$out"/*.ll | wc -l)"
+emitted=$(ls "$out"/*.ll 2>/dev/null | wc -l)
+echo "programs: $(ls "$out"/*.frontend | wc -l), emitted: $emitted"
+# Every frontend failing checks nothing; it only echoed "frontend fails" and exited 0.
+[ "$emitted" -gt 0 ] || failed=1
 echo "defined: $(cat "$out"/*.ll | grep -c '^define')"
 sed -n 's/^refused @[^:]*: //p' "$out"/*.err | sed 's/[0-9][0-9]*/N/g' | sort | uniq -c | sort -rn
 exit $failed

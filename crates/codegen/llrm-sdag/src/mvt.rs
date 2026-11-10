@@ -13,6 +13,8 @@ pub enum MVT {
     F32,
     F64,
     F80,
+    /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin keeps it with the other floats).
+    F128,
     /// A far pointer, a selector and an offset (DEVIATE SD2): m16 only, the
     /// type legalizer expands it into two `i16`.
     Far,
@@ -58,6 +60,7 @@ impl EVT {
     pub const I16: EVT = EVT::Simple(MVT::I16);
     pub const I32: EVT = EVT::Simple(MVT::I32);
     pub const I64: EVT = EVT::Simple(MVT::I64);
+    pub const I128: EVT = EVT::Simple(MVT::I128);
 
     /// `EVT::getIntegerVT`: the simple type when the width has one, so equal
     /// types compare equal.
@@ -77,7 +80,7 @@ impl EVT {
     }
 
     pub fn is_floating_point(self) -> bool {
-        matches!(self, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
+        matches!(self, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80 | MVT::F128))
     }
 
     /// `getSizeInBits`; a chain or glue has none.
@@ -91,7 +94,7 @@ impl EVT {
                 MVT::I32 | MVT::F32 | MVT::Far => 32,
                 MVT::I64 | MVT::F64 => 64,
                 MVT::F80 => 80,
-                MVT::I128 => 128,
+                MVT::I128 | MVT::F128 => 128,
                 MVT::Other | MVT::Glue => panic!("{vt:?} has no size"),
             },
         }

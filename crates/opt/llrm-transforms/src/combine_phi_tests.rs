@@ -30,11 +30,24 @@ fn visit(
 
 /// `@f` after `foldOpIntoPhi` alone, through the driver.
 fn combined(text: &str) -> String {
+    combined_hooks(text, false)
+}
+
+/// The same, with DEVIATE PHICONST (`phi_constant_users`) on or off.
+fn combined_hooks(text: &str, phi_constant_users: bool) -> String {
     let mut module = parsed(text);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
-    let (context, function) = module.function_mut("f").expect("@f");
-    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let callees = llrm_mir::memory::callees(&module);
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let hooks = crate::combine::TargetHooks { phi_constant_users, ..Default::default() };
+    {
+        let (context, function) = module.function_mut("f").expect("@f");
+        crate::combine::combine_for(
+            context, &globals, &callees, &metadata, &DataLayout::default(), function, visit, true, &mut declared, hooks,
+        );
+    }
+    declared.place(&mut module).expect("places");
     printed(&module)
 }
 
@@ -114,11 +127,12 @@ fn two_unknown_incoming_values_leave_the_add_where_it_is() {
     assert_eq!(combined(&text), text);
 }
 
-/// The phi has two users that are not the same operation: folding one into
-/// the phi would leave the other reading the old phi, so it stays.
+/// The phi has two users that are not the same operation and one reads a
+/// run-time value: folding the other into the phi would leave this one reading
+/// the old phi, so it stays (the pin's rule; PHICONST needs every user to fold).
 #[test]
 fn a_phi_with_another_kind_of_user_is_left() {
-    let text = DIAMOND.replace("ret i16 %r", "%s = mul i16 %p, 3\n  %t = add i16 %r, %s\n  ret i16 %t");
+    let text = DIAMOND.replace("ret i16 %r", "%s = mul i16 %p, %y\n  %t = add i16 %r, %s\n  ret i16 %t");
     assert_eq!(combined(&text), text);
 }
 
@@ -328,4 +342,78 @@ x:
 }
 "
     );
+}
+
+const TWO_USERS: &str = "define i32 @f(i1 %c, i32 %y) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %j
+
+b:
+  br label %j
+
+j:
+  %p = phi i32 [ -39797, %a ], [ 39797, %b ]
+  %s = ashr i32 %p, 1
+  %t = add i32 %p, 19898
+  %r = add i32 %s, %t
+  ret i32 %r
+}
+";
+
+/// DEVIATE PHICONST. x_cordic -O3 at m32 kept `ashr (phi [-39797, 39797]), 1` and
+/// `add (phi ..), 19898` as run-time operations because the phi has two
+/// different users: 1746 more instructions than gcc, whose arms hold the
+/// constants. Both users become phis of constants and the old phi goes.
+#[test]
+fn a_phi_of_constants_with_several_users_folds_into_each_of_them() {
+    let text = combined_hooks(TWO_USERS, true);
+    // ashr -39797 1 + (-39797 + 19898) = -39798; ashr 39797 1 + (39797 + 19898) = 79593:
+    // the sum of the two new phis folds as well.
+    assert!(text.contains("phi i32 [ -39798, %a ], [ 79593, %b ]"), "{text}");
+    assert!(!text.contains("ashr") && !text.contains("add "), "{text}");
+}
+
+/// A user that does not simplify on every incoming (`add %p, %y` reads a run-time
+/// value) leaves the phi and its other users alone: no second live phi.
+#[test]
+fn a_phi_of_constants_with_a_user_that_does_not_fold_is_left_alone() {
+    let text = TWO_USERS.replace("%t = add i32 %p, 19898", "%t = add i32 %p, %y");
+    assert_eq!(combined_hooks(&text, true), printed(&parsed(&text)));
+}
+
+/// At -O1 and -Os (PHICONST off) the pin's one-user rule stands: the corpus grew
+/// 2 to 12 B with it on (m16 float_in_place_update -O1).
+#[test]
+fn a_phi_of_constants_with_several_users_is_left_where_bytes_are_strict() {
+    assert_eq!(combined_hooks(TWO_USERS, false), printed(&parsed(TWO_USERS)));
+}
+
+/// Two compares of one phi of constants stay compares: folding them makes two
+/// phis of booleans, one the complement of the other (m16 float_in_place_update
+/// -O2: +12 B and +7 clocks, worse on both axes).
+#[test]
+fn two_compares_of_a_phi_of_constants_are_left_to_jump_threading() {
+    let text = "define i16 @f(i1 %c, i16 %y) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %j
+
+b:
+  br label %j
+
+j:
+  %p = phi i16 [ 1, %a ], [ 2, %b ]
+  %x = icmp eq i16 %p, 1
+  %z = icmp eq i16 %p, 2
+  %r = and i1 %x, %z
+  %s = select i1 %r, i16 %y, i16 7
+  ret i16 %s
+}
+";
+    assert_eq!(combined_hooks(text, true), printed(&parsed(text)));
 }

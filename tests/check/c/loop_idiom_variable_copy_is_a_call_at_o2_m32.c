@@ -10,5 +10,6 @@ int rd(int count)
     while (n < count && pos < 12000) dst[n++] = src[pos++];
     return n;
 }
+// MEM-1 (#7233) lowers the memcpy to an inline `rep movsd` at speed; the byte loop must not come back.
 // CHECK-LABEL: rd proc
-// CHECK: call memcpy
+// CHECK: rep movsd

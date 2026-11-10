@@ -31,7 +31,7 @@ The pass sits after `cvp` in the simplify phase (PassBuilderPipelines.cpp
 [L672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L672)),
 so the inliner then takes the direct calls.
 
-DEVIATE JT-1 (no number, owner w-6): no profile data (`!prof` value
+DEVIATE JT-1 (no number, owner w10-instcombine): no profile data (`!prof` value
 profile) and no `!prof` on the switch: llrm has none.
 
 ## Example

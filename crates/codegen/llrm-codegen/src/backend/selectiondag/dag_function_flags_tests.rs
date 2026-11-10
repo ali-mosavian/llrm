@@ -360,6 +360,94 @@ fn a_carry_survives_a_flag_writer_scheduled_between_the_add_and_its_reader() {
     );
 }
 
+const WIDE_ADD_OF_ONE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %t) optsize {
+  %r = add i64 %t, 1
+  ret i64 %r
+}
+";
+
+/// A 64-bit add of 1 at -Os was `inc; sete cl; add cl, -1; adc`: the low half
+/// tests the zero flag (`getX86XALUOOp`) and the carry into the high half
+/// came back through a byte. `combineCarryThroughADD` reads the carry flag of
+/// that add, so it is `add 1; adc 0` (pin: `addl $1; adcl $0`), 4 B shorter
+/// at m32 (compare_to_int64 -Os 190 against 168 B).
+#[test]
+fn a_wide_add_of_one_is_an_add_and_an_adc_not_an_inc_and_a_byte_round_trip() {
+    let module = llrm_mir::parse::module(WIDE_ADD_OF_ONE).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "adc") && !names.iter().any(|n| n == "sete" || n == "inc"),
+        "{names:?}"
+    );
+}
+
+const WIDE_SELECT_OF_CONSTANTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) optsize {
+  %c = icmp eq i32 %a, %b
+  %s = select i1 %c, i64 0, i64 2
+  ret i64 %s
+}
+";
+
+/// An `i64` select of two constants was branched in MIR before the DAG saw it
+/// (`jne; xor; mov; jmp; xor; mov 2`, compare_to_int64 -Os), so the pin's
+/// `foldSelectOfConstants` and the legalizer's one-select-per-half never ran:
+/// the pin has `setne; add eax, eax`.
+#[test]
+fn an_i64_select_of_constants_is_arithmetic_on_the_flag_not_a_branch() {
+    let module = llrm_mir::parse::module(WIDE_SELECT_OF_CONSTANTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "setne" || n == "setcc" || n.starts_with("set"))
+            && !names.iter().any(|n| n.starts_with('j')),
+        "{names:?}"
+    );
+}
+
+const WIDE_SELECT_OF_ADJACENT_CONSTANTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) optsize {
+  %c = icmp slt i32 %a, %b
+  %s = select i1 %c, i64 5, i64 6
+  ret i64 %s
+}
+";
+
+/// `select c, 5, 6` is `add (sext c), 6`; the pin's `add (sext i1 Y), X` is
+/// `sub X, (zext i1 Y)` (visitADDLikeCommutative), which `setge; add 5` is.
+/// Without the fold the i64 select was `setl; neg; mov; add 6; adc 0`
+/// (select_of_constants f301, +5 B each).
+#[test]
+fn an_i64_select_of_adjacent_constants_adds_the_flag_not_a_negated_one() {
+    let module = llrm_mir::parse::module(WIDE_SELECT_OF_ADJACENT_CONSTANTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert!(!names.iter().any(|n| n == "neg" || n == "adc" || n == "sbb" || n.starts_with('j')), "{names:?}");
+}
+
 const AFTER_UNREACHABLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @abort()
 define i32 @f(i32 %x, i1 %c) {
@@ -910,4 +998,33 @@ define i64 @f(i32 %hi, i32 %lo, i32 %d) {
         .collect();
     assert_eq!(names.iter().filter(|n| n.as_str() == "div").count(), 1, "{names:?}");
     assert!(!names.iter().any(|n| n.as_str() == "call"), "{names:?}");
+}
+
+const OVERFLOW_LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare {i32,i1} @llvm.uadd.with.overflow.i32(i32, i32)
+define void @f(ptr %p, i32 %s) {
+entry:
+  br label %l
+l:
+  %i = phi i32 [ %s, %entry ], [ %m, %l ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store volatile i8 -1, ptr %a
+  %o = call {i32,i1} @llvm.uadd.with.overflow.i32(i32 %i, i32 1)
+  %m = extractvalue {i32,i1} %o, 0
+  %ov = extractvalue {i32,i1} %o, 1
+  br i1 %ov, label %x, label %l
+x:
+  ret void
+}
+";
+
+/// A loop that ends on the carry of its counter's `uadd.with.overflow` branched
+/// on the flags of the add (`inc; jne`). The builder swaps the branch whose
+/// true successor follows into `xor ov, 1`, and the widened bit was tested
+/// through `sete; not; test`, three instructions per iteration (m16 `inc si;
+/// sete al; not al; test al, 1; jne`).
+#[test]
+fn a_branch_on_the_overflow_bit_reads_the_flags_of_the_add() {
+    let all = names(OVERFLOW_LOOP).unwrap();
+    assert!(!all.iter().any(|name| name.starts_with("set") || name == "not" || name == "test"), "{all:?}");
 }

@@ -82,6 +82,15 @@ impl RegisterInfo {
         Self { regs }
     }
 
+    /// `printReg(Reg, TRI)`: the target's own name for `reg`. `Debug` on a
+    /// `RegId` reads it as iced's, so a non-x86 interval printed an x86 name.
+    pub fn name(
+        &self,
+        reg: RegId,
+    ) -> String {
+        self.regs.name(reg).map_or_else(|| format!("{reg:?}"), str::to_uppercase)
+    }
+
     /// `TRI->regunits(Reg)`: the byte lanes of the register's root it covers.
     pub fn regunits(
         &self,

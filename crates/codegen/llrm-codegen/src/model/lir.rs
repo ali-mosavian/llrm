@@ -46,6 +46,11 @@ pub struct CallMemory {
     /// as it does before writing it. Empty where the callee's contract is what
     /// the call went by.
     pub disturbs: BTreeSet<RegId>,
+    /// An inline block of bytes laid down at the site (`llrm.ia16.asm`): it
+    /// writes the registers its instruction lists and no others, which a
+    /// call of a routine does not promise (a segment register it does not
+    /// list still holds what it did).
+    pub block: bool,
 }
 
 impl CallMemory {
@@ -180,12 +185,19 @@ pub struct Insn {
     /// A load of memory that never changes (a constant global:
     /// `isDereferenceableInvariantLoad`).
     pub invariant: bool,
+    /// What its load or store reaches (`MachineMemOperand`), where the target
+    /// knows; none: it may reach anything (`Insn::may_alias`).
+    pub memory: Option<crate::model::memref::MemRef>,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// It joins two words into one dword (DEVIATE PAIR1: the `or`/`shrd` of a
     /// far pointer's offset and selector, or of a long's halves), as the DAG's
     /// `PAIR_FAR`/`PAIR_LONG` marked it at selection.
     pub pair: Option<PairKind>,
+    /// An `or` of operands that share no bit, selected as the pin's `ADDnn_DB`:
+    /// two-address conversion may make it an `lea` as it would an `add`;
+    /// otherwise it is an `or`.
+    pub disjoint: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
@@ -528,6 +540,93 @@ pub fn merged_line(
 }
 
 impl Insn {
+    /// A copy that says `what` instead: the instruction's own semantics are
+    /// not cloned to be replaced. Listing every field makes a new one fail to
+    /// compile here until it is carried over.
+    #[must_use]
+    pub fn with_what(
+        &self,
+        what: Option<Semantics>,
+    ) -> Insn {
+        let Insn {
+            at,
+            covers,
+            defines,
+            uses,
+            undefs,
+            partial_defs,
+            early_clobbers,
+            lane_copies,
+            def_lanes,
+            use_lanes,
+            undef_super,
+            clobbers,
+            clobbers_high,
+            spread,
+            call,
+            group,
+            requires,
+            delivers,
+            widths,
+            symbol,
+            spill_reload,
+            spill_store,
+            frame_adjust,
+            rematerialized,
+            volatile,
+            invariant,
+            memory,
+            reads_complete,
+            pair,
+            disjoint,
+            line,
+            debug,
+            declared,
+            what: _,
+            effect: _,
+            register_effects: _,
+            ident: _,
+        } = self;
+        Insn {
+            at: at.clone(),
+            covers: covers.clone(),
+            defines: defines.clone(),
+            uses: uses.clone(),
+            undefs: undefs.clone(),
+            partial_defs: partial_defs.clone(),
+            early_clobbers: early_clobbers.clone(),
+            lane_copies: lane_copies.clone(),
+            def_lanes: def_lanes.clone(),
+            use_lanes: use_lanes.clone(),
+            undef_super: undef_super.clone(),
+            clobbers: clobbers.clone(),
+            clobbers_high: clobbers_high.clone(),
+            spread: spread.clone(),
+            call: call.clone(),
+            group: group.clone(),
+            requires: requires.clone(),
+            delivers: delivers.clone(),
+            widths: widths.clone(),
+            symbol: symbol.clone(),
+            spill_reload: spill_reload.clone(),
+            spill_store: spill_store.clone(),
+            frame_adjust: frame_adjust.clone(),
+            rematerialized: rematerialized.clone(),
+            volatile: volatile.clone(),
+            invariant: invariant.clone(),
+            memory: memory.clone(),
+            reads_complete: reads_complete.clone(),
+            pair: pair.clone(),
+            disjoint: disjoint.clone(),
+            line: line.clone(),
+            debug: debug.clone(),
+            declared: declared.clone(),
+            what,
+            effect: Derived::default(),
+            register_effects: Default::default(),
+            ident: Derived::default(),
+        }
+    }
     /// The (written, read) pair this instruction is a plain move of
     /// (`TargetInstrInfo::isCopyInstr`).
     pub fn copy_of(&self) -> Option<(u32, u32)> {
@@ -715,8 +814,10 @@ impl Insn {
             rematerialized: false,
             volatile: false,
             invariant: false,
+            memory: None,
             reads_complete: false,
             pair: None,
+            disjoint: false,
             line: None,
             debug: DebugTags::default(),
             declared: None,
@@ -786,6 +887,23 @@ impl Insn {
         self.volatile
     }
 
+    /// `MachineInstr::mayAlias` of two memory accesses (MachineInstr.cpp#L1558):
+    /// a call may; two loads do not; an access whose object a target did not say
+    /// may reach the other's. Ask it of accesses only.
+    #[must_use]
+    pub fn may_alias(
+        &self,
+        other: &Insn,
+    ) -> bool {
+        if self.call.is_some() || other.call.is_some() {
+            return true;
+        }
+        match (&self.memory, &other.memory) {
+            (Some(one), Some(two)) => (one.store || two.store) && one.may_alias(two),
+            _ => true,
+        }
+    }
+
     /// Whether it loads memory that never changes.
     #[must_use]
     pub fn invariant(&self) -> bool {
@@ -805,11 +923,19 @@ impl Insn {
     }
 
     /// Whether it may write memory its operands do not name: a call or
-    /// barrier with no `call` to list what it touches.
+    /// barrier with no `call` to list what it touches. The call-frame pseudos
+    /// (`ADJCALLSTACKDOWN`/`UP`) only move the stack pointer: they write no
+    /// memory.
     #[must_use]
     pub fn unmodeled_write(&self) -> bool {
         self.call.is_none()
-            && self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
+            && self.what.as_ref().is_some_and(|what| {
+                matches!(what.op, Operation::Call | Operation::Barrier)
+                    && !matches!(
+                        what.name.as_deref(),
+                        Some("call_frame_setup" | "call_frame_destroy")
+                    )
+            })
     }
 
     /// Whether this instruction puts bytes out, which its machine form
@@ -1385,6 +1511,10 @@ pub struct LirBody {
     /// would have held is not reserved, the locals lie directly below the
     /// pushed registers.
     pub slot_dropped: bool,
+    /// ShrinkWrap does not run: the pin adds it only when optimizing
+    /// (`TargetPassConfig::addMachinePasses`), so the frame and the registers
+    /// are set up at the entry.
+    pub unwrapped: bool,
     /// The widest alignment any object of the frame wants (an alloca's, a
     /// spill slot's as its width), 0 when not known: what a 64-bit frame
     /// aligns the locals' base to, not the stack's (the pin aligns each
@@ -1398,6 +1528,10 @@ pub struct LirBody {
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
     pub frame_exit: Option<bool>,
+    /// Whether the body can be addressed through the stack pointer, as
+    /// `masm::saved_first` found it: `masm::exits_inserted` takes it up
+    /// instead of asking again of the same body. Cleared once read.
+    pub stack_checked: Option<bool>,
     /// The registers the frame saved, found before its exit was made: the
     /// exit's own pops name them and the frame register.
     pub frame_saved: Option<Vec<RegId>>,
@@ -1414,6 +1548,10 @@ pub struct LirBody {
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
+    /// The names the addresses and memory operands of this body refer to, by
+    /// index (`LirAddr::index`, `Object::Global`): kept with the body so a copy
+    /// made by a shared phase still says what they name.
+    pub symbols: Arc<Vec<String>>,
     /// The argument bytes the callee of each indirect call pops, by the call's
     /// address (`callframe`'s `call_frame_destroy N, M`): the stack depth after
     /// it, which `masm` cannot read from a call it does not name.
@@ -1605,14 +1743,17 @@ impl LirBody {
             cfa_variables: false,
             saved_first: false,
             slot_dropped: false,
+            unwrapped: false,
             object_align: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
+            stack_checked: None,
             frame_saved: None,
             vector_saves: Vec::new(),
             notes: Arc::default(),
             placed: Arc::default(),
             arguments_in_cells: Arc::default(),
+            symbols: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
         }
@@ -1679,14 +1820,17 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
             slot_dropped: self.slot_dropped,
+            unwrapped: self.unwrapped,
             object_align: self.object_align,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
+            stack_checked: self.stack_checked,
             frame_saved: self.frame_saved.clone(),
             vector_saves: self.vector_saves.clone(),
             notes: Arc::clone(&self.notes),
             placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
+            symbols: Arc::clone(&self.symbols),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
         }
@@ -1731,7 +1875,9 @@ pub fn inert() -> Semantics {
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
 #[must_use]
 pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
-    let mut anchored = (*one).clone();
+    // A freshly placed copy is unique: `make_mut` rewrites it without a clone.
+    let mut one = one;
+    let anchored = Arc::make_mut(&mut one);
     anchored.what = Some(inert());
     anchored.clobbers.clear();
     anchored.clobbers_high.clear();
@@ -1743,7 +1889,7 @@ pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
     anchored.spill_store = false;
     anchored.frame_adjust = false;
     anchored.rematerialized = false;
-    Arc::new(anchored)
+    one
 }
 
 /// Only the source bytes `one` owns: no machine work and no dataflow.
@@ -1974,6 +2120,20 @@ mod tests {
         Arc::new(Insn::new(at, covers, Some(Semantics::new(Operation::Move)), Vec::new(), Vec::new()))
     }
 
+    /// `_placed` cloned an instruction's operand lists to drop them (1.1 M of
+    /// 24.3 M Ir at -O0). The copy made without them is the same instruction.
+    #[test]
+    fn test_with_what_is_a_clone_whose_semantics_are_replaced() {
+        let mut one = (*instruction(7, Some((1, 2)))).clone();
+        one.uses = vec![3];
+        one.spill_store = true;
+        let mut other = Semantics::new(Operation::Move);
+        other.name = Some("mov".into());
+        let mut expected = one.clone();
+        expected.what = Some(other.clone());
+        assert_eq!(one.with_what(Some(other)), expected);
+    }
+
     /// A rename of a few values copied every instruction: phielim renamed 3,500
     /// and 27 changed (d_faces -O2), and each copy held the body twice. One
     /// that names nothing the rename moves is the same allocation; one that
@@ -2189,5 +2349,65 @@ mod tests {
         assert_eq!(line(&Insn::new(3, None, None, Vec::new(), Vec::new())), "     3 None req=() del=()");
         assert_eq!(pyrepr::tuple::<i64>(&[2]), "(2,)");
         assert_eq!(pyrepr::tuple::<i64>(&[2, 3]), "(2, 3)");
+    }
+
+    /// A failed check's edge stated at `NEVER_TAKEN_WEIGHT` to 1 (isel: that
+    /// many 2^31sts) vanished when a split gave it a share of 1/16:
+    /// `rerouted` rounds to the unit as the pin does
+    /// (`BranchProbability.h:140`, no clamp), a block on that path then had
+    /// a table entry and no odds into it, and `LLRM_VERIFY=1` rejected x87
+    /// floatalloc blocks (fpbench Os at `i32::MAX`).
+    #[test]
+    fn test_a_never_taken_edge_survives_a_sixteenth_share() {
+        use crate::hir::mir::NEVER_TAKEN_WEIGHT;
+        use crate::model::lir::BlockOdds;
+
+        let units = (BlockOdds::CERTAIN / (f64::from(NEVER_TAKEN_WEIGHT) + 1.0)).round() as u32;
+        let mut odds = BlockOdds::default();
+        odds.taken.insert((1, 2), units);
+        odds.taken.insert((1, 3), BlockOdds::CERTAIN as u32 - units);
+        odds.rerouted(1, &[2, 3], 2, &[(4, 1.0 / 16.0)]);
+
+        assert!(odds.taken[&(1, 4)] > 0, "the split edge has {} units", odds.taken[&(1, 4)]);
+    }
+    fn access(
+        store: bool,
+        slot: i64,
+    ) -> crate::model::lir::Insn {
+        let mut one = crate::model::lir::Insn::new(0, None, None, vec![], vec![]);
+        one.memory = Some(crate::model::memref::MemRef {
+            object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+            offset: Some(0),
+            bytes: Some(4),
+            store,
+        });
+        one
+    }
+
+    /// `MachineInstr::mayAlias`: two loads never alias; a store and an access
+    /// of another object do not; a call and an access with no operand may.
+    #[test]
+    fn test_may_alias_follows_the_pins_order_of_questions() {
+        assert!(!access(false, 1).may_alias(&access(false, 1)), "two loads");
+        assert!(!access(true, 1).may_alias(&access(false, 2)), "another object");
+        assert!(access(true, 1).may_alias(&access(false, 1)), "the same object");
+        let bare = crate::model::lir::Insn::new(1, None, None, vec![], vec![]);
+        assert!(access(false, 1).may_alias(&bare), "no operand says nothing");
+        let mut call = access(false, 2);
+        call.call = Some(Arc::new(crate::model::lir::CallMemory {
+            effects: Default::default(),
+            private: Vec::new(),
+            disturbs: Default::default(),
+            block: false,
+        }));
+        assert!(access(false, 1).may_alias(&call), "a call");
+    }
+
+    /// A copy made to say something else (`with_what`) was built field by field:
+    /// the memory operand must come with it.
+    #[test]
+    fn test_a_copy_with_other_semantics_keeps_its_memory_operand() {
+        let one = access(true, 3);
+        assert_eq!(one.with_what(None).memory, one.memory);
     }
 }

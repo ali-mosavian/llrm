@@ -37,8 +37,8 @@ fn test_a_loop_exit_at_minus_one_reads_the_carry_of_the_add() {
     let pin = common::pin::listing(Path::new(&source), &flags);
     let pins = common::pin::loops(&pin, Some("g"));
     // The pin stores each argument into the reserved call frame (`movl %edi,
-    // (%esp)`); ours pushes it and cleans up with `add esp, 4` (DEVIATE CF1,
-    // docs/working/ci.md call-frame-reserve): a push and an add per call, two
+    // (%esp)`); ours pushes it and cleans up with `add esp, 4` at the target's
+    // slot-sized stack alignment (DEVIATE CF1, `pushfold.rs`): a push and an add per call, two
     // calls here.
     let calls = 2;
     assert!(

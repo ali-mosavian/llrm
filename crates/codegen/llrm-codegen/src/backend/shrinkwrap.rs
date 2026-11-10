@@ -417,6 +417,31 @@ fn wrapped_afresh(
                 continue;
             }
         }
+        // Registers pushed after the frame move the stack pointer under the
+        // `[sp+d]` operands of the blocks the Save reaches (a call's outgoing
+        // arguments): the push would be the first of them. The pin saves the
+        // frame and the registers together, so it has no such place.
+        if let (true, false, Some((_, stack))) = (framed, with_frame, frame) {
+            let stack = body.regs().root(stack);
+            let torn_down: Vec<(i64, i64)> = match &leaves {
+                Some(leaves) => leaves.iter().map(|&next| (restore, next)).collect(),
+                None => split.iter().map(|one| (body.blocks[one.0 as usize].at, restore)).collect(),
+            };
+            let from_save = reached_from(body, save, &torn_down);
+            let through_stack = |place: &Loc| match place {
+                Loc::Mem(ir::Mem { through, index_through, .. }) => {
+                    body.regs().root(*through) == stack || body.regs().root(*index_through) == stack
+                }
+                _ => false,
+            };
+            if body.blocks.iter().filter(|block| from_save.contains(&block.at)).any(|block| {
+                block.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| {
+                    what.dests.iter().chain(&what.sources).any(&through_stack)
+                })
+            }) {
+                continue;
+            }
+        }
         let mut pieces: Vec<Piece> = Vec::new();
         if with_frame {
             pieces.push(Piece::Frame);

@@ -1,7 +1,7 @@
 //! The pin's `llc` on the IR llrm-llc gives its instruction selection: the
 //! listing llrm-cc's is compared with, instruction for instruction, where the
 //! pass under test mirrors LLVM's. Needs the pin's `llc` (`tools/pairs/pin.py`)
-//! and `LLRM_OW`; m32 only (the m16 pin has no `llc`).
+//! and the Open Watcom tree; m32 only (the m16 pin has no `llc`).
 
 #![allow(dead_code)]
 

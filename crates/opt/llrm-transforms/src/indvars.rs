@@ -30,6 +30,9 @@
 //!    `!=` the strict compare of a unit-stride counter that never passes its
 //!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//!    `invariantsink::sunk` (`sinkUnusedInvariants`): a loop preheader's values
+//!    the loop does not read move to its exit (wasm only:
+//!    `Tti::sinks_unused_invariants`).
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
@@ -234,9 +237,9 @@ impl FunctionPass for IndVars {
         // the blocks and edges stay, so the tree and the loops do not.
         // First, as the pin's `rewriteNonIntegerIVs`: a float counter is an
         // integer one before ScalarEvolution looks at the loop.
+        let mut session = ScevSession::cached(unit.context, unit.layout, unit.function, analyses);
         let floats =
-            crate::floativ::enabled() && crate::floativ::converted(unit.context, unit.layout, unit.function, &outer);
-        let mut session = ScevSession::of(unit.context, unit.function, &outer);
+            crate::floativ::enabled() && crate::floativ::converted(unit.context, unit.function, session.loops());
         // The expressions of the pass before, as the pin keeps one SE for the
         // loop passes; handed back below, current.
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
@@ -313,9 +316,20 @@ impl FunctionPass for IndVars {
         let strengthened = crate::exitne::enabled()
             && outer.target().tti().is_some_and(|tti| tti.prefers_exit_ne())
             && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
-        let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
-        let loops = cfg::natural(unit.function, &found);
-        let sunk = crate::exitsink::sunk(unit.function, &loops);
+        // Beyond the pin, after LFTR has settled the exits: a counter of a width
+        // the target does not hold natively whose range fits one that it does.
+        let narrowed = crate::narrowiv::enabled()
+            && crate::narrowiv::narrowed_in(&mut session, unit.context, unit.layout, unit.function, &outer);
+        // The body's loops, the manager's: this pass keeps the tree and loops,
+        // so the shape stands from one run to the next of the loop passes.
+        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        let loops = &shape.loops;
+        let sunk = crate::exitsink::sunk(unit.function, loops);
+        // `sinkUnusedInvariants`, the last step of the pin's run; opt-in per
+        // target (`Tti::sinks_unused_invariants`).
+        let sunk = outer.target().tti().is_some_and(|tti| tti.sinks_unused_invariants())
+            && crate::invariantsink::sunk(unit.context, outer.callees(), &outer.globals, unit.function, loops)
+            || sunk;
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
         let dead = (floats
@@ -326,6 +340,7 @@ impl FunctionPass for IndVars {
             || optimized
             || predicated
             || tested
+            || narrowed
             || sunk
             || merged)
             && {
@@ -353,7 +368,7 @@ impl FunctionPass for IndVars {
             true,
         );
         held.put(session.into_scev());
-        if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
+        if compared || rewrote || canonical || optimized || predicated || tested || narrowed || sunk || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>().preserve::<Scevs>()
         } else {

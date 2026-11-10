@@ -3,7 +3,9 @@
 //! The record (`crates/target/llrm-<t>/dagisel.toml`) names the target's
 //! namespaces and CPUs in `[target]`, and states the CPU, atom and predicate
 //! tables in `features.toml`'s format. The output goes to the target's crate:
-//! `ids.rs`, `instrinfo.rs`, one `<name>_<cpu>.rs` per CPU and `mod.rs`.
+//! `ids.rs`, `instrinfo.rs`, one `<name>_<cpu>.rs` per CPU and `mod.rs`; with
+//! `sched_cpus`, `mod.rs` also names `sched.rs`, which
+//! `tools/dagisel/schedtable.py` writes.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -21,6 +23,9 @@ struct Target {
     /// The prefix of the target's node opcodes (`M68kISD::`).
     isd: String,
     cpus: Vec<String>,
+    /// CPUs whose scheduling models `tools/dagisel/schedtable.py` writes to
+    /// `sched.rs`.
+    sched_cpus: Vec<String>,
     /// `ByHwMode` types by mode (`getValueTypeForHwMode`), as `MVT` names.
     hw_modes: Vec<String>,
     /// Symbols the target's hand code names (`ISD::ATOMIC_CMP_SWAP`,
@@ -62,6 +67,7 @@ impl Target {
             ns: string(table, "ns")?,
             isd: string(table, "isd")?,
             cpus: strings(table, "cpus")?,
+            sched_cpus: strings(table, "sched_cpus")?,
             hw_modes: strings(table, "hw_modes")?,
             extra_symbols: strings(table, "extra_symbols")?,
             registers: strings(table, "registers")?,
@@ -121,6 +127,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         local_desc: true,
         hooks: "Hooks",
         listed_predicates: target.listed_predicates,
+        shared_flags: false,
     };
     let write = |name: &str, text: String| {
         let path = inputs.out.join(name);
@@ -163,6 +170,9 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions, &target.extra_symbols, &target.registers)?,
     )?;
     write("instrinfo.rs", emit::render_instr_info(inputs.instrinfo, &ids, &emitted, &style)?)?;
+    if !target.sched_cpus.is_empty() {
+        modules.push_str("pub mod sched;\n");
+    }
     write("mod.rs", modules)
 }
 
@@ -185,5 +195,14 @@ mod tests {
     fn a_name_that_is_no_module_name_is_refused() {
         assert!(Target::parse(&record("6502")).err().unwrap().contains("module name"));
         assert!(Target::parse(&record("mos6502")).is_ok());
+    }
+
+    /// A record's `sched_cpus` is what makes `mod.rs` name `sched.rs`; without
+    /// it the module would be missing or point at a file nobody wrote.
+    #[test]
+    fn sched_cpus_are_read_from_the_record() {
+        let with = format!("{}sched_cpus = [\"generic\"]\n", record("a64"));
+        assert_eq!(Target::parse(&with).unwrap().sched_cpus, ["generic"]);
+        assert!(Target::parse(&record("a64")).unwrap().sched_cpus.is_empty());
     }
 }

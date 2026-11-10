@@ -695,12 +695,14 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
-    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
-    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). It is
+    // read as emitted: with ERROR 53 the only raise, the optimizer folds `erl`
+    // to 100 and the table and its compare go (the executed case,
+    // conformance pds71 pds-local-error, prints PASS).
+    let emitted = emitted_mir(&source);
+    let table = emitted.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
     let entries = table.matches("i16 ").count();
     assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
-    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))
@@ -2391,8 +2393,12 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
         .find(|one| one.matches(", 1022").count() == 4)
         .unwrap_or_else(|| panic!("{procedure}"));
     // The pin's loop-reduce leaves this loop five counters too (steps 2, 6, 8,
-    // 18 and 22, ending at 642), on a machine of six: one of them is parked,
-    // in one slot, a store and the reloads that use it.
+    // 18 and 22, ending at 642), on a machine of six. "One of them is parked,
+    // in one slot" is an expectation, not a pin measurement: pin llc at code16
+    // parks two counters on this function and four on a loop of this shape
+    // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
+    // from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");
@@ -2737,7 +2743,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .expect("END")
         .1
         .attrs
-        .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
+        .push(llrm_mir::Attribute::Flag("nounwind".into()));
     llrm_codegen::backend::ehprepare::prepared(&mut emitted.module, &llrm_x86_m16::layout()).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
@@ -3693,9 +3699,11 @@ fn test_clear_calls_the_runtime_clear() {
     assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
 }
 
-/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the table of module variables its C
-/// body reads as the third argument: `table->main_module` came from a stray register and the program stopped
-/// with "Illegal function call" (clear_variables.bas). The call carries the table's near address, as the C body takes it.
+/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the
+/// table of module variables its C body reads as the third argument:
+/// `table->main_module` came from a stray register and the program stopped with
+/// "Illegal function call" (clear_variables.bas). The call carries the table's
+/// near address, as the C body takes it.
 #[test]
 fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -3705,7 +3713,10 @@ fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCLR").expect("the call");
     let before = &main[..call];
-    assert!(before.trim_end().ends_with("push offset CLEARM16$D3"), "the table's near address is the third argument: {main}");
+    assert!(
+        before.trim_end().ends_with("push offset CLEARM16$D3"),
+        "the table's near address is the third argument: {main}"
+    );
     assert!(!before.contains("pushw DGROUP"), "and not a far pointer on the stack: {main}");
 }
 

@@ -226,6 +226,48 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
 
 /// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
 /// printer, so a printed module lost it (the pipeline's text round trips).
+/// A COFF string literal is `linkonce_odr ... comdat` under a `$name = comdat
+/// any` line; the reader stopped at the `$` ("unexpected `$` at the top
+/// level"), so `llrm-llc` refused `static_pointers` and `strlen_idiom` from
+/// tests/run/c compiled for Windows (`LLParser::parseComdat`).
+#[test]
+fn a_comdat_declaration_and_its_marker_are_read() {
+    let text = "$\"??_C@_02@ab\" = comdat any\n$f = comdat largest\n\
+        @\"??_C@_02@ab\" = linkonce_odr constant [3 x i8] c\"ab\\00\", comdat, align 1\n\
+        @g = linkonce_odr global i32 0, comdat($f)\n\
+        define linkonce_odr void @f() comdat {\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    assert_eq!(module.comdats["??_C@_02@ab"], "any");
+    assert_eq!(module.comdats["f"], "largest");
+    assert_eq!(module.comdat_of["??_C@_02@ab"], "??_C@_02@ab");
+    assert_eq!(module.comdat_of["g"], "f");
+    assert_eq!(module.comdat_of["f"], "f");
+}
+
+/// The printer dropped `$c = comdat K` and every `comdat` marker, so a module
+/// printed and read back (every mid-end stage dump, `llrm-opt` output) lost its
+/// COMDAT sections. It prints them as LLVM does and reads them back equal.
+#[test]
+fn a_comdat_declaration_and_its_marker_survive_printing() {
+    let text = "$\"??_C@_02@ab\" = comdat any\n$f = comdat largest\n\n\
+        @\"??_C@_02@ab\" = linkonce_odr constant [3 x i8] c\"ab\\00\", comdat, align 1\n\
+        @g = linkonce_odr global i32 0, comdat($f)\n@plain = global i32 1\n\n\
+        define linkonce_odr void @f() comdat {\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let printed = print::module(&module);
+    assert_eq!(printed, text);
+    let again = parse::module(&printed).unwrap();
+    assert_eq!((again.comdats, again.comdat_of), (module.comdats, module.comdat_of));
+}
+
+/// The pin refuses a comdat used and never declared, and one declared twice.
+#[test]
+fn an_undeclared_or_repeated_comdat_is_refused() {
+    assert!(refusal("@g = global i32 0, comdat($c)\n").contains("undefined comdat '$c'"));
+    assert!(refusal("$c = comdat any\n$c = comdat any\n").contains("redefinition of comdat '$c'"));
+    assert!(refusal("$c = comdat sometimes\n").contains("unknown selection kind"));
+}
+
 #[test]
 fn a_global_section_survives_printing() {
     let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";
@@ -724,6 +766,124 @@ fn nearcode_is_a_function_attribute_that_round_trips() {
     assert!(crate::opcode::FLAG_ATTRIBUTES.contains(&crate::callgraph::NEAR_CODE));
 }
 
+/// The walk marks a body it made self-copies of with `llrm-self-copied`
+/// (walk::SELF_COPIED, a flag MIR does not name); the parser refused it
+/// ("expected `{`, found `llrm-self-copied`"), so llrm-qb's text of a
+/// recursive program at -O2 never reached the wasm backend
+/// (qb_wasm32 `unbounded_recursion_ends_with_out_of_stack_space`).
+#[test]
+fn llrm_self_copied_is_a_function_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndefine i16 @f(i16 %a) llrm-self-copied {{\nb0:\n  ret i16 %a\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("llrm-self-copied"), "{once}");
+    assert_eq!(round(&once), once);
+}
+
+/// The sources of every non-test file under `crates`.
+fn crate_sources() -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let mut sources = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a directory reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
+            if !name.ends_with(".rs")
+                || name.ends_with("_tests.rs")
+                || name.ends_with("/tests.rs")
+                || name.contains("/tests/")
+            {
+                continue;
+            }
+            sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
+        }
+    }
+    sources
+}
+
+/// Every flag word a pass writes with `Attribute::Flag("word".into())` or
+/// `Attribute::Flag(PATH::CONST.into())` (a `const CONST: &str = "word"`
+/// anywhere), with a file that writes it. A flag made from a variable is not
+/// seen.
+fn written_flag_words(sources: &[(String, String)]) -> std::collections::BTreeMap<String, String> {
+    let mut constants = std::collections::BTreeMap::new();
+    for (_, text) in sources {
+        for line in text.lines() {
+            let line = line.trim_start();
+            let line = line.strip_prefix("pub(crate) ").or_else(|| line.strip_prefix("pub ")).unwrap_or(line);
+            if let Some(rest) = line.strip_prefix("const ")
+                && let Some((name, value)) = rest.split_once(": &str = \"")
+                && let Some((word, _)) = value.split_once("\";")
+            {
+                constants.insert(name.to_owned(), word.to_owned());
+            }
+        }
+    }
+    let mut words = std::collections::BTreeMap::new();
+    for (file, text) in sources {
+        for (at, _) in text.match_indices("Attribute::Flag(") {
+            // The pattern inside a string literal (a scanner's own text) is not
+            // a write.
+            if text[..at].ends_with('"') {
+                continue;
+            }
+            let argument = &text[at + "Attribute::Flag(".len()..];
+            let word = if let Some(literal) = argument.strip_prefix('"') {
+                literal.split('"').next().map(str::to_owned)
+            } else {
+                let path: String =
+                    argument.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':').collect();
+                let last = path.rsplit("::").next().unwrap_or("");
+                (last.len() > 1 && last.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+                    .then(|| constants.get(last).cloned())
+                    .flatten()
+            };
+            if let Some(word) = word {
+                words.entry(word).or_insert_with(|| file.clone());
+            }
+        }
+    }
+    words
+}
+
+/// A pass that writes a flag the reader does not know makes every module that
+/// carries it unreadable (`nearcode`, `llrm-self-copied`, `llrm-mulsi3`,
+/// `tre-deferred`): each word written as a bare function flag is one the parser
+/// knows.
+#[test]
+fn every_flag_word_a_pass_writes_is_one_mir_reads() {
+    use crate::opcode::{FLAG_ATTRIBUTES, TARGET_FLAG_ATTRIBUTES};
+    let words = written_flag_words(&crate_sources());
+    assert!(words.len() > 5, "the scan found {} words: {words:?}", words.len());
+    let unread: Vec<String> = words
+        .iter()
+        .filter(|(word, _)| {
+            !FLAG_ATTRIBUTES.contains(&word.as_str()) && !TARGET_FLAG_ATTRIBUTES.contains(&word.as_str())
+        })
+        .map(|(word, file)| format!("`{word}` ({file})"))
+        .collect();
+    assert!(unread.is_empty(), "flag words the parser refuses: {}", unread.join(", "));
+}
+
+/// The scan sees a constant-named flag and a literal one: a word missing from
+/// the reader's list is reported by name.
+#[test]
+fn the_flag_scan_reads_literals_and_constants() {
+    let sources = vec![(
+        "x.rs".to_owned(),
+        "const KEPT: &str = \"kept-word\";\nfn f() { a.push(Attribute::Flag(\"lit-word\".into())); \
+         b.push(llrm::Attribute::Flag(crate::m::KEPT.into())); c.push(Attribute::Flag(name)); \
+         d.push(line.contains(\"Attribute::Flag(\") || line.contains(\"has(\")); }\n"
+            .to_owned(),
+    )];
+    let words = written_flag_words(&sources);
+    assert_eq!(words.keys().map(String::as_str).collect::<Vec<_>>(), ["kept-word", "lit-word"]);
+}
+
 /// `null_pointer_is_valid` is the attribute `null_pointer_is_defined` reads;
 /// the parser refused it ("expected `}`, found `null_pointer_is_valid`"), so a
 /// function carrying it could not be read and no pointer fact could depend on
@@ -734,6 +894,24 @@ fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
     let once = round(&text);
     assert!(once.contains("null_pointer_is_valid"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// `uwtable(sync)` read back as plain `uwtable`: the kind was dropped, so a
+/// back end could not tell a synchronous unwind table from an asynchronous one.
+#[test]
+fn the_unwind_table_kind_is_kept() {
+    use crate::opcode::{UnwindTable, unwind_table};
+    let kinds = |attrs: &str| {
+        let text = format!("{DATALAYOUT}\ndefine void @f() {attrs} {{\nb0:\n  ret void\n}}\n");
+        let once = round(&text);
+        assert_eq!(round(&once), once);
+        let mut module = parse::module(&once).expect("reads");
+        unwind_table(&module.function_mut("f").unwrap().1.attrs)
+    };
+    assert_eq!(kinds("uwtable(sync)"), Some(UnwindTable::Sync));
+    assert_eq!(kinds("uwtable"), Some(UnwindTable::Async));
+    assert_eq!(kinds("uwtable(async)"), Some(UnwindTable::Async));
+    assert_eq!(kinds(""), None);
 }
 
 /// Clang's output for arm64 states `ssp` and `uwtable(sync)` on a function and
@@ -1323,6 +1501,36 @@ fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
     assert_eq!(intrinsic(&module), None);
 }
 
+/// clang 24 prints `/* (nan) */` before the class mask of `llvm.is.fpclass`; the reader stopped at it
+/// (`unexpected character `/``), so `runtime/compiler-rt/tests/host_fp8.c` did not compile on arm64 at any level.
+/// A C comment is white space, and it counts its lines.
+#[test]
+fn a_c_style_comment_in_the_text_is_white_space() {
+    let text = "declare i1 @llvm.is.fpclass.f64(double, i32)\ndefine i1 @f(double %x) {\nentry:\n  %c = call i1 @llvm.is.fpclass.f64(double %x, /* (nan) */ i32 3)\n  ret i1 %c\n}\n";
+    let without = text.replace("/* (nan) */ ", "");
+    assert_eq!(round(text), round(&without));
+    let spanning = text.replace("/* (nan) */", "/* a\nb */");
+    assert_eq!(round(&spanning), round(&without));
+}
+
+/// A comment opener inside a string is text: a `c"..."` constant, a quoted name and a metadata string holding `/*`
+/// and `*/` read as the base lexer read them. (A guard: it passes on the base too, as it must.)
+#[test]
+fn a_comment_opener_inside_a_string_is_not_a_comment() {
+    let text = "@s = constant [6 x i8] c\"a/*b*/\"\n@\"x/*y\" = global i32 0\n@t = constant [5 x i8] c\"*/ /*\"\ndefine void @f() !dbg !0 {\n  ret void\n}\n!0 = !{!\"p/*q*/r\"}\n";
+    let printed = round(text);
+    for kept in ["a/*b*/", "x/*y", "*/ /*", "p/*q*/r"] {
+        assert!(printed.contains(kept), "{kept} was lost:\n{printed}");
+    }
+}
+
+/// An unterminated comment is an error at the line it opens, not the end of the text read as nothing.
+#[test]
+fn an_unterminated_c_comment_is_refused_at_its_line() {
+    let why = refusal("define void @f() {\n  ret void /* open\n}\n");
+    assert!(why.contains("line 2") && why.contains("unterminated"), "{why}");
+}
+
 /// LLVM's `+inf`, `-qnan`, `+nan(0x..)` and `snan(0x..)` spellings were
 /// refused (`unexpected character +`): 84 of the 619 floating-point test files
 /// of Transforms/InstSimplify and Transforms/InstCombine stopped at the first
@@ -1460,4 +1668,61 @@ fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
     assert_eq!(module.named("fresh"), Some(crate::context::GlobalId(3)));
     module.globals.swap(0, 2);
     assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");
+}
+
+/// wasm `memory_expansion` lr9: an alloca captured by a later call made BasicAA
+/// answer "may alias" against a pointer parameter, so the pin's byte-copy
+/// merge never happened in ours (18 load/store ops where the pin made 9). The
+/// pin: a parameter cannot point to a slot of this activation, captured or
+/// not; a pointer loaded from memory still can, once the slot is captured.
+#[test]
+fn a_captured_slot_does_not_alias_a_pointer_parameter_but_a_loaded_pointer_may() {
+    use crate::alias::{Alias, Location, alias};
+    use crate::{datalayout::DataLayout, memory::callees, module::Operand};
+    let module = parse::module(
+        "declare void @esc(ptr)\n\
+         define void @f(ptr %p, ptr %pp) {\n  %a = alloca [8 x i8], align 1\n  call void @esc(ptr %a)\n  \
+         %q = load ptr, ptr %pp, align 4\n  ret void\n}\n",
+    )
+    .unwrap();
+    let (_, _, function) = module.functions().find(|(_, _, f)| f.parameters().len() == 2).unwrap();
+    let results: Vec<_> = function.instructions.iter().filter_map(|i| i.result).collect();
+    let (slot, loaded) = (results[0], results[1]);
+    let at = |pointer| Location { pointer, bytes: 1, tbaa: None };
+    let verdict = |one: Operand, other: Operand| {
+        alias(
+            &module.context,
+            &DataLayout::default(),
+            &callees(&module),
+            &module.metadata,
+            function,
+            at(one),
+            at(other),
+        )
+    };
+    let parameter = Operand::Value(function.parameters()[0]);
+    assert_eq!(verdict(parameter, Operand::Value(slot)), Alias::No);
+    assert_eq!(verdict(Operand::Value(slot), parameter), Alias::No);
+    assert_eq!(verdict(Operand::Value(loaded), Operand::Value(slot)), Alias::May);
+}
+
+/// A dump printed a scope declaration as `call void
+/// @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !N`, which the
+/// pin's verifier refuses ("must have a MetadataAsValue argument"): six m32/m64
+/// cells could not be compared with the pin llc (tail_calls_edges, sysv_abi,
+/// ...), and our own parser refused the pin's form, so no dump read back. The
+/// node is the argument, and `(metadata !N)` parses back to it.
+#[test]
+fn a_scope_declaration_prints_its_node_as_the_argument_and_reads_back() {
+    let text = "declare void @llvm.experimental.noalias.scope.decl(metadata)\n\
+                define void @f(ptr %p) {\n  call void @llvm.experimental.noalias.scope.decl(metadata !2)\n  \
+                store i32 1, ptr %p, align 4, !alias.scope !2\n  ret void\n}\n\
+                !0 = distinct !{!0, !\"d\"}\n!1 = distinct !{!1, !0, !\"s\"}\n!2 = !{!1}\n";
+    let module = parse::module(text).unwrap();
+    let printed = crate::print::module(&module);
+    assert!(printed.contains("scope.decl(metadata !"), "{printed}");
+    assert!(printed.contains("@llvm.experimental.noalias.scope.decl(metadata)"), "{printed}");
+    assert!(!printed.contains("!noalias.scope.decl"), "{printed}");
+    let again = parse::module(&printed).unwrap();
+    assert_eq!(crate::print::module(&again), printed);
 }

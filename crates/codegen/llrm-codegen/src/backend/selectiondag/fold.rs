@@ -4,7 +4,7 @@
 
 use super::dag::{Folded, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// The low `bits` bits set.
 pub fn mask(bits: u32) -> u128 {
@@ -489,7 +489,8 @@ impl SelectionDAG {
         Folded::Keep(vec![n1, n2, n3])
     }
 
-    /// `FoldSetCC`, integers only (floating-point constants are SD11).
+    /// `FoldSetCC`. Floating-point constants fold on the host for `f32` and
+    /// `f64`; other types are SD11.
     fn fold_setcc(
         &mut self,
         vt: EVT,
@@ -503,6 +504,9 @@ impl SelectionDAG {
             SetFalse | SetFalse2 => return Some(self.get_bool_constant(false, vt)),
             SetTrue | SetTrue2 => return Some(self.get_bool_constant(true, vt)),
             _ => {}
+        }
+        if op_type.is_floating_point() {
+            return self.fold_fp_setcc(vt, n1, n2, cond);
         }
         if !op_type.is_integer() {
             return None;
@@ -533,9 +537,54 @@ impl SelectionDAG {
         Some(self.get_bool_constant(result, vt))
     }
 
+    /// `FoldSetCC` on two `ConstantFPSDNode`s, by `APFloat::compare`.
+    fn fold_fp_setcc(
+        &mut self,
+        vt: EVT,
+        n1: SDValue,
+        n2: SDValue,
+        cond: CondCode,
+    ) -> Option<SDValue> {
+        use CondCode::*;
+        let (NodeData::ConstFp { bits: a }, NodeData::ConstFp { bits: b }) = (self.node(n1).data, self.node(n2).data)
+        else {
+            return None;
+        };
+        let (x, y) = match self.value_type(n1) {
+            EVT::Simple(MVT::F32) => (f64::from(f32::from_bits(a as u32)), f64::from(f32::from_bits(b as u32))),
+            EVT::Simple(MVT::F64) => (f64::from_bits(a as u64), f64::from_bits(b as u64)),
+            _ => return None,
+        };
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        // `APFloat::compare`: `None` is `cmpUnordered`.
+        let order = x.partial_cmp(&y);
+        let undef = |this: &mut Self| Some(this.get_undef(vt));
+        let held = match (cond, order) {
+            // The plain codes are undefined on a NaN, the `O` codes false,
+            // the `U` codes true.
+            (SetEq | SetNe | SetLt | SetGt | SetLe | SetGe, None) => return undef(self),
+            (SetEq | SetOEq, o) => o == Some(Equal),
+            (SetNe | SetONe, o) => matches!(o, Some(Greater | Less)),
+            (SetLt | SetOLt, o) => o == Some(Less),
+            (SetGt | SetOGt, o) => o == Some(Greater),
+            (SetLe | SetOLe, o) => matches!(o, Some(Less | Equal)),
+            (SetGe | SetOGe, o) => matches!(o, Some(Greater | Equal)),
+            (SetO, o) => o.is_some(),
+            (SetUo, o) => o.is_none(),
+            (SetUEq, o) => matches!(o, None | Some(Equal)),
+            (SetUNe, o) => o != Some(Equal),
+            (SetULt, o) => matches!(o, None | Some(Less)),
+            (SetUGt, o) => matches!(o, None | Some(Greater)),
+            (SetULe, o) => matches!(o, None | Some(Less | Equal)),
+            (SetUGe, o) => matches!(o, None | Some(Greater | Equal)),
+            _ => return None,
+        };
+        Some(self.get_bool_constant(held, vt))
+    }
+
     /// `FoldConstantArithmetic`: operands that are constants, a symbol plus
     /// an offset, or a division by zero.
-    fn fold_constant_arithmetic(
+    pub(super) fn fold_constant_arithmetic(
         &mut self,
         opcode: ISD,
         vt: EVT,

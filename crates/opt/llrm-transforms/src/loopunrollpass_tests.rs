@@ -9,17 +9,34 @@ use crate::testing::{parsed, printed, results};
 /// @f's loops, the way the loop pass manager hands them over: simplified, LCSSA
 /// form; whether any was unrolled (priced for an i486, `-O2`).
 fn unrolled(module: &mut Module) -> bool {
+    unrolled_at(module, 2, None)
+}
+
+/// `unrolled` at `-O{opt_level}`, on an x87 stack of `slots` where given (the
+/// target description's field: `X86::of_cpu` alone states none).
+fn unrolled_at(
+    module: &mut Module,
+    opt_level: u32,
+    slots: Option<u32>,
+) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
+    let tti = match slots {
+        Some(slots) => {
+            tti.with_tuning(llrm_mir::target::Tuning { x87_stack_slots: Some(slots), ..llrm_mir::target::Tuning::PIN })
+        }
+        None => tti,
+    };
     let options = Options {
-        opt_level: 2,
+        opt_level,
         opt_size: false,
         min_size: false,
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -201,6 +218,7 @@ b2:
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
@@ -320,7 +338,9 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
@@ -343,7 +363,9 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     // The text has five blocks, b0 to out: a loop headed by one of them is the
@@ -482,6 +504,7 @@ exit:
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
@@ -613,4 +636,755 @@ fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_ma
     unrolled(&mut module);
     let made = get(Event::ScevNodes) - before;
     assert!(made <= 29, "{made} expressions were made for one loop");
+}
+
+/// Old: every unrolled loop dropped the function's whole table of expressions
+/// (`run.scev = ScalarEvolution::new()` after each of them, and a stand-in made
+/// for each trip-count query), so the next loop's trip count and its IVs were
+/// worked out again: 3,744 `will_not_overflow` calls against the pin's 2,001 on
+/// memory_expansion. The pin keeps one `ScalarEvolution` and forgets the loop.
+#[test]
+fn test_unrolling_loops_in_sequence_keeps_one_table_of_expressions() {
+    let mut module = parsed(&sequential(8));
+    let before = llrm_analysis::scev::made();
+    assert!(unrolled(&mut module));
+    let made = llrm_analysis::scev::made() - before;
+    assert!(made <= 2, "{made} tables of expressions made for 8 loops");
+}
+
+/// nbody -O2 at m32 priced its 4-trip loop over four float arrays at "saves
+/// 2176 clk, adds 0 B" and unrolled it, +18.5k clocks: the line said nothing of
+/// the arrays or the float file a reader needs to see why. It carries both now.
+#[test]
+fn a_priced_unroll_line_names_the_arrays_trips_and_float_file() {
+    let line = super::price::Priced {
+        trips: 4,
+        saved: 2176,
+        added: 0,
+        body_bytes: 54,
+        units: 40,
+        rolled: 13,
+        promoted: 6,
+        ints: 0,
+        floats: 4,
+        rmw: 2,
+        spilled: 3,
+        float_file: 8,
+        rate: 312,
+    }
+    .line();
+    for want in ["4 trips", "ints 0", "floats 4", "rmw 2", "spilled 3", "float file 8", "rate 312"] {
+        assert!(line.contains(want), "{want} missing from: {line}");
+    }
+}
+
+/// An unnamed loop header printed as `unroll: %:` in `LLRM_DEBUG=unroll`, so
+/// the six eight-trip decisions of x_jpeg_single -O3 could not be told apart
+/// or found in the IR dumps.
+#[test]
+fn test_a_debug_line_names_an_unnamed_loop_header_by_its_printed_label() {
+    let text = concat!(
+        "define i16 @f(i16 %x) {\n  br label %1\n1:\n",
+        "  %i = phi i16 [ 0, %0 ], [ %n, %1 ]\n  %n = add i16 %i, 1\n",
+        "  %c = icmp slt i16 %n, 4\n  br i1 %c, label %1, label %2\n",
+        "2:\n  ret i16 %n\n}\n",
+    );
+    let mut module = parsed(text);
+    let function = &*module.function_mut("f").expect("@f").1;
+    let header = function.layout()[1];
+    assert_eq!(super::loop_label(function, header, "f"), "@f %1");
+}
+
+/// Eight trips, sixteen floats live at once (a body whose unrolled cost sits
+/// between the default bar 150 and the aggressive 300): `kept` stores
+/// into a local array it also reads, `independent` into a global one.
+fn sixteen_floats(
+    kept: bool,
+    global: bool,
+) -> String {
+    let loads: String = (0..16)
+        .map(|k| {
+            format!("  %p{k} = getelementptr inbounds float, ptr %t, i16 %j{k}\n  %x{k} = load float, ptr %p{k}\n")
+        })
+        .collect();
+    let offsets: String = (0..16).map(|k| format!("  %j{k} = add i16 %i, {k}\n")).collect();
+    let chain: String = (0..15)
+        .map(|k| {
+            let left = if k == 0 { "%x0".to_string() } else { format!("%s{}", k - 1) };
+            format!("  %s{k} = fadd float {left}, %x{}\n", k + 1)
+        })
+        .collect();
+    let (decl, target, after) = if kept && global {
+        ("", "@o", "  %q3 = getelementptr inbounds float, ptr @o, i16 3\n  %r = load float, ptr %q3\n")
+    } else if kept {
+        (
+            "  %acc = alloca [8 x float], align 4\n  call void @llvm.memset.p0.i16(ptr %acc, i8 0, i16 32, i1 false)\n",
+            "%acc",
+            "  %q3 = getelementptr inbounds float, ptr %acc, i16 3\n  %r = load float, ptr %q3\n",
+        )
+    } else {
+        ("", "@o", "  %q3 = getelementptr inbounds float, ptr @o, i16 3\n  %r = load float, ptr %q3\n")
+    };
+    let old = if kept { "  %old = load float, ptr %q\n" } else { "  %old = fadd float 0.000000e+00, 0.000000e+00\n" };
+    format!(
+        "@o = internal global [8 x float] zeroinitializer
+
+define float @f(ptr %t) {{
+b0:
+{decl}  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+{offsets}{loads}{chain}  %q = getelementptr inbounds float, ptr {target}, i16 %i
+{old}  %new = fadd float %old, %s14
+  store float %new, ptr %q
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 8
+  br i1 %go, label %b1, label %b2
+
+b2:
+{after}  ret float %r
+}}
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+"
+    )
+}
+
+/// x_jpeg_single -O3 (m32): three 8-trip loops of nine live floats, trips that
+/// keep nothing across them, were held to the default bar 150 by the
+/// float-stack guard and stayed rolled where the pin unrolls them: +212k FMUL,
+/// 2.3M clocks (3.6%) over gcc.
+#[test]
+fn test_a_float_body_whose_trips_keep_nothing_across_them_is_unrolled_at_o3() {
+    let mut module = parsed(&sixteen_floats(false, false));
+    assert!(unrolled_at(&mut module, 3, Some(8)), "{}", printed(&module));
+}
+
+/// The guard's reason stays: a body that reads and writes a float array
+/// forwards its elements from copy to copy (nbody_single and fpbench -O3
+/// spilled 57 stores and 90 reloads against 30 and 30 rolled).
+#[test]
+fn test_a_float_body_that_forwards_an_array_across_its_trips_stays_a_loop_at_o3() {
+    let mut module = parsed(&sixteen_floats(true, false));
+    assert!(!unrolled_at(&mut module, 3, Some(8)), "{}", printed(&module));
+}
+
+/// The same body over a static global array (nbody_single -O3: six-trip loops
+/// over `pos_x`, `vel_x`, each read and written): the gate counted local arrays
+/// only, released the hold and the kernel grew +2.5% clocks, +825 B.
+#[test]
+fn test_a_float_body_that_forwards_a_global_array_across_its_trips_stays_a_loop_at_o3() {
+    let mut module = parsed(&sixteen_floats(true, true));
+    assert!(!unrolled_at(&mut module, 3, Some(8)), "{}", printed(&module));
+}
+
+/// `unrolled_at` at -O1 with `unroll_never_grows_at_o1` as stated.
+fn unrolled_o1(
+    module: &mut Module,
+    never_grows: bool,
+) -> bool {
+    unrolled_o1_analysing(module, never_grows, None)
+}
+
+/// `unrolled_o1`, the target stating how many trips the no-growth rule
+/// analyses.
+fn unrolled_o1_analysing(
+    module: &mut Module,
+    never_grows: bool,
+    analyzed_trips: Option<u32>,
+) -> bool {
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(module).expect("closes");
+    let tti = X86::of_cpu("i486")
+        .expect("a cpu")
+        .with_tuning(
+            llrm_mir::target::Tuning {
+                unroll_never_grows_at_o1: never_grows,
+                unroll_o1_analyzed_trips: analyzed_trips,
+                ..llrm_mir::target::Tuning::PIN
+            },
+        );
+    let options = Options {
+        opt_level: 1,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+    };
+    unroll_function(module, "f", &tti, options).expect("unrolls")
+}
+
+/// x_life's neighbour sum: three loads at constant offsets from one base.
+const THREE_LOADS: &str = "define i32 @f(ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i8, ptr %p, i32 %i
+  %v = load i8, ptr %q
+  %z = zext i8 %v to i32
+  %s = add i32 %acc, %z
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 3
+  br i1 %go, label %b1, label %b2
+
+b2:
+  %r = phi i32 [ %s, %b1 ]
+  ret i32 %r
+}
+";
+
+/// m32 -O1 took gcc's `-funroll-loops` and every small loop unrolled whatever
+/// the copies cost: matmul +2066 B, fpbench +1209 B (O1 is strict, no cell
+/// larger). With the target's `unroll_never_grows_at_o1` a loop whose copies
+/// cost more than the rolled loop stays rolled.
+#[test]
+fn test_at_o1_a_loop_whose_copies_cost_more_than_the_loop_stays_rolled() {
+    assert!(unrolled_o1(&mut parsed(&counted(8)), false), "the pin's O1 bar unrolls it");
+    assert!(!unrolled_o1(&mut parsed(&counted(8)), true), "eight copies of a multiply and an add grow");
+}
+
+/// float_in_memory_loop -O1 m32: sixteen trips of a load from a constant table
+/// and an add fold to nothing when copied (the analysis prices the copies at 0
+/// units against 4 rolled), but the -O1 guard analysed only the pin's first ten
+/// trips (`-unroll-max-iteration-count-to-analyze`), found nothing for sixteen
+/// and kept the loop: 64 -> 158 B. The pricing path analyses all the trips; so
+/// does the guard now.
+#[test]
+fn test_at_o1_a_loop_of_more_than_ten_trips_that_folds_away_is_unrolled() {
+    let table = (1..=16).map(|n| format!("i32 {n}")).collect::<Vec<_>>().join(", ");
+    let text = format!(
+        "@t = constant [16 x i32] [{table}]
+
+define i32 @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i32, ptr @t, i32 %i
+  %v = load i32, ptr %q
+  %s = add i32 %acc, %v
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 16
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 %s
+}}
+"
+    );
+    assert!(!unrolled_o1(&mut parsed(&text), true), "the pin's cap of ten analysed trips keeps it rolled");
+    let mut module = parsed(&text);
+    assert!(unrolled_o1_analysing(&mut module, true, Some(16)), "{}", printed(&module));
+}
+
+/// x_life O1 (gcc unrolls the dx loop and shrinks): three copies of a load
+/// and an add cost what the rolled loop's body and its branch do, so the
+/// size-neutral bar keeps this unroll.
+#[test]
+fn test_at_o1_a_loop_whose_copies_fit_the_loop_is_unrolled() {
+    let mut module = parsed(THREE_LOADS);
+    assert!(unrolled_o1(&mut module, true), "{}", printed(&module));
+}
+
+/// An outer loop of unknown trips holding `n` four-trip loops in sequence.
+fn nested(n: usize) -> String {
+    let mut text = String::from(
+        "define i16 @f(i16 %x, i16 %m) {\nb0:\n  br label %o\n\no:\n  %j = phi i16 [ 0, %b0 ], [ %jn, %latch ]\n  %c0 = phi i16 [ %x, %b0 ], [ %r, %latch ]\n  br label %l0\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "latch".to_owned() } else { format!("l{}", k + 1) };
+        let (pre, init) =
+            if k == 0 { ("o".to_owned(), "c0".to_owned()) } else { (format!("x{}", k - 1), format!("r{}", k - 1)) };
+        text += &format!(
+            "l{k}:\n  %i{k} = phi i16 [ 0, %{pre} ], [ %n{k}, %l{k} ]\n  %a{k} = phi i16 [ %{init}, %{pre} ], [ %s{k}, %l{k} ]\n  %s{k} = add i16 %a{k}, %i{k}\n  %n{k} = add i16 %i{k}, 1\n  %g{k} = icmp slt i16 %n{k}, 4\n  br i1 %g{k}, label %l{k}, label %x{k}\n\nx{k}:\n  %r{k} = phi i16 [ %s{k}, %l{k} ]\n  br label %{next}\n\n",
+        );
+    }
+    text += &format!(
+        "latch:\n  %r = add i16 %r{last}, 0\n  %jn = add i16 %j, 1\n  %e = icmp slt i16 %jn, %m\n  br i1 %e, label %o, label %end\n\nend:\n  ret i16 %r\n}}\n",
+        last = n - 1
+    );
+    text
+}
+
+/// Every full unroll of a loop inside another made the dominator tree and loop
+/// info again 3-4 times (1,211 calls on memory_expansion, the pin updates both
+/// in place and makes none): after the CFG-neutral `simplify_loop_after_unroll`
+/// the tree and nest were still right.
+#[test]
+fn test_unrolling_inner_loops_makes_the_loop_analyses_at_most_twice_per_loop() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(&nested(8));
+    let before = get(Event::LoopAnalyses);
+    assert!(unrolled(&mut module));
+    let made = get(Event::LoopAnalyses) - before;
+    assert!(made <= 2 * 8 + 3, "{made} analyses made for 8 inner loops");
+}
+
+/// A loop of unknown trips that nothing unrolls: the pass made the dominator
+/// tree and loop info again (449 of memory_expansion's 983 calls were this
+/// entry rebuild, 0.8 M Ir each) where the pin takes both from the analysis
+/// manager.
+#[test]
+fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {\nb0:\n  br label %l\n\nl:\n  %i = phi i16 [ 0, %b0 ], [ %j, %l ]\n  %j = add i16 %i, 1\n  %g = icmp slt i16 %j, %n\n  br i1 %g, label %l, label %x\n\nx:\n  %r = phi i16 [ %j, %l ]\n  ret i16 %r\n}\n",
+    );
+    let before = get(Event::LoopAnalyses);
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            inliner_follows: true,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    let made = get(Event::LoopAnalyses) - before;
+    assert_eq!(made, 0, "{made} rebuilds of the tree and nest for a function nothing was unrolled in");
+}
+
+/// Every partial unroll of a top-level loop built the function's dominator tree
+/// and loop info again (467 builds of each, 517 M and 277 M Ir of
+/// memory_expansion -O2); the pin updates both in place (`UnrollLoop`'s `DTU`
+/// and `LI`).
+#[test]
+fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
+    use llrm_mir::counts::{Event, get};
+    let text = (0..8).fold(sequential(8), |text, k| {
+        text.replace(&format!("icmp slt i16 %n{k}, 4"), &format!("icmp slt i16 %n{k}, 1024"))
+    });
+    let mut module = parsed(&text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("x86-64").expect("a cpu");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+    };
+    let (trees, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
+    assert_eq!(printed(&module).matches("phi i16 [ 0,").count(), 8, "partial: the eight loops remain");
+    let (trees, nests) = (get(Event::Dominators) - trees, get(Event::LoopAnalyses) - nests);
+    assert!(trees <= 2 && nests <= 2, "{trees} dominator trees and {nests} nests built for 8 partial unrolls");
+}
+
+/// Compile time: the unroll pass looked at its function's loops through a
+/// shape made again (`Shape::of`: a dominator tree and loops, 484 K Ir a call
+/// on memexp -O2) while the manager held both. A function whose loops are in
+/// canonical form and stay rolled derives no shape of its own.
+#[test]
+fn test_the_unroll_pass_asks_the_managers_loops_not_a_new_shape() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let before = llrm_analysis::cfg::shapes_derived();
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            inliner_follows: true,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was made again");
+}
+
+/// Compile time: the unroll pass closed its function's SSA form through a
+/// dominator tree and loops of its own (755 calls, 748 M Ir on memexp -O2,
+/// every one of them a no-op) while the manager held both. A function the
+/// pass left as it found it makes none.
+#[test]
+fn test_the_unroll_pass_closes_over_the_managers_tree_and_loops() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    crate::lcssa::TREES_MADE.with(|count| count.set(0));
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            inliner_follows: true,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::TREES_MADE.with(std::cell::Cell::get), 0, "a tree was made again");
+}
+
+/// Compile time: a full unroll run for one loop of the loop pass manager
+/// (`loopfilter::only`) still put the whole function in simplified and closed
+/// form first, 755 runs, 403 of them over one function of 403 loops (a
+/// quadratic 1.1 B Ir on memexp -O2). The pin's `LoopFullUnrollPass` does
+/// neither: no loop is asked, no shape made.
+#[test]
+fn test_a_full_unroll_for_one_loop_does_not_re_form_the_function() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let _scope = crate::loopfilter::only(&[llrm_mir::module::BlockId(1)]);
+    crate::lcssa::LOOPS_FORMED.with(|count| count.set(0));
+    let shapes = llrm_analysis::cfg::shapes_derived();
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            inliner_follows: true,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::LOOPS_FORMED.with(std::cell::Cell::get), 0, "the function was closed again");
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), shapes, "a shape was made again");
+}
+
+/// fib(20) at m64 -O3 with its copies priced panicked in ScalarEvolution ("the
+/// header of a loop"): ten outer trips round an inner loop started from the
+/// outer counter (`%start = %i - 1`). The full unroll of the outer loop kept
+/// `%start` with a constant, and its cached expression, an add recurrence of
+/// the gone outer loop, was read by the next inner loop's trip count.
+#[test]
+fn a_full_unroll_of_a_nest_forgets_the_expressions_of_its_kept_values() {
+    let text = "declare i32 @g(i32)
+
+define i32 @f(i32 %x) {
+b0:
+  br label %o
+
+o:
+  %i = phi i32 [ 20, %b0 ], [ %i.next, %ol ]
+  %acc = phi i32 [ 0, %b0 ], [ %r, %ol ]
+  %start = add nsw i32 %i, -1
+  %skip = icmp ult i32 %i, 3
+  br i1 %skip, label %ol, label %pre
+
+pre:
+  br label %h
+
+h:
+  %j = phi i32 [ %start, %pre ], [ %j.next, %h ]
+  %a = phi i32 [ 0, %pre ], [ %a.next, %h ]
+  %j1 = add nsw i32 %j, -1
+  %c = tail call i32 @g(i32 %j1)
+  %j.next = add nsw i32 %j, -2
+  %a.next = add i32 %c, %a
+  %low = icmp ult i32 %j, 4
+  br i1 %low, label %hx, label %h
+
+hx:
+  %jl = phi i32 [ %j.next, %h ]
+  %al = phi i32 [ %a.next, %h ]
+  br label %ol
+
+ol:
+  %m = phi i32 [ %start, %o ], [ %jl, %hx ]
+  %t = phi i32 [ 0, %o ], [ %al, %hx ]
+  %i.next = add nsw i32 %i, -2
+  %r1 = add i32 %m, %acc
+  %r = add i32 %r1, %t
+  %done = icmp eq i32 %i.next, 0
+  br i1 %done, label %out, label %o
+
+out:
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let out = crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 3,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            inliner_follows: true,
+            created,
+            decided: Default::default(),
+        },
+    );
+    assert!(!out.contains("%i = phi"), "the outer loop is gone: {out}");
+}
+
+/// A counted loop over `ty` elements of `@a`, `n` run-time trips, `@f`'s body
+/// given by `body` (defining `%y`, the next `%x`; `%v` is the element), as the
+/// loop pass manager hands it over; whether the x86-64 loop unroller
+/// (`target_unrolling`) changed `@f`, with the recurrence veto as asked.
+fn runtime_unrolled(
+    ty: &str,
+    init: &str,
+    body: &str,
+    veto: bool,
+) -> bool {
+    runtime_unrolled_text(
+        &format!(
+            "define {ty} @f(ptr %a, i64 %n) {{
+entry:
+  %skip = icmp sle i64 %n, 0
+  br i1 %skip, label %out, label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %latch ]
+  %x = phi {ty} [ {init}, %entry ], [ %y, %latch ]
+  %p = getelementptr {ty}, ptr %a, i64 %i
+  %v = load {ty}, ptr %p
+{body}
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, %n
+  br i1 %more, label %loop, label %done
+
+done:
+  ret {ty} %y
+
+out:
+  ret {ty} {init}
+}}
+"
+        )
+        .replace("%latch", "%loop"),
+        veto,
+    )
+}
+
+fn runtime_unrolled_text(
+    text: &str,
+    veto: bool,
+) -> bool {
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tuning = llrm_mir::target::Tuning { unroll_recurrence_veto: veto, ..llrm_mir::target::Tuning::PIN };
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls")
+}
+
+const CHAIN: &str = "  %m = mul i64 %x, 3\n  %y = add i64 %m, %v";
+const WIDE: &str = "  %m = mul i64 %v, 5\n  %w = add i64 %m, 7\n  %y = add i64 %x, %w";
+const FDIV: &str = "  %q = fdiv double %x, %v\n  %y = fadd double %q, 1.0";
+
+/// quicksort -O3 (`x = x * 25173 + 13849; values[i] = x & 0x7FFF`): an integer
+/// chain of constants is not a bound, the unrolled copies compose into one
+/// multiply and add per pair (instcombine), halving the chain. Its unroll was
+/// vetoed: 1731 -> 1708 B and +7.3% clocks (spread 4%).
+#[test]
+fn test_a_runtime_loop_of_integer_arithmetic_is_left_to_the_pin() {
+    assert!(runtime_unrolled("i64", "1", CHAIN, false), "premise: the pin's rule unrolls this loop");
+    assert!(runtime_unrolled("i64", "1", CHAIN, true), "an integer chain composes when unrolled");
+}
+
+/// The same for a divide chain, `s = s / a[i] + 1.0` (floats -O2, recfloat).
+#[test]
+fn test_a_runtime_loop_bound_by_a_divide_chain_is_not_unrolled() {
+    assert!(runtime_unrolled("double", "1.0", FDIV, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled("double", "1.0", FDIV, true));
+}
+
+/// floats -O2: `volatile double value` keeps the chain in memory, a load of
+/// what the last trip stored.
+#[test]
+fn test_a_runtime_loop_bound_by_a_chain_through_memory_is_not_unrolled() {
+    let text = "define double @f(i64 %n) {
+entry:
+  %slot = alloca double
+  store volatile double 1.0, ptr %slot
+  %skip = icmp sle i64 %n, 0
+  br i1 %skip, label %out, label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %x = load volatile double, ptr %slot
+  %m = fmul double %x, 1.5
+  %q = fdiv double %m, 1.25
+  store volatile double %q, ptr %slot
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, %n
+  br i1 %more, label %loop, label %out
+
+out:
+  %r = load volatile double, ptr %slot
+  ret double %r
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled_text(text, true));
+}
+
+/// The veto asks the loop, not the pass: a trip that is many independent
+/// operations around a one-cycle `add` chain is bound by the core's issue
+/// width and is unrolled as the pin does.
+#[test]
+fn test_a_runtime_loop_bound_by_issue_is_still_unrolled() {
+    assert!(runtime_unrolled("i64", "0", WIDE, true));
+}
+
+/// Known limit: only a single-block loop is priced (its operations all run each
+/// trip). A chain across a branch inside the loop keeps the pin's unroll.
+#[test]
+fn test_a_runtime_loop_of_several_blocks_is_left_to_the_pin() {
+    let text = "define i64 @f(ptr %a, i64 %n) {
+entry:
+  %skip = icmp sle i64 %n, 0
+  br i1 %skip, label %out, label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %latch ]
+  %x = phi i64 [ 1, %entry ], [ %y, %latch ]
+  %p = getelementptr i64, ptr %a, i64 %i
+  %v = load i64, ptr %p
+  %odd = icmp slt i64 %v, 0
+  br i1 %odd, label %neg, label %latch
+
+neg:
+  br label %latch
+
+latch:
+  %m = mul i64 %x, 3
+  %y = add i64 %m, %v
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, %n
+  br i1 %more, label %loop, label %done
+
+done:
+  ret i64 %y
+
+out:
+  ret i64 1
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(runtime_unrolled_text(text, true));
+}
+
+/// recfloat -O2: `bench_recfloat` inlined into `main` with a trip count of
+/// 1000 was unrolled by 5 (`decay`'s chain is `mulsd`, `addsd`), 209 bytes
+/// against gcc's 153 for the same clocks. A known trip count is no reason to
+/// copy a loop its own chain bounds.
+#[test]
+fn test_a_known_trip_loop_bound_by_its_chain_is_not_unrolled() {
+    let text = "define double @f(ptr %a) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %x = phi double [ 1.0, %entry ], [ %y, %loop ]
+  %m = fmul double %x, 0.5
+  %y = fadd double %m, 1.0
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 1000
+  br i1 %more, label %loop, label %done
+
+done:
+  ret double %y
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled_text(text, true));
+}
+
+/// histo -O2/-O3 (`++counts[(data[i] * 7 + seed) & 255]`): the store of one trip
+/// was read as feeding the next trip's load because both name the same SSA
+/// address, a chain of 7 that the loop does not have. Its partial unroll was
+/// vetoed, +7% instructions. The address changes every trip.
+#[test]
+fn test_a_counter_in_memory_at_a_new_address_each_trip_is_still_unrolled() {
+    let text = "define i64 @f(ptr %counts, ptr %data) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %d = getelementptr i8, ptr %data, i64 %i
+  %b = load i8, ptr %d
+  %k = zext i8 %b to i64
+  %p = getelementptr i64, ptr %counts, i64 %k
+  %c = load i64, ptr %p
+  %c1 = add i64 %c, 1
+  store i64 %c1, ptr %p
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 4096
+  br i1 %more, label %loop, label %done
+
+done:
+  ret i64 0
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
 }

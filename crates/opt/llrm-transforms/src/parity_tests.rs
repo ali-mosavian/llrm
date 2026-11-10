@@ -141,6 +141,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "peepholeopt@4",
             "machinesched@5",
             "combiner@4",
+            "cmovconversion@4",
             "liverangeshrink@4",
             "floatalloc@8",
             "pushfold@6",
@@ -149,6 +150,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "leaopt@5",
             "jumps@17",
             "copyprop@18",
+            "breakfalsedeps@19",
             "allocate@11",
             "unknown@1",
         ],
@@ -693,6 +695,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("processimpdefs@2", "codegen:processimpdefs"),
     ("machinelicm@4", "codegen:backend/machinelicm"),
     ("combiner@4", "codegen:backend/combiner"),
+    ("cmovconversion@4", "codegen:backend/cmovconversion"),
     ("liverangeshrink@4", "codegen:backend/liverangeshrink"),
     ("fixupsetcc@5", "codegen:backend/fixupsetcc"),
     ("callframe@5", "codegen:backend/callframe"),
@@ -703,9 +706,12 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("fixupbw@14", "codegen:backend/fixupbw"),
     ("fixupleas@14", "codegen:backend/fixupleas"),
     ("copyprop@18", "codegen:backend/machinecp"),
+    ("breakfalsedeps@19", "codegen:backend/breakfalsedeps"),
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
+    ("looptermfold", "looptermfold"),
     ("hardwareloops", "hardwareloops"),
+    ("constanthoisting", "constanthoisting"),
 ];
 
 /// Every source line of the module `name`: its file and its directory.

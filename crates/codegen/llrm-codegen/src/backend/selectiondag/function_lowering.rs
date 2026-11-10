@@ -41,6 +41,9 @@ pub struct FunctionLoweringInfo {
     /// The register a variadic function keeps the pointer to its variadic
     /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
     pub variadic_buffer: Option<u32>,
+    /// The fixed object of the first variadic argument on the stack
+    /// (`VarArgsFrameIndex`), for `llrm.vararg.address` in any block.
+    pub vararg_frame_index: Option<i32>,
     /// The words a target's `va_start` writes (`VarArgsFrameIndex` and the save
     /// areas' tops).
     pub variadic_area: Option<super::target_calling::VariadicArea>,
@@ -68,9 +71,9 @@ pub struct FunctionLoweringInfo {
     /// The names and locality of the module's globals and the function's
     /// blocks, made at the first block and shared by the DAGs of the rest
     /// (a table per block was a quadratic share of the compile).
-    pub(super) tables: Option<Tables>,
+    pub tables: Option<Tables>,
     /// The module's part of the tables, when an earlier function made it.
-    pub(super) module_tables: Option<crate::backend::constpool::Symbols>,
+    pub module_tables: Option<crate::backend::constpool::Symbols>,
 }
 
 /// How many times [`module_tables`] ran: a test hook.
@@ -82,6 +85,7 @@ pub static MODULE_TABLES_BUILT: std::sync::atomic::AtomicUsize = std::sync::atom
 pub fn module_tables(
     module: &llrm_mir::module::Module,
     dso_local_symbols: bool,
+    defined_dso_local: bool,
 ) -> crate::backend::constpool::Symbols {
     MODULE_TABLES_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     (
@@ -94,11 +98,15 @@ pub fn module_tables(
             module
                 .globals
                 .iter()
-                .map(|global| {
+                .enumerate()
+                .map(|(at, global)| {
+                    // clang -fPIE marks what it defines `dso_local`, not what it declares.
                     matches!(
                         global.linkage,
                         llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                    )
+                    ) || (defined_dso_local
+                        && crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
+                            == crate::model::ir::Space::Segment)
                 })
                 .collect()
         }),
@@ -107,7 +115,7 @@ pub fn module_tables(
 
 /// What every block's DAG reads about the module and the function.
 #[derive(Clone)]
-pub(super) struct Tables {
+pub struct Tables {
     pub global_names: std::rc::Rc<Vec<String>>,
     pub local_symbols: std::rc::Rc<Vec<bool>>,
     pub block_names: std::rc::Rc<Vec<String>>,
@@ -160,6 +168,7 @@ impl FunctionLoweringInfo {
             sret_reg: None,
             demote_reg: None,
             variadic_buffer: None,
+            vararg_frame_index: None,
             variadic_area: None,
             bpi: None,
             edge_probs: Vec::new(),

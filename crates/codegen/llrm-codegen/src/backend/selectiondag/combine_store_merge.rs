@@ -109,8 +109,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return None;
         }
         let NodeData::Mem(load) = self.dag.node(value).data else { return None };
+        // An extending load is a source too (`getStoreSource` takes any
+        // `LOAD`): a promoted `i16` store is a truncating store of one.
         if load.volatile
-            || load.ext.is_some()
             || load.mem_vt != info.mem_vt
             || load.space != info.space
             || self.dag.users(value).count() != 1
@@ -401,9 +402,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let element_bits = mem.size_in_bits();
         let total = element_bits * stores.len() as u32;
         let mask = super::fold::mask(element_bits);
-        // Little endian: the lowest address is the lowest bits.
+        // Little endian: the lowest address is the lowest bits; big endian
+        // the highest.
         let mut joined = 0u128;
-        for link in stores.iter().rev() {
+        let little = self.hooks.little_endian();
+        for at in 0..stores.len() {
+            let link = &stores[if little { stores.len() - 1 - at } else { at }];
             joined =
                 (joined << element_bits) | (self.dag.constant(self.dag.operand(link.store, 1)).unwrap_or(0) & mask);
         }
@@ -573,9 +577,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         stores: &[Link],
     ) -> bool {
-        let total = self.dag.value_type(self.stored_load(&stores[0])).size_in_bits() * stores.len() as u32;
         let first_load = self.stored_load(&stores[0]);
         let NodeData::Mem(load_info) = self.dag.node(first_load).data else { return false };
+        let total = load_info.mem_vt.size_in_bits() * stores.len() as u32;
         let (chain, store_info) = self.merged_chain_and_info(stores, total);
         let same_object = stores
             .iter()
@@ -587,7 +591,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             );
         let joint = EVT::integer(total);
         let wide =
-            MemInfo { mem_vt: joint, base: if same_object { load_info.base } else { MemBase::Unknown }, ..load_info };
+            MemInfo { mem_vt: joint, ext: None, base: if same_object { load_info.base } else { MemBase::Unknown }, ..load_info };
         let new_load = self.dag.get_load(joint, self.dag.operand(first_load, 0), self.dag.operand(first_load, 1), wide);
         let new_store = self.dag.get_store(chain, new_load, self.dag.operand(stores[0].store, 2), store_info);
         for link in stores {

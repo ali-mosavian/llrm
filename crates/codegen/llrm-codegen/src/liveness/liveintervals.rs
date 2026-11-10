@@ -114,13 +114,23 @@ pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
 /// between only added, removed or rewrote instructions (the pin keeps one
 /// analysis from the coalescer to the allocator): taken if no other body was
 /// numbered since and the edit applies.
-pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
+///
+/// `carry` (`Tuning::carry_slot_indexes`) also takes them across the
+/// instructions the pre-RA scheduler moved and across another body's
+/// numbering, as the pin's `SlotIndexes` live on (`handleMove` leaves the
+/// entry a move empties). Off, a function the scheduler touched is numbered
+/// afresh.
+pub fn take_handed_over_edited_to(
+    body: &LirBody,
+    carry: bool,
+) -> Option<LiveIntervals> {
     HANDED_OVER.with(|slot| {
         let mut held = slot.borrow_mut().take()?;
-        if held.analysed != super::slotindex::analysed() {
+        if !carry && held.analysed != super::slotindex::analysed() {
             return None;
         }
-        held.lis.take()?.edited_to(body)
+        let lis = held.lis.take()?;
+        if carry { lis.edited_to_moving(body) } else { lis.edited_to(body) }
     })
 }
 
@@ -240,8 +250,10 @@ impl LiveIntervals {
     ) {
         let instr = one.id();
         // A def that keeps the rest of the value reads it (`readsReg()`).
-        for &value in &one.defines {
-            self.push_def(one, instr, value);
+        for (at, &value) in one.defines.iter().enumerate() {
+            // a value defined twice (both bytes of a pair) names a lane each time
+            let nth = one.defines[..at].iter().filter(|v| **v == value).count();
+            self.push_def(one, instr, value, nth);
         }
         for &value in &one.uses {
             self.push_use(one, instr, value);
@@ -260,8 +272,8 @@ impl LiveIntervals {
         value: u32,
     ) {
         let instr = one.id();
-        for &named in one.defines.iter().filter(|named| **named == value) {
-            self.push_def(one, instr, named);
+        for (nth, &named) in one.defines.iter().filter(|named| **named == value).enumerate() {
+            self.push_def(one, instr, named, nth);
         }
         for &named in one.uses.iter().filter(|named| **named == value) {
             self.push_use(one, instr, named);
@@ -276,9 +288,10 @@ impl LiveIntervals {
         one: &Insn,
         instr: InstrKey,
         value: u32,
+        nth: usize,
     ) {
         let reads_reg = one.partial_defs.contains(&value);
-        let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
+        let lanes = one.def_lanes.iter().filter(|(v, _)| *v == value).nth(nth).map_or(Operand::ALL, |(_, lanes)| *lanes);
         let early_clobber = one.early_clobbers.contains(&value);
         self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
     }
@@ -457,8 +470,27 @@ impl LiveIntervals {
     /// the blocks, the inputs or the order of the instructions both bodies keep
     /// differ.
     pub fn edited_to(
+        self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        self.edited(body, false)
+    }
+
+    /// [`LiveIntervals::edited_to`], where the instructions both bodies keep
+    /// may also run in another order: each one out of place goes out of the
+    /// maps and in again (`handleMove`, LiveIntervals.cpp#L1513), and the
+    /// entry it leaves stays, empty.
+    pub fn edited_to_moving(
+        self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        self.edited(body, true)
+    }
+
+    fn edited(
         mut self,
         body: &LirBody,
+        moving: bool,
     ) -> Option<Self> {
         if body.blocks.len() != self.blocks.len() || body.inputs != self.inputs {
             return None;
@@ -491,7 +523,36 @@ impl LiveIntervals {
                 }
                 previous = Some(one.id());
             }
-            if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+            if !moving {
+                if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+                    return None;
+                }
+                continue;
+            }
+            let target: Vec<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
+            if self.blocks[n].len() != target.len() {
+                return None;
+            }
+            for (at, key) in target.iter().enumerate() {
+                if self.blocks[n][at].id() == *key {
+                    continue;
+                }
+                let Some(insn) = self.insns.get(key).map(Arc::clone) else { return None };
+                // An instruction of a parallel copy shares its index: not moved.
+                if insn.group.is_some() {
+                    return None;
+                }
+                touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                self.remove_instr(n, *key);
+                match at.checked_sub(1) {
+                    Some(before) => self.insert_instr_after(n, target[before], insn),
+                    None => {
+                        let first = self.blocks[n].first().map(|first| first.id());
+                        self.insert_instr_before(n, first, insn)
+                    }
+                };
+            }
+            if !self.blocks[n].iter().map(|one| one.id()).eq(target.iter().copied()) {
                 return None;
             }
         }
@@ -1784,6 +1845,22 @@ mod tests {
         let entry = lis.indexes.get_mbb_start_idx(0);
         assert!(!hi.live_at(&entry), "premise: nothing defines the high byte yet");
         assert!(hi.live_at(&lis.indexes.get_mbb_start_idx(1)), "it is live around the loop");
+    }
+
+    /// One instruction defines both bytes of a pair (`x.lo, x.hi := lea`): each
+    /// def names its own lane. Both took the first one's, so the high byte had
+    /// no sub-range, the matrix saw nothing in its register and a byte live
+    /// across the instruction shared it (6502, a pointer's high byte summed
+    /// with itself).
+    #[test]
+    fn test_an_instruction_defining_both_bytes_of_a_pair_defines_each_lane() {
+        let mut both = Insn::new(0, None, None, vec![1, 1], Vec::new());
+        both.def_lanes = vec![(1, ValueLanes::at(0, 1)), (1, ValueLanes::at(1, 1))];
+        both.undef_super = false;
+        let body = blocks(&[(&[Arc::new(both), insn(&[], &[1])], &[])]);
+        let mut lis = LiveIntervals::new(&body);
+        let hi = lis.interval(1).range_for_lanes(ValueLanes::at(1, 1)).expect("the pair has sub-ranges");
+        assert!(!hi.segments.is_empty(), "the high byte is defined by the instruction");
     }
 
     /// `pruneValue` from the middle of a block that falls into a join: the

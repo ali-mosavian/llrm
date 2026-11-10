@@ -17,6 +17,8 @@ fn rotated(module: &mut Module) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -212,6 +214,8 @@ declare i16 @late(i16)
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -350,16 +354,15 @@ b3:
 }
 
 /// -Os cut the header limit to 4 on every target; the byte sweep that showed it
-/// to be smaller was m16 only (a target states its own limit). m32 keeps the
-/// pin's 16 (`hasMinSize` alone lowers it), so a five-instruction header is
-/// copied there at -Os.
+/// to be smaller was m16 only (a target states its own limit). A target with
+/// none keeps the pin's 16.
 #[test]
-fn test_the_size_header_limit_is_m16_only() {
+fn test_the_size_header_limit_is_the_targets_own() {
     use llrm_mir::target::Neutral;
-    assert_eq!(super::header_limit(true, true, &Neutral), 16);
-    assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default()), 4);
-    assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default()), 16);
-    assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default()), 0);
+    assert_eq!(super::header_limit(true, true, &Neutral, &llrm_mir::tti::Basic), 16);
+    assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default(), &llrm_mir::tti::Basic), 4);
+    assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default(), &llrm_mir::tti::Basic), 16);
+    assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default(), &llrm_mir::tti::Basic), 0);
 }
 
 /// The -Os limit of 4 followed `segment_registers() > 0`, so any target with
@@ -368,7 +371,7 @@ fn test_the_size_header_limit_is_m16_only() {
 #[test]
 fn test_the_size_header_limit_comes_from_the_target_not_its_segments() {
     let segmented = crate::testing::Tuned { segments: 2, ..Default::default() };
-    assert_eq!(super::header_limit(true, true, &segmented), 16);
+    assert_eq!(super::header_limit(true, true, &segmented, &llrm_mir::tti::Basic), 16);
 }
 
 /// `rotated` as a size build on arm64, where a header is copied only when it
@@ -381,6 +384,8 @@ fn rotated_priced(module: &mut Module) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: true,
+        guard_must_fold: false,
+        free_guard: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -436,6 +441,8 @@ fn rotated_checking(check_exit_count: bool) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -475,6 +482,8 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -559,4 +568,148 @@ b3:
     assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: the copy's own pair");
     assert_eq!(aa.alias(&stores[1], &loads[1]), AliasResult::NoAlias, "premise: the loop's own pair");
     assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
+}
+
+/// `rotated` as a size build where an unfolded guard is refused (RS1).
+fn rotated_guard_must_fold(text: &str) -> bool {
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        guard_must_fold: true,
+        free_guard: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    rotate_function(&mut module, "f", &tti, options).expect("rotates")
+}
+
+/// A loop that stops on a loaded value: its two-instruction header (compare
+/// and branch) copied to the preheader is an unfolded guard, and no trip
+/// count follows. Rotating it grew jpeg_fixed Os by 118 B over 20-odd loops.
+const UNCOUNTED: &str = "define i16 @f(ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %v = load i16, ptr %p
+  %go = icmp ne i16 %v, 0
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %next = add i16 %i, 1
+  store i16 %next, ptr %p
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+
+/// -Os (RS1): a loop whose exit test is neither folded by the preheader's
+/// values nor counted is left alone; the same loop is rotated without the
+/// rule.
+#[test]
+fn test_a_size_build_leaves_an_uncounted_loop_whose_guard_does_not_fold() {
+    assert!(!rotated_guard_must_fold(UNCOUNTED));
+    assert!(rotated(&mut parsed(UNCOUNTED)));
+}
+
+/// -Os (RS1): `i < n` counts its trips, so it is rotated (queens' column
+/// loop is +18 B unrotated).
+#[test]
+fn test_a_size_build_rotates_a_counted_loop() {
+    assert!(rotated_guard_must_fold(COUNTED));
+}
+
+/// -Os (RS1): a guard the preheader's values decide (`0 < 8`) is removed by
+/// the rotation, so it is rotated.
+#[test]
+fn test_a_size_build_rotates_a_loop_whose_guard_folds() {
+    assert!(rotated_guard_must_fold(&COUNTED.replace("%n)", "%y)").replace("i16 %i, %n", "i16 %i, 8")));
+}
+
+/// m32 -Os copied a header of up to 16 instructions: x_hash's probe loop test
+/// was repeated before the loop (+29 B on 280). The target's tuning states 4.
+#[test]
+fn test_the_size_header_limit_of_m32_is_four() {
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    assert_eq!(super::header_limit(true, true, &*m32, &*tti), 4);
+    assert_eq!(super::header_limit(true, false, &*m32, &*tti), 16);
+}
+
+/// `rotated` as the pass is configured for an -Os build of `m32`: what the target's tuning states.
+fn rotated_as_m32_at_size(text: &str) -> bool {
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        max_header_size: super::header_limit(true, true, &*m32, &*tti),
+        priced_at_size: tti.rotation_header_priced_at_size(),
+        guard_must_fold: tti.rotation_guard_must_fold_at_size(),
+        free_guard: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    rotate_function(&mut module, "f", &*tti, options).expect("rotates")
+}
+
+/// m32 -Os rotated a loop that stops on a loaded value, copying a compare and a branch above it that no value decides:
+/// x_jpeg_fixed 2995 B (gcc 2805), 17 kernels larger than with RS1 (-296 B). The target's tuning states RS1; a
+/// counted loop is still rotated.
+#[test]
+fn test_m32_size_builds_leave_a_loop_whose_guard_does_not_fold() {
+    assert!(!rotated_as_m32_at_size(UNCOUNTED));
+    assert!(rotated_as_m32_at_size(COUNTED));
+    let m32 = crate::indvars::tests::m32();
+    assert!(m32.tti().unwrap().rotation_guard_must_fold_at_size());
+}
+
+/// `rotated` as -Oz: the pin copies no header instruction; `free_guard` waives that for a header that folds away.
+fn rotated_at_minsize(
+    text: &str,
+    free_guard: bool,
+) -> bool {
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options {
+        max_header_size: 0,
+        priced_at_size: false,
+        guard_must_fold: false,
+        free_guard,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    rotate_function(&mut module, "f", &tti, options).expect("rotates")
+}
+
+/// z80 sum4 -Oz lost its `djnz` when the gcc tail rotate went (#8017): a four-trip loop stayed top-tested, 27 -Oz
+/// cells grew. A loop whose copied header folds away in the preheader is rotated at -Oz where the target says so; a
+/// header that leaves code (an unfolded guard) is not.
+#[test]
+fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
+    let folded = COUNTED.replace("%n)", "%y)").replace("i16 %i, %n", "i16 %i, 4");
+    assert!(!rotated_at_minsize(&folded, false), "the pin copies nothing at -Oz");
+    assert!(rotated_at_minsize(&folded, true), "the guard `0 < 4` folds");
+    assert!(!rotated_at_minsize(COUNTED, true), "`0 < n` stays a compare and a branch");
+    let wide = folded.replace("i16", "i64");
+    assert!(!rotated_at_minsize(&wide, true), "a counter wider than a register keeps its test above the body");
 }

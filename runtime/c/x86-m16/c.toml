@@ -29,7 +29,6 @@ entry_convention = "cdecl16"
 # What the front end records of a function it passes in its default registers (its own list, which differs by tree).
 default_registers = "[ff:0]"
 # The header it includes first, from the repository root.
-header = "crates/frontends/llrm-c/src/borland.h"
 # Borland C's interrupt handler parameters, in order: the registers its handler saved, each at its slot of the frame
 # (`calling.toml`'s `interrupt_frame`); what it writes to them is what it returns to.
 interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"]
@@ -92,7 +91,6 @@ registers = "watcall16"
 # defaults (its library is built with `-fsigned-char`), and it has none of Borland's names to undo: its header is empty.
 [frontend.abi.watcom]
 convention = "cdecl16"
-header = "crates/frontends/llrm-c/src/watcom.h"
 # Its linker is asked for the start-up (`_cstart_`, the object file's entry), and for `__argc`, which builds argv, where
 # `main` takes arguments: the references Open Watcom's own compiler leaves in a module with a `main`.
 entry_requests = ["_cstart_"]

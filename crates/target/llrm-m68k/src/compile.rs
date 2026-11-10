@@ -30,15 +30,68 @@ pub enum Item {
     Loc(crate::expand::Row),
 }
 
+/// The pin's code model (`-mcmodel`), which decides how a global is reached
+/// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
+/// with a 16-bit displacement; medium and large, absolute. The assembler
+/// relaxes only branches, so data farther than 32 KiB from the code needs
+/// medium or large.
+///
+/// DEVIATE: medium is absolute on the 68020 and later as well. The pin picks
+/// PC-relative there (`M68kSubtarget::classifyLocalReference`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp#L199-L208>),
+/// but its only PC-relative data form is `(d16,%pc)` (`MxPCD`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrInfo.td#L417-L422>
+/// is the indexed `(bd32,%pc,Xn)` form), so a global past 32 KiB fails to link:
+/// `relocation truncated to fit: R_68K_PC16` for `memcpy_runtime`'s two
+/// 70016-byte arrays (command and output in
+/// `docs/working/m68k-medium-pin-pc16.md`). Reason: medium has to reach any
+/// offset; `abs.l` does at every cpu, and a `(bd32,%pc)` form would be beyond
+/// the pin and 2 B longer. Position independence is not modelled (`-fPIC` is
+/// ignored). Owner: m68k. Review: 2026-12-15, or when the pin selects a 32-bit
+/// PC-relative form for data, whichever is first.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodeModel {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl CodeModel {
+    /// `-mcmodel=NAME`: `small`, `medium` or `large`.
+    pub fn parse(name: &str) -> Result<CodeModel, String> {
+        match name {
+            "small" => Ok(CodeModel::Small),
+            "medium" => Ok(CodeModel::Medium),
+            "large" => Ok(CodeModel::Large),
+            other => Err(format!("`{other}` is not a code model (small, medium, large)")),
+        }
+    }
+
+    /// Whether a global's address is an absolute one.
+    pub fn absolute_data(self) -> bool {
+        match self {
+            CodeModel::Small => false,
+            CodeModel::Medium | CodeModel::Large => true,
+        }
+    }
+}
+
 /// What the compiler may do beyond the pin's output.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// The pin's code model: how a global's address is formed
+    /// ([`CodeModel::absolute_data`]).
+    pub code_model: CodeModel,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
     /// Size is wanted over clocks in every function (`-Os`; the x86 path's
     /// `Cpu::size`). A function marked `optsize` or `minsize` wants it too.
     pub size: bool,
+    /// At a speed level a choice takes a candidate only when it is no larger
+    /// and no slower (`-O1`); otherwise it is priced by the CPU's byte rate.
+    pub strict: bool,
     /// Schedule in source order (`-pre-RA-sched=source`) rather than with the
     /// ILP list scheduler `llc` defaults to.
     pub source_order: bool,
@@ -53,6 +106,66 @@ pub struct Options {
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// A `tst` is dropped past instructions that set the codes between it and
+    /// the definition of its register, which move above the definition
+    /// ([`crate::cmpelim`]).
+    pub hoist_flag_setters: bool,
+    /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
+    /// ([`crate::cmpshift`]).
+    pub reuse_shift_flags: bool,
+    /// A load and the step of its pointer in another block are one `(An)+`
+    /// ([`crate::loopinc`]).
+    pub post_inc_across_blocks: bool,
+    /// A small conditional block is copied into the predecessors that jump to
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    pub tail_duplicate: bool,
+    /// A load of an incoming stack argument is made again where it is read
+    /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
+    pub rematerialize_arguments: bool,
+    /// How a size-built function chooses between an inline expansion and a call
+    /// to the runtime ([`crate::libcalls`], M68K-SIZE-LIBCALL).
+    pub size_libcalls: crate::libcalls::Mode,
+    /// The kinds that choice made for the module, as [`crate::libcalls::mask`];
+    /// none given, the module is scanned for the function.
+    pub libcalls: Option<u8>,
+    /// A loop's top is chosen by the jumps its fall-throughs remove, not by
+    /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
+    pub loop_top_by_jumps: bool,
+    /// A callee called again and again is called through an address register
+    /// where that makes the function cheaper ([`crate::calltarget`]).
+    pub call_targets: bool,
+    /// A call of a function this module defines is `jsr (name,%pc)`, 4 B for
+    /// the 6 of `jsr name`. Only for a driver that has checked the module's
+    /// code is within 16-bit reach of itself ([`crate::driver`]).
+    pub pc_calls: bool,
+    /// A sum in an address register adds a sign-extended word with `adda.w`
+    /// ([`crate::sextacc`]).
+    pub sext_adds: bool,
+    /// A block that only returns is copied into the predecessors that go only
+    /// there (`TailDuplicator`); kept when the function is cheaper for it.
+    pub return_dup: bool,
+    /// A value an address register would hold across a loop it is not used in
+    /// is held in a data register (`crate::classsplit`); kept when cheaper.
+    pub class_split: bool,
+    /// The destination of a long compare may be an address register
+    /// (`cmpa.l`, [`crate::addrcmp`]); kept when the function is cheaper.
+    pub compare_destinations: bool,
+    /// A 64-bit add or subtract is `add`/`addx` (`ADDC`/`ADDE`, the pin's
+    /// lowering); a function it changed is also built with the compare form
+    /// and the cheaper kept: `addx` needs data registers on both halves.
+    pub carry_chain: bool,
+    /// The coalescer joins the copies of values that live in more than one
+    /// block with the ones that do not (`JoinGlobalCopies`, the allocator's
+    /// tuning); a function that saved a register is also built without, and
+    /// the cheaper kept. False is the pin's M68k.
+    pub global_copies: bool,
+    /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
+    /// [`crate::dagisel::mulprice`]).
+    pub mul: crate::dagisel::mulprice::Mode,
+    /// The coalescer tries first the block whose copies read a value carried
+    /// around the loop (`joins_loop_carried_first`, DEVIATE C15); false is the
+    /// pin's block order.
+    pub loop_carried_first: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -61,13 +174,33 @@ impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options = Options {
+        code_model: CodeModel::Small,
         mid_end: false,
         size: false,
+        size_libcalls: crate::libcalls::Mode::Auto,
+        libcalls: None,
+        strict: false,
         source_order: false,
         indexed: false,
         push_frame: false,
         push_arguments: false,
         short: false,
+        hoist_flag_setters: false,
+        reuse_shift_flags: false,
+        post_inc_across_blocks: false,
+        tail_duplicate: false,
+        rematerialize_arguments: false,
+        loop_top_by_jumps: false,
+        call_targets: false,
+        pc_calls: false,
+        sext_adds: false,
+        return_dup: false,
+        class_split: false,
+        compare_destinations: false,
+        carry_chain: true,
+        global_copies: true,
+        mul: crate::dagisel::mulprice::Mode::Pin,
+        loop_carried_first: false,
         debug: false,
     };
 }
@@ -75,13 +208,33 @@ impl Options {
 impl Default for Options {
     fn default() -> Options {
         Options {
+            code_model: CodeModel::Small,
             mid_end: true,
             size: false,
+            size_libcalls: crate::libcalls::Mode::Auto,
+            libcalls: None,
+            strict: false,
             source_order: false,
             indexed: true,
             push_frame: true,
             push_arguments: true,
             short: true,
+            hoist_flag_setters: true,
+            reuse_shift_flags: true,
+            post_inc_across_blocks: true,
+            tail_duplicate: true,
+            rematerialize_arguments: true,
+            loop_top_by_jumps: true,
+            call_targets: true,
+            pc_calls: false,
+            sext_adds: true,
+            return_dup: true,
+            class_split: true,
+            compare_destinations: true,
+            carry_chain: true,
+            global_copies: true,
+            mul: crate::dagisel::mulprice::Mode::Trial,
+            loop_carried_first: true,
             debug: false,
         }
     }
@@ -98,6 +251,12 @@ pub fn items(
 }
 
 /// [`items`] with `options`.
+///
+/// A function an optional rewrite touched (the `adda`/`suba` fold, the copy of
+/// a return block into its predecessors) is also built without it, and the
+/// cheaper kept (`crate::trial`): each is priced before the code is known. A
+/// function that saved a register is last built with the pin's join order,
+/// which replaces the tuned one only when cheaper.
 pub fn items_with(
     module: &Module,
     name: &str,
@@ -111,17 +270,201 @@ pub fn items_with(
     } else {
         module
     };
+    let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
+    let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if !touched.any() {
+        return Ok(kept);
+    }
+    let wants_size = options.size
+        || module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    // first: the multiply decides the shape of the rest, and its price counts
+    // the library routine, which the other rewrites do not touch
+    if touched.mul_trial {
+        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.sext_adds {
+        let without = Options { sext_adds: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.class_split {
+        let without = Options { class_split: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.return_dup {
+        let without = Options { return_dup: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.global_copies {
+        // the default stands unless the other join order is cheaper
+        let other = Options { global_copies: false, ..options };
+        let (items, _) = items_once(module, name, cpu, other)?;
+        if crate::trial::keeps(&items, &kept, cpu, price) {
+            kept = items;
+            options = other;
+        }
+    }
+    // last: the two builds compared are final, the other choices made
+    if touched.carry_chain {
+        let without = Options { carry_chain: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.compare_destinations {
+        let without = Options { compare_destinations: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+        }
+    }
+    Ok(kept)
+}
+
+/// Whether `function` carries through the extend flag: an `addx`, `subx` or
+/// `negx` (a subtract from a constant zero high half is `negx`).
+pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| matches!(
+                inst.kind,
+                llrm_spike_mf::Kind::Op(name) if ["ADDX", "SUBX", "NEGX"].iter().any(|row| name.starts_with(row))
+            ),
+        )
+}
+
+/// The optional rewrites a build used.
+#[derive(Clone, Copy, Default)]
+struct Touched {
+    sext_adds: bool,
+    return_dup: bool,
+    class_split: bool,
+    /// A compare's destination was left to the allocator's choice of an
+    /// address or a data register ([`crate::addrcmp`]).
+    compare_destinations: bool,
+    /// The function has an `addx`, `subx` or `negx` ([`uses_extend`]).
+    carry_chain: bool,
+    /// The build saved a callee-saved register: the join order may have cost
+    /// it.
+    global_copies: bool,
+    /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
+    mul_trial: bool,
+}
+
+impl Touched {
+    fn any(self) -> bool {
+        self.sext_adds
+            || self.return_dup
+            || self.class_split
+            || self.compare_destinations
+            || self.carry_chain
+            || self.global_copies
+            || self.mul_trial
+    }
+}
+
+/// The bytes of `items` as assembled (a branch not yet sized counts 6).
+pub fn items_bytes(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The runtime calls the size-built functions of `module` make, as a
+/// [`crate::libcalls::mask`]: chosen once for the module (M68K-SIZE-LIBCALL),
+/// by the bytes each function builds to with and without them.
+pub fn libcalls_for(
+    module: &Module,
+    cpu: Cpu,
+    options: Options,
+) -> u8 {
+    let kinds = crate::libcalls::chosen(
+        module,
+        options.size_libcalls,
+        |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
+        |name, kinds| {
+            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            items_with(module, name, cpu, options).map(|items| items_bytes(&items))
+        },
+    );
+    crate::libcalls::mask(&kinds)
+}
+
+/// One build of the function, and the optional rewrites that changed it.
+fn items_once(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
+) -> Result<(Vec<Item>, Touched), String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
+    // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
+    // call
+    let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
+    } else {
+        Vec::new()
+    };
+    let chain = crate::dagisel::mulprice::Chain::of(options.mul);
+    let blocks = select_function_with(
+        module,
+        name,
+        cpu,
+        options.source_order,
+        options.indexed,
+        options.short,
+        options.code_model.absolute_data(),
+        wants_size,
+        options.carry_chain,
+        crate::timing::Price::of(wants_size, options.strict),
+        &chain,
+        &libcalls,
+    )?;
     let mut function = emit(name, &blocks)?;
+    let mut touched = Touched::default();
+    touched.carry_chain = options.carry_chain && uses_extend(&function);
+    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
-        crate::cmpelim::eliminate_tests(&mut function);
+        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters, options.rematerialize_arguments);
+        if options.reuse_shift_flags {
+            crate::cmpshift::reuse_shift_flags(&mut function);
+        }
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
@@ -131,10 +474,27 @@ pub fn items_with(
             crate::foldarg::fold_argument_loads(&mut function);
         }
         crate::addrroles::address_roles(&mut function);
+        if options.compare_destinations {
+            touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
+        }
+        if options.sext_adds {
+            touched.sext_adds = crate::sextacc::sign_extended_words(
+                &mut function,
+                cpu,
+                crate::timing::Price::of(wants_size, options.strict),
+            ) > 0;
+        }
+        if options.class_split {
+            touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
+        }
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
         }
+        if options.indexed && options.post_inc_across_blocks {
+            crate::loopinc::post_increment_across_blocks(&mut function);
+        }
     }
+    function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);
@@ -150,20 +510,37 @@ pub fn items_with(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
+        crate::regalloc::allocate_greedy(
+            &mut function,
+            wants_size,
+            options.indexed,
+            options.rematerialize_arguments,
+            options.global_copies,
+            options.loop_carried_first,
+        )?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
         crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
         crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+        crate::addrcmp::compare_in_address_register(&mut function, &assignment);
+        crate::addrcmp::compare_address_registers(&mut function, &assignment);
+        crate::addrcmp::word_immediates(&mut function);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
+        crate::constreg::immediate_from_free_register(&mut function, &assignment);
+        crate::narrow_add::narrow_adds(&mut function, &assignment);
+        crate::narrow_add::narrow_compares(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
+    if options.hoist_flag_setters {
+        crate::cmpelim::eliminate_adjacent_tests(&mut function, &assignment);
+    }
     llrm_spike_mf::spill::remove_dead_slot_stores::<crate::regalloc::M68kRegisters>(
         &mut function,
         &assignment,
@@ -172,10 +549,22 @@ pub fn items_with(
     );
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+        crate::spillmove::spills_as_moves(
+            &mut function,
+            &assignment,
+            cpu,
+            crate::timing::Price::of(wants_size, options.strict),
+        );
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
-    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
+    if options.tail_duplicate && !wants_size {
+        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+        if options.return_dup {
+            touched.return_dup = llrm_spike_mf::taildup::duplicate_returns(&mut function, 2);
+        }
+    }
+    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).
@@ -187,23 +576,54 @@ pub fn items_with(
             epilogue_begin: false,
         }));
     }
-    for line in finish_with(
-        &function,
-        &assignment,
-        number,
-        &slots,
-        cpu,
-        options.push_frame,
-        options.short,
-        options.push_arguments.then_some(wants_size),
-    )? {
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    let expand = |function: &crate::mfunc::MFunction| {
+        finish_with(
+            function,
+            &assignment,
+            number,
+            &slots,
+            cpu,
+            options.push_frame,
+            options.short,
+            options.push_arguments.then_some(price),
+        )
+    };
+    if options.short && options.pc_calls {
+        crate::pccall::local_calls(&mut function, |callee| is_local_callee(module, callee));
+    }
+    if options.short && options.call_targets {
+        let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
+        crate::calltarget::through_registers(&mut function, &chosen)?;
+    }
+    for line in expand(&function)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
             Line::Loc(place) => Item::Loc(place),
         });
     }
-    Ok(out)
+    Ok((out, touched))
+}
+
+/// Whether `callee` is a function `module` defines that no other definition
+/// replaces at link time: a weak or linkonce one can be.
+fn is_local_callee(
+    module: &Module,
+    callee: &str,
+) -> bool {
+    module
+        .named(callee)
+        .is_some_and(
+            |id| {
+                let global = module.global(id);
+                global.function().is_some_and(|one| !one.is_declaration())
+                    && !matches!(
+                        llrm_mir::image::Export::of(global.linkage),
+                        llrm_mir::image::Export::Weak
+                    )
+            },
+        )
 }
 
 /// The IR's branch probabilities by `(from, to)` block number
@@ -255,14 +675,22 @@ pub fn text_with(
     cpu: Cpu,
     options: Options,
 ) -> Result<String, String> {
+    printed(items_with(module, name, cpu, options)?, options.debug)
+}
+
+/// `items` as assembly text, the `.loc` rows only with `debug`.
+pub fn printed(
+    items: Vec<Item>,
+    debug: bool,
+) -> Result<String, String> {
     let mut out = String::new();
     let mut previous = None;
-    for item in items_with(module, name, cpu, options)? {
+    for item in items {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
-            Item::Loc(row) if options.debug => {
+            Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.
                 let flags = format!(
