@@ -57,7 +57,7 @@ os_console (8 ours cells) was a sweep fault, not a miscompile: the program write
 
 `m68k-clocks-moved-68020-2026-11-11.tsv`: every 68020 exe whose figure or state changed, before (c98e231ab1 compiler, pre-#8930/#8942 pricer) and after (def16209). 1520 rows: 1364 went from "unpriced forms" (the trap and the other forms counted as 0) to priced; 8 from wrong-output to priced (os_console); 88 are still unpriced. Deltas mix the compiler change between the two commits and the pricer: ours Os moved most (urem_eq -86%, loop_interchange -74%, recdeep -70%), while the gcc column, whose objects did not change, moved by the pricer alone: all 468 priced exes, median +2.2%, up to +128%.
 
-Of the 28 ours cells that were UNMEASURED at 68020 before, 12 are measured now and 16 remain (timeouts, the forms below).
+Of the 28 ours cells that were UNMEASURED at 68020 before, 16 are measured now (bitfield_long_long, double_across_a_call_result, memcpy_libcall, os_console) and 12 remain (bench_io, memfuncs_runtime, shl_of_a_zero_extended_dividend). 16 other cells became UNMEASURED (fill_nest, loop_interchange, memory_expansion, widening_multiply): the new compiler emits forms still in the gap table below, or the run is cut.
 
 ## Remaining timing-table gaps (exes = cell x column; the pricer prints the operand as shown)
 
