@@ -151,8 +151,9 @@ mod accumulator {
         fn any() -> u8 {
             ANY
         }
-        fn candidates(_: u8) -> Vec<RegId> {
-            vec![RegId::from_raw(0), RegId::from_raw(1)]
+        fn candidates(class: u8) -> Vec<RegId> {
+            // register 2 is the memory place (a zero-page cell)
+            if class == MEM { vec![RegId::from_raw(2)] } else { (0..3).map(RegId::from_raw).collect() }
         }
         fn view(
             root: RegId,
@@ -227,6 +228,35 @@ mod accumulator {
         assert_eq!(loaded(&f), Reg::Virt(0));
         assert_eq!(f.classes[1], MEM, "the other source is the memory operand");
         assert_eq!(f.classes[0], ANY);
+    }
+
+    /// Both sources arrive outside `a`: one in `x`, one in a cell. `add a, a,
+    /// x-value` stored `x` to a cell to read it as the memory operand, and loaded
+    /// the cell's value into `a` (`stx rc4; lda rc3; adc rc4`, 6 B, the high byte
+    /// of a word sum whose first word arrives in A:X). The value already in a
+    /// cell is the operand and `x` is moved into `a` (`txa; adc rc3`, 3 B).
+    fn cell_and_x(first: Reg, second: Reg) -> MFunction<u8> {
+        let mut f = function(first, second);
+        // virtual 0 arrives in `x`, virtual 1 in the cell (register 2)
+        let jump = f.blocks[0].insts.pop().expect("the entry's jump");
+        f.blocks[0].insts = vec![Inst::copy(Reg::Virt(0), phys(X)), Inst::copy(Reg::Virt(1), phys(2)), jump];
+        f
+    }
+
+    #[test]
+    fn the_source_already_in_a_cell_is_the_memory_operand() {
+        let mut f = cell_and_x(Reg::Virt(1), Reg::Virt(0));
+        commute_accumulator::<Acc>(&mut f);
+        assert_eq!(loaded(&f), Reg::Virt(0), "x is moved into a");
+        assert_eq!(f.classes[1], MEM, "the cell's value is the operand");
+    }
+
+    #[test]
+    fn a_cell_that_is_already_the_operand_is_left_alone() {
+        let mut f = cell_and_x(Reg::Virt(0), Reg::Virt(1));
+        let before = f.blocks[1].insts.clone();
+        commute_accumulator::<Acc>(&mut f);
+        assert_eq!(f.blocks[1].insts, before);
     }
 
     #[test]

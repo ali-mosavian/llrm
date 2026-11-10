@@ -501,7 +501,14 @@ pub fn commute_accumulator<T: Target>(function: &mut MFunction<T::Class>) {
             let from_first = facts.arrives_in::<T>(function, &preds, b, load, first);
             let from_second = facts.arrives_in::<T>(function, &preds, b, load, second);
             let is_p = |from: Option<RegId>| from.is_some_and(|from| T::overlaps(T::root(from), root));
-            if !is_p(from_second) || is_p(from_first) || !facts.stored_without_a_copy(function, first) {
+            // `second` is the memory operand: a value that arrives in the
+            // operand's own class is read where it is, one that arrives in
+            // another register is stored there first
+            let operand_places = T::candidates(wanted);
+            let in_place = |from: Option<RegId>| from.is_some_and(|from| operand_places.contains(&from));
+            let swaps = (is_p(from_second) && !is_p(from_first))
+                || (from_second.is_some() && !in_place(from_second) && in_place(from_first));
+            if !swaps || !facts.stored_without_a_copy(function, first) {
                 continue;
             }
             let Some(held) = T::meet(function.classes[first as usize], wanted) else { continue };

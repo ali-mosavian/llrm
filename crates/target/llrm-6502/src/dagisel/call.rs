@@ -39,10 +39,27 @@ pub enum Refused {
     Type(EVT),
 }
 
+/// Whether `name` is a routine of the runtime (`runtime/mos_rt.s`), whose
+/// words arrive in `rc` pairs.
+fn is_runtime(name: &str) -> bool {
+    static NAMES: std::sync::OnceLock<std::collections::HashSet<&'static str>> = std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            crate::RUNTIME
+                .lines()
+                .filter_map(|line| line.strip_suffix(':'))
+                .filter(|label| !label.is_empty() && !label.starts_with(['.', '@', ' ', '\t']))
+                .collect()
+        })
+        .contains(name)
+}
+
 /// Where an argument is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Location {
     Register(llrm_lir::registers::RegId),
+    /// A word in two byte registers, low first (`a`, `x`): it has no pair register.
+    Bytes(llrm_lir::registers::RegId, llrm_lir::registers::RegId),
     /// By its offset in the stack arguments.
     Stack(i64),
 }
@@ -72,14 +89,27 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    runtime: bool,
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
+    // The runtime routines take a word in `rc` pairs only (DEVIATE WORD-ARGS-AX).
+    let mut own;
+    let convention = if runtime {
+        own = convention.clone();
+        own.wide_pairs.retain(|pair| pair[0] != "a");
+        &own
+    } else {
+        convention
+    };
     let placement = convention.place(&kinds);
     let places = placement
         .places
         .iter()
         .enumerate()
         .map(|(at, place)| match place {
+            Place::Registers(names) if vts[at] == EVT::I16 && names[0] == "a" => {
+                Location::Bytes(abi::register(&names[0]), abi::register(&names[1]))
+            }
             Place::Registers(names) if vts[at] == EVT::I16 => Location::Register(abi::pair_of(&names[0])),
             Place::Registers(names) => Location::Register(abi::register(&names[0])),
             Place::Stack(offset) => Location::Stack(*offset),
@@ -134,7 +164,13 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let runtime = match (dag.opcode(callee), dag.node(callee).data) {
+        (ISD::GlobalAddress, NodeData::Global { symbol, .. }) | (ISD::ExternalSymbol, NodeData::Symbol(symbol)) => {
+            is_runtime(&dag.symbol_names[symbol as usize])
+        }
+        _ => false,
+    };
+    let (targets, bytes) = locations(&convention, &vts, runtime)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     // `LowerMemOpCallTo`: the stack arguments are stored at `rs0 + offset`.
     let mut stores = Vec::new();
@@ -163,14 +199,19 @@ pub fn lower_call(
     // `a` and `x` last: moving a constant or a byte into a cell goes through `a`
     let (a, x) = (abi::register("a"), abi::register("x"));
     let late = |register: llrm_lir::registers::RegId| u8::from(register == x) + 2 * u8::from(register == a);
-    let mut copies: Vec<_> = outs
-        .iter()
-        .zip(&targets)
-        .filter_map(|(out, &target)| match target {
-            Location::Register(register) => Some((register, out.value)),
-            Location::Stack(_) => None,
-        })
-        .collect();
+    let mut copies: Vec<(llrm_lir::registers::RegId, SDValue)> = Vec::new();
+    for (out, &target) in outs.iter().zip(&targets) {
+        match target {
+            Location::Register(register) => copies.push((register, out.value)),
+            Location::Bytes(low, high) => {
+                let shift = dag.get_constant(8, EVT::I8);
+                let upper = dag.get_node(ISD::Srl, EVT::I16, &[out.value, shift]);
+                copies.push((low, dag.get_node(ISD::Truncate, EVT::I8, &[out.value])));
+                copies.push((high, dag.get_node(ISD::Truncate, EVT::I8, &[upper])));
+            }
+            Location::Stack(_) => {}
+        }
+    }
     copies.sort_by_key(|&(register, _)| late(register));
     for (register, value) in copies {
         let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
@@ -190,9 +231,17 @@ pub fn lower_call(
     };
     let mut operands = vec![chain, callee];
     for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target else { continue };
-        let vt = dag.value_type(out.value);
-        operands.push(dag.get_phys_register(vt, register));
+        match target {
+            Location::Register(register) => {
+                let vt = dag.value_type(out.value);
+                operands.push(dag.get_phys_register(vt, register));
+            }
+            Location::Bytes(low, high) => {
+                operands.push(dag.get_phys_register(EVT::I8, low));
+                operands.push(dag.get_phys_register(EVT::I8, high));
+            }
+            Location::Stack(_) => {}
+        }
     }
     // the scheduler's live-register check reads the mask: a call clobbers the flags
     operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::P]));
@@ -220,7 +269,7 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let (sources, _) = locations(&convention, &vts, false)?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -228,6 +277,15 @@ pub fn lower_formal_arguments(
             Location::Register(register) => {
                 let copy = dag.get_copy_from_reg(chain, live_in(register), arg.vt);
                 SDValue { node: copy.node, res: 0 }
+            }
+            Location::Bytes(low, high) => {
+                let low = dag.get_copy_from_reg(chain, live_in(low), EVT::I8);
+                let high = dag.get_copy_from_reg(chain, live_in(high), EVT::I8);
+                dag.get_node(
+                    ISD::BuildPair,
+                    arg.vt,
+                    &[SDValue { node: low.node, res: 0 }, SDValue { node: high.node, res: 0 }],
+                )
             }
             Location::Stack(offset) => {
                 // `LowerMemArgument`
