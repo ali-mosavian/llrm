@@ -606,7 +606,9 @@ impl ProgramPass for Walk {
                                 // ordinary rules, are inlined into the trial too (the pin inlines
                                 // callee-first, so `foo` into `main` and `bar` into that copy meet
                                 // the constants together); one round, so O(n).
-                                if size != crate::inlinecost::CallerSize::Speed && tti.opt_size_inline_chain_trial() {
+                                if (size != crate::inlinecost::CallerSize::Speed || (!self.speed_rate && tti.inline_trials_at_o1()))
+                                    && tti.opt_size_inline_chain_trial()
+                                {
                                     let mut seen = Vec::new();
                                     let second = crate::inlinecost::sites_with_trials(
                                         module,
