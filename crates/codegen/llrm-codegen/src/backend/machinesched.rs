@@ -119,8 +119,7 @@ fn boundary(
         || one.group.is_some()
         || !one.clobbers.is_empty()
         || !one.clobbers_high.is_empty()
-        || !one.requires.is_empty()
-        || !one.delivers.is_empty()
+        || (!std::env::var_os("LLRM_MS_CONTRACT_FREE").is_some() && (!one.requires.is_empty() || !one.delivers.is_empty()))
         || !one.spread.is_empty()
         || one.frame_adjust
         || modifies_stack_pointer(regs, one)

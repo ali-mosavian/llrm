@@ -318,7 +318,15 @@ impl<T: Target> Converted<T> {
                                 // the zero register is no lane: nothing writes
                                 // it
                                 .filter(|register| registers.known(**register))
-                                .map(|register| Lanes::span(*register, 0, 1))
+                                .map(|register| {
+                                    // a register that is part of another (the z80's `b` in `bc`) has the
+                                    // lanes of the part, not one of its own
+                                    if registers.root(*register) == *register {
+                                        Lanes::span(*register, 0, 1)
+                                    } else {
+                                        llrm_codegen::backend::peephole::_lanes(registers, *register)
+                                    }
+                                })
                                 .fold(Lanes::new(), |all, one| all.or(&one))
                         };
                         let (mut reads, mut writes) = (named(&one.uses), named(&one.defines));
