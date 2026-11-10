@@ -193,12 +193,24 @@ def test_the_pin_is_told_our_stack_alignment_and_pushes_a_one_argument_call():
     assert "pushl\t$2000" in done.stdout and "subl\t$12, %esp" not in done.stdout, done.stdout
 
 
+def compile_lines(script, compiler):
+    """The lines of a shell script that run `compiler` (`gcc` or `$CLANG`) to compile (` -c `)."""
+    return [line for line in script.splitlines() if line.lstrip().startswith(compiler + " ") and " -c " in line]
+
+
 def test_the_pins_clang_and_gcc_are_built_at_our_stack_alignment():
-    """The reference objects of the rows (build.sh) and pinclocks.sh took the Linux 16-byte stack: a reserved call frame where our m32 target (S32) pushes."""
+    """The reference objects of the rows (build.sh) and pinclocks.sh took the Linux 16-byte stack: a reserved call frame where our m32 target (S32) pushes.
+    Every compile line of each external carries the flag, wherever it sits among the others: the check was a substring of one spelling (`$CLANG $F -mstack-alignment=4`)
+    and went red on release/next when #8718 put `$NV_CLANG` before the flag, though both compilers were still built at 4."""
     build = (HERE.parents[1] / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
-    assert "$CLANG $F -mstack-alignment=4" in build and "gcc $F -mpreferred-stack-boundary=2" in build
-    assert build.count("-mstack-alignment=4") == 1
-    assert "$CLANG $F -mstack-alignment=4" in (HERE / "pinclocks.sh").read_text()
+    clang, gcc = compile_lines(build, "$CLANG"), compile_lines(build, "gcc")
+    assert len(clang) >= 2 and len(gcc) >= 2, (clang, gcc)
+    assert all("-mstack-alignment=4" in line for line in clang), clang
+    assert all("-mpreferred-stack-boundary=2" in line for line in gcc), gcc
+    pinclocks = compile_lines((HERE / "pinclocks.sh").read_text(), "$CLANG")
+    assert pinclocks and all("-mstack-alignment=4" in line for line in pinclocks), pinclocks
+    dropped = build.replace("$NV_CLANG -mstack-alignment=4", "$NV_CLANG", 1)  # the check must see a compile line without it
+    assert not all("-mstack-alignment=4" in line for line in compile_lines(dropped, "$CLANG"))
 
 
 def test_pair_builds_the_binaries_its_rows_and_sizes_steps_run():
@@ -215,3 +227,74 @@ def test_pindiff_pin_side_has_no_forced_frame_pointer():
     assert not pindiff.forced_frame("f:\n\tret\n", "define void @f() {\n  ret void\n}\n")
     assert not pindiff.forced_frame("f:\n\tpush\tebp\n\tmov\tebp, esp\n\tand\tesp, -8\n", "define void @f() {\n  ret void\n}\n")
     assert "-frame-pointer=all" not in (HERE / "pindiff.py").read_text()
+
+
+def test_a_matrix_row_whose_pin_is_built_at_another_stack_alignment_is_refused_unless_labelled_cf6():
+    """The m32 O1 matrix put the pin at the Linux 16-byte stack against our 4: select_of_constants (+39 against a matched pin) read -773, wc_mixed
+    +15 read -79, and the cells looked closed or opened by the ABI and not by the code."""
+    cells = load("m32cells")
+    ours, matched, linux = cells.columns()
+    assert (ours.stack_alignment, matched.stack_alignment, linux.stack_alignment) == (4, 4, 16)
+    cells.check_row(ours, matched)
+    cells.check_row(ours, linux)
+    unlabelled = cells.Column("pin", 16)
+    try:
+        cells.check_row(ours, unlabelled)
+    except cells.Refused as why:
+        assert "stack alignment 16 against ours 4" in str(why)
+    else:
+        raise AssertionError("an unlabelled pin at 16 against ours at 4 was accepted")
+    assert "-mstack-alignment=4" in cells.pin_flags(matched) and not any(f.startswith("-mstack-alignment") for f in cells.pin_flags(linux))
+
+
+def test_m32run_links_a_non_pic_object_that_calls_through_the_plt_without_crashing(tmp_path):
+    """spill_store_order and memfuncs_runtime segfaulted in `memset@plt` and read as base miscompiles: our -fno-pic objects were linked into clang's
+    default PIE, whose PLT needs ebx = GOT."""
+    run = load("m32run")
+    clang = subprocess.run([sys.executable, str(HERE.parent / "pin_clang.py")], capture_output=True, text=True).stdout.strip()
+    if not clang:
+        return
+    # What our objects do: a call with a PLT32 relocation and no GOT register set up.
+    source = tmp_path / "a.s"
+    source.write_text(".text\n.globl main\nmain:\n\tsubl $12, %esp\n\tpushl $64\n\tpushl $7\n\tpushl $buf\n\tcall memset@PLT\n\taddl $12, %esp\n\tmovsbl buf+63, %eax\n\tpushl %eax\n\tcall report\n\taddl $16, %esp\n\txorl %eax, %eax\n\tret\n.bss\n.lcomm buf, 64\n")
+    shim = tmp_path / "r.c"
+    shim.write_text(run.SHIM)
+    for name, text in (("a", "s"), ("r", "c")):
+        subprocess.run([clang, "-m32", "-fno-pic", "-c", str(tmp_path / f"{name}.{text}"), "-o", str(tmp_path / f"{name}.o")], check=True)
+    link = run.link_command(clang, [str(tmp_path / "a.o"), str(tmp_path / "r.o")], str(tmp_path / "a.out"))
+    if subprocess.run(link, capture_output=True).returncode:
+        return  # no 32-bit libc on this host
+    done = subprocess.run([str(tmp_path / "a.out")], capture_output=True)
+    assert done.returncode == 0 and done.stdout == b"7\n", (done.returncode, done.stdout)
+
+
+def assemble32(tmp_path: Path, name: str, text: str) -> Path:
+    source = tmp_path / f"{name}.s"
+    source.write_text(text)
+    obj = tmp_path / f"{name}.o"
+    subprocess.run(["as", "--32", str(source), "-o", str(obj)], check=True)
+    return obj
+
+
+def test_an_m32_cell_counts_the_constants_kept_outside_the_text(tmp_path):
+    """The m32 matrix summed `.text` alone: ours with a 64 B table in .rodata and 8 B of code read better than a reference of 30 B of immediates and no
+    table (72 vs 30 B once the table counts)."""
+    cells = load("m32cells")
+    table = assemble32(tmp_path, "table", ".text\nf: movl tab(,%eax,4), %eax\nret\n.section .rodata\ntab: .fill 64,1,7\n")
+    immediates = assemble32(tmp_path, "imm", ".text\nf: cmpl $3, %eax\nja 1f\nmovl $5, %eax\nret\n1: movl $9, %eax\nmovl $11, %edx\nmovl $13, %ecx\nret\n")
+    ours, other = cells.footprint(table), cells.footprint(immediates)
+    assert ours.code < other.code, "premise: the code alone favours the table"
+    assert (ours.data, other.data) == (64, 0)
+    assert cells.worse(ours, other) == [f"size {cells.size(ours)} vs {cells.size(other)}", f"static {cells.static(ours)} vs {cells.static(other)}"]
+    assert cells.worse(other, ours) == []
+
+
+def test_a_table_moved_from_data_to_bss_is_not_worse_but_extra_bss_is(tmp_path):
+    """#8466's rule: bss is judged only inside static (data + bss). A zero table moved .data -> .bss shrinks the size and leaves the footprint."""
+    cells = load("m32cells")
+    initialised = cells.footprint(assemble32(tmp_path, "d", ".text\nf: ret\n.data\ntab: .fill 40,1,0\n"))
+    zeroed = cells.footprint(assemble32(tmp_path, "z", ".text\nf: ret\n.bss\n.lcomm tab, 40\n"))
+    larger = cells.footprint(assemble32(tmp_path, "l", ".text\nf: ret\n.bss\n.lcomm tab, 60\n"))
+    assert (initialised.data, initialised.bss, zeroed.data, zeroed.bss) == (40, 0, 0, 40)
+    assert cells.worse(zeroed, initialised) == []
+    assert cells.worse(larger, initialised) == ["static 60 vs 40"]

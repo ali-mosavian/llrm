@@ -67,6 +67,7 @@ fn test_the_loop_passes_do_not_scan_the_globals_for_each_loop() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: true,
+            inliner_follows: true,
             created: Default::default(),
             decided: Default::default(),
         });

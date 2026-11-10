@@ -12,6 +12,7 @@ use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_wi
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::live_out;
@@ -255,7 +256,7 @@ impl CombineHooks for Z80Combines {
         &self,
         op: ISD,
     ) -> bool {
-        op == ISD::Shl
+        matches!(op, ISD::Shl | ISD::Srl | ISD::And)
     }
 
     fn perform_dag_combine(
@@ -265,10 +266,47 @@ impl CombineHooks for Z80Combines {
         level: CombineLevel,
     ) -> Option<SDValue> {
         // Also called for every target node, whatever its operands.
-        if dag.opcode(node) != ISD::Shl {
+        if dag.opcode(node) == ISD::And {
+            // A mask that fits the byte a word was extended from (zero or any: the high byte is masked off) is a byte `and`, extended after: no pair is made
+            // for the extension and read back. The pin leaves it to isel.
+            // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): with the byte shift, huffman_decode `getbit`.
+            let (value, mask) = (dag.operand(node, 0), dag.operand(node, 1));
+            let byte = (dag.value_type(node) == EVT::I16 && matches!(dag.opcode(value), ISD::ZeroExtend | ISD::AnyExtend))
+                .then(|| dag.operand(value, 0))
+                .filter(|byte| dag.value_type(*byte) == EVT::I8);
+            return match (byte, dag.constant(mask)) {
+                (Some(byte), Some(bits)) if bits <= 0xFF => {
+                    let mask = dag.get_constant(bits, EVT::I8);
+                    let masked = dag.get_node(ISD::And, EVT::I8, &[byte, mask]);
+                    Some(dag.get_node(ISD::ZeroExtend, EVT::I16, &[masked]))
+                }
+                _ => None,
+            };
+        }
+        if !matches!(dag.opcode(node), ISD::Shl | ISD::Srl) {
             return None;
         }
         let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        // A word whose high byte is zero, shifted right by less than 8 (C's promotion of a char): the shift runs on the
+        // byte, one instruction a step against two, and the extension is what the demanded bits then fold away. The
+        // pin narrows only a known amount (`SimplifyDemandedBits`, `SRL`).
+        // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): huffman_decode `getbit`, `stream[i] >> (7 - n)`.
+        if dag.opcode(node) == ISD::Srl {
+            let width = dag.value_type(amount).size_in_bits();
+            if level == CombineLevel::BeforeLegalizeTypes
+                && dag.value_type(node) == EVT::I16
+                && dag.constant(amount).is_none()
+                && width >= 8
+                && masked_value_is_zero(dag, value, 0xFF00)
+                && masked_value_is_zero(dag, amount, ((1u128 << width) - 1) & !7)
+            {
+                let byte = dag.get_node(ISD::Truncate, EVT::I8, &[value]);
+                let count = if width == 8 { amount } else { dag.get_node(ISD::Truncate, EVT::I8, &[amount]) };
+                let shifted = dag.get_node(ISD::Srl, EVT::I8, &[byte, count]);
+                return Some(dag.get_node(ISD::ZeroExtend, EVT::I16, &[shifted]));
+            }
+            return None;
+        }
         (level == CombineLevel::BeforeLegalizeTypes
             && dag.value_type(node) == EVT::I32
             && dag.constant(amount) == Some(1))

@@ -53,8 +53,13 @@ pub(super) fn full_unroll_pays(
     // (the pin's order): a veto in a function the inliner can take leaves a
     // small rolled helper that is then inlined, and unrolled, at every site
     // (jpeg_fixed -O2 +530 B). Such a loop is priced in the late pass, in the
-    // context of each site.
+    // context of each site. Where nothing follows to inline the function
+    // (`-fno-inline-functions` with called-once off, or `noinline`) there is
+    // no late pass for it: the loop is priced here (huffman_decode -O3: 17
+    // calls of getbit unrolled unpriced, +915 B over gcc).
     let inlinable = !run.options.target_unrolling
+        && run.options.inliner_follows
+        && llrm_mir::facts::Facts::of(&run.function.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
     if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));

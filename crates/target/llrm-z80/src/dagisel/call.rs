@@ -178,7 +178,14 @@ pub fn lower_call(
         (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
             dag.get_target_global_address(EVT::I16, symbol, offset)
         }
-        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, _) => callee,
+        // `X86TargetLowering::LowerCall`: a libcall's `ExternalSymbol` becomes the `TargetExternalSymbol` the call selects on
+        (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+            let name = dag.symbol_names[id as usize].clone();
+            // the runtime's own name for a C library routine, as the builder's `libcalls` table gives it
+            let symbol = super::function::LIBCALLS.iter().find(|(c_name, _)| *c_name == name).map_or(name.as_str(), |(_, symbol)| symbol);
+            dag.get_target_external_symbol(EVT::I16, symbol)
+        }
+        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode, _) => callee,
         _ => {
             let copy = dag.get_copy_to_phys_reg(chain, crate::reg::IY, callee, glue);
             chain = SDValue { node: copy.node, res: 0 };

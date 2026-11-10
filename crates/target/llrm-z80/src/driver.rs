@@ -305,7 +305,25 @@ impl llrm_mir::target::Machine for Z80Machine {
     fn max_alloca_align(&self) -> Option<u64> {
         Some(crate::MAX_ALLOCA_ALIGN)
     }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        llrm_mir::target::Tuning {
+            max_stores_per_memcpy: MEMCPY_STORES,
+            max_stores_per_memcpy_opt_size: MEMCPY_STORES,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
 }
+
+/// `MaxStoresPerMemcpy` (and `...OptSize`): the word copies a constant `memcpy` may be before it is an `ldir`.
+///
+/// DEVIATE Z80-MEMCPY-LIMIT (owner z80-argpush, exit 2026-11-30): the pin's x86 default is 8 at speed and 4 at size
+/// (`Tuning::PIN`, `TargetLoweringBase`), where a copied word is a load and a store with a displacement. Here a word
+/// is 8 B / 52 T through `hl` and `de` and 12 B / 76 T between frame slots, against an `ldir` block of 11 B to 20 B
+/// and 21 T a byte: one word is cheaper in both bytes and clocks, two are dearer in both (`tests/memcpy_limit.rs`
+/// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word pairs, 72 B each. Exit: none; the number
+/// is the target's price, as m16's `Dos::tuning` is.
+const MEMCPY_STORES: usize = 1;
 
 thread_local! {
     /// Parses of a module's text for its source file since the last

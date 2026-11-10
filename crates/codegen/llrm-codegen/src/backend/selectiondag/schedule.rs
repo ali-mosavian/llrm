@@ -45,6 +45,11 @@
 //! [`SchedInfo::reg_pressure_limit`]); the defaults are the pin's
 //! (`getRegPressureLimit` 0), where every class is always at its limit.
 //!
+//! DEVIATE SD407: none in the scheduler; the row records that the M68k ILP
+//! queue is the pin's and that its call-hoisting with a decomposed multiply
+//! (select_of_constants -Os, 19672 B against 16916 without the multiply hook)
+//! is the pin's own choice. Owner: m68k. Exit 2026-11-23.
+//!
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
 //! `Interferences`, `releaseInterferences`) and the call-frame resource are
@@ -60,19 +65,14 @@
 //! without the virtual-register cycle, `calcMaxScratches`, `closestSucc`) is
 //! the pin's.
 //!
-//! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
-//! break in `BURRSort` never fires. Reason: SD10 drops `SDLoc` and IR order.
-//! Exit: with the emitter, if line information needs them. Owner: sdag-d.
-//! Review 2026-12-03.
-//!
 //! # See also
 //! `ScheduleDAGRRList.cpp`
 //! ([createBURRListDAGScheduler
-//! L3082](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3082),
+//! L3113](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3113),
 //! [ListScheduleBottomUp
-//! L1548](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L1548),
+//! L1572](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L1572),
 //! [BURRSort
-//! L2504](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L2504)),
+//! L2509](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L2509)),
 //! `ScheduleDAGSDNodes::BuildSchedGraph`
 //! ([L536](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536)),
 //! `ScheduleDAG.cpp` (`SUnit::addPred`, `ScheduleDAGTopologicalSort`).
@@ -2191,14 +2191,11 @@ impl Queue {
         Some(su)
     }
 
-    /// `getNodeOrdering`: the IR order of the unit's node under `SrcOrder`.
+    /// `getNodeOrdering`: the IR order of the unit's node, under every queue.
     fn node_ordering(
         graph: &Graph<'_>,
         su: usize,
     ) -> u32 {
-        if preference(graph.info) == Preference::Burr {
-            return 0;
-        }
         graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
     }
 

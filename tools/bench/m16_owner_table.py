@@ -1,0 +1,117 @@
+"""m16_owner_table.py BENCH.json DIST OUT.tsv [HARNESS_COMMIT]: the m16 owner table, from a `bench.py --opt O1 O2 Os --references --no-judge --json` run.
+
+One row per program, language and level of ours, judged per axis against the best external (C: ow, bcc, tc, tcpp; BASIC: bc, pds71, vbdos): O1 and Os strict on code,
+clocks, data and static; O2 priced (1 clk = 2 B) plus strict data and static. A Nib row's bar is the C compilers on the C twin that has the Nib semantics
+(`bench.bar_program`: `NAME~init`, `NAME~bounds`), the compilers on the plain source stay beside it (`plain_ext_*`); a twin's own row is reference-only (verdict TWIN).
+The header names the dist, the md5 of its compilers, the harness commit and `date -u`: a table without them is not evidence.
+"""
+
+import collections
+import datetime
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import bench  # noqa: E402
+
+C_REFS = ("ow", "bcc", "tc", "tcpp")
+BAS_REFS = ("bc", "pds71", "vbdos")
+OURS = ("c", "nib", "bas", "bq16")
+
+
+def counts(row: dict | None) -> dict | None:
+    """The four axes of a measured row, None where the cell is missing or errored."""
+    if not row or "error" in row or "clocks" not in row or "code_bytes" not in row:
+        return None
+    return {"code": row["code_bytes"], "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": row.get("data_bytes", 0) + row.get("bss_bytes", 0)}
+
+
+def findings(level: str, ours: dict, refs: dict) -> list[str]:
+    """Where `ours` is worse than the best of `refs`, per axis."""
+    found = []
+
+    def strict(axes):
+        for axis in axes:
+            best = min((r[axis], name) for name, r in refs.items())
+            if ours[axis] > best[0]:
+                found.append(f"{axis} {ours[axis]}>{best[0]}({best[1]})")
+
+    if level in ("O1", "Os"):
+        strict(("code", "clocks", "data", "static"))
+    else:
+        strict(("data", "static"))
+        if max(1000 * (ours["clocks"] - r["clocks"]) + 500 * (ours["code"] - r["code"]) for r in refs.values()) > 0:
+            found.append("priced")
+    return found
+
+
+def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
+    """(rows, counts per level and verdict) of a bench run's {"NAME/LANG/LEVEL": counts}."""
+    present = {key.rsplit("/", 2)[0] for key in table}
+    out, tally = [], collections.Counter()
+    for key, value in sorted(table.items()):
+        program, language, level = key.rsplit("/", 2)
+        if language in C_REFS + BAS_REFS or language not in OURS:
+            continue
+        ours = counts(value)
+        if language in ("c", "nib"):
+            bar, names, at = bench.bar_program(program, language, present), C_REFS, level
+        else:
+            bar, names, at = program, BAS_REFS, "O2"
+        refs = {name: counts(table.get(f"{bar}/{name}/{at}")) for name in names}
+        have = {name: r for name, r in refs.items() if r}
+        plain = {name: counts(table.get(f"{program}/{name}/{at}")) for name in names} if bar != program else {}
+        plain = {name: r for name, r in plain.items() if r}
+        if not ours:
+            verdict, why = ("REFUSED" if "error" in (value or {}) else "UNMEASURED"), (value or {}).get("error", "")[:60]
+            row = (program, language, level, "", "", "", "", "", "", "", verdict, why)
+        elif bench.is_twin_name(program):
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "TWIN", "reference only: the bar of its program's Nib row")
+        elif not have:
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_BAR", "")
+        else:
+            found = findings(level, ours, have)
+            verdict = "OK" if not found else ("WORSE_LB" if len(names) - len(have) else "WORSE")
+            note = ";".join(found) + (f" [bar {bar}]" if bar != program else "")
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), verdict, note)
+        tally[(level, row[10])] += 1
+        out.append((*row, min((r["code"] for r in plain.values()), default=""), min((r["clocks"] for r in plain.values()), default="")))
+    return out, tally
+
+
+def md5_lines(dist: Path) -> str:
+    return " ".join(f"{hashlib.md5((dist / name).read_bytes()).hexdigest()}  {dist / name}" for name in ("llrm-llc", "llrm-cc", "llrm-nib") if (dist / name).is_file())
+
+
+def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str:
+    body, tally = rows(table)
+    header = [
+        f"# x86-m16 owner table {now:%Y-%m-%dT%H:%MZ} (date -u)",
+        f"# dist {dist}; md5: {md5_lines(dist)}",
+        f"# harness commit {harness}; bench.py --opt O1 O2 Os --references --no-judge; flags -march=i386",
+        "# bytes: code (CODE), data (initialised), static (data+bss); judged per axis: O1/Os strict on code/clocks/data/static; O2 priced (1 clk = 2 B) plus strict data/static;"
+        " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
+        "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
+        "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
+    ]
+    columns = "prog\tlang\tlevel\tcode_B\tdata_B\tstatic_B\tclk\tbest_ext_code\tbest_ext_clk\trefs_missing\tverdict\tfindings\tplain_ext_code\tplain_ext_clk\tours_isa\trefs_isa"
+    lines = ["\t".join(str(x) for x in (*row, "i386", "ow486/bcc386/tc186/tcpp286" if row[1] in ("c", "nib") else "bc86/pds86/vbdos86")) for row in body]
+    return "\n".join(header) + "\n" + columns + "\n" + "\n".join(lines) + "\n"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) not in (3, 4):
+        print(__doc__)
+        return 2
+    table = json.loads(Path(argv[0]).read_text())
+    harness = argv[3] if len(argv) == 4 else subprocess.run(["git", "-C", str(bench.ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    Path(argv[2]).write_text(render(table, Path(argv[1]), harness, datetime.datetime.now(datetime.UTC)))
+    print(f"{len(rows(table)[0])} rows")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
