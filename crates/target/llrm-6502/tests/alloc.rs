@@ -1911,6 +1911,69 @@ done:
     }
 }
 
+/// `call_keeps` at -Os called `churn` ~700 times, and `churn` saved 8 cells through `__csave`: 2,155 clocks in the
+/// helper's loop (9.7% of the run, 22,252 clocks against 17,704 at -O1) for 39 bytes. The helpers cost 57 + 14n
+/// clocks a run, so a function called from a loop (10 runs a level) keeps its saves inline while the cold ones
+/// still share.
+#[test]
+fn a_function_called_in_a_loop_saves_its_cells_inline() {
+    let digits = |name: &str| {
+        format!(
+            "define i8 @{name}(i16 %v) {{
+entry:
+  %c = icmp ugt i16 %v, 9
+  br i1 %c, label %loop, label %done
+loop:
+  %n = phi i8 [ 1, %entry ], [ %n2, %loop ]
+  %x = phi i16 [ %v, %entry ], [ %q, %loop ]
+  %q = udiv i16 %x, 10
+  %n2 = add i8 %n, 1
+  %g = icmp ugt i16 %x, 99
+  br i1 %g, label %loop, label %out
+out:
+  ret i8 %n2
+done:
+  ret i8 1
+}}\n"
+        )
+    };
+    let driver = "define void @driver(i16 %v, i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i2, %loop ]
+  %r = call i8 @dig0(i16 %v)
+  %i2 = add i16 %i, 1
+  %c = icmp ult i16 %i2, %n
+  br i1 %c, label %loop, label %out
+out:
+  ret void
+}\n";
+    let names: Vec<String> = (0..5).map(|n| format!("dig{n}")).collect();
+    let texts_of = |with_driver: bool| {
+        let ir: String = names.iter().map(|n| digits(n)).collect::<String>() + if with_driver { driver } else { "" };
+        let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+        let mut module = llrm_mir::parse::module(&text).expect("parses");
+        llrm_6502::prepare::split_phi_edges(&mut module);
+        let selections: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let mut selection = select_function(&module, n, Cpu::Mos6502).expect("selects");
+                selection.tuning = Tuning::SIZE;
+                selection
+            })
+            .collect();
+        let parts: Vec<(&str, &llrm_6502::dagisel::function::Selection)> =
+            names.iter().map(String::as_str).zip(&selections).collect();
+        llrm_6502::select::module_text(&module, &parts).expect("emits")
+    };
+    let cold = texts_of(false);
+    assert!(cold.iter().all(|t| t.contains("jsr __csave")), "five cold users share:\n{}", cold.concat());
+    let hot = texts_of(true);
+    assert!(hot[0].contains("pha") && !hot[0].contains("__csave"), "the looped one is inline:\n{}", hot[0]);
+    assert!(hot[1..].iter().all(|t| t.contains("jsr __csave")), "the cold ones still share:\n{}", hot.concat());
+}
+
 /// A rotate (`(x << 1) | (x >> 15)` is `rotl` to opt) was "cannot select Rotl":
 /// found by the differential tests, where every program folds its checksum that
 /// way. By constants and by a count.

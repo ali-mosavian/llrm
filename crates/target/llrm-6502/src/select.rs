@@ -175,7 +175,25 @@ pub fn module_text(
         let (before, _) = text.split_once("\n  jsr __csave")?;
         before.rsplit_once("ldy #")?.1.trim().parse().ok()
     };
-    let users: Vec<(usize, u32)> = texts.iter().enumerate().filter_map(|(at, text)| Some((at, cells(text)?))).collect();
+    let mut users: Vec<(usize, u32)> =
+        texts.iter().enumerate().filter_map(|(at, text)| Some((at, cells(text)?))).collect();
+    // The helpers cost 57 + 14n clocks a run, and the level prices a byte at
+    // `clocks_per_byte`: a function that runs more often than the bytes repay keeps its saves inline.
+    let calls = crate::staticlocals::call_weights(module);
+    let mut hot = Vec::new();
+    users.retain(|(at, n)| {
+        let runs = module.named(parts[*at].0).and_then(|id| calls.get(&(id.0 as usize)).copied()).unwrap_or(1.0);
+        let slower = f64::from(57 + 14 * n);
+        let pays = f64::from(parts[*at].1.tuning.clocks_per_byte) * alloc::shared_save_gain(*n) as f64;
+        let keep = slower * runs <= pays;
+        if !keep {
+            hot.push(*at);
+        }
+        keep
+    });
+    for at in hot {
+        texts[at] = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+    }
     let gain: i64 = users.iter().map(|(_, n)| alloc::shared_save_gain(*n)).sum();
     if !users.is_empty() && gain <= alloc::SAVE_HELPERS_BYTES {
         for (at, _) in users {
