@@ -51,3 +51,8 @@ Gates: fail-first test per piece; scalar corpora md5-identical (the vector VT is
 - Run check: a `<8 x i16>` volatile copy loop (`ldr q16,[x10,x11]` / `str q16,[x9,x11]`) copies 1920 elements correctly under qemu (bad=0). Non-volatile it becomes `memcpy` by loop-idiom, as the pin does.
 - Identity: 72 objects (36 bench programs, O2 and Os, `ccn`) byte-identical to release/next fd74ab9c6b with the flag off.
 - Not done: P4 (TTI), P5 (vectorizer), so no cell has moved yet. Next: P4+P5 for scroll's forward copy loops, then P6.
+
+## Progress (73c6f7fd04): P4 and P5 slice
+- Pieces: legality (a5fe7da02f), TTI hooks (241bcbd9fe), planner (6a2fc8a96d, 57b65c9542), pass `loopvectorize.rs` + slot `loop-vectorize@1354` (73c6f7fd04). Planner VF/IC equal the pin's remark on 20 rows; pass tests: copy 1920 i16 VF 8 IC 2, offset-80 VF 8 IC 1 (pin remarks).
+- First moved cell (flag on, `ccn`, O2, qemu/unicorn `--kernel`, output checked): scroll 1,194,464 -> 478,062 instrs (-716,402), 180 -> 192 B (+12). Loops 1 and 4 are `ldp q`/`stp q`; loop 2 (fill, needs splat) and loop 3 (reverse) stay scalar.
+- Flag off: the slot returns before any analysis.
