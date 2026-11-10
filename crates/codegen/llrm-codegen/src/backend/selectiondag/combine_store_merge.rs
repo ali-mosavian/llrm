@@ -24,7 +24,7 @@
 //! `tryStoreMergeOfLoads`
 //! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
-use super::actions::{Action, TargetLowering};
+use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
@@ -454,6 +454,24 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
     }
 
+    /// The `TypePromoteInteger` branch of `tryStoreMergeOfLoads`: `isTruncStoreLegal(promoted, StoreTy)` and
+    /// `isLoadLegal(promoted, StoreTy, ZEXTLOAD | SEXTLOAD | EXTLOAD)`.
+    fn ext_load_trunc_store_is_legal(
+        &self,
+        tli: &TargetLowering,
+        bits: u32,
+    ) -> bool {
+        match (self.promoted(bits), EVT::integer(bits)) {
+            (EVT::Simple(wide), EVT::Simple(narrow)) => {
+                self.trunc_store_is_legal(tli, bits)
+                    && [LoadExt::ZExtLoad, LoadExt::SExtLoad, LoadExt::ExtLoad]
+                        .into_iter()
+                        .all(|ext| tli.load_ext_action(ext, wide, narrow) == Action::Legal)
+            }
+            _ => false,
+        }
+    }
+
     /// `getMergeStoreChains` and the `MemInfo` of the joined store of `total`
     /// bits: the stores' chains, each once, not the stores; the pointer info
     /// of the first when all name one object.
@@ -527,6 +545,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let load_chain = self.dag.operand(first_load, 0);
             let start = self.match_address(self.dag.operand(first_load, 1)).1;
             let (mut last_consecutive, mut last_legal) = (1, 1);
+            // "DoIntegerTruncate": set by the latest size found legal, left alone by a size that is not.
+            let mut do_truncate = false;
             for i in 1..consecutive {
                 let load = self.stored_load(&stores[i]);
                 // "All loads must share the same chain."
@@ -543,6 +563,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 if tli.types.is_type_legal(EVT::integer(bits)) {
                     last_legal = i + 1;
+                    do_truncate = false;
+                } else if self.hooks.merge_stores_via_trunc_store() && self.ext_load_trunc_store_is_legal(tli, bits) {
+                    // "Or check whether a truncstore and extload is legal."
+                    last_legal = i + 1;
+                    do_truncate = true;
                 }
             }
             let count = last_consecutive.min(last_legal);
@@ -564,7 +589,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 consecutive -= count;
                 continue;
             }
-            changed |= self.merge_store_loads(&stores[..count]);
+            changed |= self.merge_store_loads(&stores[..count], do_truncate);
             stores.drain(..count);
             consecutive -= count;
         }
@@ -576,6 +601,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     fn merge_store_loads(
         &mut self,
         stores: &[Link],
+        truncating: bool,
     ) -> bool {
         let first_load = self.stored_load(&stores[0]);
         let NodeData::Mem(load_info) = self.dag.node(first_load).data else { return false };
@@ -592,7 +618,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let joint = EVT::integer(total);
         let wide =
             MemInfo { mem_vt: joint, ext: None, base: if same_object { load_info.base } else { MemBase::Unknown }, ..load_info };
-        let new_load = self.dag.get_load(joint, self.dag.operand(first_load, 0), self.dag.operand(first_load, 1), wide);
+        let (chain_in, ptr_in) = (self.dag.operand(first_load, 0), self.dag.operand(first_load, 1));
+        // "This must be the truncstore/extload case": the load widens to the promoted type, the store truncates it.
+        let new_load = if truncating {
+            self.dag.get_ext_load(LoadExt::ExtLoad, self.promoted(total), chain_in, ptr_in, wide)
+        } else {
+            self.dag.get_load(joint, chain_in, ptr_in, wide)
+        };
         let new_store = self.dag.get_store(chain, new_load, self.dag.operand(stores[0].store, 2), store_info);
         for link in stores {
             let load = self.stored_load(link);
