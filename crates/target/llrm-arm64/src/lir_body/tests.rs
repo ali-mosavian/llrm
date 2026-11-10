@@ -785,3 +785,17 @@ fn a_float_register_is_not_a_segment_register() {
     let segment: Vec<_> = complaints.iter().filter(|one| one.contains("segment")).collect();
     assert!(segment.is_empty(), "{segment:?}");
 }
+
+/// The shared MachineSink splits an edge only when its probability is at most 40%
+/// (`SPLIT_EDGE_PROBABILITY_THRESHOLD`). The body carried no odds, so every edge read
+/// as even and the entry -> join edge of a `icmp sgt a, 0` branch (37.5% in the pin)
+/// was never split: a constant stayed in the entry.
+#[test]
+fn the_body_carries_the_edge_odds_by_block_position() {
+    use llrm_mir::blockfrequency::BranchProbability;
+    let mut one = function(vec![Op::I(Inst::Nop)]);
+    one.alloc_odds = Some([((0, 1), (BranchProbability::new(3, 8), 0))].into_iter().collect());
+    let lowered = to_lir(&one).expect("a nop maps");
+    assert_eq!(lowered.body.odds.probability(0, 1), Some(0.375));
+    assert_eq!(lowered.body.odds.probability(1, 0), None);
+}
