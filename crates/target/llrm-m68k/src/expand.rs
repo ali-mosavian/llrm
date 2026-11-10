@@ -93,12 +93,20 @@ fn frame_op(
             }
             return;
         }
+        // `BuildStackAlignAND`: `and` takes no address register, so through `%d0`
+        FrameOp::AlignSp(align) => {
+            out.push(mc::Inst { opcode: "MOV32rr", operands: vec![R(reg::D0), R(reg::SP)] });
+            out.push(mc::Inst { opcode: "AND32di", operands: vec![R(reg::D0), R(reg::D0), Imm(-align)] });
+            out.push(mc::Inst { opcode: "MOV32rr", operands: vec![R(reg::SP), R(reg::D0)] });
+            return;
+        }
         _ => {}
     }
     out.push(match op {
         FrameOp::PushEach { .. } | FrameOp::PopEach { .. } => unreachable!("handled above"),
         FrameOp::Link { bytes } => mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(-bytes)] },
         FrameOp::Unlink => mc::Inst { opcode: "UNLK", operands: vec![R(reg::A6)] },
+        FrameOp::AlignSp(_) => unreachable!("handled above"),
         FrameOp::SubSp(bytes) => sp_adjust(-bytes, short),
         FrameOp::AddSp(bytes) => sp_adjust(*bytes, short),
         FrameOp::Save { registers, base: at, offset } => {
@@ -403,7 +411,13 @@ pub fn finish_with(
     pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
     if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
-        return finish_with(&folded, assignment, number, slots, cpu, push_frame, short, pushes);
+        // the fold proved its range for the stack depth it could foresee; call
+        // cleanups left owed grow the depth, which only emission knows:
+        // a function that overflows keeps its `lea`s
+        match finish_with(&folded, assignment, number, slots, cpu, push_frame, short, pushes) {
+            Err(why) if why == crate::frameindexed::OUT_OF_RANGE => {}
+            done => return done,
+        }
     }
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -466,17 +480,27 @@ pub fn finish_with(
     // more on the stack than the frame accounts for
     let convert = |inst: &crate::mfunc::Inst, pushed: i64| -> Result<Vec<mc::Operand>, String> {
         let mut converted = Vec::new();
-        let mut it = inst.operands.iter().peekable();
-        while let Some(operand) = it.next() {
+        let indexed_base = match inst.kind {
+            Kind::Op(name) => crate::scaledindex::memory_at(name).map(|(base, _)| base),
+            Kind::Copy => None,
+        };
+        let mut it = inst.operands.iter().enumerate().peekable();
+        while let Some((position, operand)) = it.next() {
             converted.push(match operand {
                 Operand::Def(r) | Operand::Use(r) => mc::Operand::Reg(physical(*r, assignment)),
                 Operand::Imm(value) => {
                     // a frame index follows the displacement it adds to
-                    if let Some(Operand::Frame(index)) = it.peek() {
+                    if let Some((_, Operand::Frame(index))) = it.peek() {
                         let at = frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
                         let (base, disp) = layout.address(at);
                         it.next();
-                        converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
+                        let shown = value + disp + if base == Base::Sp { pushed } else { 0 };
+                        // the displacement of an indexed operand is 8 bits;
+                        // `pushed` is known only here
+                        if indexed_base == Some(position + 1) && i8::try_from(shown).is_err() {
+                            return Err(crate::frameindexed::OUT_OF_RANGE.to_owned());
+                        }
+                        converted.push(mc::Operand::Imm(shown));
                         converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
                         continue;
                     }

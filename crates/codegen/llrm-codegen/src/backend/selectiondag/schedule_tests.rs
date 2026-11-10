@@ -648,3 +648,72 @@ fn a_flag_writer_is_not_scheduled_between_a_compare_and_the_branch_that_reads_it
     let (split, order) = between(true);
     assert!(!split, "{order}");
 }
+
+const EQUAL_CALL: u32 = 7;
+const EQUAL_END: u32 = 8;
+
+struct EqualCallInfo;
+
+impl SchedInfo for EqualCallInfo {
+    fn num_defs(
+        &self,
+        _opcode: u32,
+    ) -> usize {
+        0
+    }
+
+    fn implicit_defs(
+        &self,
+        _opcode: u32,
+    ) -> &[u16] {
+        &[]
+    }
+
+    fn is_call(
+        &self,
+        opcode: u32,
+    ) -> bool {
+        opcode == EQUAL_CALL
+    }
+}
+
+/// Two independent calls (each a call glued to the node that ends its
+/// sequence, as `isCall` needs) with the IR orders given; the schedule's
+/// position of the first and the second.
+fn two_calls(
+    first_order: u32,
+    second_order: u32,
+) -> (usize, usize) {
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let mut one = |dag: &mut SelectionDAG, order: u32, callee: u32| {
+        dag.cur_order = order;
+        let target = dag.get_register(EVT::I32, callee);
+        let call = machine(dag, EQUAL_CALL, &[EVT::OTHER, EVT::GLUE], &[entry, target]);
+        machine(
+            dag,
+            EQUAL_END,
+            &[EVT::OTHER],
+            &[SDValue { node: call.node, res: 0 }, SDValue { node: call.node, res: 1 }],
+        )
+    };
+    let a = one(&mut dag, first_order, 1);
+    let b = one(&mut dag, second_order, 2);
+    dag.cur_order = 3;
+    let root = dag.get_node_multi(ISD::TokenFactor, &[EVT::OTHER], &[a, b]);
+    let order = schedule(&mut dag, root, &EqualCallInfo);
+    (position(&order, a), position(&order, b))
+}
+
+/// `getNodeOrdering` is the node's `IROrder` under every queue, so
+/// `BURRSort` keeps two calls of equal Sethi-Ullman number in source order.
+/// It was zero under the register-reduction queue (wasm at -O): the tie fell
+/// to the queue id, which put the later call first whenever it was queued
+/// first, and the same IR in either order scheduled the same.
+#[test]
+fn the_register_reduction_queue_keeps_two_equal_calls_in_ir_order() {
+    let (a, b) = two_calls(1, 2);
+    assert!(a < b, "the call of order 1 goes first: {a} {b}");
+    let (a, b) = two_calls(2, 1);
+    assert!(b < a, "the call of order 1 goes first: {a} {b}");
+}

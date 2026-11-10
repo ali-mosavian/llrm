@@ -503,6 +503,15 @@ pub trait Tti {
         }
     }
 
+    /// Whether a callee that allocates may be copied into a recursive caller,
+    /// as the pin's `getInlineCost` allows up to 1024 bytes of it
+    /// (`TotalAllocaSizeRecursiveCaller`). DEVIATE (default no): a recursion's
+    /// depth times the callee's frame overflows a small platform's stack.
+    /// Exit: a target that says yes.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        false
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its
@@ -877,6 +886,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether the -O1 unroll walk may peel a loop (the pin does, under
+    /// `-funroll-loops`). A peel copies the loop body, which -O1 on a
+    /// bytes-strict target cannot pay for.
+    fn peels_at_o1(&self) -> bool {
+        true
+    }
+
     /// `Tuning::second_ipsccp`.
     fn second_ipsccp(&self) -> bool {
         false
@@ -943,6 +959,11 @@ pub trait Tti {
 
     /// `Tuning::divide_by_bytes`.
     fn divide_by_bytes(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::immediate_forms_at_size`.
+    fn immediate_forms_at_size(&self) -> bool {
         false
     }
 
@@ -1606,6 +1627,26 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: whether `LoopIdiomRecognize` turns a shift loop into a
+    /// `ctlz`/`cttz` count (`recognizeAndInsertFFS`, `recognizeShiftUntil*`).
+    /// The pin does on every target; one that expands `ctlz` to a long
+    /// sequence, or weighs bytes against the loop, keeps the loop and says
+    /// false until its `Tti` prices the intrinsics.
+    fn shift_loop_counts(&self) -> bool {
+        false
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L569
+    /// `getPopcntSupport(bits) == PSK_FastHardware`: whether `ctpop` of an
+    /// integer of `bits` is one fast instruction. The base class says
+    /// software; `LoopIdiomRecognize` forms `ctpop` only where it is fast.
+    fn popcnt_support_fast(
+        &self,
+        _bits: u32,
+    ) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a function built for size turns a store or
     /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
     /// pin does; a target whose call setup and library routine are more bytes
@@ -1760,6 +1801,20 @@ pub trait Tti {
         _optsize: bool,
     ) -> bool {
         false
+    }
+
+    /// `TargetTransformInfo::isProfitableToHoist` (the pin's `TargetLowering`
+    /// hook, overridden by AArch64 and PowerPC to keep a fused multiply-add or
+    /// a load pattern): whether `inst`, identical in every arm of a branch,
+    /// should run once before it. Asked by SimplifyCFG's
+    /// `hoistCommonCodeFromSuccessors`.
+    fn is_profitable_to_hoist(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+    ) -> bool {
+        true
     }
 
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.

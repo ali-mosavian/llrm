@@ -928,6 +928,16 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
+/// Which part of its pair `register` is: 0 the whole pair, 1 the low half, 2 the high half. A `pop` puts each
+/// half back where it was pushed from, so a slot's spills and reloads must name the same part.
+fn pair_lane(register: llrm_lir::registers::RegId) -> u8 {
+    match (stack_pair(register), register) {
+        (Some(pair), one) if pair == one => 0,
+        (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
+        _ => 2,
+    }
+}
+
 /// For each instruction of each block, whether it lies inside the stack arguments of a call: after an
 /// `ADJCALLSTACKDOWN` of bytes and before the matching `ADJCALLSTACKUP`.
 fn call_areas(function: &MFunction) -> Vec<Vec<bool>> {
@@ -987,10 +997,17 @@ pub fn frameless_slots_are_a_stack(
         _ => None,
     };
     let mut any = false;
+    let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         if inst.operands.iter().any(|one| matches!(one, Operand::Frame(_))) {
             match spill(inst) {
-                Some((_, _, register)) if stack_pair(register).is_some() => any = true,
+                Some((_, slot, register)) if stack_pair(register).is_some() => {
+                    // a byte saved from `e` and reloaded into `d` came back as it was in `d`
+                    if *lane_of.entry(slot).or_insert(pair_lane(register)) != pair_lane(register) {
+                        return false;
+                    }
+                    any = true;
+                }
                 _ => return false,
             }
         }
@@ -1184,12 +1201,7 @@ pub fn stack_slot_report_by(
                 } else {
                     counts.1 += 1;
                 }
-                // 0: a whole pair, 1: the low half, 2: the high half
-                let lane = match (stack_pair(register), register) {
-                    (Some(pair), one) if pair == one => 0,
-                    (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
-                    _ => 2,
-                };
+                let lane = pair_lane(register);
                 if *lane_of.entry(slot).or_insert(lane) != lane {
                     barred.entry(slot).or_insert(StackRefusal::DifferentLane);
                 }
@@ -2839,7 +2851,7 @@ const TAIL_DUPLICATION_SIZE: usize = 4;
 /// bytes) and the phi copy ahead of it become a `ret`. A predecessor that
 /// branches to it conditionally keeps the original, with that edge's phi
 /// inputs.
-fn tail_duplicate_returns(function: &mut MFunction) {
+pub fn tail_duplicate_returns(function: &mut MFunction) {
     let mut j = 1;
     while j < function.blocks.len() {
         let block = &function.blocks[j];
@@ -2882,7 +2894,8 @@ fn tail_duplicate_returns(function: &mut MFunction) {
             continue;
         }
         let tail = function.blocks[j].insts.clone();
-        for &p in &copy_into {
+        // highest first: a split below a predecessor moves only the blocks after it
+        for &p in copy_into.iter().rev() {
             // the phi inputs for this edge, as copies
             let mut moves = Vec::new();
             for phi in &mut function.blocks[j].phis {
@@ -2895,6 +2908,26 @@ fn tail_duplicate_returns(function: &mut MFunction) {
             if insts.last().is_some_and(|inst| inst.barrier) {
                 insts.pop();
             }
+            // a conditional branch elsewhere ahead of the copy ends the block (the pin's `analyzeBranch` reads
+            // only the terminators at its end): the copy is the block it falls into
+            let split = insts.iter().any(|inst| inst.terminator);
+            if split {
+                let id = function.blocks.iter().map(|block| block.id).max().map_or(0, |id| id + 1);
+                function.blocks.insert(p + 1, Block { id, insts: Vec::new(), phis: Vec::new() });
+                for block in &mut function.blocks {
+                    for phi in &mut block.phis {
+                        for (pred, _) in &mut phi.incoming {
+                            if *pred > p {
+                                *pred += 1;
+                            }
+                        }
+                    }
+                }
+                if j > p {
+                    j += 1;
+                }
+            }
+            let insts = &mut function.blocks[if split { p + 1 } else { p }].insts;
             insts.extend(moves);
             insts.extend(tail.iter().cloned());
         }
