@@ -747,6 +747,31 @@ pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
     "uwtable",
 ];
 
+/// The spelling of `uwtable(sync)`; `uwtable` alone is the asynchronous kind.
+pub const UWTABLE_SYNC: &str = "uwtable(sync)";
+
+/// The kind of unwind table a function asks for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnwindTable {
+    /// `uwtable(sync)`: precise at calls only.
+    Sync,
+    /// `uwtable`: precise at every instruction.
+    Async,
+}
+
+/// `Function::getUWTableKind`, or none without the attribute.
+pub fn unwind_table(attrs: &[Attribute]) -> Option<UnwindTable> {
+    attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Flag(name) if name == UWTABLE_SYNC => Some(UnwindTable::Sync),
+                Attribute::Flag(name) if name == "uwtable" => Some(UnwindTable::Async),
+                _ => None,
+            },
+        )
+}
+
 pub const INT_ATTRIBUTES: [&str; 4] = ["align", "alignstack", "dereferenceable", "dereferenceable_or_null"];
 
 pub const TYPE_ATTRIBUTES: [&str; 5] = ["byref", "byval", "elementtype", "inalloca", "sret"];
