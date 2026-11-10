@@ -1,7 +1,10 @@
 //! Two functions are the same code when their bodies match; a differing constant, operation or shape separates them.
 
-use super::{equivalent, function_hash};
-use crate::testing::parsed;
+use llrm_mir::passes::PassManager;
+use llrm_mir::program::Program;
+
+use super::{equivalent, function_hash, MergeFunctions};
+use crate::testing::{parsed, printed};
 
 const HEAD: &str = "target datalayout = \"e-p:32:32-i32:32-i64:32-n8:16:32\"\n\n";
 
@@ -124,4 +127,76 @@ b2:
 ";
     assert!(same(text, "a", "b"));
     assert!(!same(text, "a", "c"), "returning the phi is not returning its successor");
+}
+
+fn merged(text: &str) -> String {
+    let mut program =
+        Program::new(vec![parsed(&format!("{HEAD}{text}"))], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add_program(MergeFunctions);
+    manager.run(&mut program).unwrap();
+    printed(&program.modules[0])
+}
+
+fn defined(text: &str) -> usize {
+    text.lines().filter(|one| one.starts_with("define")).count()
+}
+
+/// gcc folded `__gtsf2` into `jmp __gesf2` and ours kept both 16 B bodies: two external copies stay two names,
+/// the second a tail call of the first.
+#[test]
+fn test_an_external_copy_becomes_a_tail_call_of_the_first() {
+    let after = merged(
+        "define i32 @a(i32 %x) {
+b0:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @b(i32 %y) {
+b0:
+  %s = add i32 %y, 1
+  ret i32 %s
+}
+",
+    );
+    assert_eq!(defined(&after), 2, "an exported name stays defined:\n{after}");
+    assert!(after.contains("tail call i32 @a(i32 %y)"), "@b is a thunk of @a:\n{after}");
+}
+
+/// A local copy nothing takes the address of goes, and its caller calls the kept one.
+#[test]
+fn test_a_local_copy_is_dropped_and_its_callers_call_the_kept_one() {
+    let after = merged(
+        "define internal i32 @a(i32 %x) {
+b0:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define internal i32 @b(i32 %y) {
+b0:
+  %s = add i32 %y, 1
+  ret i32 %s
+}
+
+define i32 @main(i32 %z) {
+b0:
+  %p = call i32 @a(i32 %z)
+  %q = call i32 @b(i32 %p)
+  ret i32 %q
+}
+",
+    );
+    assert_eq!(defined(&after), 2, "one copy and main:\n{after}");
+    assert!(!after.contains("@b("), "@b is gone:\n{after}");
+}
+
+/// Another constant is another function: nothing merges.
+#[test]
+fn test_functions_that_differ_are_left_alone() {
+    let after = merged(ADD);
+    assert!(!after.contains("tail call"), "no thunk:\n{after}");
+    assert_eq!(defined(&after), 4);
 }

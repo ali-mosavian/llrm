@@ -27,12 +27,16 @@
 //!  define i32 @c(i32 %y) { %s = add i32 %y, 2  ret i32 %s }   ; not: another constant
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 
+use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::module::{GlobalKind, Linkage, UnnamedAddr};
+use llrm_mir::opcode::{Attribute, Opcode, Tail};
+use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
+use llrm_mir::types::Type;
 
 /// `FunctionComparator::functionHash`: what two equivalent functions share.
 pub fn function_hash(function: &Function) -> u64 {
@@ -237,6 +241,180 @@ impl Comparator<'_> {
         x.ty == y.ty
             && matches!((&x.kind, &y.kind), (ConstantKind::Global(a), ConstantKind::Global(b)) if *a == self.left_id && *b == self.right_id)
     }
+}
+
+/// LLVM's `MergeFunctions` ([MergeFunctions.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/MergeFunctions.cpp)):
+/// the functions of a module that are the same code become one.
+///
+/// Of a class of equivalent functions the first external one (else the first) is kept. A local one nothing takes the address of
+/// (or whose address is `unnamed_addr`) is dropped and every reference goes to the kept one; any other becomes a thunk, a tail
+/// call of the kept one with its own arguments (`writeThunk`). A thunk is a `jmp` once lowered.
+///
+/// DEVIATE MERGEFUNC-ALIAS (owner x86-m32, exit 2026-11-30): the pin writes an alias where the target allows one; this writes a
+/// thunk. DEVIATE MERGEFUNC-ROUNDS: merging can make two callers equal, so the pass repeats while it merges (the pin's `Deferred`).
+pub struct MergeFunctions;
+
+impl ProgramPass for MergeFunctions {
+    fn name(&self) -> &'static str {
+        "mergefunc"
+    }
+
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+        let mut changed = false;
+        for module in &mut program.modules {
+            while merge_functions(module) {
+                changed = true;
+            }
+        }
+        if changed {
+            analyses.invalidate();
+        }
+        Ok(())
+    }
+}
+
+/// `isEligibleForMerging` (L1): a body that is the module's own and may be replaced.
+fn eligible(module: &Module, id: GlobalId) -> bool {
+    let global = module.global(id);
+    let Some(function) = global.function() else { return false };
+    let name = global.name.as_deref().unwrap_or("");
+    !function.is_declaration()
+        && matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private)
+        && !name.starts_with("llvm.")
+        && !function.attrs.iter().any(|a| matches!(a, Attribute::Flag(n) if n == "optnone" || n == "naked"))
+}
+
+fn local(linkage: Linkage) -> bool {
+    matches!(linkage, Linkage::Internal | Linkage::Private)
+}
+
+/// The functions something other than a direct call names.
+fn address_taken(module: &Module) -> BTreeSet<GlobalId> {
+    let mut taken = BTreeSet::new();
+    for alias in &module.aliases {
+        taken.insert(alias.aliasee);
+    }
+    for global in &module.globals {
+        match &global.kind {
+            GlobalKind::Variable(variable) => {
+                if let Some(initializer) = variable.initializer {
+                    embedded(&module.context, initializer, &mut taken);
+                }
+            }
+            GlobalKind::Function(function) => {
+                for &block in function.layout() {
+                    for inst in function.iter_block(block) {
+                        let inst = function.instruction(inst);
+                        let callee = matches!(inst.opcode, Opcode::Call(_)).then(|| inst.operands.len() - 1);
+                        for (at, &operand) in inst.operands.iter().enumerate() {
+                            let Operand::Constant(constant) = operand else { continue };
+                            if Some(at) == callee && matches!(module.context.get(constant).kind, ConstantKind::Global(_)) {
+                                continue;
+                            }
+                            embedded(&module.context, constant, &mut taken);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    taken
+}
+
+/// One round: whether any function was dropped or turned into a thunk.
+fn merge_functions(module: &mut Module) -> bool {
+    let mut buckets: HashMap<u64, Vec<GlobalId>> = HashMap::new();
+    for index in 0..module.globals.len() as u32 {
+        let id = GlobalId(index);
+        if eligible(module, id) {
+            let function = module.global(id).function().expect("a function");
+            buckets.entry(function_hash(function)).or_default().push(id);
+        }
+    }
+    let mut classes: Vec<Vec<GlobalId>> = Vec::new();
+    for ids in buckets.into_values().filter(|ids| ids.len() > 1) {
+        let mut here: Vec<Vec<GlobalId>> = Vec::new();
+        for id in ids {
+            let function = module.global(id).function().expect("a function");
+            let class = here.iter_mut().find(|class| {
+                let head = class[0];
+                equivalent(module, head, module.global(head).function().expect("a function"), id, function)
+            });
+            match class {
+                Some(class) => class.push(id),
+                None => here.push(vec![id]),
+            }
+        }
+        classes.extend(here.into_iter().filter(|class| class.len() > 1));
+    }
+    classes.sort_by_key(|class| class[0]);
+    let taken = address_taken(module);
+    let mut gone: BTreeMap<GlobalId, GlobalId> = BTreeMap::new();
+    let mut thunks: Vec<(GlobalId, GlobalId)> = Vec::new();
+    for class in &classes {
+        let keep = class.iter().copied().find(|&id| !local(module.global(id).linkage)).unwrap_or(class[0]);
+        for &id in class.iter().filter(|&&id| id != keep) {
+            let global = module.global(id);
+            if local(global.linkage) && (!taken.contains(&id) || global.unnamed_addr == UnnamedAddr::Global) {
+                gone.insert(id, keep);
+            } else if !is_variadic(module, id) && !is_thunk_to(module, id, keep) {
+                thunks.push((id, keep));
+            }
+        }
+    }
+    let changed = !gone.is_empty() || !thunks.is_empty();
+    for (id, keep) in thunks {
+        write_thunk(module, id, keep);
+    }
+    if !gone.is_empty() {
+        module.context.renumber_globals(&|global| Some(gone.get(&global).copied().unwrap_or(global)));
+        module.retain_globals(&|global| !gone.contains_key(&global));
+    }
+    changed
+}
+
+fn is_variadic(module: &Module, id: GlobalId) -> bool {
+    let function = module.global(id).function().expect("a function");
+    matches!(module.context.types.get(function.ty), Type::Function { variadic: true, .. })
+}
+
+/// Whether `id` already is `write_thunk(id, keep)`'s result: a call of `keep` and a return.
+fn is_thunk_to(module: &Module, id: GlobalId, keep: GlobalId) -> bool {
+    let function = module.global(id).function().expect("a function");
+    let [block] = function.layout() else { return false };
+    let insts: Vec<_> = function.iter_block(*block).collect();
+    let [call, ret] = insts[..] else { return false };
+    let call = function.instruction(call);
+    matches!(call.opcode, Opcode::Call(_))
+        && matches!(function.instruction(ret).opcode, Opcode::Ret)
+        && matches!(call.operands.last(), Some(&Operand::Constant(c)) if matches!(module.context.get(c).kind, ConstantKind::Global(g) if g == keep))
+}
+
+/// `writeThunk` (L1): the body of `id` becomes a tail call of `keep` with `id`'s arguments.
+fn write_thunk(module: &mut Module, id: GlobalId, keep: GlobalId) {
+    let callee = Operand::Constant(module.reference(keep));
+    let function = module.global(id).function().expect("a function");
+    let (ty, convention, attrs) = (function.ty, function.calling_convention, function.parameter_attrs.clone());
+    let count = function.parameters().len();
+    let GlobalKind::Function(body) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+    **body = body.declaration();
+    let mut builder = module.builder(id);
+    let entry = builder.block("entry");
+    builder.position(entry);
+    let arguments: Vec<Operand> = (0..count).map(|at| builder.parameter(at)).collect();
+    let result = builder.call_as(convention, ty, callee, &arguments, "");
+    for (at, list) in attrs.into_iter().enumerate() {
+        for attr in list {
+            builder.argument_attr(at, attr);
+        }
+    }
+    builder.ret(result);
+    let GlobalKind::Function(body) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+    let call = body.iter_block(entry).next().expect("the call");
+    let Opcode::Call(info) = body.instruction(call).opcode.clone() else { unreachable!("a call") };
+    let mut info = info;
+    info.tail = Tail::Tail;
+    body.set_opcode(call, Opcode::Call(info));
 }
 
 #[cfg(test)]
