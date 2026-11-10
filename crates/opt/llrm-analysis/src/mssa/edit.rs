@@ -2,7 +2,7 @@
 //! graph with: replacing uses, moving and removing accesses, making one for
 //! an instruction.
 
-use llrm_mir::module::{BlockId, InstId};
+use llrm_mir::module::{BlockId, Function, InstId};
 
 use super::build::{Effect, Place};
 use super::{AccessId, BlockAccesses, Kind, MemoryAccess, Mssa};
@@ -281,12 +281,13 @@ impl Mssa {
     /// `definition`. None where the instruction touches no memory.
     pub(crate) fn create_defined_access(
         &mut self,
+        function: &Function,
         block: BlockId,
         inst: InstId,
         definition: Option<AccessId>,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Option<AccessId> {
-        let access = self.create_new_access(block, inst, modref)?;
+        let access = self.create_new_access(function, block, inst, modref)?;
         // `createDefinedAccess` always sets the definition (even none).
         self.set_defining_access(access, definition);
         Some(access)
