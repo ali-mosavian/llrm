@@ -355,7 +355,10 @@ fn main() {
                         if status != Some(*expected) {
                             return (None, None, format!("wrong result: {status:?}, want {expected}"));
                         }
-                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        let total = cycles::price(&gcc_root, &exe, &[model], false, &["k".to_owned()]);
+                        if total.truncated {
+                            return (None, None, "trace cut short: raise CYCLES_TIMEOUT".to_owned());
+                        }
                         if total.insns == 0 {
                             return (None, None, "priced no instruction".to_owned());
                         }
