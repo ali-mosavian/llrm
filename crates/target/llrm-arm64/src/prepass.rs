@@ -633,13 +633,15 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// operand whose result is only copied (heuristic 2) unless every reader of
 /// `register` already reads `earlier`.
 ///
-/// DEVIATE: heuristic 1 (a cheap operation across blocks) and 3 (phi readers)
-/// are not translated; within one block equal operations always merge (one DAG
-/// node in the pin); at `optsize` they always merge (a shared constant is the
-/// smaller code; the heuristics guard register pressure). Translating 1 and 3
-/// moved 29 of 144 arm64 cells (5 better on both axes, 17 worse on one or
-/// both: lru -O2 93 -> 99 instructions, the pin 103;
-/// handoff/arm64-nest-cse1-ab-2026-11-07.md). Owner w15. Exit: 11-30.
+/// Heuristics 1 (a cheap operation across non-adjacent blocks) and 3 (phi
+/// readers) follow the pin ([MachineCSE.cpp#L435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L435));
+/// within one block equal operations always merge (one DAG node in the pin).
+///
+/// DEVIATE: at `optsize` they always merge (a shared constant is the smaller
+/// code; the heuristics guard register pressure). Without it 9 of 36 arm64
+/// -Os cells are bigger and 1 smaller (recpow -4 B; jpeg_fixed +20, stft_single
+/// +24, lru +16, handoff/w15-cse-heur-only-ab-2026-11-10.md). Owner w15.
+/// Exit: 11-30.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
     definitions: &HashMap<Reg, usize>,
@@ -1388,6 +1390,34 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!(movzs(2), 0, "{function:#?}");
+    }
+
+    /// Heuristic 3: a value a phi reads is not reused in a block that does not
+    /// read it already (the pin: `isProfitableToCSE`, the PHI scan).
+    #[test]
+    fn a_value_a_phi_reads_is_not_reused_in_another_block() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, phi) = (64, 65, 66, 67, 70);
+        function.next_register = 80;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock {
+                label: "entry".into(),
+                ops: vec![movz(b, 1), movz(c, 2), add(a, b, c), copy(phi, a), branch_to("next")].into(),
+            },
+            MBlock {
+                label: "next".into(),
+                ops: vec![
+                    add(d, b, c),
+                    copy(phi, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(phi))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, false);
+        let adds = function.blocks[1].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubShifted { .. }))).count();
+        assert_eq!(adds, 1, "{function:#?}");
     }
 
     /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
