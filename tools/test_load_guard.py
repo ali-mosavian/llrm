@@ -470,8 +470,12 @@ class Order(Env, unittest.TestCase):
             job.wait(timeout=15)
         return open(log).read().split()
 
-    def test_waiters_are_admitted_by_tier_not_by_arrival(self):
-        self.assertEqual(self.admit_order([3, 1, 2]), ["1", "2", "3"])
+    def test_tiers_one_to_three_are_admitted_by_age_and_tier_four_after_them(self):
+        """Oversight 11-10: age priority across tiers 1-3; the tier breaks ties only. Tier 4 stays behind all of them."""
+        self.assertEqual(self.admit_order([3, 1, 2]), ["3", "1", "2"])
+
+    def test_tier_four_waits_behind_older_tiers_one_to_three(self):
+        self.assertEqual(self.admit_order([4, 3, 1]), ["3", "1", "4"])
 
     def test_inside_a_tier_the_earlier_waiter_goes_first(self):
         self.assertEqual(self.admit_order([2, 2, 2]), ["2", "2", "2"])
@@ -545,6 +549,20 @@ class Drain(Env, unittest.TestCase):
             job.wait(timeout=15)
         self.assertEqual(open(log).read().split(), ["3", "2"])
 
+    def test_an_old_tier_2_waiter_goes_before_fresh_tier_1_waiters(self):
+        """A tier-2 build (6502-a) waited 2 h 20 min behind a stream of fresh tier-1 probes: tier 2 never aged to tier 1. Tiers 1-3 go by age; the tier breaks ties."""
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05")]
+        time.sleep(1.5)
+        for _ in range(3):
+            jobs.append(self.start("bash", "-c", f"echo 1 >> {log}", LG_TIER="1", LG_SETTLE="0", LG_POLL="0.05"))
+            time.sleep(0.2)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split()[0], "2")
+
     def test_an_aged_tier_4_waiter_never_passes_a_tier_2(self):
         self.set_load(30.0, 30.0)
         log = os.path.join(self.dir.name, "order")
@@ -602,4 +620,4 @@ class Drain(Env, unittest.TestCase):
         self.set_load(16.0, 16.0)
         for job in jobs:
             job.wait(timeout=15)
-        self.assertEqual(open(log).read().split(), ["1", "2", "3"])
+        self.assertEqual(open(log).read().split(), ["3", "1", "2"])  # by age, not tier
