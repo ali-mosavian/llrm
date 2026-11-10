@@ -10,7 +10,7 @@ branches, gas: as examples/matrix.rs builds it), `gcc` and `clang` (the pin's cl
 there are NO CLOCKS: the rows leave the field empty and tools/m68k_worse_cells.py judges them on bytes alone.
 
 Every cell of the denominator gets a row. A failure is a row with no number and the reason in `note`; a program with no row is a hole and
-the run exits 2. Reasons: ok, not-targeted (not a cell), refused (llrm-cc said so), timeout, compile-fail, no-reference (ours built, neither
+the run exits 2. Reasons: ok, not-targeted (not a cell), refused (llrm-cc said so), timeout, compile-fail, asm-error (gas refused ours: exit 3), no-reference (ours built, neither
 gcc nor clang did). OUT gets `m68k-corpus.tsv` (rows), `reasons.tsv` (every cell that is not ok, with the cause) and the header counts.
 Environment: LLRM_CC (llrm-cc), GCC_M68K, LLRM_PIN_CLANG, LLVM_M68K (the pin's bin directory).
 """
@@ -37,7 +37,7 @@ import m68k_worse_cells as worse_cells  # noqa: E402
 import o0_sweep  # noqa: E402
 
 TIMEOUT = 180
-CPUS = ("68000", "68020", "68040", "68060")
+CPUS = ("68000", "68010", "68020", "68030", "68040", "68060")  # test_the_matrix_cpus_are_the_supported_cpus
 LEVELS = ("O1", "O2", "O3", "Os")
 POSIX = ROOT / "runtime/shared/posix"
 GCC_ONLY = ("-fzero-init-padding-bits",)
@@ -242,6 +242,8 @@ class Tools:
         obj = Path(out + ".o")
         if not ok:
             reason, cause = failure(compiler, timed, err)
+            if compiler == "ours" and at == 1 and not timed:
+                reason = "asm-error"  # llrm-cc produced assembly gas refuses: a compiler bug, not a missing cell
             return None, reason, cause, None
         library, unresolved = self.library(cpu, level, obj, work)
         if unresolved:
@@ -266,6 +268,13 @@ def verdict(rows: list[tuple]) -> str:
 def holes(denominator: list[str], cpus: list[str], levels: list[str], have: set[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
     """The (cpu, level, program) cells of the denominator with no `ours` row: a program silently dropped from the matrix."""
     return [(cpu, level, p) for cpu in cpus for level in levels for p in denominator if (f"m68k-{cpu}", p, level) not in have]
+
+
+def exit_status(missing: list, counts: dict[str, int]) -> int:
+    """2 for a hole in the denominator, 3 for a cell whose assembly gas refused (the build is broken), else 0."""
+    if missing:
+        return 2
+    return 3 if counts.get("asm-error") else 0
 
 
 def main() -> int:
@@ -331,8 +340,9 @@ def main() -> int:
     print(header.strip())
     if missing:
         print(f"holes (denominator cells with no ours row): {missing[:8]}")
-        return 2
-    return 0
+    if counts.get("asm-error"):
+        print(f"asm-error: {counts['asm-error']} cells whose assembly gas refuses (see reasons.tsv)")
+    return exit_status(missing, counts)
 
 
 if __name__ == "__main__":
