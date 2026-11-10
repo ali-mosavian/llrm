@@ -97,7 +97,6 @@ fn touches_flags(op: &Op) -> bool {
 }
 
 pub fn run(function: &mut MFunc) {
-    return;
     let defined_once = crate::prepass::definitions(function);
     let mut reads: rustc_hash::FxHashMap<Reg, usize> = Default::default();
     for block in &function.blocks {
