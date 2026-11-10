@@ -26,6 +26,7 @@ Read with [agents.md](../../agents.md): the seven rules and the method. These ar
 
 ## Measuring
 - Doubt the instrument first: output correct, executed instructions, the same binary labelled base and new with md5s, a rerun. Static counts are labelled static.
+- A liveness, peephole or cell-dead change is gated on an executed A/B over the corpus (sim65, output against `.out`, each CPU it touches; `tools/6502/ours_cr.py`): compile-only identity hid a miscompile (#8625).
 - Tests take at most 10% of the wall clock; run the narrowest test that answers the question. No mutation tests. Never launch a full gate unprompted.
 
 ## Safety

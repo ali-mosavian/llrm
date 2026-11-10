@@ -29,7 +29,7 @@ fn scans(functions: usize) -> (u64, u64) {
     let mut manager = PassManager::default();
     manager.add(Cvp);
     manager.add(JumpThreading { enabled: true, options: JumpThreadingOptions::default() });
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.add(InstSimplify);
     manager.add(LoopInstSimplify);
     manager.add(InferAlignment);
@@ -67,6 +67,7 @@ fn test_the_loop_passes_do_not_scan_the_globals_for_each_loop() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: true,
+            inliner_follows: true,
             created: Default::default(),
             decided: Default::default(),
         });

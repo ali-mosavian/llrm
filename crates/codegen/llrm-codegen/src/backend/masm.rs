@@ -449,6 +449,10 @@ pub struct Module {
     /// The visibility of each exported name that is not the default, by its
     /// name in the object.
     pub visibility: std::collections::BTreeMap<String, llrm_object::Visibility>,
+    /// The defined procedures another module may replace at link time (weak
+    /// ones; at `-fPIC` every default-visibility public one): a call or jump
+    /// to one is left to the linker, not filled in. By name in the object.
+    pub preemptible: BTreeSet<String>,
     /// Second names for symbols above, exported as `publics` are.
     pub aliases: Vec<Alias>,
     /// (segment, items)
@@ -1678,6 +1682,7 @@ fn parts(
         !omit
             && procedure.entry == 0
             && (reserve != 0
+                || moves_stack(&procedure.body)
                 || procedure.registers.kept
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
@@ -4938,6 +4943,7 @@ mod tests {
             externs: Vec::new(),
             publics: Vec::new(),
             visibility: Default::default(),
+            preemptible: Default::default(),
             aliases: Vec::new(),
             data: Vec::new(),
             procedures: Vec::new(),

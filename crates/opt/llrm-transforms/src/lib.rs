@@ -152,6 +152,9 @@ pub mod combine_icmp_const;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
+pub mod combine_icmp_table;
+#[cfg(test)]
+mod combine_icmp_table_tests;
 pub mod combine_invert;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
@@ -170,6 +173,7 @@ pub mod combine_ptrcast;
 pub mod combine_select;
 pub mod combine_select_bit_test;
 pub mod combine_select_bools;
+pub mod combine_select_cttz_ctlz;
 pub mod combine_select_ext_const;
 pub mod combine_select_fabs;
 pub mod combine_select_into_op;

@@ -13,6 +13,6 @@ TL;DR: today an `alloca` aligned past what the frame keeps (4) is neither realig
 ## Why
 The frame rounds to 4 (M68K-STACK-ALIGN), the datalayout says `S16` (2 B), and nothing realigns. The pin's subtarget keeps 8 and realigns with a frame pointer.
 
-## Fix (general, shared target fact)
+## Fix (general, shared target fact; landed in the PR that sets the two values)
 `kept_stack_align` 4 and `max_alloca_align` 8 on the shared target fact (#8457): at pipeline entry an alloca aligned at most 4 is unchanged, 4 < A <= 8 is clamped to 4, A > 8 is refused by name. The refusal makes `over_aligned_local_after_even_pushes` a visible CCFAIL cell (no `!m68k` tag). Then stack realign (prologue `sp, -A` with a frame pointer, via `kept_stack_align`) turns the refusal into correct code.
 The harness is the fail-first for the refusal: it must exit non-zero today and the compile must refuse or the exit be 0.

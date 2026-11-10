@@ -337,6 +337,10 @@ pub struct TargetHooks {
     pub fixed_shift_count: bool,
     /// `Tti::folds_select_to_cmp`.
     pub select_to_cmp: bool,
+    /// DEVIATE PHICONST (`combine_phi.rs`): fold a phi of constants into all
+    /// its users. Off where bytes are strict: a phi of constants costs a move
+    /// per edge.
+    pub phi_constant_users: bool,
 }
 
 pub struct Env<'a> {
@@ -368,6 +372,9 @@ pub struct Combiner<'a> {
     /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
     /// dominating conditions while set (`foldICmpUsingKnownBits`).
     pub without_dom_conditions: bool,
+    /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
+    /// `Query::pending_intrinsics`).
+    pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
 }
 
 impl Combiner<'_> {
@@ -739,6 +746,7 @@ pub(crate) fn combine_for(
         worklist: InstWorklist::default(),
         declared,
         without_dom_conditions: false,
+        pending_intrinsics: Vec::new(),
     };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);

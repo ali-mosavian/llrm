@@ -91,6 +91,8 @@ use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 pub struct MachineCse {
     pub classes: Rc<RegisterClasses>,
+    /// `Target::cse_keeps_compare_with_live_minuend`.
+    pub keep_compare: bool,
 }
 
 impl LIRTransform for MachineCse {
@@ -106,7 +108,7 @@ impl LIRTransform for MachineCse {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(shared(&body, &self.classes))
+        Ok(shared_with(&body, &self.classes, self.keep_compare))
     }
 }
 
@@ -197,8 +199,11 @@ fn expression(what: &Semantics) -> Semantics {
 }
 
 /// `TII->isAsCheapAsAMove`.
-fn cheap(one: &Insn) -> bool {
-    crate::backend::machinesink::as_cheap_as_a_move(one)
+fn cheap(
+    one: &Insn,
+    classes: &RegisterClasses,
+) -> bool {
+    crate::backend::machinesink::as_cheap_as_a_move(one, classes.cheap_move_immediate)
 }
 
 /// The commutative operations: `add`, `and`, `or`, `xor`, `imul`.
@@ -239,6 +244,8 @@ struct Walk<'a> {
     regs: llrm_lir::registers::Regs,
     /// Each block's predecessors, as block numbers.
     preds: Vec<Vec<usize>>,
+    /// `Target::cheap_move_immediate`.
+    cheap_immediate: fn(u8, i64) -> bool,
 }
 
 impl Walk<'_> {
@@ -310,6 +317,77 @@ impl Walk<'_> {
         changed
     }
 
+    /// CSE-CMP: the value shared with is only a compare's difference (nothing
+    /// reads it; `PeepholeOptimizer` makes it a `cmp`), and `one` destroys an
+    /// operand. Sharing moves `one` in front of the branch: the operand is then
+    /// live past the shared point on paths that skip `one`, so it needs a copy
+    /// there, where in `one`'s own block it died and cost none. Not when the
+    /// operand outlives `one` as well (the copy was there already). A
+    /// commutative `one` needs every register operand live, and some operand
+    /// dead after `one`, to have lost a free in-place form.
+    fn would_copy_the_minuend(
+        &self,
+        shared: u32,
+        shared_block: usize,
+        one: &Insn,
+        block: usize,
+    ) -> bool {
+        if self.readers.get(&shared).is_some_and(|readers| !readers.is_empty()) {
+            return false;
+        }
+        let Some(what) = one.what.as_ref() else { return false };
+        let shared_id =
+            self.body.blocks[shared_block].insns.iter().find(|made| made.defines.first() == Some(&shared)).map(|made| made.id());
+        let position = |at: usize, id: u64| self.body.blocks[at].insns.iter().position(|made| made.id() == id);
+        let defined_in = |key: u32| {
+            self.body.blocks.iter().position(|candidate| {
+                candidate.phis.iter().any(|phi| phi.result == key)
+                    || candidate.insns.iter().any(|made| made.defines.contains(&key))
+            })
+        };
+        // Whether `reader` reads `key` after the instruction `origin` of block `from`.
+        let after = |reader: &Reader, key: u32, from: usize, origin: u64| match reader {
+            Reader::Insn(id) => match self.block_of.get(id) {
+                Some(&at) if at == from => {
+                    position(at, *id) > position(from, origin)
+                        || reaches_avoiding(self.body, &self.by_at, from, at, defined_in(key))
+                }
+                Some(&at) => reaches_avoiding(self.body, &self.by_at, from, at, defined_in(key)),
+                None => true,
+            },
+            Reader::Phi(join) => self.body.blocks[*join].phis.iter().any(|phi| {
+                phi.incoming.iter().any(|&(edge_from, value)| {
+                    self.name(value) == key
+                        && self.by_at.get(&edge_from).is_none_or(|&edge| {
+                            edge == from || reaches_avoiding(self.body, &self.by_at, from, edge, defined_in(key))
+                        })
+                })
+            }),
+        };
+        // (live past the shared point, live past `one`) of one operand.
+        let lives = |place: &Loc| -> Option<(bool, bool)> {
+            let Loc::Held(held) = place else { return None };
+            let key = self.name(held.value);
+            let others: Vec<&Reader> = self
+                .readers
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter(|reader| **reader != Reader::Insn(one.id()) && Some(**reader) != shared_id.map(Reader::Insn))
+                .collect();
+            let past_shared = shared_id.is_some_and(|origin| others.iter().any(|reader| after(reader, key, shared_block, origin)));
+            Some((past_shared, others.iter().any(|reader| after(reader, key, block, one.id()))))
+        };
+        let operands: Vec<(bool, bool)> = what.sources.iter().filter_map(lives).collect();
+        if operands.is_empty() {
+            return false;
+        }
+        if commuted(what).is_none() {
+            return what.sources.first().and_then(lives).is_some_and(|(new, old)| new && !old);
+        }
+        operands.iter().all(|&(new, _)| new) && operands.iter().any(|&(_, old)| !old)
+    }
+
     /// `isProfitableToCSE(CSReg, Reg, CSBB, MI)`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L435>).
     fn profitable(
@@ -335,7 +413,8 @@ impl Walk<'_> {
         // at any distance and its allocator splits the long range; ours spilled
         // (x_life -O3 +2.6% clk: `lea eax, _g[ecx]` shared across a loop held a
         // register and reloaded the bound each trip; x_transpose +14 B).
-        if (cheap(one) || one.what.as_ref().is_some_and(|what| what.op == Operation::Address))
+        if (crate::backend::machinesink::as_cheap_as_a_move(one, self.cheap_immediate)
+            || one.what.as_ref().is_some_and(|what| what.op == Operation::Address))
             && shared_block != block
             && !self.body.blocks[shared_block].succ.contains(&self.body.blocks[block].at)
         {
@@ -555,6 +634,18 @@ fn reaches(
     from: usize,
     to: usize,
 ) -> bool {
+    reaches_avoiding(body, by_at, from, to, None)
+}
+
+/// [`reaches`] without passing through `avoid`: a value read again only after
+/// the block that defines it again is a later value.
+fn reaches_avoiding(
+    body: &LirBody,
+    by_at: &IndexMap<i64, usize>,
+    from: usize,
+    to: usize,
+    avoid: Option<usize>,
+) -> bool {
     let mut seen: HashSet<usize> = HashSet::default();
     let mut work = vec![from];
     let mut budget = 32;
@@ -563,6 +654,9 @@ fn reaches(
             let Some(&next) = by_at.get(succ) else { continue };
             if next == to {
                 return true;
+            }
+            if Some(next) == avoid {
+                continue;
             }
             if seen.insert(next) {
                 budget -= 1;
@@ -589,7 +683,7 @@ fn pre_candidate(
 ) -> bool {
     candidate(one, classes)
         && !one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))))
-        && !cheap(one)
+        && !cheap(one, classes)
         && !sets_flags(regs, bits, one)
 }
 
@@ -734,6 +828,15 @@ pub fn shared(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> LirBody {
+    shared_with(body, classes, false)
+}
+
+/// [`shared`], with CSE-CMP (`keep_compare`) where the target asks.
+pub fn shared_with(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    keep_compare: bool,
+) -> LirBody {
     let by_at: IndexMap<i64, usize> =
         body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
     let dominance = AddressDominance::of(body.blocks.iter().map(|block| (block.at, &block.succ[..])), Some(body.entry));
@@ -804,6 +907,7 @@ pub fn shared(
         moved: HashMap::default(),
         table: HashMap::default(),
         regs,
+        cheap_immediate: classes.cheap_move_immediate,
     };
     // Depth first over the dominator tree; an entry is `(block, keys to drop)`
     // once its subtree is done.
@@ -867,6 +971,11 @@ pub fn shared(
                 continue;
             }
             let old = one.defines[0];
+            if keep_compare && sets_flags && walk.would_copy_the_minuend(shared_value, shared_block, one, number) {
+                walk.table.insert(key.clone(), (old, number));
+                mine.push(key);
+                continue;
+            }
             if !walk.profitable(shared_value, old, shared_block, one, number) {
                 walk.table.insert(key.clone(), (old, number));
                 mine.push(key);
@@ -1712,5 +1821,69 @@ mod tests {
     fn test_a_block_with_two_predecessors_keeps_its_compare() {
         let body = compare_twice(vec![], false);
         assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 2);
+    }
+
+    /// A diamond: block 0 compares `v1, v2` (the difference unread) and
+    /// branches; block 1 (the then side) makes `sub v4 := v1, v2`; block 2 is
+    /// the else side; block 3 joins them, `v5 = phi(v4 from 1, v1 from 2)`.
+    /// With `after` the join also reads `v1`.
+    fn diamond(after: bool) -> LirBody {
+        let head = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "sub", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+                    insn(1, Operation::Branch, "jb", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let then = LirBlock {
+            succ: vec![3].into(),
+            ..LirBlock::new(
+                1,
+                vec![
+                    insn(4, Operation::Binary, "sub", vec![held(4)], vec![held(1), held(2)], vec![4], vec![1, 2]),
+                    insn(5, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let other = LirBlock {
+            succ: vec![3].into(),
+            ..LirBlock::new(2, vec![insn(6, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])])
+        };
+        let mut join_insns = vec![];
+        if after {
+            join_insns.push(insn(7, Operation::Binary, "add", vec![held(6)], vec![held(1), held(5)], vec![6], vec![1, 5]));
+        }
+        join_insns.push(insn(8, Operation::Return, "ret", vec![], vec![], vec![], vec![]));
+        let mut join = LirBlock::new(3, join_insns);
+        join.phis = vec![crate::model::lir::Phi { result: 5, incoming: vec![(1, 4), (2, 1)] }].into();
+        let mut body =
+            LirBody::new("diamond", 0, vec![head.into(), then.into(), other.into(), join.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body
+    }
+
+    /// CSE-CMP. The pin shares the then side's `sub v1, v2` with the compare
+    /// that opens the diamond, which moves the subtract in front of the branch;
+    /// `v1` is still the else side's, so a copy of it is made on every
+    /// iteration of a loop of this shape (x_isqrt -O2: 8.11 executed
+    /// instructions per trip against gcc's 7.11, +4.5% clocks).
+    #[test]
+    fn test_a_subtract_that_destroys_an_operand_the_other_path_reads_stays_apart_from_the_compare() {
+        let body = diamond(false);
+        assert_eq!(subs(&body), 2, "the premise: two subtracts");
+        assert_eq!(subs(&shared_with(&body, &RegisterClasses::m16(), false)), 1, "the pin shares them");
+        assert_eq!(subs(&shared_with(&body, &RegisterClasses::m16(), true)), 2);
+    }
+
+    /// A copy of the operand was needed anyway where it outlives the
+    /// subtract, so sharing still saves the compare.
+    #[test]
+    fn test_a_subtract_whose_operand_is_read_afterwards_is_still_shared() {
+        let body = diamond(true);
+        assert_eq!(subs(&shared_with(&body, &RegisterClasses::m16(), true)), 1);
     }
 }

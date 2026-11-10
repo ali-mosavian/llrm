@@ -2393,8 +2393,12 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
         .find(|one| one.matches(", 1022").count() == 4)
         .unwrap_or_else(|| panic!("{procedure}"));
     // The pin's loop-reduce leaves this loop five counters too (steps 2, 6, 8,
-    // 18 and 22, ending at 642), on a machine of six: one of them is parked,
-    // in one slot, a store and the reloads that use it.
+    // 18 and 22, ending at 642), on a machine of six. "One of them is parked,
+    // in one slot" is an expectation, not a pin measurement: pin llc at code16
+    // parks two counters on this function and four on a loop of this shape
+    // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
+    // from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");
@@ -4415,7 +4419,7 @@ fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
 #[test]
 fn test_a_checked_subscript_is_one_unsigned_compare() {
     let text = listing_in("qb45", &["-fsanitize=bounds"], "oneck", "DIM a%(100)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n");
-    assert!(text.contains("jae"), "{text}");
+    assert_eq!(text.matches("\n    cmp ").count(), 1, "{text}");
     assert_eq!(text.matches("\n    js ").count(), 0, "{text}");
 }
 

@@ -133,3 +133,12 @@ def test_a_dump_that_names_pentium4_reaches_the_pin_as_one_cpu():
     out = pin.retarget(text, pin.target("m32"))
     assert out.count('"target-cpu"') == 1 and "pentium4" not in out and "+sse2" not in out and "tune-cpu" not in out
     assert '"target-cpu"="i486"' in out and "nounwind" in out
+
+
+def test_our_own_function_attribute_words_do_not_reach_the_pins_parser():
+    """The dump's `define` lines carry `llrm-end-biased`; the pin's llc stopped at it ("expected '{' in function body") and 150 of 353 m32 O1 cells
+    read NA instead of a number. The words of ours are dropped before the pin sees the text."""
+    pin = load()
+    text = "define i32 @f(i32 %x) nounwind llrm-end-biased {\n  ret i32 %x\n}\n"
+    out = pin.retarget(text, pin.target("m32"))
+    assert "llrm-" not in out and "nounwind" in out and "#9999 {" in out

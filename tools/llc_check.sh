@@ -21,7 +21,7 @@ progs=${*:-$(cd "$root/tests/llc" && ls *.c 2>/dev/null | sed 's/\.c$//')}
 llcpin=${LLRM_PIN_LLC:-$(dirname "$clang")/llc}
 printf '%-10s %-6s %8s %8s %8s   (.text bytes)\n' prog result clang pin llrm
 bad=0
-bytes() { python3 "$root/tools/ab/object_bytes.py" x86_64-linux "$1" | awk '{print $1 + $2}'; }  # code + data
+bytes() { uv run -q --project "$root/tools" python "$root/tools/ab/object_bytes.py" x86_64-linux "$1" | awk '{print $1 + $2}'; }  # code + data
 for p in $progs; do
   src=$root/tests/llc/$p.c
   "$clang" -target $triple -O2 -c "$src" -o "$out/$p.ref.o" && gcc "$out/$p.ref.o" -o "$out/$p.ref" -lm || { echo "$p: reference failed"; bad=1; continue; }

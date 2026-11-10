@@ -896,6 +896,24 @@ fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// `uwtable(sync)` read back as plain `uwtable`: the kind was dropped, so a
+/// back end could not tell a synchronous unwind table from an asynchronous one.
+#[test]
+fn the_unwind_table_kind_is_kept() {
+    use crate::opcode::{UnwindTable, unwind_table};
+    let kinds = |attrs: &str| {
+        let text = format!("{DATALAYOUT}\ndefine void @f() {attrs} {{\nb0:\n  ret void\n}}\n");
+        let once = round(&text);
+        assert_eq!(round(&once), once);
+        let mut module = parse::module(&once).expect("reads");
+        unwind_table(&module.function_mut("f").unwrap().1.attrs)
+    };
+    assert_eq!(kinds("uwtable(sync)"), Some(UnwindTable::Sync));
+    assert_eq!(kinds("uwtable"), Some(UnwindTable::Async));
+    assert_eq!(kinds("uwtable(async)"), Some(UnwindTable::Async));
+    assert_eq!(kinds(""), None);
+}
+
 /// Clang's output for arm64 states `ssp` and `uwtable(sync)` on a function and
 /// `captures(none)` on a parameter (LLVM 22's `nocapture`); the reader refused
 /// each ("expected `}`, found `ssp`", "expected `,`, found `captures`"), so no
@@ -1481,6 +1499,36 @@ fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
     assert_eq!(intrinsic(&module), None);
     module.globals[id.0 as usize].name = GlobalName::default();
     assert_eq!(intrinsic(&module), None);
+}
+
+/// clang 24 prints `/* (nan) */` before the class mask of `llvm.is.fpclass`; the reader stopped at it
+/// (`unexpected character `/``), so `runtime/compiler-rt/tests/host_fp8.c` did not compile on arm64 at any level.
+/// A C comment is white space, and it counts its lines.
+#[test]
+fn a_c_style_comment_in_the_text_is_white_space() {
+    let text = "declare i1 @llvm.is.fpclass.f64(double, i32)\ndefine i1 @f(double %x) {\nentry:\n  %c = call i1 @llvm.is.fpclass.f64(double %x, /* (nan) */ i32 3)\n  ret i1 %c\n}\n";
+    let without = text.replace("/* (nan) */ ", "");
+    assert_eq!(round(text), round(&without));
+    let spanning = text.replace("/* (nan) */", "/* a\nb */");
+    assert_eq!(round(&spanning), round(&without));
+}
+
+/// A comment opener inside a string is text: a `c"..."` constant, a quoted name and a metadata string holding `/*`
+/// and `*/` read as the base lexer read them. (A guard: it passes on the base too, as it must.)
+#[test]
+fn a_comment_opener_inside_a_string_is_not_a_comment() {
+    let text = "@s = constant [6 x i8] c\"a/*b*/\"\n@\"x/*y\" = global i32 0\n@t = constant [5 x i8] c\"*/ /*\"\ndefine void @f() !dbg !0 {\n  ret void\n}\n!0 = !{!\"p/*q*/r\"}\n";
+    let printed = round(text);
+    for kept in ["a/*b*/", "x/*y", "*/ /*", "p/*q*/r"] {
+        assert!(printed.contains(kept), "{kept} was lost:\n{printed}");
+    }
+}
+
+/// An unterminated comment is an error at the line it opens, not the end of the text read as nothing.
+#[test]
+fn an_unterminated_c_comment_is_refused_at_its_line() {
+    let why = refusal("define void @f() {\n  ret void /* open\n}\n");
+    assert!(why.contains("line 2") && why.contains("unterminated"), "{why}");
 }
 
 /// LLVM's `+inf`, `-qnan`, `+nan(0x..)` and `snan(0x..)` spellings were

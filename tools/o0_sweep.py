@@ -29,16 +29,31 @@ TIMEOUT = 180
 CPU_OR_ABI = ("-march", "-mcpu", "-mtune", "-mabi", "-mcmodel")  # named by the target row
 
 
+def configuration_of(source: str, target: str) -> list[str]:
+    """The `// flags:` configuration the target builds: where the line has several (`-DREAL_MODE | -m32`), the first that agrees with
+    the target's word size on `-m32` (x86_32 takes one with it, x86_16 and x86_64 one without); the first for any other target. The
+    first alone gave x86_32-wat `os_execute` the x86_16 configuration's `-DREAL_MODE`: a refusal made by the harness."""
+    configurations = ct.flag_configurations(source)
+    if not configurations:
+        return []
+    wants_m32 = {"x86_32": True, "x86_16": False, "x86_64": False}.get(target.split("-")[0])
+    if wants_m32 is not None:
+        for one in configurations:
+            if ("-m32" in one) == wants_m32:
+                return one
+    return configurations[0]
+
+
 def flags_of(source: str, target: str = "x86") -> list[str]:
-    """The first `// flags:` configuration's feature flags, then the target family's `// flags-FAMILY:` line (corpus_targets.flags_for:
-    the same source as the executed sweeps; dropping `-mcmodel=medium` made memcpy_runtime overflow a pc-relative displacement on m68k)."""
-    kept: list[str] = []
-    for line in source.splitlines()[:6]:
-        if line.startswith("// flags:"):
-            first = line.removeprefix("// flags:").split("|")[0].split()
-            feature = target.startswith("x86")  # -mlong-double-80 and the like are x87 options; other drivers reject them
-            kept = [t for t in first if t.startswith(("-D", "-f", "-W")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
-            break
+    """The target's `// flags:` configuration's feature flags (`configuration_of`), then the target family's `// flags-FAMILY:` line
+    (corpus_targets.flags_for: the same source as the executed sweeps; dropping `-mcmodel=medium` made memcpy_runtime overflow a
+    pc-relative displacement on m68k)."""
+    feature = target.startswith("x86")  # -mlong-double-80 and the like are x87 options; other drivers reject them
+    kept = [
+        t
+        for t in configuration_of(source, target)
+        if t.startswith(("-D", "-f", "-W")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))
+    ]
     return [*kept, *ct.flags_for(target.split("-")[0], source)]
 
 
@@ -78,7 +93,7 @@ def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int) -> dict[
     result = {}
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(jobs) as pool:
         for target in targets:
-            applicable = [p for p in programs if ct.applies(target, p.read_text())]
+            applicable = [p for p in programs if ct.applies(target, p.read_text(), p)]
             rows = list(pool.map(lambda p: (p.stem, *compile_one(cc, target, p, Path(tmp))), applicable))
             result[target] = {
                 "programs": len(applicable),

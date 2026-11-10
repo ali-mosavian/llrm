@@ -8,7 +8,7 @@ use std::process::Command;
 /// type with no registers, exit 1.
 #[test]
 fn a_vector_value_is_refused_not_a_panic() {
-    let dir = std::env::temp_dir().join("llrm-refuse-vector-wasm");
+    let dir = std::env::temp_dir().join(format!("llrm-refuse-vector-wasm-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let source = dir.join("g.ll");
     std::fs::write(

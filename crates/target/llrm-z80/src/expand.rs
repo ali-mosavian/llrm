@@ -126,6 +126,12 @@ thread_local! {
     pub static PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// Set for the size levels, where bytes decide and clocks may not grow
+    /// (-O0, -O1, -Os, -Oz); at -O2 and -O3 one byte is three clocks.
+    pub static BYTES_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 fn is_pair(register: RegId) -> bool {
     register == reg::BC || register == reg::DE || register == reg::HL
 }
@@ -649,7 +655,7 @@ impl Printer<'_> {
                     self.push(format!("ld {}, (hl)", name(lo)));
                     self.push("inc hl");
                     self.push(format!("ld {}, (hl)", name(hi)));
-                    self.push("dec hl");
+                    self.restore_pointer(rest);
                 }
             }
             "LD16mr" => {
@@ -661,7 +667,16 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), {}", name(lo)));
                 self.push("inc hl");
                 self.push(format!("ld (hl), {}", name(hi)));
-                self.push("dec hl");
+                self.restore_pointer(rest);
+            }
+            "LD16mi" => {
+                let Some(Operand::Imm(value)) = inst.operands.first() else {
+                    return Err("LD16mi without a constant".to_owned());
+                };
+                self.push(format!("ld (hl), #{}", value & 0xFF));
+                self.push("inc hl");
+                self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
+                self.restore_pointer(rest);
             }
             "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
@@ -927,7 +942,7 @@ impl Printer<'_> {
                 self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes + self.spill_bytes));
                 self.push("add hl, sp");
             }
-            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
+            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" | "LD16fi" => {
                 // register first for a load, the stored value first for a
                 // store; the frame object and its offset last
                 let load = op.ends_with("rf");
@@ -937,7 +952,14 @@ impl Printer<'_> {
                     Some(Operand::Imm(extra)) => *extra,
                     other => return Err(format!("a frame offset that is {other:?}")),
                 };
-                if op == "LD8fi" {
+                if op == "LD16fi" {
+                    let Some(Operand::Imm(value)) = inst.operands.first() else {
+                        return Err("LD16fi without a constant".to_owned());
+                    };
+                    for (byte, slot) in [value & 0xFF, (value >> 8) & 0xFF].into_iter().zip(self.frame_slots(index, extra, 2)?) {
+                        self.push(format!("ld {slot}, #{byte}"));
+                    }
+                } else if op == "LD8fi" {
                     let value = self.immediate(inst, 0, 0xFF)?;
                     let slot = self.frame_slots(index, extra, 1)?.remove(0);
                     self.push(format!("ld {slot}, {value}"));
@@ -1211,6 +1233,16 @@ impl Printer<'_> {
         }
     }
 
+    /// The `dec hl` that puts a pointer back after a word through it, unless nothing reads `hl` after.
+    fn restore_pointer(
+        &mut self,
+        rest: &[Inst],
+    ) {
+        if !self.pair_dead_after(reg::HL, rest) {
+            self.push("dec hl");
+        }
+    }
+
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
     fn pair_dead_after(
         &self,
@@ -1413,12 +1445,12 @@ impl Printer<'_> {
             // equality (no scratch register for two nonzero bytes)
             (false, true) if bh == "#0" && bl.starts_with('#') => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("or a, {}", name(ah)));
             }
             (false, true) if bl == "#0" && bh.starts_with('#') => {
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.push(format!("or a, {}", name(al)));
             }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
@@ -1437,15 +1469,37 @@ impl Printer<'_> {
             }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("jr nz, {skip}"));
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.out.push(Line::Label(skip));
             }
             (false, false) => unreachable!("a reader was found"),
         }
         Ok(())
+    }
+
+    /// `a` left zero exactly when it equalled `operand`, for a reader of the
+    /// zero flag alone: `sub a, #1` and `sub a, #255` are `dec a` and `inc a`,
+    /// 1 B and 3 T less (the carry they set is not read).
+    ///
+    /// DEVIATE Z80-ZTEST-1: no pin pass at this stage. The pin's counterpart
+    /// is an isel pattern, `X86sub_flag_nocf x, -1` (a flag-setting subtract
+    /// whose carry is not read) selecting `INC`
+    /// ([`X86InstrCompiler.td`][td]). Owner z80. Exit: the flag-use
+    /// predicate in the generated selector.
+    ///
+    /// [td]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L2324
+    fn push_zero_test_against(
+        &mut self,
+        operand: &str,
+    ) {
+        match operand {
+            "#1" => self.push("dec a"),
+            "#255" | "#-1" => self.push("inc a"),
+            _ => self.push(format!("sub a, {operand}")),
+        }
     }
 
     /// The byte operand `at` of an ALU or compare as printed: the frame cell a
@@ -2014,7 +2068,8 @@ pub fn finish(
     reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
-    push_arguments(&mut function, assignment);
+    let below_ix = layout(&function, slots).below_ix();
+    push_arguments(&mut function, assignment, below_ix);
     let frame = layout(&function, slots);
     let pushed = entry_pushes(&mut function, assignment, &frame);
     let function = &function;
@@ -2431,7 +2486,8 @@ fn form(text: &str) -> String {
             }
             "de" if mnemonic == "ex" => "de".to_owned(),
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
-            "a" | "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
+            "a" => "a".to_owned(),
+            "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
             "bc" | "de" | "af" => "bc".to_owned(),
             "hl" | "ix" | "iy" | "sp" => one.to_owned(),
             "(hl)" => "(hl)".to_owned(),
@@ -2474,15 +2530,30 @@ fn form(text: &str) -> String {
     key
 }
 
-/// The table's cost of a form as `form` writes it. Every byte register is `b`
-/// there, so a copy between two of them is `ld b;b`, which the table spells
-/// `ld b;c`.
+/// The table's cost of a form as `form` writes it. The accumulator is `a` where the table has the form for it alone
+/// (`ld a;(bc)`, `ld (nn);a`), else every byte register is `b` there, so a copy between two of them is `ld b;b`, which
+/// the table spells `ld b;c`.
 fn table_cost(key: &str) -> Option<crate::timing::Cost> {
-    crate::timing::cost(key)
-        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
-        .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+    let generic = key.split_once(' ').map_or_else(
+        || key.to_owned(),
+        |(mnemonic, operands)| {
+            // `add a;b`, `adc a;b`, `sbc a;b` name the accumulator in the table
+            let named = usize::from(matches!(mnemonic, "add" | "adc" | "sbc"));
+            let operands: Vec<&str> = operands
+                .split(';')
+                .enumerate()
+                .map(|(at, one)| if one == "a" && at >= named { "b" } else { one })
+                .collect();
+            format!("{mnemonic} {}", operands.join(";"))
+        },
+    );
+    [key, generic.as_str()].into_iter().find_map(|key| {
+        crate::timing::cost(key)
+            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
+            .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+    })
 }
 
 /// Bytes and T-states of the lines, summed over every instruction (a loop body
@@ -2492,11 +2563,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     let (mut bytes, mut clocks) = (0, 0);
     for line in lines {
         let Line::Inst(text) = line else { continue };
-        let key = form(text);
-        let cost = crate::timing::cost(&key)
-            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")));
-        match cost {
+        match table_cost(&form(text)) {
             Some(cost) => {
                 bytes += cost.bytes;
                 clocks += cost.taken;
@@ -2653,11 +2720,18 @@ pub fn weighted(
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
     let (mut bytes, mut clocks) = (0, 0.0);
-    for (line, weight) in weighted(lines, &frequencies) {
-        let Line::Inst(text) = line else { continue };
-        let cost = table_cost(&form(&text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+    let weighted = weighted(lines, &frequencies);
+    let mut before: Vec<&str> = Vec::new();
+    for (line, weight) in &weighted {
+        let Line::Inst(text) = line else {
+            before.clear();
+            continue;
+        };
+        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
-        clocks += f64::from(cost.1) * weight;
+        // the routine a call reaches runs too (`runtime_size::routine_clocks`: `__mulsi3` is 120 T a multiplier bit)
+        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight;
+        before.push(text);
     }
     (bytes, clocks.round() as u64)
 }
@@ -2830,64 +2904,124 @@ fn flag_and_b_free(text: &str) -> bool {
 /// The stack arguments of a call, all words in a register pair, are pushed in
 /// place of reserving the area with `push bc` and storing into it: `ld hl, #0;
 /// push hl` is 4 B where `push bc; ld hl, #0; ld -32(ix), l; ld -31(ix), h`
-/// is 10. `X86CallFrameOptimization`, which turns the stores of a reserved
-/// call frame into pushes, for the stores that run from the top word down.
+/// is 10. This is `X86CallFrameOptimization::collectCallInfo` and
+/// `adjustCallSequence`: the stores of one call cover the area once, nothing
+/// else in the sequence stores to the stack or touches it, and the pushes run
+/// from the top word down. SP moves per call here, so there is no reserved
+/// call frame: the pin's `isProfitable` answers true (`CannotReserveFrame`)
+/// and every legal frame converts.
+///
+/// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on virtual registers and puts every push at the
+/// call, bailing when an instruction defines a register an earlier store
+/// read (`classifyInstruction`). This runs after allocation, where the
+/// argument registers are loaded between the stores and the call, so a push
+/// stands at its store, or behind the push above it when that comes later:
+/// the same legality (no def of the stored register in between), the least
+/// motion.
+///
+/// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
 fn push_arguments(
     function: &mut MFunction,
     assignment: &Assignment,
+    below_ix: i64,
 ) {
-    let pair_of = |operand: Option<&Operand>| {
-        let register = match operand {
-            Some(Operand::Use(Reg::Virt(v))) => assignment.0[*v as usize],
-            Some(Operand::Use(Reg::Phys(id))) => *id,
-            _ => return None,
-        };
-        [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| register == *pair)
-    };
-    for block in &mut function.blocks {
+    let entry = call_bytes_at_entry(function);
+    for (index, block) in function.blocks.iter_mut().enumerate() {
         let mut at = 0;
         while at < block.insts.len() {
             let Kind::Op("ADJCALLSTACKDOWN") = block.insts[at].kind else {
                 at += 1;
                 continue;
             };
-            let Some(Operand::Imm(bytes @ 2..=16)) = block.insts[at].operands.first().cloned() else {
+            let Some(places) = push_places(&block.insts, at, assignment) else {
                 at += 1;
                 continue;
             };
-            let mut stores = Vec::new();
-            let mut next = bytes - 2;
-            let mut legal = bytes % 2 == 0;
-            let mut end = at + 1;
-            while legal && end < block.insts.len() && !block.insts[end].call {
-                let inst = &block.insts[end];
-                match inst.kind {
-                    Kind::Op("STSP16") => {
-                        legal = matches!(
-                            inst.operands.get(1),
-                            Some(Operand::Imm(offset)) if *offset == next
-                        ) && pair_of(inst.operands.first()).is_some();
-                        stores.push(end);
-                        next -= 2;
-                    }
-                    Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP") => {
-                        legal = false
-                    }
-                    _ => {}
-                }
-                end += 1;
-            }
-            let called = end < block.insts.len() && block.insts[end].call;
-            if !(legal && called && next == -2) {
+            let stores: Vec<usize> = places.iter().map(|&(store, _)| store).collect();
+            let bytes_first = BYTES_FIRST.with(std::cell::Cell::get);
+            if let Some(stored) = crate::spilled_args::store_spilled(&block.insts, at, &stores, assignment, bytes_first, below_ix + entry[index].1) {
+                block.insts = stored;
                 at += 1;
                 continue;
             }
-            for &store in &stores {
-                block.insts[store].kind = Kind::Op("PUSHARG");
+            let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); block.insts.len()];
+            let mut stores = vec![false; block.insts.len()];
+            for (store, after) in places {
+                let mut push = block.insts[store].clone();
+                push.kind = Kind::Op("PUSHARG");
+                push.operands.truncate(1);
+                stores[store] = true;
+                pushes[after].push(push);
             }
-            block.insts.remove(at);
+            let old = std::mem::take(&mut block.insts);
+            for (index, inst) in old.into_iter().enumerate() {
+                if index != at && !stores[index] {
+                    block.insts.push(inst);
+                }
+                block.insts.append(&mut pushes[index]);
+            }
         }
     }
+}
+
+/// For the call frame opened at `open`, the stores that become pushes, top
+/// word first, each with the instruction it goes behind; `None` when the
+/// frame cannot be pushed.
+fn push_places(
+    insts: &[Inst],
+    open: usize,
+    assignment: &Assignment,
+) -> Option<Vec<(usize, usize)>> {
+    let Some(Operand::Imm(bytes @ 2..)) = insts[open].operands.first().cloned() else { return None };
+    let physical = |register: Reg| match register {
+        Reg::Phys(id) => id,
+        Reg::Virt(v) => assignment.0[v as usize],
+    };
+    let source = |inst: &Inst| match inst.operands.first() {
+        Some(Operand::Use(register)) => {
+            let register = physical(*register);
+            [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| register == *pair)
+        }
+        _ => None,
+    };
+    // stores by word, `(instruction, pair)`
+    let mut words: Vec<Option<(usize, RegId)>> = vec![None; usize::try_from(bytes / 2).ok()?];
+    let mut end = open + 1;
+    while end < insts.len() && !insts[end].call {
+        let inst = &insts[end];
+        match inst.kind {
+            Kind::Op("STSP16") => {
+                let Some(Operand::Imm(offset)) = inst.operands.get(1) else { return None };
+                let word = usize::try_from(offset / 2).ok().filter(|_| offset % 2 == 0)?;
+                let slot = words.get_mut(word)?;
+                if slot.is_some() {
+                    return None;
+                }
+                *slot = Some((end, source(inst)?));
+            }
+            Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP") => return None,
+            _ => {}
+        }
+        end += 1;
+    }
+    if bytes % 2 != 0 || end >= insts.len() {
+        return None;
+    }
+    let mut places = Vec::with_capacity(words.len());
+    let mut behind = 0;
+    for word in words.into_iter().rev() {
+        let (store, pair) = word?;
+        behind = behind.max(store);
+        let (lo, hi) = lanes(pair).ok()?;
+        let clobbered = insts[store + 1..=behind].iter().any(|inst| {
+            inst.operands.iter().any(|operand| matches!(operand, Operand::Def(r) if [pair, lo, hi].contains(&physical(*r))))
+        });
+        if clobbered {
+            return None;
+        }
+        places.push((store, behind));
+    }
+    Some(places)
 }
 
 /// `call f; ret` is `jp f`: the callee returns to our caller with its result
@@ -2958,6 +3092,81 @@ fn tail_calls(function: &MFunction) -> MFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn op(
+        name: &'static str,
+        operands: Vec<Operand>,
+    ) -> Inst {
+        Inst::new(Kind::Op(name), operands)
+    }
+
+    fn area(bytes: i64) -> Inst {
+        op("ADJCALLSTACKDOWN", vec![Operand::Imm(bytes)])
+    }
+
+    fn store(
+        pair: RegId,
+        offset: i64,
+    ) -> Inst {
+        op("STSP16", vec![Operand::Use(Reg::Phys(pair)), Operand::Imm(offset)])
+    }
+
+    fn load(pair: RegId) -> Inst {
+        op("LD16ri", vec![Operand::Def(Reg::Phys(pair)), Operand::Imm(7)])
+    }
+
+    fn call() -> Inst {
+        let mut call = op("CALL", vec![Operand::Symbol("f".to_owned(), 0)]);
+        call.call = true;
+        call
+    }
+
+    /// A call with more than 16 B of stack arguments kept its reserve and
+    /// its `ld (ix)` stores (`os_locals_between_pushes` at -Os: 9 B / 31 T a
+    /// word where a push is 1 B / 11 T).
+    #[test]
+    fn an_area_over_sixteen_bytes_is_pushed() {
+        let mut insts = vec![area(20)];
+        for word in (0..10).rev() {
+            insts.push(load(reg::BC));
+            insts.push(store(reg::BC, 2 * word));
+        }
+        insts.push(call());
+        let places = push_places(&insts, 0, &Assignment::default()).expect("pushed");
+        assert_eq!(places.len(), 10);
+        assert!(places.iter().all(|(store, behind)| store == behind));
+    }
+
+    /// Stores that arrive low word first push the high word first, behind the
+    /// last of the two stores: the pin's pushes all stand at the call.
+    #[test]
+    fn stores_out_of_order_are_pushed_top_word_first() {
+        let insts = vec![area(4), store(reg::BC, 0), store(reg::DE, 2), call()];
+        assert_eq!(push_places(&insts, 0, &Assignment::default()), Some(vec![(2, 2), (1, 2)]));
+    }
+
+    /// Moving the low word's push behind the high word's would push the `bc`
+    /// the load in between made, not the one stored.
+    #[test]
+    fn a_register_defined_before_its_push_keeps_the_stores() {
+        let insts = vec![area(4), store(reg::BC, 0), load(reg::BC), store(reg::DE, 2), call()];
+        assert_eq!(push_places(&insts, 0, &Assignment::default()), None);
+        // in order, each push stands at its store and the load after it is harmless
+        let insts = vec![area(4), store(reg::DE, 2), store(reg::BC, 0), load(reg::BC), call()];
+        assert_eq!(push_places(&insts, 0, &Assignment::default()), Some(vec![(1, 1), (2, 2)]));
+    }
+
+    /// A word nothing stores, one stored twice, a byte store and a nested
+    /// call frame leave the reserve as it is.
+    #[test]
+    fn a_frame_that_is_not_filled_once_keeps_the_stores() {
+        let a = Assignment::default();
+        assert_eq!(push_places(&[area(4), store(reg::BC, 2), call()], 0, &a), None);
+        assert_eq!(push_places(&[area(4), store(reg::BC, 2), store(reg::DE, 2), store(reg::HL, 0), call()], 0, &a), None);
+        let byte = op("STSP8", vec![Operand::Use(Reg::Phys(reg::A)), Operand::Imm(0)]);
+        assert_eq!(push_places(&[area(2), byte, call()], 0, &a), None);
+        assert_eq!(push_places(&[area(2), store(reg::BC, 0)], 0, &a), None);
+    }
 
     /// `form` spelled a register copy `ld b;b`, a key the table lacks, so
     /// every copy was priced as an unknown form (2 B, 8 T) instead of

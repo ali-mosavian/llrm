@@ -503,6 +503,15 @@ pub trait Tti {
         }
     }
 
+    /// Whether a callee that allocates may be copied into a recursive caller,
+    /// as the pin's `getInlineCost` allows up to 1024 bytes of it
+    /// (`TotalAllocaSizeRecursiveCaller`). DEVIATE (default no): a recursion's
+    /// depth times the callee's frame overflows a small platform's stack.
+    /// Exit: a target that says yes.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        false
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its
@@ -586,6 +595,14 @@ pub trait Tti {
     /// Whether SZ2 trials simplify their copy with the cleanup list, not the whole one: a trial
     /// only counts instructions. False: the whole list.
     fn inline_trial_light_simplify(&self) -> bool {
+        false
+    }
+
+    /// Whether SZ2 tries all the sites of a callee that stays in one caller as one unit, not one
+    /// site at a time: the pin inlines each site on its cost and lets later passes merge the
+    /// copies (three `report(const)` calls sink into one), which a trial of one site cannot see.
+    /// False: a site alone. Part of DEVIATE SZ1 (the pin has no SZ2 trial): wasm, exit 2026-11-20.
+    fn inline_trial_groups_sites(&self) -> bool {
         false
     }
 
@@ -822,6 +839,16 @@ pub trait Tti {
         0
     }
 
+    /// `getSchedModel().IssueWidth`; 0: the model states none.
+    fn issue_width(&self) -> u32 {
+        0
+    }
+
+    /// `Tuning::unroll_recurrence_veto`.
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -857,6 +884,13 @@ pub trait Tti {
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
+    }
+
+    /// Whether the -O1 unroll walk may peel a loop (the pin does, under
+    /// `-funroll-loops`). A peel copies the loop body, which -O1 on a
+    /// bytes-strict target cannot pay for.
+    fn peels_at_o1(&self) -> bool {
+        true
     }
 
     /// `Tuning::second_ipsccp`.
@@ -899,9 +933,18 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4):
+    /// `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
+    }
+
+    /// DEVIATE VASTART-PROMOTE: the slot every stack argument takes where `va_arg` is left in the IR as an instruction
+    /// (clang writes it for targets without a `va_arg` lowering of its own) and `va_list` is one pointer: each read
+    /// loads the pointer, loads the value, steps the pointer by the type's size (alignment capped to the slot) and
+    /// stores it back, so SROA can keep the pointer in a register. `None`: `va_arg` stays an instruction.
+    fn va_arg_slot(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE SETCC-TREE-BRANCH: `Tuning::branch_compare_trees_at_size`.
@@ -924,8 +967,28 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
+    fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::push_imm_at_size`.
+    fn push_imm_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::sdiv_pow2_stays_at_size`.
+    fn sdiv_pow2_stays_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_movs_at_size`.
+    fn rep_movs_at_size(&self) -> bool {
         false
     }
 
@@ -1040,6 +1103,13 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-9: whether a linear recursion (one call of itself) called from another function is copied into the caller and peeled
+    /// there, as gcc does, without the pin's `recursive` refusal or the bytes-against-clocks rule (gcc prices no clocks; the peeling's
+    /// own caps bound it). false: REC-1's bounds and the price, as for a tree.
+    fn peels_linear_recursion(&self) -> bool {
+        false
+    }
+
     /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
     /// of `recursive_inlining`.
     fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
@@ -1111,6 +1181,11 @@ pub trait Tti {
     /// Tuning `constant_hoisting`.
     fn constant_hoisting(&self) -> bool {
         false
+    }
+
+    /// `Tuning::min_jump_table_density`.
+    fn min_jump_table_density(&self) -> Option<u64> {
+        None
     }
 
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
@@ -1480,6 +1555,22 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-30): `replaceCongruentIVs`
+    /// maps each wide counter's truncation to the type of the header's last
+    /// phi (`Phis.back()`, ScalarEvolutionExpander.cpp#L1965), which is a
+    /// pointer phi when the loop has one (pointers sort to the back), and
+    /// `isTruncateFree` to a pointer is false: a loop that steps a pointer keeps
+    /// a narrow counter beside the wide one it truncates to. True takes the
+    /// narrowest integer phi. The divergence is our real-mode `huge_space`
+    /// addressing mode (a bare base register only), which the pin has no
+    /// counterpart for: under the pin's ordinary p3 modes LSR shares the wide
+    /// counter (GenerateTruncates) and `llc -print-after=loop-reduce` leaves no
+    /// duplicate i16 phi. m16 huge bq16 -O1: 357 -> 339 B.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1965
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
     /// the LSR cost): a call clobbers every register, so each register the
     /// loop keeps across one is a frame slot, reloaded each trip and, for a
@@ -1528,6 +1619,26 @@ pub trait Tti {
     /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
     /// targets do. m68k's wide multiplies are library calls.
     fn sizes_exit_values(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin: whether `LoopIdiomRecognize` turns a shift loop into a
+    /// `ctlz`/`cttz` count (`recognizeAndInsertFFS`, `recognizeShiftUntil*`).
+    /// The pin does on every target; one that expands `ctlz` to a long
+    /// sequence, or weighs bytes against the loop, keeps the loop and says
+    /// false until its `Tti` prices the intrinsics.
+    fn shift_loop_counts(&self) -> bool {
+        false
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L569
+    /// `getPopcntSupport(bits) == PSK_FastHardware`: whether `ctpop` of an
+    /// integer of `bits` is one fast instruction. The base class says
+    /// software; `LoopIdiomRecognize` forms `ctpop` only where it is fast.
+    fn popcnt_support_fast(
+        &self,
+        _bits: u32,
+    ) -> bool {
         false
     }
 
@@ -1610,6 +1721,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU15 (owner z80, exit 2026-12-15: a baseline that prices the
+    /// loop as written): with `should_drop_lsr_solution_if_less_profitable`,
+    /// a loop that has an address use keeps LSR's solution. The baseline
+    /// rates every address as one pointer register, so a solution that adds
+    /// the pointer beside a count always looks worse, and dropping it keeps
+    /// `base + i` (strlen: +17 B, a frame). The pin has no drop here.
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        false
+    }
+
     /// Instructions the exit test of a counter that ends at zero costs beyond
     /// the step: 0 where the step's flags (or a branch on the register) end
     /// the loop, 1 where the zero has to be tested by its own instruction
@@ -1675,6 +1796,20 @@ pub trait Tti {
         _optsize: bool,
     ) -> bool {
         false
+    }
+
+    /// `TargetTransformInfo::isProfitableToHoist` (the pin's `TargetLowering`
+    /// hook, overridden by AArch64 and PowerPC to keep a fused multiply-add or
+    /// a load pattern): whether `inst`, identical in every arm of a branch,
+    /// should run once before it. Asked by SimplifyCFG's
+    /// `hoistCommonCodeFromSuccessors`.
+    fn is_profitable_to_hoist(
+        &self,
+        _context: &crate::context::Context,
+        _function: &crate::module::Function,
+        _inst: crate::module::InstId,
+    ) -> bool {
+        true
     }
 
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.

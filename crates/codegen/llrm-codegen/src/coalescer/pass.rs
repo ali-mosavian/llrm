@@ -232,6 +232,7 @@ impl Coalescer {
                 kind_of: None,
                 kinds: Default::default(),
                 check_kinds: false,
+                free_when_unnarrowed: false,
             },
             depth,
         ))

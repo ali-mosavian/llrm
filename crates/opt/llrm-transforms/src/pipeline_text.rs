@@ -144,7 +144,7 @@ fn add(
         ("lcssa", None) => manager.add(crate::lcssa::LoopClosedSSA),
         ("dce", None) => manager.add(crate::dead::Dead),
         ("adce", None) => manager.add(crate::adce::Adce),
-        ("instcombine", None) => manager.add(crate::combine_pass::Combine { enabled: true }),
+        ("instcombine", None) => manager.add(crate::combine_pass::Combine { enabled: true, phi_constant_users: false }),
         ("simplifycfg", None) => manager.add(crate::simplifycfg::SimplifyCfg::default()),
         (_, Some(params)) => return Err(unsupported(&format!("{name}<{params}>"))),
         _ => return Err(unsupported(name)),
