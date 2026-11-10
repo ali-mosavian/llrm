@@ -246,6 +246,7 @@ fn lower_function(
         }
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+    machine.unwind = crate::cfi::Unwind::of(function);
     let optsize = function
         .attrs
         .iter()
@@ -327,7 +328,10 @@ fn lower_function(
     let blocks = crate::layout::fold(
         blocks,
         &mut tables,
-        &crate::layout::edge_odds(module, function, &program.layout, &machine),
+        &crate::layout::odds_by_label_number(
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            &machine,
+        ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
     );
@@ -343,6 +347,7 @@ fn lower_function(
             blocks,
             variables,
             pool: machine.pool.clone(),
+            unwind: machine.unwind != crate::cfi::Unwind::None,
         },
         written,
     ))
