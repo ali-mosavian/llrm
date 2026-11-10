@@ -77,14 +77,14 @@ fn a_guarded_count_is_speculated_where_the_cpu_counts_in_hardware() {
     );
 }
 
-/// The pin's price at the 68000, which counts nothing in hardware: invalid
-/// before, so a guarded count was never speculated and `smul.fix.sat` never
-/// priced.
+/// The price at the 68000, which counts nothing in hardware (the pin's, but 10
+/// under `TCK_CodeSize` too, M68K-INTRINSIC-EXPANSION): invalid before, so a
+/// guarded count was never speculated and `smul.fix.sat` never priced.
 #[test]
 fn an_expanded_intrinsic_costs_a_call_by_kind() {
     let tti = M68k::for_cpu(Cpu::M68000);
     let price = |name: &str, bits: u32, kind| tti.intrinsic_cost(name, Some(Ty::Int(bits)), &[], kind);
-    for (kind, call) in [(CostKind::SizeAndLatency, 10), (CostKind::RecipThroughput, 10), (CostKind::CodeSize, 1)] {
+    for (kind, call) in [(CostKind::SizeAndLatency, 10), (CostKind::RecipThroughput, 10), (CostKind::CodeSize, 10)] {
         assert_eq!(price("llvm.ctlz.i32", 32, kind), Cost::of(call), "ctlz.i32 {kind:?}");
         assert_eq!(price("llvm.ctlz.i64", 64, kind), Cost::of(call), "ctlz.i64 {kind:?}");
         assert_eq!(price("llvm.smul.fix.sat.i32", 32, kind), Cost::of(call), "smul.fix.sat {kind:?}");
@@ -100,4 +100,21 @@ fn a_legal_intrinsic_costs_one_per_register() {
     let kind = CostKind::SizeAndLatency;
     assert_eq!(tti.intrinsic_cost("llvm.ctlz.i32", Some(Ty::Int(32)), &[], kind), Cost::of(1));
     assert_eq!(tti.intrinsic_cost("llvm.ctlz.i64", Some(Ty::Int(64)), &[], kind), Cost::of(4));
+}
+
+/// `tests/run/c/fixed_point.c`, as the driver gets it (`llrm-cc -S
+/// -emit-llvm`): its 3x3 loops of `smul.fix.sat` and `umul.fix.sat`, each
+/// dozens of instructions expanded, stay loops. At the pin's `TCK_CodeSize`
+/// price of 1 per intrinsic the unroller saw small bodies and unrolled them:
+/// 1421 instructions against 629, `fixed_point` -O2 at the 68020 1644 ->
+/// 3604 B (M68K-INTRINSIC-EXPANSION).
+#[test]
+fn loops_of_expanded_intrinsics_are_not_unrolled() {
+    let ir = include_str!("data/fixed_point.ll");
+    let out = llrm_m68k::driver::assembly(ir, Cpu::M68020, Level::O2).expect("compiles");
+    let instructions = out
+        .lines()
+        .filter(|line| line.starts_with(char::is_whitespace) && line.trim_start().starts_with(char::is_alphabetic))
+        .count();
+    assert!(instructions < 900, "unrolled, {instructions} instructions");
 }

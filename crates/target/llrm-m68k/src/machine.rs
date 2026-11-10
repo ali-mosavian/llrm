@@ -168,7 +168,13 @@ impl Tti for M68k {
                 cache.push((self.cpu, made.clone()));
                 made
             });
-            let code_size = kind == CostKind::CodeSize;
+            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review 2026-12-20): the pin
+            // prices an expansion at 1 under `TCK_CodeSize` (one call); the loop unroller asks
+            // that kind, so a `smul.fix.sat` that expands to dozens of instructions read as
+            // one and the 3x3 loops of `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
+            // Here an expansion costs the same under every kind.
+            let _ = kind;
+            let code_size = false;
             if let Some(cost) = llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size) {
                 return Cost::of(cost);
             }
