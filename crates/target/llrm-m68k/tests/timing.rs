@@ -277,3 +277,27 @@ fn a_register_list_ending_at_the_frame_pointer_is_priced() {
         clocks(Cpu::M68020, "movem.l (%sp)+, %d2-%d7/%a2-%a6")
     );
 }
+
+/// MC68000UM Table 8-7: a shift by a register is `8+2n` long, `n` the count
+/// register modulo 64; the pricer saw `n = 0` and called the total a bound.
+#[test]
+fn a_68000_shift_by_a_register_costs_two_clocks_a_place_once_the_count_is_known() {
+    use llrm_m68k::isa::Cpu as Model;
+    use llrm_m68k::timing::{DataRegisters, cost_on_counted};
+    let by_register = |places| cost_on_counted(Model::M68000, "lsr.l %d2, %d0", 2, false, places).unwrap();
+    assert_eq!((by_register(None).clocks, by_register(None).partial), (8, true));
+    assert_eq!((by_register(Some(16)).clocks, by_register(Some(16)).partial), (40, false));
+    // derived by hand from the immediate form: `lsr.l #8` is 8 + 2 x 8
+    assert_eq!(by_register(Some(8)).clocks, clocks(Cpu::M68000, "lsr.l #8, %d0"));
+    let mut registers = DataRegisters::new();
+    registers.execute("moveq #-1,%d2");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), Some(63), "-1 is 63 places modulo 64");
+    registers.execute("addq.l #1, %d2");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), None, "an add writes the register");
+    registers.execute("move.l #0x10,%d2");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), Some(16));
+    registers.execute("move.l %d2, %d0");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), Some(16), "a read leaves it");
+    registers.execute("movem.l (%sp)+, %d2-%d5");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), None, "a register list reloads it");
+}

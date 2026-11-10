@@ -200,7 +200,7 @@ impl Body {
         });
         let place = mssa.place_before_next_access(self.function(), block, Some(copy));
         let access = self
-            .with_effects(|effect| mssa.create_defined_access(block, copy, None, effect))
+            .with_effects(|effect| mssa.create_defined_access(self.function(), block, copy, None, effect))
             .expect("a memory instruction has an access");
         mssa.insert_into_lists_before(access, block, place);
         if mssa.access(access).kind == Kind::Def {
