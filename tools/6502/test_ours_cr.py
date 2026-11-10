@@ -275,5 +275,19 @@ class Runner(unittest.TestCase):
     def test_runs_that_wrote_their_tables_are_done(self):
         done = self.go("open(sys.argv[3], 'w').write('p\\tours\\t1\\t1\\n')\n")
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "DONE 2 runs"))
+    def real(self, **env):
+        base = {k: v for k, v in os.environ.items() if k not in ("OURS_RT", "AB_CORPUS_PY")}
+        return subprocess.run(["bash", os.path.join(HERE, "ab_corpus.sh"), "/nonexistent/llrm-cc", os.path.join(tempfile.mkdtemp(), "out")],
+                              capture_output=True, text=True, env=dict(base, AB_CPUS="6502", AB_LEVELS="O2", **env), timeout=60)
+    def test_a_missing_runtime_is_named_once_before_any_run(self):
+        """2026-11-10: no OURS_RT crashed all 12 runs, and the runner printed twelve FAILED lines for one cause."""
+        done = self.real()
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("OURS_RT", done.stderr)
+        self.assertNotIn("FAILED", done.stdout)
+    def test_a_runtime_that_is_not_a_file_is_named_too(self):
+        done = self.real(OURS_RT="/nonexistent/mos_rt.s")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("/nonexistent/mos_rt.s", done.stderr)
 
 if __name__ == "__main__": unittest.main()

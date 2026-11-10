@@ -5,6 +5,10 @@
 # AB_CPUS (default "6502 65c02"), AB_LEVELS (default "O1 O2 Os"), AB_CORPUS_PY (default ours_cr.py) override.
 set -u
 cc=${1:?compiler (llrm-cc)}; out=${2:?output directory}; shift 2
+if [ -z "${AB_CORPUS_PY:-}" ]; then  # ours_cr.py refuses a missing runtime in every run: say so once, before the 12
+    [ -n "${OURS_RT:-}" ] || { echo "ab_corpus: OURS_RT is not set: name the mos_rt.s of the tree under test" >&2; exit 2; }
+    [ -f "$OURS_RT" ] || { echo "ab_corpus: OURS_RT=$OURS_RT is not a file" >&2; exit 2; }
+fi
 py=${AB_CORPUS_PY:-$(dirname "$0")/ours_cr.py}
 mkdir -p "$out"; runs=0; failed=0
 for cpu in ${AB_CPUS:-6502 65c02}; do for level in ${AB_LEVELS:-O1 O2 Os}; do for mode in off on; do
