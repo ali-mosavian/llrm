@@ -3371,7 +3371,7 @@ fn omf_record_types(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn omf_of(arguments: &[&str]) -> Vec<u8> {
-    let directory = std::env::temp_dir().join(format!("fsec-{}-{}", std::process::id(), arguments.join("")));
+    let directory = unique_directory("fsec");
     std::fs::create_dir_all(&directory).unwrap();
     let source = directory.join("two.ll");
     std::fs::write(
@@ -3386,7 +3386,29 @@ fn omf_of(arguments: &[&str]) -> Vec<u8> {
     let mut all = vec!["-m16", "-fobject-format=omf", "-o", output.to_str().unwrap()];
     all.extend_from_slice(arguments);
     crate::llc::compile(&flags(&all), &source, None).unwrap();
-    std::fs::read(output).unwrap()
+    let bytes = std::fs::read(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    bytes
+}
+
+/// A directory name no other call in this process shares. `omf_of` named its
+/// directory after its arguments, so the three tests calling it with `&[]`
+/// rewrote one `two.ll`/`two.obj` under each other: 4 to 12 of 40 whole-lib
+/// runs failed, always a function_sections test, each passing alone.
+fn unique_directory(tag: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
+}
+
+#[test]
+fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
+    assert_ne!(unique_directory("t"), unique_directory("t"));
+    let expected = omf_of(&[]);
+    let handles: Vec<_> = (0..8).map(|_| std::thread::spawn(|| (0..4).map(|_| omf_of(&[])).collect::<Vec<_>>())).collect();
+    for handle in handles {
+        assert!(handle.join().unwrap().iter().all(|bytes| *bytes == expected));
+    }
 }
 
 /// The C path wrote one segment for the module's code whatever the program,
