@@ -1768,4 +1768,77 @@ mod tests {
         let none: [Arc<Insn>; 0] = [];
         let _: crate::support::hash::HashSet<u32> = super::x87_values(none.iter());
     }
+
+    /// The order `bottom_up` gave before it ran on the `GenericScheduler`
+    /// driver (release/next c682533d86), untracked path: the later node wins a
+    /// tie once fewer weak successors wait, and nothing else decides.
+    fn old_untracked_order(graph: &super::Graph) -> Vec<usize> {
+        let n = graph.succs.len();
+        let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
+        let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+        let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
+        let mut placed = Vec::with_capacity(n);
+        while placed.len() < n {
+            let mut best = 0;
+            for candidate in 1..available.len() {
+                let (try_node, cand_node) = (available[candidate], available[best]);
+                let (try_weak, cand_weak) = (weak_left[try_node], weak_left[cand_node]);
+                let wins = if try_weak != cand_weak { try_weak < cand_weak } else { try_node > cand_node };
+                if wins {
+                    best = candidate;
+                }
+            }
+            let node = available.swap_remove(best);
+            placed.push(node);
+            for &before in &graph.weak_preds[node] {
+                weak_left[before] -= 1;
+            }
+            for &before in &graph.preds[node] {
+                waiting[before] -= 1;
+                if waiting[before] == 0 {
+                    available.push(before);
+                }
+            }
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// The refactor onto the driver must not move an x86 schedule: on random
+    /// dependence graphs with weak edges the i486 machine orders exactly as
+    /// the hand-written loop it replaced (0 of 300 graphs differ).
+    #[test]
+    fn test_bottom_up_on_the_driver_orders_as_the_loop_it_replaced() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for _ in 0..300 {
+            let n = 2 + next(24);
+            let mut edges = Vec::new();
+            for to in 1..n {
+                for from in 0..to {
+                    if next(5) == 0 {
+                        edges.push((from, to, 1 + next(3) as u32));
+                    }
+                }
+            }
+            let mut graph = super::Graph::from_edges(n, &edges);
+            for to in 1..n {
+                for from in 0..to {
+                    if next(9) == 0 && !graph.weak_preds[to].contains(&from) {
+                        graph.weak_preds[to].push(from);
+                        graph.weak_succs[from].push(to);
+                    }
+                }
+            }
+            let insns: Vec<Arc<Insn>> = (0..n)
+                .map(|at| insn(at as i64, semantics(Operation::Move, "x", vec![], vec![]), vec![], vec![]))
+                .collect();
+            assert_eq!(super::bottom_up(&insns, &graph, None), old_untracked_order(&graph), "{edges:?}");
+        }
+    }
 }
