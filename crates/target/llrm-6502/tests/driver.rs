@@ -2958,3 +2958,18 @@ fn volatile_arguments_are_read_in_source_order_at_every_level() {
         }
     }
 }
+
+/// A word pattern over 64 cells was a loop that scaled and added its index on every trip (`asl`/`rol` of the
+/// index, `clc`/`adc` of the base: 17 instructions where a pointer step is 3). `fill_nest` at -O1 ran 429,137
+/// clocks against gcc's 333,596; 70% of them were that loop (2026-11-10).
+#[test]
+fn a_pattern_fill_steps_a_pointer() {
+    let ir = module(
+        "declare void @llvm.experimental.memset.pattern.p0.i16.i16(ptr, i16, i16, i1)\n\
+         define void @fill(ptr %p) {\n  call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 64, i1 false)\n  ret void\n}",
+    );
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(!text.contains("asl") && !text.contains("rol"), "{level:?} scales an index per trip:\n{text}");
+    }
+}
