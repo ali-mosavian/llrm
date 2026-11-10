@@ -50,7 +50,7 @@ FLAGS = {
     "IntrNoCreateUndefOrPoison": "nocreateundeforpoison",
 }
 # What MIR's `Attribute` cannot say: dropped, and counted in the header.
-UNREPRESENTABLE = {"noduplicate", "strictfp", "nocreateundeforpoison", "nofreeobj"}
+UNREPRESENTABLE = {"noduplicate", "strictfp", "nofreeobj"}
 # Properties that are no attribute: nothing to emit.
 NOT_ATTRIBUTES = {"Commutative", "IntrTriviallyScalarizable", "ArgInfo", "RangeSet", "IntrHasSideEffects"}
 ARGUMENT_FLAGS = {

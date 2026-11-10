@@ -1282,6 +1282,82 @@ fn test_a_constant_index_into_a_global_is_priced_as_a_saving() {
     assert!(cloned(true));
 }
 
+/// `CONSTANT_ROW` with a second caller, `h`, that the first round does not see.
+const TWO_CALLERS: &str = "@cells = global [4 x [8 x i16]] zeroinitializer
+
+define i16 @fill(i16 %row, i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %done
+
+body:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %q = getelementptr i16, ptr %p, i16 %i
+  store i16 %i, ptr %q
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 0
+}
+
+define i16 @f(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  %b = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+
+define i16 @h(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+";
+
+/// The clone for a context is remembered across the walk, which empties the
+/// bodies it inlined (`is_deleted`: one `unreachable`). A call that met the
+/// same constants afterwards was sent to that empty body: m32 x_hanoi2 -O3 with
+/// the clone bound at 4, 5 or 6 lost the tail of a function (no second recursive
+/// call, no `ret`) and ran off its end, a `UC_ERR_EXCEPTION` in the emulator.
+#[test]
+fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
+    let mut module = parsed(TWO_CALLERS);
+    Program::lend(&mut module, std::rc::Rc::new(crate::testing::Tuned::default()), |program| {
+        let costs = program.target.costs();
+        let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
+        let private = private(program, 0);
+        let mut state = crate::ipacp::Cloning::default();
+        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, &mut state);
+        assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
+        let mut analyses = managers(program, &mut ProgramAnalyses::default());
+        // What `bare` leaves, without its check that no call stands: the callers
+        // of the clone were inlined away in the walk this stands for.
+        let module = &mut program.modules[0];
+        let mut stub = module.global(first.added[0]).function().map(llrm_mir::module::Function::declaration).unwrap();
+        let void = module.context.types.void();
+        let entry = stub.create_block(None);
+        stub.insert_block(entry, None).unwrap();
+        let end = stub.create_instruction(Opcode::Unreachable, void, Vec::new(), llrm_mir::opcode::Flags::default(), None);
+        stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
+        module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
+        analyses[0].changed(first.added[0]);
+        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, &mut state);
+        let module = &program.modules[0];
+        let caller = module.global(h).function().unwrap();
+        let target = caller
+            .walk()
+            .find_map(|(_, inst)| llrm_mir::memory::callee(&module.context, caller, inst))
+            .expect("h still calls something");
+        assert!(!module.global(target).function().unwrap().is_deleted(), "h calls an emptied clone:\n{}", printed(module));
+    })
+    .unwrap();
+}
+
 /// Each level of `down` saves one address, too little to pay for a copy; the
 /// four levels together do, and GCC's `propagate_effects` credits the copy for
 /// `row = 0` with the ones after it. Priced alone, the copy was refused: queens

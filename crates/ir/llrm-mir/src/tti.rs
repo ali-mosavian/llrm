@@ -572,6 +572,13 @@ pub trait Tti {
         None
     }
 
+    /// Two compares joined by `and`/`or` stay two branches at every level, as
+    /// the pin does at optsize (the target's `split_merged_conditions`);
+    /// false: the pin's cost rule decides.
+    fn splits_merged_conditions(&self) -> bool {
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
@@ -662,8 +669,9 @@ pub trait Tti {
     }
 
     /// Whether a speed caller's inline that gives a loop of the callee a constant
-    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
-    /// the copy unrolls and folds, which the call's latency does not show).
+    /// trip count is exempt from the byte rate: the copy unrolls and folds, which
+    /// the call's latency does not show. No pin counterpart (the pin's InlineCost
+    /// only adds `LoopPenalty` per loop).
     fn inline_hints_known_loop_bound(&self) -> bool {
         false
     }
