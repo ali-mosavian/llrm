@@ -142,6 +142,7 @@ impl Layout {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 => inst.operands.len() - 2,
             op::STZP => 0,
             op::LEASP16 => 1,
+            code if crate::pointer_alu::pointer_alu(code).is_some_and(|fold| !fold.indexed) => inst.operands.len() - 2,
             _ => return Ok(inst.clone()),
         };
         let Operand::FrameIndex(index) = inst.operands[at] else { return Ok(inst.clone()) };

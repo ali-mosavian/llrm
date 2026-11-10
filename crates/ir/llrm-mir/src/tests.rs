@@ -896,6 +896,24 @@ fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// `uwtable(sync)` read back as plain `uwtable`: the kind was dropped, so a
+/// back end could not tell a synchronous unwind table from an asynchronous one.
+#[test]
+fn the_unwind_table_kind_is_kept() {
+    use crate::opcode::{UnwindTable, unwind_table};
+    let kinds = |attrs: &str| {
+        let text = format!("{DATALAYOUT}\ndefine void @f() {attrs} {{\nb0:\n  ret void\n}}\n");
+        let once = round(&text);
+        assert_eq!(round(&once), once);
+        let mut module = parse::module(&once).expect("reads");
+        unwind_table(&module.function_mut("f").unwrap().1.attrs)
+    };
+    assert_eq!(kinds("uwtable(sync)"), Some(UnwindTable::Sync));
+    assert_eq!(kinds("uwtable"), Some(UnwindTable::Async));
+    assert_eq!(kinds("uwtable(async)"), Some(UnwindTable::Async));
+    assert_eq!(kinds(""), None);
+}
+
 /// Clang's output for arm64 states `ssp` and `uwtable(sync)` on a function and
 /// `captures(none)` on a parameter (LLVM 22's `nocapture`); the reader refused
 /// each ("expected `}`, found `ssp`", "expected `,`, found `captures`"), so no
