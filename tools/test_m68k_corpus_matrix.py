@@ -95,6 +95,41 @@ class CorpusMatrix(unittest.TestCase):
         for needle in ("# ours:", "# gcc:", "# clang:", "-msoft-float", "-fomit-frame-pointer", "--fatal-warnings", "-relocation-model=static"):
             self.assertIn(needle, lines)
 
+    def test_the_size_only_runtime_is_not_refused_for_calling_itself(self):
+        """The corpus links the compiler-rt archive for bytes and never runs it, but asked for a runnable one: at -O1 the guard refused
+        (`__udivsi3 -> udivmod`) and the whole corpus run died after six minutes with no rows."""
+        from unittest import mock
+        tools = mx.Tools.__new__(mx.Tools)
+        tools.cc, tools.root, tools.lock = "/x/llrm-cc", "/x", __import__("threading").Lock()
+        with mock.patch.object(mx.sweep, "cache_dir", return_value=Path("/x")), mock.patch.object(mx.sweep, "build_support", return_value=["a", "b", "archive"]) as built:
+            self.assertEqual(tools.support("68020", "O1"), "archive")
+        self.assertIs(built.call_args.kwargs.get("runnable"), False)
+
+    def test_gas_refusing_our_assembly_is_an_asm_error_and_fails_the_run(self):
+        """nbody at 68000 -O1 printed `(260,%sp,%a5)`; gas refused it, the cell was an ordinary compile-fail row and the run exited 0, so the
+        broken tip was only seen as a missing `ours` number by the judge."""
+        import tempfile
+        tools = mx.Tools.__new__(mx.Tools)
+        tools.commands = lambda compiler, cpu, level, src, flags, out: [["llrm-cc"], ["as"]]
+        tools.lock = __import__("threading").Lock()
+        calls = []
+
+        def run(cmd, env):
+            calls.append(cmd[0])
+            if cmd[0] == "llrm-cc":
+                Path(tmp, "x_y.68000.O1.ours.s").write_text("\tnop\n")
+                return True, False, ""
+            return False, False, "Error: byte displacement out of range -- statement `move.l (260,%sp,%a5),-(%sp)' ignored"
+
+        tools.run = run
+        with tempfile.TemporaryDirectory() as tmp:
+            size, reason, cause, _ = tools.build("ours", "68000", "O1", Path("x/y.c"), [], Path(tmp))
+        self.assertEqual((size, reason), (None, "asm-error"))
+        self.assertIn("byte displacement", cause)
+        self.assertEqual(mx.exit_status([], {"asm-error": 2, "ok": 5}), 3)
+        self.assertEqual(mx.exit_status([("68000", "O1", "p")], {"asm-error": 2}), 2)
+        self.assertEqual(mx.exit_status([], {"ok": 5, "refused": 16}), 0)
+
     def test_a_helper_the_archive_lacks_is_named(self):
         """gcc's 96-bit long double calls __addxf3, which our compiler-rt does not define: ld --unresolved-symbols=ignore-all drops it from
         the executable, so `nm -u exe` listed nothing, the library read 0 B and whole-program 'worse' was 43 KB for three programs."""
