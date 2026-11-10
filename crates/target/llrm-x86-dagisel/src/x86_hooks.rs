@@ -608,6 +608,18 @@ impl<D: AddrDag> X86Predicates<D> for X86Hooks {
             if constant.is_some_and(|c| i8::try_from(c).is_ok()) {
                 continue;
             }
+            // DEVIATE SD610 (owner greedy-os-causes, exit 2026-11-20): the
+            // pin skips a sign-extended 8-bit immediate because the ALU
+            // opcode has a short encoding; `and r32, 0xffff` has one too,
+            // `movzx r32, r16` (3 bytes, every register has a word part),
+            // which the register form `mov r, 65535; and x, r` gives up. The
+            // byte mask is not skipped: only four registers have a byte part.
+            if dag.opcode(user) == isd::AND
+                && constant == Some(0xffff)
+                && dag.value_type(SDValue::new(user, 0)) == mvt::i32
+            {
+                continue;
+            }
             use_count += 1;
         }
         use_count > 1

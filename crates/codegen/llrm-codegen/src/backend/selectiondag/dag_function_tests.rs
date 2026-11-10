@@ -308,6 +308,41 @@ define i32 @f(i32 %a, i32 %b) {{
     assert_eq!(got, want);
 }
 
+/// m32 `-Os`, two `and x, 0xffff` of different values: each is `movzx r, r16`
+/// (3 B). Keeping 65535 in a register (`mov r, 65535; mov d, x; and d, r`)
+/// took 5 B once and 4 B a use: parity/loop +5 B, sfm16_dbg `__mulsf3` +22 B.
+#[test]
+fn at_os_a_word_mask_is_a_movzx_not_a_register_constant() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+  %x = and i32 %a, 65535
+  %y = and i32 %b, 65535
+  %t = mul i32 %x, %y
+  %s = add i32 %a, %b
+  %r = sub i32 %t, %s
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let named = |name: &str| {
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count()
+    };
+    let loaded = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter(|w| w.sources.iter().any(|l| matches!(l, crate::model::ir::Loc::Imm(imm) if imm.value == 65535)))
+        .count();
+    assert_eq!((loaded, named("movzx")), (0, 2), "65535 was loaded into a register");
+}
+
 const TIMES_SEVEN_PLUS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %y) {
   %b = xor i32 %a, %y
