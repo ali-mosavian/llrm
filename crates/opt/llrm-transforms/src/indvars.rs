@@ -320,6 +320,10 @@ impl FunctionPass for IndVars {
         // the target does not hold natively whose range fits one that it does.
         let narrowed = crate::narrowiv::enabled()
             && crate::narrowiv::narrowed_in(&mut session, unit.context, unit.layout, unit.function, &outer);
+        // Beyond the pin: a cycle through a phi that only matters at a narrower
+        // width, which TruncInstCombine does not reach.
+        let cycled = crate::narrowcycle::enabled()
+            && crate::narrowcycle::narrowed(unit.context, unit.layout, unit.function, &outer);
         // The body's loops, the manager's: this pass keeps the tree and loops,
         // so the shape stands from one run to the next of the loop passes.
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
@@ -341,6 +345,7 @@ impl FunctionPass for IndVars {
             || predicated
             || tested
             || narrowed
+            || cycled
             || sunk
             || merged)
             && {

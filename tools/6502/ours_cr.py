@@ -149,6 +149,8 @@ def split_output(stdout):
 
 sys.path.insert(0, str(HERE))
 import crlib
+sys.path.insert(0, str(HERE.parent))
+import corpus_targets
 from flagset import CORPUS_COMMON, program_flags
 RTDIR = Path(os.environ.get("RT_DIR", HERE.parents[1] / "runtime" / "compiler-rt"))
 def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the runtime routines the program and the modules name
@@ -174,6 +176,9 @@ def one(job):
     name = path.stem
     if not path.with_suffix(".out").exists():
         return name, "NO-OUT", "no .out beside the source: a helper, not a program (counted, not measured)"
+    listed = corpus_targets.tags(path.read_text())  # only an explicit `// targets:` line: the 6502 corpus measures -m32 and DOS-marked programs on purpose
+    if listed is not None and not corpus_targets.applies("6502-sim65", "// targets: " + " ".join(listed) + "\n"):
+        return name, "N/A", "n/a, targets: " + " ".join(listed)
     w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
     want = expected(path.with_suffix(".out"))
     (w / "d.s").write_text(driver())
@@ -237,7 +242,9 @@ def one(job):
     return name, "PASS", {"bytes": nb, "clks": round(sum(cycles) / len(cycles)), "insns": int(m.group(1)) if m else None, "layouts": cycles}
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
-    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None; BASE = base_members(WORK)
+    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
+    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]
     with ThreadPoolExecutor(4) as pool: res = list(pool.map(one, [(s, level, lib) for s in srcs]))

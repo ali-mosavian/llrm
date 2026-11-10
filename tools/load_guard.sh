@@ -99,6 +99,8 @@ prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter pr
   [ "$1" != first ] || [ "$out" = ok ]
 }
 
+# A link that vanishes between find's -lname test and its printf prints an empty %l: awk then reads the path as $1 and no $2, and a line of one space gave an empty
+# slot (`slot_pids: bad array subscript`, twice per scan); NF == 2 and both fields non-empty skip it, as a slot file named `slot.` without a number.
 # Which slot files are in use by a job. The lock is the open file (/proc/locks names flock(1)'s own, already dead, pid), so the holders of slot.N are
 # the processes with it open. A holder does not count when it is in state T (a SIGSTOPped or orphaned job; logged, never killed), when it is a waiter
 # probing a free slot (its pid is in the prio file) or this shell; a child of another holder is the same job (the watchdog), and one pid holding two
@@ -108,7 +110,7 @@ declare -A slot_pids ppid_of is_stopped is_waiting counted
 scan_holders() {
   local line slot pid
   slot_pids=(); ppid_of=(); is_stopped=(); is_waiting=(); counted=()
-  while read -r slot pid; do slot_pids[$slot]="${slot_pids[$slot]:-} $pid"; done < <(find /proc -maxdepth 3 -path '/proc/[0-9]*/fd/*' -lname "$slot_dir/slot.*" -printf '%l %p\n' 2>/dev/null | awk '{ split($1, t, /\/slot\./); split($2, q, "/"); print t[2], q[3] }' | sort -u)
+  while read -r slot pid; do slot_pids[$slot]="${slot_pids[$slot]:-} $pid"; done < <(find /proc -maxdepth 3 -path '/proc/[0-9]*/fd/*' -lname "$slot_dir/slot.*" -printf '%l %p\n' 2>/dev/null | awk 'NF == 2 { split($1, t, /\/slot\./); split($2, q, "/"); if (t[2] != "" && q[3] != "") print t[2], q[3] }' | sort -u)
   while read -r pid ppid st; do ppid_of[$pid]=$ppid; case $st in T*) is_stopped[$pid]=1 ;; esac; done < <(ps -eo pid=,ppid=,stat= 2>/dev/null)
   [ -r "$prio" ] && while read -r _ _ pid _; do is_waiting[$pid]=1; done < "$prio"
 }
