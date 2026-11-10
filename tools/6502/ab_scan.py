@@ -15,6 +15,8 @@ ROOT = HERE.parents[1]
 CORPUS = ROOT / "tests/run/c"
 sys.path.insert(0, str(ROOT / "tools"))
 import corpus_targets  # noqa: E402
+sys.path.insert(0, str(HERE))
+from flagset import CORPUS_COMMON, program_flags  # noqa: E402  (the flags ours_cr.py compiles each program with)
 
 TARGET = "6502-sim65"
 
@@ -25,17 +27,9 @@ def applicable(names=None, corpus=CORPUS):
     return [p.stem for p in paths if corpus_targets.applies(TARGET, p.read_text())]
 
 
-def header_flags(path):
-    """The program's `// flags:` -f/-D options, as ours_cr.py reads them."""
-    src = (HERE / "ours_cr.py").read_text()
-    ns = {}
-    exec("import re\n" + src[src.index("X86_ONLY"):src.index("def one(job):")], ns)
-    return ns["header_flags"](path)
-
-
 def assembly(dist, level, name, out):
     """Compile `name` to assembly under `dist`; whether it compiled."""
-    cmd = [f"{dist}/llrm-cc", f"--target={TARGET}", f"-{level}", "-S", "-w", "-fsigned-char", *header_flags(CORPUS / f"{name}.c"),
+    cmd = [f"{dist}/llrm-cc", f"--target={TARGET}", f"-{level}", "-S", "-w", *CORPUS_COMMON, *program_flags(CORPUS / f"{name}.c"),
            "-I", str(HERE / "inc"), str(CORPUS / f"{name}.c"), "-o", str(out)]
     return subprocess.run(["nice", "-n", "10", *cmd], capture_output=True, timeout=300).returncode == 0 and out.exists()
 

@@ -21,6 +21,14 @@ class Applicable(unittest.TestCase):
         self.assertIn("stack_arrays_copy", names)
 
 
+class Flags(unittest.TestCase):
+    def test_the_compile_flags_are_the_ones_ours_cr_uses(self):
+        """ab_scan sliced header_flags out of ours_cr.py's text; #8715 moved it to flagset and the scan died with a ValueError (2026-11-10)."""
+        import flagset
+        self.assertIs(ab_scan.program_flags, flagset.program_flags)
+        self.assertEqual(ab_scan.CORPUS_COMMON, flagset.CORPUS_COMMON)
+
+
 class ArgsAx(unittest.TestCase):
     def test_the_report_glue_is_chosen_per_dist(self):
         with tempfile.TemporaryDirectory() as old, tempfile.TemporaryDirectory() as new:
