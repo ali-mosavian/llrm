@@ -96,9 +96,10 @@ pub(crate) fn analyze<C>(
     // a branch followed by an instruction is invisible and the block after it would be merged while the branch still names it.
     assert!(
         !insts[..first].iter().any(|inst| inst.terminator),
-        "block {} of {}: non-terminator after a terminator (an instruction placed after the block's branch)",
+        "block {} of {}: non-terminator after a terminator (an instruction placed after the block's branch): {:?}",
         function.blocks[at].id,
         function.name,
+        insts.iter().map(|inst| (&inst.kind, inst.terminator)).collect::<Vec<_>>(),
     );
     match &insts[first..] {
         [] => Some(Branches { taken: None, other: None, cond: None }),
