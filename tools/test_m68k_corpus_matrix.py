@@ -1,7 +1,9 @@
 """The corpus matrix names every cell it drops: a program with no row is a hole, a failure has a reason, a duplicate file counts once."""
+import re
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
@@ -19,6 +21,12 @@ Idx Name          Size      VMA       LMA       File off  Algn
 
 
 class CorpusMatrix(unittest.TestCase):
+    def setUp(self):
+        # Several tests set LLRM_PIN_CLANG=/x/c and friends; left in os.environ they broke test_m68k_program_size run after them.
+        env = mock.patch.dict("os.environ")
+        env.start()
+        self.addCleanup(env.stop)
+
     def test_code_bytes_sums_every_code_section(self):
         """Counting `.text` alone dropped main's `.text.startup` (the kernel matrix had the same trap)."""
         self.assertEqual(mx.sections(LISTING)[0], 0x18)
@@ -104,6 +112,14 @@ class CorpusMatrix(unittest.TestCase):
         with mock.patch.object(mx.sweep, "cache_dir", return_value=Path("/x")), mock.patch.object(mx.sweep, "build_support", return_value=["a", "b", "archive"]) as built:
             self.assertEqual(tools.support("68020", "O1"), "archive")
         self.assertIs(built.call_args.kwargs.get("runnable"), False)
+
+    def test_the_matrix_cpus_are_the_supported_cpus(self):
+        """The matrix covered 68000/68020/68040/68060 while the backend supports six: 68010 and 68030 were never built, and 14 cells at 68010
+        did not assemble for weeks. The list is read from `isa::Cpu::ALL`, so a CPU cannot drop out of the sweep silently."""
+        text = (Path(mx.__file__).resolve().parent.parent / "crates/target/llrm-m68k/src/isa.rs").read_text()
+        listed = re.search(r"pub const ALL: \[Cpu; \d+\] = \[(.*?)\];", text).group(1)
+        supported = tuple(re.findall(r"M(68\d+)", listed))
+        self.assertEqual(mx.CPUS, supported)
 
     def test_gas_refusing_our_assembly_is_an_asm_error_and_fails_the_run(self):
         """nbody at 68000 -O1 printed `(260,%sp,%a5)`; gas refused it, the cell was an ordinary compile-fail row and the run exited 0, so the
@@ -206,3 +222,14 @@ class CorpusMatrix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EnvironmentIsLeftAlone(unittest.TestCase):
+    def test_the_matrix_tests_restore_os_environ(self):
+        """`pytest tools/test_m68k_*.py` failed two test_m68k_program_size tests ("llrm-cc: /x/c: No such file"): the corpus tests left
+        LLRM_PIN_CLANG=/x/c and three more variables in os.environ, so a later real compile read them."""
+        import os
+        before = dict(os.environ)
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(CorpusMatrix)
+        unittest.TextTestRunner(stream=open(os.devnull, "w")).run(suite)
+        self.assertEqual(dict(os.environ), before)

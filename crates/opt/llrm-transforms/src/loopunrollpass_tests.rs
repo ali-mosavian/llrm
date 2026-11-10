@@ -36,6 +36,7 @@ fn unrolled_at(
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -217,6 +218,7 @@ b2:
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
@@ -336,6 +338,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: std::rc::Rc::clone(&created),
             decided: Default::default(),
         },
@@ -360,6 +363,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: std::rc::Rc::clone(&created),
             decided: Default::default(),
         },
@@ -500,6 +504,7 @@ exit:
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
@@ -811,6 +816,7 @@ fn unrolled_o1_analysing(
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
@@ -944,6 +950,7 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -974,6 +981,7 @@ fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: true,
+        inliner_follows: true,
     };
     let (trees, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
@@ -1012,6 +1020,7 @@ out:
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1049,6 +1058,7 @@ out:
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1089,6 +1099,7 @@ out:
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created: Default::default(),
             decided: Default::default(),
         },
@@ -1157,6 +1168,7 @@ out:
             opt_size: false,
             only_when_forced: false,
             target_unrolling: false,
+            inliner_follows: true,
             created,
             decided: Default::default(),
         },
@@ -1221,6 +1233,7 @@ fn runtime_unrolled_text(
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: true,
+        inliner_follows: true,
     };
     unroll_function(&mut module, "f", &tti, options).expect("unrolls")
 }
