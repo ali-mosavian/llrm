@@ -51,6 +51,20 @@ extra_symbols = [
   "AArch64::JumpTableDest32",
   "TargetOpcode::JUMP_TABLE_DEBUG_INFO",
 ]
+# Opcodes the hand code selects (a bitcast, a float round) that kept a scheduling class only through patterns of vector
+# types now pruned: they keep their row in instrinfo.rs and sched.rs.
+sched_symbols = [
+  "AArch64::FABD64",
+  "AArch64::FMOVDr",
+  "AArch64::FMOVHr",
+  "AArch64::FMOVWSr",
+  "AArch64::FMOVXDr",
+  "AArch64::FRINT32XDr",
+  "AArch64::FRINT32ZDr",
+  "AArch64::FRINT64XDr",
+  "AArch64::FRINT64ZDr",
+  "AArch64::STNPSi",
+]
 ids_includes = [
   '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
   '#include "AArch64SelectionDAGInfo.h"',

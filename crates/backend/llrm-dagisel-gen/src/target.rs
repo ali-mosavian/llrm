@@ -31,6 +31,8 @@ struct Target {
     /// Symbols the target's hand code names (`ISD::ATOMIC_CMP_SWAP`,
     /// `M68k::PC`).
     extra_symbols: Vec<String>,
+    /// Qualified instruction names the hand code selects that need a scheduling row.
+    sched_symbols: Vec<String>,
     /// Registers the target's hand code maps by name (`X0`), without `ns`;
     /// written as `reg::REGISTERS`.
     registers: Vec<String>,
@@ -70,6 +72,7 @@ impl Target {
             sched_cpus: strings(table, "sched_cpus")?,
             hw_modes: strings(table, "hw_modes")?,
             extra_symbols: strings(table, "extra_symbols")?,
+            sched_symbols: strings(table, "sched_symbols")?,
             registers: strings(table, "registers")?,
             predicates: table.get("predicates").and_then(|v| v.as_str()).map(str::to_string),
             in_dagisel: table.get("in_dagisel").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -167,6 +170,15 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         write(&format!("{module}.rs"), emit::render(&source)?)?;
         modules.push_str(&format!("pub mod {module};\n"));
         eprintln!("{cpu_name}: {} items, {} operand entries", flat.items.len(), flat.operands.len());
+    }
+    // The instructions the hand code selects have rows too (their scheduling class), pattern or none.
+    for symbol in &target.sched_symbols {
+        let bare = symbol.strip_prefix(target.ns.as_str()).unwrap_or(symbol);
+        if instructions.contains(bare)
+            && let Ok(number) = ids.get(symbol)
+        {
+            emitted.insert(number as u16);
+        }
     }
     write(
         "ids.rs",

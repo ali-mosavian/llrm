@@ -89,9 +89,30 @@ fi
 # `sched_cpus = [...]`: the pin's scheduling models of those CPUs and the class of each emitted opcode (sched.rs).
 SCHED_CPUS=$(field sched_cpus)
 if [ -n "$SCHED_CPUS" ]; then
+  # A record with `[dynamic]` atoms: a second generation with each of them false and no `live` types (the tables before the vectors),
+  # so sched.rs can tell the opcodes only the vectors reach.
+  BASELINE=()
+  if grep -q '^\[dynamic\]' "$REC"; then
+    BASEREC="$RECDIR/.baseline-$(basename "$REC")"
+    python3 -I - "$REC" "$BASEREC" <<'PY'
+import re, sys
+src, dst = sys.argv[1:]
+text = open(src).read()
+m = re.search(r"^\[dynamic\]\n((?:(?!\[).*\n)*)", text, re.M)
+atoms = re.findall(r'^("[^"]+") = ', m.group(1), re.M)
+text = text.replace(m.group(0), "")
+text = text.replace("[atom]\n", "[atom]\n" + "".join(f"{a} = false\n" for a in atoms), 1)
+text = re.sub(r"^live = \[[^\]]*\]", "live = []", text, flags=re.M)
+open(dst, "w").write(text)
+PY
+    mkdir -p "$WORK/baseline"
+    "${GEN[@]}" --target "$BASEREC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --vts "$WORK/vts.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$WORK/baseline"
+    rm -f "$BASEREC"
+    BASELINE=(--baseline "$WORK/baseline")
+  fi
   [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
   "${TBLGEN[@]}" -gen-subtarget "$T/$TD" -o "$WORK/GenSubtarget.inc"
   # shellcheck disable=SC2086 # one word per CPU
   python3 -I "$ROOT/tools/dagisel/schedtable.py" --subtarget "$WORK/GenSubtarget.inc" --instrinfo "$WORK/GenInstrInfo.inc" \
-    --json "$WORK/target.json" --mcschedule "$S/include/llvm/MC/MCSchedule.h" --dir "$OUT" --out "$OUT/sched.rs" $SCHED_CPUS
+    --json "$WORK/target.json" --mcschedule "$S/include/llvm/MC/MCSchedule.h" --dir "$OUT" --out "$OUT/sched.rs" "${BASELINE[@]}" $SCHED_CPUS
 fi

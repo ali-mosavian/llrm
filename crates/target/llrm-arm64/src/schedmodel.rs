@@ -73,6 +73,10 @@ impl Arm64Model {
         let name = insn.what.as_ref()?.name.as_deref()?;
         let llvm = *llvm_names(name).first()?;
         let opcode = *opcode_numbers().get(llvm)?;
+        // An opcode only the vector patterns emit has no class while the vectors are off: it was unmodeled before them.
+        if !crate::machine::vectors_enabled() && llrm_dagisel::generated::aarch64::sched::dynamic_only(opcode) {
+            return None;
+        }
         let shifted = shift_amount(insn).is_some_and(|amount| amount != 0);
         let mut holds = |pred: SchedPred| match pred {
             SchedPred::HasShiftedReg => shifted,
