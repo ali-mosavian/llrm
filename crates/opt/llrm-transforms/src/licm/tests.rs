@@ -1544,6 +1544,41 @@ b2:
     assert!(block_of(&after, "b1").iter().filter(|line| line.contains(".reass =")).count() <= 1, "{after}");
 }
 
+/// `hoistBOAssociation` edits in place, so each link of an add chain reads the
+/// one before it as already reassociated and the chain collapses to one add in
+/// one run. llrm skipped every link whose `bo0` an earlier link had replaced:
+/// a chain of six invariants kept three adds in the loop (`dot` at -O3, where
+/// the unroll decision then saw 26 instructions, not 6, and left the loop).
+#[test]
+fn test_an_add_chain_of_invariants_collapses_in_one_run() {
+    let terms = ["a", "b", "c", "d", "e", "f"];
+    let mut body = String::from("  %t0 = add i16 %i, %a\n");
+    for at in 1..terms.len() {
+        body += &format!("  %t{at} = add i16 %t{}, %{}\n", at - 1, terms[at]);
+    }
+    let text = format!(
+        "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c, i16 %d, i16 %e, i16 %f) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, %t{last}
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+",
+        last = terms.len() - 1
+    );
+    let after = licm_printed(&text);
+    let looped = block_of(&after, "b1");
+    assert_eq!(looped.iter().filter(|line| line.contains(".reass =")).count(), 1, "{after}");
+    assert_eq!(looped.iter().filter(|line| line.contains(" = add ")).count(), 2, "{after}");
+}
+
 /// `collectChildrenInLoop` looked at every block of the function once per loop
 /// block (and `inSubLoop` compared whole loop bodies): with the inliner's big
 /// bodies `sink_and_hoist` went from 24 to 62 M on d_faces. Its work follows

@@ -928,6 +928,16 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
+/// Which part of its pair `register` is: 0 the whole pair, 1 the low half, 2 the high half. A `pop` puts each
+/// half back where it was pushed from, so a slot's spills and reloads must name the same part.
+fn pair_lane(register: llrm_lir::registers::RegId) -> u8 {
+    match (stack_pair(register), register) {
+        (Some(pair), one) if pair == one => 0,
+        (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
+        _ => 2,
+    }
+}
+
 /// For each instruction of each block, whether it lies inside the stack arguments of a call: after an
 /// `ADJCALLSTACKDOWN` of bytes and before the matching `ADJCALLSTACKUP`.
 fn call_areas(function: &MFunction) -> Vec<Vec<bool>> {
@@ -987,10 +997,17 @@ pub fn frameless_slots_are_a_stack(
         _ => None,
     };
     let mut any = false;
+    let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         if inst.operands.iter().any(|one| matches!(one, Operand::Frame(_))) {
             match spill(inst) {
-                Some((_, _, register)) if stack_pair(register).is_some() => any = true,
+                Some((_, slot, register)) if stack_pair(register).is_some() => {
+                    // a byte saved from `e` and reloaded into `d` came back as it was in `d`
+                    if *lane_of.entry(slot).or_insert(pair_lane(register)) != pair_lane(register) {
+                        return false;
+                    }
+                    any = true;
+                }
                 _ => return false,
             }
         }
@@ -1184,12 +1201,7 @@ pub fn stack_slot_report_by(
                 } else {
                     counts.1 += 1;
                 }
-                // 0: a whole pair, 1: the low half, 2: the high half
-                let lane = match (stack_pair(register), register) {
-                    (Some(pair), one) if pair == one => 0,
-                    (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
-                    _ => 2,
-                };
+                let lane = pair_lane(register);
                 if *lane_of.entry(slot).or_insert(lane) != lane {
                     barred.entry(slot).or_insert(StackRefusal::DifferentLane);
                 }

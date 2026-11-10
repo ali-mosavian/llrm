@@ -70,6 +70,11 @@ slot_count() {  # slot_count L1: prints the count
 }
 
 # ---- order: one line "tier start pid start_line" per waiter in $prio, edited under the same lock discipline ----
+# LG_QUEUED_AT=<epoch seconds>: a resubmitted job (after --cancel) keeps the place it had in the queue. A stamp in the future, or not a number, is the time now.
+queued_at() {
+  local now; now=$(date +%s.%N)
+  case ${LG_QUEUED_AT:-} in ''|*[!0-9.]*|*.*.*) echo "$now" ;; *) awk -v a="$LG_QUEUED_AT" -v n="$now" 'BEGIN{print (a+0 > n+0) ? n : a}' ;; esac
+}
 prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter precedes this one
   # A TERM that lands inside this function runs the EXIT trap (prio_edit del) in the same shell: a second flock on a new descriptor
   # waits for the lock this shell already holds. The wait is bounded (LG_LOCK_WAIT, 2 s); a waiter's line that was not removed is
@@ -85,10 +90,10 @@ prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter pr
     kill -0 "$pid" 2>/dev/null && echo "$t $st $pid $q"
   done < "$prio" > "$prio.new"
   case $1 in
-    add) my_start=$(date +%s.%N); echo "$tier $my_start $$ $start1" >> "$prio.new" ;;
+    add) my_start=$(queued_at); echo "$tier $my_start $$ $start1" >> "$prio.new" ;;
     del) grep -v " $$ " "$prio.new" > "$prio.tmp"; mv "$prio.tmp" "$prio.new" ;;
     first) awk -v me="$$" '$3==me{f=1} END{exit !f}' "$prio.new" || echo "$tier $my_start $$ $start1" >> "$prio.new"  # an old copy's prune erases 4-field lines: re-add, same start
-           out=$(awk -v now="$(date +%s)" -v step="${LG_AGE_STEP:-300}" '{e=$1-int((now-$2)/step); f=($1>=4)?3:(($1==3)?2:$1); if (e<f) e=f; printf "%d %s %s %s\n", e, $2, $3, $4}' "$prio.new" | sort -k1,1n -k2,2n | awk -v me="$$" -v l1="$2" '{q=($4==""?25:$4)} q+0>l1+0{print ($3==me)?"ok":"no"; exit}') ;;  # aged: -1 tier per 20 min, floors 3 (tier 4) and 2 (tier 3)
+           out=$(awk '{printf "%d %s %d %s %s\n", ($1 >= 4) ? 1 : 0, $2, $1, $3, $4}' "$prio.new" | sort -k1,1n -k2,2n -k3,3n | awk -v me="$$" -v l1="$2" '{q=($5==""?25:$5)} q+0>l1+0{print ($4==me)?"ok":"no"; exit}') ;;  # tiers 1-3 by age (start stamp), tier breaks ties; tier 4 after all of them. A tier-2 job 2 h old waited behind a stream of fresh tier-1 probes: the old aging floors (t3 -> 2, t2 never -> 1) kept it behind forever
   esac
   mv "$prio.new" "$prio"; exec {fd}>&-
   [ "$1" != first ] || [ "$out" = ok ]
