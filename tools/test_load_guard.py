@@ -64,12 +64,19 @@ class Env:
         self.set_mem(10)
         self.set_load(1.0, 1.0)
         self.guards = []
+        self.leaked = []  # pids of a job's other groups: a TERM to the wrapper reaches only the job's own group
 
     def tearDown(self):
         for guard in self.guards:
             if guard.poll() is None:
                 guard.terminate()
                 guard.wait(timeout=5)
+        for pid in self.leaked:  # a loop left writing into self.dir made its removal fail once in 6 runs: "Directory not empty"
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        time.sleep(0.1)
         self.dir.cleanup()
 
     def set_mem(self, gb):
@@ -140,6 +147,17 @@ class Stopping(Env, unittest.TestCase):
             self.assertRegex(err, rf"load_guard: \d\d:\d\dZ {word} groups .*\b{pgid}\b")
 
 
+class Teardown(Env, unittest.TestCase):
+    def test_the_directory_is_removed_though_a_leaked_group_keeps_writing_into_it(self):
+        """The 1-in-6 error of the suite: a job's setsid'd loop outlived the TERM to its wrapper and refilled the temp dir while it was being removed ("Directory not empty")."""
+        loop = subprocess.Popen(["bash", "-c", f"while :; do mkdir -p {self.dir.name}/x; echo > {self.dir.name}/x/$RANDOM; done"], start_new_session=True)
+        self.leaked.append(loop.pid)
+        time.sleep(0.2)
+        self.tearDown()
+        self.assertFalse(os.path.exists(self.dir.name))
+        loop.wait(timeout=5)
+
+
 class Pipeline(Env, unittest.TestCase):
     def test_a_job_with_a_pipeline_and_a_subshell_in_other_groups_is_stopped_and_continued_whole(self):
         """A stopper that signalled one group left the wrapper subshell and the `| tail -1` pipe stopped (w10's build, 67 min)."""
@@ -150,6 +168,7 @@ class Pipeline(Env, unittest.TestCase):
         root = int(subprocess.run(["pgrep", "-P", str(guard.pid), "-f", "tail -1"], capture_output=True, text=True).stdout.split()[0])
         alive = lambda: [p for p in [root, *descendants(root)] if state(p) not in ("gone", "Z")]
         self.assertTrue(until(lambda: len(alive()) >= 3 and all(state(p) == "T" for p in alive())), [(p, state(p)) for p in alive()])
+        self.leaked.extend(alive())
         self.set_load(10.0, 10.0)
         self.assertTrue(until(lambda: not any(state(p) == "T" for p in alive())), [(p, state(p)) for p in alive()])
 
