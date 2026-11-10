@@ -88,8 +88,9 @@ pub struct BuilderTarget {
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
     pub preselection_blocks: Option<&'static str>,
-    /// A call of an `llvm.` name nothing lowered is refused by name; where unset it stays a call of that
-    /// symbol (a target that names its own intrinsics by call).
+    /// A call of an `llvm.` name nothing lowered is refused by name; where
+    /// unset it stays a call of that symbol (a target that names its own
+    /// intrinsics by call).
     pub refuse_unknown_intrinsics: bool,
     /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
     pub variable_shift_legal: bool,
@@ -1528,7 +1529,8 @@ impl Builder<'_> {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
-            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same first variadic argument
+            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same
+            // first variadic argument
             self.info.vararg_frame_index = Some(index);
         }
         Ok(())
@@ -2417,9 +2419,11 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
-        // This call's own state, taken before the byval copies below: a copy that is a library call is itself a
-        // `lower_call_with` and would otherwise take it (a variadic call's unnamed-argument state sent the
-        // `memcpy` count and source to the stack, and left the call it was for a fixed one).
+        // This call's own state, taken before the byval copies below: a copy
+        // that is a library call is itself a `lower_call_with` and
+        // would otherwise take it (a variadic call's unnamed-argument state
+        // sent the `memcpy` count and source to the stack, and left the
+        // call it was for a fixed one).
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
         let in_area = calling.byval_in_area();
@@ -3246,6 +3250,42 @@ impl Builder<'_> {
         }
     }
 
+    /// `getValueImpl` of a `ConstantVector`, `ConstantDataVector` or
+    /// `ConstantAggregateZero`: a `BUILD_VECTOR` of its lanes, each made as the
+    /// scalar constant it is. `undef` and `poison` are the vector's own.
+    fn vector_constant(
+        &mut self,
+        vt: EVT,
+        id: ConstantId,
+    ) -> Result<SDValue, Refused> {
+        let lane_vt = vt.element();
+        match self.module.context.get(id).kind.clone() {
+            ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
+            ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
+            ConstantKind::Null | ConstantKind::Zero => {
+                let zero = self.dag.get_constant(0, lane_vt);
+                Ok(self.dag.get_splat_build_vector(vt, zero))
+            }
+            ConstantKind::Aggregate(lanes) => {
+                if lanes.len() as u32 != vt.lanes() {
+                    return Err(Refused("a vector constant of the wrong lane count"));
+                }
+                let ops = lanes
+                    .iter()
+                    .map(|lane| match self.module.context.get(*lane).kind {
+                        ConstantKind::Int(bits) => Ok(self.dag.get_constant(bits, lane_vt)),
+                        ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, lane_vt)),
+                        ConstantKind::Undef => Ok(self.dag.get_undef(lane_vt)),
+                        ConstantKind::Poison => Ok(self.dag.get_poison(lane_vt)),
+                        _ => Err(Refused("a vector constant lane that is not an integer")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.dag.get_build_vector(vt, &ops))
+            }
+            _ => Err(Refused("a vector constant that is not a list of integers")),
+        }
+    }
+
     fn constant_value(
         &mut self,
         id: ConstantId,
@@ -3255,6 +3295,9 @@ impl Builder<'_> {
             return self.aggregate_constant(constant.ty, id);
         }
         let vt = self.type_of(constant.ty)?;
+        if vt.is_vector() {
+            return self.vector_constant(vt, id);
+        }
         match &constant.kind {
             // A far constant is its offset and its selector (a null pointer is
             // two zero words): `get_constant` of the pair's type panicked
@@ -3498,6 +3541,8 @@ impl Builder<'_> {
             Opcode::FCmp(predicate) => self.visit_fcmp(&instruction, *predicate)?,
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
+            Opcode::InsertElement => self.visit_insert_element(&instruction)?,
+            Opcode::ShuffleVector(mask) => self.visit_shuffle_vector(&instruction, mask)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::VaArg => self.visit_va_arg(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
@@ -3996,6 +4041,43 @@ impl Builder<'_> {
         let vt = self.dag.value_type(value);
         let node = self.dag.get_node(ISD::Freeze, vt, &[value]);
         self.set_value(instruction.result.expect("a freeze has a result"), node);
+        Ok(())
+    }
+
+    /// `visitInsertElement`: `INSERT_VECTOR_ELT` of the vector, the element and
+    /// the index, which is a constant here (a variable index is refused).
+    fn visit_insert_element(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let vector = self.get_value(instruction.operands[0])?;
+        let element = self.get_value(instruction.operands[1])?;
+        let index = self.get_value(instruction.operands[2])?;
+        let Some(at) = self.dag.constant(index) else { return Err(Refused("an insertelement at a variable index")) };
+        // `getVectorIdxTy`: the pointer-sized integer.
+        let index = self.dag.get_constant(at, self.target.dag.pointer);
+        let vt = self.dag.value_type(vector);
+        let node = self.dag.get_node(ISD::InsertVectorElt, vt, &[vector, element, index]);
+        self.set_value(instruction.result.expect("an insertelement has a result"), node);
+        Ok(())
+    }
+
+    /// `visitShuffleVector`: `getVectorShuffle` of the two inputs with the
+    /// IR's mask (a lane of `-1` is undefined).
+    fn visit_shuffle_vector(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        mask: &[i32],
+    ) -> Result<(), Refused> {
+        let first = self.get_value(instruction.operands[0])?;
+        let second = self.get_value(instruction.operands[1])?;
+        let result = self.type_of(instruction.ty)?;
+        let input = self.dag.value_type(first);
+        if result != input {
+            return Err(Refused("a shufflevector that changes the lane count"));
+        }
+        let node = self.dag.get_vector_shuffle(result, first, second, mask);
+        self.set_value(instruction.result.expect("a shufflevector has a result"), node);
         Ok(())
     }
 

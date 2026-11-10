@@ -1,8 +1,9 @@
 //! Value types of the DAG: [`MVT`] (the simple ones) and [`EVT`] (also an
 //! integer of any width, as `i24` before promotion).
 
-/// A simple value type, the pin's `MVT` with the 128-bit integer vectors only (DEVIATE SD13: no
-/// wider or floating-point vectors yet; vector POC, owner m64).
+/// A simple value type, the pin's `MVT` with the 128-bit integer vectors only
+/// (DEVIATE SD13: no wider or floating-point vectors yet; vector POC, owner
+/// m64).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MVT {
     I1,
@@ -14,12 +15,14 @@ pub enum MVT {
     F32,
     F64,
     F80,
-    /// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the 128-bit integer vectors an SSE register holds.
+    /// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the 128-bit integer vectors an SSE
+    /// register holds.
     V16I8,
     V8I16,
     V4I32,
     V2I64,
-    /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin keeps it with the other floats).
+    /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin
+    /// keeps it with the other floats).
     F128,
     /// A far pointer, a selector and an offset (DEVIATE SD2): m16 only, the
     /// type legalizer expands it into two `i16`.
@@ -44,8 +47,12 @@ impl MVT {
         })
     }
 
-    /// `MVT::getVectorVT`: the vector of `count` lanes of `element`, if there is one.
-    pub fn vector(element: MVT, count: u32) -> Option<MVT> {
+    /// `MVT::getVectorVT`: the vector of `count` lanes of `element`, if there
+    /// is one.
+    pub fn vector(
+        element: MVT,
+        count: u32,
+    ) -> Option<MVT> {
         Some(match (element, count) {
             (MVT::I8, 16) => MVT::V16I8,
             (MVT::I16, 8) => MVT::V8I16,
@@ -124,6 +131,22 @@ impl EVT {
 
     pub fn is_vector(self) -> bool {
         matches!(self, EVT::Simple(vt) if vt.is_vector())
+    }
+
+    /// `getVectorElementType`.
+    pub fn element(self) -> EVT {
+        match self {
+            EVT::Simple(vt) => EVT::Simple(vt.element().expect("a vector type")),
+            EVT::Int(_) => panic!("{self:?} is not a vector"),
+        }
+    }
+
+    /// `getVectorNumElements`.
+    pub fn lanes(self) -> u32 {
+        match self {
+            EVT::Simple(vt) => vt.lanes().expect("a vector type"),
+            EVT::Int(_) => panic!("{self:?} is not a vector"),
+        }
     }
 
     pub fn is_floating_point(self) -> bool {

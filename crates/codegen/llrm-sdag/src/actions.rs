@@ -135,16 +135,19 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
-    /// The shift routines are used as a function tuned for size uses them, in a function that is not (the
-    /// unsized form the caller prices against the inline one).
+    /// The shift routines are used as a function tuned for size uses them, in a
+    /// function that is not (the unsized form the caller prices against the
+    /// inline one).
     force_shift_calls: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
-    /// The function is built for size: an `i64` divide calls the target's size routine.
+    /// The function is built for size: an `i64` divide calls the target's size
+    /// routine.
     small_divide: bool,
-    /// The function is built for size alone (-Os), not -O1 where clocks are strict too: an `i64` divide by a
-    /// dword takes the size form that always does two `div`s.
+    /// The function is built for size alone (-Os), not -O1 where clocks are
+    /// strict too: an `i64` divide by a dword takes the size form that
+    /// always does two `div`s.
     size_only: bool,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
@@ -226,12 +229,16 @@ impl TargetLowering {
                 self.set_libcall_name(op, vt, name);
             }
         }
-        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names clz and popcount at i32, i64 and
-        // i128, no cttz and no i16. DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a zero-poison
-        // cttz, and libgcc's `__clzhi2`, `__ctzhi2`, `__popcounthi2` for the 8-bit targets' i16. A name is
-        // only called where the target's action for the op and type is `LibCall`.
-        // Upstream check: at each pin bump, grep RuntimeLibcalls.td for CTTZ and an i16 count; where the pin names
-        // one, take its name and drop the row. Exit: 2026-11-30 (decide: keep as a recorded deviation or drop).
+        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names
+        // clz and popcount at i32, i64 and i128, no cttz and no i16.
+        // DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a
+        // zero-poison cttz, and libgcc's `__clzhi2`, `__ctzhi2`,
+        // `__popcounthi2` for the 8-bit targets' i16. A name is
+        // only called where the target's action for the op and type is
+        // `LibCall`. Upstream check: at each pin bump, grep
+        // RuntimeLibcalls.td for CTTZ and an i16 count; where the pin names
+        // one, take its name and drop the row. Exit: 2026-11-30 (decide: keep
+        // as a recorded deviation or drop).
         let counts: [(MVT, [&'static str; 3]); 4] = [
             (MVT::I16, ["__clzhi2", "__popcounthi2", "__ctzhi2"]),
             (MVT::I32, ["__clzsi2", "__popcountsi2", "__ctzsi2"]),
@@ -334,7 +341,10 @@ impl TargetLowering {
     /// The routine `name` is spelled `symbol` in the object.
     /// Both tables are the same allocations: neither has been written since
     /// one was copied from the other.
-    pub fn shares_maps_with(&self, other: &TargetLowering) -> bool {
+    pub fn shares_maps_with(
+        &self,
+        other: &TargetLowering,
+    ) -> bool {
         std::sync::Arc::ptr_eq(&self.maps, &other.maps)
     }
 
@@ -550,7 +560,8 @@ impl TargetLowering {
         !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
     }
 
-    /// Use the shift routines (`set_size_shift_call`) whether or not the function is tuned for size.
+    /// Use the shift routines (`set_size_shift_call`) whether or not the
+    /// function is tuned for size.
     pub fn set_force_shift_calls(
         &mut self,
         force: bool,
@@ -736,7 +747,11 @@ impl TargetLowering {
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(
+                &[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE],
+                &[vt],
+                Action::Expand,
+            );
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -827,11 +842,17 @@ impl TargetLowering {
         t.set_ops(&[SetCC, BrCC, Select, SelectCC, Xor], &words, Custom);
         t.set_ops(&[BrCond, BrJT, BrInd], &[MVT::Other], Custom);
         t.set_ops(&[SetCCCarry], &[MVT::I64], Custom);
-        // `AArch64InstrInfo.td`: `(trap)` is `BRK 1`, `(debugtrap)` is `BRK 0xF000`.
+        // `AArch64InstrInfo.td`: `(trap)` is `BRK 1`, `(debugtrap)` is `BRK
+        // 0xF000`.
         t.set_ops(&[Trap, DebugTrap], &[MVT::Other], Legal);
         t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I64], Custom);
         t.set_ops(&[BitReverse, CtLs], &words, Legal);
         t.set_ops(&[BuildPair], &[MVT::I64], Expand);
+        // The 128-bit integer vectors (`LowerBUILD_VECTOR`,
+        // `LowerVECTOR_SHUFFLE`, `LowerINSERT_VECTOR_ELT`); a node of a
+        // type the target does not take never exists.
+        let vectors = [MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64];
+        t.set_ops(&[BuildVector, VectorShuffle, InsertVectorElt], &vectors, Custom);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
@@ -1091,7 +1112,11 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry], native, Custom);
+        t.set_ops(
+            &[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry],
+            native,
+            Custom,
+        );
         t
     }
 }
@@ -1119,10 +1144,12 @@ mod tests {
         assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
     }
 
-    /// z80 prices the shift routines against the inline shifts in a function that is not tuned for size
-    /// (`set_force_shift_calls`): -O1 call_keeps 1876 B -> 1473 B. The switch is off for every other target and
-    /// for z80 outside that form; on, it makes shifts (not other ops) take the size routine and the size
-    /// threshold, as a function tuned for size does.
+    /// z80 prices the shift routines against the inline shifts in a function
+    /// that is not tuned for size (`set_force_shift_calls`): -O1 call_keeps
+    /// 1876 B -> 1473 B. The switch is off for every other target and
+    /// for z80 outside that form; on, it makes shifts (not other ops) take the
+    /// size routine and the size threshold, as a function tuned for size
+    /// does.
     #[test]
     fn forced_shift_calls_move_shifts_only_and_default_off_changes_nothing() {
         let build = |force: bool| {

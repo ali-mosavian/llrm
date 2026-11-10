@@ -93,6 +93,8 @@ pub struct Inputs<'a> {
     pub record: &'a Path,
     pub inc: &'a str,
     pub ids: &'a str,
+    /// Every value type by number, for pruning the ones the table prints bare.
+    pub vts: &'a str,
     pub pin: &'a str,
     pub instrinfo: &'a str,
     pub out: &'a Path,
@@ -102,6 +104,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
     let text = std::fs::read_to_string(inputs.record).map_err(|e| format!("{}: {e}", inputs.record.display()))?;
     let target = Target::parse(&text)?;
     let ids = inc::Ids::parse(inputs.ids)?;
+    let vts = inc::Ids::parse(inputs.vts)?;
     let parsed = inc::parse(inputs.inc, &ids)?;
     let hw = decode::HwModes(
         target
@@ -139,7 +142,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
     let mut emitted = BTreeSet::new();
     for cpu_name in &target.cpus {
         let cpu = Cpu::load(&text, cpu_name)?;
-        let mut pruner = prune::Pruner::new(&cpu, &parsed.pattern_predicates, &ids)?;
+        let mut pruner = prune::Pruner::new(&cpu, &parsed.pattern_predicates, &ids, &vts)?;
         let kept = pruner.prune(&decoded.root);
         let flat = flatten::flatten(&kept, &decoded.lists);
         let source = emit::Source {

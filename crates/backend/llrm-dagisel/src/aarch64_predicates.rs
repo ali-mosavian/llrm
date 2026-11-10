@@ -144,6 +144,32 @@ pub fn fp_imm_fmov64<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
     dag.fp_bits(v).is_some_and(|bits| hooks.fp_imm_code(bits, true).is_some())
 }
 
+/// `AArch64vashr_exact`: `N->getFlags().hasExact()`.
+pub fn exact_flag<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.has_exact_flag(v.node)
+}
+
+/// `AArch64_AM::isAdvSIMDModImmType4`: a word repeated, with only its top byte
+/// set.
+fn is_adv_simd_mod_imm_type4(imm: u64) -> bool {
+    (imm >> 32) == (imm & 0xffff_ffff) && (imm & 0x00ff_ffff_00ff_ffff) == 0
+}
+
+/// `fpimm32SIMDModImmType4`: `Enc != 0 && isAdvSIMDModImmType4(Enc << 32 |
+/// Enc)`.
+pub fn fp_imm_simd_mod_imm_type4<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.fp_bits(v).is_some_and(|bits| {
+        let enc = bits as u64 & 0xffff_ffff;
+        enc != 0 && is_adv_simd_mod_imm_type4(enc << 32 | enc)
+    })
+}
+
+/// `simdimmtype10`: `isAdvSIMDModImmType10` of the double's bits, every byte
+/// 0x00 or 0xff.
+pub fn simd_imm_type10<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.fp_bits(v).is_some_and(|bits| (bits as u64).to_le_bytes().iter().all(|byte| *byte == 0 || *byte == 0xff))
+}
+
 /// `ConstantSDNode::getSExtValue`.
 fn imm<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> i64 {
     dag.constant(v).expect("an immediate predicate on a constant")
@@ -168,6 +194,7 @@ imm_predicates! {
     imm_u64_lt_64 => |i| (i as u64) < 64;
     imm_u64_lt_65536 => |i| (i as u64) <= u64::from(u16::MAX);
     imm_u32_lt_8 => |i| (i as u32) < 8;
+    imm_u32_lt_64 => |i| (i as u32) < 64;
     imm_u32_lt_16 => |i| (i as u32) < 16;
     imm_u32_lt_32 => |i| (i as u32) < 32;
     imm_u32_lt_128 => |i| (i as u32) < 128;

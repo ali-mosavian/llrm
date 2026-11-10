@@ -63,7 +63,6 @@ ids_includes = [
 features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", "RDM"]
 
 [atom]
-"Subtarget->isNeonAvailable()" = false
 "Subtarget->isLittleEndian()" = true
 "Subtarget->isSVEorStreamingSVEAvailable()" = false
 "Subtarget->isSVEAvailable()" = false
@@ -79,6 +78,10 @@ features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", 
 "MF->getInfo<AArch64FunctionInfo>()->branchTargetEnforcement()" = false
 "MF->getInfo<AArch64FunctionInfo>()->branchProtectionPAuthLR()" = false
 "MF->getFunction().hasOptNone()" = false
+
+# Decided when a function is selected (the flag-gated vectors, ARM64-VEC POC): off, NEON patterns never match, as when they were pruned.
+[dynamic]
+"Subtarget->isNeonAvailable()" = "neon_available"
 
 [types]
 dead_prefixes = ["v", "nxv", "aarch64"]
@@ -116,6 +119,22 @@ imm0_127 = "imm_u32_lt_128"
 imm32_0_7 = "imm_u32_lt_8"
 imm0_31 = "imm_u64_lt_32"
 vecshiftL32 = "imm_u32_lt_32"
+vecshiftL8 = "imm_u32_lt_8"
+vecshiftL16 = "imm_u32_lt_16"
+vecshiftL64 = "imm_u32_lt_64"
+AArch64vashr_exact = "exact_flag"
+simdimmtype10 = "simd_imm_type10"
+fpimm32SIMDModImmType4 = "fp_imm_simd_mod_imm_type4"
+AArch64fmul_p_oneuse = "has_one_use"
+AArch64mul_p_oneuse = "has_one_use"
+AArch64setcc_z_oneuse = "has_one_use"
+any_fp_to_sint_oneuse = "has_one_use"
+any_fp_to_uint_oneuse = "has_one_use"
+anyext_oneuse = "has_one_use"
+fmul_oneuse = "has_one_use"
+fneg_oneuse = "has_one_use"
+int_aarch64_sve_cntp_oneuse = "has_one_use"
+step_vector_oneuse = "has_one_use"
 imm32_0_15 = "imm_u32_lt_16"
 imm0_255 = "imm_u32_lt_256"
 imm0_63 = "imm_u64_lt_64"

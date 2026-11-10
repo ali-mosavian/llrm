@@ -68,10 +68,12 @@ if [ "$(uname)" = Darwin ]; then UNRESOLVED=(-Wl,-undefined,dynamic_lookup); els
 g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" "${HDR[@]}" "$WORK/ids.cpp" -o "$WORK/ids" "${UNRESOLVED[@]}"
 "$WORK/ids" | sed 's/^SelectionDAGISel:://' > "$WORK/ids.txt"
 cat "$OWN" >> "$WORK/ids.txt"
+# Every value type by number (the table prints most as bare numbers): Other is 1, in GenVT.inc's order.
+sed -n '/^#ifdef GET_VT_ATTR/,/^#endif/p' "$LLVM_BUILD/include/llvm/CodeGen/GenVT.inc" | sed -n 's/^ *GET_VT_ATTR(\([A-Za-z0-9_]*\),.*/\1/p' | awk '{print "MVT::" $1 " " NR}' > "$WORK/vts.txt"
 
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
 mkdir -p "$OUT"
-"${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
+"${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --vts "$WORK/vts.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
 # `asm = "<namespace>"` in the record: the instructions' asm strings and printer methods.
 ASM_NS=$(field asm)
 if [ -n "$ASM_NS" ]; then

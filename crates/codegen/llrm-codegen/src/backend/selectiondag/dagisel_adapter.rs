@@ -198,6 +198,11 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         IntrinsicWoChain => pin::INTRINSIC_WO_CHAIN,
         IntrinsicWChain => pin::INTRINSIC_W_CHAIN,
         IntrinsicVoid => pin::INTRINSIC_VOID,
+        BuildVector => pin::BUILD_VECTOR,
+        ScalarToVector => pin::SCALAR_TO_VECTOR,
+        InsertVectorElt => pin::INSERT_VECTOR_ELT,
+        // No pattern names it: a target lowers every shuffle first.
+        VectorShuffle => u16::MAX,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
@@ -211,9 +216,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SrcValue => pin::SRCVALUE,
         // A target's private codes are named; the pin's number comes from
         // the name, and a code the target does not know is already the pin's.
-        Target(code) => llrm_sdag::target_names::installed()
-            .and_then(|names| names.pin_id(code))
-            .unwrap_or(code),
+        Target(code) => llrm_sdag::target_names::installed().and_then(|names| names.pin_id(code)).unwrap_or(code),
         // A machine node reads as the pin's `~opcode`.
         Machine(code) => !(code as u16),
     }
@@ -244,18 +247,18 @@ pub fn pin_vt(vt: EVT) -> Vt {
     }
 }
 
-/// The inverse of [`pin_vt`] for the types a pattern can ask for. Where the target has
-/// vectors (`DagConfig::vectors`) `v4i32` is the vector, not the x86 opaque 16 bytes.
-fn our_vt(vt: Vt, vectors: bool) -> EVT {
+/// The inverse of [`pin_vt`] for the types a pattern can ask for. Where the
+/// target has vectors (`DagConfig::vectors`) `v4i32` is the vector, not the x86
+/// opaque 16 bytes.
+fn our_vt(
+    vt: Vt,
+    vectors: bool,
+) -> EVT {
     if vectors {
-        if let Some(found) = [
-            (mvt::v16i8, MVT::V16I8),
-            (mvt::v8i16, MVT::V8I16),
-            (mvt::v4i32, MVT::V4I32),
-            (mvt::v2i64, MVT::V2I64),
-        ]
-        .into_iter()
-        .find(|(p, _)| *p == vt)
+        if let Some(found) =
+            [(mvt::v16i8, MVT::V16I8), (mvt::v8i16, MVT::V8I16), (mvt::v4i32, MVT::V4I32), (mvt::v2i64, MVT::V2I64)]
+                .into_iter()
+                .find(|(p, _)| *p == vt)
         {
             return EVT::Simple(found.1);
         }
@@ -799,6 +802,26 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         self.dag.is_undef(ours(value))
     }
+    fn is_build_vector_all(
+        &self,
+        value: PinValue,
+        ones: bool,
+    ) -> bool {
+        let value = ours(value);
+        if self.dag.opcode(value) != ISD::BuildVector {
+            return false;
+        }
+        // `isBuildVectorAllZeros`/`AllOnes`: every defined lane is the constant
+        // (its low lane bits), and one is defined.
+        let lane_bits = self.dag.value_type(value).element().size_in_bits();
+        let mask = (1u128 << lane_bits) - 1;
+        let lanes = &self.dag.node(value).ops;
+        lanes.iter().any(|&lane| !self.dag.is_undef(lane))
+            && lanes.iter().all(|&lane| {
+                self.dag.is_undef(lane)
+                    || self.dag.constant(lane).is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
+            })
+    }
     fn mem_operands(
         &self,
         node: u32,
@@ -938,6 +961,12 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
+    }
+    fn has_exact_flag(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::EXACT)
     }
     fn atomic_ordering(
         &self,

@@ -35,7 +35,7 @@ use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
-use crate::mc::inst::{Atomic, Barrier, Fill};
+use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
@@ -275,10 +275,13 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         }
     };
     let (width, bytes, sign) = match element {
-        // `LDRSui` and `LDRDui` move a float
-        "S" | "D" | "Q" => (
+        // `LDRSui` and `LDRDui` move a float; `LDRBui` and `LDRHui` a byte or
+        // halfword of a vector register
+        "B" | "H" | "S" | "D" | "Q" => (
             Width::W,
             match element {
+                "B" => 1,
+                "H" => 2,
                 "S" => 4,
                 "D" => 8,
                 _ => 16,
@@ -296,7 +299,7 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         "SW" => (Width::X, 4, true),
         _ => return None,
     };
-    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D" | "Q") })
+    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "B" | "H" | "S" | "D" | "Q") })
 }
 
 /// `CSELWr`, `CSINCXr` and the rest: the select and its width.
@@ -552,6 +555,54 @@ fn gpr_width(letter: &str) -> Option<Width> {
     }
 }
 
+/// `DUPv8i16gpr`, `MOVIv2d_ns`, `MOVIv8i16`, `MVNIv4s_msl`: a vector made from
+/// a general register or an immediate.
+fn vector_fill(
+    name: &str,
+    operands: &[Operand],
+) -> Option<Result<Fill, String>> {
+    let wrong = || Err(format!("{name}: operands are not those of its form"));
+    let arrangement = [
+        ("DUPv16i8gpr", Arrangement::B16),
+        ("DUPv8i16gpr", Arrangement::H8),
+        ("DUPv4i32gpr", Arrangement::S4),
+        ("DUPv2i64gpr", Arrangement::D2),
+    ]
+    .into_iter()
+    .find(|(one, _)| *one == name)
+    .map(|(_, arrangement)| arrangement);
+    if let Some(arrangement) = arrangement {
+        return Some(match operands {
+            [Operand::Reg(source)] => Ok(Fill::Dup(arrangement, *source)),
+            _ => wrong(),
+        });
+    }
+    match (name, operands) {
+        ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
+        ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
+        ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
+        _ => {}
+    }
+    for (stem, invert) in [("MOVI", false), ("MVNI", true)] {
+        let Some(lanes) = name.strip_prefix(stem) else { continue };
+        let shaped = |make: fn(u8) -> ImmShape, bias: u64| match operands {
+            [Operand::Imm(imm8), Operand::Imm(shift)] => {
+                Ok(Fill::Imm { invert, shape: make((*shift - bias) as u8), imm8: *imm8 as u8 })
+            }
+            _ => wrong(),
+        };
+        // An `msl` shift is the shifter operand `(MSL << 6) | amount`.
+        return match lanes {
+            "v8i16" => Some(shaped(ImmShape::H8, 0)),
+            "v4i32" => Some(shaped(ImmShape::S4, 0)),
+            "v2i32" => Some(shaped(ImmShape::S2, 0)),
+            "v4s_msl" => Some(shaped(ImmShape::S4Msl, 256)),
+            _ => continue,
+        };
+    }
+    None
+}
+
 /// A float machine node as an instruction: the float arithmetic, compare,
 /// select, conversion and move rows. `None` for any other opcode. The
 /// destination is a float register, or a general one for a conversion to an
@@ -563,6 +614,9 @@ fn float_inst(
     operands: &[Operand],
 ) -> Option<Result<Inst, String>> {
     let wrong = || Err(format!("{name}: operands are not those of its form"));
+    if let Some(fill) = vector_fill(name, operands) {
+        return Some(fill.map(|fill| Inst::VectorFill { rd, fill }));
+    }
     // The size letter sits before `rr`, `r`, `rrr` or `i`.
     let binary = [
         ("FADD", FpBinary::Add),
@@ -652,6 +706,18 @@ fn float_inst(
                 _ => wrong(),
             });
         }
+    }
+    // `UCVTFv1i32`: the integer in the low lane of a vector register.
+    if let Some(rest) = name.strip_prefix("SCVTFv1i").or_else(|| name.strip_prefix("UCVTFv1i")) {
+        let size = match rest {
+            "32" => FpSize::S,
+            "64" => FpSize::D,
+            _ => return None,
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::FpLaneToFp { signed: name.starts_with('S'), size, rd, rn: *rn }),
+            _ => wrong(),
+        });
     }
     // `SCVTFUWDri`: unscaled, from a `W`, to a `D`.
     for (stem, signed) in [("SCVTFU", true), ("UCVTFU", false)] {
@@ -753,11 +819,13 @@ struct Emitter<'a> {
     cuts: Vec<Cut>,
     /// The splits so far in the function, for fresh labels.
     splits: usize,
-    /// The registers that hold a copy of the stack pointer (`CopyFromReg SP`): an address with one as its base uses
-    /// the stack pointer itself, as `InstrEmitter` uses a reserved register where it is read.
+    /// The registers that hold a copy of the stack pointer (`CopyFromReg SP`):
+    /// an address with one as its base uses the stack pointer itself, as
+    /// `InstrEmitter` uses a reserved register where it is read.
     sp_copies: rustc_hash::FxHashSet<Gpr>,
-    /// Some block writes the stack pointer (a dynamic `alloca`, `llvm.stackrestore`): the outgoing area is no longer
-    /// reserved in the frame (`hasReservedCallFrame`), each call makes room for it.
+    /// Some block writes the stack pointer (a dynamic `alloca`,
+    /// `llvm.stackrestore`): the outgoing area is no longer reserved in the
+    /// frame (`hasReservedCallFrame`), each call makes room for it.
     moves_sp: bool,
     /// The register each phi's edges copy into, by the phi's register
     /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
@@ -961,7 +1029,14 @@ impl Emitter<'_> {
         let to = self.dag.value_type(SDValue { node: id, res: 0 });
         let bits = to.size_in_bits();
         let (width, size) = if bits == 64 { (Width::X, FpSize::D) } else { (Width::W, FpSize::S) };
-        match (operands.first(), to.is_floating_point()) {
+        // The class says it where the type cannot: an `i64` in `FPR64` is a
+        // double's register (`FPR8` 6, `FPR16` 7, `FPR32` 29, `FPR64` 43,
+        // `FPR128` 77).
+        let to_float = match operands.get(1) {
+            Some(Operand::Imm(class)) => matches!(class, 6 | 7 | 29 | 43 | 77),
+            _ => to.is_floating_point(),
+        };
+        match (operands.first(), to_float) {
             (Some(Operand::Reg(gpr)), true) => {
                 let fpr = self.mf.fpr();
                 self.ops.push(Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: *gpr, fpr }));
@@ -1086,7 +1161,9 @@ impl Emitter<'_> {
     ) -> Result<Addr, String> {
         let imm = offset as i64;
         match self.operand(value)? {
-            Operand::Reg(base) => Ok(Addr::Offset { base: if self.sp_copies.contains(&base) { Gpr::R31 } else { base }, imm }),
+            Operand::Reg(base) => {
+                Ok(Addr::Offset { base: if self.sp_copies.contains(&base) { Gpr::R31 } else { base }, imm })
+            }
             Operand::Slot(slot) => Ok(Addr::Slot { slot, offset: imm }),
             Operand::Fixed(at) => Ok(Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm }),
             _ => Err("a block of memory at something that is no pointer register or frame object".into()),
@@ -1184,7 +1261,7 @@ impl Emitter<'_> {
                     Some(byte) => Fill::Byte(byte),
                     None => {
                         let Operand::Reg(reg) = self.operand(operand(2))? else { return Err("a fill byte".into()) };
-                        Fill::Gpr(reg)
+                        Fill::Dup(Arrangement::B16, reg)
                     }
                 };
                 self.ops.push(Op::I(Inst::VectorFill { rd, fill }));
@@ -1439,9 +1516,10 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// `AArch64FrameLowering::eliminateCallFramePseudoInstr` where the call frame is not reserved: `sub sp, sp, #n`
-    /// before the call's stores, `add sp, sp, #n` after it, `n` the bytes aligned to 16 (`emitFrameOffset`: 12 bits,
-    /// then the next 12 shifted).
+    /// `AArch64FrameLowering::eliminateCallFramePseudoInstr` where the call
+    /// frame is not reserved: `sub sp, sp, #n` before the call's stores,
+    /// `add sp, sp, #n` after it, `n` the bytes aligned to 16
+    /// (`emitFrameOffset`: 12 bits, then the next 12 shifted).
     fn adjust_stack(
         &mut self,
         bytes: u64,
@@ -1715,7 +1793,11 @@ impl Emitter<'_> {
                     return self.f128_select(id, &operands);
                 }
                 if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
-                    let float_result = node.values[0].is_floating_point();
+                    // A fill of a 64-bit vector (`MOVIv2i32`) has no type of
+                    // ours: it reads as an `i64`.
+                    let float_result = node.values[0].is_floating_point()
+                        || node.values[0].is_vector()
+                        || vector_fill(name, &operands).is_some();
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     self.ops.push(Op::I(inst));
@@ -1784,6 +1866,17 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), *rn);
                         return Ok(());
                     }
+                    // A scalar write to a vector register zeroes the rest of
+                    // it.
+                    ("SUBREG_TO_REG", [.., Operand::Fpr(rn), _]) => {
+                        self.fvalues.insert((id, 0), *rn);
+                        return Ok(());
+                    }
+                    // The low lane of a vector register is the scalar one.
+                    ("EXTRACT_SUBREG", [Operand::Fpr(rn), _]) => {
+                        self.fvalues.insert((id, 0), *rn);
+                        return Ok(());
+                    }
                     ("SUBREG_TO_REG", [.., Operand::Reg(rn), _]) => {
                         let dst = self.mf.gpr();
                         self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(*rn) });
@@ -1792,6 +1885,30 @@ impl Emitter<'_> {
                     }
                     // Into an undefined register there is no upper half to
                     // keep.
+                    // A general register into the low lane of a vector one:
+                    // `fmov d, x` (or `s, w`) into the undefined register.
+                    ("INSERT_SUBREG", [_, Operand::Reg(rn), _])
+                        if node.values[0].is_vector()
+                            && matches!(
+                                self.dag.opcode(node.ops[0]),
+                                ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                            ) =>
+                    {
+                        let (width, size) = match self.dag.value_type(node.ops[1]).size_in_bits() {
+                            64 => (Width::X, FpSize::D),
+                            _ => (Width::W, FpSize::S),
+                        };
+                        let fpr = self.mf.fpr();
+                        self.ops.push(Op::I(Inst::FpInt {
+                            op: FpConvert::Bits { to_fp: true },
+                            width,
+                            size,
+                            gpr: *rn,
+                            fpr,
+                        }));
+                        self.fvalues.insert((id, 0), fpr);
+                        return Ok(());
+                    }
                     ("INSERT_SUBREG", [_, Operand::Reg(rn), _])
                         if matches!(
                             self.dag.opcode(node.ops[0]),
@@ -1799,6 +1916,16 @@ impl Emitter<'_> {
                         ) =>
                     {
                         self.values.insert((id, 0), *rn);
+                        return Ok(());
+                    }
+                    // The same for a scalar float register into a vector one.
+                    ("INSERT_SUBREG", [_, Operand::Fpr(rn), _])
+                        if matches!(
+                            self.dag.opcode(node.ops[0]),
+                            ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                        ) =>
+                    {
+                        self.fvalues.insert((id, 0), *rn);
                         return Ok(());
                     }
                     // `BFMWri dst, src, immr, imms` inserts into a register it
@@ -1966,13 +2093,24 @@ pub fn emit(
         splits: 0,
         sp_copies: rustc_hash::FxHashSet::default(),
         incoming: HashMap::default(),
-        moves_sp: blocks.iter().any(|block| {
-            block.units.iter().flat_map(|unit| &unit.nodes).any(|&node| {
-                let node = block.dag.node(SDValue { node, res: 0 });
-                node.opcode == ISD::CopyToReg
-                    && matches!(block.dag.node(node.ops[1]).data, NodeData::PhysReg(id) if id == crate::reg::SP)
-            })
-        }),
+        moves_sp: blocks
+            .iter()
+            .any(
+                |block| block
+                    .units
+                    .iter()
+                    .flat_map(|unit| &unit.nodes)
+                    .any(
+                        |&node| {
+                            let node = block.dag.node(SDValue { node, res: 0 });
+                            node.opcode == ISD::CopyToReg
+                                && matches!(
+                                    block.dag.node(node.ops[1]).data,
+                                    NodeData::PhysReg(id) if id == crate::reg::SP
+                                )
+                        },
+                    ),
+            ),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
