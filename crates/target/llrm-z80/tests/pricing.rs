@@ -199,3 +199,16 @@ fn a_block_made_by_a_pass_takes_the_flow_into_it() {
     // (6 + 12) * 64 + 6 * 40 + (6 + 10) * 64
     assert_eq!(priced.1, 2416, "{priced:?}");
 }
+
+/// At -O1 the variants were ranked at 1 B = 3 T on static loop weights, and
+/// rep_count's `bench` kept an allocation 24 B bigger (252 B, 305995 T against
+/// 228 B, 319019 T measured) that the static weights ranked faster. -O1 is
+/// strict on both axes, so the form with the smaller regret is taken.
+#[test]
+fn o1_takes_the_smaller_form_when_the_rate_only_ranks_the_other_faster() {
+    let ir = include_str!("kernels/ir/rep_count.ll");
+    let lines =
+        llrm_z80::compile::lines(ir, "bench", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    let (bytes, _) = price_emitted(&lines, true);
+    assert!(bytes <= 240, "bench is {bytes} B at -O1");
+}

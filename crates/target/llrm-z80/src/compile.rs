@@ -360,24 +360,69 @@ fn priced_before_peepholes(level: Level) -> bool {
 }
 
 /// Whether the price `one` beats `other`: bytes first at the size levels;
-/// otherwise weighted clocks plus 3 clocks a byte (1 B = 3 T), so a variant
-/// that is bigger and no faster by that rate does not win on a clock alone.
+/// at -O1 the smaller regret ([`smaller_regret`]); otherwise weighted clocks
+/// plus 3 clocks a byte (1 B = 3 T), so a variant that is bigger and no faster
+/// by that rate does not win on a clock alone.
 fn cheaper(
     level: Level,
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
     let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
-    if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
+    match level {
+        Level::Os | Level::Oz => one < other,
+        Level::O1 => smaller_regret(one, other),
+        _ => priced(one) < priced(other),
+    }
+}
+
+/// Whether `new` beats `old` at -O1, where the bar is strict on both axes and
+/// no rate stands between a byte and a clock: the form whose worse axis is
+/// closer to the best of the two on that axis wins. A form that gives up a few
+/// percent of one axis for a large part of the other wins, and the reverse
+/// does not; a form worse on both never does. The static loop weights run
+/// well under the measured ones, so a rate on them kept forms 20 B bigger and
+/// no faster (loop_fusion `same`).
+///
+/// DEVIATE z80-callinline-price: the pin has no price for a choice between
+/// two forms of one function, only per-site cost hooks. It is the rule
+/// [`prefers`] already used for the call-or-inline choice, now the one every
+/// variant choice at -O1 uses. Owner z80, exit 2026-11-20.
+fn smaller_regret(
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    let regret = |one: (u32, u64), other: (u32, u64)| {
+        let bytes = f64::from(one.0) / f64::from(one.0.min(other.0).max(1));
+        let clocks = one.1 as f64 / other.1.min(one.1).max(1) as f64;
+        bytes.max(clocks)
+    };
+    regret(new, old) < regret(old, new)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// loop_fusion -O1 chose a `same` 21 B bigger and slower than the -Os one
+    /// (133 B against 112) because 1 B = 3 T ranked it faster on static
+    /// weights; rep_count's `bench` kept eight word stores for a 16-byte
+    /// memset (252 B against 169). A form worse on both axes, or a few percent
+    /// faster for a fifth more bytes, does not win at -O1.
+    #[test]
+    fn o1_takes_the_form_with_the_smaller_regret_not_the_rate() {
+        assert!(cheaper(Level::O1, (112, 4100), (133, 4000)));
+        assert!(!cheaper(Level::O1, (133, 4000), (112, 4100)));
+        assert!(!cheaper(Level::O1, (133, 4100), (112, 4000)));
+        assert!(cheaper(Level::O1, (112, 4000), (133, 4100)));
+        // a rate would still decide there
+        assert!(cheaper(Level::O2, (133, 4000), (112, 4100)));
+    }
+
     /// call_keeps -O1 was 1876 B for 57813 T (long multiplies and shifts inline) against 1473 B for 64413 T with the
     /// routines: a clock rise of 11% for 21% of the bytes. The price counted each routine call as 17 T, so the form
     /// with the routines looked far faster than it is and no rate was stated for the strict level.
+
     #[test]
     fn at_o1_the_form_with_the_smaller_relative_regret_wins() {
         let (inline, calls) = ((1916, 11124), (1473, 12449));
@@ -2431,13 +2476,6 @@ fn prefers(
 ) -> bool {
     match level {
         Level::Os | Level::Oz => new < old,
-        Level::O1 => {
-            let regret = |one: (u32, u64), other: (u32, u64)| {
-                let (bytes, clocks) = (f64::from(one.0) / f64::from(one.0.min(other.0).max(1)), one.1 as f64 / other.1.min(one.1).max(1) as f64);
-                bytes.max(clocks)
-            };
-            regret(new, old) < regret(old, new)
-        }
         _ => cheaper(level, new, old),
     }
 }
