@@ -7,6 +7,9 @@ axis; bss alone is never judged. A constant kept out of .text counts for every c
 Columns: ours; pin at OUR stack alignment (the target description's, via pin.stack_alignment); pin at 16 (the Linux default), labelled CF6.
 A row whose pin and ours stack alignments differ is refused unless the pin column carries the CF6 label: the unlabelled pin column was
 read at 16 against our 4 and counted cells (select_of_constants, wc_mixed) that a matched pin does not have.
+
+Built as the matrix builds: the pin gets the one external flag set (tools/external_flags.py), both sides get the program's own `// flags:` (first
+configuration, minus level, march, ABI and width), and a program that is n/a at x86_32-linux (`// targets:`, e.g. DOS-only) is no cell.
 """
 
 import os
@@ -20,6 +23,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "ab"))
+sys.path.insert(0, str(HERE.parent))
+import corpus_targets  # noqa: E402
+import external_flags  # noqa: E402
 import object_bytes  # noqa: E402
 import pin  # noqa: E402
 
@@ -49,10 +55,25 @@ def columns() -> tuple[Column, Column, Column]:
 def pin_flags(column: Column) -> list[str]:
     """The CF6 column is the pin as clang ships it (no flag: 16, and `stackrealign` on main); the other is told ours."""
     told = [] if column.label == "CF6" else [f"-mstack-alignment={column.stack_alignment}"]
-    return ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", *told]
+    return ["-m32", "-march=i486", *external_flags.flags("x86", ("-fno-pic",)), *told]
 
 
 TARGET = "x86_32-linux"
+SET_BY_THE_CELL = ("-O", "-march=", "-mabi=")  # prefixes; `-m32`, `-m64`, `-fPIE` and `-fno-pic` are the cell's too
+
+
+def program_flags(source: str) -> list[str]:
+    """The program's own `// flags:` (its first configuration) minus what the cell sets itself: the same tokens go to ours and to the pin,
+    as the matrix does. Built without them `-fno-inline-functions`, `-fexcess-precision=standard` and `-fsanitize=...` were not in the cell."""
+    configurations = corpus_targets.flag_configurations(source)
+    return [t for t in (configurations[0] if configurations else []) if not t.startswith(SET_BY_THE_CELL) and t not in ("-m32", "-m64", "-fPIE", "-fno-pic")]
+
+
+def sources(names: list[str]) -> list[Path]:
+    """The corpus programs that are cells at x86_32-linux: `names` (stems) if given. A DOS-only program is no cell (13 of 176 rows of the matrix:
+    rep_tails +739 B and os_more +196 B were counted worse at x86_32-linux)."""
+    found = sorted((ROOT / "tests/run/c").glob("*.c")) + sorted((ROOT / "bench").glob("*/*.c"))
+    return [s for s in found if (not names or s.stem in names) and corpus_targets.applies(TARGET, s.read_text(), s)]
 
 
 def footprint(obj: Path) -> object_bytes.Footprint:
@@ -77,6 +98,7 @@ def one(src: Path, bindir: Path, level: str, cols: tuple[Column, Column, Column]
     flag = "-Os" if level == "Os" else "-" + level
     inc = ["-I" + str(ROOT / "bench"), "-I" + str(ROOT / "runtime/shared/posix")]
     ours, *pins = cols
+    extra = program_flags(src.read_text())
     for column in pins:
         check_row(ours, column)
     clang = subprocess.run([sys.executable, str(ROOT / "tools/pin_clang.py")], capture_output=True, text=True, check=True).stdout.strip()
@@ -85,10 +107,10 @@ def one(src: Path, bindir: Path, level: str, cols: tuple[Column, Column, Column]
         t = Path(t)
         env = dict(os.environ, LLRM_CC_TARGET="x86_32-linux", LLRM_LLC=str(bindir / "llrm-llc"), LLRM_PIN_CLANG=clang)
         try:
-            subprocess.run([str(bindir / "llrm-cc"), flag, "-c", "-o", str(t / "o.o"), str(src), *inc], cwd=ROOT, env=env, check=True, capture_output=True)
+            subprocess.run([str(bindir / "llrm-cc"), flag, *extra, "-c", "-o", str(t / "o.o"), str(src), *inc], cwd=ROOT, env=env, check=True, capture_output=True)
             sizes = [footprint(t / "o.o")]
             for column in pins:
-                subprocess.run([clang, flag, "-c", *pin_flags(column), *inc, str(src), "-o", str(t / f"{column.name}.o")], check=True, capture_output=True)
+                subprocess.run([clang, flag, *extra, "-c", *pin_flags(column), *inc, str(src), "-o", str(t / f"{column.name}.o")], check=True, capture_output=True)
                 sizes.append(footprint(t / f"{column.name}.o"))
         except subprocess.CalledProcessError as e:
             return name, None, (e.stderr or b"")[:60]
@@ -98,8 +120,7 @@ def one(src: Path, bindir: Path, level: str, cols: tuple[Column, Column, Column]
 def main(argv: list[str]) -> int:
     bindir, level, names = Path(argv[0]), argv[1], argv[2:]
     cols = columns()
-    srcs = sorted((ROOT / "tests/run/c").glob("*.c")) + sorted((ROOT / "bench").glob("*/*.c"))
-    srcs = [s for s in srcs if not names or s.stem in names]
+    srcs = sources(names)
     with ThreadPoolExecutor(int(os.environ.get("JOBS", "6"))) as ex:
         rows = list(ex.map(lambda s: one(s, bindir, level, cols), srcs))
     print("# size = padding-free code + data (.data, .rodata*); static = data + bss, judged apart; bss alone is not judged")
