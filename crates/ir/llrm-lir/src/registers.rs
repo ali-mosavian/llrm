@@ -362,6 +362,9 @@ pub struct Info {
     /// from each entry's `lane` and `bits`, not x86's table (the 6502's pairs
     /// and cells).
     pub byte_lanes: bool,
+    /// The file states `@lanes x86` (or `@lanes none`): x86's lane table is the one it means. A file with
+    /// integer views under 32 bits and neither line has no table (`lanes::table_of` refuses it).
+    pub lanes_x86: bool,
     /// The file states `@ties rows`: which operand an instruction ties to its
     /// dest is said by the instruction's row (`^0`), not by its operation
     /// (x86's rule).

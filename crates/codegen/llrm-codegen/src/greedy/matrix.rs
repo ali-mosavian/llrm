@@ -675,6 +675,7 @@ mod tests {
             cache: Default::default(),
             views: base.views,
             byte_lanes: base.byte_lanes,
+            lanes_x86: base.lanes_x86,
             ties_by_row: base.ties_by_row,
         })))
     }

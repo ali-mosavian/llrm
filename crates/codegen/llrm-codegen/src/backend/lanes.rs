@@ -175,8 +175,18 @@ fn table_of(regs: Regs) -> &'static Table {
     // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
     // one without writes a root whole (arm64's `w` write clears the `x`).
     if !regs.0.byte_lanes
-        && regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
+        && let Some((_, small)) = regs
+            .0
+            .entries()
+            .find(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
     {
+        // Not a default: a z80 file without the line read x86's table for every register (no effect decoded, every
+        // instruction a scheduling barrier).
+        assert!(
+            regs.0.lanes_x86,
+            "a register file with integer views under 32 bits (`{small:?}`) must say `@lanes bytes`, `@lanes x86` \
+             or `@lanes none` in its registers.regs"
+        );
         return &X86;
     }
     let key = regs.0 as *const _ as usize;
@@ -686,5 +696,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A z80 file with 8-bit integer views and no `@lanes` line read x86's table for every register: the
+    /// scheduler found no effect for 94 of 94 instructions of `three` and ordered none of them. A file with
+    /// such views and no lane declaration is refused by name.
+    #[test]
+    #[should_panic(expected = "@lanes")]
+    fn a_register_file_with_small_integer_views_and_no_lane_line_is_refused() {
+        use llrm_lir::registers::{Info, Regs};
+        let base = &llrm_x86_m16::REGISTER_INFO;
+        assert!(base.lanes_x86, "the x86 files say so");
+        let bare = Regs(Box::leak(Box::new(Info {
+            table: base.table,
+            frame: base.frame,
+            stack: base.stack,
+            loads: base.loads,
+            scratch: base.scratch,
+            bytes: base.bytes,
+            data_segment: base.data_segment,
+            stack_segment: base.stack_segment,
+            code_segment: base.code_segment,
+            far_segment: base.far_segment,
+            widths: base.widths,
+            effects: base.effects,
+            cache: Default::default(),
+            views: base.views,
+            byte_lanes: false,
+            lanes_x86: false,
+            ties_by_row: base.ties_by_row,
+        })));
+        let _ = table_of(bare);
     }
 }
