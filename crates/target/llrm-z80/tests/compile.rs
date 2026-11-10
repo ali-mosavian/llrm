@@ -413,7 +413,7 @@ fn a_pair_copy_moves_only_the_halves_that_are_read() {
 /// spilled both to the frame: 77 B against SDCC's 59. Spill-free needs no
 /// frame access. Waits for greedy's eviction order (greedy-anyisa, 11-08).
 #[test]
-#[ignore = "greedy evicts the long-lived pair for a short byte that has a free register"]
+#[ignore = "Z80-SLOT-READ-PEEK until 2026-11-30: the loop pointer is a push/pop slot read by peek each trip"]
 fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
     let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::Oz))
         .unwrap_or_else(|why| panic!("{why}"));
@@ -423,7 +423,7 @@ fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
 /// bsearch8: the base pointer and a bound spill (`ld l, -2(ix)`, `ld -3(ix),
 /// d`) in a loop with registers to spare: 68 B / 790 T against SDCC's 56 / 702.
 #[test]
-#[ignore = "greedy spills pair values in a loop with registers to spare"]
+#[ignore = "Z80-SLOT-READ-PEEK until 2026-11-30: the base pointer is a push/pop slot read by peek each trip"]
 fn a_search_loop_keeps_its_base_pointer_in_a_register() {
     let out = text(include_str!("kernels/ir/bsearch8.ll"), "bsearch8", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
