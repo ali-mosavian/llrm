@@ -701,7 +701,7 @@ fn profitable(
 /// AArch64 `isAsCheapAsAMove`: one move-immediate-like instruction.
 fn as_cheap_as_a_move(op: &Op) -> bool {
     match op {
-        Op::Imm { .. } => true,
+        Op::Imm { bits, value, .. } => crate::expand_imm::cheap_move_immediate((*bits / 8) as u8, *value as i64),
         Op::I(inst) => matches!(
             inst,
             Inst::MoveWide { .. } | Inst::LogicImm { .. } | Inst::AddSubImm { .. } | Inst::FpMoveImm { .. }
@@ -1609,6 +1609,34 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(2)), (1, 1), "{function:#?}");
+    }
+
+    /// A four-chunk 64-bit constant is not as cheap as a move: it was remade
+    /// in the far block (three extra `movk`) instead of shared.
+    #[test]
+    fn a_four_chunk_constant_two_blocks_away_is_shared() {
+        let wide = |rd: u32, value: u64| Op::Imm { dst: Gpr(rd), bits: 64, value };
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
+        let count = |value: u64| {
+            let mut function = function();
+            function.blocks = vec![
+                MBlock { label: "entry".into(), ops: vec![wide(64, value), keep(64), branch_to("mid")].into() },
+                MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
+                MBlock {
+                    label: "far".into(),
+                    ops: vec![wide(66, value), keep(66), Op::Return { uses: vec![], tail: None }].into(),
+                },
+            ];
+            run(&mut function, false);
+            function.blocks[2].ops.iter().filter(|op| matches!(op, Op::Imm { .. })).count()
+        };
+        assert_eq!((count(0x1234_5678_9abc_def0), count(0x1_0000_0000)), (0, 1));
     }
 
     /// A constant only the loop makes goes to the preheader.
