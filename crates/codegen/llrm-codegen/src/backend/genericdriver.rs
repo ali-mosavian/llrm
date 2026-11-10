@@ -130,8 +130,12 @@ impl<'a> Scheduler<'a> {
                 .unwrap_or(0);
         }
         for node in (0..n).rev() {
-            units[node].height =
-                succ_edges[node].iter().map(|&(succ, lat)| units[succ].height + lat).max().unwrap_or(0);
+            units[node].height = succ_edges[node]
+                .iter()
+                .map(|&(succ, lat)| units[succ].height + lat)
+                .max()
+                .unwrap_or(0)
+                .max(graph.exit_latency[node]);
         }
         let rem = if machine.has_instr_sched_model() { Remainder::new(machine, &units) } else { Remainder::default() };
         let idle = Cand::new(0, false, CandPolicy::default());
@@ -430,13 +434,26 @@ impl<'a> Scheduler<'a> {
             }
         }
         // Bottom roots in reverse, so the higher priority nodes appear first.
+        // The region end releases the defs that hold a latency to it
+        // (`ExitSU`), ready that many cycles into the bottom zone.
+        for node in 0..n {
+            self.units[node].bot_ready_cycle = self.graph.exit_latency[node];
+        }
         for node in (0..n).rev() {
             if self.succs_left[node] == 0 {
-                self.bot.release_node(self.machine, &self.units, node, 0, false, 0);
+                self.bot.release_node(self.machine, &self.units, node, self.graph.exit_latency[node], false, 0);
             }
         }
-        // `registerRoots`.
-        self.rem.critical_path = self.bot.available.iter().map(|&node| self.units[node].depth).max().unwrap_or(0);
+        // `registerRoots`: `ExitSU`'s depth is the deepest of what reaches it.
+        let exit_depth = (0..n).map(|node| self.units[node].depth + self.graph.exit_latency[node]).max().unwrap_or(0);
+        self.rem.critical_path = self
+            .bot
+            .available
+            .iter()
+            .map(|&node| self.units[node].depth)
+            .max()
+            .unwrap_or(0)
+            .max(exit_depth);
         let (mut top, mut bottom, mut reasons) = (Vec::new(), Vec::new(), Vec::new());
         while top.len() + bottom.len() < n {
             let (node, at_top, reason) = self.pick_node();
@@ -507,6 +524,23 @@ mod tests {
     ) -> Vec<usize> {
         let (graph, machine, units) = diamond(buffer);
         Scheduler::new(&graph, &machine, units, policy, None).schedule().0
+    }
+
+    /// pin: a def nothing in the region reads holds `latency - 1` to the
+    /// region end (`ExitSU`), so on an in-order machine the bottom zone
+    /// leaves it pending and places the independent stores first: the def
+    /// is issued first in the region. Without the edge the three tie and
+    /// source order stands, the def last of the stores.
+    #[test]
+    fn test_a_live_out_def_with_latency_is_issued_before_independent_stores() {
+        let mut graph = Graph::from_edges(3, &[]);
+        let units = vec![unit(2, 0), unit(1, 0), unit(1, 0)];
+        let machine = machine(0);
+        let held = Scheduler::new(&graph, &machine, units.clone(), RegionPolicy::bottom_up(), None).schedule().0;
+        assert_eq!(held, vec![0, 1, 2], "source order without the exit edge");
+        graph.exit_latency[2] = 3;
+        let got = Scheduler::new(&graph, &machine, units, RegionPolicy::bottom_up(), None).schedule().0;
+        assert_eq!(got[0], 2, "the live-out def stayed behind the stores: {got:?}");
     }
 
     /// pin: `llc -mcpu=generic` (in order) hoists the load and the divides

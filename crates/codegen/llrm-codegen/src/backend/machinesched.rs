@@ -255,6 +255,10 @@ pub struct Graph {
     /// For each instruction, the cluster of memory accesses it belongs to
     /// (`SUnit::ParentClusterIdx`, [`cluster_mem_ops`]).
     pub parent_cluster: Vec<Option<u32>>,
+    /// For each instruction, the latency of its artificial edge to the region
+    /// end (`ExitSU`): a def nothing in the region reads, held for its
+    /// latency less one. Zero for the others.
+    pub exit_latency: Vec<u32>,
     topo: Topo,
 }
 
@@ -305,6 +309,7 @@ impl Graph {
             weak_preds: vec![Vec::new(); n],
             weak_succs: vec![Vec::new(); n],
             parent_cluster: vec![None; n],
+            exit_latency: vec![0; n],
             topo: Topo::new(n),
         };
         for &(from, to, latency) in edges {
@@ -498,6 +503,9 @@ pub fn graph(
     // readers; the rest follows by chains. One pass, tables by value and lane.
     let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut latencies: Vec<Vec<u32>> = vec![Vec::new(); n];
+    // Whether a later instruction depends on it through a register (data,
+    // output or anti): `NumSuccs` where the pin looks, before the chains.
+    let mut register_succ = vec![false; n];
     let mut by_value: HashMap<u32, (Option<usize>, Vec<usize>)> = HashMap::default();
     // Per lane: the defs still standing (a live def replaces them, a dead one
     // joins them, as the pin's `Defs`) and the readers since.
@@ -548,6 +556,7 @@ pub fn graph(
         }
         // What every instruction after one of unknown effect keeps behind it.
         edges.extend(unknown.map(|earlier| (earlier, 0)));
+        let register_from = edges.len();
         for value in &one.uses {
             if let Some((Some(def), _)) = by_value.get(value) {
                 edges.push((*def, model.def_latency(&insns[*def])));
@@ -559,6 +568,7 @@ pub fn graph(
                 edges.extend(readers.iter().map(|&earlier| (earlier, 0)));
             }
         }
+        let value_end = edges.len();
         match masks {
             Some((reads, writes)) => {
                 for bit in bits_of(reads) {
@@ -581,6 +591,12 @@ pub fn graph(
             }
             // An unknown effect is ordered with everything before it.
             None => edges.extend(since.iter().map(|&earlier| (earlier, 0))),
+        }
+        // The register edges are in: the unknown-effect chain and the memory
+        // ones come next, and the pin counts neither.
+        let register_to = if masks.is_some() { edges.len() } else { value_end };
+        for &(earlier, _) in &edges[register_from..register_to] {
+            register_succ[earlier] = true;
         }
         if aliasing {
             let apart = |earlier: usize| !insns[earlier].may_alias(one) && one.memory.is_some() && insns[earlier].memory.is_some();
@@ -663,6 +679,19 @@ pub fn graph(
         }
         since.push(later);
     }
+    // `buildSchedGraph`: a def with no reader in the region, slower than one
+    // cycle, holds `latency - 1` to the region end.
+    let exit_latency: Vec<u32> = (0..n)
+        .map(|node| {
+            let one = &insns[node];
+            let latency = model.def_latency(one);
+            if model.exit_edges() && !register_succ[node] && latency > 1 && (!one.defines.is_empty() || memory(one).0) {
+                latency - 1
+            } else {
+                0
+            }
+        })
+        .collect();
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (later, before) in preds.iter().enumerate() {
         for &earlier in before {
@@ -676,6 +705,7 @@ pub fn graph(
         weak_preds: vec![Vec::new(); n],
         weak_succs: vec![Vec::new(); n],
         parent_cluster: vec![None; n],
+        exit_latency,
         topo: Topo::new(n),
     }
 }
@@ -1040,10 +1070,16 @@ impl ZonePressure for Followed<'_> {
         let most = match &mut self.top {
             Some(top) if at_top => {
                 top.place(node);
+                if trace() {
+                    eprintln!("machinesched pressure top {node} cur={:?}", top.current());
+                }
                 top.max().to_vec()
             }
             _ => {
                 self.bottom.place(node);
+                if trace() {
+                    eprintln!("machinesched pressure bot {node} cur={:?}", self.bottom.current());
+                }
                 self.bottom.max().to_vec()
             }
         };
@@ -1129,6 +1165,17 @@ pub(crate) fn picks(
         );
     let machine = model.machine();
     let units: Vec<Unit> = insns.iter().map(|one| model.unit(one)).collect();
+    if trace() {
+        for (node, one) in insns.iter().enumerate() {
+            let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("-");
+            eprintln!(
+                "machinesched node {node} {name} lat={} uops={} res={:?}",
+                model.def_latency(one),
+                units[node].micro_ops,
+                units[node].writes.iter().map(|write| (write.idx, write.release_at_cycle)).collect::<Vec<_>>()
+            );
+        }
+    }
     let pressure = followed.as_mut().map(|one| one as &mut dyn ZonePressure);
     let (order, reasons) = Scheduler::new(graph, &machine, units, policy, pressure).schedule();
     if trace()
@@ -1363,6 +1410,10 @@ pub fn scheduled(
                         Tracking { model, live_out, live_thru }
                     });
                     let mut deps = graph(slice, regs, bits, sched);
+                    if trace() {
+                        let held: Vec<_> = deps.exit_latency.iter().enumerate().filter(|(_, l)| **l > 0).collect();
+                        eprintln!("machinesched exit edges {held:?}");
+                    }
                     if std::env::var_os("LLRM_NO_COPYC").is_none() {
                         copy_constrain(slice, &mut deps, &|value| now.contains(&value));
                     }
@@ -2098,7 +2149,7 @@ mod tests {
             for candidate in 1..available.len() {
                 let (try_node, cand_node) = (available[candidate], available[best]);
                 let (try_delta, cand_delta) = (&deltas[candidate], &deltas[best]);
-                let pressure = |try_p, cand_p| match try_pressure(try_p, cand_p) {
+                let pressure = |try_p, cand_p| match try_pressure(try_p, cand_p, true) {
                     Pick::Try => Some(true),
                     Pick::Cand => Some(false),
                     Pick::Neither => None,

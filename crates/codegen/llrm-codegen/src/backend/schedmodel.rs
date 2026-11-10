@@ -67,6 +67,13 @@ pub trait SchedulingModel {
         insn: &Insn,
     ) -> u32;
 
+    /// Whether a def that nothing in the region reads holds its latency to
+    /// the region end (`ScheduleDAGInstrs::buildSchedGraph`'s edge to `ExitSU`).
+    /// DEVIATE SB3: off by default; x86 has not measured it.
+    fn exit_edges(&self) -> bool {
+        false
+    }
+
     /// Whether the target has an x87 register stack, a pressure set of its own
     /// that the float operations' values are counted in (the pin's `RFP`).
     fn x87_stack(&self) -> bool {

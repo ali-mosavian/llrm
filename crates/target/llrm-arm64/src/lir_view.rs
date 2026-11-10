@@ -327,6 +327,7 @@ fn view_with(
             let mut inst = LirInst::new(kind, operands);
             if !fused && !zero && matches!(op, Op::I(_) | Op::Copy { .. } | Op::Imm { .. }) {
                 inst.form = crate::lir_body::form_of(function, &mut symbols, &wide_list, &op).map(std::sync::Arc::new);
+                inst.form_operands = inst.operands.clone();
             }
             inst.ties = ties;
             inst.origin = origin;

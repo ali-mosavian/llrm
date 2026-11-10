@@ -148,6 +148,10 @@ impl SchedulingModel for Arm64Model {
         false
     }
 
+    fn exit_edges(&self) -> bool {
+        true
+    }
+
     /// `AArch64Subtarget::overrideSchedPolicy`.
     fn policy(&self) -> RegionPolicy {
         if std::env::var_os("LLRM_SCHED_BOTTOM_UP").is_some() {

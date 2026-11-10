@@ -128,7 +128,7 @@ pub enum Pick {
     Neither,
 }
 
-/// `tryPressure` (MachineScheduler.cpp#L3805), bottom-up: compares what two
+/// `tryPressure` (MachineScheduler.cpp#L3805): compares what two
 /// candidates do to one kind of pressure (`RPDelta.Excess`, `.CriticalMax` or
 /// `.CurrentMax`, for `RegExcess`, `RegCritical` and `RegMax`). A change that
 /// lowers pressure beats one that does not; for the same set the smaller
@@ -138,6 +138,7 @@ pub enum Pick {
 pub fn try_pressure(
     try_p: Option<PressureChange>,
     cand_p: Option<PressureChange>,
+    same_boundary: bool,
 ) -> Pick {
     let inc = |change: Option<PressureChange>| change.map_or(0, |change| change.inc);
     let (try_inc, cand_inc) = (inc(try_p), inc(cand_p));
@@ -150,6 +151,11 @@ pub fn try_pressure(
     let decides = greater((try_inc < 0).into(), (cand_inc < 0).into());
     if decides != Pick::Neither {
         return decides;
+    }
+    // The size of a change is not compared between the top and the bottom
+    // boundary.
+    if !same_boundary {
+        return Pick::Neither;
     }
     // Both affect the same set (or neither any): the smallest increase.
     let set = |change: Option<PressureChange>| change.map_or(usize::from(u16::MAX), |change| change.set);
@@ -920,18 +926,23 @@ mod tests {
     /// every tie.
     #[test]
     fn try_pressure_compares_as_the_pin_does() {
-        assert_eq!(try_pressure(change(3, -1), change(3, 1)), Pick::Try);
-        assert_eq!(try_pressure(change(3, 1), change(0, -2)), Pick::Cand);
-        assert_eq!(try_pressure(change(2, 1), change(2, 3)), Pick::Try);
-        assert_eq!(try_pressure(change(2, 3), change(2, 1)), Pick::Cand);
-        assert_eq!(try_pressure(change(5, 1), change(2, 1)), Pick::Try);
-        assert_eq!(try_pressure(change(2, 1), change(5, 1)), Pick::Cand);
+        assert_eq!(try_pressure(change(3, -1), change(3, 1), true), Pick::Try);
+        assert_eq!(try_pressure(change(3, 1), change(0, -2), true), Pick::Cand);
+        assert_eq!(try_pressure(change(2, 1), change(2, 3), true), Pick::Try);
+        assert_eq!(try_pressure(change(2, 3), change(2, 1), true), Pick::Cand);
+        assert_eq!(try_pressure(change(5, 1), change(2, 1), true), Pick::Try);
+        assert_eq!(try_pressure(change(2, 1), change(5, 1), true), Pick::Cand);
         // Both lower, different sets: the priority reverses.
-        assert_eq!(try_pressure(change(5, -1), change(2, -1)), Pick::Cand);
-        assert_eq!(try_pressure(None, change(4, 1)), Pick::Try);
-        assert_eq!(try_pressure(change(4, 1), None), Pick::Cand);
-        assert_eq!(try_pressure(None, None), Pick::Neither);
-        assert_eq!(try_pressure(change(1, 2), change(1, 2)), Pick::Neither);
+        assert_eq!(try_pressure(change(5, -1), change(2, -1), true), Pick::Cand);
+        assert_eq!(try_pressure(None, change(4, 1), true), Pick::Try);
+        assert_eq!(try_pressure(change(4, 1), None, true), Pick::Cand);
+        assert_eq!(try_pressure(None, None, true), Pick::Neither);
+        assert_eq!(try_pressure(change(1, 2), change(1, 2), true), Pick::Neither);
+        // A top and a bottom candidate: only a decrease decides, never the
+        // size of a rise (`Cand.AtTop != TryCand.AtTop`).
+        assert_eq!(try_pressure(change(1, 2), None, false), Pick::Neither);
+        assert_eq!(try_pressure(None, change(1, 2), false), Pick::Neither);
+        assert_eq!(try_pressure(change(1, -1), change(1, 2), false), Pick::Try);
     }
 
     #[test]

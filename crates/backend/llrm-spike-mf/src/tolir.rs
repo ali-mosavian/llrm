@@ -2632,26 +2632,49 @@ fn in_body_values<T: Target>(
     inst: &Inst,
     one: &Insn,
 ) -> Option<Semantics> {
-    let (mut defs, mut uses) = (Vec::new(), Vec::new());
-    for operand in &inst.operands {
-        let (list, register) = match operand {
-            Operand::Def(register) => (&mut defs, register),
-            Operand::Use(register) => (&mut uses, register),
-            _ => continue,
-        };
-        match register {
-            Reg::Virt(n) => list.push(*n),
-            Reg::Phys(register) if !T::reserved(T::root(*register)) => list.push(u32::MAX),
-            Reg::Phys(_) => {}
+    // The form names the registers `form_operands` had; the body's values
+    // stand at the same positions in the instruction as it is now.
+    let registers = |operands: &[Operand]| {
+        let (mut defs, mut uses) = (Vec::new(), Vec::new());
+        for operand in operands {
+            let (list, register) = match operand {
+                Operand::Def(register) => (&mut defs, register),
+                Operand::Use(register) => (&mut uses, register),
+                _ => continue,
+            };
+            match register {
+                Reg::Virt(n) => list.push(*n),
+                Reg::Phys(register) if !T::reserved(T::root(*register)) => list.push(u32::MAX),
+                Reg::Phys(_) => {}
+            }
         }
-    }
-    if defs.len() != one.defines.len() || uses.len() != one.uses.len() {
+        (defs, uses)
+    };
+    let ((defs, uses), (now_defs, now_uses)) = (registers(&inst.form_operands), registers(&inst.operands));
+    if defs.len() != one.defines.len()
+        || uses.len() != one.uses.len()
+        || now_defs.len() != defs.len()
+        || now_uses.len() != uses.len()
+    {
         return None;
     }
+    renumbered(form, defs, uses, &one.defines, &one.uses)
+}
+
+/// `form` with each register number `defs`/`uses` list (as the instruction's
+/// operands named them, `u32::MAX` for a physical one) standing for the value
+/// at the same position of `defines`/`uses`.
+fn renumbered(
+    form: &Semantics,
+    defs: Vec<u32>,
+    uses: Vec<u32>,
+    defines: &[u32],
+    reads: &[u32],
+) -> Option<Semantics> {
     let numbered = |numbers: Vec<u32>, values: &[u32]| -> std::collections::HashMap<u32, u32> {
         numbers.into_iter().zip(values.iter().copied()).filter(|(number, _)| *number != u32::MAX).collect()
     };
-    let (def_map, use_map) = (numbered(defs, &one.defines), numbered(uses, &one.uses));
+    let (def_map, use_map) = (numbered(defs, defines), numbered(uses, reads));
     let held = |held: &Held, map: &std::collections::HashMap<u32, u32>| -> Option<Held> {
         Some(Held { value: *map.get(&held.value)?, ..*held })
     };
@@ -2673,4 +2696,32 @@ fn in_body_values<T: Target>(
     let dests = form.dests.iter().map(|loc| remap(loc, &def_map)).collect::<Option<Vec<_>>>()?;
     let sources = form.sources.iter().map(|loc| remap(loc, &use_map)).collect::<Option<Vec<_>>>()?;
     Some(form.with_operands(form.name.clone(), dests, sources))
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4, offset: 0 })
+    }
+
+    /// A pass rewrote a read after the form was made (`fadd v3, v1, v2` became
+    /// `fadd v3, v1, v9`): the form still names `v2`, and the instruction was
+    /// left without it, so the scheduler priced `FADDSrr` and `FDIVSrr` of
+    /// arm64 `nbody_single` -O3 by the default latency (14 of its 53 float
+    /// ops). The form's numbers are those of the operands it was made from.
+    #[test]
+    fn a_read_renamed_after_the_form_was_made_keeps_its_form() {
+        let form = Semantics {
+            dests: vec![held(3)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        // Operands when the form was made: defs [3], uses [1, 2]; the body's
+        // values are one more than the registers, the read now being v9's.
+        let got = renumbered(&form, vec![3], vec![1, 2], &[4], &[2, 10]).expect("the form stays");
+        assert_eq!(got.dests, vec![held(4)]);
+        assert_eq!(got.sources, vec![held(2), held(10)]);
+    }
 }

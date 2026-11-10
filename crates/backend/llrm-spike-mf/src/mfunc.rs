@@ -83,6 +83,10 @@ pub struct Inst {
     /// its operands), for the pre-RA scheduler's model; none where the target
     /// does not say. The allocator reads `kind` and `operands` only.
     pub form: Option<std::sync::Arc<llrm_lir::Semantics>>,
+    /// `operands` as they were when `form` was made: later passes rewrite
+    /// registers (a hoisted constant replaces a use), and the form still
+    /// names the old ones.
+    pub form_operands: Vec<Operand>,
 }
 
 impl Inst {
@@ -111,6 +115,7 @@ impl Inst {
             commutable: false,
             origin: 0,
             form: None,
+            form_operands: Vec::new(),
         }
     }
 
