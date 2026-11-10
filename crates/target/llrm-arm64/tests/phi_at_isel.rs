@@ -1,11 +1,10 @@
 //! Selection makes phis (`PHI`, as the pin's ISel does) and `lower_phis` turns
-//! them into copies. Before, both selectors copied on the edges while
+//! them into copies. Before, selection copied on the edges while
 //! selecting, so no shared SSA phase could run on arm64: 184 registers of the
 //! -O1 corpus were defined more than once, all by copies.
 
 use llrm_arm64::dag::emit::emit;
 use llrm_arm64::dag::function::select_function;
-use llrm_arm64::machine::Platform;
 use llrm_arm64::mfunc::{MFunc, Op, lower_phis};
 
 const DATALAYOUT: &str = "e-m:o-i64:64-i128:128-n32:64-S128";
@@ -23,13 +22,6 @@ fn module() -> llrm_mir::module::Module {
 
 fn by_dag() -> MFunc {
     emit("f", &select_function(&module(), "f").expect("selects"), false).expect("emits")
-}
-
-fn by_hand() -> MFunc {
-    let module = module();
-    let layout = llrm_mir::datalayout::DataLayout::parse(DATALAYOUT).unwrap();
-    let (id, ..) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
-    llrm_arm64::isel::selected(&module, id, &layout, Platform::Darwin, false).expect("selects")
 }
 
 fn phis(function: &MFunc) -> Vec<(usize, Vec<String>)> {
@@ -70,11 +62,6 @@ fn the_dag_selector_makes_phis_where_a_loop_carries_a_value() {
     assert_selects_the_loop_phis(&by_dag());
 }
 
-#[test]
-fn the_hand_selector_makes_phis_where_a_loop_carries_a_value() {
-    assert_selects_the_loop_phis(&by_hand());
-}
-
 /// No phi is left, every phi register has one definition per path that
 /// reaches the block, and the edge from the entry to the join (the entry
 /// branches two ways) has a block of its own for its copies.
@@ -93,16 +80,11 @@ fn lowering_the_dag_selectors_phis_leaves_copies_and_an_edge_block() {
     assert_lowered(by_dag());
 }
 
-#[test]
-fn lowering_the_hand_selectors_phis_leaves_copies_and_an_edge_block() {
-    assert_lowered(by_hand());
-}
-
 /// A `switch` of five cases is a tree of blocks the selector makes, and the
 /// default is branched to from its leaves, not from the block the `switch`
 /// is in: a phi value recorded for that block alone left the phi unwritten on
 /// the paths that reached the default (`dispatch` printed `7 0 -6` for
-/// `0 0 0` under `ARM64_ISEL=hand`).
+/// `0 0 0` before selection made phis).
 #[test]
 fn a_switch_tree_gives_the_default_phi_value_from_each_leaf_that_branches_to_it() {
     let ir = "define i64 @f(i64 %x) {\n\
@@ -110,9 +92,7 @@ entry:\n  switch i64 %x, label %join [ i64 1, label %a\n i64 2, label %b\n i64 3
 a:\n  br label %join\nb:\n  br label %join\nc:\n  br label %join\nd:\n  br label %join\ne:\n  br label %join\n\
 join:\n  %r = phi i64 [ 9, %entry ], [ 1, %a ], [ 2, %b ], [ 3, %c ], [ 4, %d ], [ 5, %e ]\n  ret i64 %r\n}";
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    let layout = llrm_mir::datalayout::DataLayout::parse(DATALAYOUT).unwrap();
-    let (id, ..) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
-    let mut function = llrm_arm64::isel::selected(&module, id, &layout, Platform::Darwin, false).expect("selects");
+    let mut function = emit("f", &select_function(&module, "f").expect("selects"), false).expect("emits");
     lower_phis(&mut function).expect("lowers");
     assert_eq!(llrm_arm64::mfunc::undefined_reads(&function), vec![], "{function:?}");
 }

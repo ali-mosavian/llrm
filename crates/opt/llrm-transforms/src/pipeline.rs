@@ -176,6 +176,17 @@ pub struct Options {
     /// the path that lacks it: gcc's `-ftree-pre`, -O2 and up. Without it
     /// `gvn` only removes what is redundant on every path (`-ftree-fre`, -O1).
     pub pre: bool,
+    /// The pin's `JumpThreadingPass` slots (`jumpthreading@668`, `@809`) run
+    /// where `pre` is off too (-O1): its -O2 pipeline runs them,
+    /// `buildO1FunctionSimplificationPipeline` does not. gcc's
+    /// `-fthread-jumps`.
+    ///
+    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04, or
+    /// when the pin's -O1 gains it): a target's driver row may turn it on at
+    /// -O1 (`thread_jumps_at_o1` in llrm-cc's targets.toml); no row does but
+    /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
+    /// (bsearch -O1: a re-test and a loop-carried copy of the result).
+    pub thread_jumps: bool,
     /// A switch that only picks constants is a load from an array: gcc's
     /// `-ftree-switch-conversion`, -O2 and up.
     pub switch_conversion: bool,
@@ -319,6 +330,7 @@ impl Default for Options {
             forward: true,
             drop_loads: true,
             pre: true,
+            thread_jumps: false,
             drop_stores: true,
             sink: true,
             spare_loads: false,
@@ -380,6 +392,7 @@ impl Options {
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             pre: false,
+            thread_jumps: false,
             loop_unrolling: false,
             unswitch: false,
             switch_conversion: false,
@@ -843,7 +856,10 @@ pub(crate) fn llvm_order(
             Box::new(Together {
                 name,
                 parts: vec![
-                    Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }),
+                    Box::new(crate::combine_pass::Combine {
+                        enabled: applied.options.combine,
+                        phi_constant_users: applied.options.prices_bytes(),
+                    }),
                     Box::new(crate::simplifylibcalls::SimplifyLibCalls::with_routines(applied.options.library.clone())),
                 ],
             }),
@@ -1017,6 +1033,7 @@ pub(crate) fn llvm_order(
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
+                    inliner_follows: true,
                     created: Default::default(),
                     decided: Default::default(),
                 }),
@@ -1128,6 +1145,7 @@ pub(crate) fn llvm_order(
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
+                    inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
                     created: std::rc::Rc::clone(&created),
                     decided: std::rc::Rc::clone(&decided),
                 })
@@ -1215,8 +1233,17 @@ pub(crate) fn llvm_order(
     };
     list.into_iter()
         .filter(|one| applied.options.wanted(one.name()))
-        .filter(|one| applied.options.pre || !crate::parity::ABSENT_AT_O1.contains(&one.name()))
+        .filter(|one| {
+            applied.options.pre
+                || (applied.options.thread_jumps && is_jump_threading(one.name()))
+                || !crate::parity::ABSENT_AT_O1.contains(&one.name())
+        })
         .collect()
+}
+
+/// The slots of `JumpThreadingPass` (`Options::thread_jumps`).
+fn is_jump_threading(name: &str) -> bool {
+    matches!(name, "jumpthreading@668" | "jumpthreading@809")
 }
 
 /// The order, from the pipeline itself rather than beside it, then the

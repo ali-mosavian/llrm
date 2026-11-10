@@ -17,7 +17,7 @@ from dwarf_loc_diff import code_of, run
 # triple, objdump, the flags of our llc after the pin's
 TARGETS = {
     "x86_64": ("x86_64-unknown-linux-gnu", "objdump", []),
-    "aarch64": ("aarch64-unknown-linux-gnu", "aarch64-linux-gnu-objdump", ["--isel=dag"]),
+    "aarch64": ("aarch64-unknown-linux-gnu", "aarch64-linux-gnu-objdump", []),
 }
 
 

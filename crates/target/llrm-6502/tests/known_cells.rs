@@ -92,3 +92,29 @@ fn a_byte_kept_in_a_cell_round_a_loop_is_not_reloaded() {
     let reloads = body.iter().filter(|l| l.starts_with("lda rc")).count();
     assert_eq!(reloads, 0, "{body:?}");
 }
+
+/// The values at the labels need nine walks to settle (each walk loses `y` at
+/// one more label through the back edges): an eight-walk cap gave up and kept
+/// every load. jpeg_single's 3800-line function did the same, with 54
+/// `lda #0; sta X; lda #0` (~108 B at -Os) kept.
+#[test]
+fn values_that_need_nine_walks_still_settle() {
+    let text = "b5:\n  lda #0\nb6:\n  bne b18\nb7:\n  lda #0\n  ldy #0\nb14:\n  bne b22\n  ldy #0\n  tya\nb18:\n  tay\nb19:\n  bne b31\nb22:\n  bne b19\nb24:\n  bne b14\n  ldy #0\n  lda rc3\n  bne b36\nb31:\n  tya\n  bne b6\nb36:\n  tay\n  bne b24\n";
+    // `b7` is only fallen into, with `a` = 0: `ldy #0` is the 1-byte `tay`
+    assert_eq!(known(text), text.replacen("b7:\n  lda #0\n  ldy #0\n", "b7:\n  lda #0\n  tay\n", 1));
+}
+
+/// k_isspace's `(c - 9) < 5` of an `int`: `ldy #0 … sta rc4; tya; ora rc4` is the
+/// load of `rc4` that `a` holds already, so the `ora`, the `tya` and the `ldy`
+/// were 3 B and 5 clocks of nothing (the `ldy` goes too when `y` is dead at the return) (46 B, 75 clocks at -O2).
+#[test]
+fn an_or_of_a_known_zero_is_the_load_of_its_operand() {
+    use llrm_6502::peephole::run;
+    let text = "k_isspace:\n  ldy #0\n  clc\n  lda rc2\n  adc #247\n  ldx #0\n  sta rc4\n  tya\n  ora rc4\n  cmp #5\n  lda rc3\n  sbc #0\n  lda #1\n  bcc _cmd1\n  lda #0\n_cmd1:\n  sta rc4\n  lda rc2\n  cmp #32\n  bne _cz2\n  lda rc3\n  cmp #0\n_cz2:\n  beq _cmt3\n  lda #0\n  jmp _cmd3\n_cmt3:\n  lda #1\n_cmd3:\n  ora rc4\n  rts\n";
+    let mut asm = Asm::parse(text);
+    run(&mut asm);
+    let out = asm.text();
+    assert!(!out.contains("tya") && !out.contains("ora rc4\n  cmp"), "{out}");
+    // the `sta rc4` that fed the `ora` is dead once the `ora` is gone: copy propagation (default on) drops it, the pass off keeps it
+    assert!(out.contains("cmp #5\n"), "{out}");
+}

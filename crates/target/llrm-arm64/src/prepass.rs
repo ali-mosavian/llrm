@@ -52,8 +52,9 @@ fn pure(op: &Op) -> bool {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
         }
-        // A load from the GOT: the slot is constant memory, so a store in the loop does not
-        // change it (the pin: `PseudoSourceValue::GOT` is constant, `MachineLICM` hoists it).
+        // A load from the GOT: the slot is constant memory, so a store in the
+        // loop does not change it (the pin: `PseudoSourceValue::GOT` is
+        // constant, `MachineLICM` hoists it).
         Op::I(Inst::Load { addr: Addr::PageOffset { got: true, .. }, .. }) => {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
@@ -454,7 +455,9 @@ fn sink(
                     continue;
                 }
                 let Some(register) = defined(op) else { continue };
-                let once = |one: &Reg| definitions.get(one) == Some(&1);
+                // The zero register is a constant (`isConstantPhysReg`), not a
+                // value some definition makes.
+                let once = |one: &Reg| definitions.get(one) == Some(&1) || *one == Reg::Gpr(Gpr::R31);
                 if !once(&register) || !(zero || op.defs_and_uses().1.iter().all(once)) {
                     continue;
                 }
@@ -632,13 +635,16 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// operand whose result is only copied (heuristic 2) unless every reader of
 /// `register` already reads `earlier`.
 ///
-/// DEVIATE: heuristic 1 (a cheap operation across blocks) and 3 (phi readers)
-/// are not translated; within one block equal operations always merge (one DAG
-/// node in the pin); at `optsize` they always merge (a shared constant is the
-/// smaller code; the heuristics guard register pressure). Translating 1 and 3
-/// moved 29 of 144 arm64 cells (5 better on both axes, 17 worse on one or
-/// both: lru -O2 93 -> 99 instructions, the pin 103;
-/// handoff/arm64-nest-cse1-ab-2026-11-07.md). Owner w15. Exit: 11-30.
+/// Heuristics 1 (a cheap operation across non-adjacent blocks) and 3 (phi
+/// readers) follow the pin
+/// ([MachineCSE.cpp#L435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L435));
+/// within one block equal operations always merge (one DAG node in the pin).
+///
+/// DEVIATE: at `optsize` they always merge (a shared constant is the smaller
+/// code; the heuristics guard register pressure). Without it 9 of 36 arm64
+/// -Os cells are bigger and 1 smaller (recpow -4 B; jpeg_fixed +20, stft_single
+/// +24, lru +16, handoff/w15-cse-heur-only-ab-2026-11-10.md). Owner w15.
+/// Exit: 11-30.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
     definitions: &HashMap<Reg, usize>,
@@ -646,11 +652,19 @@ fn profitable(
     earlier: Reg,
     register: Reg,
     op: &Op,
+    earlier_block: usize,
+    block: usize,
+    successors: &[Vec<usize>],
 ) -> bool {
     let reads = |one: Reg| readers.get(&one).map_or(&[][..], Vec::as_slice);
     let seen = reads(earlier);
     if reads(register).iter().all(|reader| seen.contains(reader)) {
         return true;
+    }
+    // Heuristic 1: a cheap operation is not shared past the block after the
+    // one that made it.
+    if as_cheap_as_a_move(op) && earlier_block != block && !successors[earlier_block].contains(&block) {
+        return false;
     }
     let no_register_operand = !op.defs_and_uses().1.iter().any(|used| used.is_virtual());
     // A copy chain that ends in a register written in several places is a
@@ -676,7 +690,24 @@ fn profitable(
     };
     let only_copied = reads(register).iter().all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
         && !phi_input(register);
-    !(no_register_operand && only_copied)
+    if no_register_operand && only_copied {
+        return false;
+    }
+    // Heuristic 3: a value a phi reads is not reused unless it is read in
+    // this block already.
+    reads(earlier).iter().any(|&(reader, _)| reader == block) || !phi_input(earlier)
+}
+
+/// AArch64 `isAsCheapAsAMove`: one move-immediate-like instruction.
+fn as_cheap_as_a_move(op: &Op) -> bool {
+    match op {
+        Op::Imm { bits, value, .. } => crate::expand_imm::cheap_move_immediate((*bits / 8) as u8, *value as i64),
+        Op::I(inst) => matches!(
+            inst,
+            Inst::MoveWide { .. } | Inst::LogicImm { .. } | Inst::AddSubImm { .. } | Inst::FpMoveImm { .. }
+        ),
+        _ => false,
+    }
 }
 
 fn cse(
@@ -722,7 +753,17 @@ fn cse(
                         if (!setter || flags_dead(&function.blocks[*block].ops, index))
                             && (optsize
                                 || home.get(&earlier) == Some(block)
-                                || profitable(&readers, &definitions, &function.blocks, earlier, register, op)) =>
+                                || profitable(
+                                    &readers,
+                                    &definitions,
+                                    &function.blocks,
+                                    earlier,
+                                    register,
+                                    op,
+                                    home[&earlier],
+                                    *block,
+                                    &cfg.successors,
+                                )) =>
                     {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
@@ -804,7 +845,9 @@ fn invariants(
                         .1
                         .iter()
                         .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
-                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
+                    // The zero register is a constant, not a value the loop
+                    // could change.
+                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual() || *used == Reg::Gpr(Gpr::R31));
                 if invariant {
                     inside_defs.remove(&defined(&op).expect("a definition"));
                     hoisted.push(op);
@@ -1353,6 +1396,29 @@ mod tests {
         assert_eq!(movzs(2), 0, "{function:#?}");
     }
 
+    /// Heuristic 3: a value a phi reads is not reused in a block that does not
+    /// read it already (the pin: `isProfitableToCSE`, the PHI scan).
+    #[test]
+    fn a_value_a_phi_reads_is_not_reused_in_another_block() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, phi) = (64, 65, 66, 67, 70);
+        function.next_register = 80;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock {
+                label: "entry".into(),
+                ops: vec![movz(b, 1), movz(c, 2), add(a, b, c), copy(phi, a), branch_to("next")].into(),
+            },
+            MBlock {
+                label: "next".into(),
+                ops: vec![add(d, b, c), copy(phi, d), Op::Return { uses: vec![Reg::Gpr(Gpr(phi))], tail: None }].into(),
+            },
+        ];
+        run(&mut function, false);
+        let adds = function.blocks[1].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubShifted { .. }))).count();
+        assert_eq!(adds, 1, "{function:#?}");
+    }
+
     /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
     /// every trip, +2177 executed over the pin): the allocatable set lacked x15
     /// and x18, which the pin hands out on Linux, so hoisting had room for 13.
@@ -1453,10 +1519,11 @@ mod tests {
         assert_eq!((made(1), made(2)), (1, 0), "{function:#?}");
     }
 
-    /// A phi's constant reaches its edge through copies (`Imm`, `copy`, `copy`),
-    /// and the copies kept the sink from moving it: `movz w9, #1` ran in the
-    /// entry of the `power` of recpow at -O2, took `x9` and not `x0`, and cost
-    /// a `mov x0, x9` on every return (+4.2% net against the pin).
+    /// A phi's constant reaches its edge through copies (`Imm`, `copy`,
+    /// `copy`), and the copies kept the sink from moving it: `movz w9, #1`
+    /// ran in the entry of the `power` of recpow at -O2, took `x9` and not
+    /// `x0`, and cost a `mov x0, x9` on every return (+4.2% net against the
+    /// pin).
     #[test]
     fn a_constant_reaching_its_edge_through_copies_is_made_on_that_edge() {
         let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
@@ -1516,6 +1583,62 @@ mod tests {
         assert_eq!(reads, 2, "{function:#?}");
     }
 
+    /// A constant made two blocks away was shared: it lived in a callee-saved
+    /// register and cost a `mov` at every use (jpeg_single -Os: seven
+    /// `mov x0, x25` for fd 1, +42 reg-reg over the pin).
+    #[test]
+    fn a_cheap_constant_two_blocks_away_is_remade() {
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
+        let mut function = function();
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 1), keep(64), branch_to("mid")].into() },
+            MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
+            MBlock {
+                label: "far".into(),
+                ops: vec![movz(66, 1), keep(66), Op::Return { uses: vec![], tail: None }].into(),
+            },
+        ];
+        run(&mut function, false);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((movzs(0), movzs(2)), (1, 1), "{function:#?}");
+    }
+
+    /// A four-chunk 64-bit constant is not as cheap as a move: it was remade
+    /// in the far block (three extra `movk`) instead of shared.
+    #[test]
+    fn a_four_chunk_constant_two_blocks_away_is_shared() {
+        let wide = |rd: u32, value: u64| Op::Imm { dst: Gpr(rd), bits: 64, value };
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
+        let count = |value: u64| {
+            let mut function = function();
+            function.blocks = vec![
+                MBlock { label: "entry".into(), ops: vec![wide(64, value), keep(64), branch_to("mid")].into() },
+                MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
+                MBlock {
+                    label: "far".into(),
+                    ops: vec![wide(66, value), keep(66), Op::Return { uses: vec![], tail: None }].into(),
+                },
+            ];
+            run(&mut function, false);
+            function.blocks[2].ops.iter().filter(|op| matches!(op, Op::Imm { .. })).count()
+        };
+        assert_eq!((count(0x1234_5678_9abc_def0), count(0x1_0000_0000)), (0, 1));
+    }
+
     /// A constant only the loop makes goes to the preheader.
     #[test]
     fn a_constant_only_the_loop_makes_is_hoisted() {
@@ -1528,6 +1651,32 @@ mod tests {
                 .iter()
                 .filter(|op| matches!(op, Op::I(Inst::MoveWide { imm16: 5000, .. })))
                 .count()
+        };
+        assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
+    }
+
+    /// `0.0` is `fmov s, wzr`; the zero register is a constant, so a loop that
+    /// makes it each trip has it made once before the loop (nbody_single -O2:
+    /// 6,000 executed `fmov s28, wzr`, the pin's one hoisted zero).
+    #[test]
+    fn a_float_zero_the_loop_makes_is_hoisted() {
+        let mut function = function();
+        function.blocks[0].ops.remove(0);
+        let zero = Op::I(Inst::FpInt {
+            op: FpConvert::Bits { to_fp: true },
+            width: Width::W,
+            size: FpSize::S,
+            gpr: Gpr(31),
+            fpr: Vreg(80),
+        });
+        let sum =
+            Op::I(Inst::FpBinary { op: FpBinary::Add, size: FpSize::S, rd: Vreg(81), rn: Vreg(80), rm: Vreg(80) });
+        function.blocks[1].ops.insert(0, sum);
+        function.blocks[1].ops.insert(0, zero);
+        function.blocks[2].ops = vec![Op::Return { uses: vec![Reg::Fpr(Vreg(81))], tail: None }].into();
+        run(&mut function, false);
+        let count = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::FpInt { .. }))).count()
         };
         assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
     }

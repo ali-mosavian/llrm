@@ -230,7 +230,7 @@ def main() -> int:
             ir, opt, obj = work / f"{source.stem}.ll", work / f"{source.stem}.opt.ll", work / f"{source.stem}.o"
             run([f"{args.pin}/clang", "--target=aarch64-unknown-linux-gnu", "-fno-pic", "-O2", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
             run([f"{args.pin}/opt", "-O2", "-vectorize-loops=false", "-vectorize-slp=false", str(ir), "-S", "-o", str(opt)])
-            run([args.llc, "-O2", "--isel=dag", "-o", str(obj), str(opt)])
+            run([args.llc, "-O2", "-o", str(obj), str(opt)])
             code = code_of(run(["aarch64-linux-gnu-objdump", "-d", "--no-show-raw-insn", str(obj)]))
             tables = rows_of(str(obj))
         except (RuntimeError, KeyError) as why:
