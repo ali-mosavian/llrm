@@ -342,6 +342,24 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
+    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
+    /// speed caller that grows the code is refused when its bytes at the CPU's
+    /// `timings.times` rate cost more clocks than the call saves, the rate the
+    /// O2/O3 verdicts are judged at (0.5 B per clk on the 68000, 1.33 on the
+    /// 68020, 3.2 from the 68030). The pin inlines to its threshold alone (225,
+    /// where the flat 50 this replaces stopped `bench_sieve(1024)` and kept a
+    /// `__mulsi3` ahead of its guard).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        crate::timing::byte_milliclocks(self.cpu)
+    }
+
+    /// A callee loop the call's constants give a trip count unrolls and folds
+    /// in the copy, which the call's latency does not show (sieve, a summing
+    /// loop over constants): exempt from the rate.
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "M68k"
     }
