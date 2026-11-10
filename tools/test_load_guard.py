@@ -5,6 +5,7 @@ import re
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
@@ -141,8 +142,13 @@ class Stopping(Env, unittest.TestCase):
         self.assertTrue(until(lambda: state(pgid) == "T"))
         self.set_load(10.0, 10.0)
         self.assertTrue(until(lambda: state(pgid) != "T"))
+        seen = []  # the group is continued before the guard logs the resume: read stderr until both lines are in, then terminate
+        reader = threading.Thread(target=lambda: [seen.append(line) for line in self.guard.stderr])
+        reader.start()
+        self.assertTrue(until(lambda: "resume groups" in "".join(seen), 20), "".join(seen))
         self.guard.terminate()
-        err = self.guard.communicate(timeout=5)[1]
+        reader.join(timeout=5)
+        err = "".join(seen)
         for word in ("stop", "resume"):
             self.assertRegex(err, rf"load_guard: \d\d:\d\dZ {word} groups .*\b{pgid}\b")
 
@@ -571,7 +577,7 @@ class Drain(Env, unittest.TestCase):
         waiter = self.start("true", LG_POLL="", LG_SETTLE="0")
         time.sleep(1)
         self.set_load(1.0, 1.0)
-        self.assertEqual(waiter.wait(timeout=10), 0, "the waiter slept through the 15 s default poll")
+        self.assertEqual(waiter.wait(timeout=13), 0, "the waiter slept through the 15 s default poll")  # 13 s: under host load 40 the default 5 s poll plus start-up passed 10 s once in 8
 
     def test_an_aged_tier_3_waiter_outranks_a_fresh_tier_2(self):
         """Tier 2 arrivals at 3-4 per minute starved every tier-3 PR gate for over an hour."""
