@@ -80,6 +80,11 @@ class Env:
         time.sleep(0.1)
         self.dir.cleanup()
 
+    def decided(self, jobs, seconds=60):
+        """Wait until every starter has refused (exited) or been admitted (its job record exists): serialized admission under host load 60 left a fixed 1.5 s window counting starters still queued as admitted (11 of 12 'running' for a cap of 5)."""
+        records = os.path.join(self.slots, "jobs")
+        until(lambda: all(job.poll() is not None or os.path.exists(os.path.join(records, str(job.pid))) for job in jobs), seconds)
+
     def set_mem(self, gb):
         open(self.meminfo, "w").write(f"MemTotal: 200000000 kB\nMemAvailable: {gb * 1024 * 1024} kB\n")
 
@@ -256,7 +261,7 @@ class SlotCount(Env, unittest.TestCase):
         """How many of `wanted` long jobs the guard admits at 1m `load`."""
         self.set_load(load, load)
         jobs = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(wanted)]
-        time.sleep(1.5)
+        self.decided(jobs)
         return sum(1 for job in jobs if job.poll() is None)
 
     def test_five_slots_while_the_one_minute_load_is_under_20(self):
@@ -578,7 +583,7 @@ class Drain(Env, unittest.TestCase):
         self.set_load(load, load)
         self.set_mem(gb)
         jobs = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(wanted)]
-        time.sleep(2)
+        self.decided(jobs)
         return sum(1 for job in jobs if job.poll() is None)
 
     def test_seven_slots_at_one_minute_17_with_80_gb_available(self):
