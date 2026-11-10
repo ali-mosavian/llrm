@@ -98,3 +98,18 @@ def test_a_runtime_service_that_pulls_in_more_library_is_no_helper(monkeypatch, 
     monkeypatch.setattr(helpers, "omf_library_module", lambda library, module, out: (out.write_text(module), out)[1])
     monkeypatch.setattr(helpers.sizes, "code_bytes", lambda path: {"LDIV": 163, "FP87INIT": 526}[path.read_text()])
     assert helpers.linked_helpers(tmp_path / "p.obj", listing, set()) == [("LDIV", 163)]
+
+
+def test_a_basic_reference_is_not_refused_for_a_helper_its_map_cannot_place(monkeypatch, tmp_path):
+    """After #8750 every bc/pds71/vbdos cell read `helper $AC is called and not in the map`: BC's Microsoft map has no `Module: LIB(NAME)` lines, so the
+    owner table had no BASIC bar (252 NO_BAR rows)."""
+    listing = tmp_path / "a.map"
+    listing.write_text("Address         Publics by Name\n 09A5:17E9       $AC\n 09A5:17ED       B$AC\n")
+    (tmp_path / "a.bas").write_text("PRINT 1\n")
+    monkeypatch.setattr(bench.sizes, "code_size", lambda path: type("S", (), {"code": 703, "align": 0, "unread": 0, "library": 0})())
+    monkeypatch.setattr(bench.sizes, "externs", lambda path: ["B$CENP", "$AC"])
+    monkeypatch.setattr(bench.sizes, "is_elf", lambda path: False)
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda *path: (7, 12))
+    measured = bench.measure(bench.reference_job(("a", "bc", "O2"), "a", (tmp_path / "a.exe", listing), None, [], tmp_path / "a.obj", (), tmp_path / "a.bas"))
+    assert measured.get("code_bytes") == 703 and "error" not in measured
+    assert bench.reference_job(("a", "ow", "O2"), "a", (tmp_path / "a.exe", listing), None, [], tmp_path / "a.obj", (), tmp_path / "a.bas")[7]

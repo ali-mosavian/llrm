@@ -47,6 +47,7 @@ fn stepped(
             None,
             0,
             threshold,
+            &mut crate::ipacp::Cloning::default(),
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.owned().unwrap(), stage.to_owned()));
                 Ok(())

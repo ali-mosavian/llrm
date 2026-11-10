@@ -77,6 +77,10 @@ thread_local! {
     /// Every long multiply of an unsized function is the `__mulsi3` call, the near-power constants included
     /// (the form `DECOMPOSE_MULS` is the inline counterpart of, for a sized one).
     pub static CALL_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function with a constant-count `memset` is selected the second time, each such fill an
+    /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
+    /// prices the two with the routine linked once (`compile::decomposed_functions`).
+    pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -369,7 +373,21 @@ pub fn select_block(
         Cpu::Z80 => z80_z80::TABLE,
         Cpu::Z180 => z80_z180::TABLE,
     });
-    let mut hooks = Z80Hooks::new(cpu, false);
+    // the users of each constant before any is selected: a selected store no longer names it
+    let mut uses: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for (id, node) in dag.nodes().iter().enumerate() {
+        if dag.is_deleted(id as u32) {
+            continue;
+        }
+        let mut seen: Vec<u32> = Vec::new();
+        for op in &node.ops {
+            if !seen.contains(&op.node) && dag.nodes()[op.node as usize].opcode == ISD::Constant {
+                seen.push(op.node);
+                *uses.entry(op.node).or_default() += 1;
+            }
+        }
+    }
+    let mut hooks = Z80Hooks::new(cpu, false).with_uses(uses);
     do_instruction_selection_with(dag, &Z80Pins, |adapter, node| selector.select(adapter, &mut hooks, node))
         .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();

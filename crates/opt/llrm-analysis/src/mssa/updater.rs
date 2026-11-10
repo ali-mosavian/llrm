@@ -895,13 +895,14 @@ impl MemorySsaUpdater {
     pub fn create_memory_access_in_bb(
         &self,
         mssa: &mut Mssa,
+        function: &Function,
         inst: InstId,
         definition: Option<AccessId>,
         block: BlockId,
         point: Place,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Option<AccessId> {
-        let access = mssa.create_defined_access(block, inst, definition, modref)?;
+        let access = mssa.create_defined_access(function, block, inst, definition, modref)?;
         mssa.insert_into_lists_for_block(access, block, point);
         Some(access)
     }
@@ -910,13 +911,14 @@ impl MemorySsaUpdater {
     pub fn create_memory_access_before(
         &self,
         mssa: &mut Mssa,
+        function: &Function,
         inst: InstId,
         definition: Option<AccessId>,
         insert_point: AccessId,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Option<AccessId> {
         let block = mssa.access(insert_point).block;
-        let access = mssa.create_defined_access(block, inst, definition, modref)?;
+        let access = mssa.create_defined_access(function, block, inst, definition, modref)?;
         mssa.insert_into_lists_before(access, block, Where::Before(insert_point));
         Some(access)
     }
@@ -925,13 +927,14 @@ impl MemorySsaUpdater {
     pub fn create_memory_access_after(
         &self,
         mssa: &mut Mssa,
+        function: &Function,
         inst: InstId,
         definition: Option<AccessId>,
         insert_point: AccessId,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Option<AccessId> {
         let block = mssa.access(insert_point).block;
-        let access = mssa.create_defined_access(block, inst, definition, modref)?;
+        let access = mssa.create_defined_access(function, block, inst, definition, modref)?;
         let list = mssa.get_block_accesses(block).expect("a placed access").to_vec();
         let at = list.iter().position(|&one| one == insert_point).expect("a placed access");
         let place = list.get(at + 1).map_or(Where::End, |&next| Where::Before(next));
@@ -1413,7 +1416,7 @@ impl MemorySsaUpdater {
                 &phi_map,
                 &|block| block == bb,
             );
-            if let Some(new) = mssa.create_defined_access(p1, new_inst, Some(definition), modref) {
+            if let Some(new) = mssa.create_defined_access(function, p1, new_inst, Some(definition), modref) {
                 mssa.insert_into_lists_for_block(new, p1, Place::End);
             }
         }

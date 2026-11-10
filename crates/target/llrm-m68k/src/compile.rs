@@ -113,6 +113,9 @@ pub struct Options {
     /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
     /// ([`crate::cmpshift`]).
     pub reuse_shift_flags: bool,
+    /// A `tst` of the register an `add` of it to itself just doubled reads the
+    /// carry the `add` left instead ([`crate::cmpcarry`]).
+    pub reuse_shift_out_flags: bool,
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
@@ -187,6 +190,7 @@ impl Options {
         short: false,
         hoist_flag_setters: false,
         reuse_shift_flags: false,
+        reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
@@ -221,6 +225,7 @@ impl Default for Options {
             short: true,
             hoist_flag_setters: true,
             reuse_shift_flags: true,
+            reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
             tail_duplicate: true,
             rematerialize_arguments: true,
@@ -497,6 +502,9 @@ fn items_once(
     function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
+    if options.short && options.reuse_shift_out_flags {
+        crate::cmpcarry::reuse_shift_out_flags(&mut function);
+    }
     crate::regalloc::split_flag_edges(&mut function);
     eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
