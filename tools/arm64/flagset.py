@@ -12,6 +12,8 @@ import sys
 DROPPED_PREFIXES = ("-O", "-I", "-D", "-U", "-W", "-g", "-target", "--target", "-include", "-c", "-o", "-l", "-L", "-std")
 COLUMN_KIND = ("-fno-vectorize", "-fno-slp-vectorize", "-fno-tree-vectorize")
 GCC_ONLY = ("-fzero-init-padding-bits=",)
+# What our compiler emits for arm64 without a flag: -fPIE (explicit -fPIE, -fpie and -fPIC give the same bytes; -fno-pic grew textfill O2 84 -> 88 B).
+RELOC = ["-fPIE"]
 
 
 def canonical(tokens):
@@ -30,12 +32,17 @@ def check_gcc(tokens):
     sys.path.insert(0, __file__.rsplit("/", 2)[0])
     import external_flags
 
-    neutral = external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15)
+    neutral = external_flags.flags("arm64", RELOC, 15)
     external_flags.check_gcc_flags([], tokens, allowed_extra=(*neutral, *(t for t in tokens if t in COLUMN_KIND)))
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "--check-gcc":
+    if sys.argv[1] == "--neutral":
+        sys.path.insert(0, __file__.rsplit("/", 2)[0])
+        import external_flags
+
+        print(" ".join(external_flags.flags("arm64", RELOC, 15)))
+    elif sys.argv[1] == "--check-gcc":
         try:
             check_gcc(open(sys.argv[2]).read().split())
         except ValueError as why:

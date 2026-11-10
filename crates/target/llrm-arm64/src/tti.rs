@@ -492,6 +492,13 @@ impl Tti for AArch64 {
         Some((3, 5))
     }
 
+    /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear recursion called from another function is peeled into
+    /// the caller to gcc's caps. recpow -O2: 67,475 instructions / 260 B to 42,666 / 920 B (gcc 44,084 / 1,244); the other 71 cells of the
+    /// corpus are identical. Pin: none.
+    fn peels_linear_recursion(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save
     /// [`UNROLL_MILLICLOCKS_PER_BYTE`] for each byte it adds. Exit: the
     /// per-target clock model (2026-11-20).

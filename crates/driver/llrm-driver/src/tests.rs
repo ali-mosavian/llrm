@@ -2583,14 +2583,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// Real mode cannot realign the stack: an over-aligned local is clamped to the
-/// stack alignment (#7706), not refused, and no `and sp` is emitted.
+/// Real mode cannot realign the stack: a local aligned past 32 is refused by name
+/// (#8570), not clamped (#7706); the refusal is the only guard against a wrong
+/// promised alignment, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_clamped_not_refused() {
+fn m16_over_aligned_local_is_refused_by_name() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("and sp,"), "{listing}");
+    let why = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().expect("refused");
+    assert!(why.to_string().contains("an object aligned to 64 needs stack realignment"), "{why}");
 }
 
 /// jwlink turns a far call to the same segment into `push cs; call near` plus
@@ -2697,8 +2697,10 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
-/// it): `lea rdi, [rsp]` is a byte shorter than `[rsp+8]`, so 33 bytes.
+/// add rsp, 32; pop rbx; ret`, but for the local's address: the pin's llc puts
+/// the local at `[rsp+8]` (`lea rdi, [rsp+8]`, 5 bytes, FDE 34 long); ours at
+/// `[rsp]` (FR1, the call pad above it), and the pin's `tryOptimizeLEAtoMOV`
+/// makes that `mov rdi, rsp` (3 bytes, #8601), so 32.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
@@ -2709,7 +2711,7 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     assert_eq!(
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c07089001000\
-             01c0000001c000000000000002100000000410e10440e3083025a0e10410e0800")
+             01c0000001c000000000000002000000000410e10440e308302590e10410e0800")
     );
 }
 
@@ -3369,7 +3371,7 @@ fn omf_record_types(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn omf_of(arguments: &[&str]) -> Vec<u8> {
-    let directory = std::env::temp_dir().join(format!("fsec-{}-{}", std::process::id(), arguments.join("")));
+    let directory = unique_directory("fsec");
     std::fs::create_dir_all(&directory).unwrap();
     let source = directory.join("two.ll");
     std::fs::write(
@@ -3384,7 +3386,30 @@ fn omf_of(arguments: &[&str]) -> Vec<u8> {
     let mut all = vec!["-m16", "-fobject-format=omf", "-o", output.to_str().unwrap()];
     all.extend_from_slice(arguments);
     crate::llc::compile(&flags(&all), &source, None).unwrap();
-    std::fs::read(output).unwrap()
+    let bytes = std::fs::read(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    bytes
+}
+
+/// A directory name no other call in this process shares. `omf_of` named its
+/// directory after its arguments, so the three tests calling it with `&[]`
+/// rewrote one `two.ll`/`two.obj` under each other: 4 to 12 of 40 whole-lib
+/// runs failed, always a function_sections test, each passing alone.
+fn unique_directory(tag: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
+}
+
+#[test]
+fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
+    assert_ne!(unique_directory("t"), unique_directory("t"));
+    let expected = omf_of(&[]);
+    let handles: Vec<_> =
+        (0..8).map(|_| std::thread::spawn(|| (0..4).map(|_| omf_of(&[])).collect::<Vec<_>>())).collect();
+    for handle in handles {
+        assert!(handle.join().unwrap().iter().all(|bytes| *bytes == expected));
+    }
 }
 
 /// The C path wrote one segment for the module's code whatever the program,
