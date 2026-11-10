@@ -214,12 +214,65 @@ impl Tti for Mos6502 {
     ///
     /// 16 since 2026-11-10: `n8` made LSR leave every `p16` pointer and index,
     /// so `g[i]` over 54-byte rows called `__mulhi3` each trip (rep_count at
-    /// -O1: 148,120 clocks, 133,418 now). A pointer alone is not enough: the
-    /// walk starts at the 16-bit index phi. Open: the switch_* , function_table
-    /// and byval_inline cells that grew (see the PR); owner 6502-d, exit
-    /// 2026-11-24.
+    /// -O1: 147,011 clocks, 133,095 now). The wider LSR needs the cost model
+    /// below (`is_lsr_cost_less`, the immediates, the drop hooks); without it
+    /// switch_*, function_table and byval_inline grew. Cells still above the
+    /// tip: row 6502-LSR-WORSE (owner 6502-d, exit 2026-11-24).
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
         &[16, 32]
+    }
+
+    /// `isLSRCostLess` with the target's own instruction counts, the shape of
+    /// the pin's x86 override ("instruction number 1st priority",
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)
+    /// but with the terms weighed. LSR counts a 16-bit counter step and a
+    /// 16-bit base add as one instruction each; here a step is `inc; bne;
+    /// inc` (3), an add of two cells seven, a multiply a call (40), an
+    /// immediate added four. Zero-page cells are cheap: registers come after.
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            let work = 3 * c.add_rec_cost + 7 * c.num_base_adds + 40 * c.num_iv_muls + 4 * c.imm_cost;
+            (work, c.num_regs, c.scale_cost, c.setup_cost)
+        };
+        key(a) < key(b)
+    }
+
+    /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
+    /// LSR's own model rates the rewrite worse, as on the z80 (DEVIATE LU15):
+    /// with 16-bit widths on, switch_empty_cases, switch_jump_table and
+    /// function_table grew by an extra counter (owner 6502-d, exit 2026-11-24).
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        true
+    }
+
+    /// A loop with an address use keeps LSR's solution (DEVIATE LU15): the
+    /// baseline prices every address as one register, so the pointer that
+    /// replaces `base + i * size` always looks worse than the multiply it
+    /// removes.
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        true
+    }
+
+    /// `adc #k` and `cmp #k` take any constant a byte at a time. The pin's
+    /// base answer is "none", which made LSR bake every offset into a counter
+    /// of its own (switch_jump_table: a second counter for the exit test).
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// See [`Self::is_legal_add_immediate`]: `cmp #k` per byte.
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
     }
 
     /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).

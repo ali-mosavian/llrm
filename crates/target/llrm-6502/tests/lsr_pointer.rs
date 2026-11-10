@@ -24,3 +24,47 @@ fn a_row_address_steps_by_the_row_size_and_calls_no_multiply() {
         assert!(!body.contains("mulhi"), "{level:?}: {body}");
     }
 }
+
+fn cost(
+    insns: u32,
+    num_regs: u32,
+    add_rec_cost: u32,
+    num_base_adds: u32,
+    setup_cost: u32,
+) -> llrm_mir::tti::LsrCost {
+    llrm_mir::tti::LsrCost {
+        insns,
+        num_regs,
+        add_rec_cost,
+        num_iv_muls: 0,
+        num_base_adds,
+        imm_cost: 0,
+        setup_cost,
+        scale_cost: 0,
+        spills: 0,
+    }
+}
+
+/// switch_empty_cases at -O1 grew 106 B to 153 B and 883 to 990 clocks: LSR
+/// took the solution with fewer registers (2 against 3) that added four 16-bit
+/// base adds, because the pin's order ranks registers first. Zero-page cells
+/// are cheap; a 16-bit add is seven instructions.
+#[test]
+fn a_solution_with_more_work_loses_to_one_with_more_cells() {
+    let tti = llrm_6502::driver::machine().tti().expect("a cost model");
+    let baseline = cost(3, 3, 2, 1, 4);
+    let reduced = cost(5, 2, 1, 4, 3);
+    assert!(tti.is_lsr_cost_less(&baseline, &reduced), "baseline {baseline:?} is cheaper than {reduced:?}");
+    assert!(!tti.is_lsr_cost_less(&reduced, &baseline));
+}
+
+/// Without a legal add or compare immediate LSR bakes each offset into a
+/// counter of its own (switch_jump_table +177 B, +24% clocks); `adc #k` and
+/// `cmp #k` take any constant, a byte at a time.
+#[test]
+fn an_immediate_add_or_compare_is_legal() {
+    let tti = llrm_6502::driver::machine().tti().expect("a cost model");
+    for imm in [1, -1, 255, 256, -300, 70000] {
+        assert!(tti.is_legal_add_immediate(imm) && tti.is_legal_icmp_immediate(imm), "{imm}");
+    }
+}
