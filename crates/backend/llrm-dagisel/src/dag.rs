@@ -444,6 +444,15 @@ pub trait Hooks<D: Dag> {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool;
+    /// How many nodes used `node` when selection began, if the target keeps
+    /// that (a user selected since no longer names it, so the live count
+    /// depends on the order selection visits them).
+    fn uses_at_selection_start(
+        &self,
+        _node: u32,
+    ) -> Option<usize> {
+        None
+    }
     /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the
     /// 8-bit code of an `fmov` immediate, `None` if there is none. A target
     /// without the form never has one.
