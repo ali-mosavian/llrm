@@ -247,12 +247,13 @@ pub fn cloned(
             continue;
         }
         let origin = state.origin.get(&name).copied().unwrap_or(name);
-        // A clone the walk inlined away has no body left: its calls are not sent there.
+        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a call sent
+        // there never returns, and the context gets a new clone.
         let existing = state
             .contexts
             .get(&(origin, known.clone()))
             .copied()
-            .filter(|&clone| module.global(clone).function().is_some_and(|body| !body.is_declaration()));
+            .filter(|&clone| module.global(clone).function().is_some_and(|body| !body.is_deleted()));
         if let Some(existing) = existing {
             if existing == name {
                 // A call of the clone, which still passes the constants it was
