@@ -86,3 +86,54 @@ def test_a_table_without_the_padding_free_mark_is_refused(tmp_path):
     table.write_text("# x86-m64 matrix; data=object_bytes; code_bytes .text incl. padding\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
     done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
     assert done.returncode != 0 and "padding-free" in done.stderr
+
+
+def _git(repo, *args):
+    import subprocess
+
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _bench_repo(tmp_path):
+    (tmp_path / "bench" / "p").mkdir(parents=True)
+    (tmp_path / "bench" / "p" / "p.c").write_text("int a;\n")
+    (tmp_path / "bench" / "q").mkdir()
+    (tmp_path / "bench" / "q" / "q.c").write_text("int b;\n")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "one")
+    return _git(tmp_path, "rev-parse", "HEAD")
+
+
+def test_a_program_changed_after_the_matrix_commit_is_stale(tmp_path):
+    """The 11-09 sfm16 rows were built before #8706 made `unsigned long` 32-bit: ours 2123 B / gcc 1797 B against 1880 / 1697 on the tip source,
+    and a +35 reg-reg mov gap chased on the old program. A table that does not name the bench commit it was built from cannot be told stale."""
+    built = _bench_repo(tmp_path)
+    (tmp_path / "bench" / "p" / "p.c").write_text("int a; int c;\n")
+    _git(tmp_path, "commit", "-qam", "two")
+    assert worse_cells.stale_programs(["p", "q"], built, tmp_path) == ["p"]
+
+
+def test_a_change_to_a_program_expected_file_is_not_a_change_of_its_source(tmp_path):
+    built = _bench_repo(tmp_path)
+    (tmp_path / "bench" / "p" / "expected.toml").write_text("x = 1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "two")
+    assert worse_cells.stale_programs(["p", "q"], built, tmp_path) == []
+
+
+def test_a_table_built_from_the_current_source_is_not_stale(tmp_path):
+    _bench_repo(tmp_path)
+    (tmp_path / "bench" / "p" / "p.c").write_text("int a; int c;\n")
+    _git(tmp_path, "commit", "-qam", "two")
+    assert worse_cells.stale_programs(["p", "q"], _git(tmp_path, "rev-parse", "HEAD"), tmp_path) == []
+
+
+def test_a_table_without_the_bench_commit_or_the_pie_mark_is_refused(tmp_path):
+    import subprocess
+
+    for header, word in (("# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE\n", "bench="), ("# m; data=object_bytes; code_bytes padding-free; bench=abc\n", "reloc=-fPIE")):
+        table = tmp_path / "t.tsv"
+        table.write_text(header + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+        done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+        assert done.returncode != 0 and word in done.stderr
