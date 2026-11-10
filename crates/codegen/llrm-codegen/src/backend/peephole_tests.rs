@@ -6639,7 +6639,16 @@ fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
 
 /// `mov cx,ax; mov ax,bx; mov bx,cx`, with `after` the instructions that follow it.
 fn swap_through_a_temporary(after: Vec<Arc<Insn>>) -> LirBody {
-    let (ax, bx, cx) = (rl(RegId::AX, 2), rl(RegId::BX, 2), rl(RegId::CX, 2));
+    swap_through_a_temporary_of([RegId::AX, RegId::BX, RegId::CX], 2, after)
+}
+
+/// The same swap through `[a, b, temporary]`, `width` bytes wide.
+fn swap_through_a_temporary_of(
+    [a, b, t]: [RegId; 3],
+    width: u32,
+    after: Vec<Arc<Insn>>,
+) -> LirBody {
+    let (ax, bx, cx) = (rl(a, width), rl(b, width), rl(t, width));
     let mut insns = vec![
         point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![ax.clone()]), vec![2], vec![1]),
         point(2, sem(Operation::Move, "mov", vec![ax], vec![bx.clone()]), vec![3], vec![2]),
@@ -6688,6 +6697,35 @@ fn a_swap_whose_temporary_is_read_later_is_not_an_xchg() {
     cpu.size = true;
     let (cx, dx) = (rl(RegId::CX, 2), rl(RegId::DX, 2));
     let input = swap_through_a_temporary(vec![point(4, sem(Operation::Move, "mov", vec![dx], vec![cx]), vec![5], vec![4])]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
+
+/// 16-, 32- and 64-bit swaps become an `xchg`: it moves exactly the bits the
+/// moves did (a 16-bit `mov` keeps the upper bits, as `xchg r16` does; a 32-bit one
+/// clears them in both registers, as `xchg r32` does) and sets no flags.
+#[test]
+fn a_swap_of_16_32_and_64_bit_registers_is_one_xchg_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    for (regs, width) in [([RegId::AX, RegId::BX, RegId::CX], 2), ([RegId::EAX, RegId::EBX, RegId::ECX], 4), ([RegId::RAX, RegId::RBX, RegId::RCX], 8)] {
+        let mut input = swap_through_a_temporary_of(regs, width, vec![]);
+        if width == 8 {
+            input.bits = 64;
+        }
+        let made = swapped_registers(rules(), &input, &cpu);
+
+        assert_eq!(names_of(&made), ["xchg", "ret"], "{width} bytes");
+    }
+}
+
+/// The rule covers 16-, 32- and 64-bit registers only (`width_in`): a byte swap
+/// stays three moves.
+#[test]
+fn a_swap_of_byte_registers_stays_three_moves_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    let input = swap_through_a_temporary_of([RegId::AL, RegId::BL, RegId::CL], 1, vec![]);
 
     assert_eq!(swapped_registers(rules(), &input, &cpu), input);
 }
