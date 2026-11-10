@@ -420,6 +420,16 @@ fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
     assert!(!out.contains("(ix)"), "{out}");
 }
 
+/// The same function once the inner loop is unrolled (-O2): LSR sees the outer loop as innermost, reduces `data[i]`
+/// to a pointer and the code has no frame access. At -Os/-Oz the pin's LSR skips the nested outer loop (row
+/// Z80-SLOT-READ-PEEK).
+#[test]
+fn crc16_with_its_inner_loop_unrolled_makes_no_frame_access() {
+    let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+}
+
 /// bsearch8: the base pointer and a bound spill (`ld l, -2(ix)`, `ld -3(ix),
 /// d`) in a loop with registers to spare: 68 B / 790 T against SDCC's 56 / 702.
 #[test]
