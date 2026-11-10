@@ -12,6 +12,18 @@
 //! the end of its block; the implied-condition constant of an `icmp` on a
 //! branch's edge.
 //!
+//! DEVIATE PHICONST (owner x87, exit 2026-11-14): a phi of constants that
+//! has several different users is folded into all of them at once when every
+//! user is a binary operator or cast that simplifies to a constant on every
+//! incoming. The pin refuses (the one-user rule above), so each user
+//! reads the phi and runs at run time; gcc folds them (x_cordic -O3 at m32:
+//! `ashr (phi [-39797, 39797]), 1` and `add (phi ..), 19898` ran 1746
+//! instructions more than gcc's per-arm constants). N users become N phis of
+//! constants and no instruction is copied; the old phi has no user left. Work
+//! is O(users x incoming). Only where bytes are priced (-O2, -O3): a phi of
+//! constants is a move per edge, and at -O1/-Os the corpus grew by 2 to 12 B
+//! (m16 float_in_place_update -O1 +12, m32 -Os +2) with no cell smaller.
+//!
 //! DEVIATE 1: the `icmp` of a `ucmp`/`scmp` intrinsic with a constant (the
 //! first `WillFold` case) is not made: MIR has no `ucmp`/`scmp`.
 //!
@@ -178,6 +190,7 @@ impl Combiner<'_> {
         // Only a phi with one user, or whose users are all the same operation.
         let one_use = self.function.users(phi_value).has_one_use();
         let mut identical_users = false;
+        let mut constant_users: Vec<(InstId, Vec<Operand>)> = Vec::new();
         if !allow_multiple_uses && !one_use {
             if self
                 .function
@@ -185,26 +198,23 @@ impl Combiner<'_> {
                 .iter()
                 .any(|one| one.user != inst && !self.is_identical_to(inst, one.user))
             {
-                return Visit::None;
+                // DEVIATE PHICONST: every user folds to a constant on every incoming.
+                let users = if self.env.hooks.phi_constant_users {
+                    self.users_folding_to_constants(inst, phi, &incoming)
+                } else {
+                    None
+                };
+                let Some(users) = users else {
+                    return Visit::None;
+                };
+                constant_users = users;
+            } else {
+                identical_users = true;
             }
-            identical_users = true;
         }
 
         // Every operand is phi-translatable.
-        let tree = self.env.analyses.dominator_tree();
-        for &op in self.function.instruction(inst).operands.iter() {
-            if op == Operand::Value(phi_value) {
-                continue;
-            }
-            let Operand::Value(value) = op else { continue };
-            let ValueDef::Instruction(def) = self.function.value(value).def else { continue };
-            let Some(def_block) = self.function.parent(def) else { continue };
-            if self.function.instruction(def).opcode == Opcode::Phi && def_block == phi_block {
-                continue;
-            }
-            if def_block != phi_block && tree.dominates(def_block, phi_block) {
-                continue;
-            }
+        if !self.operands_phi_translatable(inst, phi_value, phi_block) {
             return Visit::None;
         }
 
@@ -299,7 +309,97 @@ impl Combiner<'_> {
                 self.erase(user);
             }
         }
+        for (user, values) in constant_users {
+            let ty = self.function.instruction(user).ty;
+            let mut operands = Vec::with_capacity(incoming.len() * 2);
+            for (&(_, from), &value) in incoming.iter().zip(&values) {
+                operands.push(value);
+                operands.push(Operand::Block(from));
+            }
+            let user_phi = self.insert_before(phi, Opcode::Phi, ty, operands, Default::default());
+            let user_value = Operand::Value(self.function.instruction(user_phi).result.expect("a phi's value"));
+            self.replace_inst_with(user, user_value);
+            self.erase(user);
+        }
         Visit::Replace(new_value)
+    }
+
+    /// DEVIATE PHICONST: the users of `phi` other than `inst`, each with its
+    /// constant on every incoming, when `phi`'s incoming values are all
+    /// constants and every user (`inst` included) is a binary operator or cast
+    /// whose other operands are phi-translatable and which simplifies
+    /// to a constant on every incoming. `None` if any user does not.
+    fn users_folding_to_constants(
+        &mut self,
+        inst: InstId,
+        phi: InstId,
+        incoming: &[(Operand, BlockId)],
+    ) -> Option<Vec<(InstId, Vec<Operand>)>> {
+        let is_constant = |c: &Self, op: Operand| {
+            matches!(op, Operand::Constant(id) if !matches!(c.context.get(id).kind, ConstantKind::Expr(_)))
+        };
+        if !incoming.iter().all(|&(value, _)| is_constant(self, value)) {
+            return None;
+        }
+        let phi_value = self.function.instruction(phi).result.expect("a phi's value");
+        let phi_block = self.function.parent(phi).expect("a placed phi");
+        let mut users: Vec<InstId> = Vec::new();
+        for one in self.function.users(phi_value).iter() {
+            if !users.contains(&one.user) {
+                users.push(one.user);
+            }
+        }
+        let mut others = Vec::new();
+        for user in users {
+            // Compares are left out: two compares of one phi become two phis of
+            // booleans, one the complement of the other (m16 float_in_place_update
+            // -O2 +12 B, +7 clocks), and a compare that feeds a branch is
+            // JumpThreading's.
+            if !matches!(self.function.instruction(user).opcode, Opcode::Binary(_) | Opcode::Cast(_))
+                || !self.operands_phi_translatable(user, phi_value, phi_block)
+            {
+                return None;
+            }
+            let mut values = Vec::with_capacity(incoming.len());
+            for &(value, from) in incoming {
+                let found = self.simplify_instruction_with_phi(user, phi, value, from)?;
+                if !is_constant(self, found) {
+                    return None;
+                }
+                values.push(found);
+            }
+            if user != inst {
+                others.push((user, values));
+            }
+        }
+        Some(others)
+    }
+
+    /// Every operand of `inst` is `phi_value`, a phi of `phi_block`, or defined
+    /// in a block that dominates it.
+    fn operands_phi_translatable(
+        &self,
+        inst: InstId,
+        phi_value: llrm_mir::module::ValueId,
+        phi_block: BlockId,
+    ) -> bool {
+        let tree = self.env.analyses.dominator_tree();
+        for &op in self.function.instruction(inst).operands.iter() {
+            if op == Operand::Value(phi_value) {
+                continue;
+            }
+            let Operand::Value(value) = op else { continue };
+            let ValueDef::Instruction(def) = self.function.value(value).def else { continue };
+            let Some(def_block) = self.function.parent(def) else { continue };
+            if self.function.instruction(def).opcode == Opcode::Phi && def_block == phi_block {
+                continue;
+            }
+            if def_block != phi_block && tree.dominates(def_block, phi_block) {
+                continue;
+            }
+            return false;
+        }
+        true
     }
 
     /// The `WillFold` lambda: a case that does not simplify yet, but where the

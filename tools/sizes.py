@@ -12,6 +12,7 @@ With --frames, also the bytes each program reserves below BP
 """
 
 import re
+import struct
 import sys
 import glob
 import tempfile
@@ -259,13 +260,51 @@ def lib_bytes(obj: Path) -> int | None:
     return None if is_elf(obj) else code_size(obj).library
 
 
-def data_bytes(obj: Path) -> tuple[int, int]:
-    """(initialised, uninitialised) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
-    BC_SEGS): the bytes its LEDATA and LIDATA records carry, and the rest of each SEGDEF. Not the stack, nor debug records."""
+MS_SEGMENT = re.compile(r"^ ([0-9A-F]{5})H ([0-9A-F]{5})H ([0-9A-F]{5})H (\S+)\s+(\S+)\s*$")  # the map of Microsoft's LINK: start, stop, length, name, class
+JW_SEGMENT = re.compile(r"^(\S+)\s+(\S+)\s+\S+\s+([0-9a-f]{4}):([0-9a-f]{4})\s+([0-9a-f]{8})\s*$")  # jwlink's: name, class, group, seg:off, size
+
+
+def map_segments(listing: Path) -> list[tuple[str, str, int, int]]:
+    """(name, class, start, length) of each segment in a linker map, `start` linear from the image's first byte. Either linker's table."""
+    out = []
+    for line in Path(listing).read_text(errors="replace").splitlines():
+        if one := MS_SEGMENT.match(line):
+            out.append((one[4], one[5], int(one[1], 16), int(one[3], 16)))
+        elif one := JW_SEGMENT.match(line):
+            out.append((one[1], one[2], int(one[3], 16) * 16 + int(one[4], 16), int(one[5], 16)))
+    return out
+
+
+def image_size(exe: Path) -> int:
+    """The bytes of a DOS executable's image: its file less the MZ header."""
+    head = Path(exe).read_bytes()[:10]
+    last, pages, _, header = struct.unpack("<HHHH", head[2:10])
+    return (pages - 1) * 512 + (last or 512) - header * 16
+
+
+def data_bytes(obj: Path, exe: Path | None = None, listing: Path | None = None) -> tuple[int, int]:
+    """(stored, not stored) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS, BC_SEGS), not the stack nor
+    debug records. With the linked `exe` and its map `listing` it is the image's: a segment is stored where it ends at or below the image's end
+    (the linker's own choice: jwlink stores a BSS segment placed before the stack, the loader zero-fills the rest), a segment the map does not
+    name by name and class counts as stored (zeros) unless its class is BSS. Without them it is the class: every segment but a BSS-class one.
+    How the object holds the bytes (zeros as LEDATA or a hole) never decides."""
     if is_elf(obj):
         return elfsize.data_bytes(obj)
     kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
-    return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
+    if exe is None or listing is None:
+        unstored = sum(one.size for one in kept if "BSS" in one.klass.upper())
+        return sum(one.size for one in kept) - unstored, unstored
+    end, placed = image_size(exe), {}
+    for name, klass, start, length in map_segments(listing):
+        placed.setdefault((name.upper(), klass.upper()), (start, length))
+    stored = 0
+    for one in kept:
+        start, length = placed.get((one.name.upper(), one.klass.upper()), (None, 0))
+        if start is None:
+            stored += 0 if "BSS" in one.klass.upper() else one.size
+        elif start + length <= end:
+            stored += one.size
+    return stored, sum(one.size for one in kept) - stored
 
 
 def selected(command: list[str]) -> list[str]:
