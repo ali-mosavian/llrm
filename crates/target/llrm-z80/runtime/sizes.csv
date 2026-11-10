@@ -45,7 +45,7 @@ __s_umodsi3,9,__s_dvcore
 __strlen,12,
 __udivdi3,3,__moddi3
 __udivhi3,47,
-__udivmodsi4,388,
+__udivmodsi4,228,__dvr_core
 __udivqi3,5,__umodqi3
 __udivremsi4,21,__dvr_core;__dvr_ep
 __udivsi3,3,__udivmodsi4

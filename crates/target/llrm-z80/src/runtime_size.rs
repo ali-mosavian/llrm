@@ -66,10 +66,10 @@ const ASHRSI3_PER: u32 = 45;
 /// does 32 steps whatever the operands, one constant. The step cost depends on the quotient bits, so the model is
 /// within 13% (speed) and 8% (size) of the measured clocks, not exact.
 const DIVIDES: [(&str, u32, u32); 12] = [
-    ("__udivsi3", 1091, 322),
-    ("__umodsi3", 1087, 322),
-    ("__divsi3", 1153, 329),
-    ("__modsi3", 1134, 329),
+    ("__udivsi3", 1118, 322),
+    ("__umodsi3", 1114, 322),
+    ("__divsi3", 1180, 329),
+    ("__modsi3", 1161, 329),
     ("__udivremsi4", 1159, 322),
     ("__divremsi4", 1289, 334),
     ("__s_udivsi3", 6126, 0),
@@ -375,5 +375,16 @@ mod tests {
                 assert!(done.status.success(), "{stderr}");
             }
         }
+    }
+
+    /// The plain long divides had their own copy of the steps beside `__udivremsi4`'s: a program that divides alone
+    /// and in pairs (div_constants_ulong at -Os) linked 618 B of divide, 160 B more than with the one core of compiler-rt's
+    /// `__udivmodsi4`.
+    #[test]
+    fn a_program_dividing_alone_and_in_pairs_links_one_core() {
+        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect::<HashSet<_>>();
+        let paired = reached(&names(&["__udivremsi4"]));
+        let both = reached(&names(&["__udivremsi4", "__udivsi3", "__umodsi3"]));
+        assert!(both <= paired + 240, "{both} B linked, the paired divide alone {paired} B");
     }
 }
