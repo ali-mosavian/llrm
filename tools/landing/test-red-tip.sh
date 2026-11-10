@@ -39,6 +39,14 @@ bins_verdict $w $d/target "-p fixbin" >$d/o 2>&1 && { echo "FAIL: a bin missing 
 grep -q 'a binary does not build' $d/o || { echo "FAIL: bins stop line: $(cat $d/o)"; exit 1; }
 printf 'fn main() { let _ = fixlib::Opts { a: 1, b: 2 }; }\n' > $w/bin/src/main.rs
 bins_verdict $w $d/target "-p fixbin" >$d/o 2>&1 || { echo "FAIL: a building bin was refused: $(cat $d/o)"; exit 1; }
+# the same in a ROOT package binary (src/bin of the workspace's own package, where llrm-mir.rs lives)
+r=$(mktemp -d); mkdir -p $r/lib/src $r/src/bin
+printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nfixlib = { path = "lib" }\n[workspace]\nmembers = ["lib"]\n' > $r/Cargo.toml
+printf '[package]\nname = "fixlib"\nversion = "0.1.0"\nedition = "2021"\n' > $r/lib/Cargo.toml
+printf 'pub struct Opts { pub a: u32, pub b: u32 }\n' > $r/lib/src/lib.rs
+printf 'fn main() { let _ = fixlib::Opts { a: 1 }; }\n' > $r/src/bin/tool.rs
+bins_verdict $r $d/target2 "-p rootpkg" >$d/o 2>&1 && { echo "FAIL: a root-package bin missing a struct field passed the bins check"; exit 1; }
+grep -q 'a binary does not build' $d/o || { echo "FAIL: root bin stop line: $(cat $d/o)"; exit 1; }
 # wired: tip_verdict runs it before the lib tests
 awk '/^tip_verdict\(\)/,/^}/' tools/landing/red-tip.sh | grep -q 'bins_verdict "\$w"' || { echo "FAIL: tip_verdict does not run the bins check"; exit 1; }
 echo PASS
