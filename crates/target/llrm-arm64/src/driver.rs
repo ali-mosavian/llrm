@@ -15,6 +15,15 @@ use crate::machine::{Arm64Machine, Platform};
 pub fn without_triple(text: &str) -> (Option<String>, String) {
     let mut triple = None;
     let mut kept = String::with_capacity(text.len());
+    // The words are one line's, so the text is rewritten once, and only if one
+    // is there.
+    let rewritten;
+    let text = if text.contains(" dso_local") || text.contains(" = ptrtoaddr ") {
+        rewritten = text.replace(" dso_local", "").replace(" = ptrtoaddr ", " = ptrtoint ");
+        rewritten.as_str()
+    } else {
+        text
+    };
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("target triple") {
             triple = rest.split('"').nth(1).map(str::to_owned);
@@ -26,7 +35,7 @@ pub fn without_triple(text: &str) -> (Option<String>, String) {
         // DEVIATE 4: newer clang's `ptrtoaddr` is read as `ptrtoint` (the same
         // where a pointer and its address are one width); MIR refuses the
         // instruction on purpose.
-        kept.push_str(&line.replace(" dso_local", "").replace(" = ptrtoaddr ", " = ptrtoint "));
+        kept.push_str(line);
         kept.push('\n');
     }
     (triple, kept)
@@ -137,14 +146,24 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
-/// The `-f` switches of the command line (`-fno-unroll-loops`, `-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end
+/// The `-f` switches of the command line (`-fno-unroll-loops`,
+/// `-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end
 /// run of the process: the same parser as every other backend's `llc`.
 static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
     std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
 
-/// Records `flag` if the driver passes it on to a backend; false when it is not one.
+/// Records `flag` if the driver passes it on to a backend; false when it is not
+/// one.
 pub fn pass_flag(flag: &str) -> bool {
     POLICY.lock().unwrap().take(flag)
+}
+
+/// What the pin runs before selection at every level, -O0 included: the
+/// selector never sees `memset_pattern` (PreISelIntrinsicLowering), nor
+/// `llvm.is.constant` and `llvm.objectsize` (LowerConstantIntrinsics).
+pub fn lowered_before_selection(program: &mut Program) -> Result<(), String> {
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
 }
 
 /// `program` through the shared mid-end at `level`.
@@ -161,9 +180,7 @@ pub fn optimized_at(
     }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
-    // The pin's PreISelIntrinsicLowering: the selector never sees the
-    // intrinsic.
-    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    lowered_before_selection(program)?;
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
     if let Some(merge) = program.target.global_merge(level == Level::O3) {
         for module in &mut program.modules {
@@ -178,40 +195,6 @@ pub fn optimized_at(
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
     let names = ["puts", "putchar", "fwrite", "fputc", "fputs"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
     llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
-}
-
-/// Which instruction selector makes the machine function (`--isel=`).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum IselMode {
-    Hand,
-    Dag,
-    /// The DAG path, the hand selector where it refuses (counted on stderr).
-    #[default]
-    Shadow,
-}
-
-impl IselMode {
-    /// The mode `--isel=NAME` names.
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "hand" => Some(Self::Hand),
-            "dag" => Some(Self::Dag),
-            "shadow" => Some(Self::Shadow),
-            _ => None,
-        }
-    }
-}
-
-static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Shadow);
-
-/// Chooses the selector for the compiles that follow (the process's, as the
-/// pass flags are).
-pub fn set_isel_mode(mode: IselMode) {
-    *ISEL_MODE.lock().unwrap() = mode;
-}
-
-fn isel_mode() -> IselMode {
-    *ISEL_MODE.lock().unwrap()
 }
 
 /// `name` through the DAG path: the pin's table and the shared stages.
@@ -246,18 +229,16 @@ fn lower_function(
     let global = module.global(id);
     let function = global.function().ok_or("not a function")?;
     let name = global.name.owned().ok_or("an unnamed function")?;
-    let mut machine = match isel_mode() {
-        IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
-        IselMode::Dag => dag_select(module, &name, &program.layout, platform, lines),
-        // A refusal of the DAG path falls back to the hand selector,
-        // counted.
-        IselMode::Shadow => dag_select(module, &name, &program.layout, platform, lines).or_else(|why| {
-            eprintln!("isel-shadow: @{name}: {why}");
-            crate::isel::selected(module, id, &program.layout, platform, lines)
-        }),
-    }
-    .map_err(|why| format!("@{name}: {why}"))?;
+    let mut machine = dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
+    crate::mfunc::remove_unreachable_blocks(&mut machine);
+    // The shared phases that need SSA see the body as selection made it,
+    // phis and all; the private phases below see it after phi elimination.
+    if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
+        crate::lir_body::stages::observe(&machine)?;
+    }
+    crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
+    dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
         let undefined = crate::mfunc::undefined_reads(&machine);
         if !undefined.is_empty() {
@@ -265,6 +246,7 @@ fn lower_function(
         }
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+    machine.unwind = crate::cfi::Unwind::of(function);
     let optsize = function
         .attrs
         .iter()
@@ -291,6 +273,9 @@ fn lower_function(
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
+        // The body carries the edge odds by block position; no pass between here and the
+        // conversion adds or removes a block.
+        machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
@@ -346,7 +331,10 @@ fn lower_function(
     let blocks = crate::layout::fold(
         blocks,
         &mut tables,
-        &crate::layout::edge_odds(module, function, &program.layout, &machine),
+        &crate::layout::odds_by_label_number(
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            &machine,
+        ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
     );
@@ -362,6 +350,7 @@ fn lower_function(
             blocks,
             variables,
             pool: machine.pool.clone(),
+            unwind: machine.unwind != crate::cfi::Unwind::None,
         },
         written,
     ))
@@ -482,6 +471,8 @@ pub fn object_with(
     }
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
+    } else {
+        lowered_before_selection(&mut program)?;
     }
     let lowered = functions_with(&program, debug)?;
     let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
@@ -510,6 +501,8 @@ pub fn assembly(
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
+    } else {
+        lowered_before_selection(&mut program)?;
     }
     let mut out = String::new();
     for function in functions(&program)? {

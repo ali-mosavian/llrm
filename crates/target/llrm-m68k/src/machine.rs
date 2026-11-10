@@ -127,6 +127,16 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(crate::dagisel::lowering::VA_SLOT)
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
     fn lftr_any_stride(&self) -> bool {
@@ -224,6 +234,36 @@ impl Tti for M68k {
         _optsize: bool,
     ) -> u32 {
         1
+    }
+
+    /// DEVIATE M68K-LSR-FRAME (owner m68k-lsr-addressing, exit none while the
+    /// backend folds `(d8,%sp,Xn)`, `frameindexed.rs`): a stack slot is `%sp`
+    /// and a displacement, so as the base of an address it takes no register.
+    /// The pin counts every `alloca` as one (`llc -debug-only=loop-reduce`,
+    /// d1106deb: 7 regs for 4 stack arrays and 3 IVs). Its M68k has no TTI, so
+    /// the default registers-first order keeps one pointer IV per array (6
+    /// regs); its x86 shares one index (`reg(%a) + 1*reg({0,+,4})`) because
+    /// `X86TTIImpl::isLSRCostLess` ranks instructions first (4 against 7,
+    /// [X86TargetTransformInfo.cpp#L7202](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)),
+    /// not because the slot is free.
+    ///
+    /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
+    /// index-versus-pointer cost via Tti (no per-program patch):
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
+    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
+    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
+    ///   cost the same clocks.
+    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12): pin-faithful.
+    ///   The pin's LSR picks the single IV with a compare for double_to_uint64's
+    ///   loops (`llc -print-after=loop-reduce`); our earlier two-IV
+    ///   end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os, 68020 O1
+    ///   +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B against
+    ///   gcc 330 and clang 386, so below the bar. Closes through the LSR size
+    ///   model (the exit compare's `moveq`+`cmp` is in `insns`, which the
+    ///   registers-first order ignores).
+    fn frame_address_is_free(&self) -> bool {
+        true
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer

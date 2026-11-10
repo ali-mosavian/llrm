@@ -128,6 +128,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("inline-recursive", |options, on| options.inline.recursive = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
+    ("thread-jumps", |options, on| options.thread_jumps = on),
     ("tree-switch-conversion", |options, on| options.switch_conversion = on),
     ("jump-tables", |options, on| options.jump_tables = on),
     ("tree-dse", |options, on| options.drop_stores = on),

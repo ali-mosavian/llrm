@@ -29,7 +29,7 @@ fn scans(functions: usize) -> (u64, u64) {
     let mut manager = PassManager::default();
     manager.add(Cvp);
     manager.add(JumpThreading { enabled: true, options: JumpThreadingOptions::default() });
-    manager.add(Combine { enabled: true });
+    manager.add(Combine { enabled: true, phi_constant_users: false });
     manager.add(InstSimplify);
     manager.add(LoopInstSimplify);
     manager.add(InferAlignment);

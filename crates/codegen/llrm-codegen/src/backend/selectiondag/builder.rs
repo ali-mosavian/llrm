@@ -146,6 +146,9 @@ pub struct BuilderTarget {
     /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
     /// `hasOptSize`): a jump table needs 40% density.
     pub opt_size: bool,
+    /// Bytes decide over clocks (`Profile::bytes_strict`: -O1, -Os): a
+    /// deviation that trades bytes for clocks at speed stays off.
+    pub bytes_strict: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
     /// The store limits a memset, memcpy or memmove is inlined for: the
@@ -377,6 +380,14 @@ impl BuilderTarget {
     /// beat the multiply-high sequence's.
     /// This target with a signed divide by a negative constant made from the
     /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_pow2_stays(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_pow2_stays = on;
+        self
+    }
+
     pub fn with_sdiv_by_magnitude(
         mut self,
         on: bool,
@@ -390,6 +401,15 @@ impl BuilderTarget {
         prices: Option<super::dag::DivPrices>,
     ) -> BuilderTarget {
         self.dag.div_prices = prices;
+        self
+    }
+
+    /// This target with `getMinimumJumpTableDensity` stated at every level.
+    pub fn with_min_jump_table_density(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.min_jump_table_density = percent;
         self
     }
 
@@ -408,6 +428,15 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.opt_size = on;
+        self
+    }
+
+    /// This target's bytes decide over clocks (-O1, -Os) or not.
+    pub fn with_bytes_strict(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.bytes_strict = on;
         self
     }
 
@@ -493,6 +522,7 @@ impl BuilderTarget {
             float_store: false,
             jump_tables: true,
             opt_size: false,
+            bytes_strict: false,
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
@@ -1488,6 +1518,8 @@ impl Builder<'_> {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
+            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same first variadic argument
+            self.info.vararg_frame_index = Some(index);
         }
         Ok(())
     }
@@ -2503,6 +2535,8 @@ impl Builder<'_> {
         // `IsTailCall`: the call in tail position, if the target takes it, ends
         // the block
         if let Some(tail) = self.tail_candidate.take()
+            && !(calling.byval_parameter_blocks_tail_call()
+                && self.function.parameter_attrs.iter().any(|attrs| self.byval_of(attrs).is_some()))
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
             self.tail_calls.push(tail);
