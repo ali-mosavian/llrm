@@ -143,6 +143,43 @@ impl Tti for M68k {
         true
     }
 
+    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k runs:
+    /// legal 1, custom 2, expanded `SingleCallCost`, by the table the lowering itself
+    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An intrinsic
+    /// that translation does not reach keeps the trait's price.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        _: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        if let Some(Ty::Int(bits)) = ret {
+            thread_local! {
+                static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+                    const { std::cell::RefCell::new(Vec::new()) };
+            }
+            let lowering = LOWERING.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some((_, one)) = cache.iter().find(|(cpu, _)| *cpu == self.cpu) {
+                    return one.clone();
+                }
+                let made = Rc::new(crate::dagisel::lowering::target_lowering_with(self.cpu, true));
+                cache.push((self.cpu, made.clone()));
+                made
+            });
+            let code_size = kind == CostKind::CodeSize;
+            if let Some(cost) = llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size) {
+                return Cost::of(cost);
+            }
+        }
+        if llrm_mir::tti::is_free_intrinsic(name) {
+            Cost::FREE
+        } else {
+            llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID)
+        }
+    }
+
     fn opt_size_inline_byte_gate(&self) -> bool {
         true
     }
