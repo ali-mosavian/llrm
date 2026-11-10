@@ -144,13 +144,6 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_size_libcall_name(op, MVT::I32, name);
     }
     tl.set_size_shift_call(8, 10);
-    // the long divide has a smaller routine for a function tuned for size
-    // (one step per dividend bit, registers alone: 76 B against 391)
-    for (op, name) in
-        [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divsi3", "__s_udivsi3", "__s_modsi3", "__s_umodsi3"])
-    {
-        tl.set_size_libcall_name(op, MVT::I32, name);
-    }
     // a word divide and remainder of the same operands are one call too
     // (`lower_divrem_word`)
     for (op, name) in [(SDivRem, "__divremhi4"), (UDivRem, "__udivhi3")] {
@@ -160,17 +153,9 @@ pub fn target_lowering() -> TargetLowering {
     // a divide and a remainder of the same long operands are one call, the
     // remainder stored through an address (`ExpandDivRemLibCall`; the pin's
     // `useDivRem` pairs them where the type is Custom, `lower_divrem`)
-    for (op, name, small) in [(SDivRem, "__divremsi4", "__s_divremsi4"), (UDivRem, "__udivremsi4", "__s_udivremsi4")] {
+    for (op, name) in [(SDivRem, "__divremsi4"), (UDivRem, "__udivremsi4")] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
         tl.set_libcall_name(op, MVT::I32, name);
-        tl.set_size_libcall_name(op, MVT::I32, small);
-    }
-    // the long long divide has a smaller routine (one step per dividend bit)
-    // for a function tuned for size
-    for (op, name) in
-        [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divdi3", "__s_udivdi3", "__s_moddi3", "__s_umoddi3"])
-    {
-        tl.set_size_libcall_name(op, MVT::I64, name);
     }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
@@ -275,12 +260,7 @@ impl Z80Lowering {
     ) -> Option<SDValue> {
         use super::call::{Ext, In, Out, lower_call};
         let signed = dag.opcode(node) == ISD::SDivRem;
-        let name = match (signed, self.sized) {
-            (true, false) => "__divremsi4",
-            (false, false) => "__udivremsi4",
-            (true, true) => "__s_divremsi4",
-            (false, true) => "__s_udivremsi4",
-        };
+        let name = if signed { "__divremsi4" } else { "__udivremsi4" };
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let cell = dag.create_stack_temporary(4, 1);
         let mut outs = Vec::new();
