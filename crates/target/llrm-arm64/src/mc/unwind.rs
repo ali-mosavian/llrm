@@ -145,6 +145,10 @@ pub fn compact_encoding(cfi: &[Cfi]) -> u32 {
 /// address is in `x30`. The CIE counts code in bytes and saves in slots of the
 /// pin's `getCalleeSaveStackSlotSize`: 4 on ELF (the `MCAsmInfo` default),
 /// where an FDE names its code by a 4-byte offset, and 8 on Mach-O, by 8.
+/// Code alignment 1: `MinInstAlignment` (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/MCDwarf.cpp#L1958, default
+/// `include/llvm/MC/MCAsmInfo.h#L122`). Slot size: `getDataAlignmentFactor`
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/MCDwarf.cpp#L1340), the `MCAsmInfo.h#L90` default of 4, and 8 for
+/// Darwin at https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCAsmInfo.cpp#L156.
 pub fn eh_target(darwin: bool) -> EhTarget<'static> {
     EhTarget {
         pointer: if darwin { Pointer::Pcrel8 } else { Pointer::Pcrel4 },

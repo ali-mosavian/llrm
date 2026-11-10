@@ -108,6 +108,9 @@ fn with_unwind(object: &Object) -> Result<Object, Unsupported> {
     });
     // `__eh_frame` holds the frames the compact words leave to DWARF, and is
     // not there without one.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/MCDwarf.cpp#L2170-L2222:
+    // `NeedsEHFrameSection` is set only by a DWARF-mode word, and a frame
+    // with another word is skipped (`OmitDwarfIfHaveCompactUnwind`, Darwin).
     let frames: Vec<_> = object
         .frames
         .iter()
