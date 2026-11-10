@@ -426,6 +426,11 @@ pub fn to_ssa_lir<T: Target>(
 /// function enters with, in the entry block): the body is SSA, as the pin's
 /// is, whose physical registers live only between a copy and its user. A
 /// physical register read in a block that did not write it is refused.
+///
+/// DEVIATE SP1: the pin's isel (`InstrEmitter::EmitCopyToReg` /
+/// `EmitCopyFromReg`) makes a COPY between a physical register and a virtual
+/// one; here the physical operand stays and each write is a value pinned to
+/// it. Exit: the m68k emitter makes those copies (2026-12-04).
 fn convert<T: Target>(
     function: &MFunction<T::Class>,
     registers: Regs,
