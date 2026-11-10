@@ -1,4 +1,5 @@
-//! A word load or store whose pointer steps by two afterwards is post-incremented.
+//! A word load or store whose pointer steps by two afterwards is
+//! post-incremented.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
@@ -13,8 +14,9 @@ fn compile(
     text(&format!("{DATALAYOUT}\n{body}"), name, 0, &Request::new(level)).expect("compiles")
 }
 
-/// A word copy loop: each pointer went back with `dec hl` and forward with `ld bc, #2; add hl, bc`
-/// (7 B and 32 T a trip a pointer); the access steps it as it goes.
+/// A word copy loop: each pointer went back with `dec hl` and forward with `ld
+/// bc, #2; add hl, bc` (7 B and 32 T a trip a pointer); the access steps it as
+/// it goes.
 #[test]
 fn a_word_copy_loop_steps_its_pointers_with_the_access() {
     let asm = compile(
@@ -42,8 +44,8 @@ out:
     assert!(!asm.contains("ld bc, #2"), "a pointer stepped by an add of two:\n{asm}");
 }
 
-/// The byte forms stay: `ld a, (de)` and `inc de` need no `hl`. A first cut made them post-increments
-/// through `hl` and a byte copy loop grew by 6 B.
+/// The byte forms stay: `ld a, (de)` and `inc de` need no `hl`. A first cut
+/// made them post-increments through `hl` and a byte copy loop grew by 6 B.
 #[test]
 fn a_byte_copy_loop_keeps_its_pointers_out_of_hl() {
     let asm = compile(
@@ -69,8 +71,8 @@ out:
     assert!(!asm.contains("push ix"), "the byte loop took a frame:\n{asm}");
 }
 
-/// A pointer whose step's carry is read (an overflow test on the new pointer) keeps its `add`: the merged
-/// `inc hl` sets no carry.
+/// A pointer whose step's carry is read (an overflow test on the new pointer)
+/// keeps its `add`: the merged `inc hl` sets no carry.
 #[test]
 fn a_step_whose_carry_is_read_is_not_merged() {
     let asm = compile(

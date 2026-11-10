@@ -1,4 +1,5 @@
-//! A word access and the step of its pointer, merged: `ld c, (hl); inc hl; ld b, (hl); inc hl`.
+//! A word access and the step of its pointer, merged: `ld c, (hl); inc hl; ld
+//! b, (hl); inc hl`.
 //!
 //! # How it works
 //! After allocation a word load or store through `hl` is followed, some
@@ -43,15 +44,18 @@ use crate::{REGISTER_INFO, reg};
 /// `UpdateLimit` (`-aarch64-update-scan-limit`).
 const UPDATE_LIMIT: usize = 100;
 
-/// `LdStConstLimit` (`-aarch64-load-store-const-scan-limit`): how far back the constant of an `add` is looked for.
+/// `LdStConstLimit` (`-aarch64-load-store-const-scan-limit`): how far back the
+/// constant of an `add` is looked for.
 const CONST_LIMIT: usize = 10;
 
-/// `LLRM_Z80_UPDATE_WHY`: one line a candidate access, merged or why not (the premise count).
+/// `LLRM_Z80_UPDATE_WHY`: one line a candidate access, merged or why not (the
+/// premise count).
 fn why_enabled() -> bool {
     std::env::var_os("LLRM_Z80_UPDATE_WHY").is_some()
 }
 
-/// Why an access is not merged: not a candidate at all, or a candidate the pin's checks refuse.
+/// Why an access is not merged: not a candidate at all, or a candidate the
+/// pin's checks refuse.
 enum Refused {
     Not,
     Because(&'static str),
@@ -59,7 +63,8 @@ enum Refused {
 
 /// A word access through `hl` that a step can merge into.
 struct Access {
-    /// Where the pointer lives besides `hl`: `bc` or `de`; none when it is `hl`.
+    /// Where the pointer lives besides `hl`: `bc` or `de`; none when it is
+    /// `hl`.
     home: Option<RegId>,
 }
 
@@ -92,7 +97,14 @@ impl Context<'_> {
         inst: &Inst,
         to: RegId,
     ) -> bool {
-        inst.operands.iter().any(|o| matches!(o, Operand::Use(r) if Z80Registers::overlaps(self.register(*r), to)))
+        inst.operands
+            .iter()
+            .any(
+                |o| matches!(
+                    o,
+                    Operand::Use(r) if Z80Registers::overlaps(self.register(*r), to)
+                ),
+            )
     }
 
     fn writes(
@@ -100,7 +112,14 @@ impl Context<'_> {
         inst: &Inst,
         to: RegId,
     ) -> bool {
-        inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if Z80Registers::overlaps(self.register(*r), to)))
+        inst.operands
+            .iter()
+            .any(
+                |o| matches!(
+                    o,
+                    Operand::Def(r) if Z80Registers::overlaps(self.register(*r), to)
+                ),
+            )
     }
 
     fn touches(
@@ -145,7 +164,8 @@ impl Context<'_> {
         }
     }
 
-    /// `getLdStBaseOp`, `getLdStRegOp`: the access at `block[at]`, if it is one a step can merge into.
+    /// `getLdStBaseOp`, `getLdStRegOp`: the access at `block[at]`, if it is one
+    /// a step can merge into.
     fn access_at(
         &self,
         block: usize,
@@ -163,12 +183,14 @@ impl Context<'_> {
         if pointer != reg::HL {
             return Err(Refused::Not);
         }
-        // "If the base register overlaps a source/destination register, we can't merge the update."
+        // "If the base register overlaps a source/destination register, we
+        // can't merge the update."
         if ![reg::BC, reg::DE].contains(&data) {
             return Err(Refused::Because("data in hl"));
         }
-        // the home pair: the nearest copy into `hl` before the access, with `hl` unwritten since; `hl` made by
-        // anything else (a reload, a constant, an add) is the pointer itself
+        // the home pair: the nearest copy into `hl` before the access, with
+        // `hl` unwritten since; `hl` made by anything else (a reload, a
+        // constant, an add) is the pointer itself
         let mut home = None;
         for earlier in insts[..at].iter().rev().take(UPDATE_LIMIT) {
             if let Some((to, from)) = self.copy_of(earlier) {
@@ -187,8 +209,8 @@ impl Context<'_> {
         Ok(Access { home })
     }
 
-    /// `findMatchingUpdateInsnForward`: the update after `block[at]`, along the block and the single successor
-    /// the base is live into.
+    /// `findMatchingUpdateInsnForward`: the update after `block[at]`, along the
+    /// block and the single successor the base is live into.
     fn update_after(
         &self,
         block: usize,
@@ -210,7 +232,8 @@ impl Context<'_> {
                     // the first use of the base must be the whole of the step
                     return self.matching_update(here, index, access);
                 }
-                // "If the base register is used or modified, we have no match": a call may do either
+                // "If the base register is used or modified, we have no match":
+                // a call may do either
                 if inst.call || inst.barrier {
                     return Err("a call or a jump before the update");
                 }
@@ -218,8 +241,9 @@ impl Context<'_> {
             if count >= UPDATE_LIMIT {
                 return Err("past the scan limit");
             }
-            // "Try to go downward to successors along a CF path w/o side enters such that BaseReg is alive along
-            // it but not at its exits."
+            // "Try to go downward to successors along a CF path w/o side enters
+            // such that BaseReg is alive along it but not at its
+            // exits."
             let mut next = None;
             let mut live_successors = 0;
             for &successor in &self.cfg.succs[here] {
@@ -239,7 +263,8 @@ impl Context<'_> {
         }
     }
 
-    /// `isMatchingUpdateInsn`: the use of the base at `block[index]` is the step of it by the access size.
+    /// `isMatchingUpdateInsn`: the use of the base at `block[index]` is the
+    /// step of it by the access size.
     fn matching_update(
         &self,
         block: usize,
@@ -250,7 +275,8 @@ impl Context<'_> {
         let gone = match access.home {
             // the pointer is `hl` itself: the step is the next use of `hl`
             None => self.step_at(block, index)?,
-            // the update copies the home pair into `hl`, steps it, and copies it back
+            // the update copies the home pair into `hl`, steps it, and copies
+            // it back
             Some(home) => {
                 if self.copy_of(&insts[index]) != Some((reg::HL, home)) {
                     return Err("home pair read between");
@@ -278,8 +304,8 @@ impl Context<'_> {
         Ok(Update { block, gone })
     }
 
-    /// The step of `hl` at `i` (`INC16x2 hl`, or `add hl, t` with `t` made by a `ld t, #2`): the instructions to
-    /// delete.
+    /// The step of `hl` at `i` (`INC16x2 hl`, or `add hl, t` with `t` made by a
+    /// `ld t, #2`): the instructions to delete.
     fn step_at(
         &self,
         block: usize,
@@ -308,8 +334,9 @@ impl Context<'_> {
         }
     }
 
-    /// `isMatchingMovConstInsn`'s role: the `add hl, t` at `i` adds 2 (`t` made by a `ld t, #2` at most
-    /// `CONST_LIMIT` before it), and its carry is dead. The `ld` goes too when nothing else reads `t`.
+    /// `isMatchingMovConstInsn`'s role: the `add hl, t` at `i` adds 2 (`t` made
+    /// by a `ld t, #2` at most `CONST_LIMIT` before it), and its carry is
+    /// dead. The `ld` goes too when nothing else reads `t`.
     fn add_of_two(
         &self,
         block: usize,
@@ -318,8 +345,9 @@ impl Context<'_> {
     ) -> Result<Vec<usize>, &'static str> {
         const NO_CONSTANT: &str = "the constant of the add is not a ld nearby";
         let insts = &self.function.blocks[block].insts;
-        // the carry the add sets is dead where a later instruction sets the flags before any reads them; a block
-        // that ends first leaves it unknown
+        // the carry the add sets is dead where a later instruction sets the
+        // flags before any reads them; a block that ends first leaves
+        // it unknown
         let dead = insts[i + 1..]
             .iter()
             .find(|one| one.reads_flags || one.sets_flags)
@@ -354,8 +382,8 @@ impl Context<'_> {
     }
 }
 
-/// `mergeUpdateInsn`: the access becomes its post-increment form, the update goes, and a home pair gets a copy of
-/// `hl` after the access.
+/// `mergeUpdateInsn`: the access becomes its post-increment form, the update
+/// goes, and a home pair gets a copy of `hl` after the access.
 fn merge_update(
     function: &mut MFunction,
     block: usize,
@@ -389,8 +417,8 @@ fn merge_update(
     }
 }
 
-/// `AArch64LoadStoreOpt::optimizeBlock` for the updates: each word access with the step of its pointer folded
-/// in. Whether anything changed.
+/// `AArch64LoadStoreOpt::optimizeBlock` for the updates: each word access with
+/// the step of its pointer folded in. Whether anything changed.
 pub fn fold(
     function: &mut MFunction,
     assignment: &Assignment,
