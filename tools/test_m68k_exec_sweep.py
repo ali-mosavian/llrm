@@ -21,11 +21,14 @@ def test_a_program_without_reference_output_is_noref_not_ok():
     assert sweep.verdict(0, b"anything\n", None)[0] == "noref"
 
 
-def test_crlf_output_matches_an_lf_reference():
+def test_crlf_output_matches_an_lf_reference_and_nothing_else_is_forgiven():
     """os_console writes "ab\\r\\ncd\\r\\n" (the OS layer puts exactly its bytes out); its .out has LF. The sweep read ours at every level
-    and both CPUs as a miscompile, where the oracle comparison (corpus_targets.oracle_verdict) ignores line ends."""
+    and both CPUs as a miscompile. Only CRLF -> LF is forgiven: a missing final newline, a trailing blank or different text still fail."""
     assert sweep.verdict(0, b"ab\r\ncd\r\n", b"ab\ncd\n") == ("ok", "")
     assert sweep.verdict(0, b"ab\r\ncx\r\n", b"ab\ncd\n")[0] == "output"
+    assert sweep.verdict(0, b"ab\ncd", b"ab\ncd\n")[0] == "output"
+    assert sweep.verdict(0, b"ab \ncd\n", b"ab\ncd\n")[0] == "output"
+    assert sweep.verdict(0, b"AB\ncd\n", b"ab\ncd\n")[0] == "output"
 
 
 def test_a_failing_exit_is_run_even_when_stdout_matches():
