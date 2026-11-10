@@ -149,6 +149,6 @@ mod tests {
         let chained = Trip { load: vec![8000, 1000], chain: 4000 };
         assert_eq!(saved(&tp, &chained, 12, &[12 * 2000, 0]), 0, "issue 2 clk, chain 4: the chain is the time");
         let issue_bound = Trip { load: vec![16000, 1000], chain: 1000 };
-        assert_eq!(saved(&tp, &issue_bound, 12, &[12 * 4000, 0]), 12 * 3000, "issue 4 clk to 0, held up by the 1 clk chain");
+        assert_eq!(saved(&tp, &issue_bound, 12, &[12 * 12000, 0]), 12 * 3000, "issue 4 clk to 1, the 1 clk chain");
     }
 }
