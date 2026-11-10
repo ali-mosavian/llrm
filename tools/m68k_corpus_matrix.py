@@ -37,7 +37,7 @@ import m68k_worse_cells as worse_cells  # noqa: E402
 import o0_sweep  # noqa: E402
 
 TIMEOUT = 180
-CPUS = ("68000", "68020", "68040", "68060")
+CPUS = ("68000", "68010", "68020", "68030", "68040", "68060")  # test_the_matrix_cpus_are_the_supported_cpus
 LEVELS = ("O1", "O2", "O3", "Os")
 POSIX = ROOT / "runtime/shared/posix"
 GCC_ONLY = ("-fzero-init-padding-bits",)
