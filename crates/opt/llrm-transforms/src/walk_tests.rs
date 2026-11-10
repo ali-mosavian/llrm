@@ -3252,3 +3252,126 @@ done:
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
     assert!(m16.contains("call i16 @next_byte"), "the calls were inlined:\n{m16}");
 }
+
+/// A target stating a size view: `Viewed(has_view, is_view, measured)`. The
+/// view prices a memory access at seven units where the target prices one.
+struct Viewed(bool, bool, bool);
+
+impl llrm_mir::tti::Tti for Viewed {
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        self.0.then(|| std::rc::Rc::new(Viewed(false, true, false)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
+    }
+
+    fn inline_size_view_is_measured(&self) -> bool {
+        self.2
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        kind: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        volatile: bool,
+    ) -> llrm_mir::tti::Cost {
+        let one = llrm_mir::tti::Basic.memory_op_cost(op, ty, cost, volatile);
+        if self.1 { one * 7 } else { one }
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        user: llrm_mir::tti::ImmUser,
+        index: u32,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        global: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        kind: llrm_mir::tti::CastKind,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        lhs: llrm_mir::tti::OperandInfo,
+        rhs: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
+}
+
+/// The SZ2 trials priced a body in any target's size view, the 6502's and
+/// m68k's included: `tail_calls` -Os at 6502 and 65C02 came out different
+/// from the tip (a `_even -> _odd` site kept or refused on other sizes, the
+/// object changed). Only a measured view, for a speed caller, prices a trial.
+#[test]
+fn test_a_trial_body_is_priced_in_a_view_only_when_it_is_measured_and_the_caller_is_speed() {
+    let module = parsed(
+        "define i32 @f(ptr %p) {
+b0:
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    let id = module.named("f").unwrap();
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).unwrap();
+    let size = |tti: &Viewed, speed: bool| super::body_size(&module, &layout, tti, id, speed);
+    let own = size(&Viewed(false, false, false), true);
+    assert_eq!(size(&Viewed(true, false, false), true), own, "an unmeasured view is not used (6502, m68k)");
+    assert_eq!(size(&Viewed(true, false, false), false), own);
+    assert_eq!(size(&Viewed(true, false, true), false), own, "a measured view is not used for a size caller");
+    assert!(size(&Viewed(true, false, true), true) > own, "a measured view serves a speed caller");
+}

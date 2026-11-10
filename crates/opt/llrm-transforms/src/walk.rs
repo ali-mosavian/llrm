@@ -1487,7 +1487,9 @@ fn body_size(
     id: GlobalId,
     speed: bool,
 ) -> i64 {
-    let view = tti.inline_size_view().filter(|_| speed || !tti.inline_size_view_is_measured());
+    // Only the measured view, and only for a speed caller: the 6502 and m68k
+    // views stay out of the trials, as at the tip.
+    let view = tti.inline_size_view().filter(|_| speed && tti.inline_size_view_is_measured());
     sized(module, layout, view.as_deref().unwrap_or(tti), id, true)
 }
 
