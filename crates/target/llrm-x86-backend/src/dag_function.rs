@@ -1176,7 +1176,8 @@ fn selected_in(
         has_frame_pointer: true,
         multiply_early_out,
         address_mode,
-    });
+    })
+    .with_shared_immediates_in_registers(!machine.tti().is_some_and(|tti| tti.immediate_forms_at_size()));
     let selector = Selector::new(if m16 {
         x86_m16::TABLE
     } else if m64 {

@@ -161,6 +161,37 @@ def test_the_unsupported_opcodes_are_those_with_a_write_the_model_marks():
     assert schedtable.unsupported_opcodes(data, {"M"}, ["X", "Y"]) == {"M": {"X"}}
 
 
+def twin_classes():
+    """A fourth class with class 1's numbers, as the pin has many: a row is stored once."""
+    sub = subtarget().replace(
+        "}; // TinyModelSchedClasses",
+        "  {DBGFIELD(/*WriteI2*/ 50) 1, false, false, false,  1,  1,  1, 1, 1, 1}, // #3\n}; // TinyModelSchedClasses",
+    )
+    return sub.replace("  2,\n  3,\n  DBGVAL", "  2,\n  4,\n  DBGVAL")
+
+
+def test_classes_with_the_same_numbers_share_one_row():
+    """Without sharing the 820 resolved classes of the arm64 models were 354 KB of source (83 KB shared)."""
+    sub = twin_classes()
+    models = schedtable.parse_models(sub, schedtable.parse_defaults(MCSCHEDULE))
+    classes = schedtable.parse_instr_classes(INSTRINFO + "    { 14,\t2,\t1,\t4,\t3,\t0,\t0,\tTinyOpInfoBase + 0,\t0,\t0, 0x0ULL },  // DDD\n")
+    numbers = {n: classes[n].number for n in ("AAA", "DDD")}
+    text = schedtable.render(models, {"generic": "TinyModel"}, classes, sub, numbers)
+    assert text.count("SchedClass::Resolved(0)") == 2, "both classes are emitted"
+    assert "static CLASS_ROWS: [ClassRow; 1]" in text
+
+
+def test_a_slice_is_stored_once_however_many_classes_name_it():
+    pool = schedtable.Pool("WriteLatency")
+    assert pool.span(["a", "b"]) == (0, 2) and pool.span(["c"]) == (2, 1) and pool.span(["a", "b"]) == (0, 2)
+    assert pool.items == ["a", "b", "c"]
+
+
+def test_a_slice_longer_than_a_span_holds_is_refused():
+    with pytest.raises(schedtable.SchedError, match="256"):
+        schedtable.Pool("WriteProcRes").span(["x"] * 256)
+
+
 def test_a_class_index_past_the_table_is_refused():
     broken = subtarget().replace("1,  1,  1, 1, 1, 1}, // #1", "1,  9,  1, 1, 1, 1}, // #1")
     with pytest.raises(schedtable.SchedError, match="WriteProcRes"):

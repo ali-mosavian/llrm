@@ -3,6 +3,7 @@
 mod common;
 
 use common::{Two, branch, op, v};
+use llrm_mir::blockfrequency::BranchProbability;
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, machine_sink};
 
 /// `b0: x = add a, a; branch b2` falls into `b1`, which falls into
@@ -198,4 +199,46 @@ fn sinking_in_a_loop_of_many_blocks_solves_liveness_with_bit_sets() {
     assert!(machine_sink::<Wide>(&mut function), "nothing sank: the test measures nothing");
     let took = start.elapsed();
     assert!(took.as_millis() < 150, "{} blocks took {took:?}", function.blocks.len());
+}
+
+/// `diamond` whose `add` is as cheap as a move, with the head's edge to the
+/// join taken `percent` of the time.
+fn cheap_diamond(percent: u32) -> MFunction<()> {
+    let mut function = diamond(vec![]);
+    function.blocks[0].insts[1].cheap_as_move = true;
+    let taken = BranchProbability::new(percent, 100);
+    function.odds = Some(
+        [((0, 2), (taken, 0)), ((0, 1), (taken.get_compl(), 1)), ((1, 2), (BranchProbability::get_one(), 0))]
+            .into_iter()
+            .collect(),
+    );
+    function
+}
+
+/// A cheap value goes onto a split edge the pin's
+/// `MachineBranchProbabilityInfo` prices at 40% or less. The sink priced every
+/// edge `1 / successors`, so a 37.5% edge of a two-way branch (50%) kept its
+/// constant above the branch.
+#[test]
+fn a_cheap_value_moves_onto_an_edge_taken_at_most_40_percent() {
+    let mut function = cheap_diamond(38);
+    assert!(machine_sink::<Two>(&mut function), "nothing sank: the test measures nothing");
+    assert!(function.blocks.iter().any(|block| block.id > 2), "no block was made for the edge");
+}
+
+/// The control: the same function with the edge at 60% keeps the value.
+#[test]
+fn a_cheap_value_stays_above_an_edge_taken_over_40_percent() {
+    let mut function = cheap_diamond(60);
+    assert!(!machine_sink::<Two>(&mut function));
+    assert!(function.blocks.iter().all(|block| block.id <= 2));
+}
+
+/// With no odds the edge is `1 / successors`, as before: 50% of a two-way
+/// branch is over the threshold.
+#[test]
+fn a_cheap_value_stays_when_the_function_has_no_odds() {
+    let mut function = cheap_diamond(38);
+    function.odds = None;
+    assert!(!machine_sink::<Two>(&mut function));
 }

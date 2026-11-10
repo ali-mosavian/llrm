@@ -175,7 +175,9 @@ def one(job):
     return name, "PASS", {"bytes": nb, "clks": cyc}
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
-    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None; BASE = base_members(WORK)
+    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
+    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]
     with ThreadPoolExecutor(4) as pool: res = list(pool.map(one, [(s, level, lib) for s in srcs]))
