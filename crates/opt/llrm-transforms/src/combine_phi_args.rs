@@ -15,6 +15,13 @@
 //!   the one left operand all of them share). The new operation goes at the top
 //!   of the phi's block, after the phis.
 //!
+//! - `foldDeadPhiWeb` ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
+//!   phis used only by other phis, fewer than 16 of them, are deleted.
+//! - The unused induction variable
+//!   ([:1445](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L1445)):
+//!   a phi whose one user is a binary operator, `fneg` or GEP whose one user
+//!   is the phi is poison, which leaves the user dead.
+//!
 //! # Example
 //! ```text
 //! %a = zext i1 %x to i32 ; %b = zext i1 %y to i32
@@ -29,8 +36,8 @@
 //! DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP, load,
 //! `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 //! `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
-//! `foldDeadPhiWeb`, `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`,
-//! and `foldDependentIVs`. Exit: later slices.
+//! `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
+//! `foldDependentIVs`. Exit: later slices.
 //!
 //! DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 //! cannot have a phi before; no debug locations.
@@ -38,6 +45,7 @@
 //! # Used by
 //! `combine` (its `visit`, the `Phi` opcode).
 
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::valuetracking::pattern;
@@ -82,10 +90,77 @@ impl Combiner<'_> {
         {
             return Visit::Replace(folded);
         }
+        if self.fold_dead_phi_web(phi) {
+            return Visit::Erased;
+        }
+        if let Some(poison) = self.unused_induction_variable(phi) {
+            return Visit::Replace(poison);
+        }
         if let Some(folded) = self.simplify_using_control_flow(phi, &incoming) {
             return Visit::Replace(folded);
         }
         Visit::None
+    }
+
+    /// `foldDeadPhiWeb`: the phis `phi` reaches through phi users, when
+    /// every user on the way is a phi and there are fewer than 16, are dead.
+    fn fold_dead_phi_web(
+        &mut self,
+        phi: InstId,
+    ) -> bool {
+        let mut web = vec![phi];
+        let mut stack = vec![phi];
+        while let Some(one) = stack.pop() {
+            let result = self.function.instruction(one).result.expect("a phi's value");
+            let users: Vec<InstId> = self.function.users(result).iter().map(|use_| use_.user).collect();
+            for user in users {
+                if !matches!(self.function.instruction(user).opcode, Opcode::Phi) {
+                    return false;
+                }
+                if web.contains(&user) {
+                    continue;
+                }
+                web.push(user);
+                // Early stop if the set of PHIs is large.
+                if web.len() >= 16 {
+                    return false;
+                }
+                stack.push(user);
+            }
+        }
+        for &one in &web {
+            let poison = self.poison_of(one);
+            self.replace_inst_with(one, poison);
+        }
+        for one in web {
+            self.erase(one);
+        }
+        true
+    }
+
+    /// The `visitPHINode` rule for a phi whose one user computes the next
+    /// iteration's value and is used only by the phi (`for (j = 0;; ++j)`):
+    /// poison, which leaves the user dead.
+    fn unused_induction_variable(
+        &mut self,
+        phi: InstId,
+    ) -> Option<Operand> {
+        let result = self.function.instruction(phi).result?;
+        let user = self.function.users(result).only()?.user;
+        let next = self.function.instruction(user);
+        if !matches!(next.opcode, Opcode::Binary(_) | Opcode::FNeg | Opcode::GetElementPtr { .. }) {
+            return None;
+        }
+        let next_result = next.result?;
+        (self.function.users(next_result).only()?.user == phi).then(|| self.poison_of(phi))
+    }
+
+    fn poison_of(
+        &self,
+        inst: InstId,
+    ) -> Operand {
+        let ty = self.function.instruction(inst).ty;
+        Operand::Constant(self.context.constant(Constant { ty, kind: ConstantKind::Poison }))
     }
 
     /// `simplifyUsingControlFlow`: a phi of constants whose inputs the edges
