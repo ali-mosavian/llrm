@@ -16,6 +16,9 @@ was built from; a program whose sources (`bench/P/*.c`, `*.h`, `bench/bench_io.h
 checkout, is stale and listed (exit 2): the 11-09 sfm16 rows were built before #8706 made `unsigned long` 32-bit, and a gap was chased on
 the old program.
 
+A table must also say `compiler=<commit>`, the commit its `ours` column was built from, and is refused when more than MAX_LANDINGS commits
+touching crates/ have landed since: the 11-09 table was 95 landings old by the next morning, and its unchanged-source rows were stale as gaps.
+
 A cell with no number for ours, gcc or clang is refused (exit 2, listed), never compared against the next-best column: a missing
 reference understated the z80 gaps by up to 1.7 kB."""
 import re
@@ -30,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 DATA_MARK = "data=object_bytes"
 PAD_MARK = "code_bytes padding-free"
 RELOC_MARK = "reloc=-fPIE"
+MAX_LANDINGS = 30  # first-parent commits touching crates/ between the table's compiler and this checkout (the tip took 95 in 11 h on 11-09/10)
 SHARED_SOURCES = ("bench/bench_io.h", "runtime/shared/posix")
 
 
@@ -40,6 +44,14 @@ def object_data(obj: Path) -> int:
     return object_bytes.object_bytes("x86_64-linux", obj)[1]
 
 COLUMNS = ("ours", "gcc", "clang")
+
+
+def compiler_landings(built: str, repo: Path) -> int:
+    """Commits touching the compiler (crates/) that landed after commit `built`, which built the table's `ours` column."""
+    done = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", "--first-parent", f"{built}..HEAD", "--", "crates"], capture_output=True, text=True)
+    if done.returncode:
+        sys.exit(f"compiler commit {built} is not a commit of {repo}: the table cannot be checked for age")
+    return int(done.stdout)
 
 
 def stale_programs(programs: list[str], built: str, repo: Path) -> list[str]:
@@ -121,6 +133,13 @@ if __name__ == "__main__":
     built = re.search(r"\bbench=([0-9a-f]{7,40})\b", text.splitlines()[0])
     if not built:
         sys.exit(f"{sys.argv[1]}: the header does not say bench=<commit>: its sources cannot be checked against the tip; rebuild the table")
+    compiler = re.search(r"\bcompiler=([0-9a-f]{7,40})\b", text.splitlines()[0])
+    if not compiler:
+        sys.exit(f"{sys.argv[1]}: the header does not say compiler=<commit>: the age of its `ours` column cannot be told; rebuild the table")
+    repo = Path(__file__).resolve().parents[2]
+    age = compiler_landings(compiler.group(1), repo)
+    if age > MAX_LANDINGS:
+        sys.exit(f"{sys.argv[1]}: its compiler {compiler.group(1)} is {age} landings behind this checkout (limit {MAX_LANDINGS}): rebuild the table")
     table = cells(text.splitlines())
     old = stale_programs(sorted({program for program, _ in table}), built.group(1), Path(__file__).resolve().parents[2])
     if old:
