@@ -17,8 +17,6 @@
 //! L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
 //!
 //! # Not translated
-//! - SB2: pressure is followed bottom-up only; a bidirectional region does not
-//!   track it.
 //! - SB3: `ExitSU` (the region end); the critical path is the deepest root.
 //! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
 //!   is only asked of a model with a micro-op buffer (Cyclone), not the
@@ -34,17 +32,20 @@ use crate::backend::machinesched::Graph;
 use crate::backend::regpressure::Delta;
 use crate::backend::schedboundary::{Boundary, Machine, Remainder, Unit};
 
-/// What follows the pressure of the bottom zone.
-pub trait BottomPressure {
-    /// `RPDelta` of placing `node` at the bottom.
+/// What follows the pressure of the two zones (`TopRPTracker` and
+/// `BotRPTracker`).
+pub trait ZonePressure {
+    /// `RPDelta` of placing `node` at the top or the bottom.
     fn delta(
         &self,
         node: usize,
+        at_top: bool,
     ) -> Delta;
-    /// `node` is placed at the bottom.
+    /// `node` is placed at the top or the bottom.
     fn place(
         &mut self,
         node: usize,
+        at_top: bool,
     );
 }
 
@@ -84,7 +85,7 @@ pub struct Scheduler<'a> {
     machine: &'a Machine,
     units: Vec<Unit>,
     policy: RegionPolicy,
-    pressure: Option<&'a mut dyn BottomPressure>,
+    pressure: Option<&'a mut dyn ZonePressure>,
     top: Boundary,
     bot: Boundary,
     rem: Remainder,
@@ -107,7 +108,7 @@ impl<'a> Scheduler<'a> {
         machine: &'a Machine,
         mut units: Vec<Unit>,
         policy: RegionPolicy,
-        pressure: Option<&'a mut dyn BottomPressure>,
+        pressure: Option<&'a mut dyn ZonePressure>,
     ) -> Scheduler<'a> {
         let n = units.len();
         let mut succ_edges = vec![Vec::new(); n];
@@ -152,7 +153,7 @@ impl<'a> Scheduler<'a> {
 
     fn region(&self) -> Region {
         Region {
-            tracks_pressure: self.pressure.is_some() && self.policy.only_bottom_up,
+            tracks_pressure: self.pressure.is_some(),
             acyclic_latency_limited: self.rem.is_acyclic_latency_limited,
             disable_latency: self.policy.disable_latency,
             bias_pregs_extra: false,
@@ -227,8 +228,8 @@ impl<'a> Scheduler<'a> {
         let zone = if at_top { &self.top } else { &self.bot };
         let unit = &self.units[node];
         let mut cand = Cand::new(node, at_top, policy);
-        if !at_top && let Some(pressure) = &self.pressure {
-            cand.pressure = pressure.delta(node);
+        if let Some(pressure) = &self.pressure {
+            cand.pressure = pressure.delta(node, at_top);
         }
         cand.stall = zone.latency_stall_cycles(unit);
         cand.weak_left = if at_top { self.weak_preds_left[node] } else { self.weak_succs_left[node] };
@@ -352,6 +353,9 @@ impl<'a> Scheduler<'a> {
             let cycle = self.top.curr_cycle();
             self.units[node].top_ready_cycle = self.units[node].top_ready_cycle.max(cycle);
             self.top.bump_node(self.machine, &self.units[node], &mut self.rem);
+            if let Some(pressure) = &mut self.pressure {
+                pressure.place(node, true);
+            }
             for &weak in &self.graph.weak_succs[node] {
                 self.weak_preds_left[weak] -= 1;
             }
@@ -370,7 +374,7 @@ impl<'a> Scheduler<'a> {
             self.units[node].bot_ready_cycle = self.units[node].bot_ready_cycle.max(cycle);
             self.bot.bump_node(self.machine, &self.units[node], &mut self.rem);
             if let Some(pressure) = &mut self.pressure {
-                pressure.place(node);
+                pressure.place(node, false);
             }
             for &weak in &self.graph.weak_preds[node] {
                 self.weak_succs_left[weak] -= 1;
@@ -390,8 +394,9 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `ScheduleDAGMI::schedule`: the order of the region, with the reason of
-    /// each pick (`-debug-only=machine-scheduler`'s `Pick`).
-    pub fn schedule(mut self) -> (Vec<usize>, Vec<Reason>) {
+    /// each pick in the order made: the node, whether from the top, and why
+    /// (`-debug-only=machine-scheduler`'s `Pick`).
+    pub fn schedule(mut self) -> (Vec<usize>, Vec<(usize, bool, Reason)>) {
         let n = self.units.len();
         for node in 0..n {
             if self.preds_left[node] == 0 {
@@ -409,7 +414,7 @@ impl<'a> Scheduler<'a> {
         let (mut top, mut bottom, mut reasons) = (Vec::new(), Vec::new(), Vec::new());
         while top.len() + bottom.len() < n {
             let (node, at_top, reason) = self.pick_node();
-            reasons.push(reason);
+            reasons.push((node, at_top, reason));
             self.sched_node(node, at_top);
             if at_top {
                 top.push(node);

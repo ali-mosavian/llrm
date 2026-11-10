@@ -70,6 +70,6 @@ impl SchedulingModel for GenericModel {
         &self,
         insn: &Insn,
     ) -> u32 {
-        default_def_latency(insn)
+        default_def_latency(insn, 4)
     }
 }

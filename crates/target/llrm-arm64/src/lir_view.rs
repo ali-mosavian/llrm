@@ -799,6 +799,17 @@ impl AllocTarget for Arm64 {
         true
     }
 
+    /// `-mcpu=generic` on Linux: the Cortex-A510 model. DEVIATE SB8: Darwin
+    /// (`apple-m1`) keeps the generic model until the Apple A14 model's data
+    /// (S1) lands.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        if darwin() {
+            std::rc::Rc::new(llrm_codegen::backend::schedmodel::GenericModel)
+        } else {
+            std::rc::Rc::new(crate::schedmodel::Arm64Model::generic())
+        }
+    }
+
     /// The coalescer makes a definition again for a copy only if it is
     /// `isAsCheapAsAMove`; `MOVaddr` is not (the pair is two instructions),
     /// so a copy of an address stays a `mov`. The spiller takes it still.

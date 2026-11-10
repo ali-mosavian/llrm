@@ -41,11 +41,12 @@ use std::sync::Arc;
 use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::genericdriver::{BottomPressure, RegionPolicy, Scheduler};
+use crate::backend::genericdriver::{RegionPolicy, Scheduler, ZonePressure};
+use crate::backend::genericsched::Reason;
 use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
-use crate::backend::regpressure::{Delta, Model, PressureChange, Region, Tracker};
+use crate::backend::regpressure::{Delta, Model, PressureChange, Region, TopTracker, Tracker};
 use crate::backend::schedboundary::Unit;
 use crate::backend::schedmodel::SchedulingModel;
 use crate::backend::target::Segments;
@@ -400,11 +401,13 @@ impl Graph {
     }
 }
 
-/// The latency of what `one` defines for the default scheduling model of a
-/// target with none (i486): `TargetInstrInfo::defaultDefLatency` is zero for
-/// a transient instruction (a copy), `getLoadLatency` (4) for a load, one for
-/// the rest.
-pub(crate) fn default_def_latency(one: &Insn) -> u32 {
+/// The latency of what `one` defines when the model states none:
+/// `TargetInstrInfo::defaultDefLatency` is zero for a transient instruction
+/// (a copy), the model's `LoadLatency` for a load, one for the rest.
+pub fn default_def_latency(
+    one: &Insn,
+    load_latency: u32,
+) -> u32 {
     let Some(what) = &one.what else { return 1 };
     let copy = what.op == Operation::Move
         && matches!(
@@ -414,7 +417,7 @@ pub(crate) fn default_def_latency(one: &Insn) -> u32 {
     if copy || (what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty)) {
         0
     } else if memory(one).0 {
-        4
+        load_latency
     } else {
         1
     }
@@ -871,27 +874,43 @@ pub struct Tracking<'a> {
 /// critical sets and the maximum of the program order (`RegionCriticalPSets`,
 /// `RegionPressure`).
 struct Followed<'a> {
-    tracker: Tracker<'a>,
+    bottom: Tracker<'a>,
+    /// Only in a region that schedules from the top too.
+    top: Option<TopTracker<'a>>,
     critical: Vec<PressureChange>,
     region_max: Vec<u32>,
 }
 
-impl BottomPressure for Followed<'_> {
+impl ZonePressure for Followed<'_> {
     fn delta(
         &self,
         node: usize,
+        at_top: bool,
     ) -> Delta {
-        self.tracker.delta(node, &self.critical, &self.region_max)
+        match &self.top {
+            Some(top) if at_top => top.delta(node, &self.critical, &self.region_max),
+            _ => self.bottom.delta(node, &self.critical, &self.region_max),
+        }
     }
 
     fn place(
         &mut self,
         node: usize,
+        at_top: bool,
     ) {
-        self.tracker.place(node);
+        let most = match &mut self.top {
+            Some(top) if at_top => {
+                top.place(node);
+                top.max().to_vec()
+            }
+            _ => {
+                self.bottom.place(node);
+                self.bottom.max().to_vec()
+            }
+        };
         // `updateScheduledPressure`.
         for entry in &mut self.critical {
-            let most = self.tracker.max()[entry.set] as i32;
+            let most = most[entry.set] as i32;
             if most > entry.inc {
                 entry.inc = most;
             }
@@ -918,7 +937,19 @@ pub fn order_region(
     tracking: Option<&Tracking>,
     model: &dyn SchedulingModel,
 ) -> Vec<usize> {
+    picks(insns, graph, tracking, model).0
+}
+
+/// [`order_region`] with each pick in the order made: the node, whether from
+/// the top, and the reason.
+pub(crate) fn picks(
+    insns: &[Arc<Insn>],
+    graph: &Graph,
+    tracking: Option<&Tracking>,
+    model: &dyn SchedulingModel,
+) -> (Vec<usize>, Vec<(usize, bool, Reason)>) {
     let n = insns.len();
+    let policy = model.policy();
     let region = tracking.map(|_| Region::of(insns));
     let mut followed = tracking
         .zip(region.as_ref())
@@ -931,13 +962,21 @@ pub fn order_region(
                 let region_max = program.max().to_vec();
                 let critical = Tracker::critical_sets(tracking.model, &region_max);
                 Followed {
-                    tracker: Tracker::over(
+                    bottom: Tracker::over(
                         tracking.model,
                         region,
                         tracking.live_out.iter().copied(),
                         tracking.live_thru.iter().copied(),
                         true,
                     ),
+                    top: (!policy.only_bottom_up).then(|| {
+                        TopTracker::over(
+                            tracking.model,
+                            region,
+                            tracking.live_out.iter().copied(),
+                            tracking.live_thru.iter().copied(),
+                        )
+                    }),
                     critical,
                     region_max,
                 }
@@ -945,23 +984,20 @@ pub fn order_region(
         );
     let machine = model.machine();
     let units: Vec<Unit> = insns.iter().map(|one| model.unit(one)).collect();
-    let policy = model.policy();
-    // DEVIATE SB2: pressure is followed bottom-up only.
-    assert!(policy.only_bottom_up || followed.is_none(), "SB2: a bidirectional region does not track pressure yet");
-    let pressure = followed.as_mut().map(|one| one as &mut dyn BottomPressure);
+    let pressure = followed.as_mut().map(|one| one as &mut dyn ZonePressure);
     let (order, reasons) = Scheduler::new(graph, &machine, units, policy, pressure).schedule();
     if trace() {
-        // Bottom-up picks come last-first.
-        for (&node, reason) in order.iter().rev().zip(&reasons) {
+        for (node, at_top, reason) in &reasons {
             eprintln!(
-                "machinesched pick {node} {:?} {} tracked={}",
-                insns[node].defines,
+                "machinesched pick {node} {:?} {} tracked={} {}",
+                insns[*node].defines,
                 reason.name(),
-                tracking.is_some()
+                tracking.is_some(),
+                if *at_top { "top" } else { "bottom" }
             );
         }
     }
-    order
+    (order, reasons)
 }
 
 /// The pre-RA machine scheduler: every region of a block ordered by
@@ -1185,7 +1221,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{graph, regions};
-    use crate::backend::schedmodel::GenericModel;
+    use crate::backend::schedmodel::{GenericModel, SchedulingModel};
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
 
@@ -1972,5 +2008,63 @@ mod tests {
             moved_by_pressure += usize::from(order != super::order_region(&insns, &found, None, &GenericModel));
         }
         assert!(moved_by_pressure > 0, "pressure never decided a pick: the oracle compares nothing");
+    }
+
+    /// The model of a processor like the generic one that schedules from both
+    /// ends (AArch64's `overrideSchedPolicy`).
+    struct Both;
+
+    impl crate::backend::schedmodel::SchedulingModel for Both {
+        fn machine(&self) -> crate::backend::schedboundary::Machine {
+            GenericModel.machine()
+        }
+
+        fn policy(&self) -> crate::backend::genericdriver::RegionPolicy {
+            crate::backend::genericdriver::RegionPolicy::bidirectional(false)
+        }
+
+        fn unit(
+            &self,
+            insn: &Insn,
+        ) -> crate::backend::schedboundary::Unit {
+            GenericModel.unit(insn)
+        }
+
+        fn def_latency(
+            &self,
+            insn: &Insn,
+        ) -> u32 {
+            GenericModel.def_latency(insn)
+        }
+    }
+
+    /// Limit 2; `v1`-`v3` live in, `v4` and `v5` live out; two independent
+    /// nodes, an add and a copy. Hand derived from `pickNodeBidirectional`, as
+    /// the pin's `tryCandidate` orders it: neither zone has a single
+    /// choice. At the bottom (pressure 2) node 0 would take it to 3, an
+    /// excess, and node 1 leaves it as it is: node 1 wins `RegExcess`. At
+    /// the top (pressure 3, over the limit) node 0 ends `v1` and `v2` and
+    /// starts `v4`: a drop of one, which beats node 1's no change, so node
+    /// 0 is the top candidate. Comparing the two, a drop beats no change:
+    /// the first pick is node 0 from the top. A region whose top zone
+    /// follows no pressure sees two equal candidates and keeps the bottom
+    /// one, node 1.
+    #[test]
+    fn test_a_bidirectional_region_compares_the_pressure_of_both_zones() {
+        let insns = vec![
+            insn(0, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(5)], vec![held(3)]), vec![5], vec![3]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let found = graph(&insns, regs, 16, &Both);
+        // Only the add writes flags: the nodes are independent.
+        assert_eq!((&found.preds[0][..], &found.preds[1][..]), (&[][..], &[][..]));
+        let model = one_set(2);
+        let tracking = super::Tracking { model: &model, live_out: vec![4, 5], live_thru: vec![] };
+        let (order, made) = super::picks(&insns, &found, Some(&tracking), &Both);
+        assert_eq!(made[0], (0, true, super::Reason::RegExcess));
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, [0, 1], "every node once");
     }
 }
