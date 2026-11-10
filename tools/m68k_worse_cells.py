@@ -7,6 +7,9 @@ cell with no clang number (it calls a runtime) is still judged against gcc.
 Only a cell with no `ours` or no external number is skipped, and the skipped cells are
 listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench IR, not
 what ships) is never judged.
+Bytes are the linked size: the object's code plus the self-contained compiler-rt members it pulls (the matrix's ninth field), as
+each compiler is shipped. A column whose note says "unresolved helpers" has no linked size and counts as missing (a
+reference then makes its cell one-sided; ours makes the matrix incomplete).
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
 O1 cells follow the VIRTUAL-OK rule of tools/virtual_ok.py (verdict()).
@@ -20,6 +23,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from virtual_ok import virtual_ok  # noqa: E402
 
+# The note tools/m68k_corpus_matrix.py writes when a cell's object calls a compiler-rt helper the archive lacks.
+UNRESOLVED = "unresolved helpers"
 RATES = re.compile(r"byte_rate: (.*?) B per clk")
 TIMINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates", "target", "llrm-m68k", "src", "timings.times")
 
@@ -106,8 +111,11 @@ def _seen(lines):
         if key not in keys:
             keys.append(key)
         try:
+            if len(row) > 7 and row[7].startswith(UNRESOLVED):
+                continue  # a helper the archive lacks: the linked size is unknown, not small
             clocks = int(row[5]) if row[5] != "" else None
-            seen.setdefault(key, {})[row[3]] = (int(row[4]), clocks)
+            library = int(row[8]) if len(row) > 8 and row[8] != "" else 0
+            seen.setdefault(key, {})[row[3]] = (int(row[4]) + library, clocks)
         except (ValueError, IndexError):
             continue
     return rates(header), seen, keys

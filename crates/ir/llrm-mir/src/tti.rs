@@ -962,6 +962,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::immediate_forms_at_size`.
+    fn immediate_forms_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::price_pin_multiplies`.
     fn price_pin_multiplies(&self) -> bool {
         false
