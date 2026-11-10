@@ -159,6 +159,54 @@ fn the_shared_two_address_ties_every_pair_m68k_declares() {
     assert!(open_before > 0, "no pair was open before TwoAddress: the check sees nothing");
 }
 
+/// The `mov`s of `body` by the instruction they stand beside, counted.
+fn moves_by_neighbour(body: &LirBody) -> std::collections::BTreeMap<i64, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for insn in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov")) {
+            *out.entry(insn.at).or_default() += 1;
+        }
+    }
+    out
+}
+
+/// The converse of the test above: the shared `TwoAddress` copies a source only
+/// before an instruction m68k declares a tie for. Without `@ties rows` in
+/// m68k's register description it ties by x86's rule (an `Add` is tied), so
+/// `LEA32p d, #48, v` got `mov t, #48` ahead of it, which m68k cannot place
+/// (3 of 20 fixture functions refused, 11-10). Counted: each `mov` TwoAddress
+/// adds beside an instruction with no declared tie. 36 before the rows, 3
+/// after (`KNOWN`: a copy of one value into another, placed beside an
+/// instruction that is not its user; cause not yet found, exit 2026-11-13).
+#[test]
+fn the_shared_two_address_ties_only_the_pairs_m68k_declares() {
+    const KNOWN: &[&str] = &["pack_ref @pack_ref", "soft_add @add_bits_64", "soft_pack @sf64_pack"];
+    let (mut extra, mut tied) = (Vec::new(), 0);
+    for (what, function) in functions() {
+        let (converted, stages) = through(&function, "TwoAddress");
+        let before = stages.iter().rev().find(|(name, _)| *name == "PhiElimination").map(|(_, body)| body).expect("PhiElimination ran");
+        let after = &stages.last().expect("TwoAddress ran").1;
+        let (was, now) = (moves_by_neighbour(before), moves_by_neighbour(after));
+        for (at, count) in now {
+            let added = count.saturating_sub(was.get(&at).copied().unwrap_or(0));
+            if added == 0 {
+                continue;
+            }
+            let Some(&(b, i)) = converted.origin.get((at / 2) as usize) else { continue };
+            let inst = &function.blocks[b].insts[i];
+            if inst.ties.is_empty() {
+                extra.push(format!("{what}: {added} before {:?}", inst.kind));
+            } else {
+                tied += added;
+            }
+        }
+    }
+    assert!(tied >= 20, "only {tied} copies stand beside a declared tie: the check sees nothing");
+    let unknown: Vec<_> = extra.iter().filter(|line| !KNOWN.iter().any(|known| line.starts_with(known))).collect();
+    assert!(unknown.is_empty(), "TwoAddress copied a source before instructions m68k declares no tie for: {unknown:#?}");
+    assert!(extra.len() <= KNOWN.len(), "{extra:#?}");
+}
+
 /// Flag setter -> reader pairs of `body` (a setter, then a later reader of
 /// its codes in the block) with a copy between them, and all such pairs.
 fn split_pairs(

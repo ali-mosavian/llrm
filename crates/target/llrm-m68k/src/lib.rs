@@ -67,13 +67,31 @@ pub mod reg {
     include!(concat!(env!("OUT_DIR"), "/register_ids.rs"));
 }
 
-/// Instruction effect rows: none until m68k's forms are described.
+/// The row of an instruction whose first source is its destination's register
+/// (`@ties rows`): what the pin's description says (`OperandDesc::tied_to`),
+/// not x86's rule that an `Add` is tied. `LEA32p d, #n, b` is not.
+const TIED: [Row; 1] =
+    [Row { reads: &[], writes: &[], kinds: &[], width: 0, ties: &[(0, 0)], pins: &[], flags_read: 0, flags_written: 0 }];
+
+/// Instruction effect rows: the tie of each instruction the description ties,
+/// nothing else until m68k's other effects are described.
 fn rows(
-    _name: &str,
+    name: &str,
     _dests: usize,
     _sources: usize,
 ) -> &'static [Row] {
-    &[]
+    static TIED_NAMES: std::sync::OnceLock<std::collections::HashSet<&'static str>> = std::sync::OnceLock::new();
+    let tied = TIED_NAMES.get_or_init(|| {
+        (0..=u32::from(u16::MAX))
+            .filter_map(|code| {
+                let name = dagisel::local::name_of(code)?;
+                let desc = dagisel::local::desc(code as u16)?;
+                let first_source = usize::from(desc.num_defs);
+                desc.operands.get(first_source).is_some_and(|operand| operand.tied_to == 0).then_some(name)
+            })
+            .collect()
+    });
+    if tied.contains(name) { &TIED } else { &[] }
 }
 
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
