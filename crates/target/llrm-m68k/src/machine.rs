@@ -124,6 +124,79 @@ impl M68k {
     pub fn for_cpu(cpu: crate::dagisel::hooks::Cpu) -> M68k {
         M68k { cpu, ..M68k::default() }
     }
+
+    /// The clocks of one instruction of `bytes` bytes.
+    fn clocks(
+        &self,
+        text: &str,
+        bytes: u32,
+    ) -> Option<i32> {
+        crate::timing::cost(self.cpu, text, bytes, false).ok().map(|one| i32::try_from(one.clocks).unwrap_or(0))
+    }
+
+    /// `(clocks, bytes)` of the cheapest way to write `op` with `constant` on a
+    /// data register at `bits`, by clocks and then bytes.
+    fn op_price(
+        &self,
+        op: llrm_mir::opcode::BinaryOp,
+        bits: u32,
+        constant: Option<u64>,
+    ) -> Option<(i32, i32)> {
+        use llrm_mir::opcode::BinaryOp;
+        let size = size_letter(bits)?;
+        let mnemonic = match op {
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+            BinaryOp::Xor => "eor",
+            BinaryOp::Add => "add",
+            BinaryOp::Sub => "sub",
+            BinaryOp::Shl => "lsl",
+            _ => return None,
+        };
+        let long = bits == 32;
+        let mut forms: Vec<(i32, i32)> = Vec::new();
+        let mut form = |text: String, bytes: i32| {
+            if let Some(clocks) = self.clocks(&text, bytes as u32) {
+                forms.push((clocks, bytes));
+            }
+        };
+        let register =
+            |m: &str| if m == "eor" { format!("eor.{size} %d1, %d0") } else { format!("{m}.{size} %d1, %d0") };
+        match (op, constant) {
+            (BinaryOp::Shl, Some(amount)) if (1..=8).contains(&amount) => form(format!("lsl.{size} #{amount}, %d0"), 2),
+            (BinaryOp::Shl, _) => return None,
+            (_, None) => form(register(mnemonic), 2),
+            (_, Some(value)) => {
+                let width = if long { u64::MAX >> 32 } else { (1u64 << bits) - 1 };
+                let value = value & width;
+                let small = value <= 8 || width - value < 8;
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub) && small {
+                    form(format!("addq.{size} #4, %d0"), 2);
+                }
+                form(format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 });
+                let signed = if long { value as u32 as i32 } else { 0 };
+                if long && (-128..=127).contains(&signed) {
+                    // moveq + register form
+                    if let (Some(load), Some(clocks)) =
+                        (self.clocks("moveq #1, %d1", 2), self.clocks(&register(mnemonic), 2))
+                    {
+                        forms.push((load + clocks, 4));
+                    }
+                }
+            }
+        }
+        forms.into_iter().min()
+    }
+}
+
+/// The size letter of a native integer width.
+fn size_letter(bits: u32) -> Option<char> {
+    match bits {
+        8 => Some('b'),
+        16 => Some('w'),
+        32 => Some('l'),
+        _ => None,
+    }
 }
 
 impl Tti for M68k {
@@ -154,38 +227,21 @@ impl Tti for M68k {
         true
     }
 
-    /// The register-to-register form of `op` at each size, from the timing
-    /// tables.
+    /// `op` at each size as the target would write it: the register form, the
+    /// immediate form, the `moveq` and register form of a long constant that
+    /// fits it, `addq` and `lsl #n`; clocks from the timing tables.
     fn narrowing_gain(
         &self,
         op: llrm_mir::opcode::BinaryOp,
         wide_bits: u32,
         narrow_bits: u32,
-        amount: Option<u64>,
-    ) -> i32 {
-        use llrm_mir::opcode::BinaryOp;
-        let size = |bits| match bits {
-            8 => Some('b'),
-            16 => Some('w'),
-            32 => Some('l'),
-            _ => None,
+        constant: Option<u64>,
+    ) -> llrm_mir::tti::Saving {
+        let gone = |bits| if bits == 0 { Some((0, 0)) } else { self.op_price(op, bits, constant) };
+        let (Some(wide), Some(narrow)) = (gone(wide_bits), gone(narrow_bits)) else {
+            return llrm_mir::tti::Saving::default();
         };
-        let clocks = |size: char| {
-            let text = match op {
-                BinaryOp::And => format!("and.{size} %d0, %d1"),
-                BinaryOp::Or => format!("or.{size} %d0, %d1"),
-                BinaryOp::Xor => format!("eor.{size} %d1, %d0"),
-                BinaryOp::Add => format!("add.{size} %d0, %d1"),
-                BinaryOp::Sub => format!("sub.{size} %d0, %d1"),
-                BinaryOp::Shl => format!("lsl.{size} #{}, %d0", amount.filter(|a| (1..=8).contains(a))?),
-                _ => return None,
-            };
-            crate::timing::cost(self.cpu, &text, 2, false).ok().map(|one| i32::try_from(one.clocks).unwrap_or(0))
-        };
-        let (Some(wide), Some(narrow)) = (size(wide_bits).and_then(clocks), size(narrow_bits).and_then(clocks)) else {
-            return 0;
-        };
-        wide - narrow
+        llrm_mir::tti::Saving { clocks: wide.0 - narrow.0, bytes: wide.1 - narrow.1 }
     }
 
     /// The `move.l` copy and `tst` of the old value that `cmpcarry` drops
@@ -193,16 +249,28 @@ impl Tti for M68k {
     fn shift_out_test_gain(
         &self,
         narrow_bits: u32,
-    ) -> i32 {
-        let size = match narrow_bits {
-            8 => 'b',
-            16 => 'w',
-            _ => return 0,
+    ) -> llrm_mir::tti::Saving {
+        let Some(size) = size_letter(narrow_bits) else { return llrm_mir::tti::Saving::default() };
+        let (Some(copy), Some(test)) = (self.clocks("move.l %d0, %d1", 2), self.clocks(&format!("tst.{size} %d1"), 2))
+        else {
+            return llrm_mir::tti::Saving::default();
         };
-        let clocks = |text: &str| {
-            crate::timing::cost(self.cpu, text, 2, false).ok().map(|one| i32::try_from(one.clocks).unwrap_or(0))
+        llrm_mir::tti::Saving { clocks: copy + test, bytes: 4 }
+    }
+
+    /// `moveq #0, %d0; move.<s> %d1, %d0`.
+    fn extension_cost(
+        &self,
+        narrow_bits: u32,
+        wide_bits: u32,
+    ) -> llrm_mir::tti::Saving {
+        let (Some(size), 32) = (size_letter(narrow_bits), wide_bits) else { return llrm_mir::tti::Saving::default() };
+        let (Some(zero), Some(copy)) =
+            (self.clocks("moveq #0, %d0", 2), self.clocks(&format!("move.{size} %d1, %d0"), 2))
+        else {
+            return llrm_mir::tti::Saving::default();
         };
-        clocks("move.l %d0, %d1").zip(clocks(&format!("tst.{size} %d1"))).map_or(0, |(copy, test)| copy + test)
+        llrm_mir::tti::Saving { clocks: zero + copy, bytes: 4 }
     }
 
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's

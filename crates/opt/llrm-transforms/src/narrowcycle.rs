@@ -25,8 +25,10 @@
 //!   value, zero-extended).
 //!
 //! A connected piece of `S` with a phi is made again at `w` bits when
-//! `Tti::narrowing_gain` finds none of its operations dearer and one cheaper,
-//! a doubling whose old top bit the piece tests counting `shift_out_test_gain`.
+//! `Tti::narrowing_gain` finds none of its operations dearer and the whole
+//! cheaper on an axis and dearer on none, a doubling whose old top bit the
+//! piece tests counting `shift_out_test_gain`, the `zext` at each outside use
+//! that reads the wide value costing `extension_cost`.
 //! Operands from outside are truncated (constants folded); uses outside read
 //! a `zext` of the narrow value; the `and` masks become a narrow `and` and a
 //! `zext`. The `nuw`/`nsw` flags are dropped: they were about the wide result.
@@ -47,9 +49,9 @@ use llrm_mir::context::{Constant, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::tti::Tti;
+use llrm_mir::tti::{Saving, Tti};
 use llrm_mir::types::TypeId;
 
 use crate::lcssa::{arms, from_arms};
@@ -292,7 +294,11 @@ fn plan(
     None
 }
 
-/// None of the piece's operations dearer at `bits`, and one cheaper.
+/// None of the piece's operations dearer on an axis, and the whole cheaper on
+/// one and dearer on none: its operations narrowed, a doubling whose old top
+/// bit it tests counted, less the extension at each use outside that reads the
+/// wide value. A per-iteration saving must pay for the extensions, which run
+/// once.
 fn pays(
     context: &Context,
     function: &Function,
@@ -300,16 +306,22 @@ fn pays(
     piece: &BTreeSet<InstId>,
     bits: u32,
 ) -> bool {
-    let mut total = 0;
+    let mut total = Saving::default();
+    let mut wide_bits = bits;
     for &inst in piece {
         let instruction = function.instruction(inst);
-        let Opcode::Binary(op) = instruction.opcode else { continue };
         let Some(wide) = context.types.int_bits(instruction.ty) else { return false };
-        let gain = tti.narrowing_gain(op, wide, bits, constant_of(context, instruction.operands[1]));
-        if gain < 0 {
+        wide_bits = wide_bits.max(wide);
+        let Opcode::Binary(op) = instruction.opcode else { continue };
+        let constant = constant_of(context, instruction.operands[1]);
+        // An `and` with the narrow mask is a zero extension: at the narrow
+        // width it is gone, and the `zext` at its users is counted below.
+        let kept = if op == BinaryOp::And && constant == Some(mask(bits) as u64) { 0 } else { bits };
+        let gain = tti.narrowing_gain(op, wide, kept, constant);
+        if gain.clocks < 0 || gain.bytes < 0 {
             return false;
         }
-        total += gain;
+        total = total + gain;
     }
     // A doubling whose old top bit the piece tests: the carry reads it.
     let top = 1u64 << (bits - 1);
@@ -332,10 +344,50 @@ fn pays(
                 },
             );
         if tested {
-            total += tti.shift_out_test_gain(bits);
+            total = total + tti.shift_out_test_gain(bits);
         }
     }
-    total > 0
+    let extension = tti.extension_cost(bits, wide_bits);
+    for &inst in piece {
+        let Some(result) = function.instruction(inst).result else { continue };
+        for used in function.users(result) {
+            if !piece.contains(&used.user) && !masks_or_cuts(context, function, used.user, result, bits) {
+                total = total - extension;
+            }
+        }
+    }
+    total.clocks >= 0 && total.bytes >= 0 && (total.clocks > 0 || total.bytes > 0)
+}
+
+/// Whether `user` reads `value` through a constant mask below `2^bits`, a
+/// `trunc` to `bits` or fewer or a compare with a constant that fits: no
+/// extension is left at it.
+fn masks_or_cuts(
+    context: &Context,
+    function: &Function,
+    user: InstId,
+    value: llrm_mir::module::ValueId,
+    bits: u32,
+) -> bool {
+    let instruction = function.instruction(user);
+    match instruction.opcode {
+        Opcode::Binary(BinaryOp::And) => instruction.operands.iter().any(|&operand| {
+            operand != Operand::Value(value) && constant_of(context, operand).is_some_and(|mask| mask >> bits == 0)
+        }),
+        Opcode::Cast(CastOp::Trunc) => context.types.int_bits(instruction.ty).is_some_and(|to| to <= bits),
+        // A compare with a constant that fits is made at the narrow width.
+        Opcode::ICmp(
+            IntPredicate::Eq
+            | IntPredicate::Ne
+            | IntPredicate::Ugt
+            | IntPredicate::Uge
+            | IntPredicate::Ult
+            | IntPredicate::Ule,
+        ) => instruction.operands.iter().any(|&operand| {
+            operand != Operand::Value(value) && constant_of(context, operand).is_some_and(|c| c >> bits == 0)
+        }),
+        _ => false,
+    }
 }
 
 /// The piece with operands before their users, the phis (which close the

@@ -121,11 +121,35 @@ fn a_doubling_whose_top_bit_is_tested_is_a_word_where_a_word_add_costs_the_same(
     }
 }
 
-/// With another bit tested nothing reads the carry: no cheaper word, so the
-/// cycle stays a long on a CPU where a word `add` costs the same.
+/// Symptom: stft_single/stft_fixed -Os grew 8 B at 68000 (+6 at -O1): a bit
+/// loop was carried in a byte, saving a few clocks a trip, and each wide read
+/// of it after the loop became `moveq #0; move.b`. The extensions are costed
+/// against the saving, so a cycle read wide at the exits stays a long.
 #[test]
-fn a_cycle_testing_another_bit_stays_a_long_where_a_word_is_no_cheaper() {
-    let text = crc_loop(MASKED, "xor i32 %s, 4129").replace("32768", "16384");
-    let after = run(&text, Cpu::M68020);
-    assert!(!after.contains("phi i16"), "{after}");
+fn a_cycle_read_wide_after_the_loop_stays_a_long_when_extensions_eat_the_saving() {
+    let text = format!(
+        "{LAYOUT}define i32 @f(i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %r = phi i32 [ %n, %entry ], [ %m, %loop ]
+  %s = shl i32 %r, 1
+  %o = or i32 %s, %i
+  %m = and i32 %o, 255
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 8
+  br i1 %go, label %loop, label %exit
+exit:
+  %out = phi i32 [ %m, %loop ]
+  %x = mul i32 %out, %n
+  %y = add i32 %x, %out
+  %z = xor i32 %y, %out
+  %w = sub i32 %z, %out
+  ret i32 %w
+}}
+"
+    );
+    let after = run(&text, Cpu::M68000);
+    assert!(!after.contains("phi i8"), "{after}");
 }

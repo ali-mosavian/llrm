@@ -435,6 +435,35 @@ pub struct CallShape {
     pub caller_frame_bytes: u64,
 }
 
+/// A change in cost on both axes a target prices: positive is cheaper.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Saving {
+    pub clocks: i32,
+    pub bytes: i32,
+}
+
+impl std::ops::Add for Saving {
+    type Output = Saving;
+
+    fn add(
+        self,
+        other: Saving,
+    ) -> Saving {
+        Saving { clocks: self.clocks + other.clocks, bytes: self.bytes + other.bytes }
+    }
+}
+
+impl std::ops::Sub for Saving {
+    type Output = Saving;
+
+    fn sub(
+        self,
+        other: Saving,
+    ) -> Saving {
+        Saving { clocks: self.clocks - other.clocks, bytes: self.bytes - other.bytes }
+    }
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -1641,8 +1670,8 @@ pub trait Tti {
     /// Beyond the pin: whether a cycle through a phi whose values only matter
     /// at a narrower native width (read through `and` masks, `trunc`s and
     /// values known zero above it) is carried at that width (`narrowcycle`),
-    /// when [`Tti::narrowing_gain`] prices every operation of it no dearer and
-    /// one cheaper. `TruncInstCombine` starts from a `trunc` and wants every
+    /// when [`Tti::narrowing_gain`] prices every operation of it no dearer, the
+    /// whole cheaper and no axis dearer, the extensions at its uses counted. `TruncInstCombine` starts from a `trunc` and wants every
     /// value of its graph unused outside it; a phi cycle read by a mask and a
     /// compare of masked bits has neither. Off by default.
     /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-17).
@@ -1650,20 +1679,20 @@ pub trait Tti {
         false
     }
 
-    /// Clocks saved by `op` at `narrow_bits` against `wide_bits` (negative:
-    /// dearer); `amount` is a constant shift amount. Zero where the target
-    /// does not price it apart.
+    /// What `op` at `narrow_bits` saves against `wide_bits` (negative: dearer);
+    /// `constant` is its constant operand; `narrow_bits` 0 is the operation
+    /// gone. Zero where the target does not price it apart.
     fn narrowing_gain(
         &self,
         _op: crate::opcode::BinaryOp,
         _wide_bits: u32,
         _narrow_bits: u32,
-        _amount: Option<u64>,
-    ) -> i32 {
-        0
+        _constant: Option<u64>,
+    ) -> Saving {
+        Saving::default()
     }
 
-    /// Clocks a cycle at `narrow_bits` saves per iteration when it doubles a
+    /// What a cycle at `narrow_bits` saves per iteration when it doubles a
     /// value (`shl x, 1`) and tests that value's top bit (`and x, 1 <<
     /// (narrow_bits - 1)`): the shift leaves the bit in the carry at that
     /// width only, so the target reads it there and drops the copy and the
@@ -1672,8 +1701,18 @@ pub trait Tti {
     fn shift_out_test_gain(
         &self,
         _narrow_bits: u32,
-    ) -> i32 {
-        0
+    ) -> Saving {
+        Saving::default()
+    }
+
+    /// What reading a value of `narrow_bits` where `wide_bits` is wanted costs
+    /// (the zero extension), as a positive saving lost.
+    fn extension_cost(
+        &self,
+        _narrow_bits: u32,
+        _wide_bits: u32,
+    ) -> Saving {
+        Saving::default()
     }
 
     /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
