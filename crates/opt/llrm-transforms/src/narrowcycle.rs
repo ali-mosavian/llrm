@@ -14,15 +14,12 @@
 //! the shape `add.w %d0, %d0; bcc` wants (m68k `cmpcarry`).
 //!
 //! # How it works
-//! For a legal width `w` (8, then 16), [`narrowed`] finds the largest set `S`
-//! of `phi`, `and`, `or`, `xor`, `add`, `sub`, `shl` by a constant and
-//! `select` instructions wider than `w` that a greatest fixpoint leaves with
-//! every use one of:
-//! - an operand of an `S` member that reads only the low `w` bits of it;
-//! - an `and` with a constant below `2^w` (read, the result is zero above `w`);
-//! - a `trunc` to `w` bits or fewer;
-//! - anything, when the value is known zero above `w` bits (a use of the narrow
-//!   value, zero-extended).
+//! For a legal width `w` (8, then 16), [`narrowed`] finds the set `S` of
+//! `phi`, `and`, `or`, `xor`, `add`, `sub`, `shl` by a constant and `select`
+//! instructions wider than `w` whose result is read in `w` bits or fewer: the
+//! demanded width of `computeRecurrenceType` ([`demanded_width`], over
+//! `DemandedBits`, which is the fixpoint around the cycle), or a value known
+//! zero above `w` bits, which a wide reader sees zero-extended.
 //!
 //! A connected piece of `S` with a phi is made again at `w` bits when
 //! `Tti::narrowing_gain` finds none of its operations dearer and the whole
@@ -46,6 +43,8 @@
 //! # See also
 //! [`crate::narrowiv`], [`crate::trunc_inst_combine`].
 
+use llrm_analysis::demandedbits::{DemandedBits, Environment};
+use llrm_analysis::ivdescriptors::demanded_width;
 use llrm_mir::context::{Constant, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -82,7 +81,16 @@ pub fn narrowed(
         if bits >= widest || !layout.legal_integer(bits) {
             continue;
         }
-        while let Some(plan) = plan(context, function, &*tti, bits) {
+        loop {
+            let environment = Environment {
+                context: &*context,
+                layout,
+                callees: outer.callees(),
+                globals: &outer.globals,
+                metadata: &outer.metadata,
+            };
+            let demanded = DemandedBits::of(&environment, function);
+            let Some(plan) = plan(&environment, &demanded, function, &*tti, bits) else { break };
             apply(context, function, &plan);
             changed = true;
         }
@@ -153,22 +161,6 @@ fn member_shape(
     }
 }
 
-/// Whether operand `index` of the member `user` reads only the low bits of
-/// its operand.
-fn reads_low_bits(
-    function: &Function,
-    user: InstId,
-    index: usize,
-) -> bool {
-    match function.instruction(user).opcode {
-        Opcode::Phi => index % 2 == 0,
-        Opcode::Select => index != 0,
-        Opcode::Binary(BinaryOp::Shl) => index == 0,
-        Opcode::Binary(_) => true,
-        _ => false,
-    }
-}
-
 /// Whether the bits of `operand` from `bits` up are zero, by the shapes this
 /// pass makes: a cycle of phis is assumed so while it is asked.
 fn zero_above(
@@ -201,71 +193,39 @@ fn zero_above(
     result
 }
 
-/// Whether `user`, not a member, reads the member `value` in a way that
-/// survives narrowing it.
-fn outside_use_ok(
-    context: &Context,
+/// Whether `inst`'s result can be carried in `bits` bits: the bits read of it
+/// (`computeRecurrenceType`'s demanded width, [`demanded_width`]) fit, or it
+/// is known zero above them and a wide reader sees a `zext`.
+fn fits(
+    environment: &Environment,
+    demanded: &DemandedBits,
     function: &Function,
-    value: Operand,
-    user: InstId,
+    inst: InstId,
     bits: u32,
 ) -> bool {
-    let instruction = function.instruction(user);
-    match instruction.opcode {
-        Opcode::Binary(BinaryOp::And) => {
-            let other =
-                if instruction.operands[0] == value { instruction.operands[1] } else { instruction.operands[0] };
-            if constant_of(context, other).is_some_and(|mask| mask >> bits == 0) {
-                return true;
-            }
-        }
-        Opcode::Cast(CastOp::Trunc) => {
-            if context.types.int_bits(instruction.ty).is_some_and(|to| to <= bits) {
-                return true;
-            }
-        }
-        _ => {}
-    }
-    zero_above(context, function, value, bits, &mut IdSet::new())
+    let Some(result) = function.instruction(inst).result else { return false };
+    demanded_width(demanded, environment, function, inst) <= bits
+        || zero_above(environment.context, function, Operand::Value(result), bits, &mut IdSet::new())
 }
 
 /// The next piece to narrow at `bits`, if there is one.
 fn plan(
-    context: &Context,
+    environment: &Environment,
+    demanded: &DemandedBits,
     function: &Function,
     tti: &dyn Tti,
     bits: u32,
 ) -> Option<Plan> {
-    let mut members: IdSet<InstId> =
-        function.walk().map(|(_, inst)| inst).filter(|&inst| member_shape(context, function, inst, bits)).collect();
-    // The greatest fixpoint: drop a member with a use that is none of the
-    // reads above, until none is left to drop.
-    loop {
-        let mut dropped = Vec::new();
-        for inst in members.iter() {
-            let Some(result) = function.instruction(inst).result else {
-                dropped.push(inst);
-                continue;
-            };
-            let value = Operand::Value(result);
-            let fine = function
-                .users(result)
-                .iter()
-                .all(
-                    |used| (members.contains(&used.user) && reads_low_bits(function, used.user, used.index as usize))
-                        || outside_use_ok(context, function, value, used.user, bits),
-                );
-            if !fine {
-                dropped.push(inst);
-            }
-        }
-        if dropped.is_empty() {
-            break;
-        }
-        for inst in dropped {
-            members.remove(&inst);
-        }
-    }
+    let context = environment.context;
+    // The members: the shapes this pass carries whose result is read at `bits`
+    // bits or fewer. The demanded bits are the fixpoint over the cycle.
+    let members: IdSet<InstId> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| {
+            member_shape(context, function, inst, bits) && fits(environment, demanded, function, inst, bits)
+        })
+        .collect();
     // Connected pieces of members, through operands and users.
     let mut seen: IdSet<InstId> = IdSet::new();
     for start in members.iter() {
