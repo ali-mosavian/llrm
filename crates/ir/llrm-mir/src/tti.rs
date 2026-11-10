@@ -601,8 +601,9 @@ pub trait Tti {
     }
 
     /// Whether a speed caller's inline that gives a loop of the callee a constant
-    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
-    /// the copy unrolls and folds, which the call's latency does not show).
+    /// trip count is exempt from the byte rate: the copy unrolls and folds, which
+    /// the call's latency does not show. No pin counterpart (the pin's InlineCost
+    /// only adds `LoopPenalty` per loop).
     fn inline_hints_known_loop_bound(&self) -> bool {
         false
     }
