@@ -137,3 +137,37 @@ def test_a_table_without_the_bench_commit_or_the_pie_mark_is_refused(tmp_path):
         table.write_text(header + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
         done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
         assert done.returncode != 0 and word in done.stderr
+
+
+def _landing(repo, name):
+    (repo / "crates").mkdir(exist_ok=True)
+    (repo / "crates" / name).write_text(name)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", name)
+
+
+def test_a_compiler_many_landings_behind_the_checkout_is_stale(tmp_path):
+    """The 11-09 table was also built by a compiler 95 landings older than the tip: its gaps moved with #8735 and others, and 'sources unchanged' did not make
+    them current. A table counts as current within MAX_LANDINGS commits that touch crates/."""
+    built = _bench_repo(tmp_path)
+    for i in range(worse_cells.MAX_LANDINGS + 1):
+        _landing(tmp_path, f"c{i}")
+    assert worse_cells.compiler_landings(built, tmp_path) == worse_cells.MAX_LANDINGS + 1
+
+
+def test_commits_that_do_not_touch_the_compiler_do_not_age_a_table(tmp_path):
+    built = _bench_repo(tmp_path)
+    for i in range(worse_cells.MAX_LANDINGS + 5):
+        (tmp_path / f"doc{i}.md").write_text("x")
+        _git(tmp_path, "add", ".")
+        _git(tmp_path, "commit", "-qm", f"doc{i}")
+    assert worse_cells.compiler_landings(built, tmp_path) == 0
+
+
+def test_a_table_without_a_compiler_stamp_is_refused(tmp_path):
+    import subprocess
+
+    table = tmp_path / "t.tsv"
+    table.write_text("# m; data=object_bytes; code_bytes padding-free; reloc=-fPIE; bench=abcdef1\n" + row("p", "ours", 1) + row("p", "gcc", 1) + row("p", "clang", 1))
+    done = subprocess.run([sys.executable, str(Path(worse_cells.__file__)), str(table)], capture_output=True, text=True)
+    assert done.returncode != 0 and "compiler=" in done.stderr
