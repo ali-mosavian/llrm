@@ -173,3 +173,89 @@ int main(void) { report(rot(trips, 1.0f)); return 0; }
     let calls = listing.lines().filter(|line| line.contains("call") && line.contains("rot")).count();
     assert_eq!(calls, 1, "a loop callee of ten rotating values stays a call:\n{listing}");
 }
+
+/// A callee priced at more bytes than its call is refused at -O1, but a site
+/// whose constant arguments fold the whole loop away is smaller inlined
+/// (split_loops -O1: 206 B kept as calls, 271 B with the refusal). The
+/// refused site is tried and kept where the caller comes out smaller.
+#[test]
+fn test_m32_o1_inline_keeps_a_refused_site_that_folds_away() {
+    let source = r#"
+extern void report(long value);
+static long below(short n, short k)
+{
+    long sum = 0;
+    short i;
+    for (i = 0; i < n; i++)
+        sum += i < k ? i * 3 : i + 7;
+    return sum;
+}
+static long from(short n, short k)
+{
+    long sum = 0;
+    short i;
+    for (i = 0; i < n; i++)
+        sum += i >= k ? i * 5 : 1;
+    return sum;
+}
+int main(void)
+{
+    report(below(10, 4));
+    report(below(10, 0));
+    report(below(10, 20));
+    report(below(10, -3));
+    report(from(10, 4));
+    report(from(10, 0));
+    report(from(10, 20));
+    report(from(0, 3));
+    return 0;
+}
+"#;
+    let (listing, _) = compile("folds", source, "-O1");
+    let calls = listing.lines().filter(|line| line.contains("call") && (line.contains("below") || line.contains("from"))).count();
+    assert_eq!(calls, 0, "constant arguments fold the loops: the sites are inlined, not called:\n{listing}");
+}
+
+/// A callee refused before the folds that empty it is priced again after
+/// them (`second_inline`): `bar` stores to a global nothing reads once `main`
+/// has folded the sum, so it ends as a lone `ret` and `foo` drops the call
+/// (byvalue_struct_address -O1: 18 B with the call dropped, 41 B without).
+#[test]
+fn test_m32_o1_inline_drops_the_call_to_a_callee_the_folds_emptied() {
+    let source = r#"
+extern void report(long value);
+struct baz { int a, b, c, d, e; };
+static int sum;
+void bar(struct baz *x, int f, int g, int h, int i, int j)
+{
+    sum = x->a * 1 + x->b * 10 + x->c * 100 + x->d * 1000 + x->e * 10000 + f + g + h + i + j;
+}
+void foo(char *z, struct baz x, char *y)
+{
+    bar(&x, 6, 7, 8, 9, 10);
+}
+int main(void)
+{
+    struct baz x = { 1, 2, 3, 4, 5 };
+    foo((char *)0, x, (char *)0);
+    report(sum);
+    return 0;
+}
+"#;
+    let (listing, _) = compile("emptied", source, "-O1");
+    let calls = listing.lines().filter(|line| line.contains("call") && line.contains("bar")).count();
+    assert_eq!(calls, 0, "`bar` is empty after the folds: its call is gone:\n{listing}");
+}
+
+/// At -Os the byte bound stands down where the pin's own cost is negative:
+/// `to_double` folds away at its constant call, but 16 B against a 12 B call
+/// kept it a call, which kept `classify` over the -Os threshold and the
+/// whole program 317 B instead of 60 (uint64_to_float -Os).
+#[test]
+fn test_m32_os_inline_yields_where_the_pin_counts_the_inline_as_shrinking() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source = std::fs::read_to_string(root.join("tests/run/c/uint64_to_float.c")).unwrap();
+    let (listing, _) = compile("yields", &source, "-Os");
+    let calls = listing.lines().filter(|line| line.contains("call") && !line.contains("report")).count();
+    assert_eq!(calls, 0, "the conversions fold at their constant calls and `classify` follows:\n{listing}");
+}

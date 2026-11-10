@@ -1477,14 +1477,16 @@ fn function_clocks(
 /// kept on the corpus, 14 save one unit and the rest more.
 const GUARD: i64 = 1;
 
-/// SZ2: the code size of body `id`, by the target's cost model for bytes.
+/// SZ2: the code size of body `id`, by the target's cost model for bytes (its
+/// size view, in encoded bytes, where it has one).
 fn body_size(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     tti: &dyn llrm_mir::tti::Tti,
     id: GlobalId,
 ) -> i64 {
-    sized(module, layout, tti, id, true)
+    let view = tti.inline_size_view();
+    sized(module, layout, view.as_deref().unwrap_or(tti), id, true)
 }
 
 /// [`body_size`] with or without its phis: a phi is a copy the allocator

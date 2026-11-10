@@ -785,6 +785,18 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn inline_trials_at_o1(&self) -> bool {
+        self.tuning.inline_size_bytes
+    }
+
+    fn inline_second_round_at_o1(&self) -> bool {
+        self.tuning.inline_size_bytes
+    }
+
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        self.tuning.inline_size_bytes
+    }
+
     fn callee_saved_clocks(&self, peak: usize) -> i64 {
         self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
             (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks

@@ -674,6 +674,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether the -O1 pipeline walks the call graph a second time after the
+    /// dead globals and loops are gone, repricing a callee the folds emptied
+    /// (`Options::second_inline`, which a driver may turn on at every level).
+    fn inline_second_round_at_o1(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
     /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
     /// bound's verdict stands.
