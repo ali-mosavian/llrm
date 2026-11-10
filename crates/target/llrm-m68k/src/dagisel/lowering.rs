@@ -161,6 +161,13 @@ pub fn target_lowering_with(
     // `libcalls`). Owner m68k. Exit: 2026-11-30.
     if !m68020 {
         set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
+        // DEVIATE M68K-PARITY: the parity of a word is the count routine's low
+        // bit, as before `ctpop & 1` became `ISD::PARITY`. The pin's
+        // `ExpandPARITY` (LegalizeDAG.cpp L3148) counts only when `CTPOP` is
+        // legal; here it is a call, and the xor tree is 34 B of shifts against
+        // a 12 B call (bitcount_idioms +14 B at the 68000). Owner m68k. Exit:
+        // 2026-11-20 (the row in #8789).
+        set(&[Parity], &[MVT::I8, MVT::I16, MVT::I32], Action::Custom);
     }
     // DEVIATE M68K-BFFFO (see `bfffo`): `bfffo` counts the leading zeros of an
     // `i32`, 32 for zero, so both forms are one instruction. The pin keeps
@@ -296,6 +303,7 @@ impl Hooks for M68kLowering {
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
+            ISD::Parity => Some(lower_parity_by_count(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             ISD::AddC | ISD::AddE | ISD::SubC | ISD::SubE => lower_carry_chain(dag, node),
             _ => None,
@@ -475,6 +483,21 @@ fn lower_carry_chain(
 /// `UMUL_LOHI` / `SMUL_LOHI` of two `i32`s as `mulu.l` / `muls.l` with a
 /// register pair: the low and the high half, in the order of the node's
 /// results.
+/// `parity(x)` as `ctpop(zext x) & 1`: the count is the library call
+/// (DEVIATE M68K-PARITY, see the action table).
+fn lower_parity_by_count(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let x = dag.operand(node, 0);
+    let x = if vt == EVT::I32 { x } else { dag.get_node(ISD::ZeroExtend, EVT::I32, &[x]) };
+    let count = dag.get_node(ISD::CtPop, EVT::I32, &[x]);
+    let one = dag.get_constant(1, EVT::I32);
+    let low = dag.get_node(ISD::And, EVT::I32, &[count, one]);
+    if vt == EVT::I32 { low } else { dag.get_node(ISD::Truncate, vt, &[low]) }
+}
+
 fn lower_wide_multiply(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -643,8 +666,9 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
-/// The bytes every stack argument takes, which is also the most a `va_arg` aligns its list pointer to (gcc packs each
-/// in a 4-byte slot; the pin's M68k sets neither `getMinStackArgumentAlignment` nor a cap).
+/// The bytes every stack argument takes, which is also the most a `va_arg`
+/// aligns its list pointer to (gcc packs each in a 4-byte slot; the pin's M68k
+/// sets neither `getMinStackArgumentAlignment` nor a cap).
 pub const VA_SLOT: u32 = 4;
 
 /// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`
