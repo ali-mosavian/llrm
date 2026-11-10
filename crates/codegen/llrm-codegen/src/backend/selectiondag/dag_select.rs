@@ -195,22 +195,47 @@ pub fn do_instruction_selection_with(
     Ok(())
 }
 
-/// The nodes the root reaches in reverse topological order: a node comes before
-/// everything it reads.
+/// The nodes the root reaches, users before the nodes they read: the walk
+/// `DoInstructionSelection` makes from the back of `allnodes` once
+/// `AssignTopologicalOrder` has sorted it
+/// ([SelectionDAG.cpp#L12195](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L12195)).
+///
+/// The sort is a queue: nodes without operands first, in creation order, then
+/// each sorted node releases its users, most recently added use first (the
+/// head of a node's use list), the moment their last operand is sorted.
 pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
-    let mut order = Vec::new();
-    let mut seen = HashSet::default();
-    let mut stack = vec![(dag.get_root().node, false)];
-    while let Some((n, expanded)) = stack.pop() {
-        if expanded {
-            order.push(n);
-        } else if seen.insert(n) {
-            stack.push((n, true));
-            stack.extend(dag.node(SDValue { node: n, res: 0 }).ops.iter().map(|op| (op.node, false)));
+    let count = dag.nodes().len();
+    let mut reached = vec![false; count];
+    let mut work = vec![dag.get_root().node];
+    while let Some(node) = work.pop() {
+        if !std::mem::replace(&mut reached[node as usize], true) {
+            work.extend(dag.nodes()[node as usize].ops.iter().map(|op| op.node));
         }
     }
-    order.reverse();
-    order
+    // `allnodes()` order is creation order. A use list is newest first.
+    let mut users: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut degree = vec![0usize; count];
+    for node in (0..count as u32).filter(|&n| reached[n as usize]) {
+        let operands = &dag.nodes()[node as usize].ops;
+        degree[node as usize] = operands.len();
+        for operand in operands {
+            users[operand.node as usize].push(node);
+        }
+    }
+    let mut sorted: Vec<u32> = (0..count as u32).filter(|&n| reached[n as usize] && degree[n as usize] == 0).collect();
+    let mut at = 0;
+    while at < sorted.len() {
+        let node = sorted[at];
+        at += 1;
+        for &user in users[node as usize].iter().rev() {
+            degree[user as usize] -= 1;
+            if degree[user as usize] == 0 {
+                sorted.push(user);
+            }
+        }
+    }
+    sorted.reverse();
+    sorted
 }
 
 /// The installed backend's emitter. Without one nothing emits LIR: a

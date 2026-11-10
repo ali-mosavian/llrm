@@ -308,6 +308,49 @@ define i32 @f(i32 %a, i32 %b) {{
     assert_eq!(got, want);
 }
 
+/// shellsort's first loop at m32 `-Os`: the constant 128 is read by the
+/// `+= 128` and by an address the store folds into its displacement. The pin
+/// selects the store first (`AssignTopologicalOrder`, walked from the back),
+/// which deletes the address add, so the constant has one user and `sub x, -128`
+/// keeps its immediate. Selecting the add first saw two users and made
+/// `mov r, 128; add x, r` (+4 B).
+#[test]
+fn a_constant_an_address_folds_has_one_user_when_the_add_is_selected() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %buf) {
+entry:
+  br label %loop
+loop:
+  %iv = phi i32 [ -128, %entry ], [ %iv.next, %loop ]
+  %acc = phi i32 [ 0, %entry ], [ %acc.next, %loop ]
+  %a = getelementptr i8, ptr %buf, i32 %iv
+  %b = getelementptr i8, ptr %a, i32 128
+  %v = trunc i32 %acc to i16
+  store i16 %v, ptr %b, align 2
+  %acc.next = add i32 %acc, 128
+  %iv.next = add i32 %iv, 2
+  %done = icmp eq i32 %iv.next, 0
+  br i1 %done, label %exit, label %loop
+exit:
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let imm_128_moves = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov"))
+        .filter(|w| w.sources.iter().any(|l| matches!(l, crate::model::ir::Loc::Imm(imm) if imm.value == 128)))
+        .count();
+    assert_eq!(imm_128_moves, 0, "128 was loaded into a register for one add");
+}
+
 const TIMES_SEVEN_PLUS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %y) {
   %b = xor i32 %a, %y
