@@ -583,6 +583,32 @@ class Drain(Env, unittest.TestCase):
         older.wait()
         self.assertEqual(job.wait(timeout=10), 0)
 
+    def test_an_older_waiter_that_does_not_fit_the_free_slots_still_holds_the_line_for_a_younger_one_that_does(self):
+        """Reading 1 of the 07:14Z admission: the slot class does not reorder. Each waiter decides `busy < its own LG_SLOTS`, but `first` ranks by stamp only, so a younger
+        job with a larger LG_SLOTS waits behind an older one that cannot fit (head-of-line blocking, by design: it keeps the old job from starving)."""
+        self.set_load(1.0, 1.0)
+        holder = self.start("sleep", "300", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SLOTS_MAX="1", LG_SETTLE="0")
+        self.assertTrue(until(lambda: os.path.isdir(os.path.join(self.slots, "jobs")) and os.listdir(os.path.join(self.slots, "jobs"))))
+        older = self.start("true", LG_TIER="2", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SLOTS_MAX="1", LG_SETTLE="0", LG_POLL="0.05")
+        time.sleep(0.5)
+        marker = os.path.join(self.dir.name, "ran")
+        younger = self.start("touch", marker, LG_TIER="1", LG_SLOTS="5", LG_SLOTS_HIGH="5", LG_SLOTS_MAX="5", LG_SETTLE="0", LG_POLL="0.05")
+        time.sleep(1.5)
+        self.assertFalse(os.path.exists(marker), "the younger job passed the older one because it fits")
+        self.assertIsNone(older.poll())
+
+    def test_an_older_entry_whose_own_start_threshold_is_not_met_does_not_hold_the_line(self):
+        """Reading 2: `first` skips an entry whose start threshold is at or under the 1m load (a quiet job needs < 20) or whose pid is dead; all other entries rank by stamp."""
+        self.set_load(22.0, 22.0)
+        quiet = subprocess.Popen(["sleep", "300"])
+        self.addCleanup(quiet.kill)
+        os.makedirs(self.slots, exist_ok=True)
+        open(os.path.join(self.slots, "prio"), "w").write(f"3 {time.time() - 4200} {quiet.pid} 20\n")
+        marker = os.path.join(self.dir.name, "ran")
+        job = self.start("touch", marker, LG_TIER="1", LG_SETTLE="0", LG_POLL="0.05")
+        self.assertEqual(job.wait(timeout=10), 0)
+        self.assertTrue(os.path.exists(marker))
+
     def test_a_resubmitted_job_keeps_its_place_with_LG_QUEUED_AT(self):
         """--cancel and resubmit lost the queue place (a 2 h 20 min wait restarted at zero)."""
         self.set_load(30.0, 30.0)
