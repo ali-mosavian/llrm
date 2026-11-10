@@ -35,4 +35,10 @@ out=$("$here/cells.sh" "$d" "$d/list" 2>&1)
 case $out in *"flags: -fno-inline-functions") ;; *) echo "FAIL: stamp lacks the file's flags: $out"; exit 1;; esac
 grep -q -- "-fno-inline-functions" "$d/args" || { echo "FAIL: cell compiled without the file's flags"; exit 1; }
 if grep -q -- "-m32" "$d/args"; then echo "FAIL: machine flag taken from the file"; exit 1; fi
+# Regression (2026-11-10): CELLS_FLAGS was documented and never read, so a `CELLS_FLAGS=-fPIC` sweep compiled flagless and its
+# "-fPIC identical to -fPIE" rows were meaningless. The flags reach both compiles and the row says so.
+: > "$d/args"
+out=$(CELLS_FLAGS=-fPIC "$here/cells.sh" "$d" "$d/list" 2>&1)
+[ "$(grep -c -- '-fPIC' "$d/args")" -ge 4 ] || { echo "FAIL: CELLS_FLAGS=-fPIC did not reach the compiles (base and new, -c and -S): $(cat "$d/args")"; exit 1; }
+case $out in *"env: -fPIC") ;; *) echo "FAIL: row does not state CELLS_FLAGS: $out"; exit 1;; esac
 echo ok
