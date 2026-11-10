@@ -150,13 +150,15 @@ fn test_an_external_copy_becomes_a_tail_call_of_the_first() {
     let after = merged(
         "define i32 @a(i32 %x) {
 b0:
-  %r = add i32 %x, 1
+  %t = add i32 %x, 1
+  %r = mul i32 %t, 3
   ret i32 %r
 }
 
 define i32 @b(i32 %y) {
 b0:
-  %s = add i32 %y, 1
+  %u = add i32 %y, 1
+  %s = mul i32 %u, 3
   ret i32 %s
 }
 ",
@@ -218,4 +220,23 @@ b0:
     );
     assert!(!after.contains("tail call"), "no thunk:\n{after}");
     assert_eq!(defined(&after), 3);
+}
+
+/// value_of_valueless grew 15 -> 17 B at m32 -Os: two exported `ret` bodies became a `jmp`, which is longer than the `ret`.
+/// A body no larger than its thunk stays.
+#[test]
+fn test_a_body_no_larger_than_its_thunk_is_not_replaced() {
+    let after = merged(
+        "define i32 @a(i32 %x) {
+b0:
+  ret i32 %x
+}
+
+define i32 @b(i32 %y) {
+b0:
+  ret i32 %y
+}
+",
+    );
+    assert!(!after.contains("tail call"), "a one-instruction body stays a body:\n{after}");
 }

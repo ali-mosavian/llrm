@@ -357,7 +357,7 @@ fn merge_functions(module: &mut Module) -> bool {
             let global = module.global(id);
             if local(global.linkage) && (!taken.contains(&id) || global.unnamed_addr == UnnamedAddr::Global) {
                 gone.insert(id, keep);
-            } else if !is_variadic(module, id) && !is_thunk_to(module, id, keep) {
+            } else if !is_variadic(module, id) && !is_thunk_to(module, id, keep) && outweighs_thunk(module, id) {
                 thunks.push((id, keep));
             }
         }
@@ -371,6 +371,14 @@ fn merge_functions(module: &mut Module) -> bool {
         module.retain_globals(&|global| !gone.contains_key(&global));
     }
     changed
+}
+
+/// A thunk is a call and a return: a body of that many instructions or fewer is no larger than the thunk that would replace it,
+/// and a `jmp` is longer than a `ret` (value_of_valueless `nothing`: +2 B). The pin has no such check (its pass is a
+/// size-neutral mover of code); this is part of DEVIATE MERGEFUNC-OS.
+fn outweighs_thunk(module: &Module, id: GlobalId) -> bool {
+    let function = module.global(id).function().expect("a function");
+    function.layout().iter().map(|&block| function.iter_block(block).count()).sum::<usize>() > 2
 }
 
 fn is_variadic(module: &Module, id: GlobalId) -> bool {
