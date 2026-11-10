@@ -1379,6 +1379,7 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
 /// the explicit one, else the type's, as known-bits reads it.
 pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
     let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
+    let realigned_above = program.target.realigned_above();
     if kept.is_none() && max.is_none() {
         return Ok(());
     }
@@ -1409,7 +1410,8 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                             "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"
                         ));
                     }
-                    if let Some(kept) = kept.filter(|kept| wanted > *kept) {
+                    let realigned = realigned_above.is_some_and(|above| wanted > above);
+                    if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
                     }
                 }

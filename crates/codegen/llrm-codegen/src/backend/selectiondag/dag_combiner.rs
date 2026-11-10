@@ -1924,12 +1924,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
         let NodeData::Mem(info) = self.dag.node(load).data.clone() else { return None };
         let wide = self.dag.value_type(load);
+        // `isLegalNarrowLdSt`: an extending load narrows to a plain load of
+        // the truncated width when its memory is that wide or wider
+        // (`trunc (zextload i8)` to a byte is the byte load); one whose memory is
+        // narrower than the result stays an extending load.
+        let stored = if info.ext.is_some() { info.mem_vt } else { wide };
         if info.volatile
-            || info.ext.is_some()
             || !self.dag.has_one_use(load.node)
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
+            || stored.size_in_bits() < vt.size_in_bits()
         {
             return None;
         }
@@ -1941,7 +1946,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `AdjustBigEndianShift`: the low bytes of a big-endian value are its
         // last bytes
         let offset =
-            if self.dag.config().big_endian { i64::from((wide.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
+            if self.dag.config().big_endian { i64::from((stored.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
         let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
         let base = match info.base {
             super::dag::MemBase::Stack(at) => super::dag::MemBase::Stack(at + offset as i32),
@@ -1949,7 +1954,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             other => other,
         };
         let align = if offset == 0 { info.align } else { info.align.min(1 << (offset as u32).trailing_zeros()) };
-        let narrow = super::dag::MemInfo { mem_vt: vt, align, base, ..info };
+        let narrow = super::dag::MemInfo { mem_vt: vt, ext: None, align, base, ..info };
         let new = self.dag.get_load(vt, chain, ptr, narrow);
         if self.dag.invariant_loads.contains(&load.node) {
             self.dag.invariant_loads.insert(new.node);
@@ -2524,7 +2529,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // Y), X` is `sub X, (zext i1 Y)`.
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3534
         if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne
-            && !self.dag.config().sext_bool_add_preferred
+            && vt.size_in_bits() > self.dag.config().sext_bool_add_max_bits
         {
             for (sext, other) in [(n0, n1), (n1, n0)] {
                 if self.dag.opcode(sext) == ISD::SignExtend && self.dag.value_type(self.dag.operand(sext, 0)) == EVT::I1 {

@@ -365,7 +365,8 @@ impl ProgramPass for Walk {
                         let by = crate::inline::Caller {
                             layout: &program.layout,
                             effects: known.as_deref(),
-                            recursive: recursive.contains(&id),
+                            recursive: recursive.contains(&id)
+                                && !tti.as_deref().is_some_and(|tti| tti.inline_frames_into_recursive_callers()),
                             self_inlining: None,
                             peeling: !self.inline.single && recursion.is_some(),
                             depth: recursion.map_or(0, |one| one.depth),

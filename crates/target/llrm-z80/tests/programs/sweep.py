@@ -165,10 +165,11 @@ def ours_cell(path, w, ctx, want):
     ll.write_text(run.DATALAYOUT + "\n" + "\n".join(text) + "\n")
     flags = run.program_flags(path)[0] if ctx.program_flags_to_llc else []
     try:
-        p = run.sh(["bash", "-c", 'ulimit -v 16777216; exec "$@"', "llc", ctx.llc, "-S", f"-O{ctx.level}", *flags, "-o", str(w / "p.s"), str(ll)],
-                   w, timeout=ctx.compile_timeout)
+        p = run.llc_limited([ctx.llc, "-S", f"-O{ctx.level}", *flags, "-o", str(w / "p.s"), str(ll)], w, ctx.compile_timeout)
     except subprocess.TimeoutExpired:
-        raise Void(f"SLOW llc over {ctx.compile_timeout} s")
+        raise Void(f"HUNG llc made no progress for {ctx.compile_timeout * 20} s")
+    if p.returncode == run.CPU_LIMIT:
+        raise Void(f"SLOW llc over {ctx.compile_timeout} s of cpu")
     if p.returncode:
         raise Void("COMPILE " + (p.stderr.strip()[-100:] or "llc failed"))
     (w / "rt.s").write_text(run.RUNTIME.read_text())

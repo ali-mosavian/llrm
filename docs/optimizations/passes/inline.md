@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:1836a1e61429289dc08b25503ea012adc3ef4681b0f86df015d27b431a11983b -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:e892da0de3096d09383ef6859b0fd95412e9eeb6ca70b98e14701681ce5c5879 -->
 
 # inline
 
@@ -59,7 +59,9 @@ A copy is allowed (`fits_with`) only where
 
 - the call's function type is the callee's and the callee is not variadic;
 - no body that allocates is copied into a recursive caller, except the last
-  call of a private callee;
+  call of a private callee, unless the target says
+  (`Tti::inline_frames_into_recursive_callers`, the pin's rule: the cost
+  model refuses above 1024 bytes; flat x86 says it);
 - a parameter the callee `releases` is passed an object the caller owns.
 
 Which sites are copied is `inlinecost::decide`'s (the walk's).
