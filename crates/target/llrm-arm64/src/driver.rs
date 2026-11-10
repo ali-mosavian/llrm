@@ -273,6 +273,9 @@ fn lower_function(
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
+        // The body carries the edge odds by block position; no pass between here and the
+        // conversion adds or removes a block.
+        machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
