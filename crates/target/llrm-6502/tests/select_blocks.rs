@@ -47,6 +47,26 @@ fn a_select_on_the_carry_moves_after_the_compare_and_loads_its_constant_in_the_a
     assert!(bytes <= 26, "{bytes} B\n{asm}");
 }
 
+/// A select whose result is read from a cell (`sbc rc`): a def kept in a cell
+/// cost nothing, so the join stored both literals there (`lda #0; sta rc2` in
+/// the head and `lda #1; sta rc2` in the arm, twice for a word) where one
+/// store after the join does: phi_slot_unknown_arm +2 B, memcpy_libcall +12 B
+/// (2026-11-10).
+#[test]
+fn a_select_read_from_a_cell_is_stored_once_after_the_join() {
+    let ir = "define i16 @k_cell(i16 %a, i16 %b, i16 %c) {
+  %cmp = icmp slt i16 %a, %b
+  %s = select i1 %cmp, i16 1, i16 0
+  %t = sub i16 %c, %s
+  ret i16 %t
+}";
+    let asm = function(ir, "k_cell", Level::O2);
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let from = lines.iter().position(|l| l.ends_with("t:") && l.contains("_cm")).unwrap_or_else(|| panic!("no arm in\n{asm}"));
+    let to = from + lines[from..].iter().position(|l| l.contains("_cm") && !l.ends_with("t:")).unwrap();
+    assert!(lines[from..to].iter().all(|l| !l.starts_with("sta ")), "the arm stores its literal:\n{asm}");
+}
+
 /// A block the select made inherits the loop depth of the block it was cut
 /// from (`timing` reads a depth off the last `_b<n>` label): the arm of a
 /// select in a loop is weighed as the loop.

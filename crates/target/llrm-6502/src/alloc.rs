@@ -287,8 +287,16 @@ impl<const STACK: bool> Target for Mos<STACK> {
                 _ => None,
             })
             .collect();
-        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs)
-            .map_or(0, |priced| priced.bytes + priced.cycles as u32)
+        match form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs) {
+            Some(priced) => priced.bytes + priced.cycles as u32,
+            // A result with no memory form is made in a register and stored: a def kept in a cell
+            // costs its `sta` in every block that defines it. Left at 0, a join that merges a value
+            // with a cell stores it at each def (`lda #0; sta rc2` in the head and in the arm).
+            None if matches!(priced, Some(Operand::Def(_))) && inst.kind != Kind::Copy && is_cell(register) => {
+                crate::timing::instruction(Cpu::Mos6502, "sta", "rc2").map_or(0, |store| store.bytes + store.cycles)
+            }
+            None => 0,
+        }
     }
 
     type Class = Class;
