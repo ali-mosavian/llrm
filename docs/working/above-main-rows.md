@@ -229,7 +229,7 @@ Named by the coordinator and not yet filled: QO-SIZE-1, r_bsp, x_bubble, lru m32
 
 No owner or exit: a cell under the best external at its judging metric is not a worse cell. It reopens if the bar moves under ours.
 
-- **WASM-OS-JPEG-CLAMP-8669** (#8669): jpeg_fixed wasm32 Os, 21318 B / 51836453 instrs -> 21320 B / 51983909 (+2 B, +147456 instrs). 80 B under the best external (the pin's clang, 21400 B / 51291412); instrs are an instrs-only regression, unjudged at Os. `clamp` is a call whose body is now the pin's 12-instruction form (11 before), one more instruction on each of 3 x 49152 calls. The pin inlines it (cost -25, threshold 75); SZ1/D11 (`opt_size_inline_by_code_size`, own row and exit) refuses it. With the pin's rule: 21381 B / 51291418 instrs, so SZ1 holds 61 B for +692491 instrs.
+- **WASM-OS-JPEG-CLAMP-8669** (#8669): jpeg_fixed wasm32 Os, 21318 B / 51836453 instrs -> 21320 B / 51983909 (+2 B, +147456 instrs). 80 B under the best external (the pin's clang, 21400 B / 51291412); instrs are an instrs-only regression, unjudged at Os. `clamp` is a call whose body is now the pin's 12-instruction form (11 before), one more instruction on each of 3 x 49152 calls. The pin inlines it (cost -25, threshold 75); SZ1/D11 (`opt_size_inline_by_code_size`, own row and exit) refuses it. With the pin's rule: 21381 B / 51291418 instrs, so SZ1 holds 61 B for +692491 instrs. After #8749 (negative-cost yield, `0adcd1f3cf`): 21328 B / 51365895 instrs (llrm-target-wasm's fix dist, not yet the landed tree; 72 B under the pin, +74477 instrs over its 51291412); jpeg_single Os 21339 B / 47851527 against the pin's 21423 B / 47777044.
 
 ## D-row: expression-carrying debug records and `salvageDebugInfo` (AM-DBG-1)
 
