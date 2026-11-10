@@ -373,12 +373,13 @@ fn merge_functions(module: &mut Module) -> bool {
     changed
 }
 
-/// A thunk is a call and a return: a body of that many instructions or fewer is no larger than the thunk that would replace it,
-/// and a `jmp` is longer than a `ret` (value_of_valueless `nothing`: +2 B). The pin has no such check (its pass is a
-/// size-neutral mover of code); this is part of DEVIATE MERGEFUNC-OS.
+/// A body that is only its terminator (`ret`, `unreachable`) is no larger than the `jmp` that would replace it: value_of_valueless
+/// grew 15 -> 17 B at m32 -Os. A body with any instruction beyond that is kept to the A/B: `call` plus `ret` of two arguments is
+/// pushes, a call and a pop where the thunk is one `jmp` (sfm16 `__gtsf2`, 16 B against 5 B), so a count of two or three
+/// instructions does not say the thunk is no smaller. The pin has no such check; this is part of DEVIATE MERGEFUNC-OS.
 fn outweighs_thunk(module: &Module, id: GlobalId) -> bool {
     let function = module.global(id).function().expect("a function");
-    function.layout().iter().map(|&block| function.iter_block(block).count()).sum::<usize>() > 2
+    function.layout().iter().map(|&block| function.iter_block(block).count()).sum::<usize>() > 1
 }
 
 fn is_variadic(module: &Module, id: GlobalId) -> bool {

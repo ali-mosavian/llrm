@@ -223,9 +223,9 @@ b0:
 }
 
 /// value_of_valueless grew 15 -> 17 B at m32 -Os: two exported `ret` bodies became a `jmp`, which is longer than the `ret`.
-/// A body no larger than its thunk stays.
+/// A body that is only its terminator stays.
 #[test]
-fn test_a_body_no_larger_than_its_thunk_is_not_replaced() {
+fn test_a_bare_return_is_not_replaced_by_a_thunk() {
     let after = merged(
         "define i32 @a(i32 %x) {
 b0:
@@ -238,5 +238,28 @@ b0:
 }
 ",
     );
-    assert!(!after.contains("tail call"), "a one-instruction body stays a body:\n{after}");
+    assert!(!after.contains("tail call"), "a bare return stays a body:\n{after}");
+}
+
+/// A guard that kept every body of two instructions lost the sfm16 merge (-46 B became -14 B): `call` plus `ret` with an argument
+/// of its own is pushes, a call and a pop, where the thunk is one `jmp`.
+#[test]
+fn test_a_call_and_a_return_with_a_constant_argument_is_replaced_by_a_thunk() {
+    let after = merged(
+        "declare i32 @h(i32, i32)
+
+define i32 @a(i32 %x) {
+b0:
+  %r = call i32 @h(i32 %x, i32 7)
+  ret i32 %r
+}
+
+define i32 @b(i32 %y) {
+b0:
+  %s = call i32 @h(i32 %y, i32 7)
+  ret i32 %s
+}
+",
+    );
+    assert!(after.contains("tail call i32 @a(i32 %0)"), "@b is a thunk of @a:\n{after}");
 }
