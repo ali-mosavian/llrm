@@ -1124,11 +1124,7 @@ fn many_loops_on_one_bound_do_not_nest_their_trip_count_queries() {
     }
     text += "x:\n  ret i32 0\n}\n";
     // Small enough that one nested query per loop overflows.
-    let ran = std::thread::Builder::new()
-        .stack_size(STACK)
-        .spawn(move || widening(&text).0)
-        .expect("a thread")
-        .join();
+    let ran = std::thread::Builder::new().stack_size(STACK).spawn(move || widening(&text).0).expect("a thread").join();
     assert!(ran.is_ok(), "the query recursion overflowed a {STACK} byte stack");
 }
 
@@ -1195,4 +1191,15 @@ out:
     manager.add(IndVars { lftr: true, size: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "the shape was derived again");
+}
+
+/// A run built a tree, loops and assumption cache of its own though the
+/// manager held them: the pin's loop passes read the manager's (jpeg_fixed -O2:
+/// `within_declared` 14.3 M of indvars' 69.3 M Ir).
+#[test]
+fn test_a_run_reads_the_managers_tree_and_loops_not_its_own() {
+    let mut module = parsed(&two_counters(0, 1));
+    let before = llrm_analysis::scev::analysis::sessions_made();
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert_eq!(llrm_analysis::scev::analysis::sessions_made() - before, 0, "{}", printed(&module));
 }

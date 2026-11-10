@@ -67,6 +67,8 @@ pub enum ISD {
     SMulO,
     UAddOCarry,
     USubOCarry,
+    SAddOCarry,
+    SSubOCarry,
     SetCCCarry,
     SAddSat,
     UAddSat,
@@ -76,6 +78,12 @@ pub enum ISD {
     SMax,
     UMin,
     UMax,
+    /// `AVGFLOORS`, `AVGFLOORU`, `AVGCEILS`, `AVGCEILU`: the average of two
+    /// values, rounded down / up, computed without overflowing the type.
+    AvgFloorS,
+    AvgFloorU,
+    AvgCeilS,
+    AvgCeilU,
     Abs,
     /// `ASSERT_ZEXT` / `ASSERT_SEXT`: the value's bits above the type in
     /// operand 1 are zero / copies of its sign bit. Selection drops them.
@@ -279,6 +287,8 @@ impl ISD {
             SMulO => "smulo",
             UAddOCarry => "uaddo_carry",
             USubOCarry => "usubo_carry",
+            SAddOCarry => "saddo_carry",
+            SSubOCarry => "ssubo_carry",
             SetCCCarry => "setcccarry",
             SAddSat => "saddsat",
             UAddSat => "uaddsat",
@@ -288,6 +298,10 @@ impl ISD {
             SMax => "smax",
             UMin => "umin",
             UMax => "umax",
+            AvgFloorS => "avgfloors",
+            AvgFloorU => "avgflooru",
+            AvgCeilS => "avgceils",
+            AvgCeilU => "avgceilu",
             Abs => "abs",
             AssertZext => "assertzext",
             AssertSext => "assertsext",
@@ -393,7 +407,7 @@ impl ISD {
             IntrinsicWoChain => "intrinsic_wo_chain",
             IntrinsicWChain => "intrinsic_w_chain",
             IntrinsicVoid => "intrinsic_void",
-            Target(code) => return super::x86isd::name(code),
+            Target(code) => return super::target_names::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()
@@ -418,6 +432,10 @@ impl ISD {
                 | UMax
                 | SAddSat
                 | UAddSat
+                | AvgFloorS
+                | AvgFloorU
+                | AvgCeilS
+                | AvgCeilU
                 | FAdd
                 | FMul
                 | UAddO

@@ -30,8 +30,8 @@ fn zeroed_arrays_with_lifetimes_merge_in_pairs_from_the_first_element() {
         }
     }
     ir.push_str("  call void @use(ptr %a, ptr %b, ptr %c, ptr %d)\n  ret void\n}\n");
-    let dir = std::env::temp_dir().join("llrm-store-merge-lifetimes-arm64");
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
     let (source, out) = (dir.join("f.ll"), dir.join("f.s"));
     std::fs::write(&source, ir).unwrap();
     let done = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))

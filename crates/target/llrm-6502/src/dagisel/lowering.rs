@@ -41,6 +41,7 @@ pub mod mosisd {
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
     pub const FSHL1: ISD = ISD::Target(ids::FSHL1);
     pub const FSHR1: ISD = ISD::Target(ids::FSHR1);
+    pub const SRL1C: ISD = ISD::Target(ids::SRL1C);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -127,6 +128,11 @@ pub fn target_lowering() -> TargetLowering {
     // an undefined value is a zero of the type (the legalizer builds it) until
     // the MIR has `undef`
     set(&[Undef, Poison], Action::Expand);
+    // `CLC; ADC; ROR` keeps the carry out of a byte add: the floor and ceiling
+    // averages of two bytes
+    for op in [AvgFloorU, AvgCeilU] {
+        tl.set_operation_action(op, MVT::I8, Action::Legal);
+    }
     tl.set_operation_action(Undef, MVT::I1, Action::Expand);
     tl.set_operation_action(Poison, MVT::I1, Action::Expand);
     // its action is read at the type it extends from, a bit among them
@@ -620,26 +626,30 @@ fn lower_setcc(
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }
 
-/// `x >= 0` and `-1 >= x` (`x <= -1`) of a long are the sign of its high word:
-/// the pin's `IntegerExpandSetCCOperands` takes that for `x < 0` and `x > -1`
-/// only, and the other two reach the chain as a compare against a constant of
-/// zero or of all ones. The word's compare, as a `SETCC` of the high word.
+/// `x >= 0`, `x < 0` and `-1 >= x` (`x <= -1`) of a long are the sign of its
+/// high word: the pin's `IntegerExpandSetCCOperands` takes that for `x < 0`
+/// and `x > -1` where the compare reaches it so, and the others reach the
+/// chain as a compare against a constant of zero or of all ones (`x < 0` too,
+/// when a combine has made `x >= 0` its inverse before the expansion; the
+/// branch then tests the inverse). The word's compare, as a `SETCC` of the
+/// high word.
 fn sign_compare(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    if dag.opcode(borrow) != ISD::USubO || borrow.res != 1 || cond_of(dag, dag.operand(node, 3)) != CondCode::SetGe {
+    let cc = cond_of(dag, dag.operand(node, 3));
+    if dag.opcode(borrow) != ISD::USubO || borrow.res != 1 || !matches!(cc, CondCode::SetGe | CondCode::SetLt) {
         return None;
     }
     let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
     let zero = dag.get_constant(0, EVT::I16);
     if dag.constant(other) == Some(0) && dag.constant(below) == Some(0) {
-        // x >= 0
-        let ge = dag.get_cond_code(CondCode::SetGe);
-        return Some(dag.get_node(ISD::SetCC, EVT::I1, &[high, zero, ge]));
+        // x >= 0, x < 0
+        let sign = dag.get_cond_code(cc);
+        return Some(dag.get_node(ISD::SetCC, EVT::I1, &[high, zero, sign]));
     }
-    if dag.constant(high) == Some(0xFFFF) && dag.constant(low) == Some(0xFFFF) {
+    if cc == CondCode::SetGe && dag.constant(high) == Some(0xFFFF) && dag.constant(low) == Some(0xFFFF) {
         // -1 >= x
         let lt = dag.get_cond_code(CondCode::SetLt);
         return Some(dag.get_node(ISD::SetCC, EVT::I1, &[other, zero, lt]));

@@ -8,6 +8,8 @@ isd = "AArch64ISD::"
 llvm_dir = "AArch64"
 td = "AArch64.td"
 cpus = ["apple-m1"]
+# The scheduling models (sched.rs): `generic` is Cortex-A510's, `apple-m1` Cyclone's.
+sched_cpus = ["generic", "apple-m1"]
 hw_modes = ["i64", "i64"]
 in_dagisel = true
 # The directory of the checked-in tables, from this file.

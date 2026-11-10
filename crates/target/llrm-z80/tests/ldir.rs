@@ -6,7 +6,7 @@ use std::process::Command;
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8";
 
 /// Copies `%n` (not zero) bytes from `%s` to `%d` one at a time and returns the
 /// destination's end. `LOAD` is the load's keyword.
@@ -32,10 +32,8 @@ fn run(
     dst: u16,
     n: u16,
 ) -> (Vec<u8>, u16) {
-    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let id = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("z80-ldir-{}-{id}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("makes a directory");
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let body = text(ir, "cp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     let fill: String = (1..=5).map(|i| format!("\tld a,#{i}\n\tld (0x{:x}),a\n", 0x9000 + i - 1)).collect();
     let asm = format!(

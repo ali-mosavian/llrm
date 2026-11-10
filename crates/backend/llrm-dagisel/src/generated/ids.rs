@@ -20,7 +20,10 @@ pub mod isd {
     pub const ATOMIC_LOAD_ADD: u16 = 361;
     pub const ATOMIC_STORE: u16 = 357;
     pub const ATOMIC_SWAP: u16 = 360;
+    pub const AVGCEILS: u16 = 183;
     pub const AVGCEILU: u16 = 184;
+    pub const AVGFLOORS: u16 = 181;
+    pub const AVGFLOORU: u16 = 182;
     pub const AssertAlign: u16 = 5;
     pub const AssertNoFPClass: u16 = 6;
     pub const AssertSext: u16 = 3;

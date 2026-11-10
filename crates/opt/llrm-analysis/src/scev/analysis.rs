@@ -212,9 +212,9 @@ impl<'a> LazyScevView<'a> {
 /// that has no analysis manager (`exitfold`): made once, asked many times,
 /// valid while the function is not changed.
 pub struct ScevSession {
-    tree: DomTree,
-    loops: LoopInfo,
-    assumptions: AssumptionCache,
+    tree: Rc<DomTree>,
+    loops: Rc<LoopInfo>,
+    assumptions: Rc<AssumptionCache>,
     scev: ScalarEvolution,
 }
 
@@ -261,7 +261,35 @@ impl ScevSession {
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
         let assumptions = AssumptionCache::of_declared(context, globals, metadata, function, declared);
-        Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
+        Self {
+            tree: Rc::new(tree),
+            loops: Rc::new(loops),
+            assumptions: Rc::new(assumptions),
+            scev: ScalarEvolution::new(),
+        }
+    }
+
+    /// A session over the manager's cached tree, loops and assumptions, as the
+    /// pin's loop passes read them from the analysis manager: nothing is
+    /// rebuilt. Not counted by [`sessions_made`]. The caller changes no edge
+    /// of the CFG while the session lives.
+    pub fn cached(
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            tree: analyses.get::<Dominators>(context, layout, function),
+            loops: analyses.get::<Loops>(context, layout, function),
+            assumptions: analyses.get::<Assumes>(context, layout, function),
+            scev: ScalarEvolution::new(),
+        }
+    }
+
+    /// The session's loops.
+    pub fn loops(&self) -> &LoopInfo {
+        &self.loops
     }
 
     /// `scev` as the session's expressions, for a session that carries on the

@@ -1041,6 +1041,10 @@ fn selected_in(
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_sdiv_pow2_stays(
+            (cpu.size || cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize"))
+                && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size()),
+        )
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
         .with_sdiv_by_magnitude(
@@ -1055,7 +1059,9 @@ fn selected_in(
                     )
                 }),
         )
+        .with_min_jump_table_density(machine.tti().and_then(|tti| tti.min_jump_table_density()))
         .with_opt_size(cpu.size || cpu.min_size)
+        .with_bytes_strict(cpu.bytes_strict())
         .with_min_size(cpu.min_size)
         .with_size_trade(size_trade(&*machine))
         .with_tail_calls(tail_calls_on())
@@ -1271,6 +1277,7 @@ fn selected_in(
                 div_m: cost("x87_div_m")?,
                 milliclocks_per_byte: cpu.speed_milliclocks_per_byte_on(&*machine),
                 memory_bytes: if matches!(address_mode, AddrMode::Real16) { 4 } else { 6 },
+                bytes_strict: cpu.bytes_strict(),
             })
         })
         .flatten();

@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod recurrence;
 pub mod trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
@@ -109,6 +110,9 @@ pub struct Options {
     /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
     /// `UpperBound` are the target's, not forced off.
     pub target_unrolling: bool,
+    /// The inliner still runs after this pass and may take an internal function (inlining is on and the
+    /// function is not `noinline`): its loops are then left to be priced in the context of each site.
+    pub inliner_follows: bool,
 }
 
 /// What the pass reads and changes.
@@ -1406,6 +1410,13 @@ pub(crate) fn compute_unroll_count(
         up.partial |= pinfo.explicit_unroll;
     }
 
+    // DEVIATE RU-REC: the same veto as runtime unrolling, for a known trip
+    // count, unless the user asked for the unroll.
+    if trip_count != 0 && !up.force && !pinfo.explicit_unroll && recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "partial unroll: the loop-carried chain bounds a trip (RU-REC)");
+        return 0;
+    }
+
     // 6th priority is partial unrolling, when the trip count is known.
     if let Some(factor) = should_partial_unroll(loop_size, trip_count, uce, up) {
         return factor;
@@ -1423,6 +1434,10 @@ pub(crate) fn compute_unroll_count(
         return 0;
     }
     if !up.runtime {
+        return 0;
+    }
+    if recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "runtime unroll: the loop-carried chain bounds a trip (RU-REC)");
         return 0;
     }
 
@@ -1661,9 +1676,29 @@ fn try_to_unroll_loop(
 
     // Try to find the trip count upper bound if the exact one is not known.
     let (mut max_trip_count, mut max_or_zero) = (0, false);
+    let mut object_bounded: Option<u32> = None;
     if trip_count == 0 {
         max_trip_count = se.get_small_constant_max_trip_count(&cx, header);
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
+        // DEVIATE OB1: where the pin's bound is none or too large to unroll by, the object the loop's
+        // accesses run through gives one (its range-derived 2^31-1 for `i < n`).
+        if let Some(cap) = run.tti.unroll_object_bound()
+            && !opt_for_size
+            && run.options.opt_level >= 2
+            && let Some(bound) = crate::unrollbound::object_max_trip_count(&mut se, &cx, header)
+            && bound <= cap
+            // The pin's bound is none, or too large to unroll by.
+            && (max_trip_count == 0 || max_trip_count > cap)
+            // Not under a loop that unrolls whole: its constant counter makes the trips of this loop exact in
+            // the copies, where a bounded unroll leaves exit tests (nbody -O2/-O3: 20,604 more instructions).
+            && !lp.get_parent_loop().is_some_and(|parent| {
+                let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
+                trips != 0 && trips <= up.full_unroll_max_count
+            })
+        {
+            max_trip_count = bound;
+            object_bounded = Some(cap);
+        }
     }
 
     // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
@@ -1683,6 +1718,12 @@ fn try_to_unroll_loop(
             why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
             up.threshold = UNROLL_THRESHOLD_DEFAULT;
         }
+    }
+
+    // OB1: a bound the object gives is unrolled by in full, to the target's cap.
+    if let Some(cap) = object_bounded {
+        up.upper_bound = true;
+        up.max_upper_bound = up.max_upper_bound.max(cap);
     }
 
     let pinfo = UnrollPragmaInfo::of(run, &options);
@@ -1761,7 +1802,11 @@ fn try_to_unroll_loop(
     // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
     // loop, made again, is copied out `count` times.
     let mut remade = None;
-    if run.options.target_unrolling && trip_count == 0 {
+    // `UnrollLoop`: a count that reaches the max trip count unrolls the loop
+    // whole, and "there's no point in performing runtime unrolling" then
+    // ([LoopUnroll.cpp#L1019-L1026](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L1019-L1026)).
+    let completely = max_trip_count != 0 && count >= max_trip_count;
+    if run.options.target_unrolling && trip_count == 0 && !completely {
         if trip_multiple % count != 0 {
             // `EpilogProfitability` (LoopUnroll.cpp#L1058): the epilog only
             // where a header phi starts at an integer constant.
@@ -2587,6 +2632,8 @@ pub struct LoopFullUnroll {
     /// The pin's `LoopUnrollPass` (`AllowPartial`, `Runtime` and `UpperBound`
     /// from the target) where false is `LoopFullUnrollPass`.
     pub target_unrolling: bool,
+    /// `Options::inliner_follows`.
+    pub inliner_follows: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -2641,6 +2688,7 @@ impl FunctionPass for LoopFullUnroll {
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
+                inliner_follows: self.inliner_follows,
             },
         };
         let changed = unroll_loops(&mut run);

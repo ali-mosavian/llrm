@@ -11,7 +11,6 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
-use crate::flagcse::writes_flags;
 use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
@@ -53,7 +52,7 @@ pub(crate) fn caller_saved() -> Vec<RegId> {
     <Arm64 as AllocTarget>::caller_saved()
 }
 
-fn to_lir(register: Reg) -> LirReg {
+pub(crate) fn to_lir(register: Reg) -> LirReg {
     match register {
         Reg::Gpr(Gpr(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Gpr, n)),
         Reg::Fpr(Vreg(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Fpr, n)),
@@ -61,7 +60,7 @@ fn to_lir(register: Reg) -> LirReg {
     }
 }
 
-fn from_lir(
+pub(crate) fn from_lir(
     register: LirReg,
     class: Class,
 ) -> Reg {
@@ -76,19 +75,19 @@ fn from_lir(
 }
 
 /// The instruction's name for the allocator: its variant (`AddSubImm`).
-fn name_of(inst: &Inst) -> &'static str {
-    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
-    let debug = format!("{inst:?}");
-    let variant = debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned();
+pub fn name_of(inst: &Inst) -> &'static str {
+    // The variant is told from its debug text once; every later instruction of
+    // it is found by discriminant.
+    static NAMES: OnceLock<Mutex<HashMap<std::mem::Discriminant<Inst>, &'static str>>> = OnceLock::new();
     let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
-    names.entry(variant.clone()).or_insert_with(|| Box::leak(variant.into_boxed_str()))
-}
-
-fn reads_flags(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. } | Inst::FpSelect { .. })
-    )
+    names
+        .entry(std::mem::discriminant(inst))
+        .or_insert_with(
+            || {
+                let debug = format!("{inst:?}");
+                Box::leak(debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned().into_boxed_str())
+            },
+        )
 }
 
 fn label_of(inst: &Inst) -> Option<&str> {
@@ -128,7 +127,7 @@ fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
 }
 
-fn content(op: &Op) -> i64 {
+pub fn content(op: &Op) -> i64 {
     use std::hash::{Hash, Hasher};
     let mut blank = op.clone();
     blank.visit(&mut |register, _| match register {
@@ -136,8 +135,8 @@ fn content(op: &Op) -> i64 {
         RegRef::Fpr(register) if register.is_virtual() => *register = Vreg(Gpr::FIRST_VIRTUAL),
         _ => {}
     });
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{blank:?}").hash(&mut hasher);
+    let mut hasher = rustc_hash::FxHasher::default();
+    blank.hash(&mut hasher);
     hasher.finish() as i64
 }
 
@@ -146,7 +145,17 @@ fn content(op: &Op) -> i64 {
 /// one `add` of the same symbol in the same block. By block: the index of the
 /// `add` and of its `adrp`. As one instruction the allocator can make the
 /// address again where it is needed instead of spilling it.
+thread_local! {
+    static PAIR_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has looked for fused address pairs.
+pub fn address_pair_runs() -> usize {
+    PAIR_RUNS.with(std::cell::Cell::get)
+}
+
 fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
+    PAIR_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut seen: HashMap<Reg, (u32, u32)> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         let mut op = op.clone();
@@ -193,6 +202,14 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
 /// The allocator's function for `function`, registers of both classes numbered
 /// from zero.
 pub fn view(function: &MFunc) -> MFunction<Class> {
+    view_with(function, &address_pairs(function))
+}
+
+/// [`view`] with the address pairs of `function` already found.
+fn view_with(
+    function: &MFunc,
+    pairs: &[HashMap<usize, usize>],
+) -> MFunction<Class> {
     let mut lir = MFunction::<Class>::new(&function.name);
     lir.odds = function.alloc_odds.clone();
     lir.classes = vec![Class::Gpr; (function.next_register - Gpr::FIRST_VIRTUAL) as usize];
@@ -202,7 +219,8 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
-    let pairs = address_pairs(function);
+    // The names the memory operands of this function refer to, by index.
+    let mut symbols: Vec<String> = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
         let first_halves: Vec<usize> = pairs[at].values().copied().collect();
@@ -260,6 +278,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
                 Op::DbgValue { .. } => unreachable!("a debug note is skipped above"),
+                Op::Phi { .. } => unreachable!("phis are copies before allocation"),
             };
             let mut operands = Vec::new();
             let mut ties = Vec::new();
@@ -313,21 +332,13 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             if let Op::Call { callee: crate::mfunc::Callee::Symbol(name), .. } = &op {
                 inst.call_clobbers = crate::ipra::known(name);
             }
-            inst.sets_flags = writes_flags(&op);
-            inst.reads_flags = reads_flags(&op);
-            inst.may_load = matches!(
-                op,
-                Op::I(Inst::Load { .. } | Inst::LoadPair { .. } | Inst::Atomic { .. } | Inst::Prefetch { .. })
-            );
-            inst.may_store = matches!(
-                op,
-                Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. })
-            );
-            inst.side_effects = matches!(
-                op,
-                Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
-            );
-            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
+            let facts = crate::facts::of(&op);
+            inst.sets_flags = facts.sets_flags;
+            inst.reads_flags = facts.reads_flags;
+            inst.may_load = facts.may_load;
+            inst.may_store = facts.may_store;
+            inst.side_effects = facts.side_effects;
+            inst.early_clobber = facts.early_clobber;
             inst.rematerializable = fused
                 || zero
                 || cheap_alu(&op)
@@ -341,6 +352,10 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
+            if let Op::I(access @ (Inst::Load { mem, mmo, .. } | Inst::Store { mem, mmo, .. })) = &op {
+                inst.memory =
+                    Some(crate::lir_body::memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
+            }
             inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
@@ -369,14 +384,26 @@ pub fn rebuild(
     assignment: &Assignment,
     spill_slots: &[(i32, Class)],
 ) {
+    let pairs = address_pairs(function);
+    rebuild_with(function, lir, &pairs, assignment, spill_slots);
+}
+
+/// [`rebuild`] with the address pairs `view` used: `function` has not changed
+/// since.
+fn rebuild_with(
+    function: &mut MFunc,
+    lir: &MFunction<Class>,
+    pairs: &[HashMap<usize, usize>],
+    assignment: &Assignment,
+    spill_slots: &[(i32, Class)],
+) {
     let mut originals: HashMap<i64, Op> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
     }
     // The fused `MOVaddr`s stand under the content `view` gave them.
-    let pairs = address_pairs(function);
     let mut fused: HashMap<i64, Op> = HashMap::default();
-    for (block, pairs) in function.blocks.iter().zip(&pairs) {
+    for (block, pairs) in function.blocks.iter().zip(pairs) {
         for &add in pairs.keys() {
             fused.entry(content(&block.ops[add]).wrapping_add(1)).or_insert_with(|| block.ops[add].clone());
         }
@@ -620,10 +647,11 @@ pub fn allocate(
     function: &mut MFunc,
     size: bool,
 ) -> Result<Allocation, String> {
-    let mut lir = view(function);
+    let pairs = address_pairs(function);
+    let mut lir = view_with(function, &pairs);
     crate::licm::hoist(&mut lir);
     let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
-    rebuild(function, &lir, &assignment, &slots);
+    rebuild_with(function, &lir, &pairs, &assignment, &slots);
     Ok(written_callee_saved(function))
 }
 
@@ -674,24 +702,71 @@ pub fn gpr_caller_saved_count() -> usize {
     15 + 1 + usize::from(!darwin())
 }
 
-fn gpr_order() -> Vec<RegId> {
+fn gpr_order(
+    darwin: bool,
+    scratch_free: bool,
+    frame_pointer_free: bool,
+) -> Vec<RegId> {
     // The caller-saved registers first, then x19..x28. x16 and x17 are the
     // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
     // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
     let mut extra: Vec<u32> = vec![15];
-    if scratch_free() {
+    if scratch_free {
         extra.extend([16, 17]);
     }
-    if !darwin() {
+    if !darwin {
         extra.push(18);
     }
     (9..=14u32)
         .chain((0..=8).rev())
         .chain(extra)
         .chain(19..=28)
-        .chain(frame_pointer_free().then_some(29))
+        .chain(frame_pointer_free.then_some(29))
         .map(|n| id(Class::Gpr, n))
         .collect()
+}
+
+type Flags = (Class, bool, bool, bool);
+
+thread_local! {
+    static ORDERS: std::cell::RefCell<Vec<(Flags, Vec<RegId>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static ORDERS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many allocation orders this thread has built.
+pub fn candidate_orders_built() -> usize {
+    ORDERS_BUILT.with(std::cell::Cell::get)
+}
+
+/// The registers the allocator tries for `class`, in order. The order depends
+/// on the target and the frame's needs (`darwin`, the scratch registers, the
+/// frame pointer) and is asked for by every instruction converted and every
+/// interval allocated, 4,274 times for shellsort's two functions: it is built
+/// once per such state.
+pub fn candidate_order(class: Class) -> Vec<RegId> {
+    cached_order((class, darwin(), scratch_free(), frame_pointer_free()))
+}
+
+/// [`candidate_order`] for an explicit state; the cache is keyed by all of it.
+fn cached_order(state: Flags) -> Vec<RegId> {
+    ORDERS.with(|orders| {
+        if let Some((_, order)) = orders.borrow().iter().find(|(known, _)| *known == state) {
+            return order.clone();
+        }
+        ORDERS_BUILT.with(|built| built.set(built.get() + 1));
+        let order = built_order(state);
+        orders.borrow_mut().push((state, order.clone()));
+        order
+    })
+}
+
+/// The order itself: a function of the class and the three flags only.
+fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<RegId> {
+    match class {
+        Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
+        Class::Fpr => fpr_order(),
+        Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+    }
 }
 
 fn callee_saved_fpr(id: RegId) -> bool {
@@ -758,11 +833,7 @@ impl AllocTarget for Arm64 {
     }
 
     fn candidates(class: Class) -> Vec<RegId> {
-        match class {
-            Class::Gpr => gpr_order(),
-            Class::Fpr => fpr_order(),
-            Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
-        }
+        candidate_order(class)
     }
 
     fn view(
@@ -888,6 +959,59 @@ mod tests {
         let odds: Odds = [((0, 1), (llrm_mir::blockfrequency::BranchProbability::new(5, 8), 0))].into_iter().collect();
         function.alloc_odds = Some(odds.clone());
         assert_eq!(view(&function).odds, Some(odds));
+    }
+
+    /// `view` and `rebuild` each looked for the fused address pairs of the
+    /// function (a pass over every operation, 0.4 M each on shellsort's two
+    /// functions): `allocate` finds them once, for both.
+    #[test]
+    fn allocate_finds_the_address_pairs_once() {
+        let mut function = sample();
+        let before = address_pair_runs();
+        allocate(&mut function, false).expect("allocates");
+        assert_eq!(address_pair_runs() - before, 1);
+    }
+
+    /// `candidates` rebuilt its register order (a chain of ranges mapped to ids
+    /// into a vector) on every call: 3.5 M of shellsort's 583 M, 4,274 calls.
+    /// The order is built once per target state and class. The state flags are
+    /// process-wide, so the test passes each state itself.
+    #[test]
+    fn the_candidate_order_is_built_once_per_state() {
+        let before = candidate_orders_built();
+        let base = (Class::Gpr, false, false, false);
+        let first = cached_order(base);
+        for _ in 0..50 {
+            assert_eq!(cached_order(base), first);
+        }
+        assert_eq!(candidate_orders_built() - before, 1, "built again for the same state");
+        assert!(!first.is_empty(), "the premise: an order");
+    }
+
+    /// Each input of the order is in the cache's key: flipping one gives the
+    /// order that input makes, never a cached one of another state.
+    #[test]
+    fn every_input_of_the_candidate_order_is_in_the_cache_key() {
+        let order = |state| cached_order(state);
+        let base = order((Class::Gpr, false, false, false));
+        let (darwin, scratch, fp) = (
+            order((Class::Gpr, true, false, false)),
+            order((Class::Gpr, false, true, false)),
+            order((Class::Gpr, false, false, true)),
+        );
+        let x = |n: u32| id(Class::Gpr, n);
+        assert!(base.contains(&x(18)) && !darwin.contains(&x(18)), "x18 is the platform register on Darwin");
+        assert!(
+            !base.contains(&x(16)) && scratch.contains(&x(16)) && scratch.contains(&x(17)),
+            "x16, x17 when the frame needs no scratch"
+        );
+        assert!(!base.contains(&x(29)) && fp.contains(&x(29)), "x29 when there is no frame record");
+        // Asking again returns each state's own order, not the last one's.
+        assert_eq!(order((Class::Gpr, false, false, false)), base);
+        assert_eq!(order((Class::Gpr, true, false, false)), darwin);
+        assert_eq!(order((Class::Gpr, false, false, true)), fp);
+        let (fpr, quad) = (order((Class::Fpr, false, false, false)), order((Class::Quad, false, false, false)));
+        assert!(quad.len() < fpr.len(), "the classes have their own orders");
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a

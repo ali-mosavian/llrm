@@ -28,7 +28,7 @@
 //! DEVIATE ECB1: the last rule of `isMergingEmptyBlockProfitable` (a switch or
 //! indirect jump's only successor to a phi block, kept by the ratio of block
 //! frequencies) always merges: MIR has no block frequency here. Exit: the
-//! frequency analysis (BlockOdds), owner w-4, 2026-12-02.
+//! frequency analysis (BlockOdds), owner w12, 2026-12-02.
 //!
 //! DEVIATE ECB2: the merge itself is `simplifycfg::empty_block_removed`
 //! (`TryToSimplifyUncondBranchFromEmptyBlock`), which does the same to the

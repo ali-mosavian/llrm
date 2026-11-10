@@ -162,7 +162,7 @@ pub fn select_function_with(
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, (cpu, sized), &mut info, &mut selected)?;
+        select_built(Some((function, block)), block, built, (cpu, sized, inline_multiplies), &mut info, &mut selected)?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -230,11 +230,11 @@ fn select_built(
     top: Option<(&Function, BlockId)>,
     block: BlockId,
     mut built: BlockDag,
-    (cpu, sized): (Cpu, bool),
+    (cpu, sized, synthesize): (Cpu, bool, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
-    let units = select_block(&mut built.dag, cpu, sized).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, sized, synthesize).map_err(|why| format!("{why:?}"))?;
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges
@@ -271,7 +271,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, (cpu, sized), info, selected)?;
+        select_built(None, extra, made, (cpu, sized, synthesize), info, selected)?;
     }
     Ok(())
 }

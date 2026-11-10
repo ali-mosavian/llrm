@@ -26,20 +26,23 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
 
 impl Level {
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -49,6 +52,7 @@ impl Level {
             Self::O1 => Options::basic(),
             Self::O2 => Options::default(),
             Self::O3 => Options::speed(),
+            Self::Omax => Options::aggressive(),
             Self::Os => Options::size(),
             Self::Oz => Options::min_size(),
         }
@@ -197,7 +201,8 @@ fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
@@ -206,6 +211,8 @@ fn program(
             }
         }
     }
+    // The pin lowers `llvm.is.constant` and `llvm.objectsize` at every level.
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     Ok(program)
 }
 
@@ -453,7 +460,14 @@ fn cheaper(
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
-        let priced = crate::timing::estimate_calling(request.cpu, &text, &routines, Some(&depth_of)).ok()?;
+        // loop depth guesses ten trips a level; a branch with weights (the
+        // page walk's wrap) says how often a block runs against its loop
+        let function = module.global(module.named(name)?).function()?;
+        let mut weights: Vec<u64> =
+            (0..function.block_capacity() as u32).map(|block| 10u64.pow(depth_of(block).min(3))).collect();
+        crate::weights::by_branch_weights(module, function, &mut weights);
+        let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
+        let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
         Some(priced.cycles + byte * u64::from(priced.bytes))
     };
     Ok(matches!(

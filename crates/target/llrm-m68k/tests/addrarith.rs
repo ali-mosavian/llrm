@@ -205,13 +205,15 @@ fn allocation(text: &str) -> String {
 /// tied `adda` was chosen before allocation: it changed the allocation of the
 /// whole function, and seed 277 came out 18 bytes larger and 8 clocks slower
 /// than at the 68020 (154 assembly lines differed beyond the adds). The form
-/// is chosen after allocation now, so the two CPUs allocate alike. Seed 277
-/// stopped using `adda` at the 68040 (the premise gone, not the bug), so the
-/// fixture is seed 9, which does.
+/// is chosen after allocation now, so the two CPUs allocate alike. Seeds 277
+/// and 9 stopped using `adda` at the 68040 (the premise gone, not the bug:
+/// cast sinking and extension promotion changed their code), so the fixture
+/// is `pointer-streams.ll`, five pointers bumped by constants no `addq`
+/// takes, which uses it by construction.
 #[test]
 fn the_cpu_that_prefers_adda_to_lea_allocates_as_the_one_that_does_not() {
     use llrm_m68k::driver::{Level, assembly, cpu_of};
-    let ir = include_str!("data/seed9-pointer-adds.ll");
+    let ir = include_str!("data/pointer-streams.ll");
     let on = |cpu: &str| assembly(ir, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
     let (m68020, m68040) = (on("68020"), on("68040"));
     assert!(m68040.contains("adda.l"), "the 68040 takes adda somewhere");

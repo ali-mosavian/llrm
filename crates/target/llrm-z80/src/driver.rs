@@ -20,20 +20,23 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
 
 impl Level {
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -43,6 +46,7 @@ impl Level {
             Self::O1 => Options::basic(),
             Self::O2 => Options::default(),
             Self::O3 => Options::speed(),
+            Self::Omax => Options::aggressive(),
             Self::Os => Options::size(),
             Self::Oz => Options::min_size(),
         }
@@ -50,6 +54,7 @@ impl Level {
 }
 
 /// Everything a compile is told besides the IR.
+#[derive(Clone)]
 pub struct Request {
     pub cpu: Cpu,
     pub level: Level,
@@ -67,11 +72,20 @@ pub struct Request {
     /// The pin's block frequencies as they are, a loop of 10 trips weighing as
     /// a loop of 41 (DEVIATE Z80-BFI-TRIPS, `frequency.rs`, is the default).
     pub flat_loop_trips: bool,
+    /// DEVIATE z80-oz-best-of (owner z80, exit 2026-12-15): at -Oz the module is compiled as -Oz and as -Os and the
+    /// smaller one is kept (module bytes, the runtime it reaches included; a tie keeps -Oz). The pin's -Oz is not
+    /// smaller than its -Os here: 41 of 109 corpus rows grow (+4681 B), because header duplication is off at -Oz
+    /// (LoopRotation.cpp#L80) and the inline threshold is 5 (inlinecost.rs `OPT_MIN_SIZE_THRESHOLD`), and the
+    /// pin has no Z80 byte cost to say where either pays. The rotation that wins depends on what LSR and the unroll
+    /// do after it, which no local price sees (three single-compile rules measured, none without regressions).
+    /// Cost: -Oz compiles twice (median +34 ms, p90 +212 ms, max +6.6 s over the corpus). The real fix is the
+    /// rotation/LSR interplay; the exit date is the revisit.
+    pub oz_best_of: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: true, flat_loop_trips: false, oz_best_of: true }
     }
 }
 
@@ -125,6 +139,8 @@ pub fn program(
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
     }
+    // The pin lowers `llvm.is.constant` at every level; -O0 reaches here with the call.
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     Ok(program)
 }
 
@@ -173,23 +189,35 @@ pub fn selections_with_alternatives(
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
         one
     };
-    let calls_the_routine = |name: &str| {
-        module.globals.iter().any(|global| {
-            global.name.as_deref() == Some(name)
-                && global.function().is_some_and(|one| {
-                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
-                        && ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr))
-                })
+    // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
+    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one (at -O1 only) with every multiply a
+    // call (`CALL_MULS`); the caller prices the two (`compile::decomposed_functions`).
+    let calls_the_routine = |name: &str| -> Option<bool> {
+        module.globals.iter().find_map(|global| {
+            let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
+            llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY).then(|| {
+                ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr))
+            })
         })
     };
     let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
-    crate::dagisel::pipeline::DECOMPOSE_MULS.with(|one| one.set(true));
     let alternatives: Vec<Selected> = names
         .iter()
-        .filter(|name| calls_the_routine(name))
-        .map(|name| (name.clone(), select(name, false), select(name, true)))
+        .filter_map(|name| {
+            let sized = calls_the_routine(name)?;
+            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
+            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
+            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
+            if !sized && request.level != Level::O1 {
+                return None;
+            }
+            let switch = if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS };
+            switch.with(|one| one.set(true));
+            let selected = (name.clone(), select(name, false), select(name, true));
+            switch.with(|one| one.set(false));
+            Some(selected)
+        })
         .collect();
-    crate::dagisel::pipeline::DECOMPOSE_MULS.with(|one| one.set(false));
     Ok((main, alternatives))
 }
 
@@ -250,7 +278,33 @@ impl llrm_mir::target::Machine for Z80Machine {
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Z80Tti::new()))
     }
+
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::KEPT_STACK_ALIGN)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::MAX_ALLOCA_ALIGN)
+    }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        llrm_mir::target::Tuning {
+            max_stores_per_memcpy: MEMCPY_STORES,
+            max_stores_per_memcpy_opt_size: MEMCPY_STORES,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
 }
+
+/// `MaxStoresPerMemcpy` (and `...OptSize`): the word copies a constant `memcpy` may be before it is an `ldir`.
+///
+/// DEVIATE Z80-MEMCPY-LIMIT (owner z80-argpush, exit 2026-11-30): the pin's x86 default is 8 at speed and 4 at size
+/// (`Tuning::PIN`, `TargetLoweringBase`), where a copied word is a load and a store with a displacement. Here a word
+/// is 8 B / 52 T through `hl` and `de` and 12 B / 76 T between frame slots, against an `ldir` block of 11 B to 20 B
+/// and 21 T a byte: one word is cheaper in both bytes and clocks, two are dearer in both (`tests/memcpy_limit.rs`
+/// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word pairs, 72 B each. Exit: none; the number
+/// is the target's price, as m16's `Dos::tuning` is.
+const MEMCPY_STORES: usize = 1;
 
 thread_local! {
     /// Parses of a module's text for its source file since the last

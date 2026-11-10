@@ -63,41 +63,47 @@ impl PatternContext for NoContext {
 }
 
 pub struct Aarch64Hooks {
-    complex: Vec<Complex>,
+    complex: &'static [Complex],
     globals: Globals,
     /// `CurDAG->shouldOptForSize()`: every operand fold is worth its extra
     /// uses.
     opt_for_size: bool,
 }
 
+/// What each complex pattern of the table is, decoded once: it was decoded for
+/// every block selected (0.33 M of rectwo's isel in 17 blocks).
+static COMPLEX: std::sync::LazyLock<Vec<Complex>> = std::sync::LazyLock::new(|| {
+    let patterns = table::COMPLEX_PATTERNS;
+    let mut complex = vec![Complex::Never; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
+    for &(number, function, _) in patterns {
+        complex[usize::from(number)] = match function {
+            "SelectArithImmed" => Complex::ArithImmed,
+            "SelectNegArithImmed" => Complex::NegArithImmed,
+            "SelectArithShiftedRegister" => Complex::ArithShiftedRegister,
+            "SelectLogicalShiftedRegister" => Complex::LogicalShiftedRegister,
+            f if f.starts_with("SelectAddrModeIndexed7S") => Complex::Indexed7S(size_of_name(f)),
+            f if f.starts_with("SelectAddrModeIndexed") => Complex::Indexed(size_of_name(f)),
+            f if f.starts_with("SelectAddrModeUnscaled") => Complex::Unscaled,
+            f if f.starts_with("SelectAddrModeXRO") => Complex::Xro(size_of_name(f)),
+            f if f.starts_with("SelectAddrModeWRO") => Complex::Wro(size_of_name(f)),
+            "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
+            "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
+            "SelectExtractHigh" | "SelectDupZero" => Complex::Never,
+            f if f.starts_with("SelectCVTFixedPos") => {
+                Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
+            }
+            other => panic!("complex pattern `{other}` is not translated"),
+        };
+    }
+    complex
+});
+
 impl Aarch64Hooks {
     pub fn new(
         globals: Globals,
         opt_for_size: bool,
     ) -> Aarch64Hooks {
-        let patterns = table::COMPLEX_PATTERNS;
-        let mut complex = vec![Complex::Never; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
-        for &(number, function, _) in patterns {
-            complex[usize::from(number)] = match function {
-                "SelectArithImmed" => Complex::ArithImmed,
-                "SelectNegArithImmed" => Complex::NegArithImmed,
-                "SelectArithShiftedRegister" => Complex::ArithShiftedRegister,
-                "SelectLogicalShiftedRegister" => Complex::LogicalShiftedRegister,
-                f if f.starts_with("SelectAddrModeIndexed7S") => Complex::Indexed7S(size_of_name(f)),
-                f if f.starts_with("SelectAddrModeIndexed") => Complex::Indexed(size_of_name(f)),
-                f if f.starts_with("SelectAddrModeUnscaled") => Complex::Unscaled,
-                f if f.starts_with("SelectAddrModeXRO") => Complex::Xro(size_of_name(f)),
-                f if f.starts_with("SelectAddrModeWRO") => Complex::Wro(size_of_name(f)),
-                "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
-                "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
-                "SelectExtractHigh" | "SelectDupZero" => Complex::Never,
-                f if f.starts_with("SelectCVTFixedPos") => {
-                    Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
-                }
-                other => panic!("complex pattern `{other}` is not translated"),
-            };
-        }
-        Aarch64Hooks { complex, globals, opt_for_size }
+        Aarch64Hooks { complex: COMPLEX.as_slice(), globals, opt_for_size }
     }
 }
 

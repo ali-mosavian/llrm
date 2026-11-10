@@ -21,7 +21,7 @@
 //! the arm applies to i486/P5 (no SSE, no CMOV before P6, no BMI, POPCNT or
 //! LZCNT, x87 on, 32-bit). Not yet translated because [`ISD`] has no such
 //! node: `ABDS`/`ABDU`, the `STRICT_*` family, `FSIN`/`FCOS`/`FPOW`-style
-//! math, `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS`, `SETCCCARRY`/`SADDO_CARRY`,
+//! math, `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS`, `SETCCCARRY`,
 //! atomics, `VASTART`/`VAARG`, `JumpTable`/`BlockAddress`/`GlobalTLSAddress`,
 //! `LRINT`, `ADDRSPACECAST`, `INTRINSIC_*`. Each is added with the piece
 //! that needs it (B1), in the position the constructor sets it. Arms for
@@ -135,6 +135,9 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// The shift routines are used as a function tuned for size uses them, in a function that is not (the
+    /// unsized form the caller prices against the inline one).
+    force_shift_calls: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
@@ -168,6 +171,9 @@ pub struct TargetLowering {
     /// (a call's result, an argument), and the shift is seven instructions on
     /// an 8-bit machine.
     assert_sext_keeps_high: bool,
+    /// `getMinStackArgumentAlignment`: a `va_arg` rounds the list pointer
+    /// only to an alignment above it. The pin's default is 1.
+    min_stack_argument_alignment: u32,
 }
 
 impl TargetLowering {
@@ -182,6 +188,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             size_shift_call: None,
+            force_shift_calls: false,
             inline_constant_mul: None,
             small_divide: false,
             size_only: false,
@@ -190,6 +197,7 @@ impl TargetLowering {
             sdiv_pow2_cmov: None,
             byte_equality: false,
             assert_sext_keeps_high: false,
+            min_stack_argument_alignment: 1,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -215,6 +223,23 @@ impl TargetLowering {
         ];
         for (vt, names) in rows {
             for (op, name) in [Shl, Srl, Sra, Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names clz and popcount at i32, i64 and
+        // i128, no cttz and no i16. DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a zero-poison
+        // cttz, and libgcc's `__clzhi2`, `__ctzhi2`, `__popcounthi2` for the 8-bit targets' i16. A name is
+        // only called where the target's action for the op and type is `LibCall`.
+        // Upstream check: at each pin bump, grep RuntimeLibcalls.td for CTTZ and an i16 count; where the pin names
+        // one, take its name and drop the row. Exit: 2026-11-30 (decide: keep as a recorded deviation or drop).
+        let counts: [(MVT, [&'static str; 3]); 4] = [
+            (MVT::I16, ["__clzhi2", "__popcounthi2", "__ctzhi2"]),
+            (MVT::I32, ["__clzsi2", "__popcountsi2", "__ctzsi2"]),
+            (MVT::I64, ["__clzdi2", "__popcountdi2", "__ctzdi2"]),
+            (MVT::I128, ["__clzti2", "__popcountti2", "__ctzti2"]),
+        ];
+        for (vt, names) in counts {
+            for (op, name) in [CtLzZeroPoison, CtPop, CtTzZeroPoison].into_iter().zip(names) {
                 self.set_libcall_name(op, vt, name);
             }
         }
@@ -261,6 +286,18 @@ impl TargetLowering {
     /// A shift by a constant of a `bits`-wide value is a call to the shift
     /// routine in a function tuned for size where the granules still shifted
     /// times the bits beyond whole granules reach `least`.
+    pub fn set_min_stack_argument_alignment(
+        &mut self,
+        align: u32,
+    ) {
+        self.min_stack_argument_alignment = align;
+    }
+
+    /// `getMinStackArgumentAlignment`, in bytes.
+    pub fn min_stack_argument_alignment(&self) -> u32 {
+        self.min_stack_argument_alignment
+    }
+
     pub fn set_size_shift_call(
         &mut self,
         granule: u128,
@@ -276,7 +313,7 @@ impl TargetLowering {
         amount: u128,
         bits: u128,
     ) -> bool {
-        self.opt_for_size
+        (self.opt_for_size || self.force_shift_calls)
             && self.size_shift_call.is_some_and(|(granule, least)| {
                 (bits / granule).saturating_sub(amount / granule) * (amount % granule) >= least
             })
@@ -346,7 +383,10 @@ impl TargetLowering {
                 _ => None,
             };
         }
-        let sized = self.opt_for_size.then(|| self.maps.size_libcall_names.get(&(op, vt)).copied()).flatten();
+        let shift = matches!(op, ISD::Shl | ISD::Srl | ISD::Sra);
+        let sized = (self.opt_for_size || (self.force_shift_calls && shift))
+            .then(|| self.maps.size_libcall_names.get(&(op, vt)).copied())
+            .flatten();
         sized.or_else(|| self.maps.libcall_names.get(&(op, vt)).copied())
     }
 
@@ -510,6 +550,14 @@ impl TargetLowering {
         !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
     }
 
+    /// Use the shift routines (`set_size_shift_call`) whether or not the function is tuned for size.
+    pub fn set_force_shift_calls(
+        &mut self,
+        force: bool,
+    ) {
+        self.force_shift_calls = force;
+    }
+
     /// `DAG.shouldOptForSize()` for the function selected next.
     pub fn set_opt_for_size(
         &mut self,
@@ -668,6 +716,10 @@ impl TargetLowering {
                     FShl,
                     FShr,
                     SAddSat,
+                    AvgFloorS,
+                    AvgFloorU,
+                    AvgCeilS,
+                    AvgCeilU,
                     UAddSat,
                     SSubSat,
                     USubSat,
@@ -684,7 +736,7 @@ impl TargetLowering {
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -775,6 +827,8 @@ impl TargetLowering {
         t.set_ops(&[SetCC, BrCC, Select, SelectCC, Xor], &words, Custom);
         t.set_ops(&[BrCond, BrJT, BrInd], &[MVT::Other], Custom);
         t.set_ops(&[SetCCCarry], &[MVT::I64], Custom);
+        // `AArch64InstrInfo.td`: `(trap)` is `BRK 1`, `(debugtrap)` is `BRK 0xF000`.
+        t.set_ops(&[Trap, DebugTrap], &[MVT::Other], Legal);
         t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I64], Custom);
         t.set_ops(&[BitReverse, CtLs], &words, Legal);
         t.set_ops(&[BuildPair], &[MVT::I64], Expand);
@@ -805,7 +859,7 @@ impl TargetLowering {
         }
         t.set_ops(&[SDivRem, SRem, UDivRem, URem], &words, Expand);
         t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO], &words, Custom);
-        t.set_ops(&[UAddOCarry, USubOCarry], &words, Custom);
+        t.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry], &words, Custom);
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Expand);
         }
@@ -836,6 +890,11 @@ impl TargetLowering {
         // from it are `Custom` (`LowerF128Call`).
         let quad = [MVT::F128];
         t.set_ops(&[FAdd, FSub, FMul, FDiv], &quad, LibCall);
+        // The sign-bit operations are Expand, a rewrite of the bits
+        // (`ExpandFNEG`). The pin's FCOS, FMA, FRINT, FSIN and FSQRT
+        // are Expand too, to libcalls this table does not name yet.
+        // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L641>
+        t.set_ops(&[FAbs, FCopySign, FNeg], &quad, Expand);
         t.set_ops(&[ConstantFP], &quad, Expand);
         t.set_ops(&[SetCC, BrCC, Select, SelectCC], &quad, Custom);
         t.set_ops(&[FpExtend], &quad, Custom);
@@ -1032,7 +1091,7 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SetCCCarry], native, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry], native, Custom);
         t
     }
 }
@@ -1058,6 +1117,37 @@ mod tests {
         t.set_opt_for_size(true);
         assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__small"));
         assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
+    }
+
+    /// z80 prices the shift routines against the inline shifts in a function that is not tuned for size
+    /// (`set_force_shift_calls`): -O1 call_keeps 1876 B -> 1473 B. The switch is off for every other target and
+    /// for z80 outside that form; on, it makes shifts (not other ops) take the size routine and the size
+    /// threshold, as a function tuned for size does.
+    #[test]
+    fn forced_shift_calls_move_shifts_only_and_default_off_changes_nothing() {
+        let build = |force: bool| {
+            let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+            t.set_size_shift_call(8, 10);
+            t.set_libcall_name(ISD::Shl, MVT::I32, "__fast_shl");
+            t.set_size_libcall_name(ISD::Shl, MVT::I32, "__small_shl");
+            t.set_libcall_name(ISD::Mul, MVT::I32, "__fast_mul");
+            t.set_size_libcall_name(ISD::Mul, MVT::I32, "__small_mul");
+            t.set_force_shift_calls(force);
+            t
+        };
+        let (off, on) = (build(false), build(true));
+        // by 13 bits of 32 with 8-bit granules: (4 - 1) * 5 = 15 >= 10
+        assert!(!off.calls_for_size_shift(13, 32) && on.calls_for_size_shift(13, 32));
+        assert_eq!(off.libcall_name(ISD::Shl, EVT::I32), Some("__fast_shl"));
+        assert_eq!(on.libcall_name(ISD::Shl, EVT::I32), Some("__small_shl"));
+        for t in [&off, &on] {
+            assert_eq!(t.libcall_name(ISD::Mul, EVT::I32), Some("__fast_mul"), "a multiply keeps the speed routine");
+        }
+        // sized functions are unchanged by the switch
+        let mut sized = build(false);
+        sized.set_opt_for_size(true);
+        assert!(sized.calls_for_size_shift(13, 32));
+        assert_eq!(sized.libcall_name(ISD::Mul, EVT::I32), Some("__small_mul"));
     }
 
     /// An x86 table's `i8` set-cc result and `i8` register class were the
