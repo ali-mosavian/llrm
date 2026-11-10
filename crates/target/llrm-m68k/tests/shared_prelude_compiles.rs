@@ -42,15 +42,14 @@ fn every_fixture_function_compiles_with_the_shared_prelude() {
         }
     }
     println!("{ok} compile ({same} the same text as the private passes), refused: {refused:#?}");
-    // Step 2 in progress: these are the refusals known on 11-10 (greedy takes
-    // the SSA-pinned body and cannot place 8 functions; one reads a use that
-    // is not a register). A new kind, or more of them, fails; fewer is
-    // progress, and the bound moves down with it. Exit: none, 2026-11-13.
-    let unknown: Vec<_> = refused
-        .iter()
-        .filter(|why| !why.ends_with("greedy could not allocate") && !why.ends_with("a use that is not a register"))
-        .collect();
+    // Step 2 in progress. 11-10 18:25Z: 17 of 20 compile. The 3 refused are a
+    // literal move PhiElimination cloned (`mov v, #24`) whose definition
+    // `from_lir` finds at an `lea` of the function (its sources are a register
+    // and a literal, the clone's only the literal). A new kind, or more of
+    // them, fails; fewer is progress and the bound moves with it.
+    // Exit: none, 2026-11-13.
+    let unknown: Vec<_> = refused.iter().filter(|why| !why.contains("a use that is not a register")).collect();
     assert!(unknown.is_empty(), "a new kind of refusal: {unknown:#?}");
-    assert!(refused.len() <= 9, "{} refusals, 9 known: {refused:#?}", refused.len());
-    assert!(ok >= 11, "only {ok} functions compiled");
+    assert!(refused.len() <= 3, "{} refusals, 3 known: {refused:#?}", refused.len());
+    assert!(ok >= 17, "only {ok} functions compiled");
 }

@@ -64,6 +64,9 @@ pub struct Converted<T: Target> {
     pub body: LirBody,
     /// The registers a value may take, most preferred first.
     orders: IndexMap<u32, Vec<RegId>>,
+    /// The value each one a shared phase made is a copy of (`TwoAddress`'s
+    /// fresh register for a tied source): its order and class are its parent's.
+    derived: IndexMap<u32, u32>,
     /// Values pinned to a register: they cannot be spilled.
     pub unspillable: BTreeSet<u32>,
     /// The roots a call keeps.
@@ -291,6 +294,73 @@ impl<T: Target> Converted<T> {
     /// and writes the registers its pinned values stand for, the status flags
     /// (one lane) where it reads or sets them, and memory (one more lane)
     /// where it loads or stores; one with side effects is a barrier.
+    /// Gives each copy a shared phase made its own instruction number
+    /// ([`is_shared_copy`]): it stood on its neighbour's, so the target's
+    /// answers about operands, memory forms and effects were the neighbour's.
+    /// A copy has no operand info, as the converter's own copies have none.
+    pub fn adopt(&mut self) {
+        let blocks = self
+            .body
+            .blocks
+            .iter()
+            .map(|block| {
+                if !block.insns.iter().any(|one| is_shared_copy(one)) {
+                    return block.clone();
+                }
+                let insns: Vec<_> = block
+                    .insns
+                    .iter()
+                    .map(|one| {
+                        if !is_shared_copy(one) {
+                            return Arc::clone(one);
+                        }
+                        let ordinal = self.origin.len() as i64;
+                        let beside = self.origin.get((one.at / 2) as usize).copied().unwrap_or((0, 0));
+                        self.origin.push(beside);
+                        self.tii.foldable.push(None);
+                        self.tii.infos.push(("", Vec::new()));
+                        let mut made = (**one).clone();
+                        made.at = 2 * ordinal;
+                        Arc::new(made)
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.body = self.body.with_blocks(blocks);
+        // a value `TwoAddress` made is held to what the value it copies is
+        let known = self.tii.classes.len();
+        let copies: Vec<(u32, u32)> = self
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| is_shared_copy(one))
+            .filter_map(|one| match (one.defines.first(), one.uses.first()) {
+                (Some(&to), Some(&from)) => Some((to, from)),
+                _ => None,
+            })
+            .collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &(to, from) in &copies {
+                if self.orders.contains_key(&to) || self.body.pins.contains_key(&to) {
+                    continue;
+                }
+                let Some(order) = self.orders.get(&from).cloned() else { continue };
+                self.orders.insert(to, order);
+                self.derived.insert(to, from);
+                let wanted = (to as usize).max(self.tii.classes.len());
+                self.tii.classes.resize(wanted, T::any());
+                let class = from.checked_sub(1).and_then(|v| self.tii.classes.get(v as usize)).copied().unwrap_or_else(T::any);
+                self.tii.classes[to as usize - 1] = class;
+                changed = true;
+            }
+        }
+        debug_assert!(self.tii.classes.len() >= known);
+    }
+
     pub fn with_effects(
         &self,
         function: &MFunction<T::Class>,
@@ -310,6 +380,9 @@ impl<T: Target> Converted<T> {
                     .iter()
                     .map(|one| {
                         let Some(&(from, at)) = self.origin.get((one.at / 2) as usize) else { return Arc::clone(one) };
+                        if is_shared_copy(one) {
+                            return Arc::clone(one);
+                        }
                         let inst = &function.blocks[from].insts[at];
                         let named = |values: &[u32]| -> Lanes {
                             values
@@ -621,6 +694,7 @@ fn convert<T: Target>(
         unspillable,
         saved,
         origin: made.origin,
+        derived: IndexMap::default(),
         reachable,
         joined: Default::default(),
         tii: SpikeInstrInfo {
@@ -2269,7 +2343,7 @@ fn substitute<'a, T: Target>(
                     folds.push((stand_in, slot_of(cell)));
                     Operand::Use(stand_in)
                 }
-                _ => return Err("a use that is not a register".into()),
+                other => return Err(format!("a use that is not a register: {:?} reads {other:?}", source.kind)),
             },
             Operand::Use(Reg::Phys(r)) => {
                 if !T::reserved(T::root(r)) {
@@ -2428,6 +2502,18 @@ where
     Ok(out)
 }
 
+/// A copy `PhiElimination` or `TwoAddress` made: a move of a value into a
+/// value, named `mov`, that stands beside an instruction and claims none of
+/// its bytes. A move of a literal is a definition made again, not this.
+fn is_shared_copy(insn: &Insn) -> bool {
+    insn.what.as_ref().is_some_and(|what| {
+        what.op == Operation::Move
+            && what.name.as_deref() == Some("mov")
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+    }) && insn.covers.is_some_and(|(from, to)| from == to)
+}
+
 /// What greedy's edited function is as a machine function again.
 pub struct Rewritten<C> {
     pub function: MFunction<C>,
@@ -2462,7 +2548,7 @@ pub fn from_lir<T: Target>(
         *numbers.entry(value).or_insert_with(|| {
             let mut root = value;
             while root > known {
-                match decided.parents.get(&root) {
+                match decided.parents.get(&root).or_else(|| converted.derived.get(&root)) {
                     Some(parent) => root = *parent,
                     None => break,
                 }
@@ -2624,11 +2710,7 @@ pub fn from_lir<T: Target>(
             // them beside an instruction claiming none of its bytes: copies, as
             // a split's are. A move of a literal is a definition made again, found
             // below as a rematerialized one is.
-            let shared_copy = what.op == Operation::Move
-                && what.name.as_deref() == Some("mov")
-                && matches!(what.sources.as_slice(), [Loc::Held(_)])
-                && insn.covers.is_some_and(|(from, to)| from == to);
-            let name = if shared_copy { Some(COPY) } else { what.name.as_deref() };
+            let name = if is_shared_copy(insn) { Some(COPY) } else { what.name.as_deref() };
             let agrees = match original.blocks[from].insts[inst].kind {
                 Kind::Copy => name == Some(COPY),
                 Kind::Op(op) => name == Some(op),
@@ -2678,7 +2760,8 @@ pub fn from_lir<T: Target>(
                 &mut sources,
                 &mut |held| lane_or_number(held, &mut classes, &mut number),
                 &mut folds,
-            )?;
+            )
+            .map_err(|why| format!("{why}: {what:?} uses {:?} defines {:?} of {:?}", insn.uses, insn.defines, source.operands))?;
             for (stand_in, slot) in folds {
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
@@ -2811,6 +2894,7 @@ fn allocate_greedy_pinned<T: Target>(
             let _lanes = llrm_codegen::backend::lanes::enter(registers);
             let input = converted.with_effects(function, registers);
             converted.body = prelude(input)?;
+            converted.adopt();
             converted
         }
     };
