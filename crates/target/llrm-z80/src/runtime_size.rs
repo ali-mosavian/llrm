@@ -158,7 +158,6 @@ pub fn routine_clocks(
     before: &[&str],
 ) -> u32 {
     const CALL: u32 = 17;
-    let Some(routine) = text.strip_prefix("call ").map(str::trim) else { return 0 };
     // the nearest instruction that touches the register decides: a constant only if it loads one, else unknown
     let immediate = |register: &str| {
         let prefix = format!("ld {register}, #");
@@ -183,6 +182,12 @@ pub fn routine_clocks(
             })
             .and_then(|one| one.strip_prefix(prefix.as_str())?.trim().parse::<u32>().ok())
     };
+    // `ldir` is 21 T a pass and 16 on the last, bc passes: the table has one pass; the rest of an inline copy or
+    // fill whose count is `ld bc, #n` (a count in sight only; any other write leaves the one pass)
+    if text == "ldir" {
+        return immediate("bc").map_or(0, |count| (21 * count).saturating_sub(26));
+    }
+    let Some(routine) = text.strip_prefix("call ").map(str::trim) else { return 0 };
     let counted = |base: u32, per: u32| base + per * immediate("a").unwrap_or(TYPICAL_SHIFT) - CALL;
     match routine {
         "__mulsi3" => mulsi3_clocks(immediate("bc").unwrap_or(TYPICAL_MULTIPLIER)) - CALL,
@@ -290,6 +295,10 @@ mod tests {
         assert_eq!(routine_clocks("call __ashlqi3", &["ld c, a"]), 55 + 17 * 8 - 17);
         assert_eq!(routine_clocks("call __memcpy", &["ld bc, #100"]), 62 + 21 * 100 - 17);
         assert_eq!(routine_clocks("call __memseta", &["ld de, #10"]), 95 + 21 * 10 - 17);
+        // an inline `ldir` is 21 T a pass and 16 on the last; the table's 21 is the first: an inline fill of
+        // 128 bytes was priced 21 T against the call's 2.8k, and chosen at -O1 for +3 B a site (idioms +6 B)
+        assert_eq!(routine_clocks("ldir", &["ld bc, #127", "ld (hl), #0", "ld e, l", "ld d, h", "inc de"]), 21 * 127 - 26);
+        assert_eq!(routine_clocks("ldir", &["ld hl, #_a"]), 0);
         assert_eq!(routine_clocks("call __memmove", &["ld hl, #_a"]), 90 + 21 * 32 - 17);
         assert_eq!(routine_clocks("call __strlen", &["ld hl, #_s"]), 79 + 21 * 16 - 17);
         // a divisor under 128 takes the 16-step shape, a larger one the 9-step shape
