@@ -162,7 +162,7 @@ fn read_lowered(
     let pointer = unit.context.types.ptr(0);
     let width = unit.layout.offset_bits(0);
     let (index_type, byte) = (unit.context.types.int(width), unit.context.types.int(8));
-    let void = unit.function.instruction(inst).ty;
+    let void = unit.context.types.void();
     let place = |unit: &mut Unit, opcode: Opcode, ty, operands: Vec<Operand>| {
         let one = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
         unit.function.insert(one, Position::Before(inst)).expect("a placed instruction");

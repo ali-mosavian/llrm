@@ -63,3 +63,29 @@ fn the_va_list_of_a_summing_loop_stays_out_of_the_stack_frame() {
         }
     }
 }
+
+/// The `store` that writes the stepped list pointer back was created with the `va_arg`'s value type, not `void`, so it
+/// defined a dead `i32` (x86-m32-bytes' review of the first F2 head). No stage of the mid-end may hold a store with a result.
+#[test]
+fn the_pointer_store_a_va_arg_becomes_has_no_result() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("va-stages-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    llrm_m68k::driver::assembly_dumping(LOOP, cpu_of("68020").unwrap(), Level::O2, Some(&dir)).expect("compiles");
+    let mut seen = 0;
+    let mut stack = vec![dir.clone()];
+    while let Some(path) = stack.pop() {
+        for entry in std::fs::read_dir(&path).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                seen += 1;
+                for line in text.lines().filter(|line| line.contains("= store")) {
+                    panic!("{}: a store with a result: {line}", path.display());
+                }
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(seen > 10, "only {seen} stage files dumped");
+}
