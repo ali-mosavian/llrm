@@ -918,4 +918,40 @@ mod tests {
         let len = far.len();
         assert_eq!(merged(far).len(), len);
     }
+
+    /// A pair whose high chunk is zero (`movk w8, #0, lsl #16`) gives an `add
+    /// x8, x1, #0, lsl #12`. The pin does the same (`MOVZWi 4464; MOVKWi 0,
+    /// 16; LDRWroX` -> `ADDXri $x0, 0, 12; LDRWui 1116`, `-run-pass=
+    /// aarch64-ldst-opt`), so it is kept. Unreachable: the immediate
+    /// expansion writes no zero chunk, so a constant under 2^16 is one `movz`
+    /// and no pair (`a_constant_in_one_chunk_is_no_pair`).
+    #[test]
+    fn a_pair_with_a_zero_high_chunk_adds_zero_as_the_pin_does() {
+        let out = merged(vec![
+            wide(Wide::Zero, 8, 4464, 0),
+            wide(Wide::Keep, 8, 0, 16),
+            load_at(4, 1, 8),
+            Inst::Ret { rn: Gpr(30) },
+        ]);
+        assert!(
+            matches!(
+                &out[..],
+                [
+                    Inst::AddSubImm { rd: Gpr(8), rn: Gpr(1), imm12: 0, shift12: true, .. },
+                    Inst::Load { addr: Addr::Offset { base: Gpr(8), imm: 4464 }, .. },
+                    Inst::Ret { .. },
+                ]
+            ),
+            "{out:?}"
+        );
+    }
+
+    /// A `movz` alone is no pair (`isMatchingMovConstInsn` needs the `movk`),
+    /// so a constant under 2^16 never reaches the merge, which would add 0.
+    #[test]
+    fn a_constant_in_one_chunk_is_no_pair() {
+        let out = merged(vec![wide(Wide::Zero, 8, 4097, 0), load_at(1, 1, 8), Inst::Ret { rn: Gpr(30) }]);
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(out.iter().all(|inst| !matches!(inst, Inst::AddSubImm { .. })), "{out:?}");
+    }
 }

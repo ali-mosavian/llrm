@@ -41,3 +41,15 @@ fn an_unaligned_offset_keeps_the_index_register() {
     let asm = assembly("i32", 70001);
     assert!(asm.contains("movk"), "{asm}");
 }
+
+/// Offsets that need no high part (one `movz`, e.g. 4097 for a byte) were
+/// never merged and must not become `add x, x0, #0, lsl #12`: the pin leaves
+/// `mov w8, #4097; ldrb w0, [x0, x8]`. A guard: it held before this test.
+#[test]
+fn an_offset_without_a_high_part_gets_no_add() {
+    for (ty, offset) in [("i8", 4097), ("i32", 16388), ("i64", 32776)] {
+        let asm = assembly(ty, offset);
+        assert!(!asm.lines().any(|line| line.trim_start().starts_with("add")), "{ty} {offset}: {asm}");
+        assert!(asm.contains(", x"), "{ty} {offset}: the register form stays: {asm}");
+    }
+}
