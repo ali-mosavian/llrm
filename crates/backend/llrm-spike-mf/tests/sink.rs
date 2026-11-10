@@ -3,6 +3,7 @@
 mod common;
 
 use common::{Two, branch, op, v};
+use llrm_mir::blockfrequency::BranchProbability;
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, machine_sink};
 
 /// `b0: x = add a, a; branch b2` falls into `b1`, which falls into
@@ -71,6 +72,32 @@ fn a_value_read_on_both_paths_does_not_move() {
     function.blocks[1].insts.push(op("use", vec![Operand::Use(v(1))]));
     assert!(!machine_sink::<Two>(&mut function));
     assert_eq!(names(&function.blocks[0]), ["arg", "add", "branch"]);
+}
+
+/// A select made as blocks writes its result on both paths:
+/// `b0: d = f; branch b2`, `b1: d = t`, `b2: ret d`. Forward coalescing of
+/// the head's copy rewrote the read of `d` to `f` and left the arm's `d = t`
+/// dead: 6502 `ispunct` returned 0 for 1 (2026-11-09).
+#[test]
+fn a_register_written_on_both_paths_is_not_forwarded_to_one_copy() {
+    let mut function = MFunction::new("f");
+    function.classes = vec![(); 4];
+    let head = vec![
+        op("arg", vec![Operand::Def(v(0))]),
+        op("arg", vec![Operand::Def(v(1))]),
+        Inst::copy(v(2), v(0)),
+        branch(2),
+    ];
+    function.blocks.push(Block { id: 0, insts: head, phis: vec![] });
+    function.blocks.push(Block { id: 1, insts: vec![Inst::copy(v(2), v(1))], phis: vec![] });
+    function.blocks.push(Block { id: 2, insts: vec![op("ret", vec![Operand::Use(v(2))])], phis: vec![] });
+    machine_sink::<Two>(&mut function);
+    let ret = function.blocks[2].insts.last().unwrap();
+    assert_eq!(ret.operands, [Operand::Use(v(2))], "the read of the select's result names one arm's value");
+    assert!(
+        function.blocks[0].insts.iter().any(|inst| inst.kind == Kind::Copy),
+        "the head's copy of the false arm went"
+    );
 }
 
 /// A target with room for every register, so no sink is refused for pressure.
@@ -172,4 +199,46 @@ fn sinking_in_a_loop_of_many_blocks_solves_liveness_with_bit_sets() {
     assert!(machine_sink::<Wide>(&mut function), "nothing sank: the test measures nothing");
     let took = start.elapsed();
     assert!(took.as_millis() < 150, "{} blocks took {took:?}", function.blocks.len());
+}
+
+/// `diamond` whose `add` is as cheap as a move, with the head's edge to the
+/// join taken `percent` of the time.
+fn cheap_diamond(percent: u32) -> MFunction<()> {
+    let mut function = diamond(vec![]);
+    function.blocks[0].insts[1].cheap_as_move = true;
+    let taken = BranchProbability::new(percent, 100);
+    function.odds = Some(
+        [((0, 2), (taken, 0)), ((0, 1), (taken.get_compl(), 1)), ((1, 2), (BranchProbability::get_one(), 0))]
+            .into_iter()
+            .collect(),
+    );
+    function
+}
+
+/// A cheap value goes onto a split edge the pin's
+/// `MachineBranchProbabilityInfo` prices at 40% or less. The sink priced every
+/// edge `1 / successors`, so a 37.5% edge of a two-way branch (50%) kept its
+/// constant above the branch.
+#[test]
+fn a_cheap_value_moves_onto_an_edge_taken_at_most_40_percent() {
+    let mut function = cheap_diamond(38);
+    assert!(machine_sink::<Two>(&mut function), "nothing sank: the test measures nothing");
+    assert!(function.blocks.iter().any(|block| block.id > 2), "no block was made for the edge");
+}
+
+/// The control: the same function with the edge at 60% keeps the value.
+#[test]
+fn a_cheap_value_stays_above_an_edge_taken_over_40_percent() {
+    let mut function = cheap_diamond(60);
+    assert!(!machine_sink::<Two>(&mut function));
+    assert!(function.blocks.iter().all(|block| block.id <= 2));
+}
+
+/// With no odds the edge is `1 / successors`, as before: 50% of a two-way
+/// branch is over the threshold.
+#[test]
+fn a_cheap_value_stays_when_the_function_has_no_odds() {
+    let mut function = cheap_diamond(38);
+    function.odds = None;
+    assert!(!machine_sink::<Two>(&mut function));
 }

@@ -188,6 +188,7 @@ fn query<'a>(
         dom_conditions: None,
         cond_context: None,
         cxt: None,
+        pending_intrinsics: &[],
     }
 }
 

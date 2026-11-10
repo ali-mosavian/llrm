@@ -68,6 +68,10 @@ def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SD
 // 65536 bytes).
 def SDTZ80Ldir : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>]>;
 def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, SDNPMayStore]>;
+// A fill of a constant count: the byte stored at the pointer, then `ldir` copying it forward over the next count bytes
+// (so the count is one less than the bytes filled, and nonzero). `de` is made from the pointer by the expansion.
+def SDTZ80Fill : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>]>;
+def Z80ldfill : SDNode<"Z80ISD::LDFILL", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
 // A store to SP + offset in the call frame the callseq opens. The Z80 has no SP-relative store, so the pseudo is
 // expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
 def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
@@ -188,6 +192,16 @@ def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm
 def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d, imm:$v)]>;
 }
 
+// A constant word is stored as two `ld (hl),n` only where that is no longer than loading it into a pair once and
+// storing from the pair (5 B a store against 3 B and 3 B once: two or more stores take the register). The users
+// are those the constant had when selection began, so the choice does not depend on which store is selected first
+// (`hasOneUse` read the DAG mid-selection: particle -Os moved 15 B with the selection order). The pin's `imm_su`
+// (`shouldAvoidImmediateInstFormsForSize`, X86ISelDAGToDAG.cpp#L371) counts the users the same way, but only at
+// optsize and with the threshold 2: x86 prices an immediate store as a register one.
+// DEVIATE Z80-IMM-USES: the threshold is the encoding table's bytes and it is not gated on optsize (an immediate
+// store is also slower). Owner llrm-z80-c, exit 2026-11-30.
+def imm_stored_in_immediate_form : PatLeaf<(imm), [{ return immStoredInImmediateForm(N); }]>;
+
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
   def LD8rm : Z80Inst<(outs GR8:$d), (ins HLR:$p), "ld $d, ($p)", [(set i8:$d, (load i16:$p))]>;
@@ -202,6 +216,8 @@ let mayLoad = 1, Defs = [A] in
   def LD16rm : Z80Inst<(outs GR16:$d), (ins HLR:$p), "ld16 $d, ($p)", [(set i16:$d, (load i16:$p))]>;
 let mayStore = 1 in
   def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
+  // A constant word: two `ld (hl),n`, no pair to load first (x86's MOV16mi).
+  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm_stored_in_immediate_form:$v), i16:$p)]>;
 let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;
@@ -292,6 +308,8 @@ let mayStore = 1 in {
   def LD8fr : Z80Inst<(outs), (ins GR8:$s, i16imm:$fi, i16imm:$o), "ld $o($fi), $s", []>;
   def LD8fi : Z80Inst<(outs), (ins i8imm:$v, i16imm:$fi, i16imm:$o), "ld $o($fi), $v", []>;
   def LD16fr : Z80Inst<(outs), (ins GR16:$s, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $s", []>;
+  // A constant word: two `ld d(ix), n` (4 B and 19 T each; from a pair 3 B and 19 T), so a constant with one user only.
+  def LD16fi : Z80Inst<(outs), (ins i16imm:$v, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $v", []>;
 }
 def : Pat<(i8 (load frameindex:$fi)), (LD8rf (to_tframeindex $fi), 0)>;
 def : Pat<(i8 (load (add frameindex:$fi, imm:$o))), (LD8rf (to_tframeindex $fi), imm:$o)>;
@@ -301,6 +319,8 @@ def : Pat<(store (i8 imm:$v), frameindex:$fi), (LD8fi imm:$v, (to_tframeindex $f
 def : Pat<(store (i8 imm:$v), (add frameindex:$fi, imm:$o)), (LD8fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR8:$s, frameindex:$fi), (LD8fr GR8:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR8:$s, (add frameindex:$fi, imm:$o)), (LD8fr GR8:$s, (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store (i16 imm_stored_in_immediate_form:$v), frameindex:$fi), (LD16fi imm:$v, (to_tframeindex $fi), 0)>;
+def : Pat<(store (i16 imm_stored_in_immediate_form:$v), (add frameindex:$fi, imm:$o)), (LD16fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR16:$s, frameindex:$fi), (LD16fr GR16:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR16:$s, (add frameindex:$fi, imm:$o)), (LD16fr GR16:$s, (to_tframeindex $fi), imm:$o)>;
 
@@ -330,6 +350,11 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in
   def LDIRG : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldirg $d, $s, $n", [(Z80ldirg i16:$d, i16:$s, i16:$n)]>;
 let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
   def LDIR : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldir $d, $s, $n", []>;
+// The byte as an immediate (`ld (hl), n`) or in a (`ld (hl), a`), then `ld e,l; ld d,h; inc de; ldir`.
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in {
+  def LDFILLi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, (i8 imm:$v), i16:$n)]>;
+  def LDFILLr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, i8:$v, i16:$n)]>;
+}
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;

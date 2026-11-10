@@ -2112,6 +2112,96 @@ out:
     assert!(!top.contains("@leaf"), "the last call stayed a call:\n{top}");
 }
 
+/// A flat x86 target: the neutral machine with the CPU's cost model.
+struct FlatX86(&'static str);
+
+impl llrm_mir::target::Machine for FlatX86 {
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        llrm_mir::target::Neutral.foreign_span(selectors, offsets, width)
+    }
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        llrm_mir::target::Neutral.spaces()
+    }
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::Neutral.costs()
+    }
+    fn registers(&self) -> i64 {
+        llrm_mir::target::Neutral.registers()
+    }
+    fn call_registers(&self) -> i64 {
+        llrm_mir::target::Neutral.call_registers()
+    }
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu(self.0).expect("a cpu")))
+    }
+}
+
+/// tests/run/c/shrink_wrapped_frame.c at m32 -O1: `f` (a 64-byte array) is
+/// priced to inline into the recursive `g` (cost 40, threshold 225, as the
+/// pin's `-Rpass=inline` says) and is also called from `main`, so it is not a
+/// last call. `fits_with` refused every allocating callee in a recursive
+/// caller, so `f` stayed a 60-byte call where the pin has the copy (+19 B).
+/// The pin allows up to 1024 bytes (`TotalAllocaSizeRecursiveCaller`); a
+/// platform that states otherwise (real mode) keeps the refusal.
+#[test]
+fn test_a_flat_target_inlines_a_small_frame_into_a_recursive_caller_as_the_pin_does() {
+    let text = "declare void @sink(ptr)
+
+define internal void @leaf(i32 %v) {
+b0:
+  %buf = alloca [16 x i32]
+  store i32 %v, ptr %buf
+  call void @sink(ptr %buf)
+  ret void
+}
+
+define i32 @rec(i32 %n) {
+b0:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %go, label %out
+
+go:
+  call void @leaf(i32 %n)
+  %m = sub i32 %n, 1
+  %r = call i32 @rec(i32 %m)
+  %s = add i32 %r, %n
+  ret i32 %s
+
+out:
+  ret i32 0
+}
+
+define i32 @other() {
+b0:
+  call void @leaf(i32 3)
+  ret i32 0
+}
+";
+    let run = |target: std::rc::Rc<dyn llrm_mir::target::Machine>| {
+        let mut module = parsed(text);
+        let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
+        llrm_mir::program::Program::lend(&mut module, target, |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .expect("the pipeline runs");
+        let printed = llrm_mir::print::module(&module);
+        printed.split("define").find(|one| one.contains("@rec(")).expect("the function").to_owned()
+    };
+    let flat = run(std::rc::Rc::new(FlatX86("i486")));
+    assert!(!flat.contains("@leaf"), "the small frame stayed a call in the recursive caller:\n{flat}");
+    let real = run(std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()));
+    assert!(real.contains("@leaf"), "real mode copied a frame into a recursion:\n{real}");
+}
+
 /// The pin's `GlobalOpt` runs between IPSCCP and the walk (pass 20 of
 /// `default<O2>` on sum_three): a static a norecurse function writes before it
 /// reads is a register when the loop passes run. Ours split and localized after
@@ -3074,4 +3164,91 @@ rec:
 }
 ";
     assert!(!is_tree(linear, "sum"), "sum is a tree");
+}
+
+/// A target that has not opted in prices `llvm.lifetime.*` as the calls they are in the IR (the inlining bars of x86 m16
+/// were fit so; pricing them 0 there stopped `sum` being inlined into `top` in `an_os_call_on_stack_records`), one that has
+/// prices them 0.
+#[test]
+fn test_free_intrinsics_are_priced_only_where_a_target_asks() {
+    let module = parsed(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)\ndefine i32 @f() {\n  %a = alloca i32\n  call void @llvm.lifetime.start.p0(i64 4, ptr %a)\n  ret i32 0\n}\n",
+    );
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap().2;
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let priced = |free_intrinsics| {
+        let costs = llrm_mir::target::OperationCosts { call: 5, argument: 2, free_intrinsics, ..Default::default() };
+        crate::walk::function_bytes(&module, &layout, &costs, function)
+    };
+    assert_eq!(priced(false) - priced(true), 5 + 2 * 2, "the marker call and its two arguments");
+}
+
+/// jpeg_fixed Nib at m16 -O2: `next_byte` is a few hot instructions and a long
+/// cold refill block; inlined at 36 loop sites (#7817) the code went 4305 ->
+/// 9398 B and the clocks rose 561k, for the call it saved. The cold block's
+/// bytes buy no clocks: the call stays.
+#[test]
+fn test_a_helper_whose_bulk_is_a_cold_block_stays_a_call_at_m16_o2() {
+    let text = "@g = global i16 0
+
+define i16 @next_byte(i16 %x) {
+b0:
+  %p = load volatile i16, ptr @g
+  %z = icmp ne i16 %p, 0
+  br i1 %z, label %hot, label %cold
+
+hot:
+  ret i16 %p
+
+cold:
+  %c0 = load volatile i16, ptr @g
+  %c1 = load volatile i16, ptr @g
+  %c2 = load volatile i16, ptr @g
+  %c3 = load volatile i16, ptr @g
+  %c4 = load volatile i16, ptr @g
+  %c5 = load volatile i16, ptr @g
+  %c6 = load volatile i16, ptr @g
+  %c7 = load volatile i16, ptr @g
+  %c8 = load volatile i16, ptr @g
+  %c9 = load volatile i16, ptr @g
+  %c10 = load volatile i16, ptr @g
+  %c11 = load volatile i16, ptr @g
+  %c12 = load volatile i16, ptr @g
+  %c13 = load volatile i16, ptr @g
+  %s0 = add i16 %x, %c0
+  %s1 = add i16 %s0, %c1
+  %s2 = add i16 %s1, %c2
+  %s3 = add i16 %s2, %c3
+  %s4 = add i16 %s3, %c4
+  %s5 = add i16 %s4, %c5
+  %s6 = add i16 %s5, %c6
+  %s7 = add i16 %s6, %c7
+  %s8 = add i16 %s7, %c8
+  %s9 = add i16 %s8, %c9
+  %s10 = add i16 %s9, %c10
+  %s11 = add i16 %s10, %c11
+  %s12 = add i16 %s11, %c12
+  %s13 = add i16 %s12, %c13
+  ret i16 %s13
+}
+
+define i16 @top(i16 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %j, %loop ]
+  %a = call i16 @next_byte(i16 %i)
+  %b = call i16 @next_byte(i16 %a)
+  %c = call i16 @next_byte(i16 %b)
+  store volatile i16 %c, ptr @g
+  %j = add i16 %i, 1
+  %k = icmp slt i16 %j, %n
+  br i1 %k, label %loop, label %done
+
+done:
+  ret i16 %c
+}";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(m16.contains("call i16 @next_byte"), "the calls were inlined:\n{m16}");
 }

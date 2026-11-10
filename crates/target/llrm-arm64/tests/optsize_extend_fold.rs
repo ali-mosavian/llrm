@@ -3,7 +3,7 @@
 //! feeds a `sub` and an address shift; only the shift took it, so the `sub` got
 //! a separate `mov w9, w0`: recchop -Os was 4 B larger than the pin's.
 
-use llrm_arm64::driver::{self, IselMode, Level};
+use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
 const SOURCE: &str = r#"target triple = "aarch64-unknown-linux-gnu"
@@ -63,7 +63,6 @@ define i64 @chop(i32 %0, i32 %1) optsize {
 /// Does some `sub` take its second operand as `wN, uxtw`? At -O0, where LSR
 /// leaves the shape alone.
 fn folds_the_extend(source: &str) -> bool {
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(source, Platform::Linux, Level::O0).expect("lowers");
     asm.lines().map(str::trim).any(|line| line.starts_with("sub ") && line.contains(", uxtw"))
 }

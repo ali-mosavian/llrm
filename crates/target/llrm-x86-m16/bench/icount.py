@@ -41,6 +41,15 @@ class Counts:
     # The 486's clocks over the same instructions: vsgcc's table (crates/target/llrm-x86-m32/vsgcc/harness.py), the one the
     # m32 comparison with gcc and clang prices by. A branch taken costs more than one not taken, so it is the stream's, not the count's.
     clocks: int = 0
+    # jwlink's far-call rewrite pads the return address with a `nop` that runs where the call's `push cs` sits at an even offset and with a
+    # free `ds` prefix where it sits at an odd one (M16-CLOCK-FARCALL-PAD): an odd-sized change earlier in the segment moves the nop between call sites.
+    # `pad_nops` are the executed ones, read from the bytes (`0E E8 rel16 90`); `clocks` stays raw, `layout_clocks` is it without them.
+    pad_nops: int = 0
+    pad_clocks: int = 0
+
+    @property
+    def layout_clocks(self) -> int:
+        return self.clocks - self.pad_clocks
 
 
 def _prices():
@@ -113,17 +122,20 @@ def dos_file(cwd: Path, name: str) -> Path:
     return path
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None, poison: int | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
     (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
     opens live in `cwd`. `whole` counts the program from its first instruction to its exit (the start-up, the runtime and what it calls
-    included), `entry` unused; `stdin` is what handle 0 reads; `profile` collects how often each address (from the image's first byte) ran."""
+    included), `entry` unused; `stdin` is what handle 0 reads; `profile` collects how often each address (from the image's first byte) ran. `poison`: memory is filled with this byte before the
+    image is loaded (DOS does not zero what it gives a program: a byte the image does not hold must not be assumed zero)."""
     data = exe.read_bytes()
     (_, last, pages, nrel, header, _, _, ss, sp, _, ip, cs, relocations, _) = struct.unpack("<2sHHHHHHHHHHHHH", data[:28])
     size = (pages - 1) * 512 + (last or 512)
     uc = Uc(UC_ARCH_X86, UC_MODE_16)
     uc.mem_map(0, 0x100000)
+    if poison is not None:
+        uc.mem_write(0, bytes([poison]) * 0x100000)
     uc.mem_write(LOAD * 16, data[header * 16 : size])
     for at in range(nrel):
         offset, segment = struct.unpack("<HH", data[relocations + 4 * at : relocations + 4 * at + 4])
@@ -145,6 +157,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
     decoded: dict[int, tuple[int, bool, bool]] = {}
     instructions = {}  # address -> iced instruction
     prefixes = {}  # address -> operand- and address-size prefixes it carries
+    pads = set()  # addresses of a `nop` that follows `push cs; call near`: jwlink's return-address pad
     target = None if entry is None else LOAD * 16 + entry
 
     steps = [0]
@@ -182,6 +195,8 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
             raw = bytes(uc.mem_read(address, min(size, 15)))
             one = instructions[address] = Decoder(16, raw, ip=address).decode()
             prefixes[address] = _prefixes(raw)
+            if raw[:1] == b"\x90" and bytes(uc.mem_read(address - 4, 2)) == b"\x0e\xe8":
+                pads.add(address)
         # An instruction costs what it did once the next one's address says whether its branch was taken.
         before = state.get("before")
         if before is not None:
@@ -192,6 +207,9 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
         state["before"] = (address, one, memory, factor, prefixes[address])
         counts.instructions += 1
         counts.memory_operands += memory
+        if address in pads:
+            counts.pad_nops += 1
+            counts.pad_clocks += price(one, False, True, 0, None, prefixes[address])
         if returns and uc.reg_read(UC_X86_REG_SP) == state["entry_sp"]:
             counts.clocks += price(one, True, True, memory, factor, prefixes[address])
             state["active"] = False

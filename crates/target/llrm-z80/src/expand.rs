@@ -655,7 +655,7 @@ impl Printer<'_> {
                     self.push(format!("ld {}, (hl)", name(lo)));
                     self.push("inc hl");
                     self.push(format!("ld {}, (hl)", name(hi)));
-                    self.push("dec hl");
+                    self.restore_pointer(rest);
                 }
             }
             "LD16mr" => {
@@ -667,7 +667,16 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), {}", name(lo)));
                 self.push("inc hl");
                 self.push(format!("ld (hl), {}", name(hi)));
-                self.push("dec hl");
+                self.restore_pointer(rest);
+            }
+            "LD16mi" => {
+                let Some(Operand::Imm(value)) = inst.operands.first() else {
+                    return Err("LD16mi without a constant".to_owned());
+                };
+                self.push(format!("ld (hl), #{}", value & 0xFF));
+                self.push("inc hl");
+                self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
+                self.restore_pointer(rest);
             }
             "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
@@ -717,6 +726,20 @@ impl Printer<'_> {
             // `ldir`'s. A count of zero is 65536 here; `LDIRG` skips it.
             "LDIR" => {
                 self.push("ex de, hl");
+                self.push("ldir");
+            }
+            // the byte stored at hl, then `ldir` copies it forward over the
+            // next bc bytes (de is hl + 1): a fill of a constant count
+            "LDFILLi" | "LDFILLr" => {
+                let value = if op == "LDFILLi" {
+                    self.immediate(inst, 1, 0xFF)?
+                } else {
+                    name(self.register(inst, 1)?).to_owned()
+                };
+                self.push(format!("ld (hl), {value}"));
+                self.push("ld e, l");
+                self.push("ld d, h");
+                self.push("inc de");
                 self.push("ldir");
             }
             "LDIRG" => {
@@ -933,7 +956,7 @@ impl Printer<'_> {
                 self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes + self.spill_bytes));
                 self.push("add hl, sp");
             }
-            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
+            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" | "LD16fi" => {
                 // register first for a load, the stored value first for a
                 // store; the frame object and its offset last
                 let load = op.ends_with("rf");
@@ -943,7 +966,14 @@ impl Printer<'_> {
                     Some(Operand::Imm(extra)) => *extra,
                     other => return Err(format!("a frame offset that is {other:?}")),
                 };
-                if op == "LD8fi" {
+                if op == "LD16fi" {
+                    let Some(Operand::Imm(value)) = inst.operands.first() else {
+                        return Err("LD16fi without a constant".to_owned());
+                    };
+                    for (byte, slot) in [value & 0xFF, (value >> 8) & 0xFF].into_iter().zip(self.frame_slots(index, extra, 2)?) {
+                        self.push(format!("ld {slot}, #{byte}"));
+                    }
+                } else if op == "LD8fi" {
                     let value = self.immediate(inst, 0, 0xFF)?;
                     let slot = self.frame_slots(index, extra, 1)?.remove(0);
                     self.push(format!("ld {slot}, {value}"));
@@ -1217,6 +1247,16 @@ impl Printer<'_> {
         }
     }
 
+    /// The `dec hl` that puts a pointer back after a word through it, unless nothing reads `hl` after.
+    fn restore_pointer(
+        &mut self,
+        rest: &[Inst],
+    ) {
+        if !self.pair_dead_after(reg::HL, rest) {
+            self.push("dec hl");
+        }
+    }
+
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
     fn pair_dead_after(
         &self,
@@ -1419,12 +1459,12 @@ impl Printer<'_> {
             // equality (no scratch register for two nonzero bytes)
             (false, true) if bh == "#0" && bl.starts_with('#') => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("or a, {}", name(ah)));
             }
             (false, true) if bl == "#0" && bh.starts_with('#') => {
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.push(format!("or a, {}", name(al)));
             }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
@@ -1443,15 +1483,37 @@ impl Printer<'_> {
             }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
+                self.push_zero_test_against(&bl);
                 self.push(format!("jr nz, {skip}"));
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {bh}"));
+                self.push_zero_test_against(&bh);
                 self.out.push(Line::Label(skip));
             }
             (false, false) => unreachable!("a reader was found"),
         }
         Ok(())
+    }
+
+    /// `a` left zero exactly when it equalled `operand`, for a reader of the
+    /// zero flag alone: `sub a, #1` and `sub a, #255` are `dec a` and `inc a`,
+    /// 1 B and 3 T less (the carry they set is not read).
+    ///
+    /// DEVIATE Z80-ZTEST-1: no pin pass at this stage. The pin's counterpart
+    /// is an isel pattern, `X86sub_flag_nocf x, -1` (a flag-setting subtract
+    /// whose carry is not read) selecting `INC`
+    /// ([`X86InstrCompiler.td`][td]). Owner z80. Exit: the flag-use
+    /// predicate in the generated selector.
+    ///
+    /// [td]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L2324
+    fn push_zero_test_against(
+        &mut self,
+        operand: &str,
+    ) {
+        match operand {
+            "#1" => self.push("dec a"),
+            "#255" | "#-1" => self.push("inc a"),
+            _ => self.push(format!("sub a, {operand}")),
+        }
     }
 
     /// The byte operand `at` of an ALU or compare as printed: the frame cell a
@@ -2094,7 +2156,54 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    branch_over_tail_jump(drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))))
+    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_overwritten_byte_stores(
+        forward_byte_copies(forward_high_bytes(cancel_steps(lines))),
+    ))))
+}
+
+/// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an indirect jump or a block of ours.
+fn tail_symbol(jump: &str) -> Option<&str> {
+    let symbol = jump.strip_prefix("jp ")?;
+    (!(symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$'))).then_some(symbol)
+}
+
+/// `jp cc, L` to a block that is only `jp SYMBOL`, which nothing else reaches, is `jp cc, SYMBOL`: the conditional
+/// tail call (`BranchFolder::OptimizeBlock` makes one through `replaceBranchWithTailCall`). Wherever the block lies;
+/// the layout cannot lose it.
+fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
+    let mut names: llrm_support::hash::HashMap<String, usize> = llrm_support::hash::HashMap::default();
+    for line in &lines {
+        if let Line::Inst(text) = line {
+            for word in text.split([' ', ',']).filter(|word| !word.is_empty()) {
+                *names.entry(word.trim_start_matches('#').to_owned()).or_default() += 1;
+            }
+        }
+    }
+    // each label whose block is one `jp SYMBOL` that nothing falls into
+    let mut jumps: llrm_support::hash::HashMap<String, String> = llrm_support::hash::HashMap::default();
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Label(label) = line else { continue };
+        let after = lines[at + 1..].iter().find(|line| !matches!(line, Line::Loc(_) | Line::Label(_)));
+        let before = lines[..at].iter().rev().find_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        });
+        if let (Some(Line::Inst(jump)), Some(before)) = (after, before)
+            && let Some(symbol) = tail_symbol(jump)
+            && ends_flow(before)
+            && names.get(label).copied() == Some(1)
+        {
+            jumps.insert(label.clone(), symbol.to_owned());
+        }
+    }
+    for line in &mut lines {
+        let Line::Inst(text) = line else { continue };
+        let Some((cc, label)) = text.strip_prefix("jp ").and_then(|rest| rest.split_once(", ")) else { continue };
+        if let Some(symbol) = jumps.get(label) {
+            *text = format!("jp {cc}, {symbol}");
+        }
+    }
+    lines
 }
 
 /// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc, SYMBOL; L:`: the conditional jump over a
@@ -2128,10 +2237,7 @@ fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
             next += 1;
             step(&mut next);
             let Some(Line::Inst(jump)) = lines.get(next) else { return None };
-            let symbol = jump.strip_prefix("jp ")?;
-            if symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$') {
-                return None;
-            }
+            let symbol = tail_symbol(jump)?;
             let jump_at = next;
             next += 1;
             step(&mut next);
@@ -2438,7 +2544,8 @@ fn form(text: &str) -> String {
             }
             "de" if mnemonic == "ex" => "de".to_owned(),
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
-            "a" | "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
+            "a" => "a".to_owned(),
+            "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
             "bc" | "de" | "af" => "bc".to_owned(),
             "hl" | "ix" | "iy" | "sp" => one.to_owned(),
             "(hl)" => "(hl)".to_owned(),
@@ -2481,15 +2588,44 @@ fn form(text: &str) -> String {
     key
 }
 
-/// The table's cost of a form as `form` writes it. Every byte register is `b`
-/// there, so a copy between two of them is `ld b;b`, which the table spells
-/// `ld b;c`.
+/// Whether `users` stores of one constant word are no longer as two `ld (hl),n`
+/// each than as one `ld rr,nn` and two register stores each (`inc hl` between
+/// the halves either way), by the encoding table's bytes.
+pub(crate) fn immediate_store_is_not_longer(users: usize) -> bool {
+    let bytes = |text: &str| table_cost(&form(text)).map(|cost| cost.bytes);
+    let (Some(immediate), Some(register), Some(step), Some(load)) =
+        (bytes("ld (hl), #1"), bytes("ld (hl), e"), bytes("inc hl"), bytes("ld de, #1"))
+    else {
+        return users <= 1;
+    };
+    let users = users as u32;
+    users * (2 * immediate + step) <= load + users * (2 * register + step)
+}
+
+/// The table's cost of a form as `form` writes it. The accumulator is `a` where the table has the form for it alone
+/// (`ld a;(bc)`, `ld (nn);a`), else every byte register is `b` there, so a copy between two of them is `ld b;b`, which
+/// the table spells `ld b;c`.
 fn table_cost(key: &str) -> Option<crate::timing::Cost> {
-    crate::timing::cost(key)
-        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
-        .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+    let generic = key.split_once(' ').map_or_else(
+        || key.to_owned(),
+        |(mnemonic, operands)| {
+            // `add a;b`, `adc a;b`, `sbc a;b` name the accumulator in the table
+            let named = usize::from(matches!(mnemonic, "add" | "adc" | "sbc"));
+            let operands: Vec<&str> = operands
+                .split(';')
+                .enumerate()
+                .map(|(at, one)| if one == "a" && at >= named { "b" } else { one })
+                .collect();
+            format!("{mnemonic} {}", operands.join(";"))
+        },
+    );
+    [key, generic.as_str()].into_iter().find_map(|key| {
+        crate::timing::cost(key)
+            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
+            .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+    })
 }
 
 /// Bytes and T-states of the lines, summed over every instruction (a loop body
@@ -2499,11 +2635,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     let (mut bytes, mut clocks) = (0, 0);
     for line in lines {
         let Line::Inst(text) = line else { continue };
-        let key = form(text);
-        let cost = crate::timing::cost(&key)
-            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")));
-        match cost {
+        match table_cost(&form(text)) {
             Some(cost) => {
                 bytes += cost.bytes;
                 clocks += cost.taken;
@@ -2660,11 +2792,18 @@ pub fn weighted(
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
     let (mut bytes, mut clocks) = (0, 0.0);
-    for (line, weight) in weighted(lines, &frequencies) {
-        let Line::Inst(text) = line else { continue };
-        let cost = table_cost(&form(&text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+    let weighted = weighted(lines, &frequencies);
+    let mut before: Vec<&str> = Vec::new();
+    for (line, weight) in &weighted {
+        let Line::Inst(text) = line else {
+            before.clear();
+            continue;
+        };
+        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
-        clocks += f64::from(cost.1) * weight;
+        // the routine a call reaches runs too (`runtime_size::routine_clocks`: `__mulsi3` is 120 T a multiplier bit)
+        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight;
+        before.push(text);
     }
     (bytes, clocks.round() as u64)
 }

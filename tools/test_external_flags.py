@@ -72,3 +72,59 @@ def test_the_probe_sees_what_the_distro_defaults_add(name, compiler, mode, tmp_p
 def test_a_neutral_external_has_no_endbr_canary_or_frame_pointer(name, compiler, mode, tmp_path):
     text = asm(compiler, mode, external_flags.flags("x86", ("-fno-pic",)), tmp_path)
     assert not [kind for kind, marker in markers(MODES[mode][1]).items() if marker.search(text)], f"{name} {mode}: {text}"
+
+
+def gcc_calls(flags, tmp_path):
+    source = ROOT / "tests" / "run" / "c" / "frameless.c"
+    out = tmp_path / "frameless.s"
+    done = subprocess.run(["gcc", "-m32", "-Os", "-ffreestanding", "-fno-pic", *flags, "-S", "-o", str(out), str(source)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return set(re.findall(r"^\s*call\s+(\w+)", out.read_text(), re.M)) - {"report"}
+
+
+@pytest.mark.skipif(not shutil.which("gcc"), reason="no gcc")
+def test_gcc_gets_no_inlining_where_a_test_says_fno_inline_functions(tmp_path):
+    """frameless x86_32 -Os read gcc 239 B against ours 394: gcc's -fno-inline-functions still inlined every called-once static,
+    ours and the pin's meant no inlining (gcc 304 B; the pin 625; gcc -fno-inline 501)."""
+    raw = gcc_calls(["-fno-inline-functions"], tmp_path)
+    translated = gcc_calls(external_flags.gcc_program_flags(["-fno-inline-functions"]), tmp_path)
+    assert not any(name.startswith(("mix", "add4", "chain")) for name in raw)
+    assert {"mix", "add4"} <= translated
+
+
+def test_other_flags_pass_to_gcc_unchanged():
+    tokens = ["-fno-inline-functions-called-once", "-mabi=watcom", "-fno-tree-vectorize"]
+    assert external_flags.gcc_program_flags(tokens) == tokens
+
+
+def test_a_flag_gcc_cannot_take_is_refused_not_passed_on():
+    """`-ffixed-point` reached gcc as `-ffixed-REG` and only warned, so the fixed-point program's gcc cell compiled something else."""
+    for token in ("-ffixed-point", "-fno-inline=sum5", "-fsanitize=stack"):
+        with pytest.raises(ValueError):
+            external_flags.gcc_program_flags(["-O2", token])
+
+
+def test_a_gcc_flag_list_may_differ_from_the_programs_only_by_the_named_translation():
+    program = ["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"]
+    external_flags.check_gcc_flags(program, ["-fno-inline", "-fwrapv", "-mcmodel=medium"])
+    external_flags.check_gcc_flags(program, ["-mcmodel=medium", "-fno-inline", "-D__clang__", "-fwrapv"], allowed_extra=("-D__clang__",))
+
+
+@pytest.mark.parametrize(
+    "gcc",
+    [
+        ["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"],  # the program's flag verbatim: gcc keeps inlining called-once functions
+        ["-fno-inline", "-mcmodel=medium"],  # one dropped
+        ["-fno-inline", "-fwrapv", "-mcmodel=medium", "-fno-unroll-loops"],  # one added
+        ["-fno-inline", "-fwrapv", "-fwrapv", "-mcmodel=medium"],  # one twice
+    ],
+)
+def test_any_other_difference_between_gcc_and_the_program_is_refused(gcc):
+    """The gcc column was built with a flag set nobody compared with the program's: a silent mismatch moves cells (arm64 ours column without -fomit-frame-pointer: 24 of 72 cells, -4..-16 B)."""
+    with pytest.raises(ValueError):
+        external_flags.check_gcc_flags(["-fno-inline-functions", "-fwrapv", "-mcmodel=medium"], gcc)
+
+
+def test_a_flag_gcc_cannot_take_has_no_gcc_column():
+    with pytest.raises(ValueError, match="no gcc column"):
+        external_flags.check_gcc_flags(["-ffixed-point"], [])

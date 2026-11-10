@@ -42,6 +42,8 @@ pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
 pub const STSP: ISD = ISD::Target(ids::STSP);
 /// `ldir` behind a test of the count.
 pub const LDIRG: ISD = ISD::Target(ids::LDIRG);
+/// The byte stored, then `ldir` over the rest: a fill of a constant count.
+pub const LDFILL: ISD = ISD::Target(ids::LDFILL);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, Site, TargetCalling};
@@ -176,7 +178,14 @@ pub fn lower_call(
         (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
             dag.get_target_global_address(EVT::I16, symbol, offset)
         }
-        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, _) => callee,
+        // `X86TargetLowering::LowerCall`: a libcall's `ExternalSymbol` becomes the `TargetExternalSymbol` the call selects on
+        (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+            let name = dag.symbol_names[id as usize].clone();
+            // the runtime's own name for a C library routine, as the builder's `libcalls` table gives it
+            let symbol = super::function::LIBCALLS.iter().find(|(c_name, _)| *c_name == name).map_or(name.as_str(), |(_, symbol)| symbol);
+            dag.get_target_external_symbol(EVT::I16, symbol)
+        }
+        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode, _) => callee,
         _ => {
             let copy = dag.get_copy_to_phys_reg(chain, crate::reg::IY, callee, glue);
             chain = SDValue { node: copy.node, res: 0 };
@@ -382,6 +391,30 @@ impl TargetCalling for Z80Calling {
         }
         let size = dag.get_zext_or_trunc(size, EVT::I16);
         Some(dag.get_node(LDIRG, EVT::OTHER, &[chain, dst, src, size]))
+    }
+
+    /// `EmitTargetCodeForMemset`, as X86's is `rep stos`: the byte stored at the
+    /// destination and `ldir` copying it forward over the next `n - 1` bytes
+    /// (`ld (hl), v; ld e, l; ld d, h; inc de; ld bc, n - 1; ldir`, 13 B at
+    /// the site and no routine) where `__memseta` is a call (7 B at the site)
+    /// and a 21 B routine linked once. Only for a constant count of two or
+    /// more, and only in the selection that asks for it (`INLINE_FILLS`): the
+    /// module price decides whether the routine goes
+    /// (`compile::decomposed_functions`).
+    fn emit_memset(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        if !super::pipeline::INLINE_FILLS.with(std::cell::Cell::get) {
+            return None;
+        }
+        let bytes = u64::try_from(dag.constant(size)?).ok().filter(|bytes| (2..=0x1_0000).contains(bytes))?;
+        let count = dag.get_constant(u128::from(bytes - 1), EVT::I16);
+        Some(dag.get_node(LDFILL, EVT::OTHER, &[chain, dst, value, count]))
     }
 
     /// Not `ldir`: a `memmove` whose destination is above its source overlaps

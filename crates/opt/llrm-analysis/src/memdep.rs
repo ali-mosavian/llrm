@@ -588,6 +588,7 @@ impl MemoryDependenceResults {
                 dom_conditions: None,
                 cond_context: None,
                 cxt: None,
+                pending_intrinsics: &[],
             };
             valuetracking::known::pointer_alignment(&q, mem_loc.ptr)
         };

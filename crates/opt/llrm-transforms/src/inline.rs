@@ -54,7 +54,9 @@
 //!
 //! - the call's function type is the callee's and the callee is not variadic;
 //! - no body that allocates is copied into a recursive caller, except the last
-//!   call of a private callee;
+//!   call of a private callee, unless the target says
+//!   (`Tti::inline_frames_into_recursive_callers`, the pin's rule: the cost
+//!   model refuses above 1024 bytes; flat x86 says it);
 //! - a parameter the callee `releases` is passed an object the caller owns.
 //!
 //! Which sites are copied is `inlinecost::decide`'s (the walk's).
@@ -276,6 +278,8 @@ pub struct Caller<'a> {
     /// `CalleeAAR`: what the module analysis knows of the functions' memory
     /// effects, for the scopes a copy's calls get.
     pub effects: Option<&'a llrm_analysis::globalsmodref::GlobalsModRef>,
+    /// The caller is recursive and its target bars frames in such a caller:
+    /// no body that allocates is copied in, but the last call of a private one.
     pub recursive: bool,
     /// The copies are of the caller itself: they stop at the recursion limits,
     /// and this is the frequency of each call of the function's own body
@@ -573,6 +577,24 @@ pub(crate) fn grown(
 pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     let graph = CallGraph::new(module);
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
+}
+
+/// Those of `recursive` that call themselves from exactly one place (a linear
+/// recursion), found in one walk of their bodies: the question REC-9 asks at
+/// every call site is a set lookup.
+pub fn linear_recursive(
+    module: &Module,
+    recursive: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    recursive
+        .iter()
+        .copied()
+        .filter(|&id| {
+            body(module, id).is_some_and(|function| {
+                function.walk().filter(|&(_, one)| callee(&module.context, function, one) == Some(id)).count() == 1
+            })
+        })
+        .collect()
 }
 
 /// Whether `body` may be copied as a function of its own (a recursive one

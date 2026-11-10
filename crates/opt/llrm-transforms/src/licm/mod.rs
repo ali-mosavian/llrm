@@ -105,6 +105,16 @@ pub struct State {
     /// Those of `gone` that were sunk, not erased: a clone of each stands in an
     /// exit block, so what it reads has a user outside the loop.
     pub sunk: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
+    /// `hoistMulAddAssociation` replaces the product it reassociates by its
+    /// variant: the product's result, and what now stands for it.
+    pub forwarded: std::cell::RefCell<IdMap<llrm_mir::module::ValueId, Operand>>,
+    /// The products it put a factor into, and the operand slot of that factor:
+    /// a later product of the loop reads them as invariant-factor products.
+    pub factored: std::cell::RefCell<IdMap<InstId, usize>>,
+    /// `hoistBOAssociation` edits `bo` in place to `lv op (c1 op c2)`: the
+    /// instruction it replaced, and the `lv` and wrap flags of what took its
+    /// place, which the next link of an add chain reassociates again.
+    pub chained: std::cell::RefCell<IdMap<InstId, (Operand, llrm_mir::opcode::Flags)>>,
 }
 
 /// One loop, as `hoistRegion` sees it: its blocks, the loops in it, and where

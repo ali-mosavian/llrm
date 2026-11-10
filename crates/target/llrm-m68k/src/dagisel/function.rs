@@ -58,7 +58,9 @@ pub fn builder_target() -> BuilderTarget {
         }),
         // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
         // in `BuilderTarget`
-        va_arg_align_cap: Some(4),
+        va_arg_align_cap: Some(super::lowering::VA_SLOT),
+        // `Machine::max_alloca_align`: the frame realigns the stack pointer
+        max_alloca_align: None,
         ..BuilderTarget::for_pointer_bits(32)
     }
 }
@@ -98,7 +100,7 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false, false, false, true, &[])
+    select_function_with(module, name, cpu, false, false, false, false, false, true, Default::default(), &Default::default(), &[])
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
@@ -115,6 +117,8 @@ pub fn select_function_with(
     absolute_data: bool,
     size: bool,
     carry_chain: bool,
+    price: crate::timing::Price,
+    mul: &super::mulprice::Chain,
     libcalls: &[crate::libcalls::Kind],
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -152,6 +156,8 @@ pub fn select_function_with(
             short,
             absolute_data,
             carry_chain,
+            price,
+            mul.clone(),
             libcalls,
             &mut temporaries,
         )
@@ -178,6 +184,8 @@ pub fn select_function_with(
                 short,
                 absolute_data,
                 carry_chain,
+                price,
+                mul.clone(),
                 libcalls,
                 &mut temporaries,
             )

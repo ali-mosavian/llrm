@@ -4,7 +4,7 @@
 
 use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use llrm_spike_mf::regalloc::Assignment;
-use llrm_z80::compile::{slots_are_a_stack, stack_slot_report_by};
+use llrm_z80::compile::{frameless_slots_are_a_stack, slots_are_a_stack, stack_slot_report_by};
 use llrm_z80::reg;
 use llrm_z80::regalloc::Class;
 
@@ -75,4 +75,40 @@ fn the_slot_in_the_most_conflicts_goes_back_to_the_frame() {
     assert_eq!(first_violation.pushed, [3]);
     let by_conflicts = stack_slot_report_by(&mut body(), &Assignment(Vec::new()), false, true);
     assert_eq!(by_conflicts.pushed, [0, 1, 2]);
+}
+
+/// x87_arguments -O2 (with the soft-float bitcast split of #8590) was REFUSED "a pushed spill inside the stack
+/// arguments of a call": the whole-function stack form made every spill a `push`/`pop`, those between the pushes of
+/// a call's arguments included, and the printer cannot place them. They stay slots; outside the arguments the same
+/// spill is a stack.
+#[test]
+fn a_spill_inside_the_stack_arguments_of_a_call_stays_a_slot() {
+    let adjust = |kind, bytes| Inst::new(Kind::Op(kind), vec![Operand::Imm(bytes)]);
+    let save = || Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::DE))]);
+    let read = || Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(Reg::Phys(reg::BC)), Operand::Frame(0)]);
+    let build = |insts: Vec<Inst>| {
+        let mut f = MFunction::new("f");
+        f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+        f
+    };
+    let mut inside = build(vec![adjust("ADJCALLSTACKDOWN", 4), save(), read(), adjust("ADJCALLSTACKUP", 4)]);
+    assert!(!frameless_slots_are_a_stack(&mut inside, &Assignment(Vec::new())));
+    assert_eq!(inside.blocks[0].insts[1].kind, Kind::Op("SPILL16"));
+    let mut outside = build(vec![adjust("ADJCALLSTACKDOWN", 4), adjust("ADJCALLSTACKUP", 4), save(), read()]);
+    assert!(frameless_slots_are_a_stack(&mut outside, &Assignment(Vec::new())));
+    assert_eq!(outside.blocks[0].insts[2].kind, Kind::Op("PUSHP"));
+}
+
+/// A byte saved from `e` and reloaded into `d` came back through `pop de` as it was in `d`: the frameless form
+/// pushed and popped a pair whatever half each access named (memory_expansion `ref_fill` -Os stored 0 for 123).
+#[test]
+fn a_byte_slot_saved_from_one_half_and_reloaded_into_the_other_stays_a_slot() {
+    let mut f = MFunction::new("f");
+    let insts = vec![
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::E))]),
+        Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Phys(reg::D)), Operand::Frame(0)]),
+    ];
+    f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+    assert!(!frameless_slots_are_a_stack(&mut f, &Assignment(Vec::new())));
+    assert_eq!(f.blocks[0].insts[0].kind, Kind::Op("SPILL8"));
 }

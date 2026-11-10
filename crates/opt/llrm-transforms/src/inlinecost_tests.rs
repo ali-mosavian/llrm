@@ -78,6 +78,7 @@ fn priced_params(
         callee_calls: calls,
         callee_dies: dies,
         caller_recursive: false,
+        callee_linear_recursive: false,
         caller_size: size,
         relative_frequency: None,
         entry_weight: None,
@@ -553,6 +554,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             callee_calls: 2,
             callee_dies: false,
             caller_recursive: false,
+            callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
             entry_weight: None,
@@ -598,6 +600,7 @@ fn an_interposable_callee_is_not_inlined() {
             callee_calls: 2,
             callee_dies: false,
             caller_recursive: false,
+            callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
             entry_weight: None,
@@ -701,6 +704,7 @@ fn test_a_site_llvms_frequencies_keep_warm_is_not_held_to_the_cold_threshold() {
         &crate::inline::call_counts(&module),
         &Default::default(),
         &Default::default(),
+        &Default::default(),
         InlineParams::from_level(2),
         CallerSize::Speed,
         false,
@@ -729,6 +733,7 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         counts: &counts,
         addressed: &none,
         recursive: &none,
+        linear_recursive: &none,
         params: InlineParams::from_level(2),
         size: CallerSize::Speed,
         always_only: false,
@@ -752,6 +757,7 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         &layout,
         main,
         &counts,
+        &none,
         &none,
         &none,
         InlineParams::from_level(2),
@@ -837,6 +843,7 @@ b0:
         callee_calls: 1,
         callee_dies: false,
         caller_recursive: false,
+        callee_linear_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
         entry_weight: None,
@@ -900,6 +907,7 @@ b0:
             callee_calls: 1,
             callee_dies: false,
             caller_recursive: false,
+            callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
             entry_weight: None,
@@ -1087,6 +1095,20 @@ fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
     let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
     let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&rate_only), params, (2, false));
     assert!(cost < threshold, "the rate refused a copy at -O1");
+}
+
+/// DEVIATE wasm SZ1 reaches -O1: with the rate off a speed caller holds a
+/// growing inline the pin's `default<O1>` takes (jpeg_fixed -O1 22099 B against
+/// the pin's 26245). Closing #8527 kept it: undoing it moved 33 wasm -O1 rows
+/// up by 28 525 B.
+#[test]
+fn the_size_rule_holds_a_growing_inline_in_a_speed_caller_at_o1() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = PolicyOnly(policy, Some(false), false);
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti), params, (2, false));
+    assert!(cost >= threshold, "-O1 took a growing inline the size rule holds");
 }
 
 const BOUNDED_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer

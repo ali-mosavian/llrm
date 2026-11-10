@@ -49,7 +49,6 @@ def test_no_script_takes_the_size_of_an_object_or_assembly_file_as_code_bytes():
 # (file, snippet of the line): text only, owner to extend to code + rodata + data, or to say `# text-only by design: WHY` on the line.
 TEXT_ONLY_ALLOWED = {
     ("tools/softfloat_cells/cells.sh", "text $(size -A"): "softfloat_cells owner",
-    ("tools/softfloat_cells/m68k/bytes.sh", "text() { $B-size -A"): "softfloat m68k owner",
 }
 
 

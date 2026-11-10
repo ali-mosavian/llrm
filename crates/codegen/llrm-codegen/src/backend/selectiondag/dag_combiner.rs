@@ -53,8 +53,35 @@ pub enum CombineLevel {
     AfterLegalizeDag,
 }
 
+/// The machine opcodes of a target's multiply of two half-width operands into
+/// a full-width product (`mulu.w` / `muls.w`).
+#[derive(Clone, Copy)]
+pub struct HalfMul {
+    pub half: EVT,
+    pub unsigned: u32,
+    pub signed: u32,
+    /// The target has a full-width multiply instruction (`muls.l`). The half
+    /// multiply then needs the operand's extension and a copy of the source
+    /// (the tied destination), which the full-width one needs just the same
+    /// without the copy: it is used only for operands that are already full
+    /// width.
+    pub has_full_multiply: bool,
+}
+
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `(mul x, y)` of operands known to fit half the width is the target's
+    /// half-by-half multiply. The pin has no such rule: its M68k multiplies
+    /// two `i32` with `muls.l` (68020) or a libcall (68000), never `muls.w`.
+    /// DEVIATE: off by default; m68k opts in per CPU. Exit: none, while the
+    /// pin has no known-bits multiply selection.
+    fn mul_of_halves(
+        &self,
+        _vt: EVT,
+    ) -> Option<HalfMul> {
+        None
+    }
+
     /// `TLI.shouldNormalizeToSelectSequence`: `select (or c0, c1), x, y` is
     /// `select c0, x, (select c1, x, y)` (and the `and` form likewise). The
     /// pin's default asks whether the type is split; DEVIATE: false here (the
@@ -982,6 +1009,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::USubO => self.visit_usubo(node),
             ISD::USubOCarry => self.visit_usubo_carry(node),
+            ISD::SetCCCarry => self.visit_setcc_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
@@ -1444,6 +1472,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let vt = self.dag.value_type(node);
         let NodeData::CondCode(cond) = self.dag.node(ops[4]).data else { return None };
         let compare = self.dag.get_setcc(EVT::I1, ops[0], ops[1], cond);
+        // `SimplifySelectCC`: a compare that folded to a constant names the arm.
+        if self.dag.opcode(compare) != ISD::SetCC {
+            return self.dag.constant(compare).map(|value| if value != 0 { ops[2] } else { ops[3] });
+        }
         let simpler = self.visit_setcc(compare)?;
         if self.dag.opcode(simpler) != ISD::SetCC {
             return None;
@@ -1573,6 +1605,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
         let amount_vt = self.hooks.shift_amount_type(vt);
+        let register_wide = self.tli.is_some_and(|tli| tli.types.is_type_legal(vt));
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -1585,6 +1618,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
         }
         if c1.wrapping_sub(1) & mask == c2 {
+            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, review 2026-12-20; ends
+            // if the pin's M68k lowers a select of constants itself or
+            // `convertSelectOfConstantsToMath` is answered per target): where
+            // a true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
+            // and `sext (not c)` is the inverted `Scc` with no mask:
+            // `c ? C : C-1` is `C + sext (!c)`. The pin's own forms: the sext
+            // arm ([L13102][sext]) and `or (sext (not c)), C` ([L13122][not]).
+            //
+            // [sext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13102
+            // [not]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13122
+            // Only in a register-wide type: an expanded one pays the sext's
+            // high half (`add` with carry of `zext` is cheaper there).
+            if dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne && register_wide {
+                let not = dag.get_not(cond, EVT::I1);
+                let not = dag.get_sext_or_trunc(not, vt);
+                return Some(dag.get_node(ISD::Add, vt, &[not, then]));
+            }
             let cond = dag.get_zext_or_trunc(cond, vt);
             return Some(dag.get_node(ISD::Add, vt, &[cond, other]));
         }
@@ -1901,12 +1951,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
         let NodeData::Mem(info) = self.dag.node(load).data.clone() else { return None };
         let wide = self.dag.value_type(load);
+        // `isLegalNarrowLdSt`: an extending load narrows to a plain load of
+        // the truncated width when its memory is that wide or wider
+        // (`trunc (zextload i8)` to a byte is the byte load); one whose memory is
+        // narrower than the result stays an extending load.
+        let stored = if info.ext.is_some() { info.mem_vt } else { wide };
         if info.volatile
-            || info.ext.is_some()
             || !self.dag.has_one_use(load.node)
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
+            || stored.size_in_bits() < vt.size_in_bits()
         {
             return None;
         }
@@ -1918,7 +1973,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `AdjustBigEndianShift`: the low bytes of a big-endian value are its
         // last bytes
         let offset =
-            if self.dag.config().big_endian { i64::from((wide.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
+            if self.dag.config().big_endian { i64::from((stored.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
         let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
         let base = match info.base {
             super::dag::MemBase::Stack(at) => super::dag::MemBase::Stack(at + offset as i32),
@@ -1926,7 +1981,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             other => other,
         };
         let align = if offset == 0 { info.align } else { info.align.min(1 << (offset as u32).trailing_zeros()) };
-        let narrow = super::dag::MemInfo { mem_vt: vt, align, base, ..info };
+        let narrow = super::dag::MemInfo { mem_vt: vt, ext: None, align, base, ..info };
         let new = self.dag.get_load(vt, chain, ptr, narrow);
         if self.dag.invariant_loads.contains(&load.node) {
             self.dag.invariant_loads.insert(new.node);
@@ -2501,7 +2556,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // Y), X` is `sub X, (zext i1 Y)`.
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3534
         if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne
-            && !self.dag.config().sext_bool_add_preferred
+            && vt.size_in_bits() > self.dag.config().sext_bool_add_max_bits
         {
             for (sext, other) in [(n0, n1), (n1, n0)] {
                 if self.dag.opcode(sext) == ISD::SignExtend && self.dag.value_type(self.dag.operand(sext, 0)) == EVT::I1 {
@@ -3285,7 +3340,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> bool {
         let (ka, kb) = (super::known_bits::known_bits(self.dag, a), super::known_bits::known_bits(self.dag, b));
         let all = super::fold::mask(ka.width);
-        (!ka.zero & all) + (!kb.zero & all) <= all
+        // At 128 bits the sum of the two maxima wraps in a `u128`, which read as "fits".
+        (!ka.zero & all).checked_add(!kb.zero & all).is_some_and(|sum| sum <= all)
     }
 
     /// `visitUADDO_CARRY`
@@ -3409,6 +3465,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node_multi(ISD::USubOCarry, &values, &[a, b, carry]));
         }
         None
+    }
+
+    /// `visitSETCCCARRY`
+    /// ([L15188](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15188)):
+    /// with no borrow in, the node is a plain `setcc` of its operands. The low
+    /// words' `usubo x, 0` folds to a zero borrow, so a compare of a long with
+    /// a constant whose low words are zero reaches here.
+    fn visit_setcc_carry(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (lhs, rhs, carry, cond) =
+            (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+        if !self.dag.is_null_constant(carry) {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        Some(self.dag.get_node(ISD::SetCC, vt, &[lhs, rhs, cond]))
     }
 
     /// The algebraic folds of `visitSUB`
@@ -4081,7 +4155,49 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
+        if let Some(half) = self.hooks.mul_of_halves(vt) {
+            if let Some(product) = self.mul_of_halves(n0, n1, vt, half) {
+                return Some(product);
+            }
+        }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The half-by-half multiply of `x * y`, where both are known to fit the
+    /// half type unsigned (high bits zero) or both signed (sign bits above
+    /// the half's width). A constant operand is left to the pin's folds.
+    fn mul_of_halves(
+        &mut self,
+        x: SDValue,
+        y: SDValue,
+        vt: EVT,
+        half: HalfMul,
+    ) -> Option<SDValue> {
+        if self.dag.constant(x).is_some() || self.dag.constant(y).is_some() {
+            return None;
+        }
+        // an extension of a half-width value, or a load that extends one
+        let extends_half = |dag: &SelectionDAG, v: SDValue| {
+            if dag.opcode(v) == ISD::Load {
+                return matches!(dag.node(v).data, NodeData::Mem(info) if info.ext.is_some() && info.mem_vt == half.half);
+            }
+            matches!(dag.opcode(v), ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend)
+                && dag.value_type(dag.operand(v, 0)) == half.half
+        };
+        if half.has_full_multiply && (extends_half(self.dag, x) || extends_half(self.dag, y)) {
+            return None;
+        }
+        let (width, narrow) = (vt.size_in_bits(), half.half.size_in_bits());
+        let high = super::fold::mask(width) & !super::fold::mask(narrow);
+        let opcode = if [x, y].iter().all(|&v| super::known_bits::masked_value_is_zero(self.dag, v, high)) {
+            half.unsigned
+        } else if [x, y].iter().all(|&v| super::known_bits::num_sign_bits(self.dag, v) > width - narrow) {
+            half.signed
+        } else {
+            return None;
+        };
+        let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
+        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
     }
 
     /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<

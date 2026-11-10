@@ -19,10 +19,14 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 /// lru -O2: the estimate priced each copy's constant stores one by one
 /// (+28 B), vetoed both init loops, and ran 88 instructions / 364 B against the
 /// pin's 80 / 332. Adjacent constant stores merge into stp; with the credit
-/// the init loops unroll: 11 labels, 93 instructions (without it 15 and 98).
+/// the init loops unroll: fewer than the 98 instructions without it. Counted in
+/// instructions: a sunk constant's edge block adds a label, not an instruction.
+/// The exact count follows block order (93 before the pin's placement of phi
+/// edge blocks, 94 after; the pin's `opt -O2 | llc -O2` on the same IR: 103).
 #[test]
 fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
-    assert_eq!(labels(include_str!("data/bench_lru.ll")), 11);
+    let insns = instructions(include_str!("data/bench_lru.ll"), Level::O2);
+    assert!(insns < 98, "{insns} instructions");
 }
 
 /// crc -O2: the 8-trip bit loop inside the 9-trip byte loop saves 207 clocks

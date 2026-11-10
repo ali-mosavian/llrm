@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, missing_levels, one_sided, single_input, skipped, verdict, verdicts  # noqa: E402
+from m68k_worse_cells import count, missing, missing_levels, one_sided, report, single_input, skipped, verdict, verdicts  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -119,6 +119,53 @@ class WorseCells(unittest.TestCase):
         rows += [("m68k-68000", "gcc_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "gcc_only", "Os", "gcc", 20, 100, 1, "")]
         rows += [("m68k-68000", "clang_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "clang_only", "Os", "clang", 20, 100, 1, "")]
         self.assertEqual(one_sided(tsv(*rows)), [("m68k-68000", "gcc_only", "Os", "clang"), ("m68k-68000", "clang_only", "Os", "gcc")])
+
+
+class Report(unittest.TestCase):
+    def test_a_strict_o1_cell_shows_both_axes_not_one_mixed_number(self):
+        """crc16 68000 O1 printed "+52.0 B WORSE": 10 B smaller than gcc, 52 clk slower. The number was the clock excess labelled bytes."""
+        rows = cell("m68k-68000", "crc16", "O1", (74, 4252), (84, 4200), (152, 8134))
+        (line,) = report(tsv(*rows))
+        self.assertIn("dB=-10 B", line)
+        self.assertIn("dT=+52 clk", line)
+        self.assertNotIn("+52.0 B", line)
+
+    def test_an_o2_cell_shows_the_net_and_the_rate_it_is_made_at(self):
+        rows = cell("m68k-68000", "partition", "O2", (98, 1264), (92, 1226), (150, 2104))
+        (line,) = report(tsv(*rows))
+        self.assertIn("dB=+6 B dT=+38 clk", line)
+        self.assertIn("net=+25.0 B at 0.5 B/clk", line)
+
+    def test_an_os_cell_without_clocks_has_no_dt(self):
+        rows = cell("m68k-68000", "fib", "Os", (22, None), (20, None), (24, None))
+        (line,) = report(tsv(*[[*r[:5], "", *r[6:]] for r in rows]))
+        self.assertIn("dB=+2 B dT=n/a", line)
+
+
+class LinkedSize(unittest.TestCase):
+    """The matrix counted a program's object, so a compiler-rt helper that one column linked was invisible
+    (bitcount_idioms 68000 O2 read ours 386 B against gcc 378 B while gcc linked 30 B more)."""
+
+    def row(self, compiler, code, library="", note=""):
+        return ("m68k-68000", "bitcount_idioms", "O2", compiler, code, "", "", note, library)
+
+    def test_a_reference_that_links_a_helper_is_judged_on_the_linked_size(self):
+        rows = [self.row("ours", 386, 0), self.row("gcc", 378, 30), self.row("clang", 400, 0)]
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+
+    def test_ours_linking_a_helper_counts_it(self):
+        rows = [self.row("ours", 372, 28), self.row("gcc", 378, 0), self.row("clang", 672, 0)]
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+
+    def test_a_reference_with_an_unresolved_helper_is_one_sided_not_judged(self):
+        rows = [self.row("ours", 386, 0), self.row("gcc", 300, "", "unresolved helpers: __paritysi2"), self.row("clang", 672, 0)]
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+        self.assertEqual(one_sided(tsv(*rows)), [("m68k-68000", "bitcount_idioms", "O2", "gcc")])
+
+    def test_ours_with_an_unresolved_helper_is_missing(self):
+        rows = [self.row("ours", 386, "", "unresolved helpers: __x"), self.row("gcc", 378, 0), self.row("clang", 380, 0)]
+        self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "bitcount_idioms", "O2")])
+
 
 if __name__ == "__main__":
     unittest.main()
