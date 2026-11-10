@@ -122,17 +122,20 @@ def dos_file(cwd: Path, name: str) -> Path:
     return path
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None, poison: int | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
     (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
     opens live in `cwd`. `whole` counts the program from its first instruction to its exit (the start-up, the runtime and what it calls
-    included), `entry` unused; `stdin` is what handle 0 reads; `profile` collects how often each address (from the image's first byte) ran."""
+    included), `entry` unused; `stdin` is what handle 0 reads; `profile` collects how often each address (from the image's first byte) ran. `poison`: memory is filled with this byte before the
+    image is loaded (DOS does not zero what it gives a program: a byte the image does not hold must not be assumed zero)."""
     data = exe.read_bytes()
     (_, last, pages, nrel, header, _, _, ss, sp, _, ip, cs, relocations, _) = struct.unpack("<2sHHHHHHHHHHHHH", data[:28])
     size = (pages - 1) * 512 + (last or 512)
     uc = Uc(UC_ARCH_X86, UC_MODE_16)
     uc.mem_map(0, 0x100000)
+    if poison is not None:
+        uc.mem_write(0, bytes([poison]) * 0x100000)
     uc.mem_write(LOAD * 16, data[header * 16 : size])
     for at in range(nrel):
         offset, segment = struct.unpack("<HH", data[relocations + 4 * at : relocations + 4 * at + 4])
