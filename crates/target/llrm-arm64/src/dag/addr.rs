@@ -393,6 +393,21 @@ fn extended_shl<D: AddrDag>(
     worth_folding_addr(dag, opt_for_size, n).then(|| dag.operand(n.node, 0))
 }
 
+/// `isPreferredADD`: whether an `add` takes the immediate better than a
+/// register does (12 bits, or 12 bits shifted left by 12 unless one `movz`
+/// makes it).
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L1542
+fn preferred_add(immediate: i64) -> bool {
+    let bits = immediate as u64;
+    if bits & 0xffff_ffff_ffff_f000 == 0 {
+        return true;
+    }
+    if bits & 0xffff_ffff_ff00_0fff == 0 {
+        return bits & 0xffff_ffff_ff00_ffff != 0 && bits & 0xffff_ffff_ffff_0fff != 0;
+    }
+    false
+}
+
 /// `SelectAddrModeXRO`: base, index register, sign-extend flag (0) and shift
 /// flag.
 pub fn addr_mode_xro<D: AddrDag>(
@@ -408,12 +423,23 @@ pub fn addr_mode_xro<D: AddrDag>(
     if dag.users(n).into_iter().any(|(user, _)| !is_mem_op_or_prefetch(dag, user)) {
         return None;
     }
-    // A wide constant offset takes the register form after a `MOVi64imm`: not
-    // translated.
-    if dag.constant(rhs).is_some() {
-        return None;
-    }
-    let worth = worth_folding_addr(dag, opt_for_size, n);
+    // A constant RHS that no scaled immediate and no single `add` takes is the
+    // index register (the pin builds `ADD lhs, MOVi64imm rhs` to price it;
+    // the constant itself is what the access takes).
+    let worth = if let Some(immediate) = zext(dag, rhs) {
+        let immediate = immediate as i64;
+        if valid_as_scaled_immediate(immediate, 0x1000, size)
+            || preferred_add(immediate)
+            || preferred_add(immediate.wrapping_neg())
+        {
+            return None;
+        }
+        // The new node has no user: only the size goal or a foldable shift on
+        // the left makes it worth folding.
+        opt_for_size || (dag.opcode(lhs.node) == isd::SHL && worth_folding_shl(dag, lhs))
+    } else {
+        worth_folding_addr(dag, opt_for_size, n)
+    };
     let flag = |dag: &mut D, on: i64| dag.target_constant(on, mvt::i32);
     for (shl, base) in [(rhs, lhs), (lhs, rhs)] {
         if worth && dag.opcode(shl.node) == isd::SHL {
@@ -577,12 +603,15 @@ pub fn arith_extended_register<D: AddrDag>(
             }
         }
         let reg = dag.operand(n.node, 0);
-        // A 32-bit definition is already zero-extended for free.
+        // A 32-bit definition is already zero-extended for free. The pin's
+        // list names `TargetOpcode::EXTRACT_SUBREG`, which `getOpcode()` of a
+        // machine node never equals (it is `~opcode`): the entry is dead, so a
+        // machine `EXTRACT_SUBREG` counts as a 32-bit definition here too.
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L1197
         let opcode = dag.opcode(reg.node);
         let is_def32 =
             ![isd::TRUNCATE, isd::CopyFromReg, isd::AssertSext, isd::AssertZext, isd::AssertAlign, isd::FREEZE]
-                .contains(&opcode)
-                && !(dag.is_machine(reg.node) && opcode == target_opcode::EXTRACT_SUBREG);
+                .contains(&opcode);
         if ext == UXTW && dag.value_type(reg) == mvt::i32 && is_def32 {
             return None;
         }
