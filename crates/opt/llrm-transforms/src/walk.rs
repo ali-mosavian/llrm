@@ -80,6 +80,8 @@ use crate::interprocedural::{
 /// is not passed (`ipa-deadargs`).
 pub struct ModuleIpo {
     pub inline: crate::inline::Threshold,
+    /// The clones made here count against the interprocedural step's.
+    pub cloning: crate::ipacp::Shared,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -121,31 +123,46 @@ impl ProgramPass for ModuleIpo {
                 modules[at].changed(id);
             }
         }
-        let mut cloning = crate::ipacp::Cloning::default();
-        for at in 0..count {
-            let (made, before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
-                crate::ipacp::cloned(
-                    module,
-                    &program.layout,
-                    &procedures[at],
-                    &private[at],
-                    &costs,
-                    self.inline.cp_clone,
-                    &mut cloning,
-                )
-            });
-            vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
-            for &id in &made.added {
-                procedures[at].push(id);
-                private[at].insert(id);
+        let mut cloning = self.cloning.borrow_mut();
+        // gcc finishes ipa-cp before ipa-inline (and the pin's specializer
+        // solves again after each round): a clone's constants reach the calls
+        // in its body, which are cloned in turn, so a chain such as
+        // `place(row + 1)` is whole before the walk inlines one link into the
+        // next. Off without `-fipa-cp-clone`: `cloned` makes nothing then.
+        loop {
+            let mut cloned_now = false;
+            for at in 0..count {
+                let (made, before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
+                    crate::ipacp::cloned(
+                        module,
+                        &program.layout,
+                        &procedures[at],
+                        &private[at],
+                        &costs,
+                        self.inline.cp_clone,
+                        &mut cloning,
+                    )
+                });
+                vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
+                for &id in &made.added {
+                    procedures[at].push(id);
+                    private[at].insert(id);
+                }
+                for &id in made.added.iter().chain(&made.edited) {
+                    llrm_mir::memory::unsplit(
+                        &mut function_mut(&mut program.modules[at], id).1.attrs,
+                        llrm_mir::memory::Moved::OutOfArguments,
+                    );
+                    modules[at].changed(id);
+                    changed = true;
+                    cloned_now = true;
+                }
             }
-            for &id in made.added.iter().chain(&made.edited) {
-                llrm_mir::memory::unsplit(
-                    &mut function_mut(&mut program.modules[at], id).1.attrs,
-                    llrm_mir::memory::Moved::OutOfArguments,
-                );
+            if !cloned_now {
+                break;
+            }
+            for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
                 modules[at].changed(id);
-                changed = true;
             }
         }
         for at in 0..count {
@@ -607,7 +624,9 @@ impl ProgramPass for Walk {
                                 // ordinary rules, are inlined into the trial too (the pin inlines
                                 // callee-first, so `foo` into `main` and `bar` into that copy meet
                                 // the constants together); one round, so O(n).
-                                if size != crate::inlinecost::CallerSize::Speed && tti.opt_size_inline_chain_trial() {
+                                if (size != crate::inlinecost::CallerSize::Speed || (!self.speed_rate && tti.inline_trials_at_o1()))
+                                    && tti.opt_size_inline_chain_trial()
+                                {
                                     let mut seen = Vec::new();
                                     let second = crate::inlinecost::sites_with_trials(
                                         module,

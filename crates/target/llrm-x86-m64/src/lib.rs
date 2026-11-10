@@ -468,6 +468,8 @@ impl llrm_target::Target for M64 {
                             // dword and a byte 3 + 3, a word 4 + 4); the call is `mov edx, n` 5 and the
                             // jump 5, 14 with the setup of a frame object's pointers.
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+                            // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
+                            immediate_forms_at_size: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
