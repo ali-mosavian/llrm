@@ -18,8 +18,11 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
 
 /// `sized`: the function is tuned for size (`optsize`, `minsize`).
+/// `synthesize`: the module-level re-selection of `mulimage` is running, which
+/// may expand a multiply by three signed digits.
 pub struct MosCombines {
     pub sized: bool,
+    pub synthesize: bool,
 }
 
 /// The combines after legalization: only the shared-shift answer, which every
@@ -163,7 +166,8 @@ impl CombineHooks for MosCombines {
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
-            ISD::Mul => decompose_mul(dag, node, self.sized).or_else(|| multiplier_with_fewer_bits(dag, node, self.sized)),
+            ISD::Mul => decompose_mul(dag, node, self.sized, self.synthesize)
+                .or_else(|| multiplier_with_fewer_bits(dag, node, self.sized)),
             // the combiner offers every target node to the hook
             _ => None,
         }
@@ -525,6 +529,83 @@ fn multiplier_with_fewer_bits(
         .then(|| dag.get_node(ISD::Mul, EVT::I16, &[second, first]))
 }
 
+/// The signed binary digits of an odd `m` with no two neighbours set (the
+/// non-adjacent form), lowest first: `(exponent, +1 or -1)`.
+fn non_adjacent_form(mut m: u128) -> Vec<(u32, bool)> {
+    let mut digits = Vec::new();
+    let mut exponent = 0;
+    while m != 0 {
+        if m & 1 == 1 {
+            let plus = m & 3 == 1;
+            digits.push((exponent, plus));
+            m = if plus { m - 1 } else { m + 1 };
+        }
+        m >>= 1;
+        exponent += 1;
+    }
+    digits
+}
+
+/// `x * m` for an odd `m` of three signed digits, as two adds in Horner form:
+/// `(((x << a) +- x) << b) +- x`, then `<< zeros`, negated for a negative
+/// constant. Fewer shifted bits of the two forms (binary `8 + 2 + 1`, or
+/// non-adjacent `16 - 4 - 1`).
+///
+/// DEVIATE 6502-MUL-SYNTH: the pin decomposes `2^N +- 2^M` only and leaves the
+/// general case as a TODO
+/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024):
+/// "a target set limit on number of ops and a callback to determine that
+/// sequence"). Here the limit is two adds, on a 32-bit value (`__mulsi3`, 2,200
+/// clocks a call; a byte or word multiply is a call of a few bytes and the
+/// steps cost 7 to 38). Source: gcc's `synth_mult` (expmed.cc), bounded. It
+/// runs only in `mulimage`'s re-selection, which keeps it when no multiply call
+/// is left in the module and the bytes and clocks of the level pay. Owner:
+/// llrm-target-6502. Exit: 2026-12-01, when the shared combine reads the
+/// sequence from a target hook.
+fn synthesized_mul(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    magnitude: u128,
+    zeros: u32,
+    negative: bool,
+    vt: EVT,
+    synthesize: bool,
+) -> Option<SDValue> {
+    if !synthesize || vt != EVT::I32 {
+        return None;
+    }
+    let binary: Vec<(u32, bool)> = (0..128).filter(|bit| magnitude >> bit & 1 == 1).map(|bit| (bit, true)).collect();
+    let signed_digits = non_adjacent_form(magnitude);
+    let mut digits = match (binary.len() == 3, signed_digits.len() == 3) {
+        (true, true) if binary[2].0 <= signed_digits[2].0 => binary,
+        (_, true) => signed_digits,
+        (true, false) => binary,
+        _ => return None,
+    };
+    digits.reverse(); // highest exponent first
+    let width = vt.size_in_bits();
+    if digits[0].0 + zeros >= width {
+        return None;
+    }
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
+        let by = dag.get_constant(u128::from(by), EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let op = |plus: bool| if plus { ISD::Add } else { ISD::Sub };
+    let first = shift(dag, x, digits[0].0 - digits[1].0);
+    let mut result = dag.get_node(op(digits[1].1), vt, &[first, x]);
+    result = shift(dag, result, digits[1].0 - digits[2].0);
+    result = dag.get_node(op(digits[2].1), vt, &[result, x]);
+    if zeros != 0 {
+        result = shift(dag, result, zeros);
+    }
+    if negative {
+        let zero = dag.get_constant(0, vt);
+        result = dag.get_node(ISD::Sub, vt, &[zero, result]);
+    }
+    Some(result)
+}
+
 /// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
 /// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
 /// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative
@@ -540,6 +621,7 @@ fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
     sized: bool,
+    synthesize: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I8 && vt != EVT::I16 && vt != EVT::I32 {
@@ -559,7 +641,7 @@ fn decompose_mul(
     let (add, bits) = match (magnitude - 1, magnitude + 1) {
         (below, _) if below.is_power_of_two() => (true, below),
         (_, above) if above.is_power_of_two() => (false, above),
-        _ => return None,
+        _ => return synthesized_mul(dag, x, magnitude, zeros, signed < 0, vt, synthesize),
     };
     let k = bits.trailing_zeros();
     if k + zeros >= width {
