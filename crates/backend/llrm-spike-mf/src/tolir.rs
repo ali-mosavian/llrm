@@ -340,7 +340,7 @@ impl<T: Target> Converted<T> {
                             reads.extend(memory.iter().copied());
                         }
                         let mut made = (**one).clone().standing_for(one);
-                        if let Some(form) = inst.form.as_ref().and_then(|form| in_body_values::<T>(form, inst, one)) {
+                        if let Some(form) = inst.form.as_ref().filter(|_| std::env::var_os("LLRM_NO_FORM").is_none()).and_then(|form| in_body_values::<T>(form, inst, one)) {
                             made.what = Some(form);
                         } else if std::env::var_os("LLRM_FORM_DEBUG").is_some() {
                             eprintln!("NOFORM {:?} form={:?} ops={:?} defines={:?} uses={:?} formd={:?} forms={:?}", inst.kind, inst.form.as_ref().map(|f| f.name.clone()), inst.operands, one.defines, one.uses, inst.form.as_ref().map(|f| f.dests.clone()), inst.form.as_ref().map(|f| f.sources.clone()));

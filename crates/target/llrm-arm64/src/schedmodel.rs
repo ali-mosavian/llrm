@@ -71,8 +71,8 @@ impl Arm64Model {
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
         let name = insn.what.as_ref()?.name.as_deref()?;
-        if std::env::var_os("LLRM_CLASS_DEBUG").is_some() {
-            eprintln!("CLASS {name} -> {:?}", llvm_names(name).first());
+        if std::env::var_os("LLRM_NO_CLASS").is_some() {
+            return None;
         }
         let llvm = *llvm_names(name).first()?;
         let opcode = *opcode_numbers().get(llvm)?;
@@ -150,6 +150,9 @@ impl SchedulingModel for Arm64Model {
 
     /// `AArch64Subtarget::overrideSchedPolicy`.
     fn policy(&self) -> RegionPolicy {
+        if std::env::var_os("LLRM_SCHED_BOTTOM_UP").is_some() {
+            return RegionPolicy::bottom_up();
+        }
         RegionPolicy::bidirectional(self.disable_latency)
     }
 
@@ -160,6 +163,9 @@ impl SchedulingModel for Arm64Model {
         &self,
         insn: &Insn,
     ) -> Unit {
+        if std::env::var_os("LLRM_NO_UNIT").is_some() {
+            return Unit { micro_ops: 1, ..Unit::default() };
+        }
         let Some(class) = self.class(insn) else { return Unit { micro_ops: 1, ..Unit::default() } };
         let mut unit = Unit {
             micro_ops: u32::from(class.num_micro_ops),
@@ -187,6 +193,9 @@ impl SchedulingModel for Arm64Model {
         &self,
         insn: &Insn,
     ) -> u32 {
+        if std::env::var_os("LLRM_NO_LAT").is_some() {
+            return default_def_latency(insn, self.model.load_latency);
+        }
         match self.class(insn).and_then(|class| class.write_latency.first().copied()) {
             // `capLatency`: a variable latency (-1) is 1000.
             Some(entry) => u32::try_from(entry.cycles).unwrap_or(1000),
@@ -367,5 +376,40 @@ mod tests {
     fn the_policy_is_bidirectional_with_the_latency_heuristic() {
         let policy = Arm64Model::generic().policy();
         assert_eq!((policy.only_top_down, policy.only_bottom_up, policy.disable_latency), (false, false, false));
+    }
+
+    fn access(
+        name: &str,
+        base: u32,
+        offset: i64,
+    ) -> Insn {
+        let cell = Loc::Mem(llrm_codegen::model::ir::Mem { base: Some(Held { value: base, width: 8, offset: 0 }), offset, ..llrm_codegen::model::ir::Mem::new(None, 8) });
+        let what = Semantics { name: Some(name.into()), dests: vec![held(1)], sources: vec![cell], ..Semantics::new(Operation::Move) };
+        Insn::new(0, Some((0, 0)), Some(what), vec![1], vec![base])
+    }
+
+    fn clusters(
+        model: &Arm64Model,
+        (first, a): (&str, i64),
+        (second, b): (&str, i64),
+    ) -> bool {
+        let (first, second) = (access(first, 7, a), access(second, 7, b));
+        let (x, y) = (model.mem_op(&first).unwrap(), model.mem_op(&second).unwrap());
+        model.should_cluster((&first, &x), (&second, &y), 2, x.width + y.width)
+    }
+
+    /// `shouldClusterMemOps`: two word loads from the same base at
+    /// neighbouring slots can be an `ldp`; a gap, another size or a byte
+    /// load cannot.
+    #[test]
+    fn neighbouring_accesses_of_one_base_cluster_and_the_rest_do_not() {
+        let model = Arm64Model::generic();
+        assert!(clusters(&model, ("LDRW.ui", 8), ("LDRW.ui", 12)));
+        assert!(clusters(&model, ("LDRX.ui", 0), ("LDRX.ui", 8)));
+        assert!(!clusters(&model, ("LDRW.ui", 8), ("LDRW.ui", 16)), "a slot between");
+        assert!(!clusters(&model, ("LDRW.ui", 8), ("LDRX.ui", 12)), "two sizes");
+        assert!(!clusters(&model, ("LDRB.ui", 8), ("LDRB.ui", 9)), "no byte pair");
+        assert!(!clusters(&model, ("LDRX.ui", 512), ("LDRX.ui", 520)), "the pair's 7-bit offset ends at slot 63");
+        assert!(!clusters(&model, ("LDRW.ui", 6), ("LDRW.ui", 10)), "an unscaled offset is no multiple of the size");
     }
 }

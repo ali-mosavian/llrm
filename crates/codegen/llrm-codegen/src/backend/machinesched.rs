@@ -1131,6 +1131,15 @@ pub(crate) fn picks(
     let units: Vec<Unit> = insns.iter().map(|one| model.unit(one)).collect();
     let pressure = followed.as_mut().map(|one| one as &mut dyn ZonePressure);
     let (order, reasons) = Scheduler::new(graph, &machine, units, policy, pressure).schedule();
+    if trace()
+        && let (Some(tracking), Some(region)) = (tracking, region.as_ref())
+    {
+        let mut after = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+        for &node in order.iter().rev() {
+            after.place(node);
+        }
+        eprintln!("machinesched region n={n} scheduled max={:?}", after.max());
+    }
     if trace() {
         for (node, at_top, reason) in &reasons {
             eprintln!(
@@ -1354,8 +1363,12 @@ pub fn scheduled(
                         Tracking { model, live_out, live_thru }
                     });
                     let mut deps = graph(slice, regs, bits, sched);
-                    copy_constrain(slice, &mut deps, &|value| now.contains(&value));
-                    cluster_mem_ops(slice, &mut deps, sched);
+                    if std::env::var_os("LLRM_NO_COPYC").is_none() {
+                        copy_constrain(slice, &mut deps, &|value| now.contains(&value));
+                    }
+                    if std::env::var_os("LLRM_NO_CLUSTER").is_none() {
+                        cluster_mem_ops(slice, &mut deps, sched);
+                    }
                     let order = order_region(slice, &deps, tracking.as_ref(), sched);
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
                         for (place, &node) in order.iter().enumerate() {
@@ -2265,5 +2278,85 @@ mod tests {
         let defined: Vec<u32> =
             scheduled(&body, 2, &GenericModel, |_, _| one_set(3)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
         assert_eq!(defined, [7, 1, 2, 3, 4, 5, 6], "the region peaks at 3 of 3: no critical set, source order");
+    }
+
+    /// Two loads of neighbouring words: the model clusters them.
+    struct Pairs;
+
+    use crate::backend::genericdriver::RegionPolicy;
+    use crate::backend::schedmodel::{MemBase, MemOp};
+
+    impl crate::backend::schedmodel::SchedulingModel for Pairs {
+        fn machine(&self) -> crate::backend::schedboundary::Machine {
+            GenericModel.machine()
+        }
+
+        fn policy(&self) -> RegionPolicy {
+            GenericModel.policy()
+        }
+
+        fn unit(
+            &self,
+            insn: &Insn,
+        ) -> crate::backend::schedboundary::Unit {
+            GenericModel.unit(insn)
+        }
+
+        fn def_latency(
+            &self,
+            insn: &Insn,
+        ) -> u32 {
+            GenericModel.def_latency(insn)
+        }
+
+        fn mem_op(
+            &self,
+            insn: &Insn,
+        ) -> Option<MemOp> {
+            let what = insn.what.as_ref()?;
+            match what.sources.as_slice() {
+                [Loc::Mem(cell)] if what.name.as_deref() == Some("mov") => {
+                    Some(MemOp { base: MemBase::Virtual(100), offset: cell.offset, width: 4, load: true })
+                }
+                _ => None,
+            }
+        }
+
+        fn should_cluster(
+            &self,
+            (_, a): (&Insn, &MemOp),
+            (_, b): (&Insn, &MemOp),
+            cluster_size: u32,
+            _: u32,
+        ) -> bool {
+            cluster_size <= 2 && a.base == b.base && a.offset + 4 == b.offset
+        }
+    }
+
+    /// `BaseMemOpClusterMutation` (MachineScheduler.cpp#L2264): two loads of
+    /// neighbouring words get a cluster edge and stay side by side, which
+    /// the load/store optimizer needs to make a pair. Without the mutation
+    /// the scheduler (a pick by height and then order) put the first load's
+    /// reader between them, and the AArch64 pairs of `matmul` and `nbody`
+    /// (16 `ldp` of 30) were lost.
+    #[test]
+    fn test_neighbouring_loads_are_scheduled_together() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(3)], vec![held(1)]), vec![3], vec![1]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+            insn(3, semantics(Operation::Move, "mov", vec![held(4)], vec![held(2)]), vec![4], vec![2]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16, &Pairs);
+        let apart = super::order_region(&insns, &found, None, &Pairs);
+        let distance = |order: &[usize]| {
+            let at = |node: usize| order.iter().position(|&each| each == node).unwrap();
+            at(0).abs_diff(at(2))
+        };
+        assert!(distance(&apart) > 1, "the premise: without clustering the loads are apart, {apart:?}");
+        super::cluster_mem_ops(&insns, &mut found, &Pairs);
+        let together = super::order_region(&insns, &found, None, &Pairs);
+        assert_eq!(distance(&together), 1, "the loads are adjacent, {together:?}");
     }
 }

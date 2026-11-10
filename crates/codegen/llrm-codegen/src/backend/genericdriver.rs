@@ -288,6 +288,18 @@ impl<'a> Scheduler<'a> {
                 best = try_cand;
             }
         }
+        if std::env::var_os("LLRM_MS_CANDS").is_some() {
+            eprintln!(
+                "MSC top={at_top} available={} pending={} best={} reason={:?} excess={:?} critical={:?} current={:?}",
+                zone.available.len(),
+                zone.pending.len(),
+                best.node,
+                best.reason,
+                best.pressure.excess,
+                best.pressure.critical_max,
+                best.pressure.current_max
+            );
+        }
         best
     }
 
