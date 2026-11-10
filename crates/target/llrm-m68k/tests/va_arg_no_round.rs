@@ -26,3 +26,40 @@ fn a_va_arg_int_reads_the_next_slot_without_rounding_the_list_pointer() {
         }
     }
 }
+
+const LOOP: &str = r#"target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16"
+define i32 @sum(i32 %n, ...) {
+entry:
+  %ap = alloca ptr, align 2
+  call void @llvm.va_start.p0(ptr %ap)
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %loop, label %done
+loop:
+  %i = phi i32 [ %n, %entry ], [ %j, %loop ]
+  %t = phi i32 [ 0, %entry ], [ %u, %loop ]
+  %v = va_arg ptr %ap, i32
+  %u = add i32 %t, %v
+  %j = sub i32 %i, 1
+  %d = icmp sgt i32 %j, 0
+  br i1 %d, label %loop, label %done
+done:
+  %r = phi i32 [ 0, %entry ], [ %u, %loop ]
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %r
+}
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+"#;
+
+/// The list is `char *` and `va_start` stores one address through it. It stayed a stack slot (`lea (-4,%sp),%sp`, a
+/// store and a load per `va_arg`: `sum` -Os 52 B against gcc's 22); it is a register now.
+#[test]
+fn the_va_list_of_a_summing_loop_stays_out_of_the_stack_frame() {
+    for cpu in ["68000", "68020"] {
+        for level in [Level::O1, Level::O2, Level::Os] {
+            let out = assembly(LOOP, cpu_of(cpu).unwrap(), level).expect("compiles");
+            assert!(!out.contains("(0, %sp)") && !out.contains("(0,%sp)"), "{cpu} {level:?}: the list is in memory:\n{out}");
+            assert!(!out.contains("-4, %sp") && !out.contains("subq.l\t#4, %sp"), "{cpu} {level:?}: a frame slot:\n{out}");
+        }
+    }
+}
