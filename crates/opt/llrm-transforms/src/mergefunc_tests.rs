@@ -162,7 +162,7 @@ b0:
 ",
     );
     assert_eq!(defined(&after), 2, "an exported name stays defined:\n{after}");
-    assert!(after.contains("tail call i32 @a(i32 %y)"), "@b is a thunk of @a:\n{after}");
+    assert!(after.contains("tail call i32 @a(i32 %0)"), "@b is a thunk of @a:\n{after}");
 }
 
 /// A local copy nothing takes the address of goes, and its caller calls the kept one.
@@ -193,10 +193,29 @@ b0:
     assert!(!after.contains("@b("), "@b is gone:\n{after}");
 }
 
-/// Another constant is another function: nothing merges.
+/// Another constant, another operation: nothing merges.
 #[test]
 fn test_functions_that_differ_are_left_alone() {
-    let after = merged(ADD);
+    let after = merged(
+        "define i32 @a(i32 %x) {
+b0:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @c(i32 %y) {
+b0:
+  %s = add i32 %y, 2
+  ret i32 %s
+}
+
+define i32 @d(i32 %y) {
+b0:
+  %s = sub i32 %y, 1
+  ret i32 %s
+}
+",
+    );
     assert!(!after.contains("tail call"), "no thunk:\n{after}");
-    assert_eq!(defined(&after), 4);
+    assert_eq!(defined(&after), 3);
 }
