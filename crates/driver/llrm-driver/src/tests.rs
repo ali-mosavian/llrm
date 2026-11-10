@@ -3405,7 +3405,8 @@ fn unique_directory(tag: &str) -> std::path::PathBuf {
 fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
     assert_ne!(unique_directory("t"), unique_directory("t"));
     let expected = omf_of(&[]);
-    let handles: Vec<_> = (0..8).map(|_| std::thread::spawn(|| (0..4).map(|_| omf_of(&[])).collect::<Vec<_>>())).collect();
+    let handles: Vec<_> =
+        (0..8).map(|_| std::thread::spawn(|| (0..4).map(|_| omf_of(&[])).collect::<Vec<_>>())).collect();
     for handle in handles {
         assert!(handle.join().unwrap().iter().all(|bytes| *bytes == expected));
     }
