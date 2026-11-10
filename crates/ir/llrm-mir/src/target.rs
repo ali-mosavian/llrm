@@ -557,6 +557,12 @@ pub trait Machine {
         None
     }
 
+    /// The target's throughput model, where it states one: `None` prices a loop
+    /// by the sum of `costs()` (every target but x86-64).
+    fn throughput(&self) -> Option<&Throughput> {
+        None
+    }
+
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
@@ -807,6 +813,19 @@ pub const fn carry_cost(
 /// selector's stride, and added to the selector.
 pub const fn step_cost(add: i64) -> i64 {
     4 * add
+}
+
+/// What an operation costs in thousandths of a clock on a core that overlaps
+/// instructions: `MCSchedModel::getReciprocalThroughput` per instruction form
+/// summed as `LoopVectorize` sums `TCK_RecipThroughput`, and the latency
+/// `SelectOptimize::computeLoopCosts` chains through a loop's dependences.
+/// The integer clock API of [`OperationCosts`] is unchanged.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Throughput {
+    /// Reciprocal throughput of each operation, milli-clocks.
+    pub recip: OperationCosts,
+    /// Latency of each operation, milli-clocks.
+    pub latency: OperationCosts,
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.

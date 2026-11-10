@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod throughput;
 mod recurrence;
 pub mod trial;
 

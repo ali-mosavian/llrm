@@ -164,3 +164,42 @@ nop = 1
 lahf = 2
 sahf = 1
 unknown = 2
+
+# Reciprocal throughput, thousandths of a clock: MCSchedModel::getReciprocalThroughput
+# (MCSchedule.cpp:114), the largest ReleaseAtCycle / NumUnits over a form's resources, from the
+# pin's SandyBridgeModel (X86SchedSandyBridge.td at d1106deb71, X86.td:2264 `x86-64`); a form not
+# listed here is priced at its clocks.
+[recip]
+alu_rr = 333  # WriteALU [SBPort015] X86SchedSandyBridge.td:127
+alu_ri = 333  # WriteALU :127
+alu_rm = 500  # WriteALU folded: SBPort23 :127
+alu_mr = 1000  # WriteRMW [SBPort23,SBPort4] :108 (Port4: one unit)
+cmov = 500  # WriteCMOV [SBPort05,SBPort015] :177
+xchg_rr = 1000  # WriteXCHG [SBPort015] x3 :148
+mov_rr = 333  # WriteMove [SBPort015] :113
+mov_ri = 333  # WriteMove :113
+mov_rm = 500  # WriteLoad [SBPort23] :112
+mov_mr = 1000  # WriteStore [SBPort23,SBPort4] :110 (Port4: one unit)
+shift_ri = 500  # WriteShift [SBPort05] :169
+shift_r1 = 500  # WriteShift :169
+movzx = 333  # WriteALU :127
+setcc = 500  # WriteSETCC [SBPort05] :179
+cdq = 500  # SBWriteResGroup4 [SBPort05] :626
+lea = 500  # WriteLEA [SBPort01] :196
+imul_r32 = 1000  # WriteIMul32 [SBPort1,SBPort05,SBPort015] :135 (Port1: one unit)
+imul_m32 = 1000  # WriteIMul32 folded :135
+mul_r32 = 1000  # WriteIMul32 :135
+idiv_r32 = 10000  # WriteIDiv32 [SBPort0,SBDivider] [1,10] :160 (divider: 10 cycles)
+idiv_m32 = 10000  # WriteIDiv32 folded :160
+push_r = 1000  # SBWriteResGroup33 [SBPort4,SBPort23] :767 (Port4: one unit)
+push_i = 1000  # SBWriteResGroup33 :767
+pop_r = 500  # SBWriteResGroup48 [SBPort23] :834
+leave = 667  # SBWriteResGroup25_1 [SBPort23,SBPort015 x2] :717
+jmp_short = 1000  # WriteJump [SBPort5] :174 (Port5: one unit)
+jcc = 1000  # WriteJump :174
+jcc_not_taken = 1000  # WriteJump :174
+call_near = 1000  # SBWriteResGroup36 [SBPort4,SBPort5,SBPort23] :789
+ret_near = 1000  # SBWriteResGroup2 [SBPort5] :617
+lahf = 500  # WriteLAHFSAHF [SBPort05] :185
+sahf = 500  # WriteLAHFSAHF :185
+nop = 250  # WriteNop []: NumMicroOps 1 / IssueWidth 4 (MCSchedule.cpp:135) :591

@@ -342,6 +342,7 @@ fn priced_verdict(
     }
     let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
     let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
+    let credited_operands = if analysis.is_none() && run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => {
@@ -369,17 +370,27 @@ fn priced_verdict(
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
     // to save 44 clocks a run ran 92 more: 14 more stores, 17 more exchanges).
     let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
-    // DEVIATE UP1-WIDTH (owner x86-m64, exit 2026-11-24): on a core that issues
-    // `IssueWidth` instructions a clock, a folded unit off the critical path
-    // frees an issue slot, not a clock: the instructions the copies need not
-    // run cost `1 / IssueWidth` of the one-clock-an-instruction table. The
-    // pin's `shouldFullUnroll` counts instructions and prices nothing; nearest
-    // pricing is `SelectOptimize::computeLoopCosts`' `IssueWidth` split of a loop
-    // into issue-bound and chain-bound time (huffman_decode -O2 m64: a 16-trip
-    // fill priced "saves 97 clk", ran 23, +208 B).
-    let width = i64::from(run.tti.issue_width()).max(1);
-    let removed = saved_units * body_clocks / rolled_units + constant_clocks;
-    let saved = ((removed + width / 2) / width - spill_clocks) * runs;
+    // DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): see `throughput`. A target with a throughput
+    // model prices a trip at the larger of its resource and chain bounds, and the unroll saves the
+    // resources it removes only where the trip is bound by them.
+    let (saved, bound) = match run.outer.target().throughput() {
+        None => ((saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs, (0, 0)),
+        Some(tp) => {
+            let weight = |block: BlockId| projection.map_or(1, |projection| projection.of(block));
+            let trip = throughput::trip(run, &blocks, tp, &weight);
+            let recip = &tp.recip;
+            let (trips, be) = (i64::from(trips), i64::from(up.be_insns));
+            let unit = trip.resource / rolled_units.max(1);
+            let control = (trips - 1) * recip.branch + trips * 2 * recip.add;
+            let averaged = trips * (be + 1) * unit;
+            let removed = saved_units * unit
+                + (control - averaged).max(0)
+                + trips * promoted_runs * recip.load
+                + trips * credited_operands * recip.r#move;
+            let milli = throughput::saved(&trip, trips, removed);
+            (((milli + 500) / 1000 - spill_clocks) * runs, (trip.resource, trip.chain))
+        }
+    };
     why(
         run,
         lp,
@@ -401,6 +412,8 @@ fn priced_verdict(
             unit_clocks: body_clocks / rolled_units,
             constant_clocks,
             runs,
+            resource: bound.0,
+            chain: bound.1,
         }
         .line(),
     );
@@ -467,12 +480,15 @@ pub(super) struct Priced {
     pub unit_clocks: i64,
     pub constant_clocks: i64,
     pub runs: i64,
+    /// The trip's resource and chain bounds in milli-clocks (0 where the target states no throughput model).
+    pub resource: i64,
+    pub chain: i64,
 }
 
 impl Priced {
     pub(super) fn line(&self) -> String {
         format!(
-            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}; saved units {} at {} clk, constant {} clk, runs {}",
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}; saved units {} at {} clk, constant {} clk, runs {}; trip resource {} chain {} mclk",
             self.trips,
             self.saved,
             self.added,
@@ -489,7 +505,9 @@ impl Priced {
             self.saved_units,
             self.unit_clocks,
             self.constant_clocks,
-            self.runs
+            self.runs,
+            self.resource,
+            self.chain
         )
     }
 }
