@@ -2,7 +2,7 @@
 //! store is selected first.
 
 use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
-use llrm_z80::compile::{merge_lone_constant_stores, text};
+use llrm_z80::compile::{machine_function, merge_lone_constant_stores, text};
 use llrm_z80::driver::{Level, Request};
 use llrm_z80::regalloc::Class;
 
@@ -42,4 +42,16 @@ fn a_constant_made_and_stored_once_in_a_block_is_stored_as_immediates() {
     assert!(merge_lone_constant_stores(&mut f));
     let kinds: Vec<Kind> = f.blocks[0].insts.iter().map(|inst| inst.kind).collect();
     assert_eq!(kinds, [Kind::Op("LD16fi"), Kind::Op("LD16ri"), Kind::Op("LD16fr"), Kind::Op("LD16fr")]);
+}
+
+/// frameless -O3 `chain`: the unrolled list nodes store the words 5..16, each also read by an add. The choice between
+/// `ld n(ix), #k` and a pair read `hasOneUse` while the DAG was being selected, so it followed the order the users
+/// were visited in (11 immediate frame stores on the tip); the users are counted before selection now and a constant
+/// two nodes use is a pair (6 immediates). The fixed frame stores are `merge_lone_constant_stores`' to undo.
+#[test]
+fn a_constants_form_does_not_depend_on_the_order_its_users_are_selected_in() {
+    let ir = include_str!("data/imm_frameless.ll");
+    let f = machine_function(ir, "chain", &Request::new(Level::O3)).unwrap_or_else(|why| panic!("{why}"));
+    let count = |kind| f.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op(kind)).count();
+    assert_eq!((count("LD16fi"), count("LD16ri")), (6, 13), "immediate frame stores, constants made in a pair");
 }
