@@ -80,6 +80,34 @@ class Preinclude(unittest.TestCase):
         self.assertLess(len([f for f in flags if f.startswith("-D")]), 10)  # sdcc aborts past ~90 -D flags
 
 
+class Branches(unittest.TestCase):
+    def load(self):
+        spec = importlib.util.spec_from_file_location("sweep_branch", Path(__file__).resolve().parent / "sweep.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_sdcc_sees_the_macros_that_pick_the_branch_ours_takes(self):
+        """variadic has `#ifdef __clang__`: ours built that branch, SDCC (no such macro) built `#else`, a different program,
+        and the bar read 547 B against 331 B for code that was not the same."""
+        sweep = self.load()
+        source = "#ifdef __clang__\nint a;\n#else\nint b;\n#endif\n#ifdef REAL_MODE\n#endif\n/* __INT32_TYPE__ in a comment */\n"
+        defined = {"__clang__": "1", "__INT32_TYPE__": "long", "__GNUC__": "4"}
+        self.assertEqual(sweep.branch_macros(source, defined), {"__clang__": "1"})  # REAL_MODE is nobody's macro; a comment is no test
+
+    def test_a_program_without_a_conditional_gets_no_header(self):
+        import tempfile
+        sweep = self.load()
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(sweep.branch_header("int x;\n", {"__clang__": "1"}, Path(d) / "b.h"), [])
+            flags = sweep.branch_header("#if defined(__clang__) && __BYTE_ORDER__ == 1\n#endif\n",
+                                        {"__clang__": "1", "__BYTE_ORDER__": "1234"}, Path(d) / "b.h")
+            text = (Path(d) / "b.h").read_text()
+        self.assertTrue(flags[0].startswith("-Wp-include,"))
+        self.assertIn("#define __clang__ 1", text)
+        self.assertIn("#define __BYTE_ORDER__ 1234", text)
+
+
 class Imports(unittest.TestCase):
     def test_measure_is_importable_without_running_its_command_line(self):
         """`tests/kernels/measure.py` called `main()` at import, so the sweep could not load its helpers and exec'd a split
