@@ -11,6 +11,7 @@
 //! |---|---|
 //! | D1 | `tryWidenCondBranchToCondBranch` is not ported: it needs `llvm.experimental.widenable.condition` and a deoptimize call, which the MIR has no form for. |
 //! | D2 | No branch weights, and no `unpredictable`/`TTI` predictable-threshold test of the predecessor's probability: the MIR carries none. |
+//! | D3 | Where a `select` is a branch (`Tti::has_cmov` false: z80, 6502, m68k) the limit is two phis, not the pin's three: the pin's comment says the same of "targets without predication/cmovs", and the three-phi fold grew `known_loads_walks` 2326 -> 2532 B on z80 -O2 and 3755 -> 3779 B on 6502 -O2. Exit: the cost model prices the selects (twoentryphi D5). |
 //!
 //! # Example
 //! ```text
@@ -28,9 +29,11 @@ use crate::branchtocommon::{Join, logical_op};
 use crate::edges;
 use crate::twoentryphi::Speculation;
 
-/// The phis a destination may have for the fold to be made
-/// (`NumPhis > 2` disables it).
-const MAX_PHIS: usize = 2;
+/// The phis a destination may have for the fold to be made: the pin tests
+/// `NumPhis > 2` before it counts the phi, so a fourth phi disables it.
+const MAX_PHIS: usize = 3;
+/// D3: the limit where a `select` is a branch.
+const MAX_PHIS_WITHOUT_CMOV: usize = 2;
 
 /// `not x`, before `at`: `xor x, true`.
 fn inverted(
@@ -110,7 +113,8 @@ pub fn simplified(
         return false;
     }
     // A large number of selects is a pessimization without predication.
-    if edges::phis(function, common).len() > MAX_PHIS {
+    let limit = if spec.tti.has_cmov() { MAX_PHIS } else { MAX_PHIS_WITHOUT_CMOV };
+    if edges::phis(function, common).len() > limit {
         return false;
     }
     let mut other_dest = if bi_op == 0 { other } else { taken };

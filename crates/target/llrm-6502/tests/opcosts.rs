@@ -49,6 +49,7 @@ fn the_6502_prices_are_the_assembled_sizes_of_their_sequences() {
         "branch" => costs.branch,
         "address" => costs.address,
         "call" => costs.call,
+        "argument" => costs.argument,
         "return" => costs.return_,
         other => panic!("{other}"),
     };
@@ -73,4 +74,16 @@ fn the_6502_states_the_register_file_the_allocator_has() {
     assert_eq!((bytes, kept), (3 + 14, 8), "a, x, y, rc2..rc15; rc8..rc15 kept");
     // a platform with more scratch cells has more bytes and the same kept ones
     assert_eq!(llrm_6502::alloc::register_file(24), (bytes + 8, kept));
+}
+
+/// The table left `argument` at `OperationCosts::default()`, 2 B and 2 clocks
+/// (x86's push), so `function_bytes` priced a call with three word arguments at
+/// 3 + 6 B where the code is `jsr` and twelve bytes of `lda; sta`
+/// (memcpy_libcall Os: main priced 245 B against 376 assembled).
+#[test]
+fn a_call_argument_is_priced_as_the_two_cells_it_is_stored_in() {
+    let machine = llrm_6502::driver::machine();
+    let bytes = machine.byte_costs();
+    assert_eq!(bytes.call + 3 * bytes.argument, 3 + 3 * 8, "a call with three word arguments, in bytes");
+    assert_eq!(machine.costs().argument, 10, "clocks of one word argument: lda #, sta zp, lda #, sta zp");
 }

@@ -71,6 +71,11 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
+    /// counts a callee in bytes of encoded code by instruction kind
+    /// (`Tti::inline_size_view`), not in the pin's units of one per
+    /// instruction. false: the pin's units.
+    pub inline_size_bytes: bool,
     /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
@@ -184,6 +189,10 @@ pub struct Tuning {
     /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
     /// against the `mov`'s one; the level is bytes-strict.
     pub push_imm_at_size: bool,
+    /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
+    /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
+    /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
+    pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -436,6 +445,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
+        inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
@@ -457,6 +467,7 @@ impl Tuning {
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
         push_imm_at_size: false,
+        merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -835,6 +846,12 @@ pub struct OperationCosts {
     /// equal to `multiply`/`divide` elsewhere.
     pub multiply_long: i64,
     pub divide_long: i64,
+    /// An integer product wider than the target's word (an `i64` on a 32-bit CPU), where the CPU's own multiply is
+    /// narrower: the CPU's whole sequence. 0: priced as `multiply_long`.
+    pub multiply_wide: i64,
+    /// The product of two values extended from the word (`i32` by `i32` into `i64`), the form a fixed-point multiply
+    /// expands to. 0: priced as `multiply_wide`.
+    pub multiply_widening: i64,
     /// Percent by which a constant divide's multiply-high sequence must cost
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
@@ -967,6 +984,9 @@ pub struct OperationCosts {
     /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
     /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
     pub free_intrinsics: bool,
+    /// Whether a fixed-point or saturating intrinsic (`llvm.{s,u}mul.fix[.sat]`, `llvm.{s,u}shl.sat`) is priced as the
+    /// operations it expands to, on this target's table, in a function's estimate. False: priced as a call.
+    pub expanded_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -975,6 +995,16 @@ pub struct OperationCosts {
 }
 
 impl OperationCosts {
+    /// An integer product wider than the word: `multiply_wide`, else `multiply_long`.
+    pub fn wide_product(&self) -> i64 {
+        if self.multiply_wide > 0 { self.multiply_wide } else { self.multiply_long }
+    }
+
+    /// The product of two word-wide values in a double-wide result: `multiply_widening`, else [`Self::wide_product`].
+    pub fn widening_product(&self) -> i64 {
+        if self.multiply_widening > 0 { self.multiply_widening } else { self.wide_product() }
+    }
+
     /// The ratio under which a constant memset of `zero` bytes, or of any other
     /// byte, is stores; 0 where none is stated. `size`: tuned for size.
     pub fn pieces(
@@ -1069,6 +1099,8 @@ impl Default for OperationCosts {
             divide: 1,
             multiply_long: 1,
             divide_long: 1,
+            multiply_wide: 0,
+            multiply_widening: 0,
             divide_margin: 0,
             multiply_high: 1,
             shift: 1,
@@ -1122,6 +1154,7 @@ impl Default for OperationCosts {
             function: 0,
             function_scale: 100,
             free_intrinsics: false,
+            expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }

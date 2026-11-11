@@ -203,3 +203,77 @@ b3:
     assert_eq!(after.matches("add nuw nsw i32").count(), 1, "{after}");
     assert!(after.contains("icmp ne i16"), "the exit test is replaced: {after}");
 }
+
+/// quicksort's `sort` at -O2 on m64, as it reaches `indvars`: REC5-1's ranges
+/// make `lo` non-negative, so the counters' address uses are `zext nneg`; the
+/// inner counter starts at the outer phi and is compared signed. The compare
+/// stayed `icmp slt i32 (trunc nuw i64 %iv.next), %hi`, one `lea` more per
+/// iteration (141968 instructions per call against 129992).
+#[test]
+fn test_a_counter_with_a_zext_nneg_use_is_widened_with_its_signed_compare() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+
+define void @sort(ptr %0, i32 range(i32 0, -2147483648) %1, i32 range(i32 -1, 2147483647) %2) {
+  %4 = icmp slt i32 %1, %2
+  br i1 %4, label %5, label %37
+
+5:
+  %6 = zext nneg i32 %2 to i64
+  %7 = getelementptr inbounds nuw [4 x i8], ptr %0, i64 %6
+  br label %8
+
+8:
+  %9 = phi i32 [ %1, %5 ], [ %34, %27 ]
+  %10 = load i32, ptr %7, align 4
+  br label %11
+
+11:
+  %12 = phi i32 [ %9, %8 ], [ %25, %23 ]
+  %13 = phi i32 [ %9, %8 ], [ %24, %23 ]
+  %14 = zext nneg i32 %12 to i64
+  %15 = getelementptr inbounds nuw [4 x i8], ptr %0, i64 %14
+  %16 = load i32, ptr %15, align 4
+  %17 = icmp slt i32 %16, %10
+  br i1 %17, label %18, label %23
+
+18:
+  %19 = zext nneg i32 %13 to i64
+  %20 = getelementptr inbounds nuw [4 x i8], ptr %0, i64 %19
+  %21 = load i32, ptr %20, align 4
+  store i32 %16, ptr %20, align 4
+  store i32 %21, ptr %15, align 4
+  %22 = add nuw nsw i32 %13, 1
+  br label %23
+
+23:
+  %24 = phi i32 [ %22, %18 ], [ %13, %11 ]
+  %25 = add nuw nsw i32 %12, 1
+  %26 = icmp slt i32 %25, %2
+  br i1 %26, label %11, label %27
+
+27:
+  %28 = phi i32 [ %24, %23 ]
+  %29 = zext nneg i32 %28 to i64
+  %30 = getelementptr inbounds nuw [4 x i8], ptr %0, i64 %29
+  %31 = load i32, ptr %30, align 4
+  %32 = load i32, ptr %7, align 4
+  store i32 %32, ptr %30, align 4
+  store i32 %31, ptr %7, align 4
+  %33 = add nsw i32 %28, -1
+  tail call void @sort(ptr %0, i32 %9, i32 %33)
+  %34 = add nuw nsw i32 %28, 1
+  %35 = icmp slt i32 %34, %2
+  br i1 %35, label %8, label %36
+
+36:
+  br label %37
+
+37:
+  ret void
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, IndVars { lftr: true, size: false });
+    let after = printed(&module);
+    assert!(!after.contains("trunc"), "the compare stayed on the narrow value: {after}");
+}

@@ -10,11 +10,10 @@
 //!
 //! DEVIATE SD321: not translated: `extractShiftForRotate` (a shift hidden in
 //! an `add`, `mul` or `udiv` by InstCombine), the disguised rotate of a
-//! target without funnel shifts, the variable funnel shift
-//! (`MatchFunnelPosNeg`) and the truncated rotate. `matchRotateSub` sees
+//! target without funnel shifts and the truncated rotate. `matchRotateSub` sees
 //! through an `and` with the low-bits mask only, where the pin's
 //! `SimplifyMultipleUseDemandedBits` sees through any operation that leaves
-//! those bits alone. Exit: the variable funnel shift, for `shld r, r, cl`.
+//! those bits alone. Exit: the truncated rotate.
 //! Owner sdag-c. Review 2026-11-27.
 //!
 //! # See also
@@ -79,13 +78,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let (right_arg, right_amount) = (self.dag.operand(right, 0), self.dag.operand(right, 1));
         let is_rotate = left_arg == right_arg;
         let (Some(c1), Some(c2)) = (self.dag.constant(left_amount), self.dag.constant(right_amount)) else {
-            return self.match_variable_rotate(
-                left_arg,
-                right_arg,
-                left_amount,
-                right_amount,
-                left_mask.is_some() || right_mask.is_some(),
-            );
+            let masked = left_mask.is_some() || right_mask.is_some();
+            return self
+                .match_variable_rotate(left_arg, right_arg, left_amount, right_amount, masked)
+                .or_else(|| {
+                    self.match_variable_funnel(
+                        left_arg,
+                        right_arg,
+                        left_amount,
+                        right_amount,
+                        masked,
+                        (has_fshl, has_fshr),
+                    )
+                });
         };
         if c1 + c2 != bits {
             return None;
@@ -156,15 +161,112 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             (left_amount, right_amount)
         };
         let elt = vt.size_in_bits();
-        if self.match_rotate_sub(left_inner, right_inner, elt) {
+        if self.match_rotate_sub(left_inner, right_inner, elt, true) {
             let (op, amount) = if has_rotl { (ISD::Rotl, left_amount) } else { (ISD::Rotr, right_amount) };
             return Some(self.dag.get_node(op, vt, &[left_arg, amount]));
         }
-        if self.match_rotate_sub(right_inner, left_inner, elt) {
+        if self.match_rotate_sub(right_inner, left_inner, elt, true) {
             let (op, amount) = if has_rotr { (ISD::Rotr, right_amount) } else { (ISD::Rotl, left_amount) };
             return Some(self.dag.get_node(op, vt, &[left_arg, amount]));
         }
         None
+    }
+
+    /// `MatchFunnelPosNeg` for both directions: `(or (shl x0, y), (srl x1,
+    /// 32 - y))` is `(fshl x0, x1, y)`, and the shift-and-xor spelling
+    /// `(or (shl x0, y), (srl (srl x1, 1), (xor y, 31)))` that the expansion
+    /// of a wide shift makes is the same funnel shift.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L9403>
+    fn match_variable_funnel(
+        &mut self,
+        n0: SDValue,
+        n1: SDValue,
+        left_amount: SDValue,
+        right_amount: SDValue,
+        masked: bool,
+        (has_fshl, has_fshr): (bool, bool),
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(n0);
+        if masked || !vt.is_integer() || !(has_fshl || has_fshr) {
+            return None;
+        }
+        // an amount that is extended or truncated on both sides is compared
+        // before the conversion
+        let converts = |combiner: &Self, amount: SDValue| {
+            matches!(
+                combiner.dag.opcode(amount),
+                ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend | ISD::Truncate
+            )
+        };
+        let (left_inner, right_inner) = if converts(self, left_amount) && converts(self, right_amount) {
+            (self.dag.operand(left_amount, 0), self.dag.operand(right_amount, 0))
+        } else {
+            (left_amount, right_amount)
+        };
+        let elt = vt.size_in_bits();
+        let is_rotate = n0 == n1;
+        // TryL: the left shift is the positive one
+        if self.match_rotate_sub(left_inner, right_inner, elt, is_rotate) {
+            let (op, amount) = if has_fshl { (ISD::FShl, left_amount) } else { (ISD::FShr, right_amount) };
+            return Some(self.dag.get_node(op, vt, &[n0, n1, amount]));
+        }
+        if elt.is_power_of_two() {
+            let last = u128::from(elt - 1);
+            // (or (shl x0, y), (srl (srl x1, 1), (xor y, 31))) -> (fshl x0, x1, y)
+            if let Some(x) = self.shifted_by_one(n1, ISD::Srl)
+                && self.is_xor_with(right_inner, left_inner, last)
+                && self.fp_op_legal_or_custom(ISD::FShl, vt)
+            {
+                return Some(self.dag.get_node(ISD::FShl, vt, &[n0, x, left_amount]));
+            }
+            // (or (shl (shl x0, 1), (xor y, 31)), (srl x1, y)) -> (fshr x0, x1, y)
+            // (or (shl (add x0, x0), (xor y, 31)), (srl x1, y)) -> (fshr x0, x1, y)
+            if let Some(x) = self.shifted_by_one(n0, ISD::Shl).or_else(|| self.doubled(n0))
+                && self.is_xor_with(left_inner, right_inner, last)
+                && self.fp_op_legal_or_custom(ISD::FShr, vt)
+            {
+                return Some(self.dag.get_node(ISD::FShr, vt, &[x, n1, right_amount]));
+            }
+        }
+        // TryR: the right shift is the positive one
+        if self.match_rotate_sub(right_inner, left_inner, elt, is_rotate) {
+            let (op, amount) = if has_fshr { (ISD::FShr, right_amount) } else { (ISD::FShl, left_amount) };
+            return Some(self.dag.get_node(op, vt, &[n0, n1, amount]));
+        }
+        None
+    }
+
+    /// `m_c_BinOp(op, m_Value(X), m_One())`: the operand of `op` shifting by one.
+    fn shifted_by_one(
+        &self,
+        value: SDValue,
+        op: ISD,
+    ) -> Option<SDValue> {
+        (self.dag.opcode(value) == op && self.dag.constant(self.dag.operand(value, 1)) == Some(1))
+            .then(|| self.dag.operand(value, 0))
+    }
+
+    /// `m_Add(m_Value(X), m_Deferred(X))`.
+    fn doubled(
+        &self,
+        value: SDValue,
+    ) -> Option<SDValue> {
+        (self.dag.opcode(value) == ISD::Add && self.dag.operand(value, 0) == self.dag.operand(value, 1))
+            .then(|| self.dag.operand(value, 0))
+    }
+
+    /// `m_Xor(m_Specific(other), m_SpecificInt(constant))`.
+    fn is_xor_with(
+        &self,
+        value: SDValue,
+        other: SDValue,
+        constant: u128,
+    ) -> bool {
+        if self.dag.opcode(value) != ISD::Xor {
+            return false;
+        }
+        let (a, b) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        (a == other && self.dag.constant(b) == Some(constant)) || (b == other && self.dag.constant(a) == Some(constant))
     }
 
     /// `matchRotateSub` for a rotate: whether `neg == size - pos` wherever
@@ -175,12 +277,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         pos: SDValue,
         neg: SDValue,
         elt: u32,
+        is_rotate: bool,
     ) -> bool {
         // [A] for a power of two: only the low bits of the amount count, so
-        // an `and` that keeps them is looked through on both sides
+        // an `and` that keeps them is looked through on both sides; a funnel
+        // shift reads its whole amount, no mask is looked through
         let (mut pos, mut neg) = (pos, neg);
         let mut mask_lo_bits = 0;
-        if elt.is_power_of_two() {
+        if is_rotate && elt.is_power_of_two() {
             let bits = elt.trailing_zeros();
             if self.dag.value_type(neg).size_in_bits() >= bits {
                 let inner = self.strip_and_keeping(neg, bits);

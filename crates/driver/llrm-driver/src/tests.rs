@@ -5071,6 +5071,26 @@ fn a_hidden_or_internal_callee_at_pic_is_resolved_and_a_weak_one_never_is() {
     );
 }
 
+/// Two 64-bit arguments swapped for a call (`g(b, a)`, the caller keeps neither) were three
+/// moves through `rax` at m64 -Os, 9 B where gcc's `xchg rdi, rsi` is 3 B. The rewrite has a unit
+/// test on a hand-built body; this is the pipeline's, at 64 bits, where the `rax` the swap
+/// borrows is read nowhere after it.
+#[test]
+fn a_swap_of_two_64_bit_arguments_for_a_call_is_one_xchg_at_m64_os() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64, i64)\n\
+                define i64 @f(i64 %a, i64 %b) {\n  %r = call i64 @g(i64 %b, i64 %a)\n  %s = add i64 %r, 1\n  ret i64 %s\n}\n";
+    let xchgs = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        (listing.lines().filter(|line| line.trim_start().starts_with("xchg")).count(), listing)
+    };
+    let (size, listing) = xchgs("-Os");
+    assert_eq!(size, 1, "{listing}");
+    let (speed, listing) = xchgs("-O2");
+    assert_eq!(speed, 0, "{listing}");
+
 /// A 16-trip loop of calls in an internal function that nothing will inline
 /// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
 /// early unroll leaves an internal function's loops to be priced at each

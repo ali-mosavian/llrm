@@ -1,27 +1,73 @@
-# m68k executed clocks: ours against the best of gcc and clang (2026-11-10 19:35Z, m68k-b)
+# m68k executed clocks and bytes: ours against the best of gcc and clang (2026-11-11 00:20Z, m68k-b)
 
-TL;DR: 1112 cells (139 tests/run/c programs x 68000, 68020 x O1 O2 O3 Os); ours is faster or equal in 537 (497 better, 40 equal), slower than the best external in 468 (271 by more than 5%, 84 by more than 50%), UNMEASURED in 107 (71 no external number, 36 ours). Clocks only: the O2/O3 rate and Os (bytes) verdicts need the byte column.
+TL;DR: 1112 cells (139 tests/run/c programs x 68000, 68020 x O1 O2 O3 Os), restated on release/next def162091880 (includes #8930 shift pricing and #8942 68020 table forms). 999 cells have clocks: ours better 481, equal 40, worse than the best external 478; 113 are UNMEASURED. With bytes: 402 of the 478 clock-worse cells stay WORSE, 75 ok, 1 VIRTUAL-OK; 107 more are WORSE on bytes with clocks better or equal.
 
-Method: release/next c98e231ab163; md5 llrm-cc 589675fe, llrm-llc ab16db62, llrm-m68k-llc 4eec43b1, cycles 061c05b0. One exe per cell and column (ours: `llrm-cc -c`; gcc 15 `-msoft-float`; clang: pin clang into pin llc, shared external flags), linked with our compiler-rt archive and the harness stubs. `cycles --exe`, CYCLES_CPUS set to the exe's own CPU (the tool prints the 68000 column first: a first 68020 pass read it, caught by a raw look). Every exe also runs under qemu and its stdout is compared to the reference; a wrong run is UNMEASURED, not a number (the first table showed externals 2000x faster, 123 clang runs were wrong). Table: m68k-clocks-2026-11-10.tsv, one row per cell.
+Replaces the 11-10 cards. Every 68020 clock figure published before this is a lower bound for code with the forms #8942 added (it priced `trap #0` at 0: 38 traps = 760 clk in bitcount_u32) and is withdrawn as a bar.
 
-## Counts (better / equal / worse / UNMEASURED ours / UNMEASURED no external)
+Stamps: ours = llrm-cc 5e4d9ece, llrm-llc bd2cf668, llrm-m68k-llc 8648f4ce, built from def162091880549101b706eb3eaf51c8dbb3ac6d; cycles efe6115a, same commit; both CPUs from this one build. gcc 15 `-msoft-float`; clang = pin clang into pin llc; shared external flags. One exe per cell and column, linked with our compiler-rt archive and the harness stubs; `cycles --exe` with CYCLES_CPUS set to the exe's CPU. Each exe runs under qemu and its stdout is compared to the reference (CRLF read as LF, nothing else forgiven, #8963); a wrong run has no number. Bytes: code+data of the object by the matrix method; library bytes are not included.
 
-68000 O1: better 66, equal 2, worse 62, UNMEASURED(ours) 2, UNMEASURED(no external) 7
-68000 O2: better 68, equal 7, worse 56, UNMEASURED(ours) 2, UNMEASURED(no external) 6
-68000 O3: better 60, equal 7, worse 64, UNMEASURED(ours) 2, UNMEASURED(no external) 6
-68000 Os: better 65, equal 12, worse 53, UNMEASURED(ours) 2, UNMEASURED(no external) 7
-68020 O1: better 63, equal 3, worse 53, UNMEASURED(ours) 7, UNMEASURED(no external) 13
-68020 O2: better 69, equal 3, worse 49, UNMEASURED(ours) 7, UNMEASURED(no external) 11
-68020 O3: better 62, equal 4, worse 57, UNMEASURED(ours) 7, UNMEASURED(no external) 9
-68020 Os: better 44, equal 2, worse 74, UNMEASURED(ours) 7, UNMEASURED(no external) 12
+Positive control: bitcount_u32 68020 -O2, gcc column (same gcc object both times): 26398 before, 27158 now = +760 = 38 `trap #0` x 20 clk, the 68020 trap cost.
 
-## Findings
+## Clocks only (cells; better / equal / worse / UNMEASURED ours / UNMEASURED no external)
 
-- float_in_memory_loop: ours 3.54 M clocks (68000 O2), clang 1798, gcc 5128. The loop adds 16 x 0.5 in memory 100 times; both externals fold it, ours runs 1600 soft-float adds. Largest gap in the table; the others over 50% are listed in the tsv (int64_division, float_in_place_update, urem_eq, uint64_to_float, loop_versioning, byte_multiply, idioms, word_compare_branches, select_of_constants, idiv_loop_os, ...).
-- os_console: ours and the externals differ from the reference output in this harness (stdin/args); UNMEASURED at all levels.
-- cycles timeouts (300 s) on memfuncs_runtime and shl_of_a_zero_extended_dividend (ours); UNMEASURED.
+| cpu level | better | equal | worse | ours | no ext |
+|---|---|---|---|---|---|
+| 68000 O1 | 64 | 2 | 60 | 7 | 6 |
+| 68000 O2 | 63 | 7 | 57 | 8 | 4 |
+| 68000 O3 | 55 | 7 | 63 | 7 | 7 |
+| 68000 Os | 60 | 12 | 54 | 7 | 6 |
+| 68020 O1 | 63 | 3 | 58 | 7 | 8 |
+| 68020 O2 | 71 | 3 | 52 | 7 | 6 |
+| 68020 O3 | 63 | 4 | 56 | 7 | 9 |
+| 68020 Os | 42 | 2 | 78 | 7 | 10 |
 
-## Instrument gaps (UNMEASURED cells, not compiler findings)
+285 of the 999 measured cells have one external number only (gcc or clang failed, was wrong, or is unpriced): their verdict is against that one, column `externals_with_clocks` = 1 in the tsv. Treat them as partial.
 
-- The 68020 timing tables lack `trap #0` (the harness syscall; same count in every column of a program, so cells whose only unpriced instruction is the trap are kept, as a common lower bound), `mulu.l`/`muls.l #imm`, `cmpi.l #imm,(0,%pc)` and a full-extension indexed form. Owner: the cycles/timing session.
-- External columns missing: gcc 28 abi-mismatch (long double), 48 compile, 4 link, 4 no-gcc-column, 4 cycles; clang 46 compile failures and 123 wrong runs.
+## Clocks and bytes, the 999 measured cells (verdict per level)
+
+| cpu level | WORSE | ok | VIRTUAL-OK |
+|---|---|---|---|
+| 68000 O1 | 71 | 48 | 7 |
+| 68000 O2 | 58 | 69 | 0 |
+| 68000 O3 | 66 | 59 | 0 |
+| 68000 Os | 51 | 75 | 0 |
+| 68020 O1 | 77 | 32 | 15 |
+| 68020 O2 | 61 | 65 | 0 |
+| 68020 O3 | 65 | 58 | 0 |
+| 68020 Os | 60 | 62 | 0 |
+
+The 113 UNMEASURED cells are not in these tables. Their byte-only verdicts in the tsv (65 ok, 16 WORSE, 32 n/a) are not passes.
+
+## The 113 UNMEASURED cells, by cause
+
+| cells | column | cause |
+|---|---|---|
+| 44 | ours | timing-table gap: indexed forms `(d8,An,Xn)` and full-format `(bd,,Xn)` the pricer rejects (below) |
+| 13 | ours | cycles timeout or cut trace (urem_eq, memfuncs_runtime, shl_of_a_zero_extended_dividend) |
+| 16 | no external | gcc and clang both failed to compile |
+| 12 | no external | gcc long double ABI mismatch, clang wrong output |
+| 10 | no external | table gap in one, wrong output in the other |
+| 8 | no external | gcc flags with no gcc meaning, clang wrong output |
+| 7 | no external | compile failure and a table gap |
+| 3 | no external | table gap in both |
+
+os_console (8 ours cells) was a sweep fault, not a miscompile: the program writes CRLF, its .out has LF (#8959, #8963). Now measured: ours 226 clk, clang 271 (68020, all levels); gcc fails to compile it.
+
+## What moved (68020)
+
+`m68k-clocks-moved-68020-2026-11-11.tsv`: every 68020 exe whose figure or state changed, before (c98e231ab1 compiler, pre-#8930/#8942 pricer) and after (def16209). 1520 rows: 1364 went from "unpriced forms" (the trap and the other forms counted as 0) to priced; 8 from wrong-output to priced (os_console); 88 are still unpriced. Deltas mix the compiler change between the two commits and the pricer: ours Os moved most (urem_eq -86%, loop_interchange -74%, recdeep -70%), while the gcc column, whose objects did not change, moved by the pricer alone: all 468 priced exes, median +2.2%, up to +128%.
+
+Of the 28 ours cells that were UNMEASURED at 68020 before, 16 are measured now (bitfield_long_long, double_across_a_call_result, memcpy_libcall, os_console) and 12 remain (bench_io, memfuncs_runtime, shl_of_a_zero_extended_dividend). 16 other cells became UNMEASURED (fill_nest, loop_interchange, memory_expansion, widening_multiply): the new compiler emits forms still in the gap table below, or the run is cut.
+
+## Remaining timing-table gaps (exes = cell x column; the pricer prints the operand as shown)
+
+| form | 68000 | 68020 |
+|---|---|---|
+| `(D,%aN,%dM)`, brief-format index, displacement printed sign-extended (`(ffffffffffffffff,%a3,%d1)`, `(7e,%a1,%d1)`), no size suffix | 84 | 103 |
+| `(D,,%dN)`, full-format with the base suppressed | 0 | 53 |
+
+#8942 priced the full-format index with a base register; these are the forms that remain. Owner: the timing session.
+
+## Largest gap
+
+float_in_memory_loop: ours 3.54 M clocks (68000 O2), clang 1798, gcc 5128. Both externals fold the loop (16 x 0.5 added in memory, 100 times); ours runs 1600 soft-float adds. No cause card, no owner.

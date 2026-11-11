@@ -55,6 +55,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
     );
     tl.init_actions();
+    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -240,9 +242,10 @@ impl Z80Lowering {
 }
 
 /// `ExpandDivRemLibCall` for a word: the routine returns the quotient in `de`
-/// and the remainder in `hl`, the registers of a long result; the divide
-/// routine `__udivhi3` leaves both there already, the signed one is
-/// `__divremhi4`.
+/// and the remainder in `hl`, the registers of a long result (low word `hl`,
+/// high word `de`), so the remainder is the first part and the quotient the
+/// second; the divide routine `__udivhi3` leaves both there already, the
+/// signed one is `__divremhi4`.
 fn lower_divrem_word(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -271,7 +274,7 @@ fn lower_divrem_word(
     let callee = dag.get_target_external_symbol(EVT::I16, name);
     let root = dag.entry_node();
     let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
-    let [quotient, remainder] = values[..] else { return None };
+    let [remainder, quotient] = values[..] else { return None };
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I16], &[quotient, remainder]))
 }
 
@@ -795,6 +798,7 @@ fn lower_carry_op(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> SDValue {
+    super::pipeline::CARRY_OPS.with(|count| count.set(count.get() + 1));
     if let Some(generic) = generic_carry_op(dag, node) {
         return generic;
     }

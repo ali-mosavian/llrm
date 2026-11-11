@@ -1112,6 +1112,24 @@ fn should_full_unroll(
     // additional analysis on the loop.
     let max_unrolled_loop_size =
         (u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32;
+    // DEVIATE UNROLL-ANALYZE (owner m68k float_in_memory_loop, exit
+    // 2026-11-20): the pin unrolls a loop under its own bar without analysis,
+    // so its 10-trip cap never meets a loop that bar admits. Under a lower
+    // target bar the same loop reaches the analysis, which now covers every
+    // trip count the pin's bar would have unrolled. The same as the pin where
+    // the target keeps the bar.
+    let pin_threshold = if run.options.opt_size {
+        0
+    } else if run.options.opt_level > 2 {
+        UNROLL_THRESHOLD_AGGRESSIVE
+    } else {
+        UNROLL_THRESHOLD_DEFAULT
+    };
+    let trips_to_analyze = if unrolled_size < u64::from(pin_threshold) {
+        up.max_iterations_count_to_analyze.max(full_unroll_trip_count)
+    } else {
+        up.max_iterations_count_to_analyze
+    };
     if let Some(cost) = analyze_loop_unroll_cost(
         run,
         se,
@@ -1120,7 +1138,7 @@ fn should_full_unroll(
         full_unroll_trip_count,
         eph,
         max_unrolled_loop_size,
-        up.max_iterations_count_to_analyze,
+        trips_to_analyze,
         None,
         false,
     ) {
@@ -1831,6 +1849,10 @@ fn try_to_unroll_loop(
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
+            // was worked out in: an earlier loop's remainder guard, read while
+            // counting this loop, is a value its expansion reuses.
+            session.adopt(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             let mut env = crate::loopunrollruntime::Env {
                 context: &mut *run.context,
                 layout: run.layout,
@@ -1848,6 +1870,7 @@ fn try_to_unroll_loop(
                 use_epilog,
             );
             let Some(epilog) = done else {
+                run.scev = session.into_scev();
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
@@ -2515,14 +2538,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
-            // `LoopUnrollPass` does); the loops the peeled copy holds are
-            // new siblings, visited next.
-            let mut fresh: Vec<BlockId> =
-                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
-            fresh.reverse();
-            for one in fresh {
-                work.push_front(one);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled; the
+            // loops the peeled copy holds are new siblings, visited next
+            // (`addSiblingLoops`). `LoopUnrollPass` walks the loops it began
+            // with: it adds none.
+            if !run.options.target_unrolling {
+                let mut fresh: Vec<BlockId> =
+                    siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+                fresh.reverse();
+                for one in fresh {
+                    work.push_front(one);
+                }
             }
             continue;
         }
@@ -2594,8 +2620,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for &one in &fresh {
-            work.push_front(one);
+        if !run.options.target_unrolling {
+            for &one in &fresh {
+                work.push_front(one);
+            }
         }
         revisited.extend(fresh);
     }
