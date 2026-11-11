@@ -2255,6 +2255,13 @@ pub trait Tti {
         false
     }
 
+    /// With `lsr_call_clobbers_registers`: the register units a call leaves
+    /// alone (the callee-saved cells). Only what the loop keeps beyond them is
+    /// spilled. 0: none survives (z80). DEVIATE LU13.
+    fn lsr_call_preserved_units(&self) -> u32 {
+        0
+    }
+
     /// Whether an add-recurrence the loop as written computes from its counter
     /// (`la + i * 4` with only `i` a phi) is made again each trip and so is not
     /// kept across a call. LSR's baseline rates it a register the call would

@@ -515,6 +515,9 @@ pub struct Cost {
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_order`.
     pub size_bytes: u32,
+    /// DEVIATE LU13: the register units rated so far that a call leaves alone
+    /// or spills (`Tti::lsr_call_preserved_units`).
+    kept_units: u32,
 }
 
 impl Cost {
@@ -947,7 +950,12 @@ impl Cost {
             && r.se.addrec_header(reg) == Some(r.l)
             && !is_existing_phi(r.se, r.cx, reg);
         if r.across_call && !recomputed {
-            self.c.spills += if r.se.addrec_header(reg) == Some(r.l) { 2 } else { 1 };
+            // the cells of this register, beside those the loop holds anyway
+            let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+            self.kept_units += bits.div_ceil(8).max(1);
+            if r.other_register_units + self.kept_units > r.tti.lsr_call_preserved_units() {
+                self.c.spills += if r.se.addrec_header(reg) == Some(r.l) { 2 } else { 1 };
+            }
         }
 
         // Favor registers that need no setup in the preheader.

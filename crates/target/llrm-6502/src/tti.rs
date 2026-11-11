@@ -319,6 +319,11 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// `rc8`..`rc15` are callee-saved: eight cells survive a call.
+    fn lsr_call_preserved_units(&self) -> u32 {
+        8
+    }
+
     /// DEVIATE LU22: `la + i * 4` is made from `i` each trip as written.
     fn lsr_written_derived_ivs_are_recomputed(&self) -> bool {
         true
