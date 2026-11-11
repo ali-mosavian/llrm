@@ -234,7 +234,11 @@ def one(job):
         cycles.append(int(re.search(rb"(\d+) cycles", r.stdout).group(1)))
     # executed instructions and bytes of the first layout (the padding is not the program's bytes)
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + runtime(asm + modtext))
-    sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+    keep = os.environ.get("OURS_KEEP")  # a directory: the first layout's x.bin and its ld65 labels, for tools/.../profile6502.py
+    sh(["cl65", "-t", SIM, "-m", "x.map", *(["-Ln", "x.lbl"] if keep else []), "-o", "x.bin", "d.s", "f.s", *objs], w)
+    if keep:
+        os.makedirs(keep, exist_ok=True)
+        for ext in ("bin", "lbl", "map"): shutil.copy(w / f"x.{ext}", Path(keep) / f"{name}.{ext}")
     nb = bytes_of(w / "x.map", objs)
     ins = sh([INSNS, "-c", "-x", "4000000000", "x.bin"], w, timeout=300, text=False)
     m = re.search(rb"(\d+) instructions", ins.stdout + ins.stderr)
