@@ -166,6 +166,9 @@ impl Tti for Z80Tti {
         ty: Ty,
         kind: CostKind,
     ) -> Cost {
+        if std::env::var_os("Z80_TTI_X").is_some_and(|v| v.to_string_lossy().contains('c')) {
+            return Basic.cmp_sel_cost(op, ty, kind);
+        }
         let parts = self.parts(ty);
         match op {
             CmpSel::ICmp if self.is_byte(ty) => priced(&["cp b"], kind),
@@ -522,6 +525,9 @@ impl Tti for Z80Tti {
         src: Ty,
         kind: CostKind,
     ) -> Cost {
+        if std::env::var_os("Z80_TTI_X").is_some_and(|v| v.to_string_lossy().contains('k')) {
+            return Basic.cast_cost(op, dst, src, kind);
+        }
         let (to, from) = (self.parts(dst), self.parts(src));
         let widen = self.is_byte(src) && !self.is_byte(dst);
         match op {
@@ -546,6 +552,9 @@ impl Tti for Z80Tti {
         second: OperandInfo,
     ) -> Cost {
         use ArithOp::*;
+        if std::env::var_os("Z80_TTI_X").is_some_and(|v| v.to_string_lossy().contains('a')) {
+            return Basic.arithmetic_cost(op, ty, kind, first, second);
+        }
         let parts = self.parts(ty);
         let byte = self.is_byte(ty);
         let bits = if byte { 8 } else { 16 * parts };
