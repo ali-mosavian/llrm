@@ -11,7 +11,10 @@ const IR: &str = "define i8 @scale(i8 %x) {\n  %y = add i8 %x, 1\n  ret i8 %y\n}
 define i8 @used(i8 %x) {\n  %y = add i8 %x, 2\n  ret i8 %y\n}\n\
 define i8 @main(i8 %x) {\n  %v = call i8 @used(i8 %x)\n  ret i8 %v\n}\n";
 
-fn text(flags: &[&str], level: Level) -> String {
+fn text(
+    flags: &[&str],
+    level: Level,
+) -> String {
     let ir = format!("target datalayout = \"{}\"\n{IR}", datalayout());
     let mut request = Request::new(level);
     request.passes = flags.iter().map(|flag| (*flag).to_owned()).collect();

@@ -79,7 +79,10 @@ fn preserved(
         GlobalKind::Function(function) => !function.is_declaration(),
         GlobalKind::Variable(variable) => variable.initializer.is_some(),
     };
-    if !defined || matches!(global.linkage, Linkage::Internal | Linkage::Private | Linkage::AvailableExternally) {
+    if !defined || matches!(
+        global.linkage,
+        Linkage::Internal | Linkage::Private | Linkage::AvailableExternally
+    ) {
         return true;
     }
     if global.linkage == Linkage::Appending {
