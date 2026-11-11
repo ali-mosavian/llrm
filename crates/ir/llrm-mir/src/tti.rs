@@ -2086,6 +2086,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LG3: whether LSR also builds the end-biased formulae
+    /// (`GenerateEndBiased`). Neither the pin nor gcc builds them; a target
+    /// whose bases cost setup instructions (symbol bases) turns them off.
+    fn lsr_builds_end_biased(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {

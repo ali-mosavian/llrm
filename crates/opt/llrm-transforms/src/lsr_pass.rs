@@ -318,7 +318,7 @@ fn plan_loop(
     // DEVIATE LG3's formulae (beyond the pin) join the space before its
     // narrowing, as the formulae they share registers with do.
     // `llrm-no-end-biased`: the driver builds this function without them.
-    if !llrm_mir::memory::has(&function.attrs, NO_END_BIASED) {
+    if tti.lsr_builds_end_biased() && !llrm_mir::memory::has(&function.attrs, NO_END_BIASED) {
         lsr.generate_end_biased(se);
     }
     let beyond = counts(&lsr) != pin_counts;

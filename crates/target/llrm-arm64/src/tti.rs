@@ -1037,6 +1037,12 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// The pin does not build LG3's end-biased formulae, and on arm64 their
+    /// symbol bases cost an `adrp`+`add` each (nbody_single O2 +12 B).
+    fn lsr_builds_end_biased(&self) -> bool {
+        false
+    }
+
     fn is_legal_addressing_mode_at(
         &self,
         _addr_space: u32,
