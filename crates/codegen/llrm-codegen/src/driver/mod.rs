@@ -7,6 +7,7 @@ pub mod basic;
 mod data;
 pub mod flags;
 pub mod policy;
+pub mod trial;
 
 use std::path::PathBuf;
 
@@ -88,6 +89,11 @@ pub struct Options {
     pub stack_check: bool,
     /// `--isel=`: the instruction selector.
     pub isel: crate::backend::shadow::Selector,
+    /// `--no-midend`: the pipeline's passes do not run, so the backend takes
+    /// the module as it is given: the instrument for pricing the backend alone
+    /// on an IR the mid-end already made (the pin's `llc` takes its input as it
+    /// is).
+    pub no_midend: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention (LLVM's number) a call of it is made in: `memcpy` is a call
     /// where it is named, the selector's `rep movs` where not; and the symbol
@@ -126,6 +132,7 @@ impl Options {
             no_inline: Vec::new(),
             stack_check: false,
             isel,
+            no_midend: false,
             libcalls: Vec::new(),
             wasm_exceptions: false,
         }
@@ -357,6 +364,15 @@ pub fn compiled_module(
     name: &str,
     options: &Options,
 ) -> Result<masm::Module, String> {
+    let program = optimized_program(module, options)?;
+    assembled(&program, name, options)
+}
+
+/// `module` through the mid-end: the program the backend takes.
+pub fn optimized_program(
+    module: Module,
+    options: &Options,
+) -> Result<Program, String> {
     let description = options.arch.layout();
     let layout = description.datalayout;
     match module.datalayout.as_deref() {
@@ -372,6 +388,27 @@ pub fn compiled_module(
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
     optimized(&mut program, options)?;
+    Ok(program)
+}
+
+/// The backend over a program the mid-end finished: its module as masm.
+pub fn assembled(
+    program: &Program,
+    name: &str,
+    options: &Options,
+) -> Result<masm::Module, String> {
+    assembled_module(&program.modules[0], program, name, options)
+}
+
+/// `module`, a version of `program`'s only module, as masm: the program
+/// supplies the segments.
+pub fn assembled_module(
+    module: &Module,
+    program: &Program,
+    name: &str,
+    options: &Options,
+) -> Result<masm::Module, String> {
+    let cpu = options.cpu()?;
     let segments = Segments::of(
         &options.machine,
         Regs(options.arch.registers()),
@@ -379,11 +416,11 @@ pub fn compiled_module(
     );
     let assembled = timed("assemble", || {
         assemble::assembled_by(
-            &program.modules[0],
+            module,
             &crate::abi::llvm::LlvmAbi {
                 stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
             },
-            &format!("{}_TEXT", name.to_uppercase()),
+            &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", name.to_uppercase())),
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
@@ -394,9 +431,9 @@ pub fn compiled_module(
     })?;
     let mut assembled = assembled;
     options.describe_debug(&mut assembled);
-    data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
+    data::zero_to_bss(&mut assembled, module, program.segments.data_space, options.machine.bss_begin);
     if options.machine.far_bss {
-        data::zero_far_to_bss(&mut assembled, &program.modules[0]);
+        data::zero_far_to_bss(&mut assembled, module);
     }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
@@ -540,7 +577,9 @@ pub fn optimized(
         llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
     // The pipeline sees an atomic access as a call it cannot move.
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
-    timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    if !options.no_midend {
+        timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    }
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
@@ -656,7 +695,8 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is bytes.
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is
+                // bytes.
                 let trees = |ty: &str| {
                     options.pipeline.prefers_size()
                         && tti.branch_compare_trees_at_size()

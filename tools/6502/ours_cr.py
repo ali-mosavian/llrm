@@ -167,7 +167,7 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
             stem = file.replace("/", "_")[:-2]
             text = crlib.member(RTDIR, cc, file, flags)
             have.add(file); (w / (stem + ".s")).write_text(".autoimport +\n" + text); mods += text
-            a = sh(["ca65", "-t", SIM, "-o", stem + ".o", stem + ".s"], w)
+            a = sh(["ca65", "-t", SIM, "-I", str(RTDIR / "config/6502"), "-o", stem + ".o", stem + ".s"], w)
             if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
             objs.append(stem + ".o")
     return objs, "no fixpoint"
@@ -180,7 +180,7 @@ def one(job):
     if listed is not None and not corpus_targets.applies("6502-sim65", "// targets: " + " ".join(listed) + "\n"):
         return name, "N/A", "n/a, targets: " + " ".join(listed)
     w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
-    want = expected(path.with_suffix(".out"))
+    want = expected(corpus_targets.expected_output(path, f"{CPU}-sim65"))  # NAME.6502.out / NAME.65c02.out where the 16-bit int changes the answer
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:

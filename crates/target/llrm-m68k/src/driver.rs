@@ -144,8 +144,9 @@ pub fn assembly_dumping(
     assembly_with(text, cpu, level, false, dump)
 }
 
-/// The size table's estimate of each defined function of the module the backend gets at `level`, before the
-/// `function_scale` residue: the numerator `tools/m68k_size_fit.py` divides the objects' symbol sizes by.
+/// The size table's estimate of each defined function of the module the backend
+/// gets at `level`, before the `function_scale` residue: the numerator
+/// `tools/m68k_size_fit.py` divides the objects' symbol sizes by.
 pub fn size_estimates(
     text: &str,
     cpu: Cpu,
@@ -167,7 +168,8 @@ pub fn size_estimates(
         .collect())
 }
 
-/// [`lowered`] with the default flags: the module the backend gets at `level`, what a size estimate is of.
+/// [`lowered`] with the default flags: the module the backend gets at `level`,
+/// what a size estimate is of.
 pub fn lowered_for(
     text: &str,
     cpu: Cpu,
@@ -187,7 +189,8 @@ fn lowered(
 ) -> Result<Module, String> {
     let mut program = program_for(text, cpu)?;
     policy.mark(&mut program)?;
-    let mut options = MidEnd { library: c_library(), ..level.mid_end() };
+    let mut options =
+        MidEnd { library: c_library(), lower_switches: !crate::dagisel::function::SWITCHES_IN_DAG, ..level.mid_end() };
     policy.apply(&mut options);
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
@@ -252,9 +255,14 @@ fn function_items(
         names
             .iter()
             .map(|name| {
-                items_with(module, name, cpu, Options { pc_calls, ..backend })
-                    .map(|items| (name.clone(), items))
-                    .map_err(|why| format!("@{name}: {why}"))
+                // `LLRM_DEBUG=time` charges the function by name (the largest
+                // functions are the first to look at)
+                llrm_support::debug::timed_by(
+                    || format!("m68k fn {name}"),
+                    || items_with(module, name, cpu, Options { pc_calls, ..backend }),
+                )
+                .map(|items| (name.clone(), items))
+                .map_err(|why| format!("@{name}: {why}"))
             })
             .collect()
     };
@@ -321,7 +329,7 @@ pub fn object_in(
     name: &str,
     model: CodeModel,
 ) -> Result<Vec<u8>, String> {
-    object_flagged(text, cpu, level, name, model, &Policy::default())
+    object_flagged(text, cpu, level, name, model, &Policy::default(), None)
 }
 
 /// [`object_in`] with the mid-end flags in `policy`.
@@ -332,6 +340,7 @@ pub fn object_flagged(
     name: &str,
     model: CodeModel,
     policy: &Policy,
+    dump: Option<&std::path::Path>,
 ) -> Result<Vec<u8>, String> {
     // The file symbol is the module's own `source_filename`, as the pin's: the
     // path of a scratch IR file would differ between two compiles of one
@@ -340,7 +349,10 @@ pub fn object_flagged(
         .lines()
         .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
         .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
-    let module = lowered(text, cpu, level, None, policy)?;
+    if let Some(dump) = dump {
+        std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
+    }
+    let module = lowered(text, cpu, level, dump, policy)?;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
         strict: level == Level::O1,

@@ -52,7 +52,7 @@ use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{has_one_use, query};
 
 /// A new compare in place of `inst`: `new ICmpInst(pred, a, b)`.
-fn new_icmp(
+pub(crate) fn new_icmp(
     c: &mut Combiner,
     inst: InstId,
     pred: IntPredicate,
@@ -130,7 +130,7 @@ pub fn fold_icmp_inst_with_constant(
     let (value, width) = query(c, None).int_constant(op1)?;
     // foldICmpBinOpWithConstant, the `and`, `mul` and `add` cases.
     // OWED: the other opcodes, foldICmpBinOpEqualityWithConstant and the
-    // truth-table fold; the select, intrinsic and extractvalue arms, and the
+    // truth-table fold; the select and extractvalue arms, and the
     // rest of the trunc arm.
     let trunc = {
         let q = query(c, None);
@@ -199,6 +199,11 @@ pub fn fold_icmp_inst_with_constant(
     };
     if let Some((flags, x, y)) = add
         && let Some(visit) = fold_icmp_add_constant(c, inst, pred, op0, flags, (x, y), value, width)
+    {
+        return Some(visit);
+    }
+    if let Some(visit) =
+        crate::combine_icmp_intrinsic::fold_icmp_intrinsic_with_constant(c, inst, pred, op0, value, width)
     {
         return Some(visit);
     }
@@ -615,6 +620,12 @@ fn fold_icmp_bin_op_equality_with_constant(
             // Replace ((add A, B) != 0) with (A != -B) if A or B is efficiently
             // invertible, or if the add has just this one use.
             if value == 0 {
+                if let Some(neg) = crate::combine_muldivrem::dyn_cast_neg_val(c, y) {
+                    return Some(new_icmp(c, inst, pred, x, neg));
+                }
+                if let Some(neg) = crate::combine_muldivrem::dyn_cast_neg_val(c, x) {
+                    return Some(new_icmp(c, inst, pred, neg, y));
+                }
                 if has_one_use(c, bo) {
                     // (add nuw A, B) != 0 -> (or A, B) != 0
                     if bo_inst.contains(Flags::NUW) {

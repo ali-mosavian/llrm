@@ -285,7 +285,7 @@ __ashrhi3:
 	ex	de,hl
 	ret
 
-; The first long is hl (low) and de (high), the count a byte in a; the result is de (low) and hl (high).
+; The first long is hl (low) and de (high), the count a byte in a; the result is hl (low) and de (high).
 	.globl __ashlsi3
 __ashlsi3:
 	ld	b,a
@@ -295,7 +295,6 @@ __ashlsi3:
 	rl	e
 	rl	d
 2$:	djnz	1$
-	ex	de,hl
 	ret
 
 	.globl __lshrsi3
@@ -308,7 +307,6 @@ __lshrsi3:
 	rr	h
 	rr	l
 2$:	djnz	1$
-	ex	de,hl
 	ret
 
 	.globl __ashrsi3
@@ -321,13 +319,33 @@ __ashrsi3:
 	rr	h
 	rr	l
 2$:	djnz	1$
-	ex	de,hl
+	ret
+
+; ---- 16 x 16 -> 32 multiply ---------------------------------------------------------------------------------------
+
+; hl * de -> hl:de, the full 32-bit product of two unsigned words (hl low, de high, as a long result): one multiplier
+; bit per step, 16 steps. `__mulsi3` computes two cross terms against zero for the same product.
+	.globl __umulhisi3
+__umulhisi3:
+	ld	b,h
+	ld	c,l
+	ld	hl,#0
+	ld	a,#16
+1$:	add	hl,hl
+	rl	e
+	rl	d
+	jr	nc,2$
+	add	hl,bc
+	jr	nc,2$
+	inc	de
+2$:	dec	a
+	jr	nz,1$
 	ret
 
 ; ---- long multiply -------------------------------------------------------------------------------
 
 ; The product of two longs, low 32 bits: a is hl (low) and de (high), b bc (low) and the word the caller stored on the
-; stack (high); the result is de (low) and hl (high). Shift and add over b's bits in the shadow registers, until b is
+; stack (high); the result is hl (low) and de (high). Shift and add over b's bits in the shadow registers, until b is
 ; spent (a product by 100 takes 7 passes, not 32). The return address waits in iy and the caller's word stays where it was
 ; (it pops it).
 	.globl __mulsi3
@@ -372,13 +390,14 @@ __mulsi3:
 	push	hl
 	exx
 	pop	de
+	ex	de,hl
 	push	af
 	jp	(iy)
 
 ; ---- long divide and remainder -------------------------------------------------------------------
 
 ; The dividend is hl (low) and de (high), the divisor bc (low) and the word the caller stored on the stack (high);
-; the result is de (low) and hl (high). The divisor is aligned under the dividend and each step takes it off where
+; the result is hl (low) and de (high). The divisor is aligned under the dividend and each step takes it off where
 ; it fits: one step per quotient bit, in the shadow registers, over a frame addressed through ix, which is kept.
 ; Mode bits in the frame: 0 remainder wanted, 1 signed, 2 quotient negative, 3 remainder negative.
 	.globl __udivsi3
@@ -558,10 +577,10 @@ udm_done:
 	ld	a,#0
 	sbc	a,-5(ix)
 	ld	-5(ix),a
-5$:	ld	e,-8(ix)
-	ld	d,-7(ix)
-	ld	l,-6(ix)
-	ld	h,-5(ix)
+5$:	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-6(ix)
+	ld	d,-5(ix)
 	jr	6$
 4$:	bit	3,-1(ix)
 	jr	z,7$
@@ -577,10 +596,10 @@ udm_done:
 	ld	a,#0
 	sbc	a,-9(ix)
 	ld	-9(ix),a
-7$:	ld	e,-12(ix)
-	ld	d,-11(ix)
-	ld	l,-10(ix)
-	ld	h,-9(ix)
+7$:	ld	l,-12(ix)
+	ld	h,-11(ix)
+	ld	e,-10(ix)
+	ld	d,-9(ix)
 6$:	ld	sp,ix
 	pop	ix
 	ret
@@ -619,10 +638,10 @@ __dvr_ep:
 	inc	hl
 	ld	a,-9(ix)
 	ld	(hl),a
-	ld	e,-8(ix)
-	ld	d,-7(ix)
-	ld	l,-6(ix)
-	ld	h,-5(ix)
+	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-6(ix)
+	ld	d,-5(ix)
 	ld	sp,ix
 	pop	ix
 	ret
@@ -813,15 +832,15 @@ __s_udivsi3:
 	push	de
 	exx
 	pop	hl
+	ex	de,hl
 	ret
 	.globl __s_umodsi3
 __s_umodsi3:
 	call	sdu
-	ex	de,hl
 	exx
 	push	hl
 	exx
-	pop	hl
+	pop	de
 	ret
 ; the divisor's high word is on the stack above the two return addresses
 	.globl __s_dvcore
@@ -906,6 +925,7 @@ __s_udivremsi4:
 	ld	a,d
 	ld	(bc),a
 	pop	de
+	ex	de,hl
 	ret
 ; signed: the magnitudes divided, the quotient negated if the signs differ, the remainder if the dividend is negative.
 ; -1(ix): bit 0 the quotient is negative, bit 1 the remainder is.
@@ -1001,7 +1021,8 @@ __s_divremsi4:
 	ld	a,#0
 	sbc	a,h
 	ld	h,a
-4$:	ld	sp,ix
+4$:	ex	de,hl
+	ld	sp,ix
 	pop	ix
 	ret
 ; a signed divide takes the magnitudes, divides, and gives the result the sign C gives it. -1(ix): bit 0 the
@@ -1084,7 +1105,8 @@ sds:	push	ix
 	ld	a,#0
 	sbc	a,h
 	ld	h,a
-5$:	ld	sp,ix
+5$:	ex	de,hl
+	ld	sp,ix
 	pop	ix
 	ret
 
@@ -1555,6 +1577,73 @@ shiftdi:
 	djnz	13$
 8$:	dec	-5(ix)
 	jr	nz,6$
+9$:	ld	e,-2(ix)
+	ld	d,-1(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+
+; The same shifts for a function tuned for size: the operand is written to the result, then shifted one bit at a time,
+; the count byte at 8(ix) times (a = 0, 1, 2 as above; no whole-byte moves, so a long count is slow). Frame: -2,-1
+; the result pointer, -3 mode.
+	.globl __s_ashldi3
+__s_ashldi3:
+	xor	a
+	jr	sshiftdi
+	.globl __s_lshrdi3
+__s_lshrdi3:
+	ld	a,#1
+	jr	sshiftdi
+	.globl __s_ashrdi3
+__s_ashrdi3:
+	ld	a,#2
+sshiftdi:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	hl
+	push	af
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	inc	hl
+	ld	(hl),c
+	inc	hl
+	ld	(hl),b
+	inc	hl
+	ex	de,hl
+	push	ix
+	pop	hl
+	ld	bc,#4
+	add	hl,bc
+	ldir
+1$:	ld	a,8(ix)
+	or	a,a
+	jr	z,9$
+	dec	a
+	ld	8(ix),a
+	ld	l,-2(ix)
+	ld	h,-1(ix)
+	ld	b,#7
+	ld	a,-3(ix)
+	or	a,a
+	jr	nz,3$
+	sla	(hl)
+2$:	inc	hl
+	rl	(hl)
+	djnz	2$
+	jr	1$
+3$:	ld	de,#7
+	add	hl,de
+	dec	a
+	jr	nz,4$
+	srl	(hl)
+	jr	5$
+4$:	sra	(hl)
+5$:	dec	hl
+	rr	(hl)
+	djnz	5$
+	jr	1$
 9$:	ld	e,-2(ix)
 	ld	d,-1(ix)
 	ld	sp,ix

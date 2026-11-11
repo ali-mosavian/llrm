@@ -960,6 +960,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         table_id: None,
         repeat: false,
         pops: None,
+        tied: None,
     };
     let (push, pop) = (
         |source: &Loc| step(Operation::Push, "push", vec![], vec![source.clone()]),
@@ -1070,18 +1071,24 @@ pub fn arith_imm(
     let mut shapes: Vec<(String, i64)> = Vec::new();
     let value = _immediate(value, width);
     let upper = name.to_uppercase();
+    // A quadword operation takes a sign-extended dword.
+    let immediate = (width * 8).min(32);
+    let accumulator = Some(&dest) == ACCUMULATOR.get(&width);
+    // `optimizeToFixedRegisterForm`: a byte immediate has no sign-extended
+    // form to beat the accumulator's `op al, imm8`, so it comes first.
+    if accumulator && width == 1 {
+        shapes.push((format!("{upper}_AL_IMM8"), 8));
+    }
     if fits_in_a_byte(value) && !relocated {
         shapes.push((format!("{upper}_RM{}_IMM8", width * 8), 8));
     }
-    // A quadword operation takes a sign-extended dword.
-    let immediate = (width * 8).min(32);
-    if Some(&dest) == ACCUMULATOR.get(&width) {
-        let accumulator = match width {
+    if accumulator && width > 1 {
+        let register = match width {
             2 => "AX",
             4 => "EAX",
             _ => "RAX",
         };
-        shapes.push((format!("{upper}_{accumulator}_IMM{immediate}"), immediate));
+        shapes.push((format!("{upper}_{register}_IMM{immediate}"), immediate));
     }
     shapes.push((format!("{upper}_RM{}_IMM{immediate}", width * 8), immediate));
     for (shape, _bits) in shapes {
@@ -1507,7 +1514,19 @@ pub fn test_immediate(
     let code = code_of!("TEST_RM", width * 8, "_IMM", (width * 8).min(32))?;
     let value = _immediate(value, width);
     match dest {
-        Loc::Reg(one) => _assemble(&raised(create_reg_i32(code, one.register, value)), at, true),
+        Loc::Reg(one) => {
+            // `optimizeToFixedRegisterForm`: `test al, imm8` (`a8`) and
+            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7` form.
+            let register = match (width, ACCUMULATOR.get(&width) == Some(&one.register)) {
+                (1, true) => Some("AL"),
+                (2, true) => Some("AX"),
+                (4, true) => Some("EAX"),
+                (8, true) => Some("RAX"),
+                _ => None,
+            };
+            let fixed = register.and_then(|register| code_of!("TEST_", register, "_IMM", (width * 8).min(32)));
+            _assemble(&raised(create_reg_i32(fixed.unwrap_or(code), one.register, value)), at, true)
+        }
         Loc::Mem(cell) => {
             let (r#where, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_mem_i32(code, r#where, value)), at, relocated)
@@ -3245,6 +3264,7 @@ mod sweep_support {
             repeat: false,
             table_id: None,
             pops: None,
+            tied: None,
         }
     }
 

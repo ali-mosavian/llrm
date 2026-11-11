@@ -107,6 +107,8 @@ interrupt_frame = [["gs", 2], ["fs", 2], ["es", 2], ["ds", 2], ["edi", 4], ["esi
 # registers it then loads with DGROUP's selector: the first from the group, each next from the one before.
 interrupt_saves = ["ds", "es", "fs", "gs"]
 interrupt_data = ["ds", "es"]
+# Its parameters, in order: Borland's `interrupt` register parameters, each the low word of the frame slot of that register.
+interrupt_parameters = ["ebp", "edi", "esi", "ds", "es", "edx", "ecx", "ebx", "eax", "ip", "cs", "flags"]
 
 # watcall16: Open Watcom's 16-bit register convention (`wcc -ecw`, `__watcall`), medium model, read from `bwcc`'s own output.
 # Arguments take AX, DX, BX, CX in order; a long or a far pointer (4 bytes) takes DX:AX or CX:BX (the low word, or a far

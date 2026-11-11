@@ -6,6 +6,7 @@ use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::matcher::Vt;
+use llrm_support::hash::HashMap;
 
 use super::generated::{instrinfo, z80_z80, z80_z180};
 
@@ -38,6 +39,8 @@ pub struct Z80Hooks {
     cpu: Cpu,
     /// `OptLevel == CodeGenOptLevel::None`: nothing folds.
     opt_none: bool,
+    /// The nodes that used each constant when selection began.
+    uses: HashMap<u32, usize>,
 }
 
 impl Z80Hooks {
@@ -45,13 +48,29 @@ impl Z80Hooks {
         cpu: Cpu,
         opt_none: bool,
     ) -> Z80Hooks {
-        Z80Hooks { cpu, opt_none }
+        Z80Hooks { cpu, opt_none, uses: HashMap::default() }
+    }
+
+    /// The use counts of the constants at the start of selection.
+    pub fn with_uses(
+        mut self,
+        uses: HashMap<u32, usize>,
+    ) -> Z80Hooks {
+        self.uses = uses;
+        self
     }
 }
 
 impl<D: AddrDag> Hooks<D> for Z80Hooks {
     fn pointer_type(&self) -> Vt {
         mvt::i16
+    }
+
+    fn uses_at_selection_start(
+        &self,
+        node: u32,
+    ) -> Option<usize> {
+        self.uses.get(&node).copied()
     }
 
     fn check_pattern_predicate(

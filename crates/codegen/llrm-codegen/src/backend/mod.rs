@@ -208,6 +208,7 @@ pub mod fixupbw;
 pub mod fixupleas;
 pub mod fixupsetcc;
 pub mod flagscopy;
+pub mod statustest;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
@@ -273,6 +274,7 @@ pub mod rmw;
 pub mod vectorsaves;
 pub use llrm_analysis::saverestore;
 pub mod schedboundary;
+pub mod schedmodel;
 pub mod schedule;
 pub mod selectconstants;
 pub mod selectiondag;

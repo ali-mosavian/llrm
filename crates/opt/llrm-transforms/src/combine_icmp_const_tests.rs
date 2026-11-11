@@ -354,3 +354,20 @@ fn a_divide_by_int_min_compared_with_zero_is_one_edge_of_the_dividend() {
     check("i16 %x", "  %d = sdiv i16 %x, -32768\n  %r = icmp eq i16 %d, 0\n", &["icmp ne i16 %x, -32768"]);
     check("i16 %x", "  %d = sdiv i16 %x, -32768\n  %r = icmp sgt i16 %d, 0\n", &["icmp eq i16 %x, -32768"]);
 }
+
+/// `foldICmpBinOpEqualityWithConstant`'s add arm: `(add A, (sub 0, B)) != 0`
+/// is `A != B` whatever uses the add has (`dyn_castNegVal`); without the arm
+/// only a one-use add was rewritten, so this one kept the add and the compare.
+#[test]
+fn an_add_of_a_negated_operand_compared_with_zero_is_a_compare_of_the_operands() {
+    check(
+        "i8 %a, i8 %b, ptr %p",
+        "  %n = sub i8 0, %b\n  %s = add i8 %a, %n\n  store i8 %s, ptr %p\n  %r = icmp ne i8 %s, 0\n",
+        &["icmp ne i8 %a, %b"],
+    );
+    check(
+        "i8 %a, i8 %b, ptr %p",
+        "  %n = sub i8 0, %a\n  %s = add i8 %n, %b\n  store i8 %s, ptr %p\n  %r = icmp eq i8 %s, 0\n",
+        &["icmp eq i8 %a, %b"],
+    );
+}

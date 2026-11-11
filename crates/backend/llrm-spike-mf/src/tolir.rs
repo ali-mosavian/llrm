@@ -59,11 +59,56 @@ const COPY: &str = "COPY";
 /// A flag-setting instruction and the one that reads its flags, as one.
 const BUNDLE: &str = "BUNDLE";
 
+/// The number the converter gave the instruction `one` was made from: the key
+/// into [`Converted::origin`] and the target's per-instruction answers. It is
+/// `numbered`, which a pass that moves an instruction keeps, and `at / 2` for
+/// one nothing numbered. `at` is not it: `MachineSink` sets the `at` of an
+/// instruction it moves to its new neighbour's.
+pub fn ordinal_of(one: &Insn) -> usize {
+    one.numbered.map_or((one.at / 2) as usize, |n| n as usize)
+}
+
+/// For each instruction of `block`: whether a later one reads the target's flags
+/// register by name before another writes it (a `sets_flags` instruction or a
+/// named write). Empty answers where there is no flags register or the mode
+/// models none.
+fn flags_read_after<T: Target>(
+    block: &crate::mfunc::Block,
+    ssa_pins: bool,
+) -> Vec<bool> {
+    let mut wanted = vec![false; block.insts.len()];
+    let Some(flags) = T::flags_register().filter(|_| ssa_pins) else { return wanted };
+    let root = T::root(flags);
+    let named = |reg: &Reg| matches!(reg, Reg::Phys(r) if T::root(*r) == root);
+    let mut later = false;
+    for (at, inst) in block.insts.iter().enumerate().rev() {
+        wanted[at] = later;
+        if inst.sets_flags || inst.operands.iter().any(|operand| matches!(operand, Operand::Def(reg) if named(reg))) {
+            later = false;
+        }
+        if inst.operands.iter().any(|operand| matches!(operand, Operand::Use(reg) if named(reg))) {
+            later = true;
+        }
+    }
+    wanted
+}
+
+fn numbered(
+    mut one: Insn,
+    ordinal: i64,
+) -> Insn {
+    one.numbered = Some(ordinal as u32);
+    one
+}
+
 /// A converted function and what greedy asks of the target around it.
 pub struct Converted<T: Target> {
     pub body: LirBody,
     /// The registers a value may take, most preferred first.
     orders: IndexMap<u32, Vec<RegId>>,
+    /// The value each one a shared phase made is a copy of (`TwoAddress`'s
+    /// fresh register for a tied source): its order and class are its parent's.
+    derived: IndexMap<u32, u32>,
     /// Values pinned to a register: they cannot be spilled.
     pub unspillable: BTreeSet<u32>,
     /// The roots a call keeps.
@@ -180,7 +225,7 @@ impl<T: Target> Converted<T> {
                 // which of the instruction's operand slots name the value: the
                 // same instruction shape and slots are one kind, however many
                 // instructions have them
-                let shape = (one.at / 2) as usize;
+                let shape = ordinal_of(one);
                 let (_, slots) = kind_infos.get(shape)?;
                 let what = one.what.as_ref()?;
                 if what.name.as_deref() != Some(kind_infos[shape].0) {
@@ -240,12 +285,7 @@ impl<T: Target> Converted<T> {
         function: &MFunction<T::Class>,
         registers: Regs,
     ) {
-        let mut sets: Vec<(T::Class, u32)> = Vec::new();
-        for class in &function.classes {
-            if !sets.iter().any(|(one, _)| one == class) {
-                sets.push((*class, T::candidates(*class).len() as u32));
-            }
-        }
+        let sets = pressure_sets::<T>(&function.classes);
         let limit = T::candidates(T::any()).len();
         let known = function.classes.len() as u32;
         let pins = self.body.pins.clone();
@@ -256,16 +296,15 @@ impl<T: Target> Converted<T> {
         let before = self.body.registers.replace(registers);
         let allocatable = self.body.clone();
         self.body = self.with_effects(function, registers);
-        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, |_, counted| {
+        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
             let mut model =
-                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|(_, limit)| *limit).collect());
+                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|set| set.len() as u32).collect());
             for value in 1..=known {
                 if pins.contains_key(&value) || !counted(value) {
                     continue;
                 }
                 let class = function.classes[value as usize - 1];
-                let at = sets.iter().position(|(one, _)| *one == class).expect("a class of the function has a set");
-                model.count(value, 1, std::rc::Rc::from(vec![at]));
+                model.count(value, 1, std::rc::Rc::from(sets_of::<T>(&sets, class)));
             }
             model
         });
@@ -291,6 +330,75 @@ impl<T: Target> Converted<T> {
     /// and writes the registers its pinned values stand for, the status flags
     /// (one lane) where it reads or sets them, and memory (one more lane)
     /// where it loads or stores; one with side effects is a barrier.
+    /// Gives each copy a shared phase made its own instruction number
+    /// ([`is_shared_copy`]): it stood on its neighbour's, so the target's
+    /// answers about operands, memory forms and effects were the neighbour's.
+    /// A copy has no operand info, as the converter's own copies have none.
+    pub fn adopt(&mut self) {
+        let blocks = self
+            .body
+            .blocks
+            .iter()
+            .map(|block| {
+                if !block.insns.iter().any(|one| is_shared_copy(one)) {
+                    return block.clone();
+                }
+                let insns: Vec<_> = block
+                    .insns
+                    .iter()
+                    .map(|one| {
+                        if !is_shared_copy(one) {
+                            return Arc::clone(one);
+                        }
+                        let ordinal = self.origin.len() as i64;
+                        let beside = self.origin.get(ordinal_of(one)).copied().unwrap_or((0, 0));
+                        self.origin.push(beside);
+                        self.tii.foldable.push(None);
+                        self.tii.infos.push(("", Vec::new()));
+                        let mut made = (**one).clone();
+                        made.at = 2 * ordinal;
+                        made.numbered = Some(ordinal as u32);
+                        Arc::new(made)
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.body = self.body.with_blocks(blocks);
+        // a value `TwoAddress` made is held to what the value it copies is
+        let known = self.tii.classes.len();
+        let copies: Vec<(u32, u32)> = self
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| is_shared_copy(one))
+            .filter_map(|one| match (one.defines.first(), one.uses.first()) {
+                (Some(&to), Some(&from)) => Some((to, from)),
+                _ => None,
+            })
+            .collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &(to, from) in &copies {
+                if self.orders.contains_key(&to) || self.body.pins.contains_key(&to) {
+                    continue;
+                }
+                let Some(order) = self.orders.get(&from).cloned() else { continue };
+                self.orders.insert(to, order);
+                self.derived.insert(to, from);
+                let wanted = (to as usize).max(self.tii.classes.len());
+                self.tii.classes.resize(wanted, T::any());
+                let class =
+                    from.checked_sub(1).and_then(|v| self.tii.classes.get(v as usize)).copied().unwrap_or_else(T::any);
+                self.tii.classes[to as usize - 1] = class;
+                changed = true;
+            }
+        }
+        debug_assert!(self.tii.classes.len() >= known);
+    }
+
     pub fn with_effects(
         &self,
         function: &MFunction<T::Class>,
@@ -309,7 +417,10 @@ impl<T: Target> Converted<T> {
                     .insns
                     .iter()
                     .map(|one| {
-                        let Some(&(from, at)) = self.origin.get((one.at / 2) as usize) else { return Arc::clone(one) };
+                        let Some(&(from, at)) = self.origin.get(ordinal_of(one)) else { return Arc::clone(one) };
+                        if is_shared_copy(one) {
+                            return Arc::clone(one);
+                        }
                         let inst = &function.blocks[from].insts[at];
                         let named = |values: &[u32]| -> Lanes {
                             values
@@ -318,6 +429,9 @@ impl<T: Target> Converted<T> {
                                 // the zero register is no lane: nothing writes
                                 // it
                                 .filter(|register| registers.known(**register))
+                                // the stack pointer a call rewrites has no
+                                // lanes
+                                .filter(|register| Lanes::exists(**register))
                                 .map(|register| Lanes::span(*register, 0, 1))
                                 .fold(Lanes::new(), |all, one| all.or(&one))
                         };
@@ -337,6 +451,27 @@ impl<T: Target> Converted<T> {
                             reads.extend(memory.iter().copied());
                         }
                         let mut made = (**one).clone().standing_for(one);
+                        // The form names register 31 as the zero register
+                        // wherever it is the stack pointer; the decoded
+                        // semantics name `sp`, which `boundary` needs
+                        // (`sub sp, sp, #16` moved below the stores it makes
+                        // room for: `vla_call` printed 918, not 1213).
+                        let writes_sp = one
+                            .what
+                            .as_ref()
+                            .is_some_and(
+                                |what| what.dests
+                                    .iter()
+                                    .any(|place| matches!(place, Loc::Reg(reg) if registers.is_stack(reg.register))),
+                            );
+                        if let Some(form) = inst
+                            .form
+                            .as_ref()
+                            .filter(|_| !writes_sp)
+                            .and_then(|form| in_body_values::<T>(form, inst, one))
+                        {
+                            made.what = Some(form);
+                        }
                         made.volatile = made.volatile || inst.side_effects;
                         made.memory = inst.memory;
                         if let Some(what) = made.what.as_mut() {
@@ -405,6 +540,34 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
+    convert(function, registers, false)
+}
+
+/// [`to_lir`] for a function still in SSA form, phis kept: what the shared
+/// machine stages before `PHIElimination` read. [`from_ssa`] reads the result
+/// back.
+pub fn to_ssa_lir<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+) -> Result<Converted<T>, String> {
+    convert(function, registers, true)
+}
+
+/// `ssa_pins`: each write of a physical register makes a value of its own,
+/// pinned to it, and a read takes the last write in its block (the value the
+/// function enters with, in the entry block): the body is SSA, as the pin's
+/// is, whose physical registers live only between a copy and its user. A
+/// physical register read in a block that did not write it is refused.
+///
+/// DEVIATE SP1: the pin's isel (`InstrEmitter::EmitCopyToReg` /
+/// `EmitCopyFromReg`) makes a COPY between a physical register and a virtual
+/// one; here the physical operand stays and each write is a value pinned to
+/// it. Exit: the m68k emitter makes those copies (2026-12-04).
+fn convert<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+    ssa_pins: bool,
+) -> Result<Converted<T>, String> {
     // A class's width once, not once per register of it.
     let mut width_of: Vec<(T::Class, u32)> = Vec::new();
     let widths: Vec<u32> = function
@@ -431,6 +594,13 @@ pub fn to_lir<T: Target>(
         origin: Vec::new(),
         symbols: Vec::new(),
         block_at: block_positions(function),
+        ssa_pins,
+        block: 0,
+        current: IndexMap::default(),
+        inputs: IndexMap::default(),
+        named: Vec::new(),
+        crossed: None,
+        flags_wanted: false,
         marker: PhantomData::<T>,
     };
     // every physical register is a value before the first instruction, so a
@@ -438,7 +608,11 @@ pub fn to_lir<T: Target>(
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         let (reads, writes) = physical::<T>(inst);
         for register in reads.chain(writes) {
-            made.pinned(register);
+            if !ssa_pins {
+                made.pinned(register);
+            } else if !made.named.contains(&register) {
+                made.named.push(register);
+            }
         }
     }
     let whole_homes = whole_homes::<T>(function);
@@ -447,13 +621,42 @@ pub fn to_lir<T: Target>(
     let mut orders_by_class = Orders::<T>::new(&clobbered_by_spills);
     let mut infos: Vec<(&'static str, Vec<OperandInfo>)> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
+    // the converted predecessors' last values of the physical registers
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
+    for (from, to) in successors.iter().enumerate().filter(|(from, _)| reachable[*from]) {
+        for to in to {
+            predecessors[*to].push(from);
+        }
+    }
+    let mut exits: Vec<Option<IndexMap<RegId, u32>>> = vec![None; function.blocks.len()];
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
+        made.block = at;
+        made.current.clear();
+        let flag_reads = flags_read_after::<T>(block, ssa_pins);
+        // A physical register no instruction of this block has written is the
+        // value every predecessor leaves it, if they agree and all are
+        // converted already (an unwritten join of a split block: the low word
+        // of an i64 result copied before the select, read by the `RET`).
+        // Otherwise a read of it is refused (a merge needs a phi).
+        if ssa_pins && at != 0 {
+            let before: Vec<&IndexMap<RegId, u32>> = predecessors[at].iter().filter_map(|p| exits[*p].as_ref()).collect();
+            if before.len() == predecessors[at].len() {
+                if let Some((first, rest)) = before.split_first() {
+                    made.current = first
+                        .iter()
+                        .filter(|(register, value)| rest.iter().all(|one| one.get(*register) == Some(value)))
+                        .map(|(register, value)| (*register, *value))
+                        .collect();
+                }
+            }
+        }
         // DEVIATE 2b: greedy is not given a block no path reaches (LLVM
         // removes them first); `from_lir` returns it as it was.
         let mut position = 0;
         while reachable[at] && position < block.insts.len() {
             let inst = &block.insts[position];
+            made.flags_wanted = flag_reads[position];
             if let Some(lanes) = made.pack_lanes(inst) {
                 // one copy per part, each with the origin of the `PACK`; the
                 // part is still hinted the lane of the register its whole is
@@ -474,7 +677,7 @@ pub fn to_lir<T: Target>(
                         .map(|info| OperandInfo { index: 0, lane: Some((lane.bytes, lane.offset)), ..info })
                         .collect();
                     infos.push((COPY, part));
-                    insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
+                    insns.push(Arc::new(numbered(made.lane_copy(lane, 2 * ordinal), ordinal)));
                 }
                 position += 1;
                 continue;
@@ -517,29 +720,39 @@ pub fn to_lir<T: Target>(
                             }),
                         );
                     infos.push(("", Vec::new()));
-                    insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
+                    insns.push(Arc::new(numbered(made.bundle(inst, next, 2 * ordinal), ordinal)));
                     position += 2;
                 }
                 _ => {
-                    insns.push(Arc::new(made.insn(inst, 2 * ordinal)));
+                    insns.push(Arc::new(numbered(made.insn(inst, 2 * ordinal), ordinal)));
                     position += 1;
                 }
             }
         }
+        exits[at] = reachable[at].then(|| made.current.clone());
         let mut lir = LirBlock::new(at as i64, insns);
         if reachable[at] {
             lir.succ = successors[at].iter().map(|to| *to as i64).collect();
+            lir.phis = block.phis.iter().map(|phi| made.phi(phi)).collect::<Result<Vec<_>, _>>()?.into();
         }
         blocks.push(LirBlockRef::from(lir));
+    }
+    if let Some(why) = made.crossed.take() {
+        return Err(why);
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
+    body.registers = Some(registers);
     match &function.odds {
         Some(odds) => stated_odds(&mut body, function, odds),
         None => loop_branch_odds(&mut body),
     }
-    body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
+    body.inputs = if ssa_pins {
+        made.inputs.values().copied().collect()
+    } else {
+        entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect()
+    };
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
         orders.insert(v as u32 + 1, orders_by_class.of(*class).clone());
@@ -569,6 +782,7 @@ pub fn to_lir<T: Target>(
         unspillable,
         saved,
         origin: made.origin,
+        derived: IndexMap::default(),
         reachable,
         joined: Default::default(),
         tii: SpikeInstrInfo {
@@ -696,6 +910,18 @@ struct Made<'f, T: Target> {
     next: u32,
     pins: IndexMap<u32, RegId>,
     values: IndexMap<RegId, u32>,
+    /// See [`convert`]'s `ssa_pins`: the mode, the block being converted, the
+    /// value each register holds in it, the values the entry block starts
+    /// with, the registers the function names, and the first read refused.
+    ssa_pins: bool,
+    block: usize,
+    current: IndexMap<RegId, u32>,
+    inputs: IndexMap<RegId, u32>,
+    named: Vec<RegId>,
+    crossed: Option<String>,
+    /// Whether an instruction after the one being converted reads the flags
+    /// register by name before another writes it (`flags_read_after`).
+    flags_wanted: bool,
     origin: Vec<(usize, usize)>,
     /// The symbols the function's operands name, in order of first use: the
     /// number a symbol's `Imm` carries as its address.
@@ -706,6 +932,26 @@ struct Made<'f, T: Target> {
 }
 
 impl<T: Target> Made<'_, T> {
+    /// `PHI result, (value, predecessor)..` in the body's numbering: a virtual
+    /// register `v` is the value `v + 1`, a predecessor its block's position.
+    fn phi(
+        &self,
+        phi: &crate::mfunc::Phi,
+    ) -> Result<llrm_codegen::model::lir::Phi, String> {
+        let value = |register: &Reg| match register {
+            Reg::Virt(v) => Ok(v + 1),
+            Reg::Phys(_) => Err(format!("{}: a phi of a physical register", self.function.name)),
+        };
+        Ok(llrm_codegen::model::lir::Phi {
+            result: value(&phi.result)?,
+            incoming: phi
+                .incoming
+                .iter()
+                .map(|(pred, from)| Ok((*pred as i64, value(from)?)))
+                .collect::<Result<_, String>>()?,
+        })
+    }
+
     /// The value of a physical register: one for the whole function, so
     /// greedy's liveness follows it across blocks and through every rewrite.
     fn pinned(
@@ -724,6 +970,55 @@ impl<T: Target> Made<'_, T> {
                 },
             );
         (value, self.registers.bytes(register).map_or(1, |bytes| bytes as u32))
+    }
+
+    /// The value a read of `register` sees (see [`convert`]'s `ssa_pins`).
+    fn pinned_read(
+        &mut self,
+        register: RegId,
+    ) -> (u32, u32) {
+        if !self.ssa_pins {
+            return self.pinned(register);
+        }
+        let width = self.registers.bytes(register).map_or(1, |bytes| bytes as u32);
+        if let Some(value) = self.current.get(&register) {
+            return (*value, width);
+        }
+        if self.block != 0 && self.crossed.is_none() {
+            self.crossed = Some(format!(
+                "{}: physical register {} is read in block {} without a write in it",
+                self.function.name,
+                register.index(),
+                self.block
+            ));
+        }
+        let value = self.fresh(register);
+        self.inputs.insert(register, value);
+        self.current.insert(register, value);
+        (value, width)
+    }
+
+    /// The value a write of `register` makes (see [`convert`]'s `ssa_pins`).
+    fn pinned_write(
+        &mut self,
+        register: RegId,
+    ) -> (u32, u32) {
+        if !self.ssa_pins {
+            return self.pinned(register);
+        }
+        let value = self.fresh(register);
+        self.current.insert(register, value);
+        (value, self.registers.bytes(register).map_or(1, |bytes| bytes as u32))
+    }
+
+    fn fresh(
+        &mut self,
+        register: RegId,
+    ) -> u32 {
+        let value = self.next;
+        self.next += 1;
+        self.pins.insert(value, register);
+        value
     }
 
     /// Whether `next` reads no virtual register `first` sets: one instruction
@@ -843,7 +1138,11 @@ impl<T: Target> Made<'_, T> {
         let (mut target, mut symbol) = (None, false);
         // Reads before writes: a physical register read and rewritten by one
         // instruction is read as it was.
-        for operand in &inst.operands {
+        // where each operand stands in `sources` / `dests`, for the pairs it ties
+        let mut source_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
+        let mut dest_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
+        for (index, operand) in inst.operands.iter().enumerate() {
+            let before = sources.len();
             match operand {
                 Operand::Use(Reg::Virt(v)) => {
                     let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
@@ -854,7 +1153,7 @@ impl<T: Target> Made<'_, T> {
                     if T::reserved(T::root(*register)) {
                         continue;
                     }
-                    let value = self.pinned(*register).0;
+                    let value = self.pinned_read(*register).0;
                     let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
                     let held = Held { value, width, offset: 0 };
                     uses.push(value);
@@ -887,8 +1186,12 @@ impl<T: Target> Made<'_, T> {
                 }
                 Operand::Def(_) => {}
             }
+            if sources.len() > before {
+                source_at[index] = Some(before);
+            }
         }
-        for operand in &inst.operands {
+        for (index, operand) in inst.operands.iter().enumerate() {
+            let before = dests.len();
             match operand {
                 Operand::Def(Reg::Virt(v)) => {
                     let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
@@ -897,15 +1200,28 @@ impl<T: Target> Made<'_, T> {
                 }
                 Operand::Def(Reg::Phys(register)) => {
                     if T::reserved(T::root(*register)) {
+                        // The stack pointer has no value to hold, but a write
+                        // of it is named so `boundary`
+                        // sees it
+                        // (`modifiesRegister(SP)`): without it `sub sp, sp,
+                        // #16` moved below the stores
+                        // it makes room for.
+                        if self.registers.is_stack(*register) {
+                            let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
+                            dests.push(Loc::Reg(llrm_lir::Reg { register: *register, width }));
+                        }
                         continue;
                     }
-                    let (value, width) = self.pinned(*register);
+                    let (value, width) = self.pinned_write(*register);
                     let held = Held { value, width, offset: 0 };
                     defines.push(value);
                     delivers.push((held, *register));
                     dests.push(Loc::Held(held));
                 }
                 _ => {}
+            }
+            if dests.len() > before {
+                dest_at[index] = Some(before);
             }
         }
         // An immediate or a frame cell is as wide as the value it meets.
@@ -945,7 +1261,26 @@ impl<T: Target> Made<'_, T> {
             Kind::Copy => COPY,
             Kind::Op(name) => name,
         };
-        let what = Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) };
+        // `implicit-def $ccr`: the flags a later instruction of the block reads by
+        // name (`CCR_SAVE`) are the value this one leaves. Last in the lists, so
+        // the operands before it keep their numbers.
+        if self.ssa_pins
+            && self.flags_wanted
+            && inst.sets_flags
+            && let Some(flags) = T::flags_register()
+        {
+            let (value, width) = self.pinned_write(flags);
+            let held = Held { value, width, offset: 0 };
+            defines.push(value);
+            delivers.push((held, flags));
+            dests.push(Loc::Held(held));
+        }
+        // the machine instruction's own tied operands, in the lists' numbering: a
+        // dropped operand (a reserved register) moves the ones after it
+        let tied = (!inst.ties.is_empty()).then(|| {
+            inst.ties.iter().filter_map(|&(def, used)| Some((source_at[used]?, dest_at[def]?))).collect::<Vec<_>>()
+        });
+        let what = Semantics { name: Some(name.into()), dests, sources, target, tied, ..Semantics::new(op) };
         let mut insn = Insn::new(at, Some((at, at + 1)), Some(what), defines, uses);
         insn.requires = requires;
         insn.delivers = delivers;
@@ -960,6 +1295,17 @@ impl<T: Target> Made<'_, T> {
             // The call writes each clobbered register it names: a value that
             // lives across it cannot be the register, and a read after it
             // sees what the call left.
+            if self.ssa_pins {
+                let written: Vec<RegId> = physical::<T>(inst).1.collect();
+                for register in self.named.clone() {
+                    let clobbered =
+                        insn.clobbers.contains(&register) || insn.clobbers.contains(&self.registers.root(register));
+                    if clobbered && !written.contains(&register) {
+                        let value = self.pinned_write(register).0;
+                        insn.defines.push(value);
+                    }
+                }
+            }
             for (register, value) in &self.values {
                 let clobbered =
                     insn.clobbers.contains(register) || insn.clobbers.contains(&self.registers.root(*register));
@@ -1129,7 +1475,7 @@ fn operands_in<'a>(
     one: &Insn,
 ) -> Vec<(u32, &'a OperandInfo)> {
     OPERAND_VISITS.with(|visits| visits.set(visits.get() + 1));
-    let Some((name, infos)) = infos.get((one.at / 2) as usize) else { return Vec::new() };
+    let Some((name, infos)) = infos.get(ordinal_of(one)) else { return Vec::new() };
     let Some(what) = one.what.as_ref() else { return Vec::new() };
     if what.name.as_deref() != Some(name) {
         return Vec::new();
@@ -1544,6 +1890,11 @@ fn buffer_loads<T: Target>(
 /// load of it follows that call in its block with no call between, so a value
 /// loaded is the object's content wherever the value lives, and a load made
 /// again where it is read gives the same value.
+///
+/// Worse row (owner greedy-subreg, exit 2026-11-28): z80 `float_in_memory_loop`
+/// -Os 326 -> 332 B. A remade load splits one value into two pieces and the
+/// allocation after it shifts; no single defect.
+/// z80 `fcmp_all` -O2 23661 -> 23670 B, clocks unpriced.
 fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
     let mut found = BTreeSet::new();
     let mut frames: BTreeSet<i32> = BTreeSet::new();
@@ -1763,6 +2114,15 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         self.operands_of(one).into_iter().filter_map(|(value, info)| Some((value, info.hint?))).collect()
     }
 
+    fn copy_register_cost(
+        &self,
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        T::copy_register_cost(to, from, size)
+    }
+
     fn operand_orders(
         &self,
         one: &Insn,
@@ -1839,7 +2199,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
             out.rematerialized = false;
             return Some(Arc::new(out));
         }
-        let (name, at) = self.foldable.get((one.at / 2) as usize).copied().flatten()?;
+        let (name, at) = self.foldable.get(ordinal_of(one)).copied().flatten()?;
         if what.name.as_deref() != Some(name) || one.group.is_some() {
             return None;
         }
@@ -2134,7 +2494,7 @@ fn substitute<'a, T: Target>(
                     folds.push((stand_in, slot_of(cell)));
                     Operand::Use(stand_in)
                 }
-                _ => return Err("a use that is not a register".into()),
+                other => return Err(format!("a use that is not a register: {:?} reads {other:?}", source.kind)),
             },
             Operand::Use(Reg::Phys(r)) => {
                 if !T::reserved(T::root(r)) {
@@ -2150,6 +2510,160 @@ fn substitute<'a, T: Target>(
         };
     }
     Ok(made)
+}
+
+/// A shared machine stage's result as a machine function again: the stage ran
+/// on [`to_ssa_lir`]'s body and may have removed instructions, moved them
+/// between blocks and renamed the values they read, which is all it is given
+/// back as. An instruction it made, a block it added and a value it created
+/// are refused: a stage hosted here must not make them (each later stage
+/// extends this when it needs to).
+pub fn from_ssa<T: Target>(
+    original: &MFunction<T::Class>,
+    converted: &Converted<T>,
+    body: &LirBody,
+) -> Result<MFunction<T::Class>, String> {
+    let name = &original.name;
+    if body.blocks.len() != original.blocks.len() {
+        return Err(format!("{name}: a stage changed the number of blocks"));
+    }
+    let known = original.classes.len() as u32;
+    // what each instruction read before the stage, by its place
+    let before: llrm_support::hash::HashMap<i64, &Insn> =
+        converted.body.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (ordinal_of(insn) as i64, &**insn)).collect();
+    // a value another replaces, found from the readers the stage rewrote
+    let mut renamed: IndexMap<u32, u32> = IndexMap::default();
+    let mut note = |from: u32, to: u32| -> Result<(), String> {
+        match renamed.insert(from, to) {
+            Some(held) if held != to => Err(format!("{name}: a stage renamed value {from} to {held} and to {to}")),
+            _ => Ok(()),
+        }
+    };
+    for block in body.blocks.iter() {
+        for insn in block.insns.iter() {
+            let Some(old) = before.get(&(ordinal_of(insn) as i64)) else {
+                return Err(format!("{name}: a stage made an instruction"));
+            };
+            if old.uses.len() != insn.uses.len() {
+                return Err(format!("{name}: a stage changed what an instruction reads"));
+            }
+            for (a, b) in old.uses.iter().zip(&insn.uses) {
+                if a != b {
+                    note(*a, *b)?;
+                }
+            }
+        }
+    }
+    let rename = |value: u32| *renamed.get(&value).unwrap_or(&value);
+    let register = |value: u32| -> Result<Reg, String> {
+        match converted.body.pins.get(&value) {
+            Some(register) => Ok(Reg::Phys(*register)),
+            None if value >= 1 && value <= known => Ok(Reg::Virt(value - 1)),
+            None => Err(format!("{name}: a stage made value {value}")),
+        }
+    };
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    for (at, lir) in body.blocks.iter().enumerate() {
+        if lir.at != at as i64 {
+            return Err(format!("{name}: a stage reordered the blocks"));
+        }
+        if !converted.reachable[at] {
+            blocks.push(original.blocks[at].clone());
+            continue;
+        }
+        let mut insts = Vec::with_capacity(lir.insns.len());
+        for insn in lir.insns.iter() {
+            // a bundle is two instructions
+            let places =
+                if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE)) { 2 } else { 1 };
+            for k in 0..places {
+                let (b, i) = *converted
+                    .origin
+                    .get(ordinal_of(insn) + k)
+                    .ok_or_else(|| format!("{name}: an instruction with no origin"))?;
+                let mut inst = original.blocks[b].insts[i].clone();
+                for operand in &mut inst.operands {
+                    if let Operand::Use(Reg::Virt(v)) = operand {
+                        *v = rename(*v + 1) - 1;
+                    }
+                }
+                insts.push(inst);
+            }
+        }
+        let mut phis = Vec::with_capacity(lir.phis.len());
+        for phi in lir.phis.iter() {
+            phis.push(crate::mfunc::Phi {
+                result: register(phi.result)?,
+                incoming: phi
+                    .incoming
+                    .iter()
+                    .map(|(pred, value)| Ok((*pred as usize, register(rename(*value))?)))
+                    .collect::<Result<_, String>>()?,
+            });
+        }
+        blocks.push(Block { id: original.blocks[at].id, insts, phis });
+    }
+    let mut function = original.clone();
+    function.blocks = blocks;
+    Ok(function)
+}
+
+/// A stage of the shared flow run on `function` in SSA form
+/// ([`LIRTransform`](llrm_codegen::model::passes::LIRTransform)), and the
+/// result back as a machine function. `stage` is made with the oracle that
+/// holds the register classes: a value may stand for another only where the
+/// target's classes of the two meet, and then is held to that class
+/// (`constrainRegClass`).
+pub fn host_ssa<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+    stage: impl FnOnce(llrm_codegen::backend::precse::Constrain) -> Box<dyn llrm_codegen::model::passes::LIRTransform>,
+) -> Result<MFunction<T::Class>, String>
+where
+    T::Class: 'static,
+{
+    let converted = to_ssa_lir::<T>(function, registers)?;
+    let known = function.classes.len() as u32;
+    let classes = Rc::new(RefCell::new(function.classes.clone()));
+    let oracle: llrm_codegen::backend::precse::Constrain = {
+        let classes = Rc::clone(&classes);
+        Rc::new(move |from: u32, to: u32| {
+            // a pinned value has no class to constrain
+            if from == 0 || to == 0 || from > known || to > known {
+                return true;
+            }
+            let mut held = classes.borrow_mut();
+            match T::meet(held[from as usize - 1], held[to as usize - 1]) {
+                Some(both) => {
+                    held[to as usize - 1] = both;
+                    true
+                }
+                None => false,
+            }
+        })
+    };
+    let mut stage = stage(oracle);
+    // The shared stages read an instruction's effects (the flags it sets, the
+    // memory it touches) off the instruction; the spike target states them
+    // here, as the pre-RA scheduler's input has them.
+    let _lanes = llrm_codegen::backend::lanes::enter(registers);
+    let input = converted.with_effects(function, registers);
+    let body = stage.transform(input)?;
+    let mut out = from_ssa(function, &converted, &body)?;
+    out.classes = classes.borrow().clone();
+    Ok(out)
+}
+
+/// A copy `PhiElimination` or `TwoAddress` made: a move of a value into a
+/// value, named `mov`, that stands beside an instruction and claims none of
+/// its bytes. A move of a literal is a definition made again, not this.
+fn is_shared_copy(insn: &Insn) -> bool {
+    insn.what.as_ref().is_some_and(|what| {
+        what.op == Operation::Move
+            && what.name.as_deref() == Some("mov")
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+    }) && insn.covers.is_some_and(|(from, to)| from == to)
 }
 
 /// What greedy's edited function is as a machine function again.
@@ -2186,7 +2700,7 @@ pub fn from_lir<T: Target>(
         *numbers.entry(value).or_insert_with(|| {
             let mut root = value;
             while root > known {
-                match decided.parents.get(&root) {
+                match decided.parents.get(&root).or_else(|| converted.derived.get(&root)) {
                     Some(parent) => root = *parent,
                     None => break,
                 }
@@ -2239,7 +2753,7 @@ pub fn from_lir<T: Target>(
     let mut definitions: IndexMap<String, (usize, usize)> = IndexMap::default();
     for block in &converted.body.blocks {
         for insn in block.insns.iter() {
-            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
+            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get(ordinal_of(insn))) else {
                 continue;
             };
             // A definition the target marks rematerializable may read a value
@@ -2253,8 +2767,24 @@ pub fn from_lir<T: Target>(
     }
     let mut slots: Vec<(i32, T::Class)> = Vec::new();
     let mut blocks = Vec::with_capacity(edited.blocks.len());
-    for (at, block) in edited.blocks.iter().enumerate() {
-        if !converted.reachable[at] {
+    // A block a shared phase made on an edge is labelled above every block of
+    // the function (`(entry + 1) << 32`, `PhiElimination`) and takes the next
+    // block id; the blocks stay in the layout order the body gives.
+    let floor = (edited.entry + 1) << 32;
+    let mut fresh = original.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0);
+    let mut ids: IndexMap<i64, u32> = IndexMap::default();
+    for block in &edited.blocks {
+        let id = if block.at >= floor {
+            fresh += 1;
+            fresh - 1
+        } else {
+            original.blocks.get(block.at as usize).ok_or("a block from nowhere")?.id
+        };
+        ids.insert(block.at, id);
+    }
+    for block in edited.blocks.iter() {
+        let at = block.at as usize;
+        if block.at < floor && !converted.reachable[at] {
             blocks.push(original.blocks[at].clone());
             continue;
         }
@@ -2276,7 +2806,7 @@ pub fn from_lir<T: Target>(
                     // A zero stored from the zero register
                     // (`fold_memory_operand`).
                     let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
-                    insts.push(made);
+                    place_spill(&mut insts, made)?;
                     if !slots.iter().any(|(one, _)| *one == slot) {
                         slots.push((slot, T::any()));
                     }
@@ -2316,7 +2846,7 @@ pub fn from_lir<T: Target>(
                 } else {
                     T::spill_load(class, register, slot)
                 };
-                insts.push(made.ok_or("the target states no spill form")?);
+                place_spill(&mut insts, made.ok_or("the target states no spill form")?)?;
                 // a lane store says nothing of the slot's size
                 if lane.is_none() && !slots.iter().any(|(one, _)| *one == slot) {
                     slots.push((slot, class));
@@ -2325,7 +2855,7 @@ pub fn from_lir<T: Target>(
             }
             if what.name.as_deref() == Some(BUNDLE) {
                 let (mut dests, mut sources) = (what.dests.iter(), what.sources.iter());
-                for ordinal in [(insn.at / 2) as usize, (insn.at / 2) as usize + 1] {
+                for ordinal in [ordinal_of(insn), ordinal_of(insn) + 1] {
                     let (from, inst) = *converted.origin.get(ordinal).ok_or("a bundle from nowhere")?;
                     let source = &original.blocks[from].insts[inst];
                     let mut folds = Vec::new();
@@ -2342,9 +2872,43 @@ pub fn from_lir<T: Target>(
                 }
                 continue;
             }
-            let (mut from, mut inst) =
-                *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
-            let name = what.name.as_deref();
+            // what is left where a jump to the next block was removed
+            if what.op == Operation::Nothing
+                && what.name.as_deref().is_none_or(str::is_empty)
+                && insn.defines.is_empty()
+                && insn.uses.is_empty()
+            {
+                continue;
+            }
+            // a jump `PhiElimination` made, onto an edge's block or where a
+            // branch fell through
+            if what.op == Operation::Jump
+                && what.name.as_deref() == Some("jmp")
+                && !what.indirect
+                && insn.covers.is_some_and(|(from, to)| from == to)
+            {
+                let target = what.target.and_then(|label| ids.get(&label)).ok_or("a jump to a block from nowhere")?;
+                insts.push(T::branch_to(*target).ok_or("the target has no jump to put on an edge")?);
+                continue;
+            }
+            // a literal made on an edge stands at the edge's label: it is
+            // found by what it sets, as a rematerialized one is
+            let (mut from, mut inst) = match converted.origin.get(ordinal_of(insn)).filter(|_| insn.at < floor) {
+                Some(&place) => place,
+                None => *definitions.get(&format!("{:?}{:?}", what.name, what.sources)).ok_or_else(|| {
+                    format!(
+                        "an instruction from nowhere: at {} of {} origins, {what:?}",
+                        insn.at,
+                        converted.origin.len()
+                    )
+                })?,
+            };
+            // `PhiElimination` and `TwoAddress` name their copies `mov`, and
+            // place them beside an instruction claiming none of its
+            // bytes: copies, as a split's are. A move of a literal
+            // is a definition made again, found below as a
+            // rematerialized one is.
+            let name = if is_shared_copy(insn) { Some(COPY) } else { what.name.as_deref() };
             let agrees = match original.blocks[from].insts[inst].kind {
                 Kind::Copy => name == Some(COPY),
                 Kind::Op(op) => name == Some(op),
@@ -2378,7 +2942,10 @@ pub fn from_lir<T: Target>(
             if name == Some(COPY) && (source.kind != Kind::Copy || made_by_split) {
                 let (Some(to), Some(from)) = (held(&what.dests).first().copied(), held(&what.sources).first().copied())
                 else {
-                    return Err("a copy that does not move a value".into());
+                    return Err(format!(
+                        "a copy that does not move a value: {what:?} covers {:?} of {:?}",
+                        insn.covers, source.kind
+                    ));
                 };
                 insts.push(Inst::new(
                     Kind::Copy,
@@ -2394,16 +2961,33 @@ pub fn from_lir<T: Target>(
                 &mut sources,
                 &mut |held| lane_or_number(held, &mut classes, &mut number),
                 &mut folds,
-            )?;
+            )
+            .map_err(|why| {
+                format!("{why}: {what:?} uses {:?} defines {:?} of {:?}", insn.uses, insn.defines, source.operands)
+            })?;
             for (stand_in, slot) in folds {
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
             if insn.rematerialized && T::remade_sets_no_flags() {
+                made.remade_sets_flags = made.sets_flags;
                 made.sets_flags = false;
+            }
+            // a branch `PhiElimination` pointed at the block of an edge
+            if let (Some(label), false) = (what.target, what.indirect)
+                && let Some(&id) = ids.get(&label)
+            {
+                let named: Vec<&mut u32> = made
+                    .operands
+                    .iter_mut()
+                    .filter_map(|operand| if let Operand::Block(one) = operand { Some(one) } else { None })
+                    .collect();
+                if let Ok([one]) = <[&mut u32; 1]>::try_from(named) {
+                    *one = id;
+                }
             }
             insts.push(made);
         }
-        blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });
+        blocks.push(Block { id: ids[&block.at], insts, phis: Vec::new() });
     }
     if let Some(failed) = lane_failed.take() {
         return Err(failed);
@@ -2429,8 +3013,41 @@ pub fn from_lir<T: Target>(
             one.or_else(|| T::candidates(classes[v]).first().copied()).ok_or("a register with no candidates")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let function = MFunction { blocks, classes, ..original.clone() };
+    let mut function = MFunction { blocks, classes, ..original.clone() };
+    // an edge's block takes the odds of the edge it stands on
+    for edge in edited.blocks.iter().filter(|block| block.at >= floor) {
+        let Some(&to) = edge.succ.iter().next().and_then(|label| ids.get(label)) else { continue };
+        if let Some(from) = edited.blocks.iter().find(|block| block.succ.contains(&edge.at)) {
+            function.split_odds(ids[&from.at], to, ids[&edge.at]);
+        }
+    }
     Ok(Rewritten { function, assignment: Assignment(assignment), slots })
+}
+
+/// The pressure sets of a function: each distinct register list a class of
+/// `classes` may take, sorted. The pin counts register units; classes over the
+/// same registers (Dr8, Dr16 and Dr32) are one set, not one each.
+pub fn pressure_sets<T: Target>(classes: &[T::Class]) -> Vec<Vec<RegId>> {
+    let mut sets: Vec<Vec<RegId>> = Vec::new();
+    for class in classes {
+        let mut registers = T::candidates(*class);
+        registers.sort();
+        if !sets.contains(&registers) {
+            sets.push(registers);
+        }
+    }
+    sets
+}
+
+/// The indexes in `sets` a value of `class` counts against: every set that
+/// shares a register with it (an Xr32 value lies in the data, the address and
+/// the whole set).
+pub fn sets_of<T: Target>(
+    sets: &[Vec<RegId>],
+    class: T::Class,
+) -> Vec<usize> {
+    let own = T::candidates(class);
+    (0..sets.len()).filter(|at| sets[*at].iter().any(|one| own.contains(one))).collect()
 }
 
 /// `function` allocated by greedy: converted, its copies joined by the
@@ -2446,11 +3063,29 @@ pub fn allocate_greedy<T: Target>(
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    allocate_greedy_after::<T>(function, registers, size, None)
+}
+
+/// The shared phases that stand between the SSA function and the allocator
+/// (`PhiElimination`, `TwoAddress`): the body in, the body out.
+pub type Prelude<'a> = &'a dyn Fn(LirBody) -> Result<LirBody, String>;
+
+/// [`allocate_greedy`], where `prelude` takes the function still in SSA form
+/// ([`to_ssa_lir`]) to the body greedy reads, in place of the private phi
+/// elimination and two-address passes the caller then leaves out. The copies
+/// it makes stand on their neighbour's `at` and claim no bytes
+/// (`covers == (x, x)`), which `from_lir` rebuilds as plain copies.
+pub fn allocate_greedy_after<T: Target>(
+    function: &mut MFunction<T::Class>,
+    registers: Regs,
+    size: bool,
+    prelude: Option<Prelude>,
+) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let name = function.name.clone();
-    let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
+    let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies(), prelude);
     let result = match first {
         Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
-            let second = allocate_greedy_pinned::<T>(function, registers, size, false);
+            let second = allocate_greedy_pinned::<T>(function, registers, size, false, prelude);
             if second.is_ok() {
                 record_refusal(&name, &why, true);
             }
@@ -2499,9 +3134,20 @@ fn allocate_greedy_pinned<T: Target>(
     registers: Regs,
     size: bool,
     joins_pinned: bool,
+    prelude: Option<Prelude>,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
-    let mut converted = to_lir::<T>(function, registers)?;
+    let mut converted = match prelude {
+        None => to_lir::<T>(function, registers)?,
+        Some(prelude) => {
+            let mut converted = to_ssa_lir::<T>(function, registers)?;
+            let _lanes = llrm_codegen::backend::lanes::enter(registers);
+            let input = converted.with_effects(function, registers);
+            converted.body = prelude(input)?;
+            converted.adopt();
+            converted
+        }
+    };
     if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce_pinned(registers, size, joins_pinned);
     }
@@ -2587,5 +3233,133 @@ mod palette_tests {
         assert_eq!(distinct.len(), 2, "one set per distinct order");
         assert_eq!(palettes[&1].iter().copied().collect::<Vec<_>>(), first);
         assert_eq!(palettes[&100].iter().copied().collect::<Vec<_>>(), second);
+    }
+}
+
+/// A spill goes in before the terminators the block has so far. A def that
+/// shares a bundle with its terminator (`LDI` and the `BEQ` that reads its
+/// flags) is one instruction to greedy, which stores it after the bundle; the
+/// pin stores after the def inside the bundle, before the terminator
+/// (`InlineSpiller::insertSpill`, `std::next(MI)`; SplitKit
+/// `findInsertLocation` likewise stays before the first terminator).
+///
+/// DEVIATE (row S2-BUNDLE-SPILL): an LIR bundle has no position inside it, so
+/// the store is moved here instead of made inside. Exit: 2026-12-01, or when
+/// bundles carry inside positions.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1277-L1299>
+fn place_spill(
+    insts: &mut Vec<Inst>,
+    spill: Inst,
+) -> Result<(), String> {
+    let at = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+    if at < insts.len() && spill.sets_flags && insts[at..].iter().any(|inst| inst.reads_flags) {
+        return Err("a spill between a flag setter and the terminator that reads the flags".into());
+    }
+    insts.insert(at, spill);
+    Ok(())
+}
+
+/// `form` with its values the body's: the k-th def operand of `inst` is the
+/// k-th value `one` defines, the k-th use operand its k-th use (a register the
+/// target reserves is no value). The form names what the target's selector
+/// chose (the scheduler's model reads it); the body's values are what its
+/// graph and pressure read. None where the counts differ or a value has no
+/// operand.
+fn in_body_values<T: Target>(
+    form: &Semantics,
+    inst: &Inst,
+    one: &Insn,
+) -> Option<Semantics> {
+    // The form names the registers `form_operands` had; the body's values
+    // stand at the same positions in the instruction as it is now.
+    let registers = |operands: &[Operand]| {
+        let (mut defs, mut uses) = (Vec::new(), Vec::new());
+        for operand in operands {
+            let (list, register) = match operand {
+                Operand::Def(register) => (&mut defs, register),
+                Operand::Use(register) => (&mut uses, register),
+                _ => continue,
+            };
+            match register {
+                Reg::Virt(n) => list.push(*n),
+                Reg::Phys(register) if !T::reserved(T::root(*register)) => list.push(u32::MAX),
+                Reg::Phys(_) => {}
+            }
+        }
+        (defs, uses)
+    };
+    let ((defs, uses), (now_defs, now_uses)) = (registers(&inst.form_operands), registers(&inst.operands));
+    if defs.len() != one.defines.len()
+        || uses.len() != one.uses.len()
+        || now_defs.len() != defs.len()
+        || now_uses.len() != uses.len()
+    {
+        return None;
+    }
+    renumbered(form, defs, uses, &one.defines, &one.uses)
+}
+
+/// `form` with each register number `defs`/`uses` list (as the instruction's
+/// operands named them, `u32::MAX` for a physical one) standing for the value
+/// at the same position of `defines`/`uses`.
+fn renumbered(
+    form: &Semantics,
+    defs: Vec<u32>,
+    uses: Vec<u32>,
+    defines: &[u32],
+    reads: &[u32],
+) -> Option<Semantics> {
+    let numbered = |numbers: Vec<u32>, values: &[u32]| -> std::collections::HashMap<u32, u32> {
+        numbers.into_iter().zip(values.iter().copied()).filter(|(number, _)| *number != u32::MAX).collect()
+    };
+    let (def_map, use_map) = (numbered(defs, defines), numbered(uses, reads));
+    let held = |held: &Held, map: &std::collections::HashMap<u32, u32>| -> Option<Held> {
+        Some(Held { value: *map.get(&held.value)?, ..*held })
+    };
+    let remap = |loc: &Loc, map: &std::collections::HashMap<u32, u32>| -> Option<Loc> {
+        Some(match loc {
+            Loc::Held(each) => Loc::Held(held(each, map)?),
+            Loc::Mem(cell) => {
+                let mut cell = cell.clone();
+                for slot in [&mut cell.base, &mut cell.index, &mut cell.selector] {
+                    if let Some(each) = slot.as_ref() {
+                        *slot = Some(held(each, map)?);
+                    }
+                }
+                Loc::Mem(cell)
+            }
+            other => other.clone(),
+        })
+    };
+    let dests = form.dests.iter().map(|loc| remap(loc, &def_map)).collect::<Option<Vec<_>>>()?;
+    let sources = form.sources.iter().map(|loc| remap(loc, &use_map)).collect::<Option<Vec<_>>>()?;
+    Some(form.with_operands(form.name.clone(), dests, sources))
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4, offset: 0 })
+    }
+
+    /// A pass rewrote a read after the form was made (`fadd v3, v1, v2` became
+    /// `fadd v3, v1, v9`): the form still names `v2`, and the instruction was
+    /// left without it, so the scheduler priced `FADDSrr` and `FDIVSrr` of
+    /// arm64 `nbody_single` -O3 by the default latency (14 of its 53 float
+    /// ops). The form's numbers are those of the operands it was made from.
+    #[test]
+    fn a_read_renamed_after_the_form_was_made_keeps_its_form() {
+        let form = Semantics {
+            dests: vec![held(3)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        // Operands when the form was made: defs [3], uses [1, 2]; the body's
+        // values are one more than the registers, the read now being v9's.
+        let got = renumbered(&form, vec![3], vec![1, 2], &[4], &[2, 10]).expect("the form stays");
+        assert_eq!(got.dests, vec![held(4)]);
+        assert_eq!(got.sources, vec![held(2), held(10)]);
     }
 }

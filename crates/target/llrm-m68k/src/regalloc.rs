@@ -65,6 +65,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
 
     type Class = Class;
 
+    fn schedules_before_allocation() -> bool {
+        llrm_support::env_flag!("LLRM_M68K_PRESCHED")
+    }
+
     fn meet(
         one: Class,
         other: Class,
@@ -153,8 +157,16 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         REGISTER_INFO.root(register)
     }
 
+    fn branch_to(block: u32) -> Option<llrm_spike_mf::Inst> {
+        Some(<Self as llrm_spike_mf::sink::Jump>::jump(block))
+    }
+
     fn reserved(root: RegId) -> bool {
         root == reg::SP || root == reg::A6
+    }
+
+    fn flags_register() -> Option<RegId> {
+        Some(reg::CCR)
     }
 
     fn hoist_window() -> usize {
@@ -247,32 +259,55 @@ pub fn allocate_greedy(
     global_copies: bool,
     loop_carried_first: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    allocate_greedy_after(
+        function,
+        size,
+        address_first,
+        rematerialize_arguments,
+        global_copies,
+        loop_carried_first,
+        None,
+    )
+}
+
+/// [`allocate_greedy`], the function still in SSA form and `prelude` the shared
+/// `PhiElimination` and `TwoAddress` ([`shared_prelude`]).
+pub fn allocate_greedy_after(
+    function: &mut MFunction,
+    size: bool,
+    address_first: bool,
+    rematerialize_arguments: bool,
+    global_copies: bool,
+    loop_carried_first: bool,
+    prelude: Option<llrm_spike_mf::tolir::Prelude>,
+) -> Result<(Assignment, Vec<(i32, Class)>), String> {
     // each option is a type parameter: the allocator reads them as constants
     fn run<const A: bool, const R: bool, const G: bool, const L: bool>(
         function: &mut MFunction,
         regs: llrm_lir::registers::Regs,
         size: bool,
+        prelude: Option<llrm_spike_mf::tolir::Prelude>,
     ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
-        llrm_spike_mf::tolir::allocate_greedy::<Registers<A, R, G, L>>(function, regs, size)
+        llrm_spike_mf::tolir::allocate_greedy_after::<Registers<A, R, G, L>>(function, regs, size, prelude)
     }
     let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
     match (address_first, rematerialize_arguments, global_copies, loop_carried_first) {
-        (true, true, true, true) => run::<true, true, true, true>(function, regs, size),
-        (true, true, true, false) => run::<true, true, true, false>(function, regs, size),
-        (true, true, false, true) => run::<true, true, false, true>(function, regs, size),
-        (true, true, false, false) => run::<true, true, false, false>(function, regs, size),
-        (true, false, true, true) => run::<true, false, true, true>(function, regs, size),
-        (true, false, true, false) => run::<true, false, true, false>(function, regs, size),
-        (true, false, false, true) => run::<true, false, false, true>(function, regs, size),
-        (true, false, false, false) => run::<true, false, false, false>(function, regs, size),
-        (false, true, true, true) => run::<false, true, true, true>(function, regs, size),
-        (false, true, true, false) => run::<false, true, true, false>(function, regs, size),
-        (false, true, false, true) => run::<false, true, false, true>(function, regs, size),
-        (false, true, false, false) => run::<false, true, false, false>(function, regs, size),
-        (false, false, true, true) => run::<false, false, true, true>(function, regs, size),
-        (false, false, true, false) => run::<false, false, true, false>(function, regs, size),
-        (false, false, false, true) => run::<false, false, false, true>(function, regs, size),
-        (false, false, false, false) => run::<false, false, false, false>(function, regs, size),
+        (true, true, true, true) => run::<true, true, true, true>(function, regs, size, prelude),
+        (true, true, true, false) => run::<true, true, true, false>(function, regs, size, prelude),
+        (true, true, false, true) => run::<true, true, false, true>(function, regs, size, prelude),
+        (true, true, false, false) => run::<true, true, false, false>(function, regs, size, prelude),
+        (true, false, true, true) => run::<true, false, true, true>(function, regs, size, prelude),
+        (true, false, true, false) => run::<true, false, true, false>(function, regs, size, prelude),
+        (true, false, false, true) => run::<true, false, false, true>(function, regs, size, prelude),
+        (true, false, false, false) => run::<true, false, false, false>(function, regs, size, prelude),
+        (false, true, true, true) => run::<false, true, true, true>(function, regs, size, prelude),
+        (false, true, true, false) => run::<false, true, true, false>(function, regs, size, prelude),
+        (false, true, false, true) => run::<false, true, false, true>(function, regs, size, prelude),
+        (false, true, false, false) => run::<false, true, false, false>(function, regs, size, prelude),
+        (false, false, true, true) => run::<false, false, true, true>(function, regs, size, prelude),
+        (false, false, true, false) => run::<false, false, true, false>(function, regs, size, prelude),
+        (false, false, false, true) => run::<false, false, false, true>(function, regs, size, prelude),
+        (false, false, false, false) => run::<false, false, false, false>(function, regs, size, prelude),
     }
 }
 
@@ -292,6 +327,93 @@ const CONDITIONAL: [(&str, &str); 7] = [
     ("Bge8", "Blt8"),
     ("Bgt8", "Ble8"),
 ];
+
+/// A shared machine stage over the m68k function, still in SSA form (before phi
+/// elimination): the function through `to_ssa_lir`, the stage and `from_ssa`.
+/// `stage` is made with the register-class oracle (`constrainRegClass`).
+pub fn shared_stage(
+    function: &MFunction,
+    stage: impl FnOnce(
+        std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses>,
+        llrm_codegen::backend::precse::Constrain,
+    ) -> Box<dyn llrm_codegen::model::passes::LIRTransform>,
+) -> Result<MFunction, String> {
+    // the classes read the target's description: once per thread, not per
+    // function
+    thread_local! {
+        static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
+            std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
+    }
+    let classes = CLASSES.with(std::rc::Rc::clone);
+    llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), |constrain| {
+        stage(classes, constrain)
+    })
+}
+
+/// The shared flow's `PhiElimination` and `TwoAddress`, in the order
+/// `flow::machine_with` runs them, as the body-to-body step
+/// [`allocate_greedy_after`] takes.
+pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_codegen::model::lir::LirBody, String> {
+    use llrm_codegen::model::passes::LIRTransform;
+    thread_local! {
+        static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
+            std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
+    }
+    let classes = CLASSES.with(std::rc::Rc::clone);
+    let profile = llrm_codegen::backend::cpu::tuned_for(&crate::target::M68k, "m68000", false)?;
+    let regs = llrm_lir::registers::Regs(llrm_target::Target::registers(&crate::target::M68k));
+    let segments = llrm_codegen::backend::target::Segments::of(
+        &llrm_target::Target::machine(&crate::target::M68k),
+        regs,
+        llrm_target::Target::operand_bytes(&crate::target::M68k),
+    );
+    let mut phases = llrm_codegen::flow::machine_with(
+        &Default::default(),
+        None,
+        None,
+        None,
+        false,
+        profile,
+        &segments,
+        &classes,
+        &llrm_codegen::backend::peep::Rules::NONE,
+        &llrm_target::Target::frame_registers(&crate::target::M68k),
+        llrm_codegen::backend::shadow::Selector::Old,
+        &[],
+    )?;
+    let mut body = body;
+    for phase in phases.iter_mut() {
+        if matches!(phase.class_name(), "MachineSink" | "PhiElimination" | "TwoAddress") {
+            body = phase.transform(body)?;
+        }
+    }
+    Ok(body)
+}
+
+/// The shared flow's `MachineCSE` over the m68k function.
+pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
+    shared_stage(function, |classes, constrain| {
+        Box::new(llrm_codegen::backend::precse::MachineCse { classes, keep_compare: false, constrain: Some(constrain) })
+    })
+}
+
+/// The shared flow's early `MachineLICM` over the m68k function; `size` is a
+/// size build.
+pub fn shared_licm(
+    function: &MFunction,
+    size: bool,
+) -> Result<MFunction, String> {
+    use llrm_target::Target as _;
+    let arch = crate::target::M68k;
+    let segments = llrm_codegen::backend::target::Segments::of(
+        &arch.machine(),
+        llrm_lir::registers::Regs(arch.registers()),
+        arch.operand_bytes(),
+    );
+    shared_stage(function, |classes, _| {
+        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size })
+    })
+}
 
 /// `BranchFolder` over the m68k function.
 pub fn branch_fold(

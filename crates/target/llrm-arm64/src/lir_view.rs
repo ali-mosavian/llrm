@@ -11,7 +11,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
-use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
+use crate::mc::inst::{FpConvert, Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
 use crate::regalloc::{Allocation, spill_access};
@@ -123,6 +123,10 @@ fn cheap_alu(op: &Op) -> bool {
 /// the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
 
+/// `fmov s, w`: the pin's cross-class `COPY`, which early `MachineLICM`
+/// hoists with the constant it reads.
+pub(crate) const FMOV_TO_FPR: &str = "FmovToFpr";
+
 fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
 }
@@ -216,6 +220,7 @@ fn view_with(
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
     let wide = crate::regalloc::wide_registers(function);
+    let wide_list: Vec<Reg> = wide.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
@@ -238,6 +243,9 @@ fn view_with(
                 // it is read (`reMaterializeTrivialDef`), not copied from one
                 // value.
                 Op::Copy { .. } if zero => (Kind::Op(ZERO), false, false, false),
+                Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }) => {
+                    (Kind::Op(FMOV_TO_FPR), false, false, false)
+                }
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
                     matches!(
@@ -311,6 +319,21 @@ fn view_with(
                     }
                 }
             });
+            // Register 31 is the zero register and the stack pointer by slot;
+            // a write of the stack pointer is named so, for the scheduler's
+            // boundary (`modifiesRegister(SP)`).
+            if let Op::I(inst) = &op
+                && crate::ldst_update::writes_sp(inst)
+            {
+                for operand in &mut operands {
+                    if matches!(
+                        operand,
+                        Operand::Def(LirReg::Phys(register)) if *register == crate::reg::XZR
+                    ) {
+                        *operand = Operand::Def(LirReg::Phys(crate::reg::SP));
+                    }
+                }
+            }
             if let Op::I(inst) = &op
                 && let Some(target) = label_of(inst).and_then(|label| labels.get(label))
             {
@@ -324,6 +347,10 @@ fn view_with(
                 operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
             let mut inst = LirInst::new(kind, operands);
+            if !fused && !zero && matches!(op, Op::I(_) | Op::Copy { .. } | Op::Imm { .. }) {
+                inst.form = crate::lir_body::form_of(function, &mut symbols, &wide_list, &op).map(std::sync::Arc::new);
+                inst.form_operands = inst.operands.clone();
+            }
             inst.ties = ties;
             inst.origin = origin;
             inst.terminator = terminator;
@@ -799,6 +826,17 @@ impl AllocTarget for Arm64 {
         true
     }
 
+    /// `-mcpu=generic` on Linux: the Cortex-A510 model. DEVIATE SB8: Darwin
+    /// (`apple-m1`) keeps the generic model until the Apple A14 model's data
+    /// (S1) lands.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        if darwin() {
+            std::rc::Rc::new(crate::schedmodel::DarwinModel)
+        } else {
+            std::rc::Rc::new(crate::schedmodel::Arm64Model::generic())
+        }
+    }
+
     /// The coalescer makes a definition again for a copy only if it is
     /// `isAsCheapAsAMove`; `MOVaddr` is not (the pair is two instructions),
     /// so a copy of an address stays a `mov`. The spiller takes it still.
@@ -1073,6 +1111,35 @@ mod tests {
         let ops = &back.blocks[0].ops;
         assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
         assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
+    }
+
+    /// `sub sp, sp, #16` defined register 31, the zero register, so the
+    /// scheduler saw no stack-pointer write and moved the stores below it
+    /// (`vla_call` printed 918, not 1213).
+    #[test]
+    fn a_write_of_the_stack_pointer_defines_sp_not_the_zero_register() {
+        let (sp, minus) = (Gpr(31), AddSub { subtract: true, set_flags: false });
+        let mut function = sample();
+        function.blocks[0].ops = OpList::from(vec![
+            Op::I(Inst::AddSubImm { op: minus, width: Width::X, rd: sp, rn: sp, imm12: 16, shift12: false }),
+            Op::I(Inst::AddSubImm { op: minus, width: Width::X, rd: Gpr(9), rn: sp, imm12: 16, shift12: false }),
+            Op::Return { uses: vec![], tail: None },
+        ]);
+        let lir = view(&function);
+        let defined = |at: usize| {
+            lir.blocks[0]
+                .insts[at]
+                .operands
+                .iter()
+                .find_map(
+                    |o| match o {
+                        Operand::Def(LirReg::Phys(register)) => Some(*register),
+                        _ => None,
+                    },
+                )
+        };
+        assert_eq!(defined(0), Some(crate::reg::SP), "{:?}", lir.blocks[0].insts[0]);
+        assert_ne!(defined(1), Some(crate::reg::SP), "a read of sp defines nothing");
     }
 
     /// The registers greedy chose go back into the original operations, a

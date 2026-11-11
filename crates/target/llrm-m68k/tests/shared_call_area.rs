@@ -111,13 +111,25 @@ fn host() -> i32 {
     (power(7, 13) & 255) as i32
 }
 
-#[test]
-fn stores_into_the_call_area_find_a_frame_that_reserves_one() {
+fn assert_frame_for_stores(options: Options) {
     let module = llrm_mir::parse::module(IR).expect("parses");
-    let text = text_with(&module, "power", Cpu::M68000, Options::default()).unwrap();
+    let text = text_with(&module, "power", Cpu::M68000, options).unwrap();
     let stores = text.contains(", (4,%sp)") || text.contains(", (%sp)");
     let frame = text.contains("lea\t(-8,%sp)") || text.contains("suba.l\t#8") || text.contains("subq.l\t#8");
     assert!(!stores || frame, "stores into a call area the frame does not have:\n{text}");
+}
+
+#[test]
+fn stores_into_the_call_area_find_a_frame_that_reserves_one() {
+    assert_frame_for_stores(Options::default());
+}
+
+/// Without the copies the loop is rotated: the `mulsi3` call is laid out before
+/// the `ADJCALLSTACKDOWN` whose area it uses. Its `power` sequence was pushed
+/// away and no frame was left for the stores (-Os takes this layout too).
+#[test]
+fn a_call_laid_out_before_the_area_it_shares_still_finds_a_frame() {
+    assert_frame_for_stores(Options { tail_duplicate: false, ..Options::default() });
 }
 
 #[test]

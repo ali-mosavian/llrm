@@ -226,11 +226,26 @@ pub trait Target {
         true
     }
 
+    /// A jump to the block with id `block`, for a block a shared phase made on
+    /// an edge (`PhiElimination`) or a jump it put where a branch fell through.
+    /// None: the target has no such form, and a function that needs one is
+    /// refused.
+    fn branch_to(_block: u32) -> Option<Inst> {
+        None
+    }
+
     /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
     /// register coalescer in the pin) orders the function before allocation.
     /// Here false: a target opts in once its numbers say so.
     fn schedules_before_allocation() -> bool {
         false
+    }
+
+    /// The processor the pre-RA scheduler schedules for
+    /// (`TargetSchedModel`). Here the generic one, as before; DEVIATE MS7
+    /// until a target states its own.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        std::rc::Rc::new(llrm_codegen::backend::schedmodel::GenericModel)
     }
 
     /// Whether the row `name`, loading an incoming stack argument (a frame slot
@@ -327,6 +342,18 @@ pub trait Target {
         1
     }
 
+    /// `TII.getInstrCost(COPY, {to, from})`: what the copy of `from` into `to`
+    /// costs, in the unit of [`Target::operand_cost`]. Greedy hints a value the
+    /// register that makes the copies naming it cheapest (llvm-mos
+    /// `getRegAllocationHints`, `COPY`); all 0 is the pin's order.
+    fn copy_register_cost(
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
+
     /// What the instruction `inst` costs with its operand `operand` in
     /// `register` (clocks or bytes by the target's goal, from its instruction
     /// tables): the 6502's `dec` is one instruction on a zero-page cell and
@@ -365,6 +392,14 @@ pub trait Target {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CalcSpillWeights.cpp#L398
     fn spill_weight_scale(_order: &[RegId]) -> f32 {
         1.0
+    }
+
+    /// The status-flags register, which a machine instruction that `sets_flags`
+    /// writes without naming it (the pin's `implicit-def $ccr`). The SSA
+    /// converter gives such an instruction a pinned value for it where a later
+    /// instruction of the block reads the register by name.
+    fn flags_register() -> Option<RegId> {
+        None
     }
 
     /// Registers the code of a spill or a reload overwrites (the 6502's

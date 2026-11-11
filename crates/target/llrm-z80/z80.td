@@ -55,6 +55,14 @@ def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCi
 def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
 // The signed order of two words: the carry holds the sign of a - b corrected for overflow.
 def Z80cmps : SDNode<"Z80ISD::CMPS", SDTZ80Cmp>;
+
+// A word op with its carry out in the flags: (sum, flags), and with the carry in (the flags before it).
+def SDTZ80Alf : SDTypeProfile<2, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>, SDTCisVT<3, i16>]>;
+def SDTZ80Alfc : SDTypeProfile<2, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i8>]>;
+def Z80addf : SDNode<"Z80ISD::ADDF", SDTZ80Alf, [SDNPCommutative]>;
+def Z80subf : SDNode<"Z80ISD::SUBF", SDTZ80Alf>;
+def Z80adcf : SDNode<"Z80ISD::ADCF", SDTZ80Alfc, [SDNPCommutative]>;
+def Z80sbcf : SDNode<"Z80ISD::SBCF", SDTZ80Alfc>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
 def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -126,6 +134,18 @@ let Defs = [F], Constraints = "$d = $a" in {
 // add hl,rr: the one 16-bit add. inc rr / dec rr leave the flags alone.
 let Defs = [F], Constraints = "$d = $a", isCommutable = 1 in
   def ADD16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "add hl, $b", [(set i16:$d, (add i16:$a, i16:$b))]>;
+// The same with the flags a value: the carry of a long's words (`UADDO`, `UADDO_CARRY`, `USUBO`, `USUBO_CARRY` at a word).
+let Constraints = "$d = $a" in {
+  let isCommutable = 1 in {
+    def ADD16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "add hl, $b", [(set i16:$d, i8:$f, (Z80addf i16:$a, i16:$b))]>;
+    def ADC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "adc hl, $b", [(set i16:$d, i8:$f, (Z80adcf i16:$a, i16:$b, i8:$c))]>;
+  }
+  def SUB16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "or a; sbc hl, $b", [(set i16:$d, i8:$f, (Z80subf i16:$a, i16:$b))]>;
+  def SBC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "sbc hl, $b", [(set i16:$d, i8:$f, (Z80sbcf i16:$a, i16:$b, i8:$c))]>;
+}
+// `ADD16F` and `ADC16F` of one value twice, fused by `long_shift`: a long doubled, no selection pattern
+let Defs = [F], Constraints = "$lo = $a, $hi = $b" in
+  def SHL32 : Z80Inst<(outs GR16:$lo, HLR:$hi), (ins GR16:$a, HLR:$b), "sla lo; rl hi; adc hl, hl", []>;
 let Constraints = "$d = $a" in {
   def INC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "inc $d", [(set i16:$d, (add i16:$a, (i16 1)))]>;
   def DEC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "dec $d", [(set i16:$d, (add i16:$a, (i16 -1)))]>;
@@ -175,6 +195,7 @@ let Defs = [F], Uses = [F], Constraints = "$d = $a" in {
   def SBC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sbc hl, $b", []>;
 }
 
+
 // Shifts by a constant: one SLA/SRL/SRA (or add hl,hl, srl h; rr l) per bit, expanded when emitted.
 multiclass Shift<string n, RegisterClass rc, ValueType vt> {
   let Defs = [F], Constraints = "$d = $a" in {
@@ -192,11 +213,15 @@ def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm
 def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d, imm:$v)]>;
 }
 
-// A constant with one user. Several stores of it load it into a pair once (3 B and 20 T each after), which beats
-// 5 B and 26 T a store from two users. The pin's `imm_su` (`shouldAvoidImmediateInstFormsForSize`) counts the users
-// the same way, but only at optsize: x86 prices an immediate store as a register one.
-// DEVIATE Z80-IMM-USES: not gated on optsize. Owner llrm-z80-c, exit 2026-11-30.
-def imm_one_use : PatLeaf<(imm), [{ return N->hasOneUse(); }]>;
+// A constant word is stored as two `ld (hl),n` only where that is no longer than loading it into a pair once and
+// storing from the pair (5 B a store against 3 B and 3 B once: two or more stores take the register). The users
+// are those the constant had when selection began, so the choice does not depend on which store is selected first
+// (`hasOneUse` read the DAG mid-selection: particle -Os moved 15 B with the selection order). The pin's `imm_su`
+// (`shouldAvoidImmediateInstFormsForSize`, X86ISelDAGToDAG.cpp#L371) counts the users the same way, but only at
+// optsize and with the threshold 2: x86 prices an immediate store as a register one.
+// DEVIATE Z80-IMM-USES: the threshold is the encoding table's bytes and it is not gated on optsize (an immediate
+// store is also slower). Owner llrm-z80-c, exit 2026-11-30.
+def imm_stored_in_immediate_form : PatLeaf<(imm), [{ return immStoredInImmediateForm(N); }]>;
 
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
@@ -213,7 +238,7 @@ let mayLoad = 1, Defs = [A] in
 let mayStore = 1 in
   def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
   // A constant word: two `ld (hl),n`, no pair to load first (x86's MOV16mi).
-  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm_one_use:$v), i16:$p)]>;
+  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm_stored_in_immediate_form:$v), i16:$p)]>;
 let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;
@@ -315,8 +340,8 @@ def : Pat<(store (i8 imm:$v), frameindex:$fi), (LD8fi imm:$v, (to_tframeindex $f
 def : Pat<(store (i8 imm:$v), (add frameindex:$fi, imm:$o)), (LD8fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR8:$s, frameindex:$fi), (LD8fr GR8:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR8:$s, (add frameindex:$fi, imm:$o)), (LD8fr GR8:$s, (to_tframeindex $fi), imm:$o)>;
-def : Pat<(store (i16 imm_one_use:$v), frameindex:$fi), (LD16fi imm:$v, (to_tframeindex $fi), 0)>;
-def : Pat<(store (i16 imm_one_use:$v), (add frameindex:$fi, imm:$o)), (LD16fi imm:$v, (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store (i16 imm_stored_in_immediate_form:$v), frameindex:$fi), (LD16fi imm:$v, (to_tframeindex $fi), 0)>;
+def : Pat<(store (i16 imm_stored_in_immediate_form:$v), (add frameindex:$fi, imm:$o)), (LD16fi imm:$v, (to_tframeindex $fi), imm:$o)>;
 def : Pat<(store GR16:$s, frameindex:$fi), (LD16fr GR16:$s, (to_tframeindex $fi), 0)>;
 def : Pat<(store GR16:$s, (add frameindex:$fi, imm:$o)), (LD16fr GR16:$s, (to_tframeindex $fi), imm:$o)>;
 

@@ -152,7 +152,7 @@ pub fn match_symmetric_pair(
 }
 
 /// A `MinMaxIntrinsic`: its comparison predicate and operands.
-fn min_max(
+pub(crate) fn min_max(
     q: &Query,
     v: Operand,
 ) -> Option<(llrm_mir::opcode::IntPredicate, Operand, Operand)> {
@@ -659,11 +659,13 @@ pub(crate) fn drop_poison_generating_annotations(
 ) {
     c.function.drop_poison_generating_annotations(inst);
     let q = query(c, Some(inst));
-    let has_zero_poison_operand = q.callee_name(inst).is_some_and(|name| {
-        ["llvm.ctlz", "llvm.cttz", "llvm.abs"]
-            .into_iter()
-            .any(|base| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-    });
+    let has_zero_poison_operand = q
+        .callee_name(inst)
+        .is_some_and(
+            |name| ["llvm.ctlz", "llvm.cttz", "llvm.abs"]
+                .into_iter()
+                .any(|base| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))),
+        );
     if has_zero_poison_operand {
         let false_ = c.int(c.context.types.int(1), 0);
         replace_operand(c, inst, 1, false_);

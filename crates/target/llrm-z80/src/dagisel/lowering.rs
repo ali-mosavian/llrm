@@ -29,6 +29,10 @@ pub mod z80isd {
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const CMPC: ISD = ISD::Target(ids::CMPC);
     pub const CMPS: ISD = ISD::Target(ids::CMPS);
+    pub const ADDF: ISD = ISD::Target(ids::ADDF);
+    pub const SUBF: ISD = ISD::Target(ids::SUBF);
+    pub const ADCF: ISD = ISD::Target(ids::ADCF);
+    pub const SBCF: ISD = ISD::Target(ids::SBCF);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -51,6 +55,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
     );
     tl.init_actions();
+    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -89,6 +95,10 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Add, And, Or, Xor], &[MVT::I16], Action::Legal);
     // the difference of two bytes known to be widened (`lower_sub`)
     set(&[Sub], &[MVT::I16], Action::Custom);
+    // The words of a long add or subtract: the carry is the flags of `add hl,
+    // rr` and `adc hl, rr` (`lower_carry_op`), where the pin's
+    // `ExpandIntRes_ADDSUB` keys on `UADDO_CARRY`/`USUBO_CARRY` being legal.
+    set(&[UAddO, USubO, UAddOCarry, USubOCarry], &[MVT::I16], Action::Custom);
     // A shift by a constant is an instruction; by a variable it is a call
     // (`lower_shift`).
     set(&[Shl, Srl, Sra], &[MVT::I8, MVT::I16], Action::Custom);
@@ -100,7 +110,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
-    // no rotate or funnel shift instruction: shifts and an or (`expandROT`, `expandFunnelShift`)
+    // no rotate or funnel shift instruction: shifts and an or (`expandROT`,
+    // `expandFunnelShift`)
     set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
@@ -113,8 +124,9 @@ pub fn target_lowering() -> TargetLowering {
     set(&[SetCCCarry], &[MVT::I1, MVT::I8, MVT::I16], Action::Custom);
     // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
     set(&[Load, Store], &[MVT::I1], Action::Custom);
-    // `va_start` stores the address of the first unnamed argument (`lower_vastart_frame_index`); the rest of a
-    // `va_list` is a pointer the generic expansions walk
+    // `va_start` stores the address of the first unnamed argument
+    // (`lower_vastart_frame_index`); the rest of a `va_list` is a pointer
+    // the generic expansions walk
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy], &[MVT::Other], Action::Expand);
     for (vt, names) in [
@@ -125,6 +137,11 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_libcall_name(op, vt, name);
         }
     }
+    // the product of two zero-extended words is one call in a function tuned
+    // for size, the whole 32-bit result in `hl` (low) and `de` (`expand_mul`): 15 B
+    // for the product against 216 B of partial products. At -O2 the partial
+    // products ran faster in div_constants_short and compare_to_int64.
+    tl.set_size_libcall_name(UMulLoHi, MVT::I16, "__umulhisi3");
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
     for (vt, names) in [
@@ -142,6 +159,10 @@ pub fn target_lowering() -> TargetLowering {
     // through their 32-bit halves.
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__ashlsi3", "__lshrsi3", "__ashrsi3"]) {
         tl.set_size_libcall_name(op, MVT::I32, name);
+    }
+    // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
+    for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
+        tl.set_size_variable_libcall_name(op, MVT::I64, name);
     }
     tl.set_size_shift_call(8, 10);
     // the long divide has a smaller routine for a function tuned for size
@@ -179,7 +200,8 @@ pub fn target_lowering() -> TargetLowering {
     tl.set_byte_equality(true);
     tl.set_assert_sext_keeps_high(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
-    // a jump table: the word at table + 2 * index, jumped to (`ExpandNode` of BR_JT)
+    // a jump table: the word at table + 2 * index, jumped to (`ExpandNode` of
+    // BR_JT)
     tl.set_operation_action(BrJT, MVT::Other, Action::Expand);
     tl.set_operation_action(JumpTable, MVT::I16, Action::Custom);
     tl
@@ -229,9 +251,10 @@ impl Z80Lowering {
 }
 
 /// `ExpandDivRemLibCall` for a word: the routine returns the quotient in `de`
-/// and the remainder in `hl`, the registers of a long result; the divide
-/// routine `__udivhi3` leaves both there already, the signed one is
-/// `__divremhi4`.
+/// and the remainder in `hl`, the registers of a long result (low word `hl`,
+/// high word `de`), so the remainder is the first part and the quotient the
+/// second; the divide routine `__udivhi3` leaves both there already, the
+/// signed one is `__divremhi4`.
 fn lower_divrem_word(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -260,7 +283,7 @@ fn lower_divrem_word(
     let callee = dag.get_target_external_symbol(EVT::I16, name);
     let root = dag.entry_node();
     let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
-    let [quotient, remainder] = values[..] else { return None };
+    let [remainder, quotient] = values[..] else { return None };
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I16], &[quotient, remainder]))
 }
 
@@ -357,6 +380,9 @@ impl Hooks for Z80Lowering {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
             ISD::Sub => Some(lower_sub(dag, node)),
+            ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry if dag.value_type(node) == EVT::I16 => {
+                Some(lower_carry_op(dag, node))
+            }
             ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I32 => self.lower_divrem(dag, node),
             ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I16 => lower_divrem_word(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
@@ -775,6 +801,243 @@ fn lower_setcc(
     Some(dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `UADDO`, `USUBO`, `UADDO_CARRY` and `USUBO_CARRY` on words: the sum
+/// (difference) and the flags it leaves, the carry out being the flags' C.
+fn lower_carry_op(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    super::pipeline::CARRY_OPS.with(|count| count.set(count.get() + 1));
+    if let Some(generic) = generic_carry_op(dag, node) {
+        return generic;
+    }
+    let pair = carry_pair(dag, node);
+    let (sum, flags) = (SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 });
+    let code = cc_operand(dag, cond::C);
+    let byte = dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]);
+    let carry = dag.get_node(ISD::Truncate, EVT::I1, &[byte]);
+    dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I1], &[sum, carry])
+}
+
+/// A carry op left to the generic form (`add`, then the carry as a compare of
+/// the sum), which the step passes read: a step by one (`inc rr` and a zero
+/// test make its carry; `add hl, rr` does it dearer), and the high word of one,
+/// which adds the step's carry, held in no flag, to a word.
+fn generic_carry_op(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let op = dag.opcode(node);
+    let add = matches!(op, ISD::UAddO | ISD::UAddOCarry);
+    let (a, b) = step_operands(dag, node);
+    let (sum_op, order) = if add { (ISD::Add, CondCode::SetULt) } else { (ISD::Sub, CondCode::SetUGt) };
+    let (sum, carry) = if matches!(op, ISD::UAddO | ISD::USubO) {
+        if !is_step_by_one(dag, node) {
+            return None;
+        }
+        step_sum_and_carry(dag, node)
+    } else {
+        let carry_in = dag.operand(node, 2);
+        if let Some(flags) = carry_flags_of(dag, carry_in) {
+            // Nothing added, the carry out unread: a word stepped by the carry,
+            // `jr nc` over `inc rr`, in place of `adc hl, rr` and
+            // the zero it needs in a register. (A constant word has
+            // no step to take: `adc hl, hl` or `sbc hl, hl` makes the bit a
+            // mask.)
+            if dag.constant(b) != Some(0)
+                || dag.constant(a).is_some()
+                || dag.has_users(SDValue { node: node.node, res: 1 })
+            {
+                return None;
+            }
+            let code = cc_operand(dag, cond::C);
+            let byte = dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]);
+            let step = dag.get_node(ISD::ZeroExtend, EVT::I16, &[byte]);
+            let sum = dag.get_node(sum_op, EVT::I16, &[a, step]);
+            let carry = word_compare(dag, sum, a, order);
+            return Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I1], &[sum, carry]));
+        }
+        let step_op = SDValue { node: carry_in.node, res: 0 };
+        let from_step = carry_in.res == 1 && is_step_by_one(dag, step_op);
+        match dag.constant(b).map(|c| c as u16) {
+            // The step's own carry, made again here (nodes are shared) so that
+            // it stays the compare it is.
+            Some(0) => {
+                let carry_in = if from_step { step_sum_and_carry(dag, step_op).1 } else { carry_in };
+                let step = bit_of(dag, carry_in);
+                let sum = dag.get_node(sum_op, EVT::I16, &[a, step]);
+                (sum, word_compare(dag, sum, a, order))
+            }
+            // x + 0xFFFF + c is x less the borrow of the step, `ll == 0`, as a
+            // decrement's high word is.
+            Some(0xFFFF)
+                if add && from_step && dag.constant(dag.operand(step_op, 1)).map(|c| c as u16) == Some(0xFFFF) =>
+            {
+                let low = dag.operand(step_op, 0);
+                let zero = dag.get_constant(0, EVT::I16);
+                let borrow = word_compare(dag, low, zero, CondCode::SetEq);
+                let borrow = bit_of(dag, borrow);
+                let sum = dag.get_node(ISD::Sub, EVT::I16, &[a, borrow]);
+                let (_, carry_in) = step_sum_and_carry(dag, step_op);
+                let step = bit_of(dag, carry_in);
+                let any = dag.get_node(ISD::Or, EVT::I16, &[a, step]);
+                (sum, word_compare(dag, any, zero, CondCode::SetNe))
+            }
+            _ => return None,
+        }
+    };
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I1], &[sum, carry]))
+}
+
+/// The sum of a step by one and its carry out: the sum is zero (an increment)
+/// or the operand is not (a decrement); a subtract borrows as it wraps.
+fn step_sum_and_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> (SDValue, SDValue) {
+    let add = dag.opcode(node) == ISD::UAddO;
+    let (a, b) = step_operands(dag, node);
+    let sum = dag.get_node(if add { ISD::Add } else { ISD::Sub }, EVT::I16, &[a, b]);
+    let zero = dag.get_constant(0, EVT::I16);
+    let carry = match dag.constant(b).map(|c| c as u16) {
+        Some(1) if add => word_compare(dag, sum, zero, CondCode::SetEq),
+        Some(0xFFFF) if add => word_compare(dag, a, zero, CondCode::SetNe),
+        _ if add => word_compare(dag, sum, a, CondCode::SetULt),
+        _ => word_compare(dag, a, b, CondCode::SetULt),
+    };
+    (sum, carry)
+}
+
+/// A compare of two words as the bit it sets, already in the form selection
+/// takes.
+fn word_compare(
+    dag: &mut SelectionDAG,
+    lhs: SDValue,
+    rhs: SDValue,
+    cc: CondCode,
+) -> SDValue {
+    let (code, flags) = compare(dag, cc, lhs, rhs);
+    let code = cc_operand(dag, code);
+    let byte = dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]);
+    dag.get_node(ISD::Truncate, EVT::I1, &[byte])
+}
+
+/// A bit made by `word_compare` as a word of 0 or 1: its byte, zero-extended
+/// (`zext`).
+fn bit_of(
+    dag: &mut SelectionDAG,
+    bit: SDValue,
+) -> SDValue {
+    let byte = if dag.opcode(bit) == ISD::Truncate { dag.operand(bit, 0) } else { condition_byte(dag, bit) };
+    dag.get_node(ISD::ZeroExtend, EVT::I16, &[byte])
+}
+
+/// The operands of a carry op, a constant of an add last.
+fn step_operands(
+    dag: &SelectionDAG,
+    node: SDValue,
+) -> (SDValue, SDValue) {
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    if matches!(dag.opcode(node), ISD::UAddO | ISD::UAddOCarry)
+        && dag.constant(a).is_some()
+        && dag.constant(b).is_none()
+    {
+        (b, a)
+    } else {
+        (a, b)
+    }
+}
+
+/// A word op with a carry out that adds or subtracts one: `inc rr` / `dec rr`
+/// and a zero test.
+fn is_step_by_one(
+    dag: &SelectionDAG,
+    node: SDValue,
+) -> bool {
+    matches!(dag.opcode(node), ISD::UAddO | ISD::USubO)
+        && matches!(
+            dag.constant(step_operands(dag, node).1).map(|c| c as u16),
+            Some(1 | 0xFFFF)
+        )
+}
+
+/// The flags that hold `carry` in C when a carry op made it, else none.
+fn carry_flags_of(
+    dag: &mut SelectionDAG,
+    carry: SDValue,
+) -> Option<SDValue> {
+    let value = if dag.opcode(carry) == ISD::MergeValues { dag.operand(carry, carry.res as usize) } else { carry };
+    if let Some(flags) = carry_out_flags(dag, carry) {
+        return Some(flags);
+    }
+    if dag.opcode(value) == ISD::Truncate {
+        let byte = dag.operand(value, 0);
+        if dag.opcode(byte) == z80isd::SETCC && dag.constant(dag.operand(byte, 0)) == Some(cond::C) {
+            return Some(dag.operand(byte, 1));
+        }
+    }
+    None
+}
+
+/// The `ADDF`/`ADCF`/`SUBF`/`SBCF` node (sum, flags) of a carry op. Nodes are
+/// shared, so a carry in made from the op before it here is the very node that
+/// op's own lowering makes.
+fn carry_pair(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let op = dag.opcode(node);
+    let subtract = matches!(op, ISD::USubO | ISD::USubOCarry);
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    if matches!(op, ISD::UAddOCarry | ISD::USubOCarry) {
+        let flags = carry_flags(dag, dag.operand(node, 2));
+        dag.get_node_multi(if subtract { z80isd::SBCF } else { z80isd::ADCF }, &[EVT::I16, EVT::I8], &[a, b, flags])
+    } else {
+        dag.get_node_multi(if subtract { z80isd::SUBF } else { z80isd::ADDF }, &[EVT::I16, EVT::I8], &[a, b])
+    }
+}
+
+/// The flags whose C is the carry out of a word carry op still in its generic
+/// form (`UADDO` and the others, result 1): the very
+/// `ADDF`/`ADCF`/`SUBF`/`SBCF` node `lower_carry_op` makes of it.
+fn carry_out_flags(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> Option<SDValue> {
+    let op = dag.opcode(value);
+    if value.res != 1
+        || !matches!(
+            op,
+            ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry
+        )
+        || dag.value_type(SDValue { node: value.node, res: 0 }) != EVT::I16
+        || is_step_by_one(dag, SDValue { node: value.node, res: 0 })
+    {
+        return None;
+    }
+    let pair = carry_pair(dag, SDValue { node: value.node, res: 0 });
+    Some(SDValue { node: pair.node, res: 1 })
+}
+
+/// The flags that hold `carry` in C: those of the carry op before it (its own
+/// node, or the lowered `Truncate(SETCC C, flags)`), else the flags of `0 -
+/// byte`, whose C is set when the byte is not zero.
+fn carry_flags(
+    dag: &mut SelectionDAG,
+    carry: SDValue,
+) -> SDValue {
+    if let Some(flags) = carry_flags_of(dag, carry) {
+        return flags;
+    }
+    // The carry of a step by one is the compare it is made in (the step is not
+    // a flag op).
+    let step = SDValue { node: carry.node, res: 0 };
+    let carry = if carry.res == 1 && is_step_by_one(dag, step) { step_sum_and_carry(dag, step).1 } else { carry };
+    let byte = condition_byte(dag, carry);
+    let zero = dag.get_constant(0, EVT::I8);
+    dag.get_node(z80isd::CMP, EVT::I8, &[zero, byte])
+}
+
 /// `LowerSETCCCARRY`: the high words' compare takes the borrow of the low
 /// words' (`cp16`, then `cp16c`), the order read from the carry. A signed order
 /// has the carry made to hold the sign corrected for overflow.
@@ -783,7 +1046,8 @@ fn lower_setcc_carry(
     node: SDValue,
 ) -> Option<SDValue> {
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    // The low words' subtract folded to no borrow (`x - 0` never borrows): the high compare stands alone.
+    // The low words' subtract folded to no borrow (`x - 0` never borrows): the
+    // high compare stands alone.
     if dag.constant(borrow) == Some(0) && matches!(dag.value_type(high), EVT::I8 | EVT::I16) {
         let (code, flags) = compare(dag, cond_of(dag, dag.operand(node, 3)), high, other);
         let code = cc_operand(dag, code);
@@ -819,6 +1083,15 @@ fn condition(
     };
     if dag.opcode(value) == z80isd::SETCC {
         return (dag.operand(value, 0), dag.operand(value, 1));
+    }
+    // the carry a carry op left (`lower_carry_op`): branch on its flags
+    if let Some(flags) = carry_out_flags(dag, value) {
+        return (cc_operand(dag, cond::C), flags);
+    }
+    let wrapped = if dag.opcode(value) == ISD::MergeValues { dag.operand(value, value.res as usize) } else { value };
+    if dag.opcode(wrapped) == ISD::Truncate && dag.opcode(dag.operand(wrapped, 0)) == z80isd::SETCC {
+        let setcc = dag.operand(wrapped, 0);
+        return (dag.operand(setcc, 0), dag.operand(setcc, 1));
     }
     let byte = condition_byte(dag, value);
     let zero = dag.get_constant(0, EVT::I8);
@@ -859,6 +1132,11 @@ fn condition_byte(
 ) -> SDValue {
     match dag.value_type(value) {
         EVT::I1 => match dag.opcode(value) {
+            ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry if carry_out_flags(dag, value).is_some() => {
+                let flags = carry_out_flags(dag, value).expect("a carry op");
+                let code = cc_operand(dag, cond::C);
+                dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags])
+            }
             ISD::Constant => {
                 let bit = dag.constant(value).expect("a constant") & 1;
                 dag.get_constant(bit, EVT::I8)

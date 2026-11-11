@@ -34,6 +34,8 @@ pub const SNIPPETS: &[(&str, &str)] = &[
     ("branch", "lda rc2\n  cmp rc3\n  bne l\nl:\n"),
     ("address", "clc\n  lda rc2\n  adc #1\n  sta rc2\n  lda rc3\n  adc #0\n  sta rc3\n"),
     ("call", ".import callee\n  jsr callee\n"),
+    // a 16-bit argument (an int or a pointer) is two cells
+    ("argument", "lda #1\n  sta rc2\n  lda #0\n  sta rc3\n"),
     ("return", "rts\n"),
 ];
 
@@ -63,6 +65,7 @@ fn table(
         branch: at("branch"),
         address: at("address"),
         call: at("call"),
+        argument: at("argument"),
         return_: at("return"),
         ..OperationCosts::default()
     }
@@ -76,4 +79,46 @@ pub fn clocks(cpu: Cpu) -> OperationCosts {
 /// Prices in code bytes.
 pub fn bytes(cpu: Cpu) -> OperationCosts {
     table(cpu, |(_, bytes)| bytes)
+}
+
+/// The prices of the Os inline trial's byte estimate: [`bytes`] refit to the
+/// bytes the backend writes.
+pub fn trial_bytes(cpu: Cpu) -> OperationCosts {
+    let mut costs = bytes(cpu);
+    calibrate(&mut costs);
+    costs
+}
+
+/// What the snippets do not say, fit to the bytes the backend writes: a
+/// non-negative least squares of each function's operation counts
+/// (width-weighted) against its written size, over the 86 programs of
+/// `tests/data_size` at -Os (`tools/6502/size_fit.py`, 182 functions; the fit
+/// is within 25% for 68% of them, the snippets alone for 39%).
+///
+/// DEVIATE (6502-OPCOSTS): measured here, the pin has no byte model for the
+/// 6502. Exit: a generated scheduling description of the instruction tables
+/// (2026-11-20).
+fn calibrate(costs: &mut OperationCosts) {
+    costs.width_scaled = true;
+    // A load or store from a global or a stack slot is an absolute address;
+    // through a pointer it is `(zp),y`.
+    costs.direct_load = 2;
+    costs.direct_store = 5;
+    costs.load = 5;
+    costs.store = 6;
+    // A compare and its branch are one `cmp`/`sbc` chain and a jump; a constant
+    // offset is the access's own `ldy`.
+    costs.branch_in_compare = true;
+    costs.constant_offsets_fold = true;
+    // A constant shift is a few `asl`/`rol` per byte; a call keeps what it
+    // needs across it.
+    costs.shift = 5;
+    costs.call = 12;
+    costs.argument = 2;
+    costs.multiply = 9;
+    costs.multiply_long = 9;
+    costs.divide = 22;
+    costs.divide_long = 22;
+    // `llvm.lifetime.*` writes nothing.
+    costs.free_intrinsics = true;
 }

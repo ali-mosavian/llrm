@@ -38,6 +38,9 @@ pub const LICM_MSSA_OPT_CAP: u32 = 100;
 /// before no store is hoisted or sunk and nothing is promoted
 /// ([`LICM.cpp#L118`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L118)).
 pub const LICM_MSSA_NO_ACC_FOR_PROMOTION_CAP: u32 = 250;
+/// A backstop for the rounds of reassociation of one loop; the pin has none (each
+/// round erases an instruction, so the walk ends by itself).
+const MAX_REASSOCIATION_ROUNDS: usize = 16;
 
 /// [`SinkAndHoistLICMFlags`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L388).
 pub struct Flags {
@@ -234,6 +237,9 @@ pub struct Decisions {
     /// How many times a loop's safety info was worked out (the scan of its
     /// blocks for one that may throw): the pin does it once per `runOnLoop`.
     pub safety_scans: usize,
+    /// How many times a block's predecessors were looked up for the loop's
+    /// safety info.
+    pub safety_pred_lookups: usize,
     /// The updater-kept graph was put back in the manager.
     pub graph_kept: bool,
 }
@@ -288,6 +294,9 @@ pub fn decide(
     let exposed = promote::Exposed::default();
     let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
+        if !crate::loopfilter::allows(cfg::block(one.header)) {
+            continue;
+        }
         memo.clear();
         let ctx = LoopCtx {
             function: unit.function,
@@ -328,6 +337,7 @@ pub fn decide(
         }
     }
     decisions.safety_scans = memo.scans.get();
+    decisions.safety_pred_lookups = memo.pred_lookups.get();
     decisions
 }
 
@@ -495,45 +505,54 @@ pub fn run(
         };
         // Worked out once per loop, as the pin's `ICFLoopSafetyInfo`: cleared at each loop and after each edit.
         memo.clear();
-        let (sunk, hoisted, reassociated) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
-            let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses, &memo);
-            record_edits(view, &mut decisions, header, &found.0, &found.1, &found.2);
-            found
-        });
-        {
-            let built = graph.as_mut().expect("a graph");
-            let mut kept = apply::Graph {
-                mssa: &mut built.mssa,
-                accesses: &mut built.accesses,
-                updater: &mut built.updater,
-                outer: &outer,
-                layout: unit.layout,
-                last_store: IdMap::new(),
-            };
-            apply::apply_loop(
-                &mut *unit.function,
-                &mut *unit.context,
-                &mut *unit.declared,
-                &mut kept,
-                one,
-                preheader,
-                &sunk,
-                &hoisted,
-                &reassociated,
-            )
-            .unwrap_or_else(|why| panic!("licm: {why}"));
-            if !(sunk.is_empty() && hoisted.is_empty() && reassociated.is_empty()) {
-                memo.clear();
+        // The pin reassociates an instruction it has just made, in the same walk
+        // (`hoistMulAddAssociation` chains 31, 961, 29791 to one multiply by 923521); a
+        // round here leaves alone what another has replaced, so the loop is looked at
+        // again while a round reassociated something.
+        for round in 0.. {
+            let (sunk, hoisted, reassociated) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
+                let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses, &memo);
+                record_edits(view, &mut decisions, header, &found.0, &found.1, &found.2);
+                found
+            });
+            {
+                let built = graph.as_mut().expect("a graph");
+                let mut kept = apply::Graph {
+                    mssa: &mut built.mssa,
+                    accesses: &mut built.accesses,
+                    updater: &mut built.updater,
+                    outer: &outer,
+                    layout: unit.layout,
+                    last_store: IdMap::new(),
+                };
+                apply::apply_loop(
+                    &mut *unit.function,
+                    &mut *unit.context,
+                    &mut *unit.declared,
+                    &mut kept,
+                    one,
+                    preheader,
+                    &sunk,
+                    &hoisted,
+                    &reassociated,
+                )
+                .unwrap_or_else(|why| panic!("licm: {why}"));
+                if !(sunk.is_empty() && hoisted.is_empty() && reassociated.is_empty()) {
+                    memo.clear();
+                }
+            }
+            check_graph(unit, graph.as_ref().expect("a graph"), &|| {
+                format!(
+                    "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
+                    sunk.len(),
+                    hoisted.len(),
+                    reassociated.len()
+                )
+            });
+            if reassociated.is_empty() || round >= MAX_REASSOCIATION_ROUNDS {
+                break;
             }
         }
-        check_graph(unit, graph.as_ref().expect("a graph"), &|| {
-            format!(
-                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
-                sunk.len(),
-                hoisted.len(),
-                reassociated.len()
-            )
-        });
         let Some(preheader) = preheader else { continue };
         // The stores of a promotion go before the first instruction of each
         // exit block that is not a phi, taken before any promotion: the
@@ -621,6 +640,7 @@ pub fn run(
         decisions.graph_kept = true;
     }
     decisions.safety_scans = memo.scans.get();
+    decisions.safety_pred_lookups = memo.pred_lookups.get();
     decisions
 }
 
@@ -867,6 +887,7 @@ impl FunctionPass for Licm {
             all.rebuilds += found.rebuilds;
             all.rebuilt_instructions += found.rebuilt_instructions;
             all.safety_scans += found.safety_scans;
+            all.safety_pred_lookups += found.safety_pred_lookups;
             all.max_rebuilds = all.max_rebuilds.max(found.rebuilds);
         });
         if self.apply && changed {

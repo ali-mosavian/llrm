@@ -34,6 +34,20 @@ class HeaderFlags(unittest.TestCase):
     def test_no_header_no_flags(self):
         self.assertEqual(header_flags_fn()(self.write("int x;")), [])
 
+class Manifest(unittest.TestCase):
+    def test_the_f32_arithmetic_links_the_hand_asm_not_the_generic_c(self):
+        """The product link took generic C for __addsf3, __mulsf3, __floatsisf...: x87rotate cost 115481 clk and 9904 B, 3.7x the clocks and 1.6x
+        the bytes of the repo's sf32*.s, which no index named (2026-11-11). config/6502/members.txt now lists them and they win over the C index."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        for name, file in {"__addsf3": "sf32_abi.s", "__subsf3": "sf32_abi.s", "__mulsf3": "sf32_abi.s", "__divsf3": "sf32_abi.s",
+                           "__floatsisf": "sf32_conv.s", "__fixsfsi": "sf32_conv.s", "__mul32x32": "mul32x32.s",
+                           "__divdi3": "di64.s", "__udivdi3": "di64.s", "__moddi3": "umod64.s", "__umoddi3": "umod64.s"}.items():
+            self.assertEqual(index[name], "config/6502/" + file, name)
+
+
 class PadSpan(unittest.TestCase):
     """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
     a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""
@@ -129,6 +143,43 @@ class Members(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr[-300:])
                 rows = open(out).read().splitlines()
             self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
+
+    def test_the_int64_divides_and_multiply_come_from_the_asm_members(self):
+        """The generic C __udivdi3/__divdi3/__umoddi3/__moddi3/__muldi3 were linked although config/6502/di64.s and umod64.s define them:
+        int64_division -O2 was 5519 B / 1,508,261 clocks and is 4076 B / 994,717 with the asm, output-identical (2026-11-11)."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        for name in ("__muldi3", "__udivdi3", "__divdi3"):
+            self.assertEqual(index[name], "config/6502/di64.s", name)
+        for name in ("__umoddi3", "__moddi3"):
+            self.assertEqual(index[name], "config/6502/umod64.s", name)
+        text = crlib.member(rt, CC, "config/6502/di64.s", ["-Os"])
+        self.assertNotIn(".include", text)  # ca65 runs in the work directory, where the .inc files are not
+        self.assertIn("__udivdi3:", text)
+
+    def test_int64_division_links_the_asm_divide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "int64_division"],
+                               capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            rows = [x.split("\t") for x in open(out).read().splitlines()]
+        self.assertEqual([x[:2] for x in rows], [["int64_division", "ours"]], r.stdout[-200:])
+        self.assertLess(int(rows[0][2]), 5000, "the generic C divide links 5519 B")
+
+    def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
+        """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
+        compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        self.assertEqual(crlib.asm_members(rt)[-1], "config/6502/sf32_abi.s")
+        text = crlib.member(rt, CC, "config/6502/sf32_6502.c", ["-Os"])
+        for name in ("__mulsf3", "__divsf3"):
+            self.assertIn(name + ":", text)
 
     def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
@@ -346,3 +397,23 @@ class Runner(unittest.TestCase):
         self.assertIn("/nonexistent/mos_rt.s", done.stderr)
 
 if __name__ == "__main__": unittest.main()
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class PerTargetOut(unittest.TestCase):
+    """2026-11-11: spill_store_order (`-m32`, an LCG over 32-bit `unsigned`) read WRONG at the 6502 against its 32-bit `.out`; the answer is
+    right for a 16-bit int (llvm-mos agrees). ours_cr read only NAME.out: a NAME.6502.out / NAME.65c02.out was never looked at."""
+    def run_cpu(self, cpu):
+        import json
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "w.c").write_text("extern void report(long value);\nint main(void) { report(sizeof(int)); return 0; }\n")
+        Path(corpus, "w.out").write_text("4\n")
+        Path(corpus, f"w.{cpu}.out").write_text("2\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, OURS_CPU=cpu, OURS_PADS="0", LLRM_CC=CC)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "w"], capture_output=True, text=True, env=env, timeout=600)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        return [row[:2] for row in json.load(open(out + ".json"))]
+    def test_the_6502_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("6502"), [["w", "PASS"]])
+    def test_the_65c02_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("65c02"), [["w", "PASS"]])

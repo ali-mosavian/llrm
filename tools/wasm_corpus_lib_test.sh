@@ -4,7 +4,7 @@
 fail=0; t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
 check() { [ "$2" = "$3" ] || { echo "FAIL $1: got '$2', want '$3'"; fail=1; }; }
-echo 'int run(void) { return 7; }' > "$t/p.c"
+echo 'int llrm_harness_run(void) { return 7; }' > "$t/p.c"
 echo 'int stub_value(void) { return 1; }' > "$t/a.c"; echo 'int stub_value(void) { return 2; }' > "$t/b.c"
 for f in p a b; do "$clang" --target=wasm32 -ffreestanding -O2 -c "$t/$f.c" -o "$t/$f.o" || { echo "FAIL: clang cannot compile $f.c"; exit 2; }; done
 cp "$t/p.o" "$t/ours.o"; cp "$t/p.o" "$t/pin.o"

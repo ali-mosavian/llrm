@@ -85,7 +85,8 @@ const LOCAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a) {
 entry:
   %p = alloca i32
-  store i32 %a, ptr %p
+  %b = add i32 %a, 1
+  store i32 %b, ptr %p
   %v = load volatile i32, ptr %p
   ret i32 %v
 }
@@ -1767,7 +1768,7 @@ fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_o3() {
     let target = cpu.target();
     let tti = target.tti();
     let depth = |o3: bool| {
-        llrm_transforms::walk::Recursion::of(false, false, true, o3, tti.as_deref())
+        llrm_transforms::walk::Recursion::of(None, false, true, o3, tti.as_deref())
             .expect("m32 copies recursion")
             .depth
     };

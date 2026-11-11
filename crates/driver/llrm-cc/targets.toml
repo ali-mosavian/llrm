@@ -39,6 +39,7 @@ link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{o
 # How a program runs on the host: a command taking the executable last.
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/targets/arm64-link.sh).
 [arm64-linux]
@@ -99,7 +100,7 @@ clang_env = "LLRM_CLANG_M16"
 clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
-  "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
+  "-nostdinc", "-isystem", "{root}/toolchain/clang/borland", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
 ]
 llc = ["-mabi=cdecl"]
 object = "omf"
@@ -141,6 +142,7 @@ object = "omf"
 link = ["python3", "-I", "{root}/tools/wat_link.py", "m32", "{ow}", "{output}", "{objects}"]
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # arm64 Linux on glibc, for qemu-aarch64: LLRM_ARM64_SYSROOT is the unpacked *-arm64-cross packages.
 [arm64-glibc]
@@ -180,6 +182,7 @@ object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # 6502 on sim65: clang's msp430 is only the C front end (16-bit int and pointers, as cc65; unsigned char, packed structs),
 # its datalayout replaced by the 6502's. Stops at -S: ca65 text, which the tests assemble and link with cl65.

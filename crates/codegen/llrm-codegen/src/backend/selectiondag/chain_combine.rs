@@ -41,6 +41,19 @@ pub trait AliasOracle {
         a: MemLocation,
         b: MemLocation,
     ) -> bool;
+
+    /// `hasSameUnderlyingObj`: whether every location's pointer has one
+    /// underlying object.
+    ///
+    /// DEVIATE: false unless a target answers, so a merged store keeps no
+    /// pointer info there; only wasm is measured with it. Owner
+    /// llrm-wasm-b, exit 2026-11-24: each target measures and opts in.
+    fn same_underlying_object(
+        &self,
+        _locations: &[MemLocation],
+    ) -> bool {
+        false
+    }
 }
 
 /// `GatherAllAliasesMaxDepth`: 18, `TargetLoweringBase`; x86 does not set its

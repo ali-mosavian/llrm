@@ -485,7 +485,7 @@ end:
   ret i16 %s
 }
 ",
-        "@switch.table.0 = private unnamed_addr constant [3 x i8] [i8 8, i8 8, i8 9]
+        "@switch.table.0 = private unnamed_addr constant [3 x i8] [i8 8, i8 8, i8 9], align 1
 
 define i16 @f(i16 %x) {
 b0:
@@ -517,7 +517,7 @@ end:
 fn test_array_cells_are_as_narrow_as_the_values_need() {
     check(
         &diamond("i32", &[(0, 0), (1, 1), (2, 2), (3, 1), (4, 0), (5, 2), (6, 1), (7, 0), (8, 2), (9, 1)], 0),
-        "@switch.table.0 = private unnamed_addr constant [10 x i8] [i8 0, i8 1, i8 2, i8 1, i8 0, i8 2, i8 1, i8 0, i8 2, i8 1]
+        "@switch.table.0 = private unnamed_addr constant [10 x i8] [i8 0, i8 1, i8 2, i8 1, i8 0, i8 2, i8 1, i8 0, i8 2, i8 1], align 1
 
 define i32 @f(i32 %x) {
 b0:
@@ -579,7 +579,7 @@ fn test_the_table_load_stays_behind_its_range_check() {
     text += &format!("{}, [ 1, %d ]\n  ret i32 %p\n}}\n", arms.join(", "));
     check16(
         &text,
-        "@switch.table.0 = private unnamed_addr constant [12 x i8] [i8 3, i8 14, i8 15, i8 92, i8 65, i8 35, i8 89, i8 79, i8 32, i8 38, i8 46, i8 26]
+        "@switch.table.0 = private unnamed_addr constant [12 x i8] [i8 3, i8 14, i8 15, i8 92, i8 65, i8 35, i8 89, i8 79, i8 32, i8 38, i8 46, i8 26], align 1
 
 define i32 @f(i32 %x) {
 b0:
@@ -650,4 +650,29 @@ fn test_a_switch_table_is_unnamed_addr() {
     simplified_with(&Options::L1438, context, &spec, &mut declared, function);
     declared.place(&mut module).expect("the declarations are placed");
     assert!(printed(&module).contains("private unnamed_addr constant"), "{}", printed(&module));
+}
+
+/// The table is aligned as one cell (the pin's `getPrefTypeAlign` of the
+/// element), not left to the backend, which aligned any table of 16 bytes or
+/// more to 16: x86-m32 x_switch_ranges -O1 kept a 114 B byte table in a
+/// 16-aligned section, 12 B of padding, 225 B against clang's 223.
+#[test]
+fn test_a_table_is_aligned_as_one_of_its_cells() {
+    let aligned = |ty: &str, values: &[i128]| {
+        let cases: Vec<(i128, i128)> = values.iter().enumerate().map(|(at, &v)| (at as i128, v)).collect();
+        let mut module = parsed(&diamond(ty, &cases, 1));
+        let outer = Outer::of(&module, None);
+        let layout = DataLayout::parse("e-p:32:32-i64:32-n8:16:32").expect("a layout");
+        let tti = X86::of_cpu("i486").expect("a cpu");
+        let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
+        let mut declared = Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        simplified_with(&Options::L1438, context, &spec, &mut declared, function);
+        declared.place(&mut module).expect("the declarations are placed");
+        printed(&module).lines().next().expect("a line").to_owned()
+    };
+    let bytes = [3, 14, 15, 92, 65, 35, 89, 79, 32, 38, 46, 26, 3, 14, 15, 92, 65, 35];
+    assert!(aligned("i32", &bytes).ends_with("], align 1"), "{}", aligned("i32", &bytes));
+    let words = [70000, 14, 15, 920, 65, 35, 89, 790, 32, 38, 46, 260];
+    assert!(aligned("i32", &words).ends_with("], align 4"), "{}", aligned("i32", &words));
 }

@@ -215,9 +215,21 @@ impl Tti for Wasm {
         true
     }
 
+    /// The -O1 trial also inlines the sites its splice brings (#7700, m32 -Os): the pin inlines
+    /// callee-first at threshold 337 where the size bound clamps it, so `churn` into `hold` and
+    /// `hold` into `main` meet the constants together (`call_keeps` -O1: 263 B against the pin's 50).
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        true
+    }
+
     /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
     /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
     fn inline_trial_groups_sites(&self) -> bool {
+        true
+    }
+
+    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an 8-bit access).
+    fn selects_odd_sized_integers(&self) -> bool {
         true
     }
 

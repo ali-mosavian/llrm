@@ -7,8 +7,7 @@ import flagcheck as f  # noqa: E402
 import external_flags  # noqa: E402
 
 BASE = [*external_flags.flags("x86", ("-fno-pic",)), "-m32", "-march=i486", "-Dfar=", "-O1"]
-GCC = [*BASE, "-mpreferred-stack-boundary=2"]
-CLANG = [*BASE, "-mstack-alignment=4"]
+GCC = CLANG = BASE
 # What llrm-cc's clang ran for an m32 -O1 cell (logged through a clang wrapper, 2026-11-09, x_fir).
 OURS = ("-target i486-unknown-linux-gnu -fhosted -fshort-wchar -mlong-double-64 -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables "
         "-std=gnu99 -Xclang -fdefault-calling-conv=regcall -fdeclspec -Wno-unknown-attributes -nostdinc -isystem /h -idirafter /i "
@@ -60,7 +59,7 @@ def test_every_llrm_compile_of_build_sh_shares_one_flag_set_with_the_parity_chec
     lines = _llrm_lines()
     assert len(lines) >= 5, "premise: build.sh compiles llrm at four levels, the ELF build and the probe"
     for line in lines:
-        assert re.search(r"--target=x86_32-wat \$\{LLRM_FLAGS:-\} -mabi=\$ABI \$LLRM_LD (-\$?\w+ )?-march=i486", line), line
+        assert re.search(r"--target=x86_32-wat \$\{LLRM_FLAGS:-\} (\$\(HF llrm \$?\w+\) )?-mabi=\$ABI \$LLRM_LD (-\$?\w+ )?-march=i486", line), line
     text = (Path(__file__).parent / "build.sh").read_text()
     assert "ABI=${VSGCC_ABI:-sysv}" in text and "LLRM_LD=${VSGCC_LLRM_LD--mlong-double-80}" in text
     parity = (Path(__file__).parent / "flagparity.sh").read_text()

@@ -89,6 +89,22 @@ thread_local! {
     /// speed routine with the pin-structure wide path, and not the one with
     /// the small wide path (see [`with_fast_division`]).
     static FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether a long multiply calls `__mulsi3_fast` (see
+    /// [`with_fast_multiply`]).
+    static FAST_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the speed multiply called or not: 19 bytes linked once, a module
+/// asks for it only where its multiply sites run (`hotmultiply`,
+/// `select::module_text`).
+pub fn with_fast_multiply<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = FAST_MULTIPLY.with(|a| a.replace(allowed));
+    let result = f();
+    FAST_MULTIPLY.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the wide speed division allowed or not. Linked once, it costs
@@ -210,6 +226,44 @@ impl<const STACK: bool> Target for Mos<STACK> {
     /// join of a value with its argument cell removes that copy.
     fn copy_cost() -> u32 {
         crate::timing::estimate(Cpu::Mos6502, "ldx rc2").map_or(1, |priced| priced.bytes + priced.cycles as u32)
+    }
+
+    /// The copy of `from` into `to` in the timing tables: a transfer between
+    /// `a`, `x` and `y` (two through `a` between `x` and `y`), a store or a
+    /// load of a cell, and `lda`+`sta` between two cells. Greedy hints a
+    /// value the register that makes its copies cheapest.
+    fn copy_register_cost(
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        // Dormant: the hint moves 39 cells worse than the tip (6502-HINT-1
+        // follow-up).
+        if !llrm_support::env_flag!("LLRM_6502_COPY_HINT") {
+            return 0;
+        }
+        let is_index = |register: RegId| matches!(register, reg::A | reg::X | reg::Y);
+        if to == from || !(is_index(to) || is_cell(to)) || !(is_index(from) || is_cell(from)) {
+            return 0;
+        }
+        // bytes when the function is sized; clocks plus 3 per byte otherwise
+        // (the project's O2 rate)
+        let price = |mnemonic: &str, operand: &str| {
+            crate::timing::instruction(Cpu::Mos6502, mnemonic, operand)
+                .map_or(0, |cost| if size { cost.bytes } else { cost.cycles as u32 + 3 * cost.bytes })
+        };
+        let name = |register: RegId| match register {
+            reg::A => "a",
+            reg::X => "x",
+            _ => "y",
+        };
+        match (is_cell(to), is_cell(from)) {
+            (true, true) => price("lda", "rc2") + price("sta", "rc2"),
+            (true, false) => price(&format!("st{}", name(from)), "rc2"),
+            (false, true) => price(&format!("ld{}", name(to)), "rc2"),
+            (false, false) if to == reg::A || from == reg::A => price(&format!("t{}{}", name(from), name(to)), ""),
+            (false, false) => 2 * price("tax", ""),
+        }
     }
 
     /// `isAsCheapAsAMove` against the copy it replaces. In a register a literal
@@ -3553,6 +3607,9 @@ fn emit_with<const STACK: bool>(
     keep_carry_in_c(&mut function);
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
+    if crate::cmpzero::drop_zero_compares(&mut function) {
+        remove_dead(&mut function);
+    }
     reschedule_kills::<Mos<STACK>>(&mut function);
     commute_accumulator::<Mos<STACK>>(&mut function);
     two_address(&mut function);
@@ -3851,7 +3908,10 @@ fn emit_with<const STACK: bool>(
                         "_fast_byte"
                     } else if division && !FAST_DIVISION.with(|f| f.get()) {
                         "_fast_small"
-                    } else if division || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3") {
+                    } else if division
+                        || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
+                        || (callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
+                    {
                         "_fast"
                     } else {
                         ""
@@ -3876,9 +3936,10 @@ fn emit_with<const STACK: bool>(
                         let push_low = if cmos { "phx" } else { "txa\n  pha" };
                         format!("  lda {lo}\n  sec\n  sbc #1\n  tax\n  lda {hi}\n  sbc #0\n  pha\n  {push_low}\n")
                     };
+                    let name = &function.name;
                     writeln!(
                         out,
-                        "{keep}  lda #>(_ci{made}-1)\n  pha\n  lda #<(_ci{made}-1)\n  pha\n{target}{restore}  rts\n_ci{made}:"
+                        "{keep}  lda #>(_ci_{name}_{made}-1)\n  pha\n  lda #<(_ci_{name}_{made}-1)\n  pha\n{target}{restore}  rts\n_ci_{name}_{made}:"
                     )
                     .unwrap();
                 }
