@@ -99,6 +99,7 @@ Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not cl
 - **REC-2:** rectwo, 1230664 vs 555904 clk. gcc: `paths/5` clone on `n != 0`, then 8 recursive inlines; hand-specialised ours is still 2.3x gcc.
 - **REC-3:** x_hanoi2, 167712 vs 120944 clk.
 - **REC-4 (tried, not landed, 2026-11-05):** the O3 pair `(450, 450)` for `recursive_inlining_growth` (O3 is `(450, 150)`), A/B on release/next 2971106fb0, 8 cells of 284 change; net = clocks + 0.312 B (data included): fib and x_fib 234537 -> 97919 (+493 B), frames 5970838 -> 5024860 (+493 B), x_hanoi2 168023 -> 163783 (+1659 B); worse: bintree 60835 -> 62774 (+1878 B), quicksort 202006 -> 208234 (+1668 B), recchop 6255 -> 7038 (+2300 B), rectwo 1230940 -> 1416540 (+1206 B, +185k clk). Mixed, so O3 keeps 150. Ours already beats clang -O3 on clocks in the four worse cells (bintree 60475 vs 73587, quicksort 221218 vs 239181, recchop 5727 vs 7088, rectwo 1230664 vs 1823245), not on bytes; the gap left is to gcc and rests on its cloning (REC-1, REC-2).
+- **REC-2 growth (450, 150), retired 2026-11-11:** with REC-7's depth 2 the bound is never reached: reverting the entry moves no object of the 121 bench or 192 `tests/run/c` sources at -O1/-O2/-O3/-Os. The generic 150 stands.
 
 ## REC-2 update (2026-11-05, x86-m32): the tail call goes first at -O3
 

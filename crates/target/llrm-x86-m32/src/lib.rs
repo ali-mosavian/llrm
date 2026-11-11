@@ -218,11 +218,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
-        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also inlines the sites its
-        // splice brings. The pin inlines callee-first (`bar` into `foo`, cost 15 < 75, then `foo` into
-        // `main`); the size guard prices each edge alone and keeps both calls. byvalue_struct_address
-        // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
-        inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
@@ -231,11 +226,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
         // the estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
-        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 ->
-        // 99687 clk, x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are
-        // worse with 450; their O3 card is open). Owner x86-m32, exit
-        // 2026-11-20.
-        recursive_inlining_growth: Some((450, 150)),
         // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2 and -O3. rectwo -O2
         // 1449397 -> 347314 clk (1965 -> 277 B), fib 99618 -> 19993 (962 -> 215 B), frames
         // 5035113 -> 4585856. -O3 had gcc's 8: over 12 recursion programs it cost +5556 B and
