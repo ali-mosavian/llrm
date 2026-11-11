@@ -46,3 +46,32 @@ def test_a_cell_is_measured_when_every_llrm_module_it_names_compiled(tmp_path):
         assert f"{k.lower()}caller.llrm.obj" in (work / f"{k}LB.lnk").read_text()
         for pair in ("BL", "LL"):
             assert (work / f"{k}{pair}.UNMEASURED").is_file() and not (work / f"{k}{pair}.lnk").exists()
+
+
+def test_llrm_callers_are_armed_without_the_si_di_check_and_bcc_references_are_not_relaxed(tmp_path):
+    """-DARMED on llrm callers alone made every llrm caller that copies a struct with `rep movsd` report "lost 0003" (SI+DI) for a callee that kept them: llrm's own code legally uses SI/DI between arm() and verify()."""
+    seen = tmp_path / "flags"
+    stub = STUB.replace('echo "llrm $src" > "$out"', 'echo "llrm $src" > "$out"; echo "$src $*" >> "$SEEN"')
+    bins = tmp_path / "bin"
+    bins.mkdir()
+    for name, text in (("llrm-cc", stub), ("jwasm", QUIET), ("jwlink", QUIET), ("dosbox-x", QUIET)):
+        (bins / name).write_text(text)
+        (bins / name).chmod(0o755)
+    env = {**os.environ, "LLRM_BIN": str(bins), "DOSRUN": str(bins / "dosbox-x"), "BCLIB": str(tmp_path), "STUB_ACCEPT": ".", "SEEN": str(seen)}
+    subprocess.run([str(SCRIPT), str(tmp_path / "work")], capture_output=True, text=True, env=env)
+    lines = seen.read_text().splitlines()
+    for line in lines:
+        armed = line.split()[0].endswith(("caller.c", "agger.c"))
+        assert ("-DARMED -DARMED_NO_SIDI" in line) == armed, line
+    assert len(lines) == 16
+    reference = (SCRIPT.parent / "reference.sh").read_text()
+    assert "-DARMED -r-" in reference and "NO_SIDI" not in reference
+
+
+def test_the_probe_has_a_verify_that_skips_si_and_di_and_keeps_sp_bp_ds_df():
+    """verify_nosidi must clear exactly bits 0 and 1 of the lost mask before it reports: SP (bit 3), BP, DS and DF still fail."""
+    probe = (SCRIPT.parents[2] / "tests/fixtures/callconv/c/probe.asm").read_text()
+    nosidi = probe[probe.index("_verify_nosidi proc far"):probe.index("_verify_nosidi endp")]
+    assert "and cx, 0FFFCh" in nosidi and nosidi.index("and cx, 0FFFCh") < nosidi.index("jcxz")
+    for check in ("cmp bp, savedbp", "cmp dx, savedsp", "test ax, 400h"):
+        assert check in nosidi, check
