@@ -1709,6 +1709,10 @@ impl<'a> Analyzer<'a> {
             let compares = 3 * clusters as i64 / 2 - 1;
             self.add_cost(compares * 2 * INSTR_COST);
         }
+        if let Some(tti) = self.site.tti {
+            let view = tti.inline_size_view();
+            self.size_units += view.as_deref().unwrap_or(tti).switch_code_size(clusters, table);
+        }
         false
     }
 

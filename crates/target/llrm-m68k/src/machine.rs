@@ -381,6 +381,16 @@ impl Tti for M68k {
         true
     }
 
+    /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
+    /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
+    /// range check, the dispatch and a word a case.
+    fn switch_code_size(&self, clusters: u64, table: u64) -> i64 {
+        if !self.code_size_bytes {
+            return 0;
+        }
+        if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
