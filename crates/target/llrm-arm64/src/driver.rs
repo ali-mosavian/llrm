@@ -237,8 +237,25 @@ fn lower_function(
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
         crate::lir_body::stages::observe(&machine)?;
     }
-    // The pin runs it in SSA, before PHIElimination: a loop counter's
-    // `sub` is its register's one definition there.
+    let optsize = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
+    // The pin runs it in SSA, before PHIElimination (a loop counter's `sub`
+    // is its register's one definition there) and after MachineCombiner (a
+    // `mul; sub` is an `msub` by then, which has no flag-setting form).
+    // Selection leaves a `subs` whose flags a `cbnz` never reads; as the pin's
+    // `optimizeCompareInstr` it is the plain `sub` before the combiner fuses it.
+    if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
+        crate::prepass::non_flag_setting(&mut machine);
+        crate::combine::run(&mut machine, optsize);
+        dump("Combine (SSA)", &machine);
+    }
     crate::condbrtuning::run(&mut machine);
     dump("CondBrTuning", &machine);
     crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
@@ -251,15 +268,6 @@ fn lower_function(
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
     machine.unwind = crate::cfi::Unwind::of(function);
-    let optsize = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
     crate::prepass::run(&mut machine, optsize);
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {

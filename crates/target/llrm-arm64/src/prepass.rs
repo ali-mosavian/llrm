@@ -407,7 +407,7 @@ fn dead_definitions(function: &mut MFunc) {
 
 /// An add or subtract that sets flags nothing reads is the plain instruction
 /// (`optimizeCompareInstr`, `convertToNonFlagSettingOpc`).
-fn non_flag_setting(function: &mut MFunc) {
+pub(crate) fn non_flag_setting(function: &mut MFunc) {
     for block in &mut function.blocks {
         for at in 0..block.ops.len() {
             if flag_setting(&block.ops[at]) && flags_dead(&block.ops, at) {

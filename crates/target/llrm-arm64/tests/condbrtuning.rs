@@ -39,3 +39,17 @@ fn a_loop_counter_decrement_sets_the_flags_the_latch_reads() {
     assert!(asm.contains("subs"), "{asm}");
     assert!(!asm.contains("cbz") && !asm.contains("cbnz"), "{asm}");
 }
+
+/// `sdiv; mul; subs; b.ne` where the pin keeps `sdiv; msub; cbnz` (recgcd -O2
+/// +8 B): the pass ran before `mul; sub` became an `msub`, which has no
+/// flag-setting form; the pin runs it after MachineCombiner.
+#[test]
+fn a_remainder_tested_against_zero_stays_a_msub() {
+    let ir = format!(
+        "{DATALAYOUT}declare void @g()\ndefine void @f(i32 %a, i32 %b) {{\n  %r = srem i32 %a, %b\n  %c = icmp eq i32 %r, 0\n  \
+         br i1 %c, label %x, label %y\nx:\n  ret void\ny:\n  call void @g()\n  ret void\n}}\n"
+    );
+    let asm = assembly(&ir);
+    assert!(asm.contains("msub"), "{asm}");
+    assert!(!asm.contains("subs"), "{asm}");
+}
