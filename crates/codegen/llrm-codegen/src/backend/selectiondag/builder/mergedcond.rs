@@ -558,6 +558,26 @@ mod tests {
         tti: bool,
         tuning: llrm_mir::target::Tuning,
     ) -> usize {
+        let x86 = tti.then(|| llrm_x86::tti::X86::of_cpu("i486").unwrap());
+        lowered_blocks(body, x86, tuning)
+    }
+
+    /// `split_blocks` where the i486 cost model prices a merged pair at
+    /// `clocks` (`Tuning::merged_condition_clocks`).
+    fn split_blocks_priced(
+        body: &str,
+        clocks: i64,
+    ) -> usize {
+        let mut x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+        x86.tuning.merged_condition_clocks = clocks;
+        lowered_blocks(body, Some(x86), llrm_mir::target::Tuning::PIN)
+    }
+
+    fn lowered_blocks(
+        body: &str,
+        x86: Option<llrm_x86::tti::X86>,
+        tuning: llrm_mir::target::Tuning,
+    ) -> usize {
         let text = format!(
             "target datalayout = \"e-p:32:32-n8:16:32\"\ndefine i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, ptr %p, i8 %e) {{\nentry:\n  %x = icmp slt i32 %a, %b\n{body}\n  br i1 %o, label %t, label %e2\nt:\n  ret i32 1\ne2:\n  ret i32 2\n}}\n"
         );
@@ -569,8 +589,8 @@ mod tests {
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         let mut target = BuilderTarget::for_pointer_bits(32).with_tuning(tuning);
-        if tti {
-            target = target.with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
+        if let Some(x86) = x86 {
+            target = target.with_tti(Some(std::rc::Rc::new(x86)));
         }
         build_block(
             &module,
@@ -695,6 +715,35 @@ mod tests {
         let knob = llrm_mir::target::Tuning { split_merged_conditions: true, ..llrm_mir::target::Tuning::PIN };
         assert_eq!(split_blocks(CHEAP, true), 0, "the pin keeps it");
         assert_eq!(split_blocks_with(CHEAP, true, knob), 1, "the knob splits it");
+    }
+
+    /// DEVIATE SD103-M32: a merged pair costs a `setcc` per compare, a logic op
+    /// and a `test` the pin's latency rule does not count. sieve -O1,
+    /// `i < 32 && i*i < n`, merged `setb; setb; and; cmp 1; jne` and ran 20.6%
+    /// more clocks (24,676 against 29,771) than two branches: with the price a
+    /// cheap right side that does not fold splits, as it does with no price at
+    /// the pin's (0).
+    #[test]
+    fn a_merged_pair_that_costs_setcc_and_a_logic_op_splits_where_priced() {
+        assert_eq!(split_blocks_priced(CHEAP, 0), 0, "the pin's budget keeps it");
+        assert_eq!(split_blocks_priced(CHEAP, 8), 1, "priced, it is two branches");
+    }
+
+    /// A pair the DAG joins into one compare (`foldLogicOfSetCCs`: `x < 0 ||
+    /// y < 0` is `(x | y) < 0`) has no `setcc` pair to pay for and stays
+    /// merged at any price: the stft counter loops took a stack slot for the
+    /// split sign tests (`test; js; test; js` for `or; js`, +11 B each).
+    #[test]
+    fn a_pair_the_dag_folds_to_one_compare_stays_merged_at_any_price() {
+        let sign = |first: &str, second: &str| {
+            format!("  %y = icmp {first} i32 %c, 0\n  %z = icmp {second} i32 %d, 0\n  %o = or i1 %z, %y")
+        };
+        assert_eq!(split_blocks_priced(&sign("slt", "slt"), 8), 0, "(c | d) < 0");
+        assert_eq!(split_blocks_priced(&sign("slt", "sgt"), 8), 1, "unequal compares do not fold");
+        let and = "  %y = icmp eq i32 %c, 0\n  %z = icmp eq i32 %d, 0\n  %o = and i1 %z, %y";
+        assert_eq!(split_blocks_priced(and, 8), 0, "(c | d) == 0");
+        let other = "  %y = icmp eq i32 %c, 5\n  %z = icmp eq i32 %d, 5\n  %o = and i1 %z, %y";
+        assert_eq!(split_blocks_priced(other, 8), 1, "only 0 and -1 fold");
     }
 
     /// Without a cost model the target says nothing and the pin's default

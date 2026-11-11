@@ -145,12 +145,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
         lftr_any_stride: true,
-        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24, as m16): at the 486 and P5 rates a
-        // merged `a && b` is two `setcc`, a logic op, a `test` and a `jcc`, and byte registers
-        // are scarce; split, the second compare runs only if the first holds and the branch
-        // costs 1 clk not taken. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb; and;
-        // cmp 1; jne`.
-        split_merged_conditions: true,
+        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24): the pin's cost rule, with the price
+        // of a merged `a && b` it omits taken from the table: two `setcc`, a logic op and a
+        // `test`, less the branch saved. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb;
+        // and; cmp 1; jne`, 20% more clocks; a pair the DAG folds to one compare stays merged.
+        merged_condition_clocks: 2 * costs.set + 2 * costs.add - costs.branch,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,

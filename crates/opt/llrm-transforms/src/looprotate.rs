@@ -1172,8 +1172,9 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     let mut info = analyze(run);
     // The loop pass manager's worklist is popped from the back: a loop's
     // children before it, siblings in program order.
-    let headers: Vec<BlockId> =
+    let mut headers: Vec<BlockId> =
         info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
     let mut stale = IdSet::<BlockId>::new();
     let mut changed = false;
     for header in headers {
