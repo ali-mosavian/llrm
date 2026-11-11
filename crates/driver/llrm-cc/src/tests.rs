@@ -590,3 +590,28 @@ fn resource_dir_defers_to_clang_when_ambiguous_and_follows_symlinks() {
     assert_eq!(many, Some(PathBuf::from("/spawned")));
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// A 6502 program linked from one C source kept every external function
+/// nothing calls: float_return was 5945 B against llvm-mos's 90 (its linker
+/// drops them). The sweep is the default of that link only: not of `-S` or
+/// `-c` (other units may name the globals), of several sources, nor of a row
+/// whose backend lacks it.
+#[test]
+fn one_source_linked_for_the_6502_sweeps_what_main_does_not_reach() {
+    let table = targets(TARGETS).unwrap();
+    let args = |name: &str, line: &str| llc_args(&table[name], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let on = "-O2 x.c -o x";
+    for name in ["6502-cc65", "65c02-cc65"] {
+        assert!(args(name, on).contains(&"-fwhole-program".to_owned()), "{name}");
+        for line in
+            ["-O2 -S x.c", "-O2 -c x.c", "-O2 x.c y.c -o x", "-O2 x.c y.o -o x", "-O2 -fno-whole-program x.c -o x"]
+        {
+            assert!(!args(name, line).contains(&"-fwhole-program".to_owned()), "{name}: {line}");
+        }
+    }
+    // identity elsewhere: the same command line on every other row, bit for bit
+    for (name, row) in table.iter().filter(|(name, _)| !name.contains("cc65")) {
+        assert!(!row.whole_program, "{name}");
+        assert!(!args(name, on).contains(&"-fwhole-program".to_owned()), "{name}");
+    }
+}

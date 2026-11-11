@@ -258,6 +258,9 @@ pub mod globalbool;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
+pub mod internalize;
+#[cfg(test)]
+mod internalize_tests;
 pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
