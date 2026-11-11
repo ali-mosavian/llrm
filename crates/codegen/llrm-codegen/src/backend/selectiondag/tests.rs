@@ -107,6 +107,7 @@ mod wasm_hooks;
 mod wide_compare;
 mod wide_counts;
 mod wide_division;
+mod funnel_pos_neg;
 mod wide_shifts;
 mod window;
 mod x86_64_legal;
