@@ -32,6 +32,23 @@ whole +21.6M; the O1 rule takes the smaller relative regret.
   int64_division (-328, 147150), licm_graph_callee_footprint, memmove_overlap, phi_slot_unknown_arm (-7, 2942), rep_count,
   shrink_wrapped_frame (-4, 732), switch_peeled_table, wide_shift_by_one, word_compare_branches (16, 0).
 
+## Against the best SDCC (the bar), cells with a bar
+
+Bar: best of the four SDCC 4.5.0 variants per axis (owner table 2026-11-10 12:00Z); O1/Os/Oz above the bar = worse on either
+axis, O2/O3 = clocks + 3 x bytes. Script `ab/bar.py` (base = tip 0db87355f6, B = this PR).
+
+| level | cells with a bar | above the bar, base -> B | above on both axes, base -> B | newly above | no longer above |
+|---|---|---|---|---|---|
+| O2 | 75 | 4 -> 4 | 3 -> 3 | none | 0 |
+| Os | 74 | 14 -> 13 | 3 -> 3 | none | 1 |
+| O1 | 74 | 14 -> 12 | 3 -> 3 | rep_count (289 -> 340 B; bar 273) | 3 |
+| Oz | 74 | 14 -> 13 | 4 -> 4 | none | 1 |
+| O3 | 76 | 3 -> 3 | 2 -> 2 | none | 0 |
+
+The O1 clocks trade is below the bar on both axes: `div_constants_long` 15633 -> 14173 B (bar 15095) and 478.7M -> 479.7M T (bar
+991M); `div_constants_ulong` 10353 -> 9634 B (bar 10022), 290.8M -> 301.9M T (bar 656M). Both were above the bar on bytes.
+`wide_shift_by_one` +100 B stays under its bar (1110 -> 1210 vs 1567 B).
+
 ## Causes (largest first)
 
 1. wide_shift_by_one +100 B (O1/O2/O3): base calls `__mulsi3` (x 514), B emits the inline shift-and-add form. Seen in the
