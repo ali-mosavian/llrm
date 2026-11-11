@@ -60,6 +60,10 @@ thread_local! {
 }
 
 impl Target for Z80Registers {
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        std::rc::Rc::new(crate::msched::Z80Model)
+    }
+
     /// The pin joins a copy with a physical register only when it is reserved
     /// (`canJoinPhys`); an argument pair is not, so the copy stays and the
     /// word can spill instead of holding its pair to its last use. The

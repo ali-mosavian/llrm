@@ -100,6 +100,7 @@ fn boundary(
     regs: Regs,
     bits: u32,
     one: &Insn,
+    pinned_as_edges: bool,
 ) -> bool {
     let Some(what) = &one.what else { return true };
     matches!(
@@ -121,8 +122,7 @@ fn boundary(
         || one.group.is_some()
         || !one.clobbers.is_empty()
         || !one.clobbers_high.is_empty()
-        || !one.requires.is_empty()
-        || !one.delivers.is_empty()
+        || (!pinned_as_edges && (!one.requires.is_empty() || !one.delivers.is_empty()))
         || !one.spread.is_empty()
         || one.frame_adjust
         || modifies_stack_pointer(regs, one)
@@ -139,11 +139,12 @@ pub fn regions(
     insns: &[Arc<Insn>],
     regs: Regs,
     bits: u32,
+    pinned_as_edges: bool,
 ) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut start = None;
     for (index, one) in insns.iter().enumerate() {
-        if boundary(regs, bits, one) {
+        if boundary(regs, bits, one, pinned_as_edges) {
             if let Some(first) = start.take() {
                 out.push(first..index);
             }
@@ -1356,7 +1357,7 @@ pub fn scheduled(
         .iter()
         .map(|block| {
             let insns = block.insns.to_vec();
-            let regions = regions(&insns, regs, bits);
+            let regions = regions(&insns, regs, bits, sched.pinned_as_edges());
             // A region of fewer than two instructions has nothing to order.
             if regions.iter().all(|region| region.len() < 2) {
                 return block.clone();
@@ -1697,6 +1698,28 @@ mod tests {
         assert!(war[1].is_empty(), "{war:?}");
     }
 
+    /// Every instruction of a z80 function that wants `A` or `HL` was a region
+    /// boundary: `three` at -Os had 72 of 94 and the scheduler moved nothing. The
+    /// effect already holds the pinned register's lanes (`addPhysRegDeps`' physical
+    /// operands), so the reader of `cl` stays before the next writer of it without
+    /// the boundary, which the model's flag lifts.
+    #[test]
+    fn test_a_pinned_register_is_an_edge_when_the_model_says_so() {
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let cl = llrm_lir::registers::RegId::CL;
+        let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 1, address: None });
+        let mut insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(1)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(2)]), vec![2], vec![]),
+        ];
+        Arc::make_mut(&mut insns[0]).requires = vec![(llrm_lir::Held { value: 1, width: 1, offset: 0 }, cl)];
+        Arc::make_mut(&mut insns[1]).delivers = vec![(llrm_lir::Held { value: 2, width: 1, offset: 0 }, cl)];
+        assert!(regions(&insns, regs, 16, false).is_empty());
+        assert_eq!(regions(&insns, regs, 16, true), vec![0..2]);
+        let order = graph(&insns, regs, 16, &GenericModel, None).preds;
+        assert_eq!(order[1], [0], "the writer of cl follows its reader: {order:?}");
+    }
+
     /// A call, a terminator and a volatile access are in no region; the runs
     /// between are.
     #[test]
@@ -1704,7 +1727,7 @@ mod tests {
         let mut insns = body();
         insns.insert(2, insn(9, semantics(Operation::Call, "call", vec![], vec![]), vec![], vec![]));
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
+        assert_eq!(regions(&insns, regs, 16, false), vec![0..2, 3..5]);
     }
 
     /// `modifies_stack_pointer`: `add sp, 4` is neither a push, a pop nor a
@@ -1717,7 +1740,7 @@ mod tests {
         let imm = Loc::Imm(crate::model::ir::Imm { value: 4, width: 2, address: None });
         insns.insert(2, insn(9, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, imm]), vec![], vec![]));
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
+        assert_eq!(regions(&insns, regs, 16, false), vec![0..2, 3..5]);
     }
 
     /// Three constants feed two adds and a store. In source order all three
@@ -1911,7 +1934,7 @@ mod tests {
             insn(3, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(8)]), vec![2], vec![]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        assert_eq!(regions(&insns, regs, 16), [0..1, 3..4]);
+        assert_eq!(regions(&insns, regs, 16, false), [0..1, 3..4]);
     }
 
     /// One test per class of the pin's `isSchedulingBoundary`: each is a
@@ -1958,9 +1981,9 @@ mod tests {
             ("frame setup or destroy", frame),
         ];
         for (class, one) in &classes {
-            assert!(boundary(regs, 16, one), "{class} is a boundary");
+            assert!(boundary(regs, 16, one, false), "{class} is a boundary");
         }
-        assert!(!boundary(regs, 16, &plain), "a plain mov is not");
+        assert!(!boundary(regs, 16, &plain, false), "a plain mov is not");
     }
 
     /// An x87 compare's decoded effect writes the status word only; `fnstsw;
@@ -1993,7 +2016,7 @@ mod tests {
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         for name in ["fldcw", "fnstcw", "fnstsw"] {
             let one = insn(0, semantics(Operation::Move, name, vec![], vec![]), vec![], vec![]);
-            assert!(boundary(regs, 16, &one), "{name}");
+            assert!(boundary(regs, 16, &one, false), "{name}");
         }
     }
 

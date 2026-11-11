@@ -74,6 +74,14 @@ pub trait SchedulingModel {
         false
     }
 
+    /// Whether an instruction that requires or delivers a pinned register is
+    /// ordered by edges on that register's lanes (`addPhysRegDeps` on the
+    /// physical operands the pin gives it) rather than ending the region.
+    /// DEVIATE MS4: off by default, the coarser graph; the z80 states it.
+    fn pinned_as_edges(&self) -> bool {
+        false
+    }
+
     /// Whether the target has an x87 register stack, a pressure set of its own
     /// that the float operations' values are counted in (the pin's `RFP`).
     fn x87_stack(&self) -> bool {

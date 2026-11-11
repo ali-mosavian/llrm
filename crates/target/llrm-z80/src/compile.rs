@@ -637,6 +637,13 @@ fn allocate_once(
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
+    if std::env::var_os("LLRM_Z80_MSCHED").is_some() {
+        match crate::msched::schedule(&mut function) {
+            Ok(moved) if std::env::var_os("LLRM_Z80_MSCHED_LOG").is_some() => eprintln!("MSCHED {name} blocks_moved={moved}"),
+            Err(why) if std::env::var_os("LLRM_Z80_MSCHED_LOG").is_some() => eprintln!("MSCHED {name} refused: {why}"),
+            _ => {}
+        }
+    }
     ALLOCATIONS.with(|one| one.set(one.get() + 1));
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     let reads = expand::reads(&function);

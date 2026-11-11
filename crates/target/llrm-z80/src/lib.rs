@@ -14,6 +14,7 @@ pub mod carry;
 pub mod commute;
 pub mod ldir;
 pub mod mfunc;
+pub mod msched;
 pub mod narrow;
 pub mod post_update;
 pub mod prepare;
