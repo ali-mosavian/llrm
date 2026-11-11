@@ -2001,6 +2001,29 @@ pub trait Tti {
         0
     }
 
+    /// Multiplies the loop as written does to form an induction variable that
+    /// steps by `step` (`bits` wide) and is not a phi of its own: `i * 54`
+    /// where the loop only has `i`. LSR's baseline sees one add-recurrence
+    /// either way; the pin's note on `AddRecCost` is "This should be a
+    /// function of the stride" (LoopStrengthReduce.cpp, RateRegister). The
+    /// rating of the baseline adds this to `num_iv_muls`. DEVIATE LU17
+    /// (`lsr_use.rs`); 0 where multiplying is cheap.
+    fn lsr_written_step_multiplies(
+        &self,
+        _step: i64,
+        _bits: u32,
+    ) -> u32 {
+        0
+    }
+
+    /// Whether an offset LSR leaves unfolded in an address that has one base
+    /// register and no scale is folded into that address after LSR (the 6502's
+    /// `(zp),y` with a constant `y`): then it costs no add. DEVIATE LU16
+    /// (`lsr_use.rs`); the pin counts it as a base add.
+    fn unfolded_address_offsets_fold(&self) -> bool {
+        false
+    }
+
     /// Whether the target adds registers and an immediate in one instruction
     /// whatever the use (x86's `lea`): an unfolded offset beside two or more
     /// registers then costs no add of its own, for a value of `bits` bits.
