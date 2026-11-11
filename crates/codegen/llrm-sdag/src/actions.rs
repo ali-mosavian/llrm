@@ -139,6 +139,9 @@ pub struct TargetLowering {
     /// function that is not (the unsized form the caller prices against the
     /// inline one).
     force_shift_calls: bool,
+    /// An `i64` shifted by an amount known below the half width is the routine's call, not the inline
+    /// expansion the pin makes (SD241): a target whose inline policy is not priced yet keeps the call.
+    libcall_for_small_variable_shift: bool,
     /// A constant factor the combiner turns into shifts and adds, so the
     /// multiply is not the library call outside functions tuned for size.
     inline_constant_mul: Option<fn(u128) -> bool>,
@@ -192,6 +195,7 @@ impl TargetLowering {
             cmov: false,
             size_shift_call: None,
             force_shift_calls: false,
+            libcall_for_small_variable_shift: false,
             inline_constant_mul: None,
             small_divide: false,
             size_only: false,
@@ -303,6 +307,15 @@ impl TargetLowering {
     /// `getMinStackArgumentAlignment`, in bytes.
     pub fn min_stack_argument_alignment(&self) -> u32 {
         self.min_stack_argument_alignment
+    }
+
+    /// SD241: keep the shift routine for a wide shift by a variable amount known below the half width.
+    pub fn set_libcall_for_small_variable_shift(&mut self) {
+        self.libcall_for_small_variable_shift = true;
+    }
+
+    pub fn libcall_for_small_variable_shift(&self) -> bool {
+        self.libcall_for_small_variable_shift
     }
 
     pub fn set_size_shift_call(

@@ -313,6 +313,15 @@ impl GreedyEnv for BodyEnv<'_> {
     ) -> Vec<(u32, RegId)> {
         self.tii.preferred_registers(insn)
     }
+
+    fn copy_register_cost(
+        &self,
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        self.tii.copy_register_cost(to, from, size)
+    }
 }
 
 /// What `SplitKit` asks of the function: its loops, its terminators and the
@@ -1692,6 +1701,149 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+    /// X86's forms with `copy_register_cost` stated: copying into `cheap` costs
+    /// 0, into any other register 1.
+    struct CopyPriced<'a> {
+        inner: crate::greedy::tii::X86InstrInfo<'a>,
+        cheap: RegId,
+    }
+
+    impl crate::greedy::tii::TargetInstrInfo for CopyPriced<'_> {
+        fn is_plain_move(
+            &self,
+            what: &crate::model::ir::Semantics,
+        ) -> bool {
+            self.inner.is_plain_move(what)
+        }
+        fn copy_semantics(
+            &self,
+            to: u32,
+            from: u32,
+            width: u32,
+        ) -> crate::model::ir::Semantics {
+            self.inner.copy_semantics(to, from, width)
+        }
+        fn remat_shape(
+            &self,
+            one: &Insn,
+        ) -> bool {
+            self.inner.remat_shape(one)
+        }
+        fn is_trivially_re_materializable(
+            &self,
+            def: &Insn,
+            invariant: bool,
+        ) -> bool {
+            self.inner.is_trivially_re_materializable(def, invariant)
+        }
+        fn argument_loads(
+            &self,
+            body: &LirBody,
+        ) -> BTreeSet<u32> {
+            self.inner.argument_loads(body)
+        }
+        fn fold_memory_operand(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &crate::model::ir::Mem,
+        ) -> Option<Arc<Insn>> {
+            self.inner.fold_memory_operand(one, reg, cell)
+        }
+        fn fold_copy_member(
+            &self,
+            one: &Insn,
+            values: &BTreeSet<u32>,
+            frame: &mut dyn FrameInfo,
+            home: &dyn Fn(u32) -> u32,
+        ) -> Result<Option<Arc<Insn>>, crate::backend::allocresult::Error> {
+            self.inner.fold_copy_member(one, values, frame, home)
+        }
+        fn load_reg_from_stack_slot(
+            &self,
+            beside: &Insn,
+            into: u32,
+            cell: &crate::model::ir::Mem,
+        ) -> Arc<Insn> {
+            self.inner.load_reg_from_stack_slot(beside, into, cell)
+        }
+        fn store_reg_to_stack_slot(
+            &self,
+            beside: &Insn,
+            out_of: u32,
+            cell: &crate::model::ir::Mem,
+        ) -> Arc<Insn> {
+            self.inner.store_reg_to_stack_slot(beside, out_of, cell)
+        }
+        fn needs_data_group(
+            &self,
+            one: &Insn,
+        ) -> bool {
+            self.inner.needs_data_group(one)
+        }
+        fn copy_register_cost(
+            &self,
+            to: RegId,
+            _from: RegId,
+            _size: bool,
+        ) -> u32 {
+            u32::from(to != self.cheap)
+        }
+    }
+
+    /// llvm-mos `getRegAllocationHints`, `COPY` (MOSRegisterInfo.cpp#L753):
+    /// `v2 = copy v1` where `v1` holds eax and stays live past the copy, so
+    /// `v2` cannot share it. Without a stated copy cost `v2` takes the first
+    /// free register of its order (ebx); with it, the register that makes the
+    /// copy cheapest (ecx), though it comes last.
+    #[test]
+    fn test_a_copy_hints_the_register_that_makes_it_cheapest() {
+        use crate::greedy::tii::TargetInstrInfo as _;
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
+        let plain = |at: i64, defines: &[u32], uses: &[u32]| {
+            Arc::new(Insn::new(at, None, None, defines.to_vec(), uses.to_vec()))
+        };
+        let copy = Arc::new(Insn::new(1, None, Some(tii.copy_semantics(2, 1, 2)), vec![2], vec![1]));
+        let insns = vec![plain(0, &[1], &[]), copy, plain(2, &[], &[1]), plain(3, &[], &[2]), plain(4, &[], &[1])];
+        let body = LirBody::new(
+            "copy_hint",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |_: u32| vec![RegId::EAX, RegId::EBX, RegId::ECX];
+        let place = |tii: &dyn crate::greedy::tii::TargetInstrInfo| {
+            let inputs = ShadowInputs {
+                body: &body,
+                registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+                order: &order,
+                pins: &IndexMap::default(),
+                unspillable: &BTreeSet::new(),
+                data: None,
+                sets: None,
+                stable_loads: true,
+                saved: &[],
+                tii,
+                tri: &crate::greedy::targetinfo::X86RegisterInfo,
+                size: false,
+                lane_pins: false,
+                carry_slot_indexes: true,
+            };
+            let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+            let at = |value: u32| decided.placed.iter().find(|(v, _)| *v == value).map(|(_, reg)| *reg);
+            (at(1), at(2))
+        };
+        assert_eq!(place(&tii), (Some(RegId::EAX), Some(RegId::EBX)), "premise: no stated cost, order decides");
+        let priced = CopyPriced { inner: tii, cheap: RegId::ECX };
+        assert_eq!(place(&priced), (Some(RegId::EAX), Some(RegId::ECX)));
+    }
+
 
     /// The interference cache searched the regmask slots twice (two binary
     /// searches over `SlotIndex`es, 364 instructions) for every block it

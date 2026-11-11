@@ -70,9 +70,7 @@ impl Arm64Model {
         &self,
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
-        let name = insn.what.as_ref()?.name.as_deref()?;
-        let llvm = *llvm_names(name).first()?;
-        let opcode = *opcode_numbers().get(llvm)?;
+        let opcode = *opcode_numbers().get(pin_opcode(insn)?)?;
         // An opcode only the vector patterns emit has no class while the vectors are off: it was unmodeled before them.
         if !crate::machine::vectors_enabled() && llrm_dagisel::generated::aarch64::sched::dynamic_only(opcode) {
             return None;
@@ -86,6 +84,38 @@ impl Arm64Model {
             Modeled::Class(data) => Some(data),
             Modeled::Unmodeled | Modeled::Unsupported => None,
         }
+    }
+}
+
+/// The opcode the pin has for `insn` where the scheduler runs: the LLVM name
+/// of its form, or of the operation `lir_view` names without a form (a frame
+/// address is `ADDXri` of a frame index, a zero is `COPY $xzr`), with a
+/// register offset's opcode chosen by its extend (`roX` for a 64-bit index,
+/// `roW` for a 32-bit one; the shift is an operand, not part of the opcode).
+fn pin_opcode(insn: &Insn) -> Option<&'static str> {
+    let name = insn.what.as_ref()?.name.as_deref()?;
+    // A floating-point zero is a pseudo (`FMOVS0`) until the pin expands it after
+    // allocation to `fmov s, wzr`; the scheduler sees the pseudo.
+    let zero_source = matches!(
+        insn.what.as_ref()?.sources.first(),
+        Some(Loc::Reg(reg)) if reg.register == crate::reg::XZR
+    );
+    match name {
+        "FMOVHWr" | "FMOVHXr" if zero_source => return Some("FMOVH0"),
+        "FMOVSWr" if zero_source => return Some("FMOVS0"),
+        "FMOVDXr" if zero_source => return Some("FMOVD0"),
+        "FrameAddress" => return Some("ADDXri"),
+        "Zero" => return Some("COPY"),
+        _ => {}
+    }
+    let register_offset = name.split_once('.').and_then(|(head, suffix)| {
+        let digits = suffix.strip_prefix("ro")?.as_bytes();
+        let wide = matches!(digits.first()?, b'3' | b'7');
+        Some((format!("{head}.ro21"), if wide { "roX" } else { "roW" }))
+    });
+    match register_offset {
+        Some((row, tail)) => llvm_names(&row).iter().copied().find(|opcode| opcode.ends_with(tail)),
+        None => llvm_names(name).first().copied(),
     }
 }
 
@@ -349,6 +379,76 @@ mod tests {
 
     fn imm(value: i64) -> Loc {
         Loc::Imm(Imm { value, width: 4, address: None })
+    }
+
+    /// A frame address is `ADDXri` of a frame index to the pin; the model
+    /// missed it and priced it as an unmodeled opcode (no resource write).
+    #[test]
+    fn a_frame_address_is_priced_as_an_add_immediate() {
+        let model = Arm64Model::generic();
+        let address = form("FrameAddress", vec![]);
+        let add = form("ADDXri", vec![held(2), imm(1), imm(0)]);
+        let resources = |one: &Insn| model.unit(one).writes.iter().map(|write| write.idx).collect::<Vec<_>>();
+        assert_eq!(resources(&address), resources(&add));
+        assert_eq!(model.def_latency(&address), model.def_latency(&add));
+        assert!(!model.unit(&address).writes.is_empty(), "it writes a resource of the model");
+    }
+
+    /// A copy and a zero (`COPY $xzr`) are the model's `COPY` class (one
+    /// micro-op of one cycle on a resource): `COPY` had no number in the
+    /// table, so both were priced as unmodeled (matmul O2: 2 copies, 2 zeros).
+    #[test]
+    fn a_copy_and_a_zero_are_priced_by_the_models_copy_class() {
+        let model = Arm64Model::generic();
+        for name in ["COPY", "Zero"] {
+            let one = form(name, vec![held(2)]);
+            assert_eq!((model.unit(&one).micro_ops, model.def_latency(&one)), (1, 1), "{name}");
+            assert!(!model.unit(&one).writes.is_empty(), "{name} writes a resource of the model");
+        }
+    }
+
+    /// `fmov s0, wzr` is the pin's `FMOVS0` where the scheduler runs (the
+    /// pseudo expands after allocation): its own class (four cycles on the
+    /// A510), not the three of a transfer from a value.
+    #[test]
+    fn a_floating_point_zero_is_the_pin_pseudo_not_a_transfer() {
+        let zero = |name: &str, source: Loc| pin_opcode(&form(name, vec![source]));
+        let wzr = Loc::Reg(llrm_lir::Reg { register: crate::reg::XZR, width: 4 });
+        assert_eq!(zero("FMOVSWr", wzr.clone()), Some("FMOVS0"));
+        assert_eq!(zero("FMOVDXr", wzr.clone()), Some("FMOVD0"));
+        assert_eq!(zero("FMOVSWr", held(2)), Some("FMOVSWr"), "a move from a value stays a transfer");
+        let model = Arm64Model::generic();
+        let latency = |name: &str, source: Loc| model.def_latency(&form(name, vec![source]));
+        assert_eq!((latency("FMOVSWr", wzr), latency("FMOVSWr", held(2))), (4, 3));
+    }
+
+    /// A register offset is `roX` for a 64-bit index (`uxtx`, `sxtx`) and
+    /// `roW` for a 32-bit one, whatever the shift: `STRX.ro30` is `STRXroX`.
+    /// Only `ro21` was in the file, so every other register offset missed
+    /// the model.
+    #[test]
+    fn a_register_offset_is_the_pin_opcode_of_its_index_width() {
+        let opcode = |name: &str| pin_opcode(&form(name, vec![]));
+        assert_eq!(opcode("STRX.ro30"), Some("STRXroX"));
+        assert_eq!(opcode("STRX.ro31"), Some("STRXroX"));
+        assert_eq!(opcode("STRX.ro21"), Some("STRXroW"));
+        assert_eq!(opcode("LDRX.ro60"), Some("LDRXroW"));
+        assert_eq!(opcode("LDRX.ro70"), Some("LDRXroX"));
+        let model = Arm64Model::generic();
+        assert!(!model.unit(&form("STRX.ro30", vec![])).writes.is_empty(), "it writes a resource of the model");
+    }
+
+    /// `SUBXri`, `SUBWri` and others a form stands for had no number in the
+    /// table (only the opcodes the DAG patterns emit were listed), so the
+    /// model said nothing about them and the scheduler priced them as
+    /// unmodeled (matmul O2: `SUBXri`).
+    #[test]
+    fn every_opcode_a_form_stands_for_has_a_number_in_the_table() {
+        let numbered: std::collections::HashSet<&str> =
+            opcode_numbers().keys().flat_map(|names| names.split('|')).collect();
+        let missing: Vec<_> =
+            crate::opcode_rows::LLVM_OPCODES.iter().filter(|name| !numbered.contains(**name)).collect();
+        assert!(missing.is_empty(), "{} opcodes without a number: {missing:?}", missing.len());
     }
 
     /// The module header's example, read off the pin's Cortex-A510 tables:

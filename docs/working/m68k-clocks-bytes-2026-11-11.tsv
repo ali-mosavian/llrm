@@ -1,0 +1,1113 @@
+prog	cpu	level	ours_B	ours_clk	gcc_B	gcc_clk	clang_B	clang_clk	clock_kind	verdict	externals_with_clocks
+bench_io	68000	O1	261	UNMEASURED	None		289		UNMEASURED(ours)	ok	0
+bit_setclear	68000	O1	164	10464	188	10808	182	10432	worse	WORSE	2
+bit_test	68000	O1	176	8840	186	9046	194	8788	worse	WORSE	2
+bitcount_idioms	68000	O1	402	78806	400		672	85180	better	WORSE	1
+bitcount_u32	68000	O1	270	65938	320	66188	770	93204	better	ok	2
+bitcount_u64	68000	O1	424	86778	472	86728	1314	150608	worse	WORSE	2
+bitfield_long_long	68000	O1	158	9394	172	9492	None		better	ok	1
+bitfield_overhang_init	68000	O1	128	13688	208	13932	164	13712	better	ok	2
+builtin_expect	68000	O1	38	4058	36	4082	52	4094	better	WORSE	2
+builtins_table	68000	O1	94	5652	84	5664	140	5668	better	WORSE	2
+byte_multiply	68000	O1	148	185008	130	155460	184	201360	worse	WORSE	2
+byval_initializes	68000	O1	26	3062	28	3090	40	3094	better	ok	2
+byval_inline	68000	O1	122	9068	106	9066	162		worse	WORSE	1
+byval_struct	68000	O1	122	6640	246		222		UNMEASURED(no external)	ok	0
+byvalue_struct_address	68000	O1	214	4778	254	2632	32	1846	worse	WORSE	2
+call_cleanup_keeps_pair	68000	O1	182	51932	180	40286	202	43372	worse	WORSE	2
+call_clobbers_flags	68000	O1	130	5050	110	4978	152	5102	worse	WORSE	2
+call_keeps	68000	O1	278	14788	300	12950	308	14704	worse	WORSE	2
+clzll_ctzll_64	68000	O1	240	12032	246	12112	610	24488	better	ok	2
+compare_to_int64	68000	O1	230	8154	174	6648	244	22584	worse	WORSE	2
+compound_assignment_types	68000	O1	228	6402	265	6422	244	6398	worse	WORSE	2
+constant_int_float_compare	68000	O1	70	7752	48	7750	76	7768	worse	WORSE	2
+copy_runs	68000	O1	724	107134	1468	108440	None		better	ok	1
+data_int64	68000	O1	154	12354	160	12406	158	12370	better	ok	2
+div8_os	68000	O1	388	18082276	386	7686162	928	18630662	worse	WORSE	2
+div_constants_long	68000	O1	5532	141276214	5508	158624550	6800	146214376	better	VIRTUAL-OK	2
+div_constants_short	68000	O1	4714	59411278	4718	35309252	5908	63072242	worse	WORSE	2
+div_constants_ulong	68000	O1	3756	85033730	3718	101202900	4596	87456062	better	VIRTUAL-OK	2
+double_across_a_call_result	68000	O1	294	13134	358	14656	342	13462	better	ok	2
+double_against_int	68000	O1	70	6986	48	6974	76	7002	worse	WORSE	2
+double_to_int64	68000	O1	180	15196	174	15266	212	15870	better	WORSE	2
+double_to_uint64	68000	O1	322	49222	None		386		UNMEASURED(no external)	ok	0
+dse_merge_byte_order	68000	O1	26	1334	34	1354	60	1422	better	ok	2
+extension_chain_fused	68000	O1	44	5646	52	5650	74	5802	better	ok	2
+fcmp_all	68000	O1	5148	741400	6630	786200	None		better	ok	1
+fill_nest	68000	O1	212	UNMEASURED	198	246284	472	497068	UNMEASURED(ours)	WORSE	2
+fixed_point	68000	O1	2730	515562	None		2872		UNMEASURED(no external)	ok	0
+float_bits	68000	O1	90	11066	64	11060	96	11082	worse	WORSE	2
+float_conversions_loop	68000	O1	230	37552	218	35876	266	37646	worse	WORSE	2
+float_in_memory_loop	68000	O1	100	3965334	70	5128	236	3994712	worse	WORSE	2
+float_in_place_update	68000	O1	176	48556	16	1474	228	48806	worse	WORSE	2
+float_return	68000	O1	110	2866	98	2894	144	2898	better	WORSE	2
+frame_address_stack_args	68000	O1	322	3436	320	5384	440	3480	better	VIRTUAL-OK	2
+frameless	68000	O1	510	46250	566	53544	690		better	ok	1
+function_table	68000	O1	42	3078	38	2980	76	3214	worse	WORSE	2
+huffman_decode	68000	O1	480	136444	540	143316	660		better	ok	1
+idioms	68000	O1	1116	11519474	1348	11831888	2776	13059222	better	ok	2
+idiv_loop_os	68000	O1	138	2554026	136	2850958	280	2605392	better	VIRTUAL-OK	2
+inlined_tail_call_keeps_frame_stores	68000	O1	54	1570	52	1584	82	1634	better	WORSE	2
+int64_division	68000	O1	596	1064304	484	1172408	566		better	WORSE	1
+int_compared_with_float	68000	O1	408	19174	450	19414	496	19432	better	ok	2
+known_loads_walks	68000	O1	2421	462542	2167	387662	3783	910222	worse	WORSE	2
+licm_graph_callee_footprint	68000	O1	88	188244	90	221222	126	218314	better	ok	2
+local_initializers	68000	O1	70	8346	166	9146	76	8362	better	ok	2
+logical_value	68000	O1	166	6028	158	4844	252	7520	worse	WORSE	2
+long_compare_chain	68000	O1	1052	951272	910	830090	1188		worse	WORSE	1
+long_double_arguments	68000	O1	396	32110	None		466	32206	better	ok	1
+long_double_constant_store	68000	O1	64	8864	None		84	13856	better	ok	1
+long_double_decimal_literal	68000	O1	72	3764	None		76	3780	better	ok	1
+long_double_layout	68000	O1	378	24250	None		388	24282	better	ok	1
+long_double_stride	68000	O1	64	5844	None		80	5884	better	ok	1
+long_double_variadic	68000	O1	182	12952	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68000	O1	148	8666	148	8762	200	8762	better	ok	2
+long_step_by_one	68000	O1	132	58342	126	58080	178	58938	worse	WORSE	2
+loop_fusion	68000	O1	548	61538	696	62834	1034	90414	better	ok	2
+loop_interchange	68000	O1	306	UNMEASURED	346	4622644	592	4843890	UNMEASURED(ours)	ok	2
+loop_versioning	68000	O1	260	595950	334	443954	598	685590	worse	WORSE	2
+memcpy_libcall	68000	O1	288	52366	344	59708	366	88772	better	ok	2
+memcpy_runtime	68000	O1	246	25930714	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68000	O1	464	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68000	O1	230	16056	246	16960	320		better	ok	1
+memory_expansion	68000	O1	26462	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68000	O1	2564	11330928	3432	10641500	3414	11389556	worse	VIRTUAL-OK	2
+object_extent_loop	68000	O1	408	3188670	442	3244298	636	3229120	better	ok	2
+old_style_extra_args	68000	O1	254	10076	None		None		UNMEASURED(no external)	n/a	0
+os_console	68000	O1	57	472	None		97	584	better	ok	1
+os_exit	68000	O1	38	1400	None		48	1424	better	ok	1
+os_locals_between_pushes	68000	O1	236	8276	272	16520	268		better	ok	1
+over_aligned_local_after_even_pushes	68000	O1	766	203928	676	184154	1024		worse	WORSE	1
+overflow_builtins	68000	O1	1648	727528	2002	635800	1516		worse	WORSE	1
+pair_return	68000	O1	40	4510	42	4538	50	4534	better	ok	2
+pattern_fill	68000	O1	238	89782	232	86440	454	173444	worse	WORSE	2
+phi_slot_unknown_arm	68000	O1	262	829262	320	1045278	332	1302702	better	ok	2
+predefined_macros	68000	O1	70	6446	48	6434	76	6462	worse	WORSE	2
+recdeep	68000	O1	174	4107072	182	4481936	218	4188056	better	ok	2
+recmany_o1	68000	O1	208	4107072	194	4481996	264	4188056	better	VIRTUAL-OK	2
+register_args_truncate	68000	O1	70	1588	64	1588	104	1612	equal	WORSE	2
+register_upper_half	68000	O1	136	8764	132	9280	170	9352	better	WORSE	2
+rep_count	68000	O1	140	85460	118	69158	418	131298	worse	WORSE	2
+rotate_small	68000	O1	294	31846	263	25076	382	37084	worse	WORSE	2
+sat_builtins	68000	O1	632	275158	None		852	276862	better	ok	1
+sat_sub_u64_shared_compare	68000	O1	122	27606	None		158	28798	better	ok	1
+sbb_wide_sub	68000	O1	134	8318	144	8514	160	8362	better	ok	2
+select_of_constants	68000	O1	19672	1988486	18518	1827092	23496		worse	WORSE	1
+shift_int32_variable	68000	O1	288	569216	286	567422	256	559962	worse	WORSE	2
+shift_int64_masked_amount	68000	O1	344	196402	326	157572	400	211426	worse	WORSE	2
+shift_int64_variable	68000	O1	430	281724	432	142718	494	251164	worse	WORSE	2
+shift_until_idioms	68000	O1	612	268132	682	259668	1398	305910	worse	WORSE	2
+shl_long_by_one	68000	O1	146	54444	154	54700	174	53928	worse	WORSE	2
+shl_of_a_narrow_load_keeps_the_top_byte	68000	O1	58	1452	86	1512	None		better	ok	1
+shl_of_a_zero_extended_dividend	68000	O1	222	UNMEASURED	244		342		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68000	O1	184	10464	200	10280	272		worse	WORSE	1
+shrink_wrapped_saves	68000	O1	210	8096	254		292	7798	worse	WORSE	1
+shuttle_value	68000	O1	238	15354	202	15348	274	15370	worse	WORSE	2
+sibling_call_callees	68000	O1	82	2942	92	3034	142	3110	better	ok	2
+signbit_idioms	68000	O1	1500	309430	1802	317518	1570	304302	worse	WORSE	2
+spill_store_order	68000	O1	572	2088504	572	2008904	880		worse	WORSE	1
+split_loops	68000	O1	366	60820	394	39024	330	41520	worse	WORSE	2
+ssub_sat_i64_loop	68000	O1	134	11404	None		168	11456	better	ok	1
+stack_arrays_copy	68000	O1	106	8646	116	8838	166		better	ok	1
+static_inline	68000	O1	38	4804	72	5260	52	4836	better	ok	2
+static_pointers	68000	O1	273	22210	291	21912	383	22818	worse	WORSE	2
+strlen_idiom	68000	O1	62	5322	119	6562	96	5362	better	ok	2
+struct_odd_sizes	68000	O1	274	4356	218	3206	266	3210	worse	WORSE	2
+struct_with_i64	68000	O1	288	8948	224	6188	268	6200	worse	WORSE	2
+switch_empty_cases	68000	O1	70	2140	48	2016	88	2536	worse	WORSE	2
+switch_header_marker_loop	68000	O1	226	3330	276	3400	324	3660	better	ok	2
+switch_i64	68000	O1	236	9472	186	9444	254	9488	worse	WORSE	2
+switch_jump_table	68000	O1	310	49318	232	46918	382	49096	worse	WORSE	2
+switch_peeled_table	68000	O1	174	119092	192	96690	310	137958	worse	WORSE	2
+switch_table_holes	68000	O1	150	23766	160	27200	202	36700	better	ok	2
+sysv_abi	68000	O1	340	10896	262	10872	404	10912	worse	WORSE	2
+tail_call_long_argument	68000	O1	76	5102	84	3670	122	5234	worse	WORSE	2
+tail_calls	68000	O1	576	29212	660	32786	786		better	ok	1
+u64_shift_select_arms	68000	O1	248	8380	218	9166	368	7688	worse	WORSE	2
+uint64_to_float	68000	O1	368	43922	398	45292	92	9278	worse	WORSE	2
+urem_eq	68000	O1	402	55349020	382	63489172	536	56085096	better	VIRTUAL-OK	2
+value_of_valueless	68000	O1	36	1448	30	1448	36	1476	equal	WORSE	2
+variadic	68000	O1	256	7608	None		450	8878	better	ok	1
+volatile_bitfield	68000	O1	306	8184	472	8828	334	8260	better	ok	2
+wide_shift_by_one	68000	O1	278	143146	292	147990	342	141150	worse	WORSE	2
+widening_multiply	68000	O1	313	UNMEASURED	None		439		UNMEASURED(ours)	ok	0
+word_compare_branches	68000	O1	276	368736	318	129892	408	403392	worse	WORSE	2
+word_compares	68000	O1	256	115750	242	126276	362	156472	better	WORSE	2
+wrapv_overflow_check	68000	O1	206	6554	180	6538	270	6590	worse	WORSE	2
+write_through_parameter	68000	O1	104	6496	122	6430	144		worse	WORSE	1
+x87_arguments	68000	O1	620	240272	722	245220	684	241212	better	ok	2
+x87rotate	68000	O1	596	64614	566	63532	998	51664	worse	WORSE	2
+zz_f	68000	O1	46	5188	36	5202	52	5204	better	WORSE	2
+bench_io	68000	O2	247	UNMEASURED	None		343		UNMEASURED(ours)	ok	0
+bit_setclear	68000	O2	150	10476	142	10496	182	10432	worse	ok	2
+bit_test	68000	O2	162	8852	160	8898	194	8788	worse	ok	2
+bitcount_idioms	68000	O2	386	78674	378		672	85180	better	WORSE	1
+bitcount_u32	68000	O2	270	65938	292	66148	770	93204	better	ok	2
+bitcount_u64	68000	O2	428	86618	446	86700	1314	150608	better	ok	2
+bitfield_long_long	68000	O2	158	9496	160	9456	None		worse	WORSE	1
+bitfield_overhang_init	68000	O2	128	13688	208	13932	164	13712	better	ok	2
+builtin_expect	68000	O2	38	4058	36	4082	52	4094	better	ok	2
+builtins_table	68000	O2	94	5652	78	5664	140	5668	better	WORSE	2
+byte_multiply	68000	O2	148	185008	132	152356	184	201360	worse	WORSE	2
+byval_initializes	68000	O2	26	3062	28	3090	40	3094	better	ok	2
+byval_inline	68000	O2	154	8712	104	9082	None		better	ok	1
+byval_struct	68000	O2	74	5538	238		52	4282	worse	WORSE	1
+byvalue_struct_address	68000	O2	22	1822	256	1850	32	1846	better	ok	2
+call_cleanup_keeps_pair	68000	O2	210	52186	168	42278	210	42046	worse	WORSE	2
+call_clobbers_flags	68000	O2	130	5050	108	4946	152	5102	worse	WORSE	2
+call_keeps	68000	O2	278	14788	292	12780	308	14704	worse	WORSE	2
+clzll_ctzll_64	68000	O2	226	12044	246	12112	610	24488	better	ok	2
+compare_to_int64	68000	O2	402	7386	176	6604	40	3760	worse	WORSE	2
+compound_assignment_types	68000	O2	220	4140	283	6496	220		better	ok	1
+constant_int_float_compare	68000	O2	56	7764	48	7750	76	7768	worse	WORSE	2
+copy_runs	68000	O2	726	106434	850	107808	None		better	ok	1
+data_int64	68000	O2	154	12354	160	12406	158	12370	better	ok	2
+div8_os	68000	O2	388	8572344	350	7738370	532	8874090	worse	WORSE	2
+div_constants_long	68000	O2	5442	141167602	6752	158559240	6990	145954094	better	ok	2
+div_constants_short	68000	O2	4436	35613834	6858	35055520	5578		worse	WORSE	1
+div_constants_ulong	68000	O2	3644	84913026	7456	101201906	4682	87267410	better	ok	2
+double_across_a_call_result	68000	O2	294	13134	462	14692	342	13462	better	ok	2
+double_against_int	68000	O2	48	6974	48	6974	76	7002	equal	ok	2
+double_to_int64	68000	O2	58	8050	172	15310	64	8066	better	ok	2
+double_to_uint64	68000	O2	304	49150	None		804	47372	worse	WORSE	1
+dse_merge_byte_order	68000	O2	26	1334	26	1334	38	1362	equal	ok	2
+extension_chain_fused	68000	O2	86	5516	52	5650	110	5568	better	ok	2
+fcmp_all	68000	O2	5148	741400	5824	677172	None		worse	WORSE	1
+fill_nest	68000	O2	212	UNMEASURED	258	247100	900		UNMEASURED(ours)	ok	1
+fixed_point	68000	O2	2730	515562	None		10948		UNMEASURED(no external)	ok	0
+float_bits	68000	O2	72	11074	64	11060	96	11082	worse	WORSE	2
+float_conversions_loop	68000	O2	110	32306	218	35876	114	32322	better	ok	2
+float_in_memory_loop	68000	O2	166	3966440	70	5128	132	1798	worse	WORSE	2
+float_in_place_update	68000	O2	16	1474	16	1474	28	1502	equal	ok	2
+float_return	68000	O2	110	2866	98	2894	144	2898	better	ok	2
+frame_address_stack_args	68000	O2	322	3436	376	4358	440	3480	better	ok	2
+frameless	68000	O2	540	43268	520	59662	842		better	ok	1
+function_table	68000	O2	34	2972	38	2980	48	3004	better	ok	2
+huffman_decode	68000	O2	544	136142	526	145934	None		better	ok	1
+idioms	68000	O2	1308	11472688	1626	2998396	None		worse	WORSE	1
+idiv_loop_os	68000	O2	212	2474490	146	2441868	324	2510556	worse	WORSE	2
+inlined_tail_call_keeps_frame_stores	68000	O2	54	1570	52	1584	66	1586	better	ok	2
+int64_division	68000	O2	584	1064138	450	1169946	526	1103050	better	ok	2
+int_compared_with_float	68000	O2	390	19182	454	19540	496	19432	better	ok	2
+known_loads_walks	68000	O2	2063	234094	1981	164238	3917	322414	worse	WORSE	2
+licm_graph_callee_footprint	68000	O2	88	188244	98	221262	126	218314	better	ok	2
+local_initializers	68000	O2	60	8362	158	9150	76	8362	equal	ok	2
+logical_value	68000	O2	26	3112	134		40	3140	better	ok	1
+long_compare_chain	68000	O2	1012	958712	950	833726	1106	804296	worse	WORSE	2
+long_double_arguments	68000	O2	386	32126	None		466	32206	better	ok	1
+long_double_constant_store	68000	O2	64	8864	None		84	13856	better	ok	1
+long_double_decimal_literal	68000	O2	72	3764	None		76	3780	better	ok	1
+long_double_layout	68000	O2	336	24278	None		392	24306	better	ok	1
+long_double_stride	68000	O2	64	5844	None		80	5884	better	ok	1
+long_double_variadic	68000	O2	182	12952	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68000	O2	152	8674	154	8766	364	7940	worse	WORSE	2
+long_step_by_one	68000	O2	132	58342	124	58140	436	57862	worse	WORSE	2
+loop_fusion	68000	O2	880	60368	738	61698	None		better	ok	1
+loop_interchange	68000	O2	372	UNMEASURED	336	4640404	1424		UNMEASURED(ours)	WORSE	1
+loop_versioning	68000	O2	374	592166	352	137472	None		worse	WORSE	1
+memcpy_libcall	68000	O2	288	52366	384	61318	718	70770	better	ok	2
+memcpy_runtime	68000	O2	246	25930714	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68000	O2	534	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68000	O2	240	14660	256	18018	None		better	ok	1
+memory_expansion	68000	O2	27314	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68000	O2	2564	11330928	3432	10643228	3414	11389556	worse	WORSE	2
+object_extent_loop	68000	O2	388	3186822	420	3244360	2572	3231612	better	ok	2
+old_style_extra_args	68000	O2	244	10092	None		None		UNMEASURED(no external)	n/a	0
+os_console	68000	O2	57	472	None		97	584	better	ok	1
+os_exit	68000	O2	38	1400	None		48	1424	better	ok	1
+os_locals_between_pushes	68000	O2	282	8064	264	7232	328	8140	worse	WORSE	2
+over_aligned_local_after_even_pushes	68000	O2	704	200748	682	182110	998	226982	worse	WORSE	2
+overflow_builtins	68000	O2	1648	727240	2714	632266	1516		worse	WORSE	1
+pair_return	68000	O2	40	4510	42	4538	50	4534	better	ok	2
+pattern_fill	68000	O2	242	91402	250	92250	588	169530	better	ok	2
+phi_slot_unknown_arm	68000	O2	250	746290	328	980982	308	810482	better	ok	2
+predefined_macros	68000	O2	48	6434	48	6434	76	6462	equal	ok	2
+recdeep	68000	O2	116	4052850	118	4079894	190	4328898	better	ok	2
+recmany_o1	68000	O2	224	4052850	140	4079980	376	4328898	better	ok	2
+register_args_truncate	68000	O2	70	1588	54	1588	104	1612	equal	WORSE	2
+register_upper_half	68000	O2	138	8644	162	22444	170	9352	better	ok	2
+rep_count	68000	O2	140	85460	118	69518	1618		worse	WORSE	1
+rotate_small	68000	O2	276	31850	259	25046	448	26646	worse	WORSE	2
+sat_builtins	68000	O2	632	275158	None		852	276862	better	ok	1
+sat_sub_u64_shared_compare	68000	O2	122	27606	None		164	25124	worse	WORSE	1
+sbb_wide_sub	68000	O2	120	8330	144	8514	160	8362	better	ok	2
+select_of_constants	68000	O2	19652	1989136	18550	1802344	23496		worse	WORSE	1
+shift_int32_variable	68000	O2	268	568092	258	565690	510	553148	worse	WORSE	2
+shift_int64_masked_amount	68000	O2	344	196402	340	152970	470	93738	worse	WORSE	2
+shift_int64_variable	68000	O2	336	192018	446	134220	772	135116	worse	WORSE	2
+shift_until_idioms	68000	O2	604	268944	696	259766	1742	294522	worse	WORSE	2
+shl_long_by_one	68000	O2	146	54444	152	54284	174	53928	worse	WORSE	2
+shl_of_a_narrow_load_keeps_the_top_byte	68000	O2	58	1452	86	1512	None		better	ok	1
+shl_of_a_zero_extended_dividend	68000	O2	208	UNMEASURED	224		294		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68000	O2	154	9812	134	9192	52	4606	worse	WORSE	2
+shrink_wrapped_saves	68000	O2	38	5030	36	5054	52	5066	better	ok	2
+shuttle_value	68000	O2	216	15358	240	15348	274	15370	worse	ok	2
+sibling_call_callees	68000	O2	82	2942	84	2966	142	3110	better	ok	2
+signbit_idioms	68000	O2	1490	309026	1616	318098	2618	300150	worse	WORSE	2
+spill_store_order	68000	O2	604	2016690	724	1904102	1470		worse	WORSE	1
+split_loops	68000	O2	206	54502	204	32376	356	42314	worse	WORSE	2
+ssub_sat_i64_loop	68000	O2	134	11404	None		316	11174	worse	ok	1
+stack_arrays_copy	68000	O2	104	8286	112	8810	658	8514	better	ok	2
+static_inline	68000	O2	38	4804	74	5262	52	4836	better	ok	2
+static_pointers	68000	O2	277	22120	285	21924	393	21884	worse	WORSE	2
+strlen_idiom	68000	O2	62	5322	60	5348	96	5362	better	ok	2
+struct_odd_sizes	68000	O2	214	3178	206	3206	266	3210	better	ok	2
+struct_with_i64	68000	O2	206	6168	202	6188	268	6200	better	ok	2
+switch_empty_cases	68000	O2	42	2466	48	2016	56	2502	worse	WORSE	2
+switch_header_marker_loop	68000	O2	226	3330	254	3386	278	3522	better	ok	2
+switch_i64	68000	O2	218	9480	190	9444	254	9488	worse	WORSE	2
+switch_jump_table	68000	O2	310	49318	262	46260	382	49096	worse	WORSE	2
+switch_peeled_table	68000	O2	174	119092	442	70396	310	137958	worse	WORSE	2
+switch_table_holes	68000	O2	150	23766	170	24872	202	36700	better	ok	2
+sysv_abi	68000	O2	322	10904	262	10872	404	10912	worse	WORSE	2
+tail_call_long_argument	68000	O2	76	5102	82	3614	122	5234	worse	WORSE	2
+tail_calls	68000	O2	560	29066	610	27086	772		worse	WORSE	1
+u64_shift_select_arms	68000	O2	398	7804	384	8776	368	7688	worse	WORSE	2
+uint64_to_float	68000	O2	84	9262	120	8002	92	9278	worse	WORSE	2
+urem_eq	68000	O2	402	UNMEASURED	392	63457178	554	56309112	UNMEASURED(ours)	WORSE	2
+value_of_valueless	68000	O2	36	1448	30	1448	36	1476	equal	WORSE	2
+variadic	68000	O2	246	7422	None		462	8376	better	ok	1
+volatile_bitfield	68000	O2	292	8196	464	8776	334	8260	better	ok	2
+wide_shift_by_one	68000	O2	278	143146	296	149546	342	141150	worse	WORSE	2
+widening_multiply	68000	O2	313	UNMEASURED	None		439		UNMEASURED(ours)	ok	0
+word_compare_branches	68000	O2	276	368736	288	116216	408	403392	worse	WORSE	2
+word_compares	68000	O2	256	115750	222	86454	374	165418	worse	WORSE	2
+wrapv_overflow_check	68000	O2	196	6570	192	6538	270	6590	worse	WORSE	2
+write_through_parameter	68000	O2	48	5906	114	6442	64	5946	better	ok	2
+x87_arguments	68000	O2	822	239250	882	239620	1048	240620	better	ok	2
+x87rotate	68000	O2	1018	52778	786	63540	998	51664	worse	WORSE	2
+zz_f	68000	O2	46	5188	36	5202	52	5204	better	WORSE	2
+bench_io	68000	O3	247	15964	None		343	21438	better	ok	1
+bit_setclear	68000	O3	150	10476	142	10496	182	10432	worse	ok	2
+bit_test	68000	O3	162	8852	160	8898	194	8788	worse	ok	2
+bitcount_idioms	68000	O3	386	78674	378		1572	84690	better	WORSE	1
+bitcount_u32	68000	O3	270	65938	292	66148	1360	92812	better	ok	2
+bitcount_u64	68000	O3	428	86618	446	86700	2288	150118	better	ok	2
+bitfield_long_long	68000	O3	158	9496	160	9456	None		worse	WORSE	1
+bitfield_overhang_init	68000	O3	128	13688	208	13932	164	13712	better	ok	2
+builtin_expect	68000	O3	38	4058	36	4082	52	4094	better	ok	2
+builtins_table	68000	O3	94	5652	78	5664	140	5668	better	WORSE	2
+byte_multiply	68000	O3	148	185008	132	152356	116	43234	worse	WORSE	2
+byval_initializes	68000	O3	26	3062	28	3090	40	3094	better	ok	2
+byval_inline	68000	O3	154	8712	144	8702	None		worse	WORSE	1
+byval_struct	68000	O3	74	5538	232	6460	52	4282	worse	WORSE	2
+byvalue_struct_address	68000	O3	22	1822	22	1822	32	1846	equal	ok	2
+call_cleanup_keeps_pair	68000	O3	210	52186	168	42278	210	42046	worse	WORSE	2
+call_clobbers_flags	68000	O3	130	5050	108	4946	152	5102	worse	WORSE	2
+call_keeps	68000	O3	278	14788	292	12780	308	14704	worse	WORSE	2
+clzll_ctzll_64	68000	O3	226	12044	246	12112	610	24488	better	ok	2
+compare_to_int64	68000	O3	572	7820	30	3764	40	3760	worse	WORSE	2
+compound_assignment_types	68000	O3	220	4140	283	6496	220		better	ok	1
+constant_int_float_compare	68000	O3	56	7764	48	7750	76	7768	worse	WORSE	2
+copy_runs	68000	O3	726	106434	850	107808	None		better	ok	1
+data_int64	68000	O3	154	12354	160	12406	158	12370	better	ok	2
+div8_os	68000	O3	388	8572344	1400	7101518	1016		worse	WORSE	1
+div_constants_long	68000	O3	5442	141167602	11540	157993792	14458	145510834	better	ok	2
+div_constants_short	68000	O3	4436	35613834	11228	34987204	9484		worse	WORSE	1
+div_constants_ulong	68000	O3	3644	84913026	9240	100938530	9502	86974956	better	ok	2
+double_across_a_call_result	68000	O3	294	13134	462	14692	342	13462	better	ok	2
+double_against_int	68000	O3	48	6974	48	6974	76	7002	equal	ok	2
+double_to_int64	68000	O3	58	8050	46	8058	64	8066	better	WORSE	2
+double_to_uint64	68000	O3	304	49150	None		804	47372	worse	WORSE	1
+dse_merge_byte_order	68000	O3	26	1334	26	1334	38	1362	equal	ok	2
+extension_chain_fused	68000	O3	86	5516	52	5650	110	5568	better	ok	2
+fcmp_all	68000	O3	5148	741400	29854	614998	None		worse	WORSE	1
+fill_nest	68000	O3	212	UNMEASURED	780	134388	2576		UNMEASURED(ours)	ok	1
+fixed_point	68000	O3	2730	515562	None		10948		UNMEASURED(no external)	ok	0
+float_bits	68000	O3	72	11074	64	11060	96	11082	worse	WORSE	2
+float_conversions_loop	68000	O3	110	32306	114	32326	114	32322	better	ok	2
+float_in_memory_loop	68000	O3	166	3966440	70	5128	132	1798	worse	WORSE	2
+float_in_place_update	68000	O3	16	1474	16	1474	28	1502	equal	ok	2
+float_return	68000	O3	110	2866	98	2894	144	2898	better	ok	2
+frame_address_stack_args	68000	O3	322	3436	462	4284	440	3480	better	ok	2
+frameless	68000	O3	540	43268	772		842		UNMEASURED(no external)	ok	0
+function_table	68000	O3	34	2972	38	2980	48	3004	better	ok	2
+huffman_decode	68000	O3	544	136142	1670		None		UNMEASURED(no external)	ok	0
+idioms	68000	O3	1308	11472688	3524	2977796	5986		worse	WORSE	1
+idiv_loop_os	68000	O3	212	2474490	248	2442358	324	2510556	worse	WORSE	2
+inlined_tail_call_keeps_frame_stores	68000	O3	54	1570	52	1584	66	1586	better	ok	2
+int64_division	68000	O3	584	1064138	2234	852944	64	9812	worse	WORSE	2
+int_compared_with_float	68000	O3	390	19182	454	19540	496	19432	better	ok	2
+known_loads_walks	68000	O3	2211	234734	2845	162450	4521	347718	worse	WORSE	2
+licm_graph_callee_footprint	68000	O3	88	188244	98	221262	126	218314	better	ok	2
+local_initializers	68000	O3	60	8362	54	8346	76	8362	worse	WORSE	2
+logical_value	68000	O3	26	3112	28	3140	40	3140	better	ok	2
+long_compare_chain	68000	O3	1012	958712	950	833726	1106	804296	worse	WORSE	2
+long_double_arguments	68000	O3	386	32126	None		466	32206	better	ok	1
+long_double_constant_store	68000	O3	64	8864	None		642	6308	worse	WORSE	1
+long_double_decimal_literal	68000	O3	72	3764	None		76	3780	better	ok	1
+long_double_layout	68000	O3	336	24278	None		392	24306	better	ok	1
+long_double_stride	68000	O3	64	5844	None		80	5884	better	ok	1
+long_double_variadic	68000	O3	182	12952	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68000	O3	152	8674	222	8598	364	7940	worse	WORSE	2
+long_step_by_one	68000	O3	132	58342	124	58140	436	57862	worse	WORSE	2
+loop_fusion	68000	O3	880	60368	1320		None		UNMEASURED(no external)	ok	0
+loop_interchange	68000	O3	372	UNMEASURED	378	4631356	2720		UNMEASURED(ours)	ok	1
+loop_versioning	68000	O3	374	592166	340	126952	None		worse	WORSE	1
+memcpy_libcall	68000	O3	288	52366	384	61318	None		better	ok	1
+memcpy_runtime	68000	O3	246	25930714	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68000	O3	534	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68000	O3	240	14660	990	16044	None		better	ok	1
+memory_expansion	68000	O3	27314	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68000	O3	2564	11330928	2678	10622412	3414	11389556	worse	WORSE	2
+object_extent_loop	68000	O3	388	3186822	3020	3223406	2572	3231612	better	ok	2
+old_style_extra_args	68000	O3	244	10092	None		None		UNMEASURED(no external)	n/a	0
+os_console	68000	O3	57	472	None		97	584	better	ok	1
+os_exit	68000	O3	38	1400	None		48	1424	better	ok	1
+os_locals_between_pushes	68000	O3	282	8064	296	7004	328	8140	worse	WORSE	2
+over_aligned_local_after_even_pushes	68000	O3	704	200748	682	182110	998	226982	worse	WORSE	2
+overflow_builtins	68000	O3	1648	727240	2714	632266	1516		worse	WORSE	1
+pair_return	68000	O3	40	4510	42	4538	50	4534	better	ok	2
+pattern_fill	68000	O3	242	91402	392	85034	588	169530	worse	WORSE	2
+phi_slot_unknown_arm	68000	O3	250	746290	3558	915212	308	810482	better	ok	2
+predefined_macros	68000	O3	48	6434	48	6434	76	6462	equal	ok	2
+recdeep	68000	O3	116	4052850	118	4079894	190	4328898	better	ok	2
+recmany_o1	68000	O3	224	4052850	234	4079894	376	4328898	better	ok	2
+register_args_truncate	68000	O3	70	1588	54	1588	104	1612	equal	WORSE	2
+register_upper_half	68000	O3	138	8644	132		170	9352	better	WORSE	1
+rep_count	68000	O3	140	85460	774	47512	1656		worse	WORSE	1
+rotate_small	68000	O3	276	31850	1041	21820	368	24480	worse	WORSE	2
+sat_builtins	68000	O3	632	275158	None		1564	273044	worse	WORSE	1
+sat_sub_u64_shared_compare	68000	O3	122	27606	None		164	25124	worse	WORSE	1
+sbb_wide_sub	68000	O3	120	8330	144	8514	160	8362	better	ok	2
+select_of_constants	68000	O3	19652	1989136	18550	1802344	23496		worse	WORSE	1
+shift_int32_variable	68000	O3	268	568092	258	565690	510	553148	worse	WORSE	2
+shift_int64_masked_amount	68000	O3	344	196402	340	152970	470	93738	worse	WORSE	2
+shift_int64_variable	68000	O3	336	192018	352	132382	772	135116	worse	WORSE	2
+shift_until_idioms	68000	O3	604	268944	822	256724	1742	294522	worse	WORSE	2
+shl_long_by_one	68000	O3	146	54444	152	54284	590	53418	worse	WORSE	2
+shl_of_a_narrow_load_keeps_the_top_byte	68000	O3	58	1452	86	1512	None		better	ok	1
+shl_of_a_zero_extended_dividend	68000	O3	208	UNMEASURED	224		294		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68000	O3	154	9812	36	4594	52	4606	worse	WORSE	2
+shrink_wrapped_saves	68000	O3	38	5030	36	5054	52	5066	better	ok	2
+shuttle_value	68000	O3	216	15358	240	15348	274	15370	worse	ok	2
+sibling_call_callees	68000	O3	82	2942	84	2966	142	3110	better	ok	2
+signbit_idioms	68000	O3	1490	309026	1616	318098	2618	300150	worse	WORSE	2
+spill_store_order	68000	O3	810	1968880	1980	1793930	13902		worse	WORSE	1
+split_loops	68000	O3	206	54502	236	29146	None		worse	WORSE	1
+ssub_sat_i64_loop	68000	O3	134	11404	None		316	11174	worse	ok	1
+stack_arrays_copy	68000	O3	104	8286	176	8516	658	8514	better	ok	2
+static_inline	68000	O3	38	4804	52	4900	52	4836	better	ok	2
+static_pointers	68000	O3	277	22120	295	22126	393	21884	worse	WORSE	2
+strlen_idiom	68000	O3	62	5322	60	5348	96	5362	better	ok	2
+struct_odd_sizes	68000	O3	214	3178	206	3206	266	3210	better	ok	2
+struct_with_i64	68000	O3	206	6168	202	6188	268	6200	better	ok	2
+switch_empty_cases	68000	O3	42	2466	66	1780	56	2502	worse	WORSE	2
+switch_header_marker_loop	68000	O3	226	3330	254	3386	278	3522	better	ok	2
+switch_i64	68000	O3	218	9480	190	9444	254	9488	worse	WORSE	2
+switch_jump_table	68000	O3	310	49318	262	46260	326	47426	worse	WORSE	2
+switch_peeled_table	68000	O3	174	119092	320	65780	310	137958	worse	WORSE	2
+switch_table_holes	68000	O3	150	23766	170	24872	None		better	ok	1
+sysv_abi	68000	O3	322	10904	262	10872	404	10912	worse	WORSE	2
+tail_call_long_argument	68000	O3	76	5102	82	3614	122	5234	worse	WORSE	2
+tail_calls	68000	O3	560	29066	574	26770	772		worse	WORSE	1
+u64_shift_select_arms	68000	O3	398	7804	384	8776	368	7688	worse	WORSE	2
+uint64_to_float	68000	O3	84	9262	120	8002	92	9278	worse	WORSE	2
+urem_eq	68000	O3	402	UNMEASURED	392	63457178	554	56309112	UNMEASURED(ours)	WORSE	2
+value_of_valueless	68000	O3	36	1448	30	1448	36	1476	equal	WORSE	2
+variadic	68000	O3	246	7422	None		462	8376	better	ok	1
+volatile_bitfield	68000	O3	292	8196	464	8776	334	8260	better	ok	2
+wide_shift_by_one	68000	O3	278	143146	296	149546	342	141150	worse	WORSE	2
+widening_multiply	68000	O3	313	UNMEASURED	None		1513		UNMEASURED(ours)	ok	0
+word_compare_branches	68000	O3	276	368736	256	96598	408	403392	worse	WORSE	2
+word_compares	68000	O3	256	115750	1452	80748	3040	178124	worse	WORSE	2
+wrapv_overflow_check	68000	O3	196	6570	192	6538	270	6590	worse	WORSE	2
+write_through_parameter	68000	O3	48	5906	42	5926	64	5946	better	ok	2
+x87_arguments	68000	O3	822	239250	882	239620	1048	240620	better	ok	2
+x87rotate	68000	O3	1018	52778	786	63540	998	51664	worse	WORSE	2
+zz_f	68000	O3	46	5188	36	5202	52	5204	better	WORSE	2
+bench_io	68000	Os	239	UNMEASURED	None		343		UNMEASURED(ours)	ok	0
+bit_setclear	68000	Os	150	10486	142	10496	182	10432	worse	WORSE	2
+bit_test	68000	Os	160	8856	160	8898	194	8788	worse	ok	2
+bitcount_idioms	68000	Os	386	78674	364		672	85180	better	WORSE	1
+bitcount_u32	68000	Os	270	65938	292	66136	764	93274	better	ok	2
+bitcount_u64	68000	Os	424	86778	446	86688	1314	150608	worse	ok	2
+bitfield_long_long	68000	Os	158	9496	160	9456	None		worse	ok	1
+bitfield_overhang_init	68000	Os	128	13688	208	13932	164	13712	better	ok	2
+builtin_expect	68000	Os	36	4082	36	4082	52	4094	equal	ok	2
+builtins_table	68000	Os	82	5664	74	5664	140	5668	equal	WORSE	2
+byte_multiply	68000	Os	142	185024	122	166628	184	201360	worse	WORSE	2
+byval_initializes	68000	Os	26	3062	28	3090	40	3094	better	ok	2
+byval_inline	68000	Os	108	9080	104	9082	154		better	WORSE	1
+byval_struct	68000	Os	118	6670	166		176		UNMEASURED(no external)	ok	0
+byvalue_struct_address	68000	Os	56	1822	290	4042	32	1846	better	WORSE	2
+call_cleanup_keeps_pair	68000	Os	180	51916	152	73882	224	43460	worse	WORSE	2
+call_clobbers_flags	68000	Os	128	5094	112	4986	152	5102	worse	WORSE	2
+call_keeps	68000	Os	276	14812	292	12780	308	14704	worse	ok	2
+clzll_ctzll_64	68000	Os	226	12044	246	12112	610	24488	better	ok	2
+compare_to_int64	68000	Os	226	8120	184	6800	236	22702	worse	WORSE	2
+compound_assignment_types	68000	Os	220	4118	283	6408	220		better	ok	1
+constant_int_float_compare	68000	Os	56	7764	48	7750	76	7768	worse	WORSE	2
+copy_runs	68000	Os	520	113218	842	110334	None		worse	ok	1
+data_int64	68000	Os	148	12386	160	12418	158	12382	worse	ok	2
+div8_os	68000	Os	408	9672196	358	7739202	532	8800410	worse	WORSE	2
+div_constants_long	68000	Os	5110	149915600	5444	169843508	6634	154764398	better	ok	2
+div_constants_short	68000	Os	4352	35535750	4716	34954412	5456		worse	ok	1
+div_constants_ulong	68000	Os	3496	91269796	3684	109929832	4404	93614872	better	ok	2
+double_across_a_call_result	68000	Os	286	13620	360	15132	334	13908	better	ok	2
+double_against_int	68000	Os	48	6974	48	6974	76	7002	equal	ok	2
+double_to_int64	68000	Os	46	8058	170	15338	64	8066	better	ok	2
+double_to_uint64	68000	Os	304	49868	None		386		UNMEASURED(no external)	ok	0
+dse_merge_byte_order	68000	Os	26	1334	26	1334	38	1362	equal	ok	2
+extension_chain_fused	68000	Os	44	5646	54	5714	74	5802	better	ok	2
+fcmp_all	68000	Os	5146	742822	5692	677002	None		worse	ok	1
+fill_nest	68000	Os	212	UNMEASURED	198	345576	304	271984	UNMEASURED(ours)	WORSE	2
+fixed_point	68000	Os	2688	516292	None		2788		UNMEASURED(no external)	ok	0
+float_bits	68000	Os	72	11074	64	11060	96	11082	worse	WORSE	2
+float_conversions_loop	68000	Os	202	28990	216	29058	230	29206	better	ok	2
+float_in_memory_loop	68000	Os	98	4025534	94	10400	236	4045312	worse	WORSE	2
+float_in_place_update	68000	Os	168	45178	16	1474	222	45378	worse	WORSE	2
+float_return	68000	Os	110	2866	98	2894	144	2898	better	WORSE	2
+frame_address_stack_args	68000	Os	314	3436	326	5340	440	3480	better	ok	2
+frameless	68000	Os	496	46262	514	60234	688		better	ok	1
+function_table	68000	Os	50	3130	38	2980	48	3004	worse	WORSE	2
+huffman_decode	68000	Os	472	135880	514	150918	656		better	ok	1
+idioms	68000	Os	1132	11588336	1084	3337534	3416	13462640	worse	WORSE	2
+idiv_loop_os	68000	Os	120	2402200	118	2398026	324	2450548	worse	WORSE	2
+inlined_tail_call_keeps_frame_stores	68000	Os	54	1570	52	1584	66	1586	better	WORSE	2
+int64_division	68000	Os	564	1178004	462	1167326	538		worse	WORSE	1
+int_compared_with_float	68000	Os	378	19290	420	19490	496	19460	better	ok	2
+known_loads_walks	68000	Os	2431	483522	1577	348994	4297	819342	worse	WORSE	2
+licm_graph_callee_footprint	68000	Os	88	188244	88	224214	126	218314	better	ok	2
+local_initializers	68000	Os	60	8362	168	9780	76	8362	equal	ok	2
+logical_value	68000	Os	164	6048	176	5958	244	7606	worse	ok	2
+long_compare_chain	68000	Os	1038	950130	912	829886	1162		worse	WORSE	1
+long_double_arguments	68000	Os	360	33846	None		466	33822	worse	ok	1
+long_double_constant_store	68000	Os	64	8864	None		84	13856	better	ok	1
+long_double_decimal_literal	68000	Os	72	3764	None		76	3780	better	ok	1
+long_double_layout	68000	Os	336	25298	None		392	25326	better	ok	1
+long_double_stride	68000	Os	58	5864	None		80	5884	better	ok	1
+long_double_variadic	68000	Os	180	13564	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68000	Os	146	8686	150	8806	200	8746	better	ok	2
+long_step_by_one	68000	Os	126	58238	124	58140	178	58938	worse	WORSE	2
+loop_fusion	68000	Os	540	61580	612	64644	1808	95116	better	ok	2
+loop_interchange	68000	Os	298	UNMEASURED	306	4991172	656	5209428	UNMEASURED(ours)	ok	2
+loop_versioning	68000	Os	246	594630	288	138082	812	678516	worse	ok	2
+memcpy_libcall	68000	Os	280	52414	316	74314	574	72524	better	ok	2
+memcpy_runtime	68000	Os	246	25930714	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68000	Os	476	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68000	Os	224	16092	226	17290	506		better	ok	1
+memory_expansion	68000	Os	23018	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68000	Os	2552	11321496	3368	10668444	3414	11389556	worse	ok	2
+object_extent_loop	68000	Os	378	3389416	406	3445556	622	3428628	better	ok	2
+old_style_extra_args	68000	Os	236	10112	None		None		UNMEASURED(no external)	n/a	0
+os_console	68000	Os	57	472	None		97	584	better	ok	1
+os_exit	68000	Os	36	1406	None		48	1424	better	ok	1
+os_locals_between_pushes	68000	Os	230	8260	272	7528	268		worse	ok	1
+over_aligned_local_after_even_pushes	68000	Os	730	203902	680	188338	1004		worse	WORSE	1
+overflow_builtins	68000	Os	1640	728176	1714	633018	1516		worse	WORSE	1
+pair_return	68000	Os	40	4510	42	4538	50	4534	better	ok	2
+pattern_fill	68000	Os	226	91398	204	96688	454	173444	better	WORSE	2
+phi_slot_unknown_arm	68000	Os	250	746290	278	1014822	302	799826	better	ok	2
+predefined_macros	68000	Os	48	6434	48	6434	76	6462	equal	ok	2
+recdeep	68000	Os	112	3941996	128	4038000	190	4230000	better	ok	2
+recmany_o1	68000	Os	126	3936072	140	4098048	376	4230000	better	ok	2
+register_args_truncate	68000	Os	70	1588	54	1588	104	1612	equal	WORSE	2
+register_upper_half	68000	Os	130	8784	154	23792	166	9272	better	ok	2
+rep_count	68000	Os	140	85460	132	111902	246	123686	better	WORSE	2
+rotate_small	68000	Os	276	31850	271	25990	394	38632	worse	WORSE	2
+sat_builtins	68000	Os	632	275158	None		840	276716	better	ok	1
+sat_sub_u64_shared_compare	68000	Os	122	27606	None		158	28798	better	ok	1
+sbb_wide_sub	68000	Os	120	8330	144	8514	160	8362	better	ok	2
+select_of_constants	68000	Os	16828	6190580	17494	1785842	23456		worse	ok	1
+shift_int32_variable	68000	Os	268	568092	224	574444	250	554736	worse	WORSE	2
+shift_int64_masked_amount	68000	Os	338	196418	224	320090	400	211426	better	WORSE	2
+shift_int64_variable	68000	Os	336	192018	326	300708	484	250102	better	WORSE	2
+shift_until_idioms	68000	Os	602	271400	616	278556	1374	305346	better	ok	2
+shl_long_by_one	68000	Os	140	54352	148	54340	174	53928	worse	ok	2
+shl_of_a_narrow_load_keeps_the_top_byte	68000	Os	58	1452	86	1512	None		better	ok	1
+shl_of_a_zero_extended_dividend	68000	Os	200	UNMEASURED	224		294		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68000	Os	158	10340	138	9814	230		worse	WORSE	1
+shrink_wrapped_saves	68000	Os	36	5054	36	5054	52	5066	equal	ok	2
+shuttle_value	68000	Os	216	15358	180	15348	274	15370	worse	WORSE	2
+sibling_call_callees	68000	Os	82	2942	84	2968	136	3120	better	ok	2
+signbit_idioms	68000	Os	1490	309026	1680	332218	1570	304302	worse	ok	2
+spill_store_order	68000	Os	538	2071014	498	2165808	878		better	WORSE	1
+split_loops	68000	Os	206	54502	358	43666	264	56110	worse	ok	2
+ssub_sat_i64_loop	68000	Os	132	11408	None		164	11428	better	ok	1
+stack_arrays_copy	68000	Os	106	8646	110	11754	166		better	ok	1
+static_inline	68000	Os	36	4828	74	5262	52	4836	better	ok	2
+static_pointers	68000	Os	289	22318	285	21924	393	22886	worse	WORSE	2
+strlen_idiom	68000	Os	54	5348	81	5946	96	5362	better	ok	2
+struct_odd_sizes	68000	Os	214	3178	206	3206	266	3210	better	WORSE	2
+struct_with_i64	68000	Os	198	6188	202	6188	268	6200	equal	ok	2
+switch_empty_cases	68000	Os	64	2092	48	2016	88	2536	worse	WORSE	2
+switch_header_marker_loop	68000	Os	226	3334	246	3412	276	3512	better	ok	2
+switch_i64	68000	Os	202	9444	182	9444	254	9488	equal	WORSE	2
+switch_jump_table	68000	Os	306	49220	232	47676	378	49014	worse	WORSE	2
+switch_peeled_table	68000	Os	174	121412	168	111828	224	144558	worse	WORSE	2
+switch_table_holes	68000	Os	154	23982	140	30628	208	37018	better	WORSE	2
+sysv_abi	68000	Os	308	10872	262	10872	404	10912	equal	WORSE	2
+tail_call_long_argument	68000	Os	76	5102	82	3614	122	5234	worse	ok	2
+tail_calls	68000	Os	592	29808	610	27172	796		worse	ok	1
+u64_shift_select_arms	68000	Os	242	8400	214	9146	368	7688	worse	WORSE	2
+uint64_to_float	68000	Os	78	9282	372	45834	92	9278	worse	ok	2
+urem_eq	68000	Os	396	55333040	416	70932200	554	56309112	better	ok	2
+value_of_valueless	68000	Os	36	1448	30	1448	36	1476	equal	WORSE	2
+variadic	68000	Os	246	7624	None		450	8878	better	ok	1
+volatile_bitfield	68000	Os	292	8196	458	8778	334	8260	better	ok	2
+wide_shift_by_one	68000	Os	278	143146	300	149694	342	141150	worse	ok	2
+widening_multiply	68000	Os	297	UNMEASURED	None		439		UNMEASURED(ours)	ok	0
+word_compare_branches	68000	Os	268	371356	264	118736	396	403340	worse	WORSE	2
+word_compares	68000	Os	242	117054	240	101162	366	164166	worse	WORSE	2
+wrapv_overflow_check	68000	Os	188	6554	178	6538	282	6590	worse	WORSE	2
+write_through_parameter	68000	Os	122	6426	114	6442	144		better	WORSE	1
+x87_arguments	68000	Os	480	249376	908	249722	1048	249576	better	ok	2
+x87rotate	68000	Os	596	64674	480	63722	990	51664	worse	WORSE	2
+zz_f	68000	Os	40	5208	36	5202	52	5204	worse	WORSE	2
+bench_io	68020	O1	287	UNMEASURED	None		283		UNMEASURED(ours)	WORSE	0
+bit_setclear	68020	O1	164	4967	188	5154	182	4962	worse	WORSE	2
+bit_test	68020	O1	176	4152	186	4263	194	4137	worse	WORSE	2
+bitcount_idioms	68020	O1	426	35538	406		668	38541	better	WORSE	1
+bitcount_u32	68020	O1	374	26944	310	27181	708	30334	better	WORSE	2
+bitcount_u64	68020	O1	658	33682	482	34915	1218	38744	better	WORSE	2
+bitfield_long_long	68020	O1	172	4427	170	4482	None		better	WORSE	1
+bitfield_overhang_init	68020	O1	172	6421	132	6448	164	6445	better	WORSE	2
+builtin_expect	68020	O1	38	1908	36	1925	52	1919	better	VIRTUAL-OK	2
+builtins_table	68020	O1	94	2659	84	2672	140	2663	better	VIRTUAL-OK	2
+byte_multiply	68020	O1	148	86061	124	65409	184	93652	worse	WORSE	2
+byval_initializes	68020	O1	26	1449	28	1466	40	1461	better	ok	2
+byval_inline	68020	O1	134	4204	110	4223	162		better	WORSE	1
+byval_struct	68020	O1	118	3063	246		222		UNMEASURED(no external)	ok	0
+byvalue_struct_address	68020	O1	216	1233	232	1131	32	879	worse	WORSE	2
+call_cleanup_keeps_pair	68020	O1	184	32303	180	17285	202	19457	worse	WORSE	2
+call_clobbers_flags	68020	O1	126	2399	110	2339	152	2407	worse	WORSE	2
+call_keeps	68020	O1	304	6689	292		326	5955	worse	WORSE	1
+clzll_ctzll_64	68020	O1	300	4586	244	4773	570	5517	better	WORSE	2
+compare_to_int64	68020	O1	152	3641	168	3123	276	3892	worse	WORSE	2
+compound_assignment_types	68020	O1	234	1890	231	1596	228		worse	WORSE	1
+constant_int_float_compare	68020	O1	70	3612	48	3624	76	3618	better	VIRTUAL-OK	2
+copy_runs	68020	O1	1204	23700	1538	18507	None		worse	WORSE	1
+data_int64	68020	O1	178	4939	164	4965	158	4943	better	WORSE	2
+div8_os	68020	O1	324	1601374	332	985427	744		worse	WORSE	1
+div_constants_long	68020	O1	5328	14682382	5376	12619954	6696		worse	WORSE	1
+div_constants_short	68020	O1	4496	11368926	4848	9481632	5712		worse	WORSE	1
+div_constants_ulong	68020	O1	3406	8369877	3400	7327409	4374		worse	WORSE	1
+double_across_a_call_result	68020	O1	340	5531	358	6174	342	5586	better	ok	2
+double_against_int	68020	O1	58	3276	48	3293	76	3289	better	VIRTUAL-OK	2
+double_to_int64	68020	O1	172	7086	174	6490	212	6774	worse	WORSE	2
+double_to_uint64	68020	O1	342	22993	None		386		UNMEASURED(no external)	ok	0
+dse_merge_byte_order	68020	O1	30	624	34	630	60	662	better	ok	2
+extension_chain_fused	68020	O1	46	2644	52	2683	74	2740	better	ok	2
+fcmp_all	68020	O1	5348	284620	5938	305064	None		better	ok	1
+fill_nest	68020	O1	216	UNMEASURED	194	139560	472	214158	UNMEASURED(ours)	WORSE	2
+fixed_point	68020	O1	1942	131184	None		2872		UNMEASURED(no external)	ok	0
+float_bits	68020	O1	90	5233	64	5250	96	5239	better	VIRTUAL-OK	2
+float_conversions_loop	68020	O1	234	12348	210	11717	266	12437	worse	WORSE	2
+float_in_memory_loop	68020	O1	112	1571538	70	2305	236	1579911	worse	WORSE	2
+float_in_place_update	68020	O1	192	17956	16	696	228	18034	worse	WORSE	2
+float_return	68020	O1	110	1351	98	1368	144	1363	better	VIRTUAL-OK	2
+frame_address_stack_args	68020	O1	310	1631	320	2375	404	1655	better	ok	2
+frameless	68020	O1	500	19274	536	18093	658		worse	WORSE	1
+function_table	68020	O1	46	1452	38	1404	76	1518	worse	WORSE	2
+huffman_decode	68020	O1	540	67859	516		660		UNMEASURED(no external)	WORSE	0
+idioms	68020	O1	1298	1266881	1290		2582	2009612	better	WORSE	1
+idiv_loop_os	68020	O1	132	346644	128	491700	280	1043747	better	WORSE	2
+inlined_tail_call_keeps_frame_stores	68020	O1	58	742	52	742	82	758	equal	WORSE	2
+int64_division	68020	O1	464	328998	484	378762	566		better	ok	1
+int_compared_with_float	68020	O1	492	8504	450	8596	496	8594	better	VIRTUAL-OK	2
+known_loads_walks	68020	O1	2579	252001	2209	202672	3783	507966	worse	WORSE	2
+licm_graph_callee_footprint	68020	O1	112	140574	92	89558	126	91105	worse	WORSE	2
+local_initializers	68020	O1	70	3956	166	4293	76	3962	better	ok	2
+logical_value	68020	O1	168	3065	164	2280	252	3500	worse	WORSE	2
+long_compare_chain	68020	O1	1052	417855	870	382565	1188		worse	WORSE	1
+long_double_arguments	68020	O1	412	12917	None		466	12921	better	ok	1
+long_double_constant_store	68020	O1	64	4156	None		84	6264	better	ok	1
+long_double_decimal_literal	68020	O1	72	1790	None		76	1794	better	ok	1
+long_double_layout	68020	O1	428	9961	None		388	9984	better	WORSE	1
+long_double_stride	68020	O1	64	2760	None		80	2772	better	ok	1
+long_double_variadic	68020	O1	200	5212	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68020	O1	148	4035	144	4127	200	4121	better	VIRTUAL-OK	2
+long_step_by_one	68020	O1	136	27704	126	27750	178	27985	better	WORSE	2
+loop_fusion	68020	O1	658	31627	702	31788	1034	43124	better	ok	2
+loop_interchange	68020	O1	350	UNMEASURED	386	513094	592	2016621	UNMEASURED(ours)	ok	2
+loop_versioning	68020	O1	276	72069	324	69362	568	119440	worse	WORSE	2
+memcpy_libcall	68020	O1	346	26668	338	30066	366	43115	better	WORSE	2
+memcpy_runtime	68020	O1	244	12545959	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68020	O1	468	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68020	O1	254	9027	240	8043	320		worse	WORSE	1
+memory_expansion	68020	O1	28338	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68020	O1	2450	1089601	3954		3168	646487	worse	WORSE	1
+object_extent_loop	68020	O1	448	1262090	446	1287714	636	1277132	better	VIRTUAL-OK	2
+old_style_extra_args	68020	O1	276	4197	None		None		UNMEASURED(no external)	n/a	0
+os_console	68020	O1	65	226	None		97	271	better	ok	1
+os_exit	68020	O1	38	657	None		48	663	better	ok	1
+os_locals_between_pushes	68020	O1	220	3730	278	4592	258		better	ok	1
+over_aligned_local_after_even_pushes	68020	O1	824	92069	682		1024		UNMEASURED(no external)	WORSE	0
+overflow_builtins	68020	O1	1152	254374	1564	254597	1516		better	ok	1
+pair_return	68020	O1	40	2172	42	2189	50	2180	better	ok	2
+pattern_fill	68020	O1	274	43200	230	40947	454	78447	worse	WORSE	2
+phi_slot_unknown_arm	68020	O1	256	397682	316	319053	336	380530	worse	WORSE	2
+predefined_macros	68020	O1	58	3006	48	3023	76	3019	better	VIRTUAL-OK	2
+recdeep	68020	O1	244	642991	250	615941	218	1656623	worse	WORSE	2
+recmany_o1	68020	O1	278	642991	262	615965	264	1656623	worse	WORSE	2
+register_args_truncate	68020	O1	64	751	62	751	98	760	equal	WORSE	2
+register_upper_half	68020	O1	144	4531	132	4233	170	4369	worse	WORSE	2
+rep_count	68020	O1	154	38567	118	38459	418	62820	worse	WORSE	2
+rotate_small	68020	O1	288	21038	263	11395	382	18069	worse	WORSE	2
+sat_builtins	68020	O1	698	130120	None		852	131402	better	ok	1
+sat_sub_u64_shared_compare	68020	O1	122	12947	None		158	13580	better	ok	1
+sbb_wide_sub	68020	O1	146	3878	144	3956	160	3901	better	VIRTUAL-OK	2
+select_of_constants	68020	O1	20288	1177926	18038	728085	23496		worse	WORSE	1
+shift_int32_variable	68020	O1	288	270715	286	270123	256	267154	worse	WORSE	2
+shift_int64_masked_amount	68020	O1	372	150230	322	64545	400	106341	worse	WORSE	2
+shift_int64_variable	68020	O1	346	133768	426	57125	494	121446	worse	WORSE	2
+shift_until_idioms	68020	O1	678	125761	680	121923	1378	135368	worse	WORSE	2
+shl_long_by_one	68020	O1	150	25783	154	25939	174	25529	worse	WORSE	2
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O1	70	680	84	701	None		better	ok	1
+shl_of_a_zero_extended_dividend	68020	O1	234	UNMEASURED	236		342		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68020	O1	186	4594	198	4659	272		better	ok	1
+shrink_wrapped_saves	68020	O1	206	3905	276		294	3346	worse	WORSE	1
+shuttle_value	68020	O1	238	7333	198	7353	274	7339	better	VIRTUAL-OK	2
+sibling_call_callees	68020	O1	82	1387	92	1432	142	1441	better	ok	2
+signbit_idioms	68020	O1	1462	139050	1692	144118	1570	135822	worse	WORSE	2
+spill_store_order	68020	O1	578	408126	532	263292	888		worse	WORSE	1
+split_loops	68020	O1	402	21264	392	17979	320	18341	worse	WORSE	2
+ssub_sat_i64_loop	68020	O1	146	5224	None		168	5305	better	ok	1
+stack_arrays_copy	68020	O1	98	3880	124	4169	156		better	ok	1
+static_inline	68020	O1	38	2281	74	2456	52	2290	better	ok	2
+static_pointers	68020	O1	327	10045	283	9812	363	10246	worse	WORSE	2
+strlen_idiom	68020	O1	62	2497	119	3075	96	2507	better	ok	2
+struct_odd_sizes	68020	O1	176	1507	184	1524	254	1519	better	ok	2
+struct_with_i64	68020	O1	186	2920	218	2937	252	2928	better	ok	2
+switch_empty_cases	68020	O1	80	1262	48	909	88	1185	worse	WORSE	2
+switch_header_marker_loop	68020	O1	238	1550	268		324	1711	better	ok	1
+switch_i64	68020	O1	226	4441	174	4449	246	4447	better	VIRTUAL-OK	2
+switch_jump_table	68020	O1	308	22926	230	21856	370	22867	worse	WORSE	2
+switch_peeled_table	68020	O1	182	55527	186	44559	310	63889	worse	WORSE	2
+switch_table_holes	68020	O1	158	21007	150	10482	202	17013	worse	WORSE	2
+sysv_abi	68020	O1	292	5152	258	5162	398	5158	better	VIRTUAL-OK	2
+tail_call_long_argument	68020	O1	80	1754	82	1701	116	1782	worse	WORSE	2
+tail_calls	68020	O1	744	14227	656	14933	786	15162	better	WORSE	2
+u64_shift_select_arms	68020	O1	248	3986	216	4342	368	3633	worse	WORSE	2
+uint64_to_float	68020	O1	402	20460	394	20354	86	3777	worse	WORSE	2
+urem_eq	68020	O1	374	2831123	460		428	2675113	worse	WORSE	1
+value_of_valueless	68020	O1	36	683	30	683	36	694	equal	WORSE	2
+variadic	68020	O1	264	3316	None		440	3814	better	ok	1
+volatile_bitfield	68020	O1	378	3794	382	3965	334	3834	better	WORSE	2
+wide_shift_by_one	68020	O1	270	97450	294	57234	342	54947	worse	WORSE	2
+widening_multiply	68020	O1	319	UNMEASURED	None		345		UNMEASURED(ours)	ok	0
+word_compare_branches	68020	O1	268	72416	282	52180	400	82755	worse	WORSE	2
+word_compares	68020	O1	258	58989	204	49169	362	71549	worse	WORSE	2
+wrapv_overflow_check	68020	O1	218	3050	178	3049	270	3072	worse	WORSE	2
+write_through_parameter	68020	O1	104	3036	122	3037	144		better	ok	1
+x87_arguments	68020	O1	790	96893	722	98745	684	96907	better	WORSE	2
+x87rotate	68020	O1	678	26121	566	25849	998	20759	worse	WORSE	2
+zz_f	68020	O1	46	2414	36	2428	52	2420	better	VIRTUAL-OK	2
+bench_io	68020	O2	287	UNMEASURED	None		337		UNMEASURED(ours)	ok	0
+bit_setclear	68020	O2	164	4967	142	5010	182	4962	worse	ok	2
+bit_test	68020	O2	176	4152	160	4201	194	4137	worse	WORSE	2
+bitcount_idioms	68020	O2	426	35538	376		668	38541	better	WORSE	1
+bitcount_u32	68020	O2	374	26944	282	27158	708	30334	better	ok	2
+bitcount_u64	68020	O2	666	33610	452	34749	1218	38744	better	ok	2
+bitfield_long_long	68020	O2	190	4444	158	4459	None		better	WORSE	1
+bitfield_overhang_init	68020	O2	146	6438	132	6448	164	6445	better	WORSE	2
+builtin_expect	68020	O2	38	1908	36	1925	52	1919	better	ok	2
+builtins_table	68020	O2	94	2659	78	2672	140	2663	better	ok	2
+byte_multiply	68020	O2	148	75565	130	65415	184	93652	worse	WORSE	2
+byval_initializes	68020	O2	26	1449	28	1466	40	1461	better	ok	2
+byval_inline	68020	O2	168	4053	106	4278	None		better	ok	1
+byval_struct	68020	O2	72	2601	238		52	2012	worse	WORSE	1
+byvalue_struct_address	68020	O2	22	870	226	880	32	879	better	ok	2
+call_cleanup_keeps_pair	68020	O2	214	22476	168	18281	210	18673	worse	WORSE	2
+call_clobbers_flags	68020	O2	128	2360	108	2325	152	2407	worse	WORSE	2
+call_keeps	68020	O2	278	5774	298		326	5955	better	ok	1
+clzll_ctzll_64	68020	O2	300	4586	240	4744	570	5517	better	ok	2
+compare_to_int64	68020	O2	266	3019	180	3246	40	1793	worse	WORSE	2
+compound_assignment_types	68020	O2	254	1562	233	1600	212		better	WORSE	1
+constant_int_float_compare	68020	O2	70	3612	48	3624	76	3618	better	WORSE	2
+copy_runs	68020	O2	1208	19727	930	18166	None		worse	WORSE	1
+data_int64	68020	O2	178	4939	164	4964	158	4943	better	WORSE	2
+div8_os	68020	O2	348	1420622	330	977747	494	1769369	worse	WORSE	2
+div_constants_long	68020	O2	5306	13305132	6574	12542982	6736		worse	WORSE	1
+div_constants_short	68020	O2	4378	9273597	7062	9238153	5566		worse	WORSE	1
+div_constants_ulong	68020	O2	3398	7408245	7266	7286862	4456		worse	WORSE	1
+double_across_a_call_result	68020	O2	340	5531	462	6238	342	5586	better	ok	2
+double_against_int	68020	O2	58	3276	48	3293	76	3289	better	ok	2
+double_to_int64	68020	O2	58	3856	172	6513	64	3862	better	ok	2
+double_to_uint64	68020	O2	342	22993	None		804	21959	worse	WORSE	1
+dse_merge_byte_order	68020	O2	30	624	26	622	38	635	worse	WORSE	2
+extension_chain_fused	68020	O2	94	2584	52	2691	110	2625	better	ok	2
+fcmp_all	68020	O2	5162	284633	5324	294993	None		better	ok	1
+fill_nest	68020	O2	216	UNMEASURED	250	139588	900		UNMEASURED(ours)	ok	1
+fixed_point	68020	O2	1872	131197	None		10948		UNMEASURED(no external)	ok	0
+float_bits	68020	O2	90	5233	64	5250	96	5239	better	WORSE	2
+float_conversions_loop	68020	O2	110	10309	210	11733	114	10313	better	ok	2
+float_in_memory_loop	68020	O2	166	1581984	70	2305	132	854	worse	WORSE	2
+float_in_place_update	68020	O2	16	696	16	696	28	707	equal	ok	2
+float_return	68020	O2	110	1351	98	1368	144	1363	better	ok	2
+frame_address_stack_args	68020	O2	310	1631	370	1993	404	1655	better	ok	2
+frameless	68020	O2	552	17089	500	17091	842		better	WORSE	1
+function_table	68020	O2	42	1406	38	1404	48	1418	worse	WORSE	2
+huffman_decode	68020	O2	616	62329	520		None		UNMEASURED(no external)	WORSE	0
+idioms	68020	O2	1370	1308029	1568	1057443	None		worse	WORSE	1
+idiv_loop_os	68020	O2	210	443826	128	299432	324	992130	worse	WORSE	2
+inlined_tail_call_keeps_frame_stores	68020	O2	58	742	52	742	66	740	worse	WORSE	2
+int64_division	68020	O2	486	317616	450	378130	526	334833	better	ok	2
+int_compared_with_float	68020	O2	492	8504	454	8670	496	8594	better	ok	2
+known_loads_walks	68020	O2	2077	119358	1989	85497	3917	183335	worse	WORSE	2
+licm_graph_callee_footprint	68020	O2	112	79074	102	92583	126	91105	better	ok	2
+local_initializers	68020	O2	70	3956	158	4296	76	3962	better	ok	2
+logical_value	68020	O2	26	1473	120		40	1483	better	ok	1
+long_compare_chain	68020	O2	1014	420480	910	376970	1106	396783	worse	WORSE	2
+long_double_arguments	68020	O2	412	12917	None		466	12921	better	ok	1
+long_double_constant_store	68020	O2	64	4156	None		84	6264	better	ok	1
+long_double_decimal_literal	68020	O2	72	1790	None		76	1794	better	ok	1
+long_double_layout	68020	O2	428	9961	None		392	9995	better	ok	1
+long_double_stride	68020	O2	64	2760	None		80	2772	better	ok	1
+long_double_variadic	68020	O2	190	5215	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68020	O2	152	4043	150	4130	364	3704	worse	WORSE	2
+long_step_by_one	68020	O2	136	27704	124	27803	436	27527	worse	ok	2
+loop_fusion	68020	O2	1044	28925	744		None		UNMEASURED(no external)	WORSE	0
+loop_interchange	68020	O2	464	UNMEASURED	372	517931	1398		UNMEASURED(ours)	WORSE	1
+loop_versioning	68020	O2	418	73481	352	64660	None		worse	WORSE	1
+memcpy_libcall	68020	O2	346	26668	380	31809	718	36189	better	ok	2
+memcpy_runtime	68020	O2	244	12545959	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68020	O2	538	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68020	O2	294	6819	250	8548	None		better	ok	1
+memory_expansion	68020	O2	28178	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68020	O2	2288	638390	3962		3168	646487	better	ok	1
+object_extent_loop	68020	O2	428	1262101	420	1287096	2572	1283594	better	ok	2
+old_style_extra_args	68020	O2	272	4160	None		None		UNMEASURED(no external)	n/a	0
+os_console	68020	O2	65	226	None		97	271	better	ok	1
+os_exit	68020	O2	38	657	None		48	663	better	ok	1
+os_locals_between_pushes	68020	O2	274	3220	246	3246	318	3242	better	ok	2
+over_aligned_local_after_even_pushes	68020	O2	760	90339	684		998	110859	better	WORSE	1
+overflow_builtins	68020	O2	1014	254387	2182	253326	1516		worse	WORSE	1
+pair_return	68020	O2	40	2172	42	2189	50	2180	better	ok	2
+pattern_fill	68020	O2	286	44072	244	45304	588	76683	better	ok	2
+phi_slot_unknown_arm	68020	O2	254	248129	326	255869	300	276903	better	ok	2
+predefined_macros	68020	O2	58	3006	48	3023	76	3019	better	ok	2
+recdeep	68020	O2	190	440393	170	392388	190	1737558	worse	WORSE	2
+recmany_o1	68020	O2	374	440393	188	392420	376	1737558	worse	WORSE	2
+register_args_truncate	68020	O2	64	751	62	751	98	760	equal	WORSE	2
+register_upper_half	68020	O2	138	3943	148	3923	170	4369	worse	WORSE	2
+rep_count	68020	O2	154	38567	114	38724	1618		better	ok	1
+rotate_small	68020	O2	282	13905	263	11395	448	12878	worse	WORSE	2
+sat_builtins	68020	O2	640	130133	None		852	131402	better	ok	1
+sat_sub_u64_shared_compare	68020	O2	122	12947	None		164	11843	worse	WORSE	1
+sbb_wide_sub	68020	O2	146	3878	144	3956	160	3901	better	ok	2
+select_of_constants	68020	O2	21126	795836	18046	712931	23496		worse	WORSE	1
+shift_int32_variable	68020	O2	282	270715	258	269253	510	263674	worse	WORSE	2
+shift_int64_masked_amount	68020	O2	346	81103	334	63007	470	42450	worse	WORSE	2
+shift_int64_variable	68020	O2	348	76174	446	54539	772	62141	worse	WORSE	2
+shift_until_idioms	68020	O2	642	126395	694	121889	1722	130103	worse	WORSE	2
+shl_long_by_one	68020	O2	150	25783	152	25762	174	25529	worse	WORSE	2
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O2	70	680	84	701	None		better	ok	1
+shl_of_a_zero_extended_dividend	68020	O2	216	UNMEASURED	216		294		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68020	O2	154	4307	134	4379	52	2175	worse	WORSE	2
+shrink_wrapped_saves	68020	O2	38	2393	36	2410	52	2404	better	ok	2
+shuttle_value	68020	O2	238	7333	234	7353	274	7339	better	ok	2
+sibling_call_callees	68020	O2	82	1387	84	1392	142	1441	better	ok	2
+signbit_idioms	68020	O2	1462	139050	1490	142895	2618	133946	worse	WORSE	2
+spill_store_order	68020	O2	612	270260	668	214003	1456		worse	WORSE	1
+split_loops	68020	O2	210	17868	200	15047	346	18595	worse	WORSE	2
+ssub_sat_i64_loop	68020	O2	146	5224	None		316	5211	worse	ok	1
+stack_arrays_copy	68020	O2	92	3698	108	4115	646	3675	worse	ok	2
+static_inline	68020	O2	38	2281	82	2460	52	2290	better	ok	2
+static_pointers	68020	O2	333	10000	277	9814	373	9807	worse	WORSE	2
+strlen_idiom	68020	O2	62	2497	60	2513	96	2507	better	ok	2
+struct_odd_sizes	68020	O2	178	1507	176	1524	254	1519	better	ok	2
+struct_with_i64	68020	O2	186	2920	206	2937	252	2928	better	ok	2
+switch_empty_cases	68020	O2	48	838	48	909	50	847	better	ok	2
+switch_header_marker_loop	68020	O2	238	1550	246		278	1637	better	ok	1
+switch_i64	68020	O2	210	4432	186	4449	246	4447	better	WORSE	2
+switch_jump_table	68020	O2	308	22926	254	21541	370	22867	worse	WORSE	2
+switch_peeled_table	68020	O2	182	55527	410	31280	310	63889	worse	WORSE	2
+switch_table_holes	68020	O2	160	10089	164	10325	202	17013	better	ok	2
+sysv_abi	68020	O2	296	5152	252	5162	398	5158	better	WORSE	2
+tail_call_long_argument	68020	O2	80	1754	80	1675	116	1782	worse	WORSE	2
+tail_calls	68020	O2	692	13067	614	11994	772	15120	worse	WORSE	2
+u64_shift_select_arms	68020	O2	408	3691	382	4171	368	3633	worse	WORSE	2
+uint64_to_float	68020	O2	88	3771	118	3812	86	3777	better	ok	2
+urem_eq	68020	O2	372	2667123	422		446	2807120	better	ok	1
+value_of_valueless	68020	O2	36	683	30	683	36	694	equal	WORSE	2
+variadic	68020	O2	266	3197	None		452	3582	better	ok	1
+volatile_bitfield	68020	O2	378	3794	384	3967	334	3834	better	ok	2
+wide_shift_by_one	68020	O2	280	44894	290	56105	342	54947	better	ok	2
+widening_multiply	68020	O2	319	UNMEASURED	None		345		UNMEASURED(ours)	ok	0
+word_compare_branches	68020	O2	264	63988	264	46450	400	82755	worse	WORSE	2
+word_compares	68020	O2	256	49210	206	37926	374	77834	worse	WORSE	2
+wrapv_overflow_check	68020	O2	218	3050	190	3049	270	3072	worse	WORSE	2
+write_through_parameter	68020	O2	48	2791	114	3046	64	2803	better	ok	2
+x87_arguments	68020	O2	980	96360	878	96693	1048	96650	better	ok	2
+x87rotate	68020	O2	1022	21155	786	25778	998	20759	worse	WORSE	2
+zz_f	68020	O2	46	2414	36	2428	52	2420	better	ok	2
+bench_io	68020	O3	287	UNMEASURED	None		337		UNMEASURED(ours)	ok	0
+bit_setclear	68020	O3	164	4967	142	5010	182	4962	worse	ok	2
+bit_test	68020	O3	176	4152	160	4201	194	4137	worse	WORSE	2
+bitcount_idioms	68020	O3	426	35538	376		1568	38320	better	WORSE	1
+bitcount_u32	68020	O3	374	26944	282	27158	1298	30163	better	ok	2
+bitcount_u64	68020	O3	666	33610	452	34749	2192	38526	better	ok	2
+bitfield_long_long	68020	O3	190	4444	158	4459	None		better	WORSE	1
+bitfield_overhang_init	68020	O3	146	6438	132	6448	164	6445	better	WORSE	2
+builtin_expect	68020	O3	38	1908	36	1925	52	1919	better	ok	2
+builtins_table	68020	O3	94	2659	78	2672	140	2663	better	ok	2
+byte_multiply	68020	O3	148	75565	130	65415	116	18648	worse	WORSE	2
+byval_initializes	68020	O3	26	1449	28	1466	40	1461	better	ok	2
+byval_inline	68020	O3	168	4053	144	4068	None		better	WORSE	1
+byval_struct	68020	O3	72	2601	232	2923	52	2012	worse	WORSE	2
+byvalue_struct_address	68020	O3	22	870	22	870	32	879	equal	ok	2
+call_cleanup_keeps_pair	68020	O3	214	22476	168	18281	210	18673	worse	WORSE	2
+call_clobbers_flags	68020	O3	128	2360	108	2325	152	2407	worse	WORSE	2
+call_keeps	68020	O3	278	5774	298		326	5955	better	ok	1
+clzll_ctzll_64	68020	O3	300	4586	240	4744	570	5517	better	ok	2
+compare_to_int64	68020	O3	352	3120	30	1802	40	1793	worse	WORSE	2
+compound_assignment_types	68020	O3	254	1562	233	1600	212		better	WORSE	1
+constant_int_float_compare	68020	O3	70	3612	48	3624	76	3618	better	WORSE	2
+copy_runs	68020	O3	1208	19727	928	18267	None		worse	WORSE	1
+data_int64	68020	O3	178	4939	164	4964	158	4943	better	WORSE	2
+div8_os	68020	O3	348	1420622	1942	814696	952		worse	WORSE	1
+div_constants_long	68020	O3	5306	13305132	10668	12514470	13278	31511324	worse	WORSE	2
+div_constants_short	68020	O3	4378	9273597	10790	9216162	9518		worse	WORSE	1
+div_constants_ulong	68020	O3	3398	7408245	8450	7267126	8652	17483997	worse	WORSE	2
+double_across_a_call_result	68020	O3	340	5531	462	6238	342	5586	better	ok	2
+double_against_int	68020	O3	58	3276	48	3293	76	3289	better	ok	2
+double_to_int64	68020	O3	58	3856	46	3873	64	3862	better	ok	2
+double_to_uint64	68020	O3	342	22993	None		804	21959	worse	WORSE	1
+dse_merge_byte_order	68020	O3	30	624	26	622	38	635	worse	WORSE	2
+extension_chain_fused	68020	O3	94	2584	52	2691	110	2625	better	ok	2
+fcmp_all	68020	O3	5162	284633	30590	268823	None		worse	ok	1
+fill_nest	68020	O3	216	UNMEASURED	736	63685	2576		UNMEASURED(ours)	ok	1
+fixed_point	68020	O3	1872	131197	None		10948		UNMEASURED(no external)	ok	0
+float_bits	68020	O3	90	5233	64	5250	96	5239	better	WORSE	2
+float_conversions_loop	68020	O3	110	10309	106	10334	114	10313	better	ok	2
+float_in_memory_loop	68020	O3	166	1581984	70	2305	132	854	worse	WORSE	2
+float_in_place_update	68020	O3	16	696	16	696	28	707	equal	ok	2
+float_return	68020	O3	110	1351	98	1368	144	1363	better	ok	2
+frame_address_stack_args	68020	O3	310	1631	456	1958	404	1655	better	ok	2
+frameless	68020	O3	552	17089	764		842		UNMEASURED(no external)	ok	0
+function_table	68020	O3	42	1406	38	1404	48	1418	worse	WORSE	2
+huffman_decode	68020	O3	616	62329	1616		None		UNMEASURED(no external)	ok	0
+idioms	68020	O3	1370	1308029	3336		5774		UNMEASURED(no external)	ok	0
+idiv_loop_os	68020	O3	210	443826	210	298789	324	992130	worse	WORSE	2
+inlined_tail_call_keeps_frame_stores	68020	O3	58	742	52	742	66	740	worse	WORSE	2
+int64_division	68020	O3	486	317616	2538	229761	64	4731	worse	WORSE	2
+int_compared_with_float	68020	O3	492	8504	454	8670	496	8594	better	ok	2
+known_loads_walks	68020	O3	2225	119470	2861	84624	4521	198682	worse	WORSE	2
+licm_graph_callee_footprint	68020	O3	112	79074	102	92583	126	91105	better	ok	2
+local_initializers	68020	O3	70	3956	54	3972	76	3962	better	ok	2
+logical_value	68020	O3	26	1473	28	1490	40	1483	better	ok	2
+long_compare_chain	68020	O3	1014	420480	910	376970	1106	396783	worse	WORSE	2
+long_double_arguments	68020	O3	412	12917	None		466	12921	better	ok	1
+long_double_constant_store	68020	O3	64	4156	None		642	2866	worse	WORSE	1
+long_double_decimal_literal	68020	O3	72	1790	None		76	1794	better	ok	1
+long_double_layout	68020	O3	428	9961	None		392	9995	better	ok	1
+long_double_stride	68020	O3	64	2760	None		80	2772	better	ok	1
+long_double_variadic	68020	O3	190	5215	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68020	O3	152	4043	216	3972	364	3704	worse	WORSE	2
+long_step_by_one	68020	O3	136	27704	124	27803	436	27527	worse	ok	2
+loop_fusion	68020	O3	1044	28925	1318		None		UNMEASURED(no external)	ok	0
+loop_interchange	68020	O3	464	UNMEASURED	498	518706	2694		UNMEASURED(ours)	ok	1
+loop_versioning	68020	O3	418	73481	340	59399	None		worse	WORSE	1
+memcpy_libcall	68020	O3	346	26668	380	31809	None		better	ok	1
+memcpy_runtime	68020	O3	244	12545959	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68020	O3	538	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68020	O3	294	6819	956	7349	None		better	ok	1
+memory_expansion	68020	O3	28178	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68020	O3	2288	638390	3222		3168	646487	better	ok	1
+object_extent_loop	68020	O3	428	1262101	3020	1278387	2572	1283594	better	ok	2
+old_style_extra_args	68020	O3	272	4160	None		None		UNMEASURED(no external)	n/a	0
+os_console	68020	O3	65	226	None		97	271	better	ok	1
+os_exit	68020	O3	38	657	None		48	663	better	ok	1
+os_locals_between_pushes	68020	O3	274	3220	278	3090	318	3242	worse	WORSE	2
+over_aligned_local_after_even_pushes	68020	O3	760	90339	684		998	110859	better	WORSE	1
+overflow_builtins	68020	O3	1014	254387	2182	253326	1516		worse	WORSE	1
+pair_return	68020	O3	40	2172	42	2189	50	2180	better	ok	2
+pattern_fill	68020	O3	286	44072	360		588	76683	better	ok	1
+phi_slot_unknown_arm	68020	O3	254	248129	3500	229804	300	276903	worse	WORSE	2
+predefined_macros	68020	O3	58	3006	48	3023	76	3019	better	ok	2
+recdeep	68020	O3	190	440393	170	392388	190	1737558	worse	WORSE	2
+recmany_o1	68020	O3	374	440393	334	392388	376	1737558	worse	WORSE	2
+register_args_truncate	68020	O3	64	751	62	751	98	760	equal	WORSE	2
+register_upper_half	68020	O3	138	3943	130		170	4369	better	WORSE	1
+rep_count	68020	O3	154	38567	770		1656		UNMEASURED(no external)	ok	0
+rotate_small	68020	O3	282	13905	1057	9223	346	9926	worse	WORSE	2
+sat_builtins	68020	O3	640	130133	None		1564	129360	worse	WORSE	1
+sat_sub_u64_shared_compare	68020	O3	122	12947	None		164	11843	worse	WORSE	1
+sbb_wide_sub	68020	O3	146	3878	144	3956	160	3901	better	ok	2
+select_of_constants	68020	O3	21126	795836	18046	712931	23496		worse	WORSE	1
+shift_int32_variable	68020	O3	282	270715	258	269253	510	263674	worse	WORSE	2
+shift_int64_masked_amount	68020	O3	346	81103	334	63007	470	42450	worse	WORSE	2
+shift_int64_variable	68020	O3	348	76174	352	53809	772	62141	worse	WORSE	2
+shift_until_idioms	68020	O3	642	126395	806	120358	1722	130103	worse	WORSE	2
+shl_long_by_one	68020	O3	150	25783	152	25762	590	25296	worse	WORSE	2
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O3	70	680	84	701	None		better	ok	1
+shl_of_a_zero_extended_dividend	68020	O3	216	UNMEASURED	216		294		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68020	O3	154	4307	36	2181	52	2175	worse	WORSE	2
+shrink_wrapped_saves	68020	O3	38	2393	36	2410	52	2404	better	ok	2
+shuttle_value	68020	O3	238	7333	234	7353	274	7339	better	ok	2
+sibling_call_callees	68020	O3	82	1387	84	1392	142	1441	better	ok	2
+signbit_idioms	68020	O3	1462	139050	1490	142895	2618	133946	worse	WORSE	2
+spill_store_order	68020	O3	802	242877	1802	173482	13896		worse	WORSE	1
+split_loops	68020	O3	210	17868	234	13377	None		worse	WORSE	1
+ssub_sat_i64_loop	68020	O3	146	5224	None		316	5211	worse	ok	1
+stack_arrays_copy	68020	O3	92	3698	186	3958	646	3675	worse	ok	2
+static_inline	68020	O3	38	2281	52	2328	52	2290	better	ok	2
+static_pointers	68020	O3	333	10000	287	9896	373	9807	worse	WORSE	2
+strlen_idiom	68020	O3	62	2497	60	2513	96	2507	better	ok	2
+struct_odd_sizes	68020	O3	178	1507	176	1524	254	1519	better	ok	2
+struct_with_i64	68020	O3	186	2920	206	2937	252	2928	better	ok	2
+switch_empty_cases	68020	O3	48	838	62	824	50	847	worse	WORSE	2
+switch_header_marker_loop	68020	O3	238	1550	246		278	1637	better	ok	1
+switch_i64	68020	O3	210	4432	186	4449	246	4447	better	WORSE	2
+switch_jump_table	68020	O3	308	22926	254	21541	314	22116	worse	WORSE	2
+switch_peeled_table	68020	O3	182	55527	314		310	63889	better	ok	1
+switch_table_holes	68020	O3	160	10089	164	10325	None		better	ok	1
+sysv_abi	68020	O3	296	5152	252	5162	398	5158	better	WORSE	2
+tail_call_long_argument	68020	O3	80	1754	80	1675	116	1782	worse	WORSE	2
+tail_calls	68020	O3	692	13067	578	11855	772	15120	worse	WORSE	2
+u64_shift_select_arms	68020	O3	408	3691	382	4171	368	3633	worse	WORSE	2
+uint64_to_float	68020	O3	88	3771	118	3812	86	3777	better	ok	2
+urem_eq	68020	O3	372	2667123	422		446	2807120	better	ok	1
+value_of_valueless	68020	O3	36	683	30	683	36	694	equal	WORSE	2
+variadic	68020	O3	266	3197	None		452	3582	better	ok	1
+volatile_bitfield	68020	O3	378	3794	384	3967	334	3834	better	ok	2
+wide_shift_by_one	68020	O3	280	44894	290	56105	342	54947	better	ok	2
+widening_multiply	68020	O3	319	UNMEASURED	None		1419		UNMEASURED(ours)	ok	0
+word_compare_branches	68020	O3	264	63988	232	41976	400	82755	worse	WORSE	2
+word_compares	68020	O3	256	49210	1338	35829	3040	89649	worse	WORSE	2
+wrapv_overflow_check	68020	O3	218	3050	190	3049	270	3072	worse	WORSE	2
+write_through_parameter	68020	O3	48	2791	42	2808	64	2803	better	ok	2
+x87_arguments	68020	O3	980	96360	878	96693	1048	96650	better	ok	2
+x87rotate	68020	O3	1022	21155	786	25778	998	20759	worse	WORSE	2
+zz_f	68020	O3	46	2414	36	2428	52	2420	better	ok	2
+bench_io	68020	Os	259	UNMEASURED	None		337		UNMEASURED(ours)	ok	0
+bit_setclear	68020	Os	150	4990	142	5010	182	4962	worse	WORSE	2
+bit_test	68020	Os	160	4177	160	4201	194	4137	worse	ok	2
+bitcount_idioms	68020	Os	412	35561	368		668	38541	better	WORSE	1
+bitcount_u32	68020	Os	344	27014	282	27150	708	30334	better	WORSE	2
+bitcount_u64	68020	Os	474	34786	454	34778	1218	38744	worse	WORSE	2
+bitfield_long_long	68020	Os	176	4461	158	4459	None		worse	WORSE	1
+bitfield_overhang_init	68020	Os	146	6438	132	6448	164	6445	better	WORSE	2
+builtin_expect	68020	Os	36	1925	36	1925	52	1919	worse	ok	2
+builtins_table	68020	Os	82	2674	74	2672	140	2663	worse	WORSE	2
+byte_multiply	68020	Os	142	86074	118	65507	184	93652	worse	WORSE	2
+byval_initializes	68020	Os	26	1449	28	1466	40	1461	better	ok	2
+byval_inline	68020	Os	120	4221	104	4238	154		better	WORSE	1
+byval_struct	68020	Os	116	3080	164		176		UNMEASURED(no external)	ok	0
+byvalue_struct_address	68020	Os	60	870	270	1892	32	879	better	WORSE	2
+call_cleanup_keeps_pair	68020	Os	182	32299	152	33460	224	19527	worse	WORSE	2
+call_clobbers_flags	68020	Os	124	2428	112	2353	152	2407	worse	WORSE	2
+call_keeps	68020	Os	286	6700	298		324	5943	worse	ok	1
+clzll_ctzll_64	68020	Os	284	4624	240	4750	570	5517	better	WORSE	2
+compare_to_int64	68020	Os	150	3654	194	3304	270	3876	worse	ok	2
+compound_assignment_types	68020	Os	250	1721	233	1600	212		worse	WORSE	1
+constant_int_float_compare	68020	Os	56	3629	48	3624	76	3618	worse	WORSE	2
+copy_runs	68020	Os	772	22166	930		None		UNMEASURED(no external)	ok	0
+data_int64	68020	Os	172	4966	164	4974	158	4953	worse	WORSE	2
+div8_os	68020	Os	306	1651790	344	981331	494	1769369	worse	ok	2
+div_constants_long	68020	Os	4484	14328618	5156	12632798	6408		worse	ok	1
+div_constants_short	68020	Os	4194	10331104	4680	9316723	5444		worse	ok	1
+div_constants_ulong	68020	Os	3024	7955614	3374	7316729	4242		worse	ok	1
+double_across_a_call_result	68020	Os	326	5935	360	6631	334	5981	better	ok	2
+double_against_int	68020	Os	48	3293	48	3293	76	3289	worse	ok	2
+double_to_int64	68020	Os	46	3873	170	6525	64	3862	worse	ok	2
+double_to_uint64	68020	Os	324	23340	None		386		UNMEASURED(no external)	ok	0
+dse_merge_byte_order	68020	Os	30	624	26	622	38	635	worse	WORSE	2
+extension_chain_fused	68020	Os	46	2644	52		74	2740	better	ok	1
+fcmp_all	68020	Os	5106	287444	5078	296726	None		better	WORSE	1
+fill_nest	68020	Os	216	UNMEASURED	194	160282	304	111850	UNMEASURED(ours)	WORSE	2
+fixed_point	68020	Os	1834	131203	None		2788		UNMEASURED(no external)	ok	0
+float_bits	68020	Os	72	5250	64	5250	96	5239	worse	WORSE	2
+float_conversions_loop	68020	Os	206	9543	208	9602	230	9678	better	ok	2
+float_in_memory_loop	68020	Os	102	1693630	94	5036	236	1693711	worse	WORSE	2
+float_in_place_update	68020	Os	168	17061	16	696	222	17099	worse	WORSE	2
+float_return	68020	Os	110	1351	98	1368	144	1363	better	WORSE	2
+frame_address_stack_args	68020	Os	310	1631	322	2363	404	1655	better	ok	2
+frameless	68020	Os	482	19290	490	17211	656		worse	ok	1
+function_table	68020	Os	50	1463	38	1404	48	1418	worse	WORSE	2
+huffman_decode	68020	Os	538	68220	486		656		UNMEASURED(no external)	WORSE	0
+idioms	68020	Os	1262	1303904	1050		3346	2194297	better	WORSE	1
+idiv_loop_os	68020	Os	128	467277	116	326541	324	992668	worse	WORSE	2
+inlined_tail_call_keeps_frame_stores	68020	Os	58	742	52	742	66	740	worse	WORSE	2
+int64_division	68020	Os	450	326261	462	376250	538		better	ok	1
+int_compared_with_float	68020	Os	454	8611	420	8649	496	8607	worse	WORSE	2
+known_loads_walks	68020	Os	2451	241082	1581	188023	4297	461614	worse	WORSE	2
+licm_graph_callee_footprint	68020	Os	112	140574	92	95554	126	91105	worse	WORSE	2
+local_initializers	68020	Os	60	3973	168	4637	76	3962	worse	ok	2
+logical_value	68020	Os	166	3078	172	2662	244	3642	worse	ok	2
+long_compare_chain	68020	Os	1038	417673	916	391022	1162		worse	WORSE	1
+long_double_arguments	68020	Os	360	14408	None		466	14326	worse	ok	1
+long_double_constant_store	68020	Os	64	4156	None		84	6264	better	ok	1
+long_double_decimal_literal	68020	Os	72	1790	None		76	1794	better	ok	1
+long_double_layout	68020	Os	386	10438	None		392	10421	worse	ok	1
+long_double_stride	68020	Os	58	2777	None		80	2772	worse	ok	1
+long_double_variadic	68020	Os	184	5657	None		276		UNMEASURED(no external)	ok	0
+long_shift_by_a_call_result	68020	Os	146	4106	146	4118	200	4119	better	ok	2
+long_step_by_one	68020	Os	130	27717	124	27803	178	27985	better	WORSE	2
+loop_fusion	68020	Os	616	31669	626		1808	45555	better	ok	1
+loop_interchange	68020	Os	322	UNMEASURED	342		656	2210367	UNMEASURED(ours)	ok	1
+loop_versioning	68020	Os	264	72076	286	64196	782	112192	worse	ok	2
+memcpy_libcall	68020	Os	340	26697	328		574	36549	better	WORSE	1
+memcpy_runtime	68020	Os	238	12546000	None		None		UNMEASURED(no external)	n/a	0
+memfuncs_runtime	68020	Os	472	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+memmove_overlap	68020	Os	252	9044	224		506		UNMEASURED(no external)	WORSE	0
+memory_expansion	68020	Os	23018	UNMEASURED	None		None		UNMEASURED(ours)	n/a	0
+mul_constants	68020	Os	2328	1088818	3890		3168	646487	worse	ok	1
+object_extent_loop	68020	Os	402	1424158	406	1448916	622	1437239	better	ok	2
+old_style_extra_args	68020	Os	260	4214	None		None		UNMEASURED(no external)	n/a	0
+os_console	68020	Os	65	226	None		97	271	better	ok	1
+os_exit	68020	Os	36	656	None		48	663	better	ok	1
+os_locals_between_pushes	68020	Os	200	3738	254	3328	258		worse	ok	1
+over_aligned_local_after_even_pushes	68020	Os	770	92073	692		1004		UNMEASURED(no external)	WORSE	0
+overflow_builtins	68020	Os	1014	254387	1386	254227	1516		worse	ok	1
+pair_return	68020	Os	40	2172	42	2189	50	2180	better	ok	2
+pattern_fill	68020	Os	260	43782	204	47578	454	78447	better	WORSE	2
+phi_slot_unknown_arm	68020	Os	248	362533	294	313526	294	272263	worse	ok	2
+predefined_macros	68020	Os	48	3023	48	3023	76	3019	worse	ok	2
+recdeep	68020	Os	100	477888	182	410391	190	1737592	worse	ok	2
+recmany_o1	68020	Os	124	492929	196	431410	376	1737592	worse	ok	2
+register_args_truncate	68020	Os	64	751	62	751	98	760	equal	WORSE	2
+register_upper_half	68020	Os	132	4548	136	4215	166	4329	worse	ok	2
+rep_count	68020	Os	154	38567	120		246	59393	better	WORSE	1
+rotate_small	68020	Os	270	21051	269	11856	394	19275	worse	WORSE	2
+sat_builtins	68020	Os	640	130133	None		840	131322	better	ok	1
+sat_sub_u64_shared_compare	68020	Os	122	12947	None		158	13580	better	ok	1
+sbb_wide_sub	68020	Os	132	3895	144	3956	160	3901	better	ok	2
+select_of_constants	68020	Os	20184	1187166	16990	709218	23456		worse	WORSE	1
+shift_int32_variable	68020	Os	268	270728	220	272749	250	264532	worse	WORSE	2
+shift_int64_masked_amount	68020	Os	366	150243	224	144659	400	106341	worse	WORSE	2
+shift_int64_variable	68020	Os	336	133781	342	137417	484	121160	worse	ok	2
+shift_until_idioms	68020	Os	640	127191	608	130549	1354	135123	better	WORSE	2
+shl_long_by_one	68020	Os	144	25796	148	25750	174	25529	worse	ok	2
+shl_of_a_narrow_load_keeps_the_top_byte	68020	Os	70	680	84	701	None		better	ok	1
+shl_of_a_zero_extended_dividend	68020	Os	208	UNMEASURED	216		294		UNMEASURED(ours)	ok	0
+shrink_wrapped_frame	68020	Os	158	4542	138	4665	230		better	WORSE	1
+shrink_wrapped_saves	68020	Os	36	2410	36	2410	52	2404	worse	ok	2
+shuttle_value	68020	Os	216	7350	180	7353	274	7339	worse	WORSE	2
+sibling_call_callees	68020	Os	82	1387	84	1394	136	1447	better	ok	2
+signbit_idioms	68020	Os	1452	139063	1600	149016	1570	135822	worse	ok	2
+spill_store_order	68020	Os	548	396784	476	326729	896		worse	WORSE	1
+split_loops	68020	Os	210	17868	356	20873	258	19329	better	ok	2
+ssub_sat_i64_loop	68020	Os	144	5237	None		164	5289	better	ok	1
+stack_arrays_copy	68020	Os	98	3880	106	5321	156		better	ok	1
+static_inline	68020	Os	36	2298	74	2459	52	2290	worse	ok	2
+static_pointers	68020	Os	311	10104	277	9814	373	10278	worse	WORSE	2
+strlen_idiom	68020	Os	54	2513	81	2834	96	2507	worse	ok	2
+struct_odd_sizes	68020	Os	176	1507	176	1524	254	1519	better	ok	2
+struct_with_i64	68020	Os	180	2937	206	2937	252	2928	worse	ok	2
+switch_empty_cases	68020	Os	76	1238	48	909	88	1185	worse	WORSE	2
+switch_header_marker_loop	68020	Os	238	1554	238		276	1631	better	ok	1
+switch_i64	68020	Os	192	4449	170	4449	246	4447	worse	WORSE	2
+switch_jump_table	68020	Os	296	22962	222	21987	368	22843	worse	WORSE	2
+switch_peeled_table	68020	Os	182	56919	162	52483	224	67414	worse	WORSE	2
+switch_table_holes	68020	Os	158	21070	132		208	17105	worse	WORSE	1
+sysv_abi	68020	Os	260	5162	252	5162	398	5158	worse	WORSE	2
+tail_call_long_argument	68020	Os	80	1754	80	1675	116	1782	worse	ok	2
+tail_calls	68020	Os	730	14537	614	11960	796	15547	worse	WORSE	2
+u64_shift_select_arms	68020	Os	242	4003	212	4336	368	3633	worse	WORSE	2
+uint64_to_float	68020	Os	82	3788	370	20617	86	3777	worse	ok	2
+urem_eq	68020	Os	346	4111267	452		446	2807120	worse	ok	1
+value_of_valueless	68020	Os	36	683	30	683	36	694	equal	WORSE	2
+variadic	68020	Os	254	3341	None		440	3814	better	ok	1
+volatile_bitfield	68020	Os	364	3819	378	3967	334	3834	better	WORSE	2
+wide_shift_by_one	68020	Os	270	97450	316	61205	342	54947	worse	ok	2
+widening_multiply	68020	Os	301	UNMEASURED	None		345		UNMEASURED(ours)	ok	0
+word_compare_branches	68020	Os	264	72686	250	48179	392	82363	worse	WORSE	2
+word_compares	68020	Os	244	59777	202	39108	366	77268	worse	WORSE	2
+wrapv_overflow_check	68020	Os	200	3062	176	3049	282	3072	worse	WORSE	2
+write_through_parameter	68020	Os	122	3014	114	3046	144		better	WORSE	1
+x87_arguments	68020	Os	564	106547	906	106522	1048	106090	worse	ok	2
+x87rotate	68020	Os	604	26407	480	26134	990	20968	worse	WORSE	2
+zz_f	68020	Os	40	2431	36	2428	52	2420	worse	WORSE	2
