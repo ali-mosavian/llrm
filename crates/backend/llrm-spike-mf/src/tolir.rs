@@ -353,7 +353,8 @@ impl<T: Target> Converted<T> {
                 self.derived.insert(to, from);
                 let wanted = (to as usize).max(self.tii.classes.len());
                 self.tii.classes.resize(wanted, T::any());
-                let class = from.checked_sub(1).and_then(|v| self.tii.classes.get(v as usize)).copied().unwrap_or_else(T::any);
+                let class =
+                    from.checked_sub(1).and_then(|v| self.tii.classes.get(v as usize)).copied().unwrap_or_else(T::any);
                 self.tii.classes[to as usize - 1] = class;
                 changed = true;
             }
@@ -853,7 +854,11 @@ impl<T: Target> Made<'_, T> {
         };
         Ok(llrm_codegen::model::lir::Phi {
             result: value(&phi.result)?,
-            incoming: phi.incoming.iter().map(|(pred, from)| Ok((*pred as i64, value(from)?))).collect::<Result<_, String>>()?,
+            incoming: phi
+                .incoming
+                .iter()
+                .map(|(pred, from)| Ok((*pred as i64, value(from)?)))
+                .collect::<Result<_, String>>()?,
         })
     }
 
@@ -892,7 +897,9 @@ impl<T: Target> Made<'_, T> {
         if self.block != 0 && self.crossed.is_none() {
             self.crossed = Some(format!(
                 "{}: physical register {} is read in block {} without a write in it",
-                self.function.name, register.index(), self.block
+                self.function.name,
+                register.index(),
+                self.block
             ));
         }
         let value = self.fresh(register);
@@ -2423,7 +2430,8 @@ pub fn from_ssa<T: Target>(
         let mut insts = Vec::with_capacity(lir.insns.len());
         for insn in lir.insns.iter() {
             // a bundle is two instructions
-            let places = if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE)) { 2 } else { 1 };
+            let places =
+                if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE)) { 2 } else { 1 };
             for k in 0..places {
                 let (b, i) = *converted
                     .origin
@@ -2615,8 +2623,24 @@ pub fn from_lir<T: Target>(
     }
     let mut slots: Vec<(i32, T::Class)> = Vec::new();
     let mut blocks = Vec::with_capacity(edited.blocks.len());
-    for (at, block) in edited.blocks.iter().enumerate() {
-        if !converted.reachable[at] {
+    // A block a shared phase made on an edge is labelled above every block of
+    // the function (`(entry + 1) << 32`, `PhiElimination`) and takes the next
+    // block id; the blocks stay in the layout order the body gives.
+    let floor = (edited.entry + 1) << 32;
+    let mut fresh = original.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0);
+    let mut ids: IndexMap<i64, u32> = IndexMap::default();
+    for block in &edited.blocks {
+        let id = if block.at >= floor {
+            fresh += 1;
+            fresh - 1
+        } else {
+            original.blocks.get(block.at as usize).ok_or("a block from nowhere")?.id
+        };
+        ids.insert(block.at, id);
+    }
+    for block in edited.blocks.iter() {
+        let at = block.at as usize;
+        if block.at < floor && !converted.reachable[at] {
             blocks.push(original.blocks[at].clone());
             continue;
         }
@@ -2704,12 +2728,42 @@ pub fn from_lir<T: Target>(
                 }
                 continue;
             }
-            let (mut from, mut inst) =
-                *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
-            // `PhiElimination` and `TwoAddress` name their copies `mov`, and place
-            // them beside an instruction claiming none of its bytes: copies, as
-            // a split's are. A move of a literal is a definition made again, found
-            // below as a rematerialized one is.
+            // what is left where a jump to the next block was removed
+            if what.op == Operation::Nothing
+                && what.name.as_deref().is_none_or(str::is_empty)
+                && insn.defines.is_empty()
+                && insn.uses.is_empty()
+            {
+                continue;
+            }
+            // a jump `PhiElimination` made, onto an edge's block or where a
+            // branch fell through
+            if what.op == Operation::Jump
+                && what.name.as_deref() == Some("jmp")
+                && !what.indirect
+                && insn.covers.is_some_and(|(from, to)| from == to)
+            {
+                let target = what.target.and_then(|label| ids.get(&label)).ok_or("a jump to a block from nowhere")?;
+                insts.push(T::branch_to(*target).ok_or("the target has no jump to put on an edge")?);
+                continue;
+            }
+            // a literal made on an edge stands at the edge's label: it is
+            // found by what it sets, as a rematerialized one is
+            let (mut from, mut inst) = match converted.origin.get((insn.at / 2) as usize).filter(|_| insn.at < floor) {
+                Some(&place) => place,
+                None => *definitions.get(&format!("{:?}{:?}", what.name, what.sources)).ok_or_else(|| {
+                    format!(
+                        "an instruction from nowhere: at {} of {} origins, {what:?}",
+                        insn.at,
+                        converted.origin.len()
+                    )
+                })?,
+            };
+            // `PhiElimination` and `TwoAddress` name their copies `mov`, and
+            // place them beside an instruction claiming none of its
+            // bytes: copies, as a split's are. A move of a literal
+            // is a definition made again, found below as a
+            // rematerialized one is.
             let name = if is_shared_copy(insn) { Some(COPY) } else { what.name.as_deref() };
             let agrees = match original.blocks[from].insts[inst].kind {
                 Kind::Copy => name == Some(COPY),
@@ -2744,7 +2798,10 @@ pub fn from_lir<T: Target>(
             if name == Some(COPY) && (source.kind != Kind::Copy || made_by_split) {
                 let (Some(to), Some(from)) = (held(&what.dests).first().copied(), held(&what.sources).first().copied())
                 else {
-                    return Err(format!("a copy that does not move a value: {what:?} covers {:?} of {:?}", insn.covers, source.kind));
+                    return Err(format!(
+                        "a copy that does not move a value: {what:?} covers {:?} of {:?}",
+                        insn.covers, source.kind
+                    ));
                 };
                 insts.push(Inst::new(
                     Kind::Copy,
@@ -2761,16 +2818,31 @@ pub fn from_lir<T: Target>(
                 &mut |held| lane_or_number(held, &mut classes, &mut number),
                 &mut folds,
             )
-            .map_err(|why| format!("{why}: {what:?} uses {:?} defines {:?} of {:?}", insn.uses, insn.defines, source.operands))?;
+            .map_err(|why| {
+                format!("{why}: {what:?} uses {:?} defines {:?} of {:?}", insn.uses, insn.defines, source.operands)
+            })?;
             for (stand_in, slot) in folds {
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
             if insn.rematerialized && T::remade_sets_no_flags() {
                 made.sets_flags = false;
             }
+            // a branch `PhiElimination` pointed at the block of an edge
+            if let (Some(label), false) = (what.target, what.indirect)
+                && let Some(&id) = ids.get(&label)
+            {
+                let named: Vec<&mut u32> = made
+                    .operands
+                    .iter_mut()
+                    .filter_map(|operand| if let Operand::Block(one) = operand { Some(one) } else { None })
+                    .collect();
+                if let Ok([one]) = <[&mut u32; 1]>::try_from(named) {
+                    *one = id;
+                }
+            }
             insts.push(made);
         }
-        blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });
+        blocks.push(Block { id: ids[&block.at], insts, phis: Vec::new() });
     }
     if let Some(failed) = lane_failed.take() {
         return Err(failed);
@@ -2796,7 +2868,14 @@ pub fn from_lir<T: Target>(
             one.or_else(|| T::candidates(classes[v]).first().copied()).ok_or("a register with no candidates")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let function = MFunction { blocks, classes, ..original.clone() };
+    let mut function = MFunction { blocks, classes, ..original.clone() };
+    // an edge's block takes the odds of the edge it stands on
+    for edge in edited.blocks.iter().filter(|block| block.at >= floor) {
+        let Some(&to) = edge.succ.iter().next().and_then(|label| ids.get(label)) else { continue };
+        if let Some(from) = edited.blocks.iter().find(|block| block.succ.contains(&edge.at)) {
+            function.split_odds(ids[&from.at], to, ids[&edge.at]);
+        }
+    }
     Ok(Rewritten { function, assignment: Assignment(assignment), slots })
 }
 

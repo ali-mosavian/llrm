@@ -246,7 +246,7 @@ impl Default for Options {
             shared_cse: false,
             direct_copies: false,
             shared_licm: false,
-        shared_prelude: false,
+            shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
@@ -370,6 +370,33 @@ pub fn items_with(
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
 /// `negx` (a subtract from a constant zero high half is `negx`).
+/// A tied def and use share a register once allocated: a write-back form such
+/// as `add.w (An)+, Dn` is printed from its use, so a def allocated elsewhere
+/// would leave the pointer it should have moved where it was.
+fn verify_ties(
+    function: &crate::mfunc::MFunction,
+    assignment: &llrm_spike_mf::regalloc::Assignment,
+) -> Result<(), String> {
+    let root = |reg: &llrm_spike_mf::Reg| match reg {
+        llrm_spike_mf::Reg::Virt(v) => crate::REGISTER_INFO.root(assignment.0[*v as usize]),
+        llrm_spike_mf::Reg::Phys(id) => crate::REGISTER_INFO.root(*id),
+    };
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for &(def, used) in &inst.ties {
+            if let (llrm_spike_mf::Operand::Def(def), llrm_spike_mf::Operand::Use(used)) =
+                (&inst.operands[def], &inst.operands[used])
+                && root(def) != root(used)
+            {
+                return Err(format!(
+                    "{}: {:?} ties a def and a use allocated to different registers",
+                    function.name, inst.kind
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
     function
         .blocks
@@ -484,7 +511,8 @@ fn items_once(
         &blocks,
         Shape {
             direct_copies: options.direct_copies,
-            // what the hosted stages read: a result is defined in its copy's register
+            // what the hosted stages read: a result is defined in its copy's
+            // register
             copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
         },
     )?;
@@ -564,6 +592,7 @@ fn items_once(
         )?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
         crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);

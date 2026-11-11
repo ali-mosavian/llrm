@@ -153,6 +153,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         REGISTER_INFO.root(register)
     }
 
+    fn branch_to(block: u32) -> Option<llrm_spike_mf::Inst> {
+        Some(<Self as llrm_spike_mf::sink::Jump>::jump(block))
+    }
+
     fn reserved(root: RegId) -> bool {
         root == reg::SP || root == reg::A6
     }
@@ -247,7 +251,15 @@ pub fn allocate_greedy(
     global_copies: bool,
     loop_carried_first: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
-    allocate_greedy_after(function, size, address_first, rematerialize_arguments, global_copies, loop_carried_first, None)
+    allocate_greedy_after(
+        function,
+        size,
+        address_first,
+        rematerialize_arguments,
+        global_copies,
+        loop_carried_first,
+        None,
+    )
 }
 
 /// [`allocate_greedy`], the function still in SSA form and `prelude` the shared
@@ -318,7 +330,8 @@ pub fn shared_stage(
         llrm_codegen::backend::precse::Constrain,
     ) -> Box<dyn llrm_codegen::model::passes::LIRTransform>,
 ) -> Result<MFunction, String> {
-    // the classes read the target's description: once per thread, not per function
+    // the classes read the target's description: once per thread, not per
+    // function
     thread_local! {
         static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
             std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
