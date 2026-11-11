@@ -2643,6 +2643,21 @@ fn a_long_multiply_with_overflow_in_a_loop_calls_the_fast_routine_at_speed() {
     assert!(text.contains("jsr __mulsi3_fast\n"), "{text}");
 }
 
+/// Two functions that call through a pointer both made the label `_ci1`:
+/// ca65 stopped with "Symbol '_ci1' is already defined" on any such module
+/// (tail_calls_edges), so no program with two indirect calls assembled.
+#[test]
+fn indirect_call_return_labels_are_unique_across_functions() {
+    let ir = module(
+        "define i16 @f(ptr %p, i16 %x) {\n  %r = call i16 %p(i16 %x)\n  %s = add i16 %r, 1\n  ret i16 %s\n}\n\
+         define i16 @g(ptr %p, i16 %x) {\n  %r = call i16 %p(i16 %x)\n  %s = add i16 %r, 2\n  ret i16 %s\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let labels: Vec<&str> = text.lines().filter(|l| l.starts_with("_ci") && l.ends_with(':')).collect();
+    assert_eq!(labels.len(), 2, "{text}");
+    assert_ne!(labels[0], labels[1], "{text}");
+}
+
 /// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
 /// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i` called
 /// `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks. At speed
