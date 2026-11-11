@@ -1031,6 +1031,27 @@ impl FunctionPass for LoopDeletion {
     }
 }
 
+/// DEVIATE (late-loop-deletion, M32-TIP-3): `LoopDeletionPass` once more, after
+/// the late unroll and the cleanup behind it. The pin runs it before the
+/// unroll (l.1628) and never after; the unroll's peeled iterations can leave a
+/// loop that only counts (a byte copied onto itself once combine drops the
+/// store). It is no slot of the pin's, so it names no translation.
+pub struct LateLoopDeletion;
+
+impl FunctionPass for LateLoopDeletion {
+    fn name(&self) -> &'static str {
+        "latedeletion"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        LoopDeletion.run(unit, analyses)
+    }
+}
+
 #[cfg(test)]
 #[path = "loopdeletion_tests.rs"]
 mod tests;
