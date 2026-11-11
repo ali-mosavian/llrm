@@ -1,4 +1,3 @@
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
 target triple = "msp430"
 
 @__const.main.d = private unnamed_addr constant [8 x double] [double 0.000000e+00, double 1.500000e+00, double f0x41EFFFFFFFE00000, double f0x41F0000000000000, double f0x43E0000000000000, double f0x43E0000000000000, double f0x43E0000000000001, double f0x43EFFFFFFFFFFFFF], align 2

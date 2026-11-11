@@ -1,4 +1,3 @@
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
 target triple = "msp430"
 
 @values = internal constant [4 x i64] [i64 81985529216486895, i64 -1, i64 -9223372036854775807, i64 4294901761], align 2

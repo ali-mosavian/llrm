@@ -1,4 +1,3 @@
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
 target triple = "msp430"
 
 @la = dso_local global [3 x i32] [i32 2000000000, i32 -2000000000, i32 70000], align 2
