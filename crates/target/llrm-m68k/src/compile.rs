@@ -140,7 +140,8 @@ pub struct Options {
     /// Off: the private passes are what the corpus was tuned on.
     pub shared_prelude: bool,
     /// A small conditional block is copied into the predecessors that jump to
-    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build, and
+    /// kept only where the build with the copies beats the build without.
     pub tail_duplicate: bool,
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
@@ -307,7 +308,8 @@ pub fn items_with(
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            touched.tail_dup,
             touched.return_dup,
             touched.class_split,
             touched.compare_destinations,
@@ -328,15 +330,39 @@ pub fn items_with(
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
     if touched.mul_trial {
-        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
+        use crate::dagisel::mulprice::Mode;
+        let without = Options { mul: Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
-        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
+        if touched.mul_synthesized {
+            // DEVIATE G2: the pin's shapes are judged as before (clocks
+            // count wherever they run); a chain beyond them only against
+            // that winner, and its clocks only inside loops
+            let shapes = Options { mul: Mode::TrialPinShapes, ..options };
+            let (pin, _) = items_once(module, name, cpu, shapes)?;
+            let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
+                (plain, without)
+            } else {
+                (pin, shapes)
+            };
+            if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+                kept = base;
+                options = base_options;
+            }
+        } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
             kept = plain;
             options = without;
         }
     }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.tail_dup {
+        let without = Options { tail_duplicate: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
@@ -424,6 +450,9 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
+    /// A block was copied into the arms that jump to it
+    /// ([`llrm_spike_mf::taildup::tail_duplicate`]).
+    tail_dup: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -436,11 +465,16 @@ struct Touched {
     global_copies: bool,
     /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
     mul_trial: bool,
+    /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
+    /// trial credits clocks only inside loops, since a straight-line multiply
+    /// may never run.
+    mul_synthesized: bool,
 }
 
 impl Touched {
     fn any(self) -> bool {
-        self.return_dup
+        self.tail_dup
+            || self.return_dup
             || self.class_split
             || self.compare_destinations
             || self.carry_chain
@@ -535,6 +569,7 @@ fn items_once(
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
     touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
+    touched.mul_synthesized = chain.synthesized();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
@@ -655,8 +690,11 @@ fn items_once(
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
     branch_fold(&mut function, &assignment);
-    if options.tail_duplicate && !wants_size {
-        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+    if !wants_size {
+        if options.tail_duplicate {
+            touched.tail_dup =
+                llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+        }
         if options.return_dup {
             touched.return_dup = llrm_spike_mf::taildup::duplicate_returns(&mut function, 2);
         }

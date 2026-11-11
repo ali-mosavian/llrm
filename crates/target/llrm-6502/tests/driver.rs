@@ -1741,13 +1741,13 @@ define i8 @sub_overflow() {
     assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
 }
 
-/// A 64-bit multiply is one call to libgcc's `__muldi3`. The legalizer expanded
-/// it into four calls of `__mulsi3` and the adds between them (445 lines of
-/// assembly for `a * b` in `u64.c`, 13161 clocks), and `__muldi3`, which the
-/// runtime holds, was never called. The routine here is the shift-and-add loop
-/// a C library would hold; `(2^32 + 3) * (2^32 + 1) >> 32` is 4.
+/// A 64-bit multiply stays inline on the 6502: it names no size routine for the
+/// product (DEVIATE in `expand_mul`, exit when the call is measured), so
+/// `release/next` makes no `__muldi3` call. #6858 asserted the call and went red
+/// there. The routine in the module is the shift-and-add loop a C library would
+/// hold, and must stay uncalled; the inline path is `__mulsi3` calls.
 #[test]
-fn a_64_bit_multiply_is_one_call_to_the_library_routine() {
+fn a_64_bit_multiply_stays_inline_until_the_call_is_measured() {
     let ir = module(
         r#"@a = internal global i64 4294967299
 @b = internal global i64 4294967297
@@ -1779,9 +1779,8 @@ define i8 @probe() {
 }"#,
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(text.contains("jsr __muldi3"), "no call to the routine:\n{text}");
-    assert!(!text.contains("__mulsi3"), "expanded through 32-bit multiplies:\n{text}");
-    assert_eq!(exit_code_of(&text, "probe"), 4, "{text}");
+    assert!(!text.contains("jsr __muldi3"), "the product called the routine:\n{text}");
+    assert!(text.contains("jsr __mulsi3"), "the product was not expanded through 32-bit multiplies:\n{text}");
 }
 
 /// A variable `i64` shift is a call to libgcc's `__ashldi3 (u64, int)`. The
@@ -2608,6 +2607,55 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
         let text = assembly(&ir, &Request::new(level)).unwrap();
         assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
     }
+}
+
+/// A long multiply in a 200 trip loop called the compact `__mulsi3` (32 bits
+/// of multiplier a call): mul_constants 20.7M clocks against 16.8M, and
+/// overflow_builtins 720k against 426k with `__mulsi3_fast`. A module links
+/// the speed routine where its multiply sites count three runs
+/// (`hotmultiply`): a loop, or a function called from one; -Os never does.
+#[test]
+fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
+    let looped = module(
+        "define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = mul i32 %s, 1664525\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr __mulsi3_fast\n"), "a loop at -O2:\n{text}");
+    let small = assembly(&looped, &Request::new(Level::Os)).unwrap();
+    assert!(small.contains("__mulsi3") && !small.contains("_fast"), "a loop at -Os:\n{small}");
+}
+
+/// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no `mul`:
+/// the site count saw no multiply and overflow_builtins kept the compact routine
+/// (720k clocks against 426k).
+#[test]
+fn a_long_multiply_with_overflow_in_a_loop_calls_the_fast_routine_at_speed() {
+    let looped = module(
+        "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)\n\
+         define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %p = call {i32, i1} @llvm.umul.with.overflow.i32(i32 %s, i32 1664525)\n  \
+         %r = extractvalue {i32, i1} %p, 0\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr __mulsi3_fast\n"), "{text}");
+}
+
+/// Two functions that call through a pointer both made the label `_ci1`:
+/// ca65 stopped with "Symbol '_ci1' is already defined" on any such module
+/// (tail_calls_edges), so no program with two indirect calls assembled.
+#[test]
+fn indirect_call_return_labels_are_unique_across_functions() {
+    let ir = module(
+        "define i16 @f(ptr %p, i16 %x) {\n  %r = call i16 %p(i16 %x)\n  %s = add i16 %r, 1\n  ret i16 %s\n}\n\
+         define i16 @g(ptr %p, i16 %x) {\n  %r = call i16 %p(i16 %x)\n  %s = add i16 %r, 2\n  ret i16 %s\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let labels: Vec<&str> = text.lines().filter(|l| l.starts_with("_ci") && l.ends_with(':')).collect();
+    assert_eq!(labels.len(), 2, "{text}");
+    assert_ne!(labels[0], labels[1], "{text}");
 }
 
 /// LSR left every 16- and 32-bit induction variable of the 6502 alone (its

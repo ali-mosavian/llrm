@@ -138,7 +138,7 @@ pub fn target_lowering() -> TargetLowering {
         }
     }
     // the product of two zero-extended words is one call in a function tuned
-    // for size, the whole 32-bit result in `de` and `hl` (`expand_mul`): 15 B
+    // for size, the whole 32-bit result in `hl` (low) and `de` (`expand_mul`): 15 B
     // for the product against 216 B of partial products. At -O2 the partial
     // products ran faster in div_constants_short and compare_to_int64.
     tl.set_size_libcall_name(UMulLoHi, MVT::I16, "__umulhisi3");
@@ -159,6 +159,10 @@ pub fn target_lowering() -> TargetLowering {
     // through their 32-bit halves.
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__ashlsi3", "__lshrsi3", "__ashrsi3"]) {
         tl.set_size_libcall_name(op, MVT::I32, name);
+    }
+    // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
+    for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
+        tl.set_size_variable_libcall_name(op, MVT::I64, name);
     }
     tl.set_size_shift_call(8, 10);
     // the long divide has a smaller routine for a function tuned for size

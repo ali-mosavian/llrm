@@ -107,6 +107,8 @@ impl FunctionPass for Combine {
                 // targets without a rate are strict at every level).
                 phi_constant_users: self.phi_constant_users
                     && outer.target().tti().is_some_and(|tti| tti.speed_milliclocks_per_byte() != 0),
+                phi_constant_chains: self.phi_constant_users
+                    && outer.target().tti().is_some_and(|tti| tti.folds_phi_constant_chains()),
             },
         );
         last.instcombine.set(true);

@@ -2223,6 +2223,16 @@ impl SelectionDAG {
         self.cse_find(opcode, &[vt], ops, &NodeData::None).map(|node| SDValue { node, res: 0 })
     }
 
+    /// The filed constant of `bits` in `vt`, none if there is no such node.
+    pub fn find_constant(
+        &self,
+        bits: u128,
+        vt: EVT,
+    ) -> Option<SDValue> {
+        let bits = bits & super::fold::mask(vt.size_in_bits());
+        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false }).map(|node| SDValue { node, res: 0 })
+    }
+
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.
     pub fn get_node_multi(
         &mut self,

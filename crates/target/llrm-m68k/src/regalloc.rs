@@ -165,6 +165,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         root == reg::SP || root == reg::A6
     }
 
+    fn flags_register() -> Option<RegId> {
+        Some(reg::CCR)
+    }
+
     fn hoist_window() -> usize {
         4
     }
@@ -379,7 +383,7 @@ pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_co
     )?;
     let mut body = body;
     for phase in phases.iter_mut() {
-        if matches!(phase.class_name(), "PhiElimination" | "TwoAddress") {
+        if matches!(phase.class_name(), "MachineSink" | "PhiElimination" | "TwoAddress") {
             body = phase.transform(body)?;
         }
     }

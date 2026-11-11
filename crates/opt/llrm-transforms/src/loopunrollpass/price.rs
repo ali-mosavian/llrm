@@ -182,7 +182,7 @@ fn project_nest(
 
 /// The outermost loop above `lp`, itself included, whose chain down to `lp`
 /// runs known trips.
-fn known_root<'a>(
+pub(super) fn known_root<'a>(
     run: &Run,
     se: &mut ScalarEvolution,
     analyzed: &Analyzed,
@@ -248,6 +248,53 @@ fn root_pays(
     let rate = run.tti.unroll_milliclocks_per_byte();
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
     Some(priced_verdict(run, se, analyzed, root, up, trips, &uce, None, Some(&projection), prices_nest, memory_aware, rate))
+}
+
+/// Whether `lp` is a step of a nest of known trips whose whole unroll is under `limit` units: the
+/// root's body at the copies the inner unrolls make (`project_nest`), once more for each of its
+/// trips, as the pin's threshold counts the outermost loop after the inner ones are gone. The
+/// loops DEVIATE UNROLL-O1-TRIAL compiles again for: a loop that is no nest step goes alone, and a
+/// nest the pin's own threshold refuses is not unrolled by the trial either.
+pub(super) fn nest_unroll_fits(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    up: &UnrollingPreferences,
+    limit: u32,
+) -> bool {
+    let root = known_root(run, se, analyzed, lp);
+    if root.get_header() == lp.get_header() {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let trips = se.get_small_constant_trip_count(&cx, root.get_header());
+    let Some(projection) = (trips != 0).then(|| project_nest(run, se, analyzed, root)).flatten() else { return false };
+    let eph = ephemeral_values(run, analyzed, root);
+    let uce = cost_estimator(run, root, &eph, up.be_insns);
+    if !uce.can_unroll() {
+        return false;
+    }
+    let bytes = run.outer.target().byte_costs();
+    let blocks = root.get_blocks();
+    let once = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true).max(1);
+    let mut projected = 0;
+    for block in blocks.iter() {
+        projected += projection.of(*block)
+            * trip_cost(run.context, run.layout, run.function, run.callees, std::iter::once(block), &bytes, true);
+    }
+    let units = (i64::from(uce.rolled_loop_size().max(1)) * projected.max(1) / once).max(1);
+    let unrolled = ((units - i64::from(up.be_insns)).max(0)) * i64::from(trips) + i64::from(up.be_insns);
+    unrolled < i64::from(limit)
 }
 
 /// The profit rule of a priced unroll of `lp` by `trips`, from the loop's

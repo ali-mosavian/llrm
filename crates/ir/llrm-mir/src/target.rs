@@ -77,6 +77,16 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05): the unrolled size, in
+    /// the unroll units, up to which a loop the -O1 rule above refused is unrolled on
+    /// trial; the driver compiles the module again and keeps the unroll only if neither
+    /// its bytes nor its executed work grow (`Tti::unroll_trial_threshold`). `None`: no
+    /// trial.
+    pub unroll_trial_at_o1: Option<u32>,
+    /// Whether that trial takes only a step of a nest of known trips (a lone loop the -O1 rule refused
+    /// did not pay on x86-m32: 1 of 46 programs). False: any refused loop under the threshold, which
+    /// is what the 6502 and m68k trials were fit on (float_in_place_update: 9441 B at -O1 against 19 B).
+    pub unroll_trial_nests_only: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -282,12 +292,35 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): the inliner's
+    /// cold-call-site test reads the site's frequency from a flow in which
+    /// edges into `unreachable`-ended failure blocks carry no mass, where the
+    /// block has another successor. The pin reads the full flow, in which
+    /// checks (`!prof` 2^-20 failure edges) in deep loop nests leak most of
+    /// the mass and make the code after them cold (threshold 45, no bonuses).
+    /// false: the pin's.
+    pub cold_site_ignores_sinks: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// DEVIATE SD103-M32 (owner x87, exit 2026-11-24): clocks a merged `a && b`
+    /// costs over two branches where the pin's latency rule does not see them: a
+    /// `setcc` per compare, the logic op and a `test`, less the branch the
+    /// merge saves. `getJumpConditionMergingParams`' base cost is lowered by
+    /// it, except where the DAG folds the pair into one compare
+    /// (`foldLogicOfSetCCs`). 0: the pin's budget.
+    pub merged_condition_clocks: i64,
+    /// DEVIATE LSR-OUTER (owner x87, exit 2026-11-27): clocks of a multiply
+    /// the CPU executes (`imul`); with `loop_carried_clocks` it prices reducing
+    /// an outer loop's multiply to a counter. 0: the pin (no outer-loop
+    /// reduction).
+    pub multiply_clocks: i64,
+    /// Clocks a value held across an inner loop costs each outer trip: a store
+    /// and a load.
+    pub loop_carried_clocks: i64,
     /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
     /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
     /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
@@ -330,6 +363,8 @@ pub struct Tuning {
     /// than the loop-closing jump it removes. false: the pass's header limit
     /// alone.
     pub rotation_guard_must_fold_at_size: bool,
+    /// DEVIATE ROTATION-TRIAL: see `Tti::rotation_trial_at_size`.
+    pub rotation_trial_at_size: bool,
     /// A size build rotates a loop only when the copied header is no bigger
     /// than the branches the rotation removes (the loop-closing jump and
     /// the exit test), in `CodeSize` (arm64's w15 rule). false: the header
@@ -380,6 +415,8 @@ pub struct Tuning {
     pub unroll_milliclocks_per_byte: i64,
     /// DEVIATE UP1-NEST (`Tti::unroll_prices_nest_loops_without_outer_counter`).
     pub unroll_prices_nest: bool,
+    /// DEVIATE PHICONST-2 (`Tti::folds_phi_constant_chains`).
+    pub phi_constant_chains: bool,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
@@ -455,6 +492,8 @@ impl Tuning {
         promote_va_list: false,
         branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
+        unroll_trial_at_o1: None,
+        unroll_trial_nests_only: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -496,8 +535,12 @@ impl Tuning {
         unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
+        cold_site_ignores_sinks: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
+        merged_condition_clocks: 0,
+        multiply_clocks: 0,
+        loop_carried_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
@@ -507,6 +550,7 @@ impl Tuning {
         lsr_size_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
+        rotation_trial_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
         keep_constant_displacements: false,
@@ -519,6 +563,7 @@ impl Tuning {
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,
+        phi_constant_chains: false,
         sink_select_arms: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
@@ -669,6 +714,13 @@ pub trait Machine {
     /// so. Not the pin's thresholds, which read instruction units. By default
     /// `size_costs`.
     fn byte_costs(&self) -> OperationCosts {
+        self.size_costs()
+    }
+
+    /// The prices of the Os inline trial's byte estimate (`function_bytes`),
+    /// which may be calibrated against the bytes written where `size_costs`
+    /// is not. By default `size_costs`.
+    fn trial_costs(&self) -> OperationCosts {
         self.size_costs()
     }
 
@@ -1031,6 +1083,21 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// Whether `function_bytes` scales the prices by [`OperationCosts::words`] (an `i32` add on an 8-bit machine is
+    /// four byte adds). False: one price per operation, the table the other byte decisions read.
+    pub width_scaled: bool,
+    /// Whether a GEP with only constant indices costs nothing: the displacement is part of the load or store that
+    /// reads the address (`ldy #offset`, an absolute address plus a constant). False: priced as `address`.
+    pub constant_offsets_fold: bool,
+    /// Whether the branch is priced with its compare (the `branch` snippet is a compare and a jump, which `ICmp`
+    /// already prices): a `br` costs nothing, as an unconditional jump is mostly a fall-through. False: `branch`
+    /// each.
+    pub branch_in_compare: bool,
+    /// What a load from a global or a stack slot costs per native word (an absolute address, no pointer to
+    /// form); 0: what any load does.
+    pub direct_load: i64,
+    /// The same for a store.
+    pub direct_store: i64,
     /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
     /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
     /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
@@ -1043,6 +1110,10 @@ pub struct OperationCosts {
     pub cache_line: i64,
     /// Clocks to fill one such line from memory; 0: not stated.
     pub line_fill_clocks: i64,
+    /// Block placement at -Os/-Oz is `MachineBlockPlacement`'s
+    /// `-apply-ext-tsp-for-size` (Ext-TSP over unit counts), which the pin
+    /// ships off.
+    pub ext_tsp_for_size: bool,
 }
 
 impl OperationCosts {
@@ -1204,10 +1275,16 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            width_scaled: false,
+            constant_offsets_fold: false,
+            branch_in_compare: false,
+            direct_load: 0,
+            direct_store: 0,
             free_intrinsics: false,
             expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
+            ext_tsp_for_size: false,
         }
     }
 }

@@ -280,6 +280,12 @@ pub fn visit_icmp(
     if let Some(r) = fold_select_icmp(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
+    if let Some(r) = crate::combine_icmp_minmax::fold_icmp_with_min_max(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = crate::combine_icmp_minmax::fold_icmp_with_min_max(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
     if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
         return r;
     }

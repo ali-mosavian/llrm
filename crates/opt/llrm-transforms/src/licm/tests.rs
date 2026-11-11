@@ -432,6 +432,47 @@ fn test_a_global_stored_on_some_paths_keeps_its_store_in_a_single_threaded_modul
     assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["constant".to_owned()], false)]);
 }
 
+/// `isWritableObject` takes a `byval` argument and a `noalias` call's result,
+/// not only an alloca: with the object thread-local (single-threaded module)
+/// the store made on some paths is sunk. A plain pointer argument stays
+/// unwritable, so its store stayed in the loop and the other two did too.
+#[test]
+fn test_a_byval_argument_stored_on_some_paths_is_sunk_but_a_plain_pointer_is_not() {
+    let loop_over = |attrs: &str| {
+        format!(
+            "define i32 @f(i32 %n, ptr {attrs} %g) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %x = load i32, ptr %g
+  %t = icmp eq i32 %x, 3
+  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr %g
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}}
+"
+        )
+    };
+    let sunk = |attrs: &str| promoted_on(&loop_over(attrs), SingleThreaded(llrm_mir::target::Neutral));
+    assert_eq!(sunk("byval(i32) align 4 dereferenceable(4)"), [(vec!["g".to_owned()], true)]);
+    assert_eq!(sunk("dereferenceable(4) align 4"), [(vec!["g".to_owned()], false)]);
+}
+
 /// A call that is handed the slot's address may read or write it: no promotion.
 #[test]
 fn test_a_slot_a_call_may_touch_is_not_promoted() {
@@ -2458,6 +2499,50 @@ fn safety_scans(
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
     DECIDED.with(|all| all.borrow().safety_scans)
+}
+
+/// How many predecessor lookups the loops' safety info made.
+fn safety_pred_lookups(text: &str) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_pred_lookups)
+}
+
+/// A loop of `n` diamonds, each arm holding a hoistable add.
+fn diamond_chain(n: usize) -> String {
+    let mut text = String::from(
+        "@g = global i16 0\n\ndefine void @f(i16 %n, i16 %m) {\nb0:\n  br label %h\n\nh:\n  %i = phi i16 [ 0, %b0 ], [ %i1, %latch ]\n  br label %t0\n\n",
+    );
+    for k in 0..n {
+        text += &format!(
+            "t{k}:\n  %c{k} = icmp slt i16 %i, %m\n  br i1 %c{k}, label %l{k}, label %r{k}\n\nl{k}:\n  %x{k} = add i16 %n, {}\n  store i16 %x{k}, ptr @g\n  br label %t{}\n\nr{k}:\n  br label %t{}\n\n",
+            k + 1,
+            k + 1,
+            k + 1
+        );
+    }
+    text += &format!(
+        "t{n}:\n  br label %latch\n\nlatch:\n  %i1 = add i16 %i, 1\n  %e = icmp slt i16 %i1, %m\n  br i1 %e, label %h, label %out\n\nout:\n  ret void\n}}\n"
+    );
+    text
+}
+
+/// A loop of 3n blocks asked for each arm whether it is guaranteed to execute
+/// looked a block's predecessors up in the function once for every block the
+/// walk back from each arm reached: 40 diamonds made 4,840 lookups, and
+/// queens at -O3 (360-block loop, 53 runs of LICM) spent 2.1 G Ir there. The
+/// lists of the loop's blocks are made once, so the lookups follow the blocks,
+/// not their product.
+#[test]
+fn test_the_walk_back_from_each_block_reads_the_loops_predecessors_once() {
+    let n = 40;
+    let lookups = safety_pred_lookups(&diamond_chain(n));
+    assert!(lookups <= 4 * 3 * n, "{lookups} predecessor lookups for a loop of {} blocks", 3 * n + 3);
 }
 
 /// The sinking, the hoisting and the promotion of one loop shared two

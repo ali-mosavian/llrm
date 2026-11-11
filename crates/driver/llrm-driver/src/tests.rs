@@ -1842,6 +1842,43 @@ fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
     assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
 }
 
+const SMALL_STRUCT_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out) addrspace(1) {\n  store i8 7, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// clang returns `struct { char x; }` through an `sret` pointer; Borland's
+/// cdecl returns it in AL. The call pushed the address of a temporary and the
+/// callee wrote through it, so a BCC callee (which returns AL) left the
+/// caller's copy unwritten: cfaggee's `r_s1` read 2F, not 11 (callconv CFLB).
+#[test]
+fn a_one_byte_struct_result_comes_back_in_al_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), SMALL_STRUCT_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov al, 7"), "the callee returns the byte in AL\n{listing}");
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
+/// The call through a function pointer carries its convention, so a call that
+/// passed the `sret` address to a callee returning AL left the result unwritten
+/// with no diagnostic.
+#[test]
+fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { i8 }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
 /// `-fno-inline=sum5` named the function as the source does, but the module
 /// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
 /// looked up: "the program defines no function of that name", so
@@ -3415,6 +3452,32 @@ fn unique_directory(tag: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
 }
 
+/// Borland's `interrupt` takes the registers it saved as parameters
+/// (`bp, di, si, ds, es, dx, cx, bx, ax`). They were read as the frame's words
+/// in address order, so `ax` was the high half of EDI and the harness cell
+/// CFLL saw `bp = 0, di = 0, si = ES, ds = DS` for a handler that was given
+/// BP = 0xB0B0. The description names each parameter's slot; `ax` is the low
+/// word of EAX.
+#[test]
+fn an_interrupt_handler_parameter_is_the_low_word_of_the_register_slot_it_names() {
+    let directory = unique_directory("intr");
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("isr.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+         @g = global i16 0\n\
+         define x86_intrcc void @isr(i16 %bp, i16 %di, i16 %si, i16 %ds, i16 %es, i16 %dx, i16 %cx, i16 %bx, i16 %ax) {\n  store i16 %ax, ptr @g\n  ret void\n}\n",
+    )
+    .unwrap();
+    let output = directory.join("isr.s");
+    crate::llc::compile(&flags(&["-m16", "-S", "-O0", "-o", output.to_str().unwrap()]), &source, None).unwrap();
+    let text = std::fs::read_to_string(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    // gs fs es ds (2 each), edi esi ebp esp ebx edx ecx (4 each): EAX is 36 bytes up the frame, past BP.
+    assert!(text.contains("word ptr [bp+38]"), "{text}");
+}
+
 #[test]
 fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
     assert_ne!(unique_directory("t"), unique_directory("t"));
@@ -3444,13 +3507,22 @@ fn no_function_sections_is_the_default_object() {
 
 /// Every function's COMDAT is allocated in the module's code segment
 /// (`<MODULE>_TEXT`), the segment the one-segment layout names: function
-/// sections change the grouping, not the segment. (`-mcode-segment=` is not
-/// read on this path, with or without the flag.)
+/// sections change the grouping, not the segment.
 #[test]
 fn function_sections_allocate_in_the_modules_code_segment() {
     let has = |object: &[u8]| object.windows(8).any(|window| window == b"TWO_TEXT");
     assert!(has(&omf_of(&["-ffunction-sections"])));
     assert!(has(&omf_of(&[])));
+}
+
+/// `-mcode-segment=` was read only on the Nib/QB path: a C module from llrm-cc
+/// always went to `<MODULE>_TEXT`, so a BCC caller's near call into it left the
+/// segment and the harness cell CNBL crashed.
+#[test]
+fn mcode_segment_names_the_segment_of_an_llvm_ir_module() {
+    let has = |object: &[u8], name: &[u8]| object.windows(name.len()).any(|window| window == name);
+    let object = omf_of(&["-mcode-segment=HOT_TEXT"]);
+    assert!(has(&object, b"HOT_TEXT") && !has(&object, b"TWO_TEXT"));
 }
 
 /// `llrm-llc` on a module stated for Windows or macOS x86-64 answered `no
@@ -5116,4 +5188,173 @@ fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o
     assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
     let on = ["-m64", "-O3", "--isel=dag"];
     assert!(calls_of_h(&on) >= 1);
+}
+
+/// `p >= 65535.0f ? 65535.0f : p` was branched before selection (`ucomiss`,
+/// `jb`, `movss`): fp selects never reached the DAG, so its `pseudo_fmin` was
+/// dead code and the clamps of jpeg_fixed and stft_single grew 24-80 B at m64.
+/// It is `minss`.
+#[test]
+fn a_float_clamp_is_minss_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(float %p) {\n\
+                  %c = fcmp oge float %p, 6.553500e+04\n\
+                  %q = select i1 %c, float 6.553500e+04, float %p\n\
+                  ret float %q\n}\n";
+    let (built, _) = compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("minss") && !listing.contains("ucomiss"), "{listing}");
+}
+
+/// `x_life`'s 3x3 neighbour nest (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes) at -O1
+/// with `-funroll-loops`: the -O1 unroll rule counts the 3-trip inner loop one instruction too large and kept both
+/// loops, which spill their counters to the stack (416 B, 564,234 clk, gcc 368,623). The pin's threshold unrolls the
+/// nest to nine straight loads, and unrolled it is smaller (401 B, 214,872 clk), which only a second compile can see
+/// (DEVIATE UNROLL-O1-TRIAL): the nest is kept unrolled.
+#[test]
+fn a_nest_whose_unroll_is_no_larger_and_no_slower_is_unrolled_at_o1() {
+    let text = include_str!("tests_data/life_nest.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-funroll-loops", "-march=i486"]), text, "bench_x_life").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The eight neighbours of the centre are loaded in one straight run: no loop is left around them.
+    let mut loads = 0;
+    let mut most = 0;
+    for line in listing.lines().map(str::trim) {
+        if line.ends_with(':') {
+            loads = 0;
+        } else if line.contains(", byte ptr [") && !line.starts_with("cmp") {
+            loads += 1;
+            most = most.max(loads);
+        }
+    }
+    assert!(most >= 8, "the nest kept a loop: at most {most} neighbour loads in a block: {listing}");
+}
+
+/// `matmul` at -O1 with `-funroll-loops`: the pin's threshold unrolls it (303 -> 1904 B), which the trial prices
+/// and puts back: the code stays well under the unrolled size (about 100 instructions rolled, 600 unrolled).
+#[test]
+fn a_nest_whose_unroll_grows_the_code_stays_rolled_at_o1() {
+    let text = include_str!("tests_data/matmul_int.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-funroll-loops", "-march=i486"]), text, "bench_matmul").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let instructions = listing.lines().filter(|line| line.starts_with("    ") && !line.trim_end().ends_with(':')).count();
+    assert!(instructions < 250, "matmul unrolled to {instructions} instructions: {listing}");
+}
+
+/// x_adler -O2: `movzx esi, bl` of a counter that stays live ran 3 clocks on
+/// the i486 where gcc's `mov; and` runs 2 (47,972 clk with the mask, 50,972
+/// without; gcc 49,551). MaskByAnd (DEVIATE MA1) skipped every source with
+/// another reader; a live source is copied first and the copy is priced.
+#[test]
+fn a_byte_extension_of_a_live_counter_is_a_mask_in_a_hot_loop_at_o2() {
+    let text = include_str!("tests_data/live_byte_mask.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "sum_low_bytes").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("movzx"), "the loop extends with movzx (3 clk): {listing}");
+    assert!(listing.contains("and ") && listing.contains(", 255"), "no mask: {listing}");
+}
+
+/// x_int64_division -O2: the same mask of a live byte, wanted again past two
+/// calls, kept the masked value in a register across both and spilled one more
+/// value (+700 clk): the copy-and-mask is not made where its result outlives a
+/// call.
+#[test]
+fn a_masked_byte_wanted_past_a_call_stays_a_movzx_at_o2() {
+    let text = include_str!("tests_data/live_byte_mask_calls.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "low_bytes_across_calls").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movzx"), "the extension was made a mask: {listing}");
+}
+
+/// x_cordic -O2: both arms of the body joined in the loop latch (`inc; cmp; branch back`), one reached by a taken
+/// `jmp` that ran 3 clocks a trip (50,829 clk; 49,539 with the latch copied into each arm, gcc 49,031). The pin's
+/// tail-duplication bound (2 instructions) kept the latch; the priced copy (DEVIATE TAILDUP-HOT) takes it.
+#[test]
+fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
+    let text = include_str!("tests_data/latch_arms.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "arms").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The latch's `xor` of 5 stands once in each arm, not once behind a `jmp` from one of them.
+    let copies = listing.lines().filter(|line| line.trim() == "xor esi, 5").count();
+    assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
+}
+
+/// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
+/// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
+/// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
+#[test]
+fn counted_loops_that_are_smaller_unrotated_stay_unrotated_at_os() {
+    let text = include_str!("tests_data/prefix_sums.ll");
+    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
+    let object = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "prefix_sums.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    assert!(object.len() < 310, "{} bytes: {}", object.len(), llrm_codegen::backend::masm::text(&built).unwrap());
+}
+
+/// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B
+/// longer in code (the padding between functions moved). The trial compares the bytes without
+/// padding, so the rotated loops stay.
+#[test]
+fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
+    let text = include_str!("tests_data/bubble_sort.ll");
+    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_x_bubble").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "bubble_sort.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
+}
+
+/// COMPILE-OSROT: the rotation trial assembled the functions that differ twice and the module once
+/// more, so a module of two loop functions and a leaf that does not change cost three assemblies
+/// where two are the floor (x_jpeg_fixed -Os, 6 of 8 functions differ: 2.0x the compile time). Each
+/// of the three functions is selected once per assembly, twice in all.
+#[test]
+fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
+    let one = include_str!("tests_data/prefix_sums.ll");
+    let start = one.find("; Function Attrs").unwrap();
+    let end = one[start..].find("\n}\n").unwrap() + start + 3;
+    let function = &one[start..end];
+    let second = function.replace("@bench_prefix", "@bench_prefix2").replace("mul nsw i32 %11, 5", "mul nsw i32 %11, 7");
+    let text = format!(
+        "{}\n{second}\ndefine dso_local i32 @leaf(i32 %x) {{\n  ret i32 %x\n}}\n{}",
+        &one[..end],
+        &one[end..]
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+    compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
+    let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
+    assert_eq!(selections, 6, "{selections} selections of three functions");
+}
+
+/// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
+/// backend against it must too. `llrm-llc` ran the whole mid-end over any IR it was handed (a hand-made
+/// branch form of x_heapsort's child select compiled to the same 37,923 clk as the unedited IR), so
+/// "the pin's code on our IR" could not be isolated. With the switch a slot that mem2reg promotes stays
+/// a stack slot.
+#[test]
+fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+        define i32 @f(i32 %x) {\n  %p = alloca i32, align 4\n  store i32 %x, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  ret i32 %v\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O2", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "slot").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let optimized = listing(&[]);
+    let given = listing(&["--no-midend"]);
+    assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
+    assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
 }

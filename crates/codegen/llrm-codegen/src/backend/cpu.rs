@@ -488,9 +488,13 @@ impl Profile {
         let size = self.tail_dup_hot_size?;
         let per_byte = self.speed_milliclocks_per_byte();
         let jump = self.cost("jmp_short").ok()?;
+        // A copied loop latch ends in a branch back that is taken, where the
+        // tail's own branch out of the loop was not.
+        let back = self.cost("jcc").ok()? - self.cost("jcc_not_taken").ok()?;
         (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
             size,
             jump_clocks: jump as f64,
+            back_edge_clocks: back.max(0) as f64,
             clocks_per_byte: per_byte as f64 / 1000.0,
         })
     }

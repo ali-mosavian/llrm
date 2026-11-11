@@ -131,6 +131,17 @@ pub trait SpillWeightEnv {
         &self,
         instr: &crate::model::lir::Insn,
     ) -> Option<(u32, u32)>;
+    /// `MachineOperand::getSubReg` of the operand of `instr` that names `reg`:
+    /// where it reads or writes a part of the value (its lane offset and
+    /// width), `None` for the whole of it. A value has no sub-register index
+    /// where the target does not say.
+    fn sub_register(
+        &self,
+        _instr: &crate::model::lir::Insn,
+        _reg: u32,
+    ) -> Option<(u32, u32)> {
+        None
+    }
     /// The register a value is pinned to, where it is (a physical register
     /// hint).
     fn pinned(
@@ -223,9 +234,15 @@ impl<'a> VirtRegAuxInfo<'a> {
     }
 
     /// `copyHint` (CalcSpillWeights.cpp#L57): the preferred allocation register
-    /// for `reg`, given a copy.
+    /// for `reg`, given a copy. A virtual register is a hint only when both
+    /// ends name the same sub-register of theirs (L72-73).
+    ///
+    /// DEVIATE (no number): a pinned partner is a physical register of its
+    /// root whatever sub-register the copy names (the pin's `getSubReg` and
+    /// `getMatchingSuperReg`, L75-82, are not translated).
     fn copy_hint(
         &self,
+        instr: &crate::model::lir::Insn,
         copy: (u32, u32),
         reg: u32,
     ) -> Option<Hint> {
@@ -233,7 +250,7 @@ impl<'a> VirtRegAuxInfo<'a> {
         if let Some(phys) = self.env.pinned(h_reg) {
             return Some(Hint::Phys(phys));
         }
-        Some(Hint::Virt(h_reg))
+        (self.env.sub_register(instr, reg) == self.env.sub_register(instr, h_reg)).then_some(Hint::Virt(h_reg))
     }
 
     /// `isRematerializable` (CalcSpillWeights.cpp#L84): every value of `li` is
@@ -392,7 +409,7 @@ impl<'a> VirtRegAuxInfo<'a> {
             }
             // Get allocation hints from copies.
             let Some(copy) = copy else { continue };
-            if let Some(hint_reg) = self.copy_hint(copy, li.reg()) {
+            if let Some(hint_reg) = self.copy_hint(&insn, copy, li.reg()) {
                 let allocatable = match hint_reg {
                     Hint::Virt(_) => true,
                     Hint::Phys(reg) => self.env.is_allocatable(reg),
