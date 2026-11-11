@@ -283,7 +283,7 @@ const RANGED_I8: &str = "i8 range(i8 0, 101) %x, i8 range(i8 1, 11) %y";
 /// three instructions and a `zext` instead of `udiv (add nuw X, Y-1), Y`.
 #[test]
 fn the_div_ceil_idiom_is_one_udiv_of_a_nuw_add() {
-    let after = "  %0 = add i8 %y, -1\n  %1 = add nuw i8 %x, %0\n  %2 = udiv i8 %1, %y\n  ret i8 %2\n";
+    let after = "  %0 = add nsw i8 %y, -1\n  %1 = add nuw i8 %x, %0\n  %2 = udiv i8 %1, %y\n  ret i8 %2\n";
     check("i8", RANGED_I8, &div_ceil_body("i8", "i8", false), after);
     check("i8", RANGED_I8, &div_ceil_body("i8", "i8", true), after);
 }
@@ -291,7 +291,7 @@ fn the_div_ceil_idiom_is_one_udiv_of_a_nuw_add() {
 /// `divceil.ll`, zext form: `udiv`/`urem` in i8, the add in i16.
 #[test]
 fn the_div_ceil_idiom_through_a_zext_is_a_zext_of_the_udiv() {
-    let after = "  %0 = add i8 %y, -1\n  %1 = add nuw i8 %x, %0\n  %2 = udiv i8 %1, %y\n  %3 = zext i8 %2 to i16\n  ret i16 %3\n";
+    let after = "  %0 = add nsw i8 %y, -1\n  %1 = add nuw i8 %x, %0\n  %2 = udiv i8 %1, %y\n  %3 = zext i8 %2 to i16\n  ret i16 %3\n";
     check("i16", RANGED_I8, &div_ceil_body("i8", "i16", false), after);
     check("i16", RANGED_I8, &div_ceil_body("i8", "i16", true), after);
 }
@@ -302,6 +302,8 @@ fn the_div_ceil_idiom_through_a_zext_is_a_zext_of_the_udiv() {
 fn the_div_ceil_idiom_stays_where_the_add_can_wrap() {
     for params in ["i8 range(i8 0, 101) %x, i8 %y", "i8 %x, i8 range(i8 1, 11) %y"] {
         let body = div_ceil_body("i8", "i8", false);
-        check("i8", params, &body, &body);
+        // Flag inference still marks the final add `nuw` (a quotient plus a bit).
+        let kept = body.replace("%result = add i8", "%result = add nuw i8");
+        check("i8", params, &body, &kept);
     }
 }
