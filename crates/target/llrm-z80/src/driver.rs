@@ -185,16 +185,15 @@ pub fn selections_with_alternatives(
         .collect();
     let select = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
-        crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(request.level == Level::O1));
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
-        crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(false));
         one
     };
     // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
     // other way, a sized one with every multiply inline (`DECOMPOSE_MULS`); the caller prices the two
-    // (`compile::decomposed_functions`). At -O1 an unsized one prices each shift and multiply site (`PRICED_SITES`).
+    // (`compile::decomposed_functions`). At -O1 an unsized one is also selected with each shift and multiply site
+    // priced (`PRICED_SITES`); the caller keeps it where it is no worse on either axis.
     let calls_the_routine = |name: &str| -> Option<bool> {
         module.globals.iter().find_map(|global| {
             let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
@@ -218,7 +217,10 @@ pub fn selections_with_alternatives(
         .filter_map(|name| {
             let muls = calls_the_routine(name).filter(|sized| *sized);
             let fills = has_fills(name);
-            if muls.is_none() && !fills {
+            // DEVIATE z80-callinline-price: an unsized function of a module that links the long routines. One
+            // alternative per function: a function with a sized form or a fill keeps those.
+            let sites = muls.is_none() && !fills && request.level == Level::O1 && calls_the_routine(name) == Some(false);
+            if muls.is_none() && !fills && !sites {
                 return None;
             }
             let switch = muls.map(|_| &crate::dagisel::pipeline::DECOMPOSE_MULS);
@@ -226,7 +228,9 @@ pub fn selections_with_alternatives(
                 switch.with(|one| one.set(true));
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
+            crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(sites));
             let selected = (name.clone(), select(name, false), select(name, true));
+            crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
