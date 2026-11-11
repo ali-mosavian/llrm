@@ -1,8 +1,10 @@
 # Programs expected to fail, and where: see tests/callconv.rs.
 # Recorded 2026-11-11 with tools/callconv/c.sh; each fix removes its rows. near functions: fork clang 507f2c7a70b9.
+# CFLB/CFLL i_plain: lost 0008 (SP) only with the armed llrm caller: a call of an `interrupt` function from llrm's caller leaves SP off (found by -DARMED_NO_SIDI).
 CFBL r_s1
 CFBL r_s2
 CFBL r_s4
+CFLB i_plain
 CFLB r_s1
 CFLB r_s2
 CFLB r_s3
@@ -12,6 +14,7 @@ CFLB r_s7
 CFLB r_s8
 CFLB r_s9
 CFLB r_sci
+CFLL i_plain
 CNBL r_s1
 CNBL r_s2
 CNBL r_s4
