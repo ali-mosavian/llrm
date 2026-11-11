@@ -303,6 +303,7 @@ pub fn machine_with<'a>(
         Box::new(twoaddr::TwoAddress {
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
+            loop_carried_flow: target.commutes_loop_carried_flow(),
             unoptimized: !target.optimized,
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),

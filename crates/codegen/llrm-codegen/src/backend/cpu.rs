@@ -501,6 +501,13 @@ impl Profile {
         loop_carried_applies(self.commute_loop_carried, self.size, self.min_size)
     }
 
+    /// DEVIATE TA-LC2 applies here: TA-LC where bytes are priced at speed
+    /// (-O2, -O3). At -O1 (strict bytes) the tie can leave the web one value
+    /// wider: x_adler -O1 gained a callee-saved register (+2 B, +5 clk).
+    pub fn commutes_loop_carried_flow(&self) -> bool {
+        self.commutes_loop_carried() && !self.bytes_strict()
+    }
+
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
     /// X86FixupLEAs splits it. Of the nine `-march`es only `x86-64`, tuned as
     /// clang and llc tune it by default, `generic` (X86.td L1903): not
@@ -1247,5 +1254,25 @@ mod bytes_strict_tests {
         assert!(at(true, true, true).bytes_strict(), "-Os");
         assert!(!at(true, false, true).bytes_strict(), "-O2 and -O3 price bytes in clocks");
         assert!(!at(false, false, false).bytes_strict(), "-O0 is not tuned");
+    }
+
+    /// x_adler -O1 with TA-LC2 on gained a callee-saved register (115 -> 117 B,
+    /// 57094 -> 57099 clk, worse on both axes where -O1 is strict): the
+    /// cross-block tie holds at -O2 and -O3 only, and only where TA-LC does.
+    #[test]
+    fn the_loop_carried_flow_commute_is_o2_and_o3_only() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile {
+            optimized,
+            size,
+            speed_rate,
+            commute_loop_carried: true,
+            ..base.clone()
+        };
+        assert!(at(true, false, true).commutes_loop_carried_flow(), "-O2 and -O3");
+        assert!(!at(true, false, false).commutes_loop_carried_flow(), "-O1");
+        assert!(!at(true, true, true).commutes_loop_carried_flow(), "-Os");
+        let without_key = Profile { commute_loop_carried: false, ..at(true, false, true) };
+        assert!(!without_key.commutes_loop_carried_flow(), "no key: the pin's order");
     }
 }
