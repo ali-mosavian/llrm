@@ -329,8 +329,13 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
                     }
                 }
             }
-            Op::I(Inst::VectorMov { rd, rn }) => {
+            Op::I(Inst::VectorMov { rd, rn })
+            | Op::I(Inst::VectorShift { rd, rn, .. })
+            | Op::I(Inst::VectorNot { rd, rn }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
+            }
+            Op::I(Inst::VectorBinary { rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::Copy { dst: dst @ Reg::Fpr(_), src } => copies.push((*dst, *src)),
             _ => {}

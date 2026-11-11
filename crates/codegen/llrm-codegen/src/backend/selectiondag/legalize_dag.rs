@@ -255,6 +255,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::FShl | ISD::FShr | ISD::ShlParts | ISD::SrlParts | ISD::SraParts => 2,
             _ => return n,
         };
+        // `getShiftAmountOperand`: a vector shift's amount is a vector of the
+        // value's type and stays as it is (it was truncated to a scalar).
+        if self.dag.value_type(at).is_vector() {
+            return n;
+        }
         let amount = self.dag.operand(at, amount_at);
         let want = match self.tli.types.shift_amount() {
             ShiftAmount::I8 => EVT::I8,

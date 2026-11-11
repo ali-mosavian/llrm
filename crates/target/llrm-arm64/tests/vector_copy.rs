@@ -218,3 +218,36 @@ fn a_splat_made_in_the_preheader_is_stored_in_the_loop() {
     );
     assert!(text.contains("dup") && (text.contains("str\tq") || text.contains("str q")), "{text}");
 }
+
+/// `shl`, `lshr`, `ashr` of `<8 x i16>` by a constant refused with
+/// `CannotSelect("Shl")`: the legalizer truncated the vector shift amount to a
+/// scalar (`getShiftAmountOperand` leaves a vector's alone), so
+/// `LowerVectorSRA_SRL_SHL` saw no splat.
+#[test]
+fn a_vector_shift_by_a_constant_is_one_shift_instruction() {
+    let three = "<i16 3, i16 3, i16 3, i16 3, i16 3, i16 3, i16 3, i16 3>";
+    for (op, mnemonic) in [("shl", "shl"), ("lshr", "ushr"), ("ashr", "sshr")] {
+        let text = assembly(&format!(
+            "define void @f(ptr %d, ptr %s) {{\n  %v = load <8 x i16>, ptr %s, align 16\n  %r = {op} <8 x i16> %v, {three}\n  store <8 x i16> %r, ptr %d, align 16\n  ret void\n}}\n"
+        ));
+        assert!(text.contains(&format!("{mnemonic} v")) && text.contains(".8h") && text.contains("#3"), "{op}: {text}");
+    }
+}
+
+/// The three-register forms: one instruction each, on the lanes of the type.
+#[test]
+fn a_vector_binary_operation_is_one_instruction_on_its_lanes() {
+    for (op, lanes, mnemonic, arrangement) in [
+        ("add", "<8 x i16>", "add", ".8h"),
+        ("sub", "<4 x i32>", "sub", ".4s"),
+        ("mul", "<16 x i8>", "mul", ".16b"),
+        ("and", "<2 x i64>", "and", ".16b"),
+        ("xor", "<8 x i16>", "eor", ".16b"),
+        ("or", "<4 x i32>", "orr", ".16b"),
+    ] {
+        let text = assembly(&format!(
+            "define void @f(ptr %d, ptr %a, ptr %b) {{\n  %x = load {lanes}, ptr %a, align 16\n  %y = load {lanes}, ptr %b, align 16\n  %r = {op} {lanes} %x, %y\n  store {lanes} %r, ptr %d, align 16\n  ret void\n}}\n"
+        ));
+        assert!(text.contains(&format!("{mnemonic} v")) && text.contains(arrangement), "{op} {lanes}: {text}");
+    }
+}

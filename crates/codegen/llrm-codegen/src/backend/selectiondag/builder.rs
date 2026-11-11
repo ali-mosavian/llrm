@@ -3649,9 +3649,11 @@ impl Builder<'_> {
         let mut rhs = self.get_value(instruction.operands[1])?;
         let mut flags = flags_of(instruction.flags);
         if matches!(opcode, ISD::Shl | ISD::Srl | ISD::Sra) {
-            // visitShift: the amount in the target's shift type, and only these
-            // flags
-            rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount_for(self.dag.value_type(lhs)));
+            // visitShift: the amount in the target's shift type (a scalar
+            // shift's: "!I.getType()->isVectorTy()"), and only these flags
+            if !self.dag.value_type(lhs).is_vector() {
+                rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount_for(self.dag.value_type(lhs)));
+            }
             flags = SDNodeFlags(
                 flags.0 & (SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0),
             );

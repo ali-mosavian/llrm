@@ -868,6 +868,8 @@ impl TargetLowering {
         // type the target does not take never exists.
         let vectors = [MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64];
         t.set_ops(&[BuildVector, VectorShuffle, InsertVectorElt], &vectors, Custom);
+        // `addTypeForNEON`: the shifts are lowered to `VSHL`/`VLSHR`/`VASHR` (`LowerVectorSRA_SRL_SHL`).
+        t.set_ops(&[Shl, Srl, Sra], &vectors, Custom);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
