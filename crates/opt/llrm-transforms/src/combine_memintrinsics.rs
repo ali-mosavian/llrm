@@ -59,13 +59,17 @@ impl Combiner<'_> {
             Some(Intrinsic::Assume) => self.visit_assume(call),
             Some(Intrinsic::Abs) => self.visit_abs(call),
             Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
-            None => return self.transform_const_expr_cast_call(call),
+            None => {
+                let cast = self.transform_const_expr_cast_call(call);
+                return if cast == Visit::None { self.replace_call_with_returned_argument(call) } else { cast };
+            }
             _ => Visit::None,
         };
         if visited != Visit::None {
             return visited;
         }
-        self.fold_intrinsic_into_select_or_phi(call)
+        let folded = self.fold_intrinsic_into_select_or_phi(call);
+        if folded == Visit::None { self.replace_call_with_returned_argument(call) } else { folded }
     }
 
     /// `canonicalizeConstantArg0ToArg1`

@@ -85,7 +85,7 @@ use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_bl
 mod price;
 mod throughput;
 mod recurrence;
-pub mod trial;
+pub use crate::trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
@@ -1063,6 +1063,8 @@ fn should_full_unroll(
     // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
     // cost more than the rolled loop: by size, or by the cost the analysis
     // finds once the trip's constants fold (gcc's size-neutral complete unroll).
+    // A loop this refuses goes to the trial (DEVIATE UNROLL-O1-TRIAL, `note_for_trial`): the
+    // driver compiles again with it unrolled and keeps that only if bytes and work do not grow.
     if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
         let rolled = u64::from(uce.rolled_loop_size());
         let fits = unrolled_size <= rolled
@@ -1080,7 +1082,16 @@ fn should_full_unroll(
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
         let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
-        if !unroll {
+        // Only a step of a nest of known trips that the pin's threshold unrolls whole is noted: a loop
+        // that goes with its parent takes the counters and registers of both away, which is what an
+        // unroll can pay in bytes (x_life); a lone loop refused by one instruction did not (1 of 46
+        // programs with such a loop paid), nor did a nest too large (matmul +1601 B), and the trial
+        // compiles the module again.
+        if !unroll
+            && run.tti.unroll_trial_threshold().is_some_and(|limit| {
+                !run.tti.unroll_trial_nests_only() || price::nest_unroll_fits(run, se, analyzed, lp, up, limit)
+            })
+        {
             note_for_trial(run, unrolled_size);
         }
         return unroll.then_some(full_unroll_trip_count);

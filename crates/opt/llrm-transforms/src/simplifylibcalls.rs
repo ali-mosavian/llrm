@@ -26,7 +26,10 @@
 //! (`compare.rs`). `strchr` of a constant string and character, `strpbrk`,
 //! `strspn`, `strcspn` and `strstr` over constant strings fold to an address
 //! into the first string, null or a length, and `memchr` of a constant array
-//! or size folds to compares and a select (`search.rs`).
+//! or size folds to compares and a select (`search.rs`). `strcpy`, `stpcpy`,
+//! `strcat`, `strncat` and `strncpy` of a string of known length are an
+//! `llvm.memcpy` of it with its NUL (`copy.rs`), `strlen` finding the end where
+//! the compile states it.
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
@@ -43,6 +46,11 @@
 //!   against its own string: such a call is left as it is.
 //! - D5: `memchr` of a constant array and size tested against null (the pin's
 //!   bit-field and OR-chain rewrite) is not translated.
+//! - D6: `stpcpy` with an unused result (the pin's `strcpy` call) and
+//!   `stpcpy(x, x)` (its `strlen` call) are untranslated.
+//! - D7: `strncpy` of an empty source (the pin's `memset`) and of a bound past
+//!   the source and its NUL (a NUL-padded copy) are untranslated, as is
+//!   `stpncpy`.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.
@@ -69,6 +77,7 @@ use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
 use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 mod compare;
+mod copy;
 mod memops;
 mod search;
 
@@ -108,6 +117,31 @@ fn build(
     let made = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
     unit.function.insert(made, Position::Before(site.call)).expect("a placed instruction");
     Operand::Value(unit.function.instruction(made).result.expect("a result"))
+}
+
+/// `GetStringLength`: the length with the NUL of a constant string, 0 where
+/// the array has no NUL.
+fn string_length(
+    unit: &Unit,
+    site: &Site,
+    operand: Operand,
+) -> u64 {
+    match constant_array(unit, site.env, operand) {
+        Some(bytes) => bytes.iter().position(|&byte| byte == 0).map_or(0, |end| end as u64 + 1),
+        None => 0,
+    }
+}
+
+/// The length operand as a constant, `dyn_cast<ConstantInt>(Size)`.
+fn constant_length(
+    unit: &Unit,
+    operand: Operand,
+) -> Option<u64> {
+    let Operand::Constant(id) = operand else { return None };
+    match unit.context.get(id).kind {
+        ConstantKind::Int(bits) => Some(bits as u64),
+        _ => None,
+    }
 }
 
 /// `getConstantDataArrayInfo`
@@ -175,11 +209,11 @@ fn constant_string(
 
 /// A call of a stated library routine to form: `emitPutChar`, `emitPutS`,
 /// `emitFWrite`, `emitFPutC`, `emitFPutS`.
-struct NewCall {
-    standard: &'static str,
-    args: Vec<Operand>,
-    returns: llrm_mir::types::TypeId,
-    params: Vec<llrm_mir::types::TypeId>,
+pub(crate) struct NewCall {
+    pub(crate) standard: &'static str,
+    pub(crate) args: Vec<Operand>,
+    pub(crate) returns: llrm_mir::types::TypeId,
+    pub(crate) params: Vec<llrm_mir::types::TypeId>,
 }
 
 enum Rewrite {
@@ -190,13 +224,13 @@ enum Rewrite {
     Call(NewCall),
 }
 
-/// The call of the stated routine `new`, placed before `at`; none where the
+/// The call of the stated routine `new`, placed at `at`; none where the
 /// compile does not state it.
-fn emit(
+pub(crate) fn emit(
     unit: &mut Unit,
     routines: &[Routine],
     new: NewCall,
-    at: InstId,
+    at: Position,
 ) -> Option<InstId> {
     let routine = routines.iter().find(|one| one.standard == new.standard)?;
     let ty =
@@ -219,7 +253,7 @@ fn emit(
     operands.push(callee);
     let call =
         unit.function.create_instruction(Opcode::Call(Box::new(info)), new.returns, operands, Flags::default(), None);
-    unit.function.insert(call, Position::Before(at)).expect("a placed call");
+    unit.function.insert(call, at).expect("a placed call");
     Some(call)
 }
 
@@ -470,7 +504,7 @@ fn string(
     let i8 = unit.context.types.int(8);
     let ty = unit.context.types.intern(Type::Array { element: i8, count: raw.len() as u64 });
     let initializer = unit.context.constant(Constant { ty, kind: ConstantKind::Bytes(raw) });
-    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global);
+    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global, None);
     let pointer = unit.context.types.ptr(0);
     Operand::Constant(unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
 }
@@ -556,6 +590,11 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
                 LibFunc::Strchr => search::str_chr(unit, &site),
                 LibFunc::Memchr => search::mem_chr(unit, &site),
+                LibFunc::Strcpy => copy::str_cpy(unit, &site),
+                LibFunc::Stpcpy => copy::stp_cpy(unit, &site),
+                LibFunc::Strcat => copy::str_cat(unit, &site, &self.routines),
+                LibFunc::Strncat => copy::str_n_cat(unit, &site, &self.routines),
+                LibFunc::Strncpy => copy::str_n_cpy(unit, &site),
                 LibFunc::Strpbrk => search::str_pbrk(unit, &site),
                 LibFunc::Strspn => search::str_spn(unit, &site, true),
                 LibFunc::Strcspn => search::str_spn(unit, &site, false),
@@ -575,7 +614,7 @@ impl FunctionPass for SimplifyLibCalls {
                     Operand::Constant(unit.context.int(ty, 0))
                 }
                 Rewrite::Value(value) => value,
-                Rewrite::Call(new) => match emit(unit, &self.routines, new, call) {
+                Rewrite::Call(new) => match emit(unit, &self.routines, new, Position::Before(call)) {
                     Some(new) => Operand::Value(unit.function.instruction(new).result.expect("a result")),
                     None => continue,
                 },

@@ -121,6 +121,7 @@ pub mod combine_lifetime_end;
 pub mod combine_load;
 pub mod combine_load_combine;
 pub mod combine_mulo;
+pub mod combine_select_minmax;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;

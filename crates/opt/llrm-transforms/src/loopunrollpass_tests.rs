@@ -1719,6 +1719,7 @@ done:
 fn test_a_partial_unroll_is_priced_by_the_cores_resources() {
     assert!(issue_bound_loop_partially_unrolled(false), "premise: the pin's rule unrolls this loop");
     assert!(!issue_bound_loop_partially_unrolled(true), "24 clk saved by the control, 9 B of copies at 4000 milliclocks");
+}
 
 /// m68k float_in_memory_loop: sixteen trips of `acc += 0.5` fold to a constant,
 /// but the target's unroll threshold (32) is under the unrolled size (64) and

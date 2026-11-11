@@ -219,6 +219,7 @@ pub fn machine_with<'a>(
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm {
             classes: Rc::clone(classes),
+            segments: segments.clone(),
             size: target.size || target.min_size,
         }),
         // After the loop-invariant values are in the preheader: streams that
@@ -233,6 +234,7 @@ pub fn machine_with<'a>(
             // model) gets no pass, not a free one.
             clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
+            copy_clocks: target.cost("mov_rr").ok(),
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).

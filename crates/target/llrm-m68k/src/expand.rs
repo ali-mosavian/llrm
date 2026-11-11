@@ -93,7 +93,8 @@ fn frame_op(
             }
             return;
         }
-        // `BuildStackAlignAND`: `and` takes no address register, so through `%d0`
+        // `BuildStackAlignAND`: `and` takes no address register, so
+        // through `%d0`
         FrameOp::AlignSp(align) => {
             out.push(mc::Inst { opcode: "MOV32rr", operands: vec![R(reg::D0), R(reg::SP)] });
             out.push(mc::Inst { opcode: "AND32di", operands: vec![R(reg::D0), R(reg::D0), Imm(-align)] });
@@ -521,6 +522,9 @@ pub fn finish_with(
                     }
                     mc::Operand::Imm(*value)
                 }
+                // The table and blocks of a table jump are for the passes and
+                // the emitted table; the instruction is `jmp (An)`.
+                Operand::Symbol(..) | Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
                 Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
                 Operand::Block(id) => {
                     let at = function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;

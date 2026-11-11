@@ -193,6 +193,12 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// `function_bytes` is calibrated against the objects
+    /// (tests/size_calibration.rs).
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
@@ -282,6 +288,11 @@ impl Tti for Mos6502 {
         bits: u32,
     ) -> u32 {
         u32::from(!crate::dagisel::combine::mul_by_constant_stays_in_line(bits, i128::from(step), false))
+    }
+
+    /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        true
     }
 
     /// A constant offset in an address with one pointer cell is the `y` of

@@ -3,9 +3,9 @@
 //! # How it works
 //! [`cheaper`] prices both builds on the CPU: bytes as they are, clocks
 //! weighted by loop depth (a backward branch to a label makes the lines
-//! between a loop; each nesting multiplies by ten), then asks the level's
-//! [`Price`] whether the first beats the second. A price the tables cannot
-//! give keeps the second (the build without the optional pass).
+//! between that can reach it a loop; each nesting multiplies by ten), then asks
+//! the level's [`Price`] whether the first beats the second. A price the tables
+//! cannot give keeps the second (the build without the optional pass).
 //!
 //! A pass whose price needs the allocation (the moves an address register
 //! costs) is decided here, by building the function both ways, instead of
@@ -19,6 +19,7 @@ use crate::mc;
 use crate::timing::Price;
 
 /// How a block ends: where its branch goes, and whether control also falls on.
+#[derive(Clone, Copy)]
 enum Ending {
     Return,
     Jump(usize),
@@ -60,6 +61,7 @@ fn relaxed_sizes(
         .map(|item| match item {
             Item::Inst(inst) => crate::encode::encode(inst).ok().map(|encoded| encoded.bytes.len()),
             Item::Bytes(bytes) => Some(bytes.len()),
+            Item::Table(labels) => Some(4 * labels.len()),
             _ => Some(0),
         })
         .collect::<Option<_>>()?;
@@ -102,8 +104,10 @@ fn callee_clocks(
     cpu: Cpu,
     hoisted: &[llrm_lir::registers::RegId],
 ) -> u32 {
-    let direct = inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
-    // a call through the register `lea __mulsi3, An` set (the call-target hoist)
+    let direct =
+        inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
+    // a call through the register `lea __mulsi3, An` set (the call-target
+    // hoist)
     let through = inst.opcode == "CALLj"
         && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Reg(reg) if hoisted.contains(reg)));
     if inst.opcode.starts_with("CALL") && (direct || through) { crate::routine::mulsi3_floor(cpu) } else { 0 }
@@ -123,10 +127,46 @@ fn mulsi3_registers(items: &[Item]) -> Vec<llrm_lir::registers::RegId> {
         .collect()
 }
 
+/// The items of the loop headed at `header` whose back edges are at `latches`:
+/// those in the span that can reach a back edge without leaving it. The exit
+/// path laid out between two back edges (a `bra` to the code after the loop)
+/// is in the span but runs once per call, not once per trip.
+fn loop_members(
+    ends: &[Option<Ending>],
+    header: usize,
+    latches: &[usize],
+) -> Vec<bool> {
+    let last = latches.iter().copied().max().unwrap_or(header);
+    let mut member = vec![false; ends.len()];
+    for &latch in latches {
+        member[latch] = true;
+    }
+    loop {
+        let mut changed = false;
+        for at in (header..=last).rev() {
+            if member[at] {
+                continue;
+            }
+            let (first, second) = match ends[at] {
+                Some(Ending::Return) => (None, None),
+                Some(Ending::Jump(to)) => (Some(to), None),
+                Some(Ending::Branch(to)) => (Some(to), Some(at + 1)),
+                _ => (Some(at + 1), None),
+            };
+            if [first, second].into_iter().flatten().any(|next| (header..=last).contains(&next) && member[next]) {
+                member[at] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            return member;
+        }
+    }
+}
+
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
 /// instruction counts the share of runs that reach it (a two-way branch splits
-/// evenly) times ten per loop it sits in (a backward branch to a label makes
-/// the lines between a loop).
+/// evenly) times ten per loop it sits in ([`loop_members`]).
 fn price_of(
     items: &[Item],
     cpu: Cpu,
@@ -136,7 +176,9 @@ fn price_of(
         .enumerate()
         .filter_map(|(at, item)| if let Item::Label(name) = item { Some((name.as_str(), at)) } else { None })
         .collect();
-    let mut loops: Vec<(usize, usize)> = Vec::new();
+    // header -> its back edges: several to one label are one loop
+    let mut loops: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut ends_of: Vec<Option<Ending>> = Vec::with_capacity(items.len());
     // the share of runs reaching each item, along forward edges only, in
     // thousandths
     let mut share = vec![0u64; items.len() + 1];
@@ -145,9 +187,11 @@ fn price_of(
         let Item::Inst(inst) = item else {
             // a label or a line mark passes the share on
             share[at + 1] += share[at];
+            ends_of.push(None);
             continue;
         };
         let ends = ending(inst, &labels);
+        ends_of.push(ends);
         let (jump, branch) = match ends {
             Some(Ending::Jump(to)) => (Some(to), None),
             Some(Ending::Branch(to)) => (None, Some(to)),
@@ -155,7 +199,7 @@ fn price_of(
         };
         for to in jump.into_iter().chain(branch) {
             if to <= at {
-                loops.push((to, at));
+                loops.entry(to).or_default().push(at);
             }
         }
         match ends {
@@ -177,6 +221,8 @@ fn price_of(
         }
     }
     let sizes = relaxed_sizes(items, &labels)?;
+    let members: Vec<Vec<bool>> =
+        loops.iter().map(|(&header, latches)| loop_members(&ends_of, header, latches)).collect();
     let (mut bytes, mut clocks) = (0usize, 0u64);
     let hoisted = mulsi3_registers(items);
     for (at, item) in items.iter().enumerate() {
@@ -184,7 +230,7 @@ fn price_of(
         let size = sizes[at];
         let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks
             + callee_clocks(inst, cpu, &hoisted);
-        let depth = loops.iter().filter(|(from, to)| *from <= at && at <= *to).count().min(3);
+        let depth = members.iter().filter(|member| member[at]).count().min(3);
         bytes += size;
         clocks += u64::from(cost) * share[at] * 10u64.pow(depth as u32);
     }

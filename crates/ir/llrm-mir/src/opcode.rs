@@ -183,6 +183,33 @@ impl IntPredicate {
         }
     }
 
+    /// `CmpInst::isUnsigned`: an unsigned relational predicate.
+    pub fn is_unsigned(self) -> bool {
+        matches!(self, Self::Ugt | Self::Uge | Self::Ult | Self::Ule)
+    }
+
+    /// `CmpInst::getStrictPredicate`.
+    pub fn strict(self) -> Self {
+        match self {
+            Self::Uge => Self::Ugt,
+            Self::Ule => Self::Ult,
+            Self::Sge => Self::Sgt,
+            Self::Sle => Self::Slt,
+            same => same,
+        }
+    }
+
+    /// `CmpInst::getNonStrictPredicate`.
+    pub fn non_strict(self) -> Self {
+        match self {
+            Self::Ugt => Self::Uge,
+            Self::Ult => Self::Ule,
+            Self::Sgt => Self::Sge,
+            Self::Slt => Self::Sle,
+            same => same,
+        }
+    }
+
     /// `CmpInst::isTrueWhenEqual`.
     pub fn true_when_equal(self) -> bool {
         matches!(self, Self::Eq | Self::Uge | Self::Ule | Self::Sge | Self::Sle)
