@@ -69,6 +69,33 @@ if sys.argv[3:] == ['edge']:
         else:
             a = random.getrandbits(random.randint(1, 32)); b = 0
         recs.append((a, b))
+if sys.argv[3:] == ['directed']:
+    # NaN classes: quiet/signalling, either sign, payloads, in either operand, and the invalid operations (inf-inf, 0*inf, 0/0, inf/inf).
+    nans = [0x7fc00000, 0xffc00000, 0x7fa00000, 0xffa00000, 0x7f800001, 0xff800001, 0x7fffffff, 0xffffffff, 0x7fc12345, 0xffdeadbe]
+    fin = [0, 0x80000000, 0x3f800000, 0xbf800000, 0x7f800000, 0xff800000, 0x00000001, 0x7f7fffff]
+    recs = [(a, b) for a in nans for b in nans + fin] + [(b, a) for a in nans for b in fin]
+    recs += [(0x7f800000, 0xff800000), (0xff800000, 0x7f800000), (0x7f800000, 0x7f800000), (0, 0x7f800000), (0x80000000, 0xff800000), (0, 0), (0x80000000, 0), (0x7f800000, 0xff800000)]
+    # round-to-even ties: mul products whose dropped bits are exactly half an ulp (both normalisation shifts), and denormal-result ties by 2.0 / 0.5.
+    while len(recs) < n and op in ('mul', 'div'):
+        if op == 'mul':
+            # v2(ma*mb) = s-1 makes the dropped bits exactly half an ulp; build the factors from their 2-adic parts (rejection sampling needs ~2^23 tries)
+            s = random.choice([23, 24]); i = random.randint(0, min(23, s - 1)); j = s - 1 - i
+            if j > 23: continue
+            def fac(v):
+                o = (random.getrandbits(24 - v) | 1 << (23 - v)) | 1
+                return o << v
+            ma, mb = fac(i), fac(j)
+            p = ma * mb
+            if p & ((1 << (24 if p >> 47 else 23)) - 1) != 1 << ((24 if p >> 47 else 23) - 1): continue
+            ea, eb = random.randint(100, 150), random.randint(100, 150)
+            recs.append((sg_ := random.choice([0, 1 << 31]) | ea << 23 | ma & 0x7fffff, random.choice([0, 1 << 31]) | eb << 23 | mb & 0x7fffff))
+        else:
+            m = random.getrandbits(23) | 1
+            recs.append((random.choice([0, 1 << 31]) | random.choice([0, 1, 2, 5]) << 23 | m, 0x40000000))
+    while len(recs) < n and op in ('add', 'sub'):
+        ma = random.getrandbits(23) | 1; ea = random.randint(30, 200)       # a + b where b is exactly half an ulp of a: tie to even
+        recs.append((ea << 23 | ma, (ea - 24) << 23))
+    recs = recs[:n] if op in ('mul', 'div', 'add', 'sub') else recs
 print("nrec = %d\nvec:" % len(recs))
 for a, b in recs:
     print("  .dword $%08x, $%08x, $%08x" % (a, b, ref(a, b)))
