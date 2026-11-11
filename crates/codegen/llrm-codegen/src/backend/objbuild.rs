@@ -2236,6 +2236,12 @@ mod tests {
         assert!(call_across(65_535).is_err());
     }
 
+    /// Past the 64K segment no displacement reaches the callee.
+    #[test]
+    fn a_near_call_a_segment_or_more_ahead_is_still_refused() {
+        assert!(call_across(65_600).is_err());
+    }
+
     /// `object_of` looked each symbol up in the module's public list, a
     /// `Vec`: 4x the symbols cost about 16x the work (2400 tiny functions
     /// spent 27% of the object write there). Counted in work (instructions, or
