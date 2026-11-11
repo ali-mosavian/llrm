@@ -70,13 +70,16 @@ def test_llrm_os_exit_ends_the_program_under_qemu(tmp_path):
     assert (ran.returncode, ran.stdout) == (0, b"1\n")
 
 
-def test_the_bench_programs_run_by_default():
-    """The sweep ran tests/run/c alone: bench/floats printed 0 at 68000 (a miscompiled `__divdf3`) and nothing in a gate saw it."""
-    default = [p.parent.parent.name + "/" + p.stem for p in sweep.sources([], False)]
-    assert "bench/floats" in default
-    assert not [p for p in sweep.sources([], True) if p.parent.parent.name == "bench"]
+def test_a_bench_program_gets_the_input_it_opens():
+    """bench grep, stft_* and jpeg_* ran with no input and printed another program's output (grep, stft: 'stdout differs'; jpeg: 'PHOTO.JPG not found', exit 0): nothing was compared."""
+    root = HERE.parent / "bench"
+    files, stdin = sweep.inputs_of(root / "stft_fixed/stft_fixed.c")
+    assert list(files) == ["SIGNAL"] and len(files["SIGNAL"]) == 131072 and stdin is None
+    files, stdin = sweep.inputs_of(root / "jpeg_fixed/jpeg_fixed.c")
+    assert list(files) == ["PHOTO.JPG"] and files["PHOTO.JPG"] == (root / "jpeg_single/photo.jpg").read_bytes()
+    assert sweep.inputs_of(root / "recgcd/recgcd.c") == ({}, None)
 
 
-def test_a_bench_program_whose_input_corpus_is_not_in_the_tree_is_not_a_cell():
-    """bench/grep reads `@dickens`, which the tree does not have: it printed differently at every level and CPU, four false `output` cells."""
-    assert "bench/grep" not in [p.parent.parent.name + "/" + p.stem for p in sweep.sources([], False)]
+def test_the_stubs_define_keep():
+    """bench parity and scalar did not link: `keep`, the opaque identity the bench driver supplies, was undefined."""
+    assert "int keep(int" in (HERE / "m68k_exec/os.c").read_text()

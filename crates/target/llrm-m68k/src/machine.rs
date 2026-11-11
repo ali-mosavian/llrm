@@ -355,6 +355,12 @@ impl Tti for M68k {
         crate::timing::byte_milliclocks(self.cpu)
     }
 
+    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
+    /// speculation of a branch into selects then takes the limit of targets without one (condtocond D3).
+    fn has_cmov(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "M68k"
     }

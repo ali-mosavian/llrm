@@ -223,6 +223,7 @@ impl Total {
                     self.partial |= one.partial;
                 }
                 Err(why) => {
+                    assert!(!why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
                     self.unpriced[slot] += 1;
                     if seen.insert(why.clone()) {
                         eprintln!("unpriced: {why}");

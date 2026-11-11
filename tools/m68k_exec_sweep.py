@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """The tests/run/c corpus compiled, linked and run on m68k under qemu-user: the executed sweep that o0_sweep (compile only) is not.
 
-m68k_exec_sweep.py [--cpu 68020|68000] [--levels O1,O2,Os] [--jobs N] [--tsv FILE] [--no-bench] [NAME...]
-
-The bench/ programs run too (their `NAME.out` reference, the data file a `// data:` header names written into the run directory), since
-a gate that changes library code must be judged on what the programs print, not on whether they compile: bench/floats printed 0 at
-68000 with a miscompiled `__divdf3` while every compile succeeded.
+m68k_exec_sweep.py [--cpu 68020|68000] [--levels O1,O2,Os] [--jobs N] [--tsv FILE] [NAME...]
 
 Per program the target applies to and per level: llrm-cc -c, link with the stubs in tools/m68k_exec (crt + report, memcpy and friends, the
 llrm_os layer over raw syscalls) and the compiler-rt archive built by llrm-cc, run under `qemu-m68k -cpu m<CPU>`. One verdict per cell:
   ok        exit 0 and stdout equals the reference (`NAME.out`, or `NAME.m68k.out`)
   noref     exit 0 but the program has no reference: it ran, nothing was compared. Never counted as ok.
   output    exit 0, stdout differs        run   signal, timeout or exit != 0        link   undefined or relocation error
-  compile   llrm-cc failed
+  compile   llrm-cc failed        input  the program's `// data:` input is not available (--bench; UNMEASURED, not a failure of the compiler)
 A program `// targets:` excludes from m68k is n/a: not a cell. Flags are the first `// flags:` configuration's (o0_sweep.flags_of: x87-only
 options such as -mlong-double-80 are dropped) plus `// flags-m68k:`.
 Exit 1 unless every cell is ok or noref. Environment: LLRM_BIN (llrm-cc), GCC_M68K (unpacked m68k binutils+gcc), LLRM_PIN_CLANG,
@@ -35,6 +31,7 @@ import corpus_targets as ct  # noqa: E402
 import llrmbin  # noqa: E402
 import m68k_runtime_guard as guard  # noqa: E402
 import o0_sweep  # noqa: E402
+import benchlist  # noqa: E402
 
 TIMEOUT = 180
 RUN_TIMEOUT = 30
@@ -55,6 +52,24 @@ def verdict(returncode: int, stdout: bytes, want: bytes | None) -> tuple[str, st
     return "ok", ""
 
 
+def inputs_of(source: Path) -> tuple[dict[str, bytes], bytes | None]:
+    """What a program opens, from its `// data:` line: the files to put in its working directory (named as the program opens them, upper case) and
+    the bytes for its standard input (`@dickens`, read by `input_read`). `@signal` is generated (tools/dosbatch/signal_gen), `@dickens` comes from
+    the pinned corpus cache (dosbatch/corpus: SHA-256 checked, never another file in its place; raises corpus.Unavailable), a path is relative to the source."""
+    found = re.search(r"^//\s*data:\s*(\S+)", source.read_text(), re.M)
+    if not found:
+        return {}, None
+    what = found[1]
+    sys.path.insert(0, str(HERE / "dosbatch"))
+    import corpus  # noqa: E402
+    if what == "@signal":
+        return {"SIGNAL": corpus.path("signal").read_bytes()}, None
+    if what == "@dickens":
+        return {}, corpus.path("dickens").read_bytes()
+    target = (source.parent / what).resolve()
+    return {target.name.upper(): target.read_bytes()}, None
+
+
 def tool_env(root: str) -> dict[str, str]:
     return {**os.environ, "LD_LIBRARY_PATH": f"{root}/usr/lib/x86_64-linux-gnu"}
 
@@ -72,7 +87,7 @@ def cache_dir(cc: str) -> Path:
         path = Path(cc).parent / name
         if path.exists():
             digest.update(path.read_bytes())
-    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h")]):
+    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h"), RUNTIME / "config/m68k/mulsi3.s"]):
         digest.update(source.read_bytes())
     digest.update(BUILD_FLAGS.encode())
     base = Path(os.environ.get("M68K_EXEC_CACHE") or Path.home() / ".cache/llrm-m68k-exec")
@@ -115,6 +130,11 @@ def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: s
 
         with ThreadPoolExecutor(jobs) as pool:
             objects = [o for o in pool.map(compile_one, sources) if o]
+        # __mulsi3 is hand-written (config/m68k/mulsi3.s; SF_MULSI3_EXTERNAL keeps int32.c's out)
+        mulsi3 = cache / f"rt_{cpu}_mulsi3.o"
+        defsym = ["--defsym", "M68020=1"] if cpu in ("68020", "68030", "68040", "68060") else []
+        subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-as", f"-m{cpu}", *defsym, "-o", str(mulsi3), str(RUNTIME / "config/m68k/mulsi3.s")], check=True, env=env)
+        objects.append(str(mulsi3))
         tmp = archive.with_suffix(".tmp")
         tmp.unlink(missing_ok=True)
         subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-ar", "rcs", str(tmp), *objects], check=True, env=env)
@@ -127,9 +147,7 @@ def cell(cc: str, root: str, qemu: str, cpu: str, level: str, path: Path, work: 
     target = f"m68k-{cpu}"
     name = f"{path.stem}.{level}"
     obj, exe = work / f"{name}.o", work / f"{name}.exe"
-    bench = path.parent.parent.name == "bench"
-    includes = ["-I", str(ROOT / "runtime/shared/posix")] + (["-I", str(path.parent)] if bench else [])
-    cmd = [cc, f"-{level}", "-w", "-c", *o0_sweep.flags_of(path.read_text(), target), *includes, "-o", str(obj), str(path)]
+    cmd = [cc, f"-{level}", "-w", "-c", *o0_sweep.flags_of(path.read_text(), target), "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(path)]
     env = {**os.environ, **llrmbin.cc_environment(), "LLRM_CC_TARGET": target}
     try:
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT, env=env)
@@ -145,7 +163,16 @@ def cell(cc: str, root: str, qemu: str, cpu: str, level: str, path: Path, work: 
     if link.returncode != 0:
         return "link", first_error(link.stderr)
     try:
-        ran = subprocess.run([qemu, "-cpu", f"m{cpu}", str(exe)], capture_output=True, timeout=RUN_TIMEOUT, cwd=work)
+        files, stdin = inputs_of(path)
+    except Exception as error:  # a corpus that is missing or fails its hash: the cell has no input, so it is not run
+        exe.unlink(missing_ok=True)
+        return "input", f"{type(error).__name__}: {error}"[:200]
+    cwd = work / f"{name}.{cpu}.dir"
+    cwd.mkdir(exist_ok=True)
+    for file, data in files.items():
+        (cwd / file).write_bytes(data)
+    try:
+        ran = subprocess.run([qemu, "-cpu", f"m{cpu}", str(exe)], capture_output=True, timeout=RUN_TIMEOUT, cwd=cwd, input=stdin if stdin is not None else b"")
     except subprocess.TimeoutExpired:
         return "run", f"timeout {RUN_TIMEOUT}s"
     finally:
@@ -154,25 +181,13 @@ def cell(cc: str, root: str, qemu: str, cpu: str, level: str, path: Path, work: 
     return verdict(ran.returncode, ran.stdout, reference.read_bytes() if reference.exists() else None)
 
 
-def sources(names: list[str], no_bench: bool) -> list[Path]:
-    """The programs the sweep runs: tests/run/c, and bench/NAME/NAME.c unless `no_bench`; all of them with no `names`."""
-    found = sorted((ROOT / "tests/run/c").glob("*.c"))
-    if not no_bench:
-        # a `// data: @corpus` input other than the generated signal is not in the tree: not a cell
-        needs_corpus = re.compile(r"^//\s*data:\s*@(?!signal\b)", re.M)
-        found += sorted(
-            p for p in (ROOT / "bench").glob("*/*.c") if p.stem == p.parent.name and not needs_corpus.search(p.read_text())
-        )
-    return [p for p in found if not names or p.stem in names]
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpu", default="68020")
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
+    parser.add_argument("--bench", action="store_true", help="also the bench/*/NAME.c programs, with the input their `// data:` line names")
     parser.add_argument("--tsv")
-    parser.add_argument("--no-bench", action="store_true")
     parser.add_argument("names", nargs="*")
     args = parser.parse_args()
     root = os.environ.get("GCC_M68K")
@@ -182,19 +197,14 @@ def main() -> int:
         return 2
     cc = o0_sweep.compiler()
     target = f"m68k-{args.cpu}"
-    chosen = sources(args.names, args.no_bench)
+    sources = sorted((ROOT / "tests/run/c").glob("*.c")) + (benchlist.sources(".c") if args.bench else [])
+    chosen = [p for p in sources if not args.names or p.stem in args.names]
     programs = [p for p in chosen if ct.applies(target, p.read_text(), p)]
     support = build_support(cc, root, args.cpu, cache_dir(cc), args.jobs)
     levels = args.levels.split(",")
     jobs = [(p, level) for p in programs for level in levels]
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        sys.path.insert(0, str(HERE / "hostshim"))
-        import host  # noqa: E402
-
-        for p in programs:
-            if p.parent.parent.name == "bench":
-                host.write_data(str(ROOT), p.stem, str(work))
         with ThreadPoolExecutor(args.jobs) as pool:
             results = list(pool.map(lambda j: cell(cc, root, qemu, args.cpu, j[1], j[0], work, support), jobs))
     rows = [(p.stem, level, *r) for (p, level), r in zip(jobs, results)]
