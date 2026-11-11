@@ -26,6 +26,7 @@ RUN_C = REPO / "tests/run/c"
 KERNELS = Path(__file__).resolve().parent / "kernels"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clocks  # noqa: E402
+import ioenv  # noqa: E402
 
 
 def source_dir(prog):
@@ -35,7 +36,9 @@ def source_dir(prog):
 
 def expected_file(prog):
     """The `.out` a run must report: tests/run/c/NAME.out for the cell `run_NAME`, else the program's own."""
-    return RUN_C / f"{prog[4:]}.out" if prog.startswith("run_") else source_dir(prog) / f"{prog}.out"
+    if prog.startswith("run_"):
+        return RUN_C / f"{prog[4:]}.out"
+    return source_dir(prog) / ioenv.answer_name(prog, source_dir(prog))
 sys.path.insert(0, str(REPO / "tools"))
 import corpus_targets  # noqa: E402
 import llrmbin  # noqa: E402
@@ -495,10 +498,20 @@ def run(prog, variant, hot=False, limit=300_000_000):
     reports = []
     calls = Counter()
     shadow = []
+    source = source_dir(prog) / f"{prog}.c"
+    files = ioenv.Files(*ioenv.inputs(source)) if source.is_file() and ioenv.uses_files(source) else None
+    # the file API's entry points (stub.s): emulated here, then the stub's own `ret` runs
+    io_at = {stub[f"{name}{suffix}"]: name for name in ioenv.CALLS for suffix in ("", "_") if f"{name}{suffix}" in stub} if files else {}
+    if files and in_eax:
+        raise SystemExit(f"harness: {prog} {variant}: the file API is emulated for the stack convention only (-mabi=sysv)")
 
     def hook(uc, address, size, _):
         if address == SENT:
             uc.emu_stop(); return
+        if address in io_at:
+            sp = uc.reg_read(UC_X86_REG_ESP)
+            args = list(struct.unpack("<4I", uc.mem_read(sp + 4, 16)))
+            uc.reg_write(UC_X86_REG_EAX, files.call(uc, io_at[address], args))
         if address in report_at:
             if in_eax:
                 reports.append(struct.unpack("<i", struct.pack("<I", uc.reg_read(UC_X86_REG_EAX)))[0])
@@ -570,12 +583,14 @@ def run(prog, variant, hot=False, limit=300_000_000):
 
     uc.hook_add(UC_HOOK_CODE, hook)
     uc.emu_start(main, SENT, count=limit)
+    assert uc.reg_read(UC_X86_REG_EIP) == SENT, f"{prog} {variant}: stopped at the {limit}-instruction cap, not at the end of main"
     assert total["ins"], f"{prog} {variant}: the kernel was never entered"
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
     return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"], clocks=total["clocks"], reports=reports,
                 clocks_by_imul={m: total["clocks"] - mul_clocks[model] + mul_clocks[m] for m in IMUL_MODELS},
-                hits=hits, edges=edges, by_op=by_op, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
+                hits=hits, edges=edges, by_op=by_op, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms,
+                io=files.summary() if files else None)
 
 
 _MNEMONIC_NAMES = {int(v): k for k, v in vars(Mnemonic).items() if k.isupper() and isinstance(v, int)}
@@ -670,7 +685,7 @@ def main():
         for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
             print(f"HIST {name:8} {count:8} {clk:9}", file=sys.stderr)
     expect = [int(x) for x in expected_file(prog).read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], clocks_by_imul=r["clocks_by_imul"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], clocks_by_imul=r["clocks_by_imul"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect and not (r["io"] and r["io"]["failed_opens"]), got=r["reports"][:4], io=r["io"])))
 
 
 if __name__ == "__main__":
