@@ -327,6 +327,18 @@ pub trait Target {
         1
     }
 
+    /// `TII.getInstrCost(COPY, {to, from})`: what the copy of `from` into `to`
+    /// costs, in the unit of [`Target::operand_cost`]. Greedy hints a value the
+    /// register that makes the copies naming it cheapest (llvm-mos
+    /// `getRegAllocationHints`, `COPY`); all 0 is the pin's order.
+    fn copy_register_cost(
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
+
     /// What the instruction `inst` costs with its operand `operand` in
     /// `register` (clocks or bytes by the target's goal, from its instruction
     /// tables): the 6502's `dec` is one instruction on a zero-page cell and

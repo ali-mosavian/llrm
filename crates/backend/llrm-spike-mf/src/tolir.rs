@@ -1763,6 +1763,15 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         self.operands_of(one).into_iter().filter_map(|(value, info)| Some((value, info.hint?))).collect()
     }
 
+    fn copy_register_cost(
+        &self,
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        T::copy_register_cost(to, from, size)
+    }
+
     fn operand_orders(
         &self,
         one: &Insn,
