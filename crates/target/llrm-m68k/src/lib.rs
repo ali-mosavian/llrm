@@ -45,6 +45,7 @@ pub mod mc;
 pub mod mfunc;
 pub mod narrow;
 pub mod narrow_add;
+pub mod moveqremat;
 pub mod negadd;
 pub mod object;
 pub mod opcosts;

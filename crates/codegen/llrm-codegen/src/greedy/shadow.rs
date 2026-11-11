@@ -415,7 +415,7 @@ fn reclass_orders(
 ) {
     use crate::backend::regclass::{Confinement, confinement_of};
     let Some(sets) = sets else {
-        reclass_by_operands(tables, pinned, tii, lis, regs);
+        reclass_by_operands(tables, pinned, tii, registers, lis, regs);
         return;
     };
     for &reg in regs {
@@ -454,6 +454,7 @@ fn reclass_by_operands(
     tables: &Tables,
     pinned: &crate::support::hash::HashSet<u32>,
     tii: &dyn super::tii::TargetInstrInfo,
+    registers: Regs,
     lis: &LiveIntervals,
     regs: &[u32],
 ) {
@@ -461,6 +462,8 @@ fn reclass_by_operands(
         if pinned.contains(&reg) {
             continue;
         }
+        // The (offset, width) of every lane of `reg` an instruction reads.
+        let mut lanes: Vec<(u32, u32)> = Vec::new();
         let mut seen = crate::support::hash::HashSet::default();
         // Start from the larger class the parent's has, if any, and let the
         // instructions narrow it again.
@@ -470,13 +473,35 @@ fn reclass_by_operands(
                 continue;
             }
             for (value, order) in tii.operand_orders(lis.instr(op.instr)) {
-                if value != reg || reads_a_lane(tables, lis.instr(op.instr), reg) {
+                if value != reg {
+                    continue;
+                }
+                if reads_a_lane(tables, lis.instr(op.instr), reg) {
+                    if let Some(what) = &lis.instr(op.instr).what {
+                        for place in what.dests.iter().chain(&what.sources).flat_map(crate::model::ir::values) {
+                            if place.value == reg && !lanes.contains(&(place.offset, place.width)) {
+                                lanes.push((place.offset, place.width));
+                            }
+                        }
+                    }
                     continue;
                 }
                 allowed = Some(match allowed {
                     None => order,
                     Some(so_far) => so_far.into_iter().filter(|one| order.contains(one)).collect(),
                 });
+            }
+        }
+        // `recomputeRegClass`'s `getMatchingSuperRegClass`: a register read
+        // through a lane stays in the order only if it has that lane.
+        if let Some(order) = &mut allowed {
+            let kept: Vec<RegId> = order
+                .iter()
+                .copied()
+                .filter(|one| lanes.iter().all(|&(offset, width)| registers.lane_register(*one, offset, width).is_some()))
+                .collect();
+            if !kept.is_empty() {
+                *order = kept;
             }
         }
         match allowed {

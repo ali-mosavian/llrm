@@ -188,6 +188,8 @@ pub struct Options {
     /// that saved a callee-saved register is also built with it, and the
     /// cheaper kept.
     pub relax_classes: bool,
+    /// Make a `moveq` constant again where it is read ([`crate::moveqremat`]).
+    pub remat_constants: bool,
     /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
     /// [`crate::dagisel::mulprice`]).
     pub mul: crate::dagisel::mulprice::Mode,
@@ -234,6 +236,7 @@ impl Options {
         carry_chain: true,
         global_copies: true,
         relax_classes: false,
+        remat_constants: false,
         mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
@@ -274,6 +277,7 @@ impl Default for Options {
             carry_chain: true,
             global_copies: true,
             relax_classes: true,
+            remat_constants: true,
             mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
@@ -678,6 +682,9 @@ fn items_once(
     }
     if options.indexed && options.relax_classes && !options.shared_prelude {
         touched.relax_classes = crate::regalloc::relax_copy_only_classes(&mut function);
+    }
+    if options.remat_constants {
+        crate::moveqremat::rematerializable_constants(&mut function);
     }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);

@@ -47,10 +47,17 @@ fn uses<'a>(
     inst.operands.iter().filter_map(move |o| if let Operand::Use(r) = o { Some(root(*r, assignment)) } else { None })
 }
 
+/// A `moveq` [`crate::moveqremat`] marked: the coalescer and the spiller put it
+/// where a copy or a use was, so the codes it sets are never the ones a branch
+/// meant.
+fn is_remade_moveq(inst: &Inst) -> bool {
+    inst.kind == Kind::Op("MOVI32ri") && inst.rematerializable
+}
+
 /// The data register `inst` writes where it becomes a `move` that sets the
-/// codes: a copy from another register, or a load of a frame slot (the
-/// allocator makes an argument's load again where it is read,
-/// `ARGUMENT_REMAT`).
+/// codes: a copy from another register, a load of a frame slot (the allocator
+/// makes an argument's load again where it is read, `ARGUMENT_REMAT`), or a
+/// `moveq` made again.
 fn written(
     inst: &Inst,
     assignment: &Assignment,
@@ -58,6 +65,7 @@ fn written(
     let to = match (inst.kind, &inst.operands[..]) {
         (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if root(*to, assignment) != root(*from, assignment) => *to,
         (Kind::Op("MOV32rp"), [Operand::Def(to), .., Operand::Frame(_)]) => *to,
+        (Kind::Op("MOVI32ri"), [Operand::Def(to), Operand::Imm(_)]) if is_remade_moveq(inst) => *to,
         _ => return None,
     };
     Some(root(to, assignment)).filter(|&to| is_data(to))
@@ -76,7 +84,7 @@ pub fn preserve_flags(
                 r += 1;
                 continue;
             }
-            let Some(mut s) = block.insts[..r].iter().rposition(|inst| inst.sets_flags) else {
+            let Some(mut s) = block.insts[..r].iter().rposition(|inst| inst.sets_flags && !is_remade_moveq(inst)) else {
                 r += 1;
                 continue;
             };
