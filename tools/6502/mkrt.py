@@ -114,7 +114,7 @@ def main():
     objs = []
     for stem, text in sources.items():
         (work / f"{stem}.s").write_text(text)
-        a = subprocess.run(["ca65", "-t", "sim6502", "-o", f"{stem}.o", f"{stem}.s"], cwd=work, capture_output=True, text=True)
+        a = subprocess.run(["ca65", "-t", "sim6502", "-I", str(rt / "config/6502"), "-o", f"{stem}.o", f"{stem}.s"], cwd=work, capture_output=True, text=True)
         if a.returncode:
             sys.exit(f"ca65 {stem}: {a.stderr[-200:]}")
         objs.append(f"{stem}.o")
