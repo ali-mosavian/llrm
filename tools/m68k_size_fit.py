@@ -54,6 +54,7 @@ def main():
     ap.add_argument("--corpus", action="store_true", help="every tests/run/c program, from C")
     ap.add_argument("--cc", help="llrm-cc, for --corpus")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--dump", help="write every (cpu, key, estimate, object) row to this TSV")
     args = ap.parse_args()
     nm = args.nm or f"{os.environ['GCC_M68K']}/usr/bin/m68k-linux-gnu-nm"
     if args.corpus:
@@ -100,6 +101,9 @@ def main():
         jobs = [(cpu, level, name, file) for level in args.levels.split(",") for name, file in sources(cpu)]
         with ThreadPoolExecutor(args.jobs) as pool:
             rows = [row for part in pool.map(one, jobs) for row in part]  # (key, estimate, object)
+        if args.dump:
+            with open(args.dump, "a") as out:
+                out.writelines(f"{cpu}\t{k}\t{e}\t{o}\n" for k, e, o in rows)
         hold = [r for r in rows if zlib.crc32(r[0].encode()) % 5 == 0]
         train = [r for r in rows if zlib.crc32(r[0].encode()) % 5 != 0]
         scale = statistics.median(o / e for _, e, o in train)

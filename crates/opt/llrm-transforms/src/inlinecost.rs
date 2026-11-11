@@ -1710,6 +1710,10 @@ impl<'a> Analyzer<'a> {
             let compares = 3 * clusters as i64 / 2 - 1;
             self.add_cost(compares * 2 * INSTR_COST);
         }
+        if let Some(tti) = self.site.tti {
+            let view = tti.inline_size_view();
+            self.size_units += view.as_deref().unwrap_or(tti).switch_code_size(clusters, table);
+        }
         false
     }
 
@@ -2363,6 +2367,9 @@ impl<'a> Analyzer<'a> {
             self.threshold -= self.vector_bonus;
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
+        }
+        if llrm_support::debug::enabled("inline") {
+            eprintln!("inline:   size={} call={} k={} dies={}", self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls, self.site.callee_dies);
         }
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.

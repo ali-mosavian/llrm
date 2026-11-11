@@ -1135,6 +1135,10 @@ impl Fast<'_> {
                     return Some(address);
                 }
                 let ValueDef::Argument(n) = self.function.value(value).def else { return None };
+                // its slot is a local now: the entry's load is not this one
+                if self.info.elided_args.contains(&value) {
+                    return None;
+                }
                 let object = match *self.sources.get(n as usize)? {
                     Source::Cell(object) => object,
                     Source::Register(vreg) => {
@@ -1248,6 +1252,10 @@ impl Fast<'_> {
         while at < insts.len() {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
+            // `ElidedArgCopyInstrs`: the argument's own slot is the local
+            if self.info.elided_stores.contains(&insts[at - 1]) {
+                continue;
+            }
             *declined = Some(Declined::At(insts[at - 1]));
             // `++SDNodeOrder` and the instruction's `DebugLoc`, as
             // `SelectionDAGBuilder::visit` does: the nodes

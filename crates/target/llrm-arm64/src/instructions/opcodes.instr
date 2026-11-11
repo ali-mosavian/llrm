@@ -127,6 +127,10 @@ FCMP{f}rz                cmp      -/x           f16,f32,f64              fp_arit
 FCMPE{f}rr               cmp      -/x,x         f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}rr
 FCMPE{f}rz               cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}ri
 FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r unary    x/x           -                        fp_cvt     - - - -/-                FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r
+SCVTFv1i32               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i32
+SCVTFv1i64               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i64
+UCVTFv1i32               unary    x/x           -                        fp_cvt     - - - -/-                UCVTFv1i32
+UCVTFv1i64               unary    x/x           -                        fp_cvt     - - - -/-                UCVTFv1i64
 FCVTZS{g}{f}r            unary    r/x           g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZSU{g}{f}r
 FCVTZS{g}{f}ri           unary    r/x,i         g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZSS{g}{f}ri
 FCVTZU{g}{f}r            unary    r/x           g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZUU{g}{f}r
@@ -148,6 +152,19 @@ DUPv16b                  move     x/r           -                        fp_arit
 MOVIv16b                 move     x/i           -                        fp_arith   - - - -/-                MOVIv16b_ns
 MOVIv2d                  move     x/-           -                        fp_arith   - - - -/-                MOVIv2d_ns
 ORRv16b                  move     x/x           -                        fp_arith   - - - -/-                ORRv16i8
+DUPv8i16gpr              move     x/r           -                        fp_arith   - - - -/-                DUPv8i16gpr
+DUPv4i32gpr              move     x/r           -                        fp_arith   - - - -/-                DUPv4i32gpr
+DUPv2i64gpr              move     x/r           -                        fp_arith   - - - -/-                DUPv2i64gpr
+MOVIv2d_ns               move     x/i           -                        fp_arith   - - - -/-                MOVIv2d_ns
+MOVID                    move     x/i           -                        fp_arith   - - - -/-                MOVID
+MOVIv8i16                move     x/i,i         -                        fp_arith   - - - -/-                MOVIv8i16
+MVNIv8i16                move     x/i,i         -                        fp_arith   - - - -/-                MVNIv8i16
+MOVIv4i32                move     x/i,i         -                        fp_arith   - - - -/-                MOVIv4i32
+MOVIv2i32                move     x/i,i         -                        fp_arith   - - - -/-                MOVIv2i32
+MVNIv4i32                move     x/i,i         -                        fp_arith   - - - -/-                MVNIv4i32
+MVNIv2i32                move     x/i,i         -                        fp_arith   - - - -/-                MVNIv2i32
+MOVIv4s_msl              move     x/i,i         -                        fp_arith   - - - -/-                MOVIv4s_msl
+MVNIv4s_msl              move     x/i,i         -                        fp_arith   - - - -/-                MVNIv4s_msl
 # ---- pseudo operations (a call, a tail call and the return carry a variable number of
 # registers: no row, their effects are the contract's)
 COPY                     move     r/r           -                        alu        - - - -/-                COPY
@@ -179,6 +196,9 @@ LDRSH.{pre|post}         move     r,r/m         -                        load   
 LDRSW.{ui|fi|pg|gotpg}   move     r/m           -                        load       - - - -/-                LDRSWui
 LDRSW.ro21               move     r/m           -                        load       - - - -/-                LDRSW[roW|roX]
 LDRSW.{pre|post}         move     r,r/m         -                        load       - - - -/-                LDRSW{pre|post}
+LDRF1.{ui|fi|pg|gotpg}   move     x/m           -                        load       - - - -/-                LDRBui
+LDRF1.ro21               move     x/m           -                        load       - - - -/-                LDRB[roW|roX]
+LDRF1.{pre|post}         move     x,r/m         -                        load       - - - -/-                LDRB{pre|post}
 LDRF2.{ui|fi|pg|gotpg}   move     x/m           -                        load       - - - -/-                LDRHui
 LDRF2.ro21               move     x/m           -                        load       - - - -/-                LDRH[roW|roX]
 LDRF2.{pre|post}         move     x,r/m         -                        load       - - - -/-                LDRH{pre|post}
@@ -212,6 +232,9 @@ STRSH.{pre|post}         move     r/r,m         -                        store  
 STRSW.{ui|fi|pg|gotpg}   move     -/r,m         -                        store      - - - -/-                STRWui
 STRSW.ro21               move     -/r,m         -                        store      - - - -/-                STRW[roW|roX]
 STRSW.{pre|post}         move     r/r,m         -                        store      - - - -/-                STRW{pre|post}
+STRF1.{ui|fi|pg|gotpg}   move     -/x,m         -                        store      - - - -/-                STRBui
+STRF1.ro21               move     -/x,m         -                        store      - - - -/-                STRB[roW|roX]
+STRF1.{pre|post}         move     r/x,m         -                        store      - - - -/-                STRB{pre|post}
 STRF2.{ui|fi|pg|gotpg}   move     -/x,m         -                        store      - - - -/-                STRHui
 STRF2.ro21               move     -/x,m         -                        store      - - - -/-                STRH[roW|roX]
 STRF2.{pre|post}         move     r/x,m         -                        store      - - - -/-                STRH{pre|post}

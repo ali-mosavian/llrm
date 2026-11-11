@@ -189,6 +189,13 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `replaceStoreOfFPConstant`: a `float`/`double` constant store, volatile
+    /// too (`isNormalStore`), is an `i32`/`i64` constant store, as the pin does
+    /// for wasm.
+    fn store_fp_constant_as_i64(&self) -> bool {
+        true
+    }
+
     fn merge_stores_after_legalization(
         &self,
         _mem: EVT,

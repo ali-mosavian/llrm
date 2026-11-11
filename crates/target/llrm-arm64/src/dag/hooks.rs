@@ -60,6 +60,11 @@ impl PatternContext for NoContext {
     fn is_legal_to_call_immediate_addr(&self) -> bool {
         false
     }
+    /// `Subtarget->isNeonAvailable()`: with the vectors flag; off, the NEON
+    /// patterns never match, as when the table dropped them.
+    fn neon_available(&self) -> bool {
+        crate::machine::vectors_enabled()
+    }
 }
 
 pub struct Aarch64Hooks {
@@ -88,7 +93,7 @@ static COMPLEX: std::sync::LazyLock<Vec<Complex>> = std::sync::LazyLock::new(|| 
             f if f.starts_with("SelectAddrModeWRO") => Complex::Wro(size_of_name(f)),
             "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
             "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
-            "SelectExtractHigh" | "SelectDupZero" => Complex::Never,
+            "SelectExtractHigh" | "SelectDupZero" | "SelectRoundingVLShr" => Complex::Never,
             f if f.starts_with("SelectCVTFixedPos") => {
                 Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
             }
@@ -190,7 +195,7 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         let signed = || dag.constant(value).expect("an xform of a constant");
         // `fpimm32XForm`, `fpimm64XForm`: the 8-bit code;
         // `bitcast_fpimm_to_i32`/`i64`: the bits.
-        if matches!(xform, 34 | 35 | 38 | 39) {
+        if matches!(xform, 34 | 35 | 36 | 37 | 38 | 39) {
             let bits = dag.fp_bits(value).expect("an xform of a float constant");
             let code = || {
                 i64::from(
@@ -200,6 +205,10 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             };
             let (constant, vt) = match xform {
                 34 | 35 => (code(), mvt::i32),
+                // `fpimm64SIMDModImmType10XForm`: a bit per byte;
+                // `fpimm32SIMDModImmType4XForm`: the top byte.
+                36 => (super::vector::encode_mod_imm_type10(bits as u64) as i64, mvt::i32),
+                37 => (((bits as u32 & 0xff00_0000) >> 24) as i64, mvt::i32),
                 38 => (bits as u32 as i64, mvt::i32),
                 _ => (bits as u64 as i64, mvt::i64),
             };

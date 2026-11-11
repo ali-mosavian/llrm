@@ -159,12 +159,23 @@ fn the_shared_two_address_ties_every_pair_m68k_declares() {
     assert!(open_before > 0, "no pair was open before TwoAddress: the check sees nothing");
 }
 
-/// The `mov`s of `body` by the instruction they stand beside, counted.
-fn moves_by_neighbour(body: &LirBody) -> std::collections::BTreeMap<i64, usize> {
-    let mut out = std::collections::BTreeMap::new();
-    for insn in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-        if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov")) {
-            *out.entry(insn.at).or_default() += 1;
+/// The `mov`s TwoAddress added, each with the name of the instruction after
+/// it (the one it feeds). By identity, not by `at`: MachineSink hands two
+/// instructions one `at`, so an `at` lookup names the wrong instruction.
+fn added_moves(
+    before: &LirBody,
+    after: &LirBody,
+) -> Vec<String> {
+    let was: std::collections::HashSet<u64> = before.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| insn.id()).collect();
+    let is_mov = |insn: &llrm_codegen::model::lir::Insn| insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov"));
+    let mut out = Vec::new();
+    for block in &after.blocks {
+        let insns: Vec<_> = block.insns.iter().collect();
+        for (i, insn) in insns.iter().enumerate() {
+            if is_mov(insn) && !was.contains(&insn.id()) {
+                let next = insns[i + 1..].iter().find(|one| !is_mov(one));
+                out.push(next.and_then(|one| one.what.as_ref()?.name.as_deref()).unwrap_or_default().to_string());
+            }
         }
     }
     out
@@ -175,36 +186,34 @@ fn moves_by_neighbour(body: &LirBody) -> std::collections::BTreeMap<i64, usize> 
 /// m68k's register description it ties by x86's rule (an `Add` is tied), so
 /// `LEA32p d, #48, v` got `mov t, #48` ahead of it, which m68k cannot place
 /// (3 of 20 fixture functions refused, 11-10). Counted: each `mov` TwoAddress
-/// adds beside an instruction with no declared tie. 36 before the rows, 3
-/// after (`KNOWN`: a copy of one value into another, placed beside an
-/// instruction that is not its user; cause not yet found, exit 2026-11-13).
+/// adds ahead of an instruction with no declared tie. 36 before the rows; 3
+/// after, which were the instrument: it found the instruction by `at`, and
+/// MachineSink gives two instructions one `at` (pack_ref, add_bits_64,
+/// sf64_pack), so a copy before a tied `OR8dd` was charged to a `MOVZXd32d8`.
 #[test]
 fn the_shared_two_address_ties_only_the_pairs_m68k_declares() {
-    const KNOWN: &[&str] = &["pack_ref @pack_ref", "soft_add @add_bits_64", "soft_pack @sf64_pack"];
+    let functions = functions();
+    let tied_names: std::collections::HashSet<&str> = functions
+        .iter()
+        .flat_map(|(_, function)| function.blocks.iter().flat_map(|block| block.insts.iter()))
+        .filter(|inst| !inst.ties.is_empty())
+        .filter_map(|inst| if let Kind::Op(name) = inst.kind { Some(name) } else { None })
+        .collect();
     let (mut extra, mut tied) = (Vec::new(), 0);
-    for (what, function) in functions() {
-        let (converted, stages) = through(&function, "TwoAddress");
+    for (what, function) in &functions {
+        let (_, stages) = through(function, "TwoAddress");
         let before = stages.iter().rev().find(|(name, _)| *name == "PhiElimination").map(|(_, body)| body).expect("PhiElimination ran");
         let after = &stages.last().expect("TwoAddress ran").1;
-        let (was, now) = (moves_by_neighbour(before), moves_by_neighbour(after));
-        for (at, count) in now {
-            let added = count.saturating_sub(was.get(&at).copied().unwrap_or(0));
-            if added == 0 {
-                continue;
-            }
-            let Some(&(b, i)) = converted.origin.get((at / 2) as usize) else { continue };
-            let inst = &function.blocks[b].insts[i];
-            if inst.ties.is_empty() {
-                extra.push(format!("{what}: {added} before {:?}", inst.kind));
+        for name in added_moves(before, after) {
+            if tied_names.contains(name.as_str()) {
+                tied += 1;
             } else {
-                tied += added;
+                extra.push(format!("{what}: a copy before {name:?}"));
             }
         }
     }
-    assert!(tied >= 20, "only {tied} copies stand beside a declared tie: the check sees nothing");
-    let unknown: Vec<_> = extra.iter().filter(|line| !KNOWN.iter().any(|known| line.starts_with(known))).collect();
-    assert!(unknown.is_empty(), "TwoAddress copied a source before instructions m68k declares no tie for: {unknown:#?}");
-    assert!(extra.len() <= KNOWN.len(), "{extra:#?}");
+    assert!(tied >= 20, "only {tied} copies stand before a declared tie: the check sees nothing");
+    assert!(extra.is_empty(), "TwoAddress copied a source before instructions m68k declares no tie for: {extra:#?}");
 }
 
 /// Flag setter -> reader pairs of `body` (a setter, then a later reader of
@@ -259,4 +268,43 @@ fn the_shared_phi_elimination_can_put_a_copy_between_a_flag_setter_and_its_reade
     println!("flag setter/reader pairs {pairs}; with a copy between: before {before}, after PhiElimination {after}");
     assert!(pairs >= 5, "only {pairs} setter/reader pairs in the fixtures: the test sees nothing");
     assert!(after >= before, "PhiElimination removed copies between setters and readers");
+}
+
+/// Instructions of `body` whose `at` names another MIR instruction than the one
+/// they are: `Converted::origin` is read by `at`.
+fn misattached(
+    function: &MFunction,
+    converted: &llrm_spike_mf::tolir::Converted<M68kRegisters>,
+    body: &LirBody,
+) -> usize {
+    let mut open = 0;
+    for insn in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(&(b, i)) = converted.origin.get((insn.at / 2) as usize) else { continue };
+        let (Kind::Op(name), Some(what)) = (function.blocks[b].insts[i].kind, &insn.what) else { continue };
+        let own = what.name.as_deref();
+        if own != Some(name) && !matches!(own, Some("mov" | "COPY")) {
+            open += 1;
+        }
+    }
+    open
+}
+
+/// MachineSink sets a sunk instruction's `at` to the first of the block it
+/// goes to (`machinesink.rs`, "stay in order by their `at`"), so `at` no longer
+/// names the MIR instruction it came from, and `from_ssa` / `from_lir`, which
+/// read `Converted::origin` by `at`, would give the sunk `OR8dd` of pack_ref the
+/// operands and opcode of the `MOVZXd32d8` it landed beside. Not reached today
+/// (the prelude runs no MachineSink); step 3 (MachineSink) has to carry the
+/// origin by identity first. The test states the count: 0 before, more after.
+#[test]
+fn machine_sink_breaks_the_origin_by_at() {
+    let (mut before, mut after) = (0, 0);
+    for (_, function) in functions() {
+        let (converted, stages) = through(&function, "MachineSink");
+        before += misattached(&function, &converted, &converted.body);
+        after += misattached(&function, &converted, &stages.last().expect("ran").1);
+    }
+    println!("mis-attached: before {before}, after MachineSink {after}");
+    assert_eq!(before, 0, "the converted body already mis-attaches: the check is wrong");
+    assert!(after > 0, "MachineSink keeps every `at` in place: the origin by `at` is safe, drop this test");
 }
