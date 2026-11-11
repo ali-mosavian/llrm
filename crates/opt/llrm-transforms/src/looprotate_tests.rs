@@ -760,3 +760,50 @@ fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
     assert!(crate::trial::take_rotated().is_empty(), "a big function is not noted");
     assert!(crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(&big, true)), "the trial rotates it too");
 }
+
+/// An inner loop that stops on a loaded value, entered from an outer counter that starts at `%gap` (shellsort's
+/// `while (at >= gap && v[at - gap] > value)`); `START` is `%gap` or an unrelated `%start`.
+const SCEV_GUARD: &str = "define i16 @f(ptr %p, i16 %gap, i16 %start) {
+b0:
+  br label %o
+
+o:
+  %i = phi i16 [ START, %b0 ], [ %inext, %x ]
+  br label %h
+
+h:
+  %at = phi i16 [ %i, %o ], [ %sub, %s ]
+  %lt = icmp ult i16 %at, %gap
+  br i1 %lt, label %x, label %b
+
+b:
+  %sub = sub nuw i16 %at, %gap
+  %v = load i16, ptr %p
+  %c = icmp ne i16 %v, 0
+  br i1 %c, label %s, label %x
+
+s:
+  store i16 %sub, ptr %p
+  br label %h
+
+x:
+  %e = phi i16 [ %at, %h ], [ %sub, %b ]
+  store i16 %e, ptr %p
+  %inext = add nuw i16 %i, 1
+  %done = icmp uge i16 %inext, 64
+  br i1 %done, label %out, label %o
+
+out:
+  ret i16 %e
+}
+";
+
+/// m64 shellsort -Os: the pin rotates the inner `while` loop and the induction pass then removes the copied guard
+/// (`at >= gap` on the outer counter `{gap,+,1}`); RS1 left it unrotated because only the preheader's constants were
+/// asked, 179 B against clang's 173 and 9193 instructions against 7625. A guard SCEV decides is rotated; one it
+/// cannot decide (the counter starts elsewhere) is left.
+#[test]
+fn test_a_size_build_rotates_a_loop_whose_guard_the_induction_variable_decides() {
+    assert!(rotated_guard_must_fold(&SCEV_GUARD.replace("START", "%gap")));
+    assert!(!rotated_guard_must_fold(&SCEV_GUARD.replace("START", "%start")));
+}

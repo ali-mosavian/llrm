@@ -696,11 +696,48 @@ fn guard_folds(
     {
         condition = mapped;
     }
-    let folds = constant_int(run.context, condition).is_some();
+    let folds = constant_int(run.context, condition).is_some() || scev_decides(run, &copies, condition, orig_preheader);
     for copy in copies.into_iter().rev() {
         run.function.erase(copy).expect("a temporary copy");
     }
     Guard { folds, remains }
+}
+
+/// Whether `condition`, the copied header's exit test, is decided by the preheader's values the way
+/// `IndVarSimplify::eliminateIVComparison` decides it after the rotation: a compare of two values that
+/// were there before the copy, whose SCEVs give the answer (`{gap,+,1}<nuw> u< gap` is false). The pin
+/// rotates such a loop at -Os and the pass after it removes the guard.
+fn scev_decides(
+    run: &Run,
+    copies: &[InstId],
+    condition: Operand,
+    preheader: BlockId,
+) -> bool {
+    let Operand::Value(value) = condition else { return false };
+    let Some(&compare) = copies.iter().find(|&&copy| run.function.instruction(copy).result == Some(value)) else {
+        return false;
+    };
+    let instruction = run.function.instruction(compare);
+    let Opcode::ICmp(predicate) = instruction.opcode else { return false };
+    let made: Vec<_> = copies.iter().filter_map(|&copy| run.function.instruction(copy).result).collect();
+    if instruction.operands.iter().any(|operand| matches!(operand, Operand::Value(one) if made.contains(one))) {
+        return false;
+    }
+    let (lhs, rhs) = (instruction.operands[0], instruction.operands[1]);
+    let mut held = run.scev.borrow_mut();
+    let session = held.get_or_insert_with(|| {
+        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function)
+    });
+    let (se, env) = session.split(run.layout, run.globals, run.metadata);
+    let cx = env.cx(&*run.context, &*run.function);
+    if !se.is_value_scevable(&cx, lhs) || !se.is_value_scevable(&cx, rhs) {
+        return false;
+    }
+    let scope = cx.loops.get_loop_for(preheader).map(|enclosing| enclosing.get_header());
+    let left = se.get_scev_at_scope_of_value(&cx, lhs, scope).scev;
+    let right = se.get_scev_at_scope_of_value(&cx, rhs, scope).scev;
+    let decided = se.evaluate_predicate_at(&cx, predicate, left, right, preheader);
+    decided.is_some()
 }
 
 /// Whether no header phi is wider than the target's widest native integer: rotating keeps a
