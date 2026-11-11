@@ -64,7 +64,7 @@ const BUNDLE: &str = "BUNDLE";
 /// `numbered`, which a pass that moves an instruction keeps, and `at / 2` for
 /// one nothing numbered. `at` is not it: `MachineSink` sets the `at` of an
 /// instruction it moves to its new neighbour's.
-fn ordinal_of(one: &Insn) -> usize {
+pub fn ordinal_of(one: &Insn) -> usize {
     one.numbered.map_or((one.at / 2) as usize, |n| n as usize)
 }
 
