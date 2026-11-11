@@ -2112,3 +2112,50 @@ fn test_a_tie_with_nothing_dropped_keeps_its_operand_numbers() {
     let converted = to_lir::<Flat>(&f, regs()).expect("converts");
     assert_eq!(converted.body.blocks[0].insns[2].what.as_ref().expect("semantics").tied, None, "no ties: the rows say");
 }
+
+/// A diamond whose head writes ebx, an arm that also writes it when `arm_writes`,
+/// and a join that reads it.
+fn ebx_across_a_diamond(arm_writes: bool) -> MFunction<()> {
+    let mut f = MFunction::<()>::new("diamond");
+    f.classes = vec![(); 1];
+    let mut head = Block { id: 0, ..Block::default() };
+    head.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    head.insts.push(branch(2));
+    let mut arm = Block { id: 1, ..Block::default() };
+    if arm_writes {
+        arm.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    }
+    let mut jump = op("jump", vec![Operand::Block(3)]);
+    jump.terminator = true;
+    jump.barrier = true;
+    arm.insts.push(jump);
+    let other = Block { id: 2, ..Block::default() };
+    let mut join = Block { id: 3, ..Block::default() };
+    join.insts.push(op("get", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    join.insts.push(ret());
+    f.blocks = vec![head, arm, other, join];
+    f
+}
+
+/// `ssa_pins` read a physical register only in the block that wrote it, so an
+/// i64 result's low word copied before a select's split refused the function
+/// (f302, f334 of select_of_constants, three levels each). A join sees the one
+/// value both paths leave.
+#[test]
+fn test_a_join_reads_the_physical_register_both_paths_leave() {
+    let converted = llrm_spike_mf::tolir::to_ssa_lir::<Flat>(&ebx_across_a_diamond(false), regs()).expect("converts");
+    let written = converted.body.blocks[0].insns[0].defines[0];
+    let read = &converted.body.blocks[3].insns[0];
+    assert_eq!(read.uses, vec![written], "the join reads the head's value");
+}
+
+/// The control: where the arms disagree a merge needs a phi, which a physical
+/// register has none of here, and the read stays refused by name.
+#[test]
+fn test_a_join_after_two_different_writes_is_still_refused() {
+    let why = match llrm_spike_mf::tolir::to_ssa_lir::<Flat>(&ebx_across_a_diamond(true), regs()) {
+        Ok(_) => panic!("converted"),
+        Err(why) => why,
+    };
+    assert!(why.contains("is read in block 3 without a write in it"), "{why}");
+}
