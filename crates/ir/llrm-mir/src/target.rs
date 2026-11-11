@@ -302,6 +302,13 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// DEVIATE SD103-M32 (owner x87, exit 2026-11-24): clocks a merged `a && b`
+    /// costs over two branches where the pin's latency rule does not see them: a
+    /// `setcc` per compare, the logic op and a `test`, less the branch the
+    /// merge saves. `getJumpConditionMergingParams`' base cost is lowered by
+    /// it, except where the DAG folds the pair into one compare
+    /// (`foldLogicOfSetCCs`). 0: the pin's budget.
+    pub merged_condition_clocks: i64,
     /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
     /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
     /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
@@ -516,6 +523,7 @@ impl Tuning {
         cold_site_ignores_sinks: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
+        merged_condition_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,

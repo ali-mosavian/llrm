@@ -52,19 +52,35 @@ pub struct MaskByAnd {
     /// Thousandths of a clock a byte of code is worth
     /// (`speed_milliclocks_per_byte`).
     pub milliclocks_per_byte: i64,
+    /// Clocks the `mov` of a source that stays live costs (gcc's
+    /// `X86_TUNE_ZERO_EXTEND_WITH_AND` makes it `mov d,s; and d,255`); none
+    /// where the CPU states no clock for it: that form is then not priced, so
+    /// it is not made.
+    pub copy_clocks: Option<i64>,
 }
 
 /// Bytes `and r32,imm32` takes over `movzx r32,r8|r16` (`eax` takes one less).
 const EXTRA_BYTES: i64 = 3;
+
+/// Bytes of the `mov r32,r32` a live source needs before the `and`.
+const COPY_BYTES: i64 = 2;
 
 impl MaskByAnd {
     /// Whether a site executed `frequency` times per entry pays for the bytes.
     fn pays(
         &self,
         frequency: f64,
+        copied: bool,
     ) -> bool {
-        let Some(saved) = self.clocks_saved.filter(|saved| *saved > 0) else { return false };
-        frequency * saved as f64 * 1000.0 >= (self.milliclocks_per_byte * EXTRA_BYTES) as f64
+        let Some(saved) = self.clocks_saved else { return false };
+        // A live source is copied first: the `mov` costs clocks and bytes.
+        let (saved, bytes) = if copied {
+            let Some(copy) = self.copy_clocks else { return false };
+            (saved - copy, EXTRA_BYTES + COPY_BYTES)
+        } else {
+            (saved, EXTRA_BYTES)
+        };
+        saved > 0 && frequency * saved as f64 * 1000.0 >= (self.milliclocks_per_byte * bytes) as f64
     }
 }
 
@@ -94,7 +110,8 @@ impl LIRTransform for MaskByAnd {
         let reads = read_counts(&body);
         let mut out = body.clone();
         for (index, block) in out.blocks.iter_mut().enumerate() {
-            if !self.pays(frequencies.get_block_freq_relative_to_entry_block(index)) {
+            let frequency = frequencies.get_block_freq_relative_to_entry_block(index);
+            if !self.pays(frequency, false) && !self.pays(frequency, true) {
                 continue;
             }
             let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
@@ -103,8 +120,10 @@ impl LIRTransform for MaskByAnd {
                 if !kept.contains(&insns[at].at) {
                     continue;
                 }
-                if let Some(new) =
-                    masked(&insns[at], &reads).filter(|_| flags_dead_after(regs, body.bits, &insns[at + 1..]))
+                if let Some(new) = masked(&insns[at], &reads, |copied, dest| {
+                    self.pays(frequency, copied) && !(copied && crosses_call(&insns, at, dest, reads.of(dest) > insns.iter().filter(|one| reads_value(one, dest)).count()))
+                })
+                .filter(|_| flags_dead_after(regs, body.bits, &insns[at + 1..]))
                 {
                     insns[at] = Arc::new(new);
                     changed = true;
@@ -122,6 +141,7 @@ impl LIRTransform for MaskByAnd {
 fn masked(
     one: &Arc<Insn>,
     reads: &Reads,
+    pays: impl Fn(bool, u32) -> bool,
 ) -> Option<Insn> {
     let what = one.what.as_ref()?;
     if what.name.as_deref() != Some("movzx") || what.op != Operation::Extend {
@@ -133,9 +153,9 @@ fn masked(
     if dest.width != 4 || source.width != 1 || source.offset != 0 || dest.value == source.value {
         return None;
     }
-    // The `and` overwrites its source's register: a source read elsewhere
-    // costs a `mov` and loses the clocks it was to save.
-    if reads.of(source.value) != 1 {
+    // The `and` overwrites its source's register: a source read elsewhere is
+    // copied first (TwoAddress), which the price counts.
+    if !pays(reads.of(source.value) != 1, dest.value) {
         return None;
     }
     let mask = 0xff;
@@ -147,6 +167,34 @@ fn masked(
         vec![Loc::Held(Held { value: source.value, width: 4, offset: 0 }), Loc::Imm(Imm { value: mask, width: 4, address: None })];
     new.widths.retain(|(value, _)| *value != source.value);
     Some(new)
+}
+
+/// Whether `one` reads `value`.
+fn reads_value(
+    one: &Arc<Insn>,
+    value: u32,
+) -> bool {
+    one.uses.contains(&value)
+        || one.what.as_ref().is_some_and(|what| {
+            what.sources.iter().any(|loc| crate::model::ir::values(loc).into_iter().any(|held| held.value == value))
+        })
+}
+
+/// Whether `dest`, made at `insns[at]`, is wanted past a call of the block (a
+/// read after the call here, or a read in another block): its register then
+/// outlives the call, which costs a spill or a callee-saved register that the
+/// clocks saved do not repay (x_int64_division -O2: one more spill across two
+/// `$div64_u`, +700 clk). `elsewhere`: it is read outside this block.
+fn crosses_call(
+    insns: &[Arc<Insn>],
+    at: usize,
+    dest: u32,
+    elsewhere: bool,
+) -> bool {
+    let reads = |one: &Arc<Insn>| reads_value(one, dest);
+    let is_call = |one: &Arc<Insn>| one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+    let Some(first) = (at + 1..insns.len()).find(|&index| is_call(&insns[index])) else { return false };
+    elsewhere || (first + 1..insns.len()).any(|index| reads(&insns[index]))
 }
 
 /// The value a chain of plain copies starts from.
@@ -235,8 +283,8 @@ mod tests {
     #[test]
     fn test_a_pass_with_no_stated_clocks_never_pays() {
         let rate = 1;
-        let stated = MaskByAnd { clocks_saved: Some(1), milliclocks_per_byte: rate };
-        let unstated = MaskByAnd { clocks_saved: None, milliclocks_per_byte: rate };
-        assert!(stated.pays(1.0e9) && !unstated.pays(1.0e9));
+        let stated = MaskByAnd { clocks_saved: Some(1), milliclocks_per_byte: rate, copy_clocks: Some(0) };
+        let unstated = MaskByAnd { clocks_saved: None, milliclocks_per_byte: rate, copy_clocks: Some(0) };
+        assert!(stated.pays(1.0e9, false) && !unstated.pays(1.0e9, false));
     }
 }
