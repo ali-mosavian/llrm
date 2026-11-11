@@ -297,6 +297,18 @@ impl Tti for Mos6502 {
         u32::from(!crate::dagisel::combine::mul_by_constant_stays_in_line(bits, i128::from(step), false))
     }
 
+    /// DEVIATE LSR-OUTER (hook of x87's #9182): `i * 54` feeding an inner loop
+    /// is a `__mulhi3` call on every trip of the outer loop; a counter held
+    /// across the inner loop is a pair of zero-page cells. Reduced where the
+    /// multiply is no shift-and-add chain (`mul_by_constant_stays_in_line`),
+    /// or not a constant.
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
     /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
     fn lsr_written_exit_bound_is_live(&self) -> bool {
         true
