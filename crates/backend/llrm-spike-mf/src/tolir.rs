@@ -595,10 +595,35 @@ fn convert<T: Target>(
     let mut orders_by_class = Orders::<T>::new(&clobbered_by_spills);
     let mut infos: Vec<(&'static str, Vec<OperandInfo>)> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
+    // the converted predecessors' last values of the physical registers
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
+    for (from, to) in successors.iter().enumerate().filter(|(from, _)| reachable[*from]) {
+        for to in to {
+            predecessors[*to].push(from);
+        }
+    }
+    let mut exits: Vec<Option<IndexMap<RegId, u32>>> = vec![None; function.blocks.len()];
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
         made.block = at;
         made.current.clear();
+        // A physical register no instruction of this block has written is the
+        // value every predecessor leaves it, if they agree and all are
+        // converted already (an unwritten join of a split block: the low word
+        // of an i64 result copied before the select, read by the `RET`).
+        // Otherwise a read of it is refused (a merge needs a phi).
+        if ssa_pins && at != 0 {
+            let before: Vec<&IndexMap<RegId, u32>> = predecessors[at].iter().filter_map(|p| exits[*p].as_ref()).collect();
+            if before.len() == predecessors[at].len() {
+                if let Some((first, rest)) = before.split_first() {
+                    made.current = first
+                        .iter()
+                        .filter(|(register, value)| rest.iter().all(|one| one.get(*register) == Some(value)))
+                        .map(|(register, value)| (*register, *value))
+                        .collect();
+                }
+            }
+        }
         // DEVIATE 2b: greedy is not given a block no path reaches (LLVM
         // removes them first); `from_lir` returns it as it was.
         let mut position = 0;
@@ -676,6 +701,7 @@ fn convert<T: Target>(
                 }
             }
         }
+        exits[at] = reachable[at].then(|| made.current.clone());
         let mut lir = LirBlock::new(at as i64, insns);
         if reachable[at] {
             lir.succ = successors[at].iter().map(|to| *to as i64).collect();
