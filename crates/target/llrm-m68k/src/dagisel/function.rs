@@ -157,6 +157,12 @@ pub fn select_function_with(
     // X86 and AArch64 return the size flag here too. Owner m68k. Exit: none.
     let mut target = builder_target().with_int_div_cheap(size && cpu.at_least(Cpu::M68020));
     target.ordered_copies = indexed;
+    // DEVIATE M68K-JT-PRICE (`super::switchprice`): the table's limits are the
+    // level's price of a table against the compare chain, not the pin's 4
+    // entries and 10% (40% at -Os)
+    let limits = super::switchprice::limits(cpu, price);
+    target.min_jump_table_entries = limits.min_entries;
+    target.min_jump_table_density = Some(limits.min_density);
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
