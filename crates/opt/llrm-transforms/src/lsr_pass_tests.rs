@@ -1941,7 +1941,7 @@ fn an_outer_loops_multiply_is_a_counter_where_the_target_prices_multiplies() {
     };
     // a multiply left in the preheader runs once; one in the loop, every trip
     let in_loop = |text: &str| text[text.find("outer:").expect("the outer loop")..].contains(" mul ");
-    let priced = run(llrm_mir::target::Tuning { multiply_by_clocks: true, ..llrm_mir::target::Tuning::PIN });
+    let priced = run(llrm_mir::target::Tuning { multiply_clocks: 19, loop_carried_clocks: 2, ..llrm_mir::target::Tuning::PIN });
     assert!(!in_loop(&priced), "{priced}");
     let pin = run(llrm_mir::target::Tuning::PIN);
     assert!(in_loop(&pin), "{pin}");

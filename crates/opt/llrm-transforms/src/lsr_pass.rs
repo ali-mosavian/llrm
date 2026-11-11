@@ -41,11 +41,11 @@ use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
 use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
 
-/// Whether `operand` is computed with a multiply no shift, `lea` or short
-/// shift-and-add chain makes (`i * 300`, `i * n`), through adds, subtracts and
-/// casts to `depth` levels: the values an outer loop's multiply reduction is
-/// for. `i * 3` is one `lea`.
-fn computed_by_dear_multiply(
+/// Whether `operand` is computed with a multiply the target prices as worth
+/// reducing in an outer loop (`Tti::reduces_outer_multiply`), through adds,
+/// subtracts and casts to `depth` levels.
+fn computed_by_priced_multiply(
+    tti: &dyn Tti,
     context: &Context,
     function: &Function,
     operand: Operand,
@@ -55,34 +55,22 @@ fn computed_by_dear_multiply(
     let ValueDef::Instruction(inst) = function.value(value).def else { return false };
     let inst = function.instruction(inst);
     match inst.opcode {
-        Opcode::Binary(BinaryOp::Mul) => match inst.operands.get(1) {
-            Some(&Operand::Constant(constant)) => match context.get(constant).kind {
-                ConstantKind::Int(bits) => signed_digits(bits as i128) > 2,
-                _ => true,
-            },
-            _ => true,
-        },
+        Opcode::Binary(BinaryOp::Mul) => {
+            let constant = match inst.operands.get(1) {
+                Some(&Operand::Constant(constant)) => match context.get(constant).kind {
+                    ConstantKind::Int(bits) => Some(bits),
+                    _ => None,
+                },
+                _ => None,
+            };
+            tti.reduces_outer_multiply(constant)
+        }
         Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => inst
             .operands
             .iter()
-            .any(|&one| computed_by_dear_multiply(context, function, one, depth - 1)),
+            .any(|&one| computed_by_priced_multiply(tti, context, function, one, depth - 1)),
         _ => false,
     }
-}
-
-/// The nonzero digits of `n` in signed-digit (non-adjacent) form: a multiply by
-/// `n` is that many shifted terms added or subtracted.
-fn signed_digits(n: i128) -> u32 {
-    let (mut n, mut count) = (n.unsigned_abs(), 0);
-    while n > 0 {
-        if n & 1 == 1 {
-            // 1 mod 4 takes the digit +1, 3 mod 4 takes -1
-            n = if n & 3 == 1 { n - 1 } else { n + 1 };
-            count += 1;
-        }
-        n >>= 1;
-    }
-    count
 }
 
 #[cfg(test)]
@@ -309,14 +297,14 @@ fn plan_loop(
     // shadow variables and the exit tests above are made on every loop, as the
     // pin's constructor does before it looks at the nesting.
     // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop that
-    // has a subloop): where the target prices a multiply in clocks
-    // (`multiply_by_clocks`), an outer loop that computes an affine value with a
-    // multiply is reduced as an inner loop is, so `i * 300` feeding the inner
-    // loop becomes a counter stepped by 300. gcc's ivopts does this on every
-    // loop (its code is not translated). x_cordic -O1: 200 `imul` x 19 clocks.
-    // Not at -Os: the counter costs a register across the inner loop.
+    // has a subloop): where the target prices it (`Tti::reduces_outer_multiply`: the
+    // multiply's clocks against a counter held across the inner loop) and not at
+    // -Os, an outer loop that computes an affine value with a multiply is reduced as
+    // an inner loop is, so `i * 300` feeding the inner loop becomes a counter stepped
+    // by 300. gcc's ivopts does this on every loop (named behaviour only, its code is
+    // not translated). x_cordic -O1: 200 `imul` x 19 clocks.
     if !lp.is_innermost()
-        && !(!size && tti.multiply_by_clocks() && users.uses.iter().any(|one| computed_by_dear_multiply(context, function, one.operand, 3)))
+        && !(!size && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, function, one.operand, 3)))
     {
         return planned(None);
     }
