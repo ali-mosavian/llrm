@@ -130,6 +130,22 @@ impl SpillWeightEnv for BodyEnv<'_> {
         instr.copy_of()
     }
 
+    fn sub_register(
+        &self,
+        instr: &Insn,
+        reg: u32,
+    ) -> Option<(u32, u32)> {
+        use crate::model::ir::Loc;
+        let what = instr.what.as_ref()?;
+        let held = what.dests.iter().chain(&what.sources).find_map(|place| match place {
+            Loc::Held(held) if held.value == reg => Some(*held),
+            _ => None,
+        })?;
+        // The whole of a value is as wide as its widest access.
+        let whole = self.orders.widths.borrow().get(&reg).copied()?;
+        (held.offset != 0 || held.width < whole).then_some((held.offset, held.width))
+    }
+
     fn pinned(
         &self,
         reg: u32,
@@ -1842,6 +1858,75 @@ mod tests {
         assert_eq!(place(&tii), (Some(RegId::EAX), Some(RegId::EBX)), "premise: no stated cost, order decides");
         let priced = CopyPriced { inner: tii, cheap: RegId::ECX };
         assert_eq!(place(&priced), (Some(RegId::EAX), Some(RegId::ECX)));
+    }
+
+    /// `%1126:gr8 = COPY %1158.sub_8bit:gr64_nosp` of known_loads_walks `f`
+    /// (m64 -Os): the pin's `copyHint` gives a virtual partner only when both
+    /// ends name the same sub-register (CalcSpillWeights.cpp#L72-73), so
+    /// `%1126` had no hint. Ours hinted it to the register of the wider
+    /// value, which evicted that value, and a chain of evictions ended in an
+    /// 8-way split of another (+53 B).
+    #[test]
+    fn test_a_copy_of_a_part_of_a_wider_value_hints_nothing() {
+        use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
+        let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
+        let mov = |to: Loc, from: Loc| Semantics {
+            name: Some("mov".into()),
+            dests: vec![to],
+            sources: vec![from],
+            ..Semantics::new(Operation::Move)
+        };
+        let imm = Loc::Imm(Imm { value: 0, width: 4, address: None });
+        let place = |copied: u32| {
+            // v1 (4 bytes) lives longer than v2, which it ends at the copy
+            // of its low `copied` bytes.
+            let mut insns = vec![Arc::new(Insn::new(0, None, Some(mov(held(1, 4), imm.clone())), vec![1], vec![]))];
+            for at in 1..6 {
+                insns.push(Arc::new(Insn::new(at, None, None, vec![], vec![1])));
+            }
+            insns.push(Arc::new(Insn::new(6, None, Some(mov(held(2, copied), held(1, copied))), vec![2], vec![1])));
+            insns.push(Arc::new(Insn::new(7, None, None, vec![], vec![2])));
+            let body = LirBody::new(
+                "sub_register_copy",
+                0,
+                vec![Block::from(LirBlock::new(0, insns))],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            let order = |value: u32| {
+                if value == 2 {
+                    vec![RegId::EBX, RegId::EAX, RegId::ECX]
+                } else {
+                    vec![RegId::EAX, RegId::EBX, RegId::ECX]
+                }
+            };
+            let inputs = ShadowInputs {
+                body: &body,
+                registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+                order: &order,
+                pins: &IndexMap::default(),
+                unspillable: &BTreeSet::new(),
+                data: None,
+                sets: None,
+                stable_loads: true,
+                saved: &[],
+                tii: &tii,
+                tri: &crate::greedy::targetinfo::X86RegisterInfo,
+                size: false,
+                lane_pins: false,
+                carry_slot_indexes: true,
+            };
+            let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+            decided.placed.iter().find(|(v, _)| *v == 2).map(|(_, reg)| *reg)
+        };
+        assert_eq!(place(4), Some(RegId::EAX), "premise: a copy of the whole value hints its register");
+        assert_eq!(place(2), Some(RegId::EBX), "a copy of its low half hints nothing: the order decides");
     }
 
 
