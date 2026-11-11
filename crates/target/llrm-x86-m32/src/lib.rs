@@ -221,7 +221,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
-        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9, exit
+        // 2026-11-24.
         recursive_inlining: Some((8, 450)),
         // DEVIATE REC-2 bar: gcc's 15/30 size units in our `gcc_insns`, fitted
         // to the 10 corpus recursions (insns = 1.6 x gcc size less 5.5; queens
