@@ -131,6 +131,19 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as SDCC has it.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    /// `va_arg` is an IR instruction on this target's clang. The z80 aligns nothing past a byte (`a:8`) and sets no
+    /// minimum stack-argument alignment, so the selector's `expandVAArg` steps by the value's size: slot 1 writes
+    /// exactly that.
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(1)
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
     fn lftr_any_stride(&self) -> bool {
