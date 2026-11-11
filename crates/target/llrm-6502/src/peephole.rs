@@ -1550,6 +1550,11 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
 /// them before anything reads). Two literals stored into cells while `a` is
 /// live (`known_loads_walks` -O1: two brackets of 12 clocks, run 576 times)
 /// are one bracket, and the second `lda #n` is then a known load.
+///
+/// DEVIATE (6502-A-BRACKET): not in the pin; llvm-mos parks a live A in an
+/// imaginary register instead. Reason: the allocator's `pha`/`pla` save left
+/// dead `pla; pha` pairs in 9 (O2) and 12 (Os) corpus programs. Exit: the
+/// allocator parks A in a cell (2026-11-24).
 pub fn merge_saves_of_a(asm: &mut Asm) {
     loop {
         let lines = &asm.lines;
