@@ -21,13 +21,28 @@ import difflib
 import re
 
 
+# Our LIR view names arm64 instructions by form (AddSubImm, CompareBranch); the pin's
+# MIR by opcode (SUBWri, CBZW). Both reduce to one class.
+ARM64_CLASS = {
+    "addsubimm": "addsub", "addsubshifted": "addsub", "addsubextended": "addsub", "add": "addsub", "sub": "addsub",
+    "adds": "addsub", "subs": "addsub", "imm1": "movimm", "movi": "movimm", "zero": "mov",
+    "branch": "b", "comparebranch": "cbz", "cbz": "cbz", "cbnz": "cbz", "tbz": "cbz", "tbnz": "cbz",
+    "call": "bl", "return": "ret", "imm": "movimm",
+    "cbzw": "cbz", "cbzx": "cbz", "cbnzw": "cbz", "cbnzx": "cbz", "tbzw": "cbz", "tbzx": "cbz", "tbnzw": "cbz", "tbnzx": "cbz",
+}
+
+
 def mnemonic(name):
     """`MOV32rr` -> `mov`, `COPY` -> `mov`, `mov` -> `mov`."""
     name = name.strip()
     if name == "COPY":
         return "mov"
+    a = re.fullmatch(r"([A-Z]{2,}?)[WX](?:r[irsx]|ui|i|rr|rrs?)", name)  # arm64: SUBWri, ADDXrr
+    if a:
+        return ARM64_CLASS.get(a.group(1).lower(), a.group(1).lower())
     m = re.match(r"([A-Za-z]+?)(?:\d|$|_)", name)
     mn = (m.group(1) if m else name).lower()
+    mn = ARM64_CLASS.get(mn, mn)
     # Condition codes are an operand in the pin (JCC, SETCC, CMOV), the mnemonic in ours.
     if re.fullmatch(r"j(?!mp)[a-z]+", mn):
         return "jcc"
@@ -60,9 +75,11 @@ def pin_stream(text):
         if not eq:
             lhs, rhs = "", s
         rhs = re.sub(r"\(.*?\)", "", rhs)
-        op = rhs.split()[0] if rhs.split() else ""
-        if not re.match(r"^[A-Z]{2,}[A-Za-z0-9_]*$", op):
+        # Lower-case flag words (`nsw`, `nuw`, `exact`) may precede the opcode.
+        ops = [w for w in rhs.split() if re.match(r"^([A-Z]{2,}[A-Za-z0-9_]*|B)$", w)]
+        if not ops or not re.match(r"^((nsw|nuw|exact|nneg|disjoint|samesign|nnan|ninf|nsz|arcp|contract|afn|reassoc|fast) )*[A-Z]", rhs):
             continue
+        op = ops[0]
         defs = [int(x) for x in re.findall(r"%(\d+)", lhs)]
         uses = [int(x) for x in re.findall(r"%(\d+)", rhs)]
         out.append((mnemonic(op), defs, uses))
@@ -72,11 +89,11 @@ def pin_stream(text):
 def shapes(stream):
     """Per instruction: mnemonic, #defs and, for each use, the mnemonic of
     the instruction that last defined it (so the token carries local
-    dataflow). Uses defined by the entry pseudo are physical registers: the
-    pin has none of them as vregs, so they are left out."""
+    dataflow). Uses with no earlier definition, or defined by the entry pseudo,
+    are physical registers or loop-carried: left out on both sides."""
     last, out = {}, []
     for mn, defs, uses in stream:
-        feeds = tuple(sorted(last.get(u, "?") for u in uses if last.get(u) != "pseudo"))
+        feeds = tuple(sorted(last[u] for u in uses if last.get(u, "pseudo") != "pseudo"))
         out.append((mn, len(defs), feeds))
         for d in defs:
             last[d] = mn
@@ -106,6 +123,9 @@ def match(ours, pin):
 def reg_key(name):
     """`EDX`, `$rdx`, `$edx`, `R8D`, `$r8d` -> a width-free key."""
     n = name.lower().lstrip("$")
+    a = re.fullmatch(r"[wx](\d+)", n)  # arm64 w5/x5 are one register
+    if a:
+        return "a" + a.group(1)
     n = re.sub(r"^([re])(?=[a-ds][xil]|[sb]p|[sd]i)", "", n)
     return re.sub(r"^(r\d+)[dwb]$", r"\1", n)
 

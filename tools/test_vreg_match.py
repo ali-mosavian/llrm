@@ -53,6 +53,10 @@ class VregMatch(unittest.TestCase):
         self.assertEqual(vm.mnemonic("jmp"), vm.mnemonic("JMP_1"))
         self.assertEqual(vm.pin_stream("Function Live Ins: $esi in %427, $edx in %428\n"), [])
 
+    def test_flag_words_before_the_opcode_and_arm64_names(self):
+        self.assertEqual(vm.pin_stream("224B\t  %0:gpr32common = nsw SUBWri %7:gpr32common, 1, 0\n"), [("addsub", [0], [7])])
+        self.assertEqual(vm.reg_key("W21"), vm.reg_key("$x21"))
+
     def test_register_names_compare_across_widths(self):
         self.assertEqual(vm.reg_key("EDX"), vm.reg_key("$rdx"))
         self.assertEqual(vm.reg_key("R8D"), vm.reg_key("$r8d"))
