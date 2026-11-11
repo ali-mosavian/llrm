@@ -269,3 +269,42 @@ fn the_shared_phi_elimination_can_put_a_copy_between_a_flag_setter_and_its_reade
     assert!(pairs >= 5, "only {pairs} setter/reader pairs in the fixtures: the test sees nothing");
     assert!(after >= before, "PhiElimination removed copies between setters and readers");
 }
+
+/// Instructions of `body` whose `at` names another MIR instruction than the one
+/// they are: `Converted::origin` is read by `at`.
+fn misattached(
+    function: &MFunction,
+    converted: &llrm_spike_mf::tolir::Converted<M68kRegisters>,
+    body: &LirBody,
+) -> usize {
+    let mut open = 0;
+    for insn in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(&(b, i)) = converted.origin.get((insn.at / 2) as usize) else { continue };
+        let (Kind::Op(name), Some(what)) = (function.blocks[b].insts[i].kind, &insn.what) else { continue };
+        let own = what.name.as_deref();
+        if own != Some(name) && !matches!(own, Some("mov" | "COPY")) {
+            open += 1;
+        }
+    }
+    open
+}
+
+/// MachineSink sets a sunk instruction's `at` to the first of the block it
+/// goes to (`machinesink.rs`, "stay in order by their `at`"), so `at` no longer
+/// names the MIR instruction it came from, and `from_ssa` / `from_lir`, which
+/// read `Converted::origin` by `at`, would give the sunk `OR8dd` of pack_ref the
+/// operands and opcode of the `MOVZXd32d8` it landed beside. Not reached today
+/// (the prelude runs no MachineSink); step 3 (MachineSink) has to carry the
+/// origin by identity first. The test states the count: 0 before, more after.
+#[test]
+fn machine_sink_breaks_the_origin_by_at() {
+    let (mut before, mut after) = (0, 0);
+    for (_, function) in functions() {
+        let (converted, stages) = through(&function, "MachineSink");
+        before += misattached(&function, &converted, &converted.body);
+        after += misattached(&function, &converted, &stages.last().expect("ran").1);
+    }
+    println!("mis-attached: before {before}, after MachineSink {after}");
+    assert_eq!(before, 0, "the converted body already mis-attaches: the check is wrong");
+    assert!(after > 0, "MachineSink keeps every `at` in place: the origin by `at` is safe, drop this test");
+}
