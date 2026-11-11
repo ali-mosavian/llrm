@@ -577,6 +577,14 @@ pub fn visit(
     {
         return Visit::None;
     }
+    // DEVIATE COMBINE-VEC: the arithmetic visitors read integer widths (MIR had
+    // no vectors), so an operation on vectors, which the loop vectorizer makes,
+    // is left as it is. Exit: vector-aware folds (owner arm64-vec, with LV-X3).
+    if matches!(c.function.instruction(inst).opcode, Opcode::Binary(_))
+        && matches!(c.context.types.get(c.function.instruction(inst).ty), llrm_mir::types::Type::Vector { .. })
+    {
+        return Visit::None;
+    }
     // The table is 'static: the opcode (a clone per visit, a Box for calls) is
     // not held.
     let table = visitors(&c.function.instruction(inst).opcode);

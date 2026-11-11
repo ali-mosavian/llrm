@@ -39,6 +39,63 @@ fn a_copy_loop_is_widened_by_the_pins_factors() {
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
 
+const ADD: &str = include_str!("../tests/lv/binop_add.ll");
+const CHAIN: &str = include_str!("../tests/lv/binop_chain.ll");
+const SPLAT: &str = include_str!("../tests/lv/binop_splat.ll");
+const SHIFT: &str = include_str!("../tests/lv/binop_shift.ll");
+const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
+const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
+
+/// `c[i] = a[i] + b[i]` stayed scalar ("An instruction the vectorizer does not
+/// widen yet"); the pin takes VF 8, IC 2 (`opt -passes=loop-vectorize`: four
+/// `load <8 x i16>`, step 16) and adds the wide values.
+#[test]
+fn an_add_of_two_loaded_arrays_is_widened() {
+    let text = run(ADD);
+    assert_eq!(count(&text, "load <8 x i16>"), 4, "{text}");
+    assert_eq!(count(&text, "add <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+}
+
+/// A chain of operations feeds one into the next, a constant operand is a splat:
+/// pin VF 8, IC 2.
+#[test]
+fn a_chain_of_binary_operations_is_widened_with_its_constants_splat() {
+    let text = run(CHAIN);
+    assert_eq!(count(&text, "add <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "mul <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "ashr <8 x i16>"), 2, "{text}");
+    assert!(text.contains("<i16 3, i16 3, i16 3, i16 3, i16 3, i16 3, i16 3, i16 3>"), "{text}");
+}
+
+/// One loaded array against a constant: pin VF 16, IC 2.
+#[test]
+fn an_add_of_a_constant_is_widened() {
+    let text = run(SPLAT);
+    assert_eq!(count(&text, "load <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "add <16 x i8>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 32"), "{text}");
+}
+
+/// A shift by a constant: pin VF 8, IC 2.
+#[test]
+fn a_shift_by_a_constant_is_widened() {
+    let text = run(SHIFT);
+    assert_eq!(count(&text, "shl <8 x i16>"), 2, "{text}");
+}
+
+/// The pin leaves `i64` multiplies scalar (a `mul <2 x i64>` has no NEON
+/// instruction, so the vector costs more) and does not divide in vectors.
+#[test]
+fn a_mul_of_i64_and_a_division_stay_scalar() {
+    for source in [MUL64, UDIV] {
+        let text = run(source);
+        assert_eq!(count(&text, "load <"), 0, "{text}");
+    }
+}
+
 /// Where the pin allows no epilogue it does not interleave (`selectInterleaveCount`
 /// L3705 returns 1): a trip count under 16 widened i64 copy twice (IC 2, four
 /// lanes a step) where the pin takes VF 2, IC 1 (`opt -passes=loop-vectorize`,
