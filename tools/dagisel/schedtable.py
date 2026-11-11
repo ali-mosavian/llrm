@@ -315,7 +315,46 @@ def tables(sub):
     return wpr, wl, ra
 
 
-def render_class(model, class_id, wpr, wl, ra):
+class Pool:
+    """The entries every class slices, each distinct slice once and shared across models."""
+
+    def __init__(self, what):
+        self.what = what
+        self.items = []
+        self.starts = {}
+
+    def span(self, entries):
+        """`(at, len)` of `entries` in the pool, added when new."""
+        entries = tuple(entries)
+        if not entries:
+            return 0, 0
+        if len(entries) > 255:
+            raise SchedError(f"a class has {len(entries)} {self.what} entries; the table's span holds 255")
+        if entries not in self.starts:
+            if len(self.items) + len(entries) > 65535:
+                raise SchedError(f"the {self.what} pool is past 65535 entries")
+            self.starts[entries] = len(self.items)
+            self.items.extend(entries)
+        return self.starts[entries], len(entries)
+
+    def render(self, name, rust_type):
+        body = "".join(f"    {item},\n" for item in self.items)
+        return f"static {name}: [{rust_type}; {len(self.items)}] = [\n{body}];\n"
+
+
+class Pools:
+    def __init__(self):
+        self.proc = Pool("WriteProcRes")
+        self.latency = Pool("WriteLatency")
+        self.advance = Pool("ReadAdvance")
+        self.arms = Pool("VariantArm")
+        self.rows = Pool("ClassRow")
+
+
+FLAGS = (("begin_group", 1), ("end_group", 2), ("retire_ooo", 4))
+
+
+def render_class(model, class_id, wpr, wl, ra, pools):
     row = model.classes[class_id]
     for what, begin, count, table in (
         ("WriteProcRes", row.write_proc_res_idx, row.num_write_proc_res, wpr),
@@ -338,15 +377,21 @@ def render_class(model, class_id, wpr, wl, ra):
         f"ReadAdvance {{ use_idx: {use}, write_idx: {write}, cycles: {cycles} }}"
         for use, write, cycles in ra[row.read_advance_idx : row.read_advance_idx + row.num_read_advance]
     ]
-    return (
-        f"SchedClass::Resolved(ClassData {{ name: {json.dumps(row.name)}, num_micro_ops: {row.micro_ops}, "
-        f"begin_group: {str(row.begin_group).lower()}, end_group: {str(row.end_group).lower()}, "
-        f"retire_ooo: {str(row.retire_ooo).lower()}, write_proc_res: &[{', '.join(proc)}], "
-        f"write_latency: &[{', '.join(lat)}], read_advance: &[{', '.join(adv)}] }})"
+    flags = sum(bit for field, bit in FLAGS if getattr(row, field))
+    (proc_at, proc_len), (lat_at, lat_len), (adv_at, adv_len) = (
+        pools.proc.span(proc),
+        pools.latency.span(lat),
+        pools.advance.span(adv),
     )
+    text = (
+        f"ClassRow {{ num_micro_ops: {row.micro_ops}, flags: {flags}, "
+        f"proc_at: {proc_at}, proc_len: {proc_len}, lat_at: {lat_at}, lat_len: {lat_len}, "
+        f"adv_at: {adv_at}, adv_len: {adv_len} }}"
+    )
+    return f"SchedClass::Resolved({pools.rows.span([text])[0]})"
 
 
-def render_model(model, wanted, sub, wpr, wl, ra, kinds):
+def render_model(model, wanted, sub, wpr, wl, ra, kinds, pools, pool_names):
     variants = parse_variants(sub, model)
     ids = reachable(model, wanted, variants)
     lines = []
@@ -355,13 +400,14 @@ def render_model(model, wanted, sub, wpr, wl, ra, kinds):
         if row.invalid:
             body = f"SchedClass::{kinds.get(class_id, 'Unmodeled')}"
         elif row.variant:
-            arms = ", ".join(
+            arms = [
                 f"VariantArm {{ pred: {'None' if p is None else 'Some(SchedPred::' + PREDICATES[p] + ')'}, class: {t} }}"
                 for p, t in variants[class_id]
-            )
-            body = f"SchedClass::Variant(&[{arms}])"
+            ]
+            at, length = pools.arms.span(arms)
+            body = f"SchedClass::Variant {{ at: {at}, len: {length} }}"
         else:
-            body = render_class(model, class_id, wpr, wl, ra)
+            body = render_class(model, class_id, wpr, wl, ra, pools)
         lines.append(f"        ({class_id}, {body}),")
     resources = []
     for r in model.resources:
@@ -383,13 +429,18 @@ def render_model(model, wanted, sub, wpr, wl, ra, kinds):
         f"    post_ra_scheduler: {flag(model.post_ra_scheduler)},\n"
         f"    complete_model: {flag(model.complete_model)},\n"
         f"    opcode_class: &OPCODE_CLASS,\n"
+        f"    write_proc_res: &{pool_names[0]},\n"
+        f"    write_latency: &{pool_names[1]},\n"
+        f"    read_advance: &{pool_names[2]},\n"
+        f"    variant_arms: &{pool_names[3]},\n"
+        f"    class_rows: &{pool_names[4]},\n"
         f"    resources: &[\n" + "\n".join(resources) + "\n    ],\n"
         f"    classes: &[\n" + "\n".join(lines) + "\n    ],\n"
         f"}};\n"
     )
 
 
-def render(models, cpu_models, instrs, sub, numbers, unsupported=None, regen="tools/dagisel/regen-target.sh"):
+def render(models, cpu_models, instrs, sub, numbers, unsupported=None, regen="tools/dagisel/regen-target.sh", dynamic_only=()):
     """The text of `sched.rs`: `numbers` {opcode name: opcode number}, `cpu_models` {cpu: model name},
     `unsupported` {model name: opcodes whose writes the model marks Unsupported}."""
     unsupported = unsupported or {}
@@ -426,9 +477,27 @@ def render(models, cpu_models, instrs, sub, numbers, unsupported=None, regen="to
     for name in sorted(numbers, key=numbers.get):
         out.append(f"    ({numbers[name]}, {instrs[name].sched_class}),\n")
     out.append("];\n\n")
+    out.append("/// Opcodes only a pattern of a live type or under a dynamic atom (`[types] live`, `[dynamic]` in the record) emits: a target that has the atom\n")
+    out.append("/// false (the vector flag off) leaves them unmodeled, as when the pattern was pruned.\n")
+    out.append(f"static DYNAMIC_ONLY: [u16; {len(dynamic_only)}] = [\n")
+    for number in dynamic_only:
+        out.append(f"    {number},\n")
+    out.append("];\n\n")
+    out.append("pub fn dynamic_only(opcode: u16) -> bool {\n    DYNAMIC_ONLY.binary_search(&opcode).is_ok()\n}\n\n")
+    pools = Pools()
+    pool_names = ("WRITE_PROC_RES", "WRITE_LATENCY", "READ_ADVANCE", "VARIANT_ARMS", "CLASS_ROWS")
+    rendered = []
     for name in chosen:
         wanted = sorted({instr.sched_class for instr in opcode_class.values()})
-        out.append(render_model(models[name], wanted, sub, wpr, wl, ra, invalid_kinds(models[name], opcode_class, unsupported.get(name, ()))))
+        kinds = invalid_kinds(models[name], opcode_class, unsupported.get(name, ()))
+        rendered.append(render_model(models[name], wanted, sub, wpr, wl, ra, kinds, pools, pool_names))
+    out.append("/// The pin's `MCWriteProcResEntry`, `MCWriteLatencyEntry`, `MCReadAdvanceEntry`, variant arms and distinct class rows the classes below slice;\n")
+    out.append("/// a slice the models share is stored once.\n")
+    for pool, name, rust_type in zip((pools.proc, pools.latency, pools.advance, pools.arms, pools.rows), pool_names, ("WriteProcRes", "WriteLatency", "ReadAdvance", "VariantArm", "ClassRow")):
+        out.append(pool.render(name, rust_type))
+        out.append("\n")
+    for text in rendered:
+        out.append(text)
         out.append("\n")
     return "".join(out).rstrip("\n") + "\n"
 
@@ -476,6 +545,7 @@ def main():
     parser = argparse.ArgumentParser()
     for flag in ("subtarget", "instrinfo", "json", "mcschedule", "dir", "out"):
         parser.add_argument(f"--{flag}", required=True)
+    parser.add_argument("--baseline", help="a generation with every dynamic atom false and no live types: opcodes it lacks are DYNAMIC_ONLY")
     parser.add_argument("cpus", nargs="+")
     args = parser.parse_args()
     sub = Path(args.subtarget).read_text()
@@ -486,7 +556,11 @@ def main():
     instrs = parse_instr_classes(Path(args.instrinfo).read_text())
     numbers = opcode_numbers(Path(args.dir), instrs)
     unsupported = unsupported_opcodes(data, set(cpu_models.values()), numbers)
-    Path(args.out).write_text(render(models, cpu_models, instrs, sub, numbers, unsupported))
+    dynamic_only = []
+    if args.baseline:
+        base = {int(m.group(1)) for m in re.finditer(r"^\s+\((\d+), InstrDesc ", (Path(args.baseline) / "instrinfo.rs").read_text(), re.M)}
+        dynamic_only = sorted(n for n in numbers.values() if n not in base)
+    Path(args.out).write_text(render(models, cpu_models, instrs, sub, numbers, unsupported, dynamic_only=dynamic_only))
 
 
 if __name__ == "__main__":

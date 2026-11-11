@@ -110,6 +110,9 @@ pub struct Options {
     /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
     /// `UpperBound` are the target's, not forced off.
     pub target_unrolling: bool,
+    /// The inliner still runs after this pass and may take an internal function (inlining is on and the
+    /// function is not `noinline`): its loops are then left to be priced in the context of each site.
+    pub inliner_follows: bool,
 }
 
 /// What the pass reads and changes.
@@ -1059,7 +1062,7 @@ fn should_full_unroll(
     // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
     // cost more than the rolled loop: by size, or by the cost the analysis
     // finds once the trip's constants fold (gcc's size-neutral complete unroll).
-    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() {
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
         let rolled = u64::from(uce.rolled_loop_size());
         let fits = unrolled_size <= rolled
             || analyze_loop_unroll_cost(
@@ -1075,9 +1078,11 @@ fn should_full_unroll(
                 false,
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
-        return (fits
-            && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up))
-        .then_some(full_unroll_trip_count);
+        let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
+        if !unroll {
+            note_for_trial(run, unrolled_size);
+        }
+        return unroll.then_some(full_unroll_trip_count);
     }
     // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
     // size is unrolled; the function is priced whole afterwards.
@@ -1107,6 +1112,24 @@ fn should_full_unroll(
     // additional analysis on the loop.
     let max_unrolled_loop_size =
         (u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32;
+    // DEVIATE UNROLL-ANALYZE (owner m68k float_in_memory_loop, exit
+    // 2026-11-20): the pin unrolls a loop under its own bar without analysis,
+    // so its 10-trip cap never meets a loop that bar admits. Under a lower
+    // target bar the same loop reaches the analysis, which now covers every
+    // trip count the pin's bar would have unrolled. The same as the pin where
+    // the target keeps the bar.
+    let pin_threshold = if run.options.opt_size {
+        0
+    } else if run.options.opt_level > 2 {
+        UNROLL_THRESHOLD_AGGRESSIVE
+    } else {
+        UNROLL_THRESHOLD_DEFAULT
+    };
+    let trips_to_analyze = if unrolled_size < u64::from(pin_threshold) {
+        up.max_iterations_count_to_analyze.max(full_unroll_trip_count)
+    } else {
+        up.max_iterations_count_to_analyze
+    };
     if let Some(cost) = analyze_loop_unroll_cost(
         run,
         se,
@@ -1115,7 +1138,7 @@ fn should_full_unroll(
         full_unroll_trip_count,
         eph,
         max_unrolled_loop_size,
-        up.max_iterations_count_to_analyze,
+        trips_to_analyze,
         None,
         false,
     ) {
@@ -1126,7 +1149,16 @@ fn should_full_unroll(
                 .then_some(full_unroll_trip_count);
         }
     }
-    // DEVIATE UNROLL-TRIAL: noted for the trial that follows the walk.
+    note_for_trial(run, unrolled_size);
+    None
+}
+
+/// DEVIATE UNROLL-TRIAL: a loop the walk refused is noted for the trial that
+/// follows it.
+fn note_for_trial(
+    run: &Run,
+    unrolled_size: u64,
+) {
     if trial::active().is_none()
         && let (Some(limit), Some(this)) = (run.tti.unroll_trial_threshold(), run.this)
         && unrolled_size < u64::from(limit)
@@ -1134,7 +1166,6 @@ fn should_full_unroll(
     {
         trial::note(name, unrolled_size);
     }
-    None
 }
 
 /// `shouldPragmaUnroll`.
@@ -1387,6 +1418,11 @@ pub(crate) fn compute_unroll_count(
         };
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
         crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
+        // DEVIATE UNROLL-O1: a target that cannot pay for the copy does not peel at -O1.
+        if run.options.opt_level == 1 && !run.options.opt_size && !run.tti.peels_at_o1() {
+            pp.peel_count = 0;
+            pp.allow_peeling = false;
+        }
         if pp.peel_count == 0
             && already == 0
             && pp.allow_peeling
@@ -1813,6 +1849,10 @@ fn try_to_unroll_loop(
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
+            // was worked out in: an earlier loop's remainder guard, read while
+            // counting this loop, is a value its expansion reuses.
+            session.adopt(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             let mut env = crate::loopunrollruntime::Env {
                 context: &mut *run.context,
                 layout: run.layout,
@@ -1830,6 +1870,7 @@ fn try_to_unroll_loop(
                 use_epilog,
             );
             let Some(epilog) = done else {
+                run.scev = session.into_scev();
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
@@ -2497,14 +2538,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
-            // `LoopUnrollPass` does); the loops the peeled copy holds are
-            // new siblings, visited next.
-            let mut fresh: Vec<BlockId> =
-                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
-            fresh.reverse();
-            for one in fresh {
-                work.push_front(one);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled; the
+            // loops the peeled copy holds are new siblings, visited next
+            // (`addSiblingLoops`). `LoopUnrollPass` walks the loops it began
+            // with: it adds none.
+            if !run.options.target_unrolling {
+                let mut fresh: Vec<BlockId> =
+                    siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+                fresh.reverse();
+                for one in fresh {
+                    work.push_front(one);
+                }
             }
             continue;
         }
@@ -2576,8 +2620,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for &one in &fresh {
-            work.push_front(one);
+        if !run.options.target_unrolling {
+            for &one in &fresh {
+                work.push_front(one);
+            }
         }
         revisited.extend(fresh);
     }
@@ -2629,6 +2675,8 @@ pub struct LoopFullUnroll {
     /// The pin's `LoopUnrollPass` (`AllowPartial`, `Runtime` and `UpperBound`
     /// from the target) where false is `LoopFullUnrollPass`.
     pub target_unrolling: bool,
+    /// `Options::inliner_follows`.
+    pub inliner_follows: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -2683,6 +2731,7 @@ impl FunctionPass for LoopFullUnroll {
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
+                inliner_follows: self.inliner_follows,
             },
         };
         let changed = unroll_loops(&mut run);

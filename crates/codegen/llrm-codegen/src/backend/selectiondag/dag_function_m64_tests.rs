@@ -180,6 +180,40 @@ entry:
     }
 }
 
+/// Three unsigned divides read one zero for their high half (`v12 := mov v11`
+/// shared), so the zero lived across all three `EDX` clobbers and greedy gave
+/// it a callee-saved register: recmany m64 -Os, `push rbp` + `xor ebp, ebp` +
+/// 3 `mov edx, ebp`, 10 B where the pin's `$rdx = COPY %22` x3, each made again
+/// as `xor edx, edx`, is 6 B. Each divide reads a zero of its own.
+#[test]
+fn each_m64_divide_reads_its_own_zero_high_half() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %a, i64 %b, i64 %c, i64 %x, i64 %y, i64 %z) {
+entry:
+  %p = udiv i64 %a, %x
+  %q = udiv i64 %b, %y
+  %r = udiv i64 %c, %z
+  %s = add i64 %p, %q
+  %t = add i64 %s, %r
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let highs: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref().filter(|w| w.name.as_deref() == Some("div")))
+        .map(|w| w.sources[0].clone())
+        .collect();
+    assert_eq!(highs.len(), 3, "the premise: three divides: {highs:?}");
+    for (at, high) in highs.iter().enumerate() {
+        assert!(!highs[..at].contains(high), "divide {at} reads a zero an earlier one read: {highs:?}");
+    }
+}
+
 /// A signed divide by a constant at m64 stopped at `CannotSelect("SMulLoHi")`
 /// (the multiply by the magic number): `MUL64r`/`IMUL64r` had no case.
 #[test]

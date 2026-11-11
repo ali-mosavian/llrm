@@ -98,3 +98,17 @@ fn a_spill_inside_the_stack_arguments_of_a_call_stays_a_slot() {
     assert!(frameless_slots_are_a_stack(&mut outside, &Assignment(Vec::new())));
     assert_eq!(outside.blocks[0].insts[2].kind, Kind::Op("PUSHP"));
 }
+
+/// A byte saved from `e` and reloaded into `d` came back through `pop de` as it was in `d`: the frameless form
+/// pushed and popped a pair whatever half each access named (memory_expansion `ref_fill` -Os stored 0 for 123).
+#[test]
+fn a_byte_slot_saved_from_one_half_and_reloaded_into_the_other_stays_a_slot() {
+    let mut f = MFunction::new("f");
+    let insts = vec![
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::E))]),
+        Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Phys(reg::D)), Operand::Frame(0)]),
+    ];
+    f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+    assert!(!frameless_slots_are_a_stack(&mut f, &Assignment(Vec::new())));
+    assert_eq!(f.blocks[0].insts[0].kind, Kind::Op("SPILL8"));
+}

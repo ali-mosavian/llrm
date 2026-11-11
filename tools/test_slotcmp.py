@@ -26,5 +26,22 @@ class Join(unittest.TestCase):
             slotcmp.common({"_add_bits": 120}, {"add_bits": 119})
 
 
+class WorkDir(unittest.TestCase):
+    def test_a_run_leaves_no_work_dir_behind(self):
+        """Every run left its dump dir: 107 `slotcmp-*` dirs, 756 MB, under ~/scratch by 2026-11-10."""
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as root:
+            counts = {"f": 3}
+            with (
+                mock.patch.dict("os.environ", {"WORK": root}),
+                mock.patch.object(slotcmp, "ours", lambda *a: counts),
+                mock.patch.object(slotcmp, "theirs", lambda *a: counts),
+            ):
+                slotcmp.main(["x.c", "O2", "x86_64-linux", "m64"])
+            self.assertEqual(list(Path(root).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

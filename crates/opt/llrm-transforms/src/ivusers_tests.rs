@@ -222,3 +222,60 @@ fn users_are_visited_in_use_list_order_not_program_order() {
         assert!(load < store, "the edited gep's load comes first: {found:?}");
     });
 }
+
+/// The users of `text`'s loop on a target whose layout has no 16-bit integer
+/// and declares 16 native (the 6502): the opcodes of the users found.
+fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let layout = DataLayout::parse("e-p:16:8-i16:8-i32:8-i64:8-a:8-n8").unwrap();
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let header = loops.top_level_loops().next().expect("a loop").get_header();
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16] };
+    let users = IvUsers::of(&mut se, &cx, header, &env);
+    users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
+}
+
+/// DEVIATE LU19. `arr[zext i8 i]` was rewritten into a 16-bit pointer walk
+/// (`adc (rc2),y; iny; bne; inc rc3`) where `adc arr,x` was one instruction:
+/// six llrm-6502 tests went red on release/next (2026-11-11). A width the
+/// target declares native is for induction variables of that width; the same
+/// loop over a 16-bit counter is still reduced.
+#[test]
+fn a_native_width_is_not_for_a_narrow_counter_an_extension_widens() {
+    let walk = |phi: &str, index: &str, bound: &str| {
+        format!(
+            "@arr = global [256 x i8] zeroinitializer\n\
+             define i8 @f(i8 %n) {{\nentry:\n  br label %loop\nloop:\n  \
+             %i = phi {phi} [ 0, %entry ], [ %next, %loop ]\n  {index}\n  \
+             %a = getelementptr i8, ptr @arr, i16 %z\n  %v = load i8, ptr %a\n  \
+             %next = add nuw {phi} %i, 1\n  {bound}\n  \
+             br i1 %c, label %loop, label %exit\nexit:\n  ret i8 %v\n}}\n"
+        )
+    };
+    let widened = walk("i8", "%z = zext i8 %i to i16", "%w = zext i8 %next to i16\n  %c = icmp ne i16 %w, 200");
+    let native = walk("i16", "%z = add i16 %i, 0", "%c = icmp ne i16 %next, 200");
+    let widened = users_on_a_16_bit_native_target(&widened);
+    assert!(
+        !widened.is_empty() && widened.iter().all(|op| op.starts_with("Cast")),
+        "the walk stops at the extensions: {widened:?}"
+    );
+    let native = users_on_a_16_bit_native_target(&native);
+    assert!(
+        native.iter().any(|op| !op.starts_with("Cast")),
+        "a 16-bit counter reaches the gep and the compare: {native:?}"
+    );
+}

@@ -205,7 +205,7 @@ pub fn select_block_with(
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering_with(cpu, carry_chain);
     crate::libcalls::apply(&mut tli, libcalls);
-    let mut lowering = M68kLowering { indexed, short, absolute_data, cpu, price, mul };
+    let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu), cpu, price, mul };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,

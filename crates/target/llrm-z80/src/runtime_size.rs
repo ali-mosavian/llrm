@@ -36,8 +36,8 @@ fn target(text: &str) -> Option<&str> {
 
 /// `__mulsi3`'s clocks, the call instruction through the return, measured in ucsim by `runtime/clocks.py`: the
 /// routine shifts the multiplier right once per pass until it is spent and adds on each set bit, so the multiplicand
-/// does not matter. A product by 100 (7 bits, 3 set) is 1094.
-const MULSI3_BASE: u32 = 167;
+/// does not matter. A product by 100 (7 bits, 3 set) is 1098.
+const MULSI3_BASE: u32 = 171;
 const MULSI3_PASS: u32 = 120;
 const MULSI3_ADD: u32 = 29;
 
@@ -53,11 +53,11 @@ const TYPICAL_MULTIPLIER: u32 = 0xA5A5;
 const TYPICAL_SHIFT: u32 = 8;
 
 /// The long shift routines' clocks, the call instruction through the return, linear in the count (`runtime/clocks.py`).
-const ASHLSI3_BASE: u32 = 59;
+const ASHLSI3_BASE: u32 = 55;
 const ASHLSI3_PER: u32 = 40;
-const LSHRSI3_BASE: u32 = 59;
+const LSHRSI3_BASE: u32 = 55;
 const LSHRSI3_PER: u32 = 45;
-const ASHRSI3_BASE: u32 = 59;
+const ASHRSI3_BASE: u32 = 55;
 const ASHRSI3_PER: u32 = 45;
 
 /// The long divide and remainder routines' clocks, the call instruction through the return (`runtime/clocks.py`):
@@ -72,12 +72,12 @@ const DIVIDES: [(&str, u32, u32); 12] = [
     ("__modsi3", 1134, 329),
     ("__udivremsi4", 1159, 322),
     ("__divremsi4", 1289, 334),
-    ("__s_udivsi3", 6126, 0),
-    ("__s_umodsi3", 6130, 0),
-    ("__s_divsi3", 6341, 0),
-    ("__s_modsi3", 6329, 0),
-    ("__s_udivremsi4", 6292, 0),
-    ("__s_divremsi4", 6466, 0),
+    ("__s_udivsi3", 6130, 0),
+    ("__s_umodsi3", 6126, 0),
+    ("__s_divsi3", 6345, 0),
+    ("__s_modsi3", 6333, 0),
+    ("__s_udivremsi4", 6296, 0),
+    ("__s_divremsi4", 6470, 0),
 ];
 
 /// The routines whose clocks are linear in a count, `base + per * n`, the call instruction through the return
@@ -158,7 +158,13 @@ pub fn routine_clocks(
     before: &[&str],
 ) -> u32 {
     const CALL: u32 = 17;
-    let Some(routine) = text.strip_prefix("call ").map(str::trim) else { return 0 };
+    // a tail call `jp __r` runs the routine as `call __r` does; the table prices the jump 7 T under the call
+    if let Some(routine) = text.strip_prefix("jp ").map(str::trim).filter(|routine| routine.starts_with("__")) {
+        return match routine_clocks(&format!("call {routine}"), before) {
+            0 => 0,
+            clocks => clocks + (CALL - 10),
+        };
+    }
     // the nearest instruction that touches the register decides: a constant only if it loads one, else unknown
     let immediate = |register: &str| {
         let prefix = format!("ld {register}, #");
@@ -183,6 +189,12 @@ pub fn routine_clocks(
             })
             .and_then(|one| one.strip_prefix(prefix.as_str())?.trim().parse::<u32>().ok())
     };
+    // `ldir` is 21 T a pass and 16 on the last, bc passes: the table has one pass; the rest of an inline copy or
+    // fill whose count is `ld bc, #n` (a count in sight only; any other write leaves the one pass)
+    if text == "ldir" {
+        return immediate("bc").map_or(0, |count| (21 * count).saturating_sub(26));
+    }
+    let Some(routine) = text.strip_prefix("call ").map(str::trim) else { return 0 };
     let counted = |base: u32, per: u32| base + per * immediate("a").unwrap_or(TYPICAL_SHIFT) - CALL;
     match routine {
         "__mulsi3" => mulsi3_clocks(immediate("bc").unwrap_or(TYPICAL_MULTIPLIER)) - CALL,
@@ -246,21 +258,21 @@ pub fn reached(names: &HashSet<String>) -> u32 {
 mod tests {
     use super::*;
 
-    /// The price counted `call __mulsi3` as the 17 T call alone: x * 3 is 465 T (ucsim), 448 of them the routine.
+    /// The price counted `call __mulsi3` as the 17 T call alone: x * 3 is 469 T (ucsim), 452 of them the routine.
     #[test]
     fn a_long_multiply_call_prices_the_routine_by_its_constant_multiplier() {
-        assert_eq!(routine_clocks("call __mulsi3", &["push hl", "ld bc, #3"]), 448);
-        assert_eq!(routine_clocks("call __mulsi3", &["ld bc, #100", "ld l, c"]), 1094 - 17);
+        assert_eq!(routine_clocks("call __mulsi3", &["push hl", "ld bc, #3"]), 452);
+        assert_eq!(routine_clocks("call __mulsi3", &["ld bc, #100", "ld l, c"]), 1098 - 17);
         assert_eq!(routine_clocks("call __mulsi3", &["ld bc, #3", "call _f", "ld hl, #0"]), mulsi3_clocks(TYPICAL_MULTIPLIER) - 17);
         assert_eq!(routine_clocks("call _f", &["ld bc, #3"]), 0);
         // idioms -O1 sum(): `ld bc, #0` is the high word pushed first, bc is then loaded from a variable: the
         // multiplier is unknown and was priced as 0 (167 T) instead of a typical one
         let variable = ["ld bc, #0", "push bc", "ld c, -4(ix)", "ld b, -3(ix)"];
         assert_eq!(routine_clocks("call __mulsi3", &variable), mulsi3_clocks(TYPICAL_MULTIPLIER) - 17);
-        assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5", "xor a, c"]), 59 + 40 * TYPICAL_SHIFT - 17);
-        // a long shifted by 5: 59 + 40 * 5 = 259 T for the call (ucsim), 242 of them the routine
-        assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5"]), 59 + 40 * 5 - 17);
-        assert_eq!(routine_clocks("call __lshrsi3", &["ld a, #5"]), 59 + 45 * 5 - 17);
+        assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5", "xor a, c"]), 55 + 40 * TYPICAL_SHIFT - 17);
+        // a long shifted by 5: 55 + 40 * 5 = 255 T for the call (ucsim), 238 of them the routine
+        assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5"]), 55 + 40 * 5 - 17);
+        assert_eq!(routine_clocks("call __lshrsi3", &["ld a, #5"]), 55 + 45 * 5 - 17);
     }
 
     /// The price counted a long divide call as the 17 T call alone: a 32-bit divide by a variable is 6.3k T (ucsim), which
@@ -273,7 +285,7 @@ mod tests {
         assert_eq!(routine_clocks("call __udivsi3", &["ld c, -4(ix)"]), 1091 + 322 * (24 - 8) - 17);
         // a divisor wider than the dividend takes the base alone
         assert_eq!(routine_clocks("call __udivsi3", &["ld bc, #65535", "ld a, #1"]), 1091 + 322 * (24 - 16) - 17);
-        assert_eq!(routine_clocks("call __s_divsi3", &["ld bc, #10"]), 6341 - 17);
+        assert_eq!(routine_clocks("call __s_divsi3", &["ld bc, #10"]), 6345 - 17);
         assert_eq!(routine_clocks("call __divremsi4", &["ld bc, #10"]), 1289 + 334 * 20 - 17);
     }
 
@@ -290,6 +302,14 @@ mod tests {
         assert_eq!(routine_clocks("call __ashlqi3", &["ld c, a"]), 55 + 17 * 8 - 17);
         assert_eq!(routine_clocks("call __memcpy", &["ld bc, #100"]), 62 + 21 * 100 - 17);
         assert_eq!(routine_clocks("call __memseta", &["ld de, #10"]), 95 + 21 * 10 - 17);
+        // `jp __memseta` (a fill in tail position) was priced as a bare jump: 5.4k T of a 256-byte fill read as free,
+        // and pattern_fill -O1 kept the call over the inline fill that is faster and links no routine
+        assert_eq!(routine_clocks("jp __memseta", &["ld de, #10"]), 95 + 21 * 10 - 10);
+        assert_eq!(routine_clocks("jp nz, __memseta", &["ld de, #10"]), 0);
+        // an inline `ldir` is 21 T a pass and 16 on the last; the table's 21 is the first: an inline fill of
+        // 128 bytes was priced 21 T against the call's 2.8k, and chosen at -O1 for +3 B a site (idioms +6 B)
+        assert_eq!(routine_clocks("ldir", &["ld bc, #127", "ld (hl), #0", "ld e, l", "ld d, h", "inc de"]), 21 * 127 - 26);
+        assert_eq!(routine_clocks("ldir", &["ld hl, #_a"]), 0);
         assert_eq!(routine_clocks("call __memmove", &["ld hl, #_a"]), 90 + 21 * 32 - 17);
         assert_eq!(routine_clocks("call __strlen", &["ld hl, #_s"]), 79 + 21 * 16 - 17);
         // a divisor under 128 takes the 16-step shape, a larger one the 9-step shape
@@ -332,12 +352,12 @@ mod tests {
         }
     }
 
-    /// Clocks measured in ucsim (runtime/clocks.py): 0 -> 287, 1 -> 316, 100 -> 1094, 0xFFFF -> 2551, 0xFFFFFFFF -> 4935.
+    /// Clocks measured in ucsim (runtime/clocks.py): 0 -> 291, 1 -> 320, 100 -> 1098, 0xFFFF -> 2555, 0xFFFFFFFF -> 4939.
     #[test]
     fn the_long_multiply_clocks_follow_the_multiplier() {
         assert_eq!(
             [0, 1, 100, 0xFFFF, 0xFFFF_FFFF].map(mulsi3_clocks),
-            [287, 316, 1094, 2551, 4935]
+            [291, 320, 1098, 2555, 4939]
         );
     }
 
@@ -356,10 +376,10 @@ mod tests {
         }
     }
 
-    /// `__mulsi3` assembles to 57 B (sdasz80 listing of `runtime/z80_rt.s`).
+    /// `__mulsi3` assembles to 58 B (sdasz80 listing of `runtime/z80_rt.s`).
     #[test]
-    fn the_long_multiply_routine_is_57_bytes() {
-        assert_eq!(own_bytes("__mulsi3"), Some(57));
+    fn the_long_multiply_routine_is_58_bytes() {
+        assert_eq!(own_bytes("__mulsi3"), Some(58));
     }
 
     /// `runtime/sizes.csv` is what `runtime/sizes.py` writes from `z80_rt.s`.

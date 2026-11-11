@@ -153,3 +153,152 @@ fn the_page_is_as_wide_as_the_targets_index() {
         assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
     }
 }
+
+/// A pointer read after the loop as its next value (the loop-closed phi of a
+/// rotated copy) kept both walks stepping: lz4's literal copy at -O2 ran
+/// 44 clocks a byte on the 6502 with two 16-bit pointer steps. The pointers
+/// now walk by page and the loop-closed value is one step on from the index.
+#[test]
+fn a_pointer_read_past_the_loop_walks_by_page() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  %b = alloca [600 x i8]
+  br label %copy
+copy:
+  %sp = phi ptr [ %a, %entry ], [ %sq, %copy ]
+  %dp = phi ptr [ %b, %entry ], [ %dq, %copy ]
+  %k = phi i16 [ %n, %entry ], [ %k2, %copy ]
+  %x = load i8, ptr %sp
+  store i8 %x, ptr %dp
+  %sq = getelementptr inbounds i8, ptr %sp, i16 1
+  %dq = getelementptr inbounds i8, ptr %dp, i16 1
+  %k2 = sub i16 %k, 1
+  %d = icmp ne i16 %k2, 0
+  br i1 %d, label %copy, label %done
+done:
+  %se = phi ptr [ %sq, %copy ]
+  %de = phi ptr [ %dq, %copy ]
+  %si = ptrtoint ptr %se to i16
+  %di = ptrtoint ptr %de to i16
+  %ai = ptrtoint ptr %a to i16
+  %bi = ptrtoint ptr %b to i16
+  %s = sub i16 %si, %ai
+  %d2 = sub i16 %di, %bi
+  %r = mul i16 %s, 1000
+  %t = add i16 %r, %d2
+  ret i16 %t
+}
+";
+    let before = llrm_mir::parse::module(text).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed(&mut after, 8).expect("rewrites");
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(changed, vec!["f".to_owned()], "{printed}");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(!printed.contains("%sq ="), "the source pointer still steps:\n{printed}");
+    assert!(!printed.contains("%dq ="), "the destination pointer still steps:\n{printed}");
+    for n in [1, 2, 255, 256, 257, 300, 511, 512, 513, 599] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
+
+/// The same copy entered through a guard: the exit block has two ways in, so
+/// the loop-closed phi has two arms and only the latch's is the loop's pointer.
+#[test]
+fn a_pointer_read_past_a_guarded_loop_walks_by_page() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  %b = alloca [600 x i8]
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %copy
+copy:
+  %sp = phi ptr [ %a, %entry ], [ %sq, %copy ]
+  %dp = phi ptr [ %b, %entry ], [ %dq, %copy ]
+  %k = phi i16 [ %n, %entry ], [ %k2, %copy ]
+  %x = load i8, ptr %sp
+  store i8 %x, ptr %dp
+  %sq = getelementptr inbounds i8, ptr %sp, i16 1
+  %dq = getelementptr inbounds i8, ptr %dp, i16 1
+  %k2 = sub i16 %k, 1
+  %d = icmp ne i16 %k2, 0
+  br i1 %d, label %copy, label %done
+done:
+  %se = phi ptr [ %a, %entry ], [ %sq, %copy ]
+  %de = phi ptr [ %b, %entry ], [ %dq, %copy ]
+  %si = ptrtoint ptr %se to i16
+  %di = ptrtoint ptr %de to i16
+  %ai = ptrtoint ptr %a to i16
+  %bi = ptrtoint ptr %b to i16
+  %s = sub i16 %si, %ai
+  %d2 = sub i16 %di, %bi
+  %r = mul i16 %s, 1000
+  %t = add i16 %r, %d2
+  ret i16 %t
+}
+";
+    let before = llrm_mir::parse::module(text).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed(&mut after, 8).expect("rewrites");
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(changed, vec!["f".to_owned()], "{printed}");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(!printed.contains("%sq ="), "the source pointer still steps:\n{printed}");
+    for n in [0, 1, 2, 255, 256, 257, 300, 511, 512, 513, 599] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
+
+/// The wrap block runs once per page, not once per trip: the pass says so on
+/// its branch (`!prof`), and a price that weighs a block by its loop alone
+/// priced lz4's page-walked copy slower than the pointer walk it replaced.
+#[test]
+fn the_wrap_branch_says_the_bump_runs_once_per_page() {
+    let mut module = llrm_mir::parse::module(TEXT).expect("parses");
+    crate::pageindex::indexed(&mut module, 8).expect("rewrites");
+    let printed = llrm_mir::print::module(&module);
+    assert!(printed.contains("!prof"), "no weights on the wrap:\n{printed}");
+    assert!(printed.contains("i32 1, i32 255"), "not one in 256:\n{printed}");
+    let mut module = llrm_mir::parse::module(TEXT).expect("parses");
+    crate::pageindex::indexed(&mut module, 4).expect("rewrites");
+    assert!(llrm_mir::print::module(&module).contains("i32 1, i32 15"), "not one in 16");
+}
+
+/// The current pointer read after the loop by a phi with other ways in (a scan
+/// that returns where it stopped, or the start when it never ran) kept its step
+/// for the same reason: the loop-closed arm names a value the pass rewrote.
+#[test]
+fn the_current_pointer_read_by_a_guarded_exit_phi_walks_by_page() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %scan
+scan:
+  %p = phi ptr [ %a, %entry ], [ %q, %scan ]
+  %k = phi i16 [ %n, %entry ], [ %k2, %scan ]
+  store i8 7, ptr %p
+  %q = getelementptr inbounds i8, ptr %p, i16 1
+  %k2 = sub i16 %k, 1
+  %d = icmp ne i16 %k2, 0
+  br i1 %d, label %scan, label %done
+done:
+  %e = phi ptr [ %a, %entry ], [ %p, %scan ]
+  %ei = ptrtoint ptr %e to i16
+  %ai = ptrtoint ptr %a to i16
+  %r = sub i16 %ei, %ai
+  ret i16 %r
+}
+";
+    let before = llrm_mir::parse::module(text).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed(&mut after, 8).expect("rewrites");
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(changed, vec!["f".to_owned()], "{printed}");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(!printed.contains("%q ="), "the pointer still steps:\n{printed}");
+    for n in [0, 1, 2, 255, 256, 257, 300, 511, 512, 513, 599] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}

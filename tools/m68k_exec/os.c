@@ -25,6 +25,7 @@ long llrm_os_current_directory(size_t d, unsigned char *p) { return -1; }
 long llrm_os_current_drive(void) { return 0; }
 unsigned char llrm_os_console_read_key(void) { return 26; }
 unsigned char llrm_os_console_key_ready(void) { return 1; }
+int keep(int v) { return v; } /* the opaque identity the bench driver supplies (bench/parity) */
 int input_read(char *b, int n) { return (int)sc(3, 0, (long)b, n); }
 static void out(const char *s, int n) { sc(4, 1, (long)s, n); }
 int printf(const char *f, ...)

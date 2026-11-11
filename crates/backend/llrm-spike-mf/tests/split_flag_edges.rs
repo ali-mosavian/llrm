@@ -38,13 +38,77 @@ fn diamonds(count: u32) -> MFunction<()> {
     function
 }
 
-#[test]
-fn many_flag_edges_are_split_in_linear_work_per_pass() {
-    let mut function = diamonds(1000);
+/// The calling thread's CPU time: a loaded machine, a preempted thread or a
+/// sleep does not stretch it.
+fn thread_cpu() -> std::time::Duration {
+    let mut found = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `found` is a valid timespec for the call to fill.
+    let done = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut found) };
+    assert_eq!(done, 0, "no thread CPU clock");
+    std::time::Duration::new(found.tv_sec as u64, found.tv_nsec as u32)
+}
+
+/// CPU time of `run` on `count` diamonds, the construction left out; the edges
+/// split are checked, or the measure would time nothing.
+fn pass_cpu(
+    count: u32,
+    run: impl Fn(&mut MFunction<()>),
+) -> std::time::Duration {
+    let mut function = diamonds(count);
     let before = function.blocks.len();
-    let start = std::time::Instant::now();
-    split_flag_edges::<Two, _>(&mut function);
-    let took = start.elapsed();
+    let start = thread_cpu();
+    run(&mut function);
+    let took = thread_cpu() - start;
     assert!(function.blocks.len() > before, "no edge was split: the test measures nothing");
-    assert!(took.as_secs() < 1, "{before} blocks took {took:?}");
+    took
+}
+
+/// How much more CPU time `work` takes on 2000 diamonds than on 500: the
+/// least of three runs each, on one thread's CPU clock, so the machine's load
+/// and speed do not enter the ratio. 4x the input is 4x for linear work, 16x
+/// for quadratic and 64x for cubic.
+fn growth(work: impl Fn(u32) -> std::time::Duration) -> f64 {
+    let least = |count| (0..3).map(|_| work(count)).min().expect("three runs");
+    least(2000).as_secs_f64() / least(500).as_secs_f64().max(1e-4)
+}
+
+/// The pass splits one edge per round and every round is linear, so the whole
+/// is quadratic: 16x. The scans this test was written for made it cubic: 64x.
+/// The bound is between, 32x.
+const CUBIC_FLOOR: f64 = 32.0;
+
+/// Measured against a 1 s wall-clock bound, which failed at 1.1 s whenever the
+/// machine ran 40 jobs.
+#[test]
+fn many_flag_edges_are_split_in_no_more_than_quadratic_work() {
+    let ratio = growth(|count| pass_cpu(count, |function| split_flag_edges::<Two, _>(function)));
+    assert!(ratio < CUBIC_FLOOR, "4x the edges took {ratio:.1}x the CPU time");
+}
+
+/// The measure ignores time a thread spends waiting: 50 ms of sleep is wall
+/// time and no CPU time.
+#[test]
+fn a_wait_in_the_pass_is_not_charged() {
+    let ratio = growth(|count| {
+        pass_cpu(count, |function| {
+            split_flag_edges::<Two, _>(function);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        })
+    });
+    assert!(ratio < CUBIC_FLOOR, "4x the edges took {ratio:.1}x the CPU time");
+}
+
+/// The measure sees work that grows with the cube.
+#[test]
+fn cubic_work_is_over_the_floor() {
+    let ratio = growth(|count| {
+        let start = thread_cpu();
+        let mut sum = 0u64;
+        for step in 0..(count as u64).pow(3) / 200 {
+            sum = sum.wrapping_add(std::hint::black_box(step));
+        }
+        std::hint::black_box(sum);
+        thread_cpu() - start
+    });
+    assert!(ratio > CUBIC_FLOOR, "4x the input took {ratio:.1}x the CPU time");
 }

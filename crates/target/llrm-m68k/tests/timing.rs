@@ -277,3 +277,97 @@ fn a_register_list_ending_at_the_frame_pointer_is_priced() {
         clocks(Cpu::M68020, "movem.l (%sp)+, %d2-%d7/%a2-%a6")
     );
 }
+
+/// M68020UM Table 8.2.17 (p. 8-39): `TRAP #n` 20 clocks, the cache case. The
+/// harness's `trap #0` was not in the 68020 tables, so every program that
+/// exits that way read UNMEASURED.
+#[test]
+fn a_68020_trap_is_the_exception_table_row() {
+    assert_eq!(clocks(Cpu::M68020, "trap #0"), 20);
+}
+
+/// M68020UM Table 8.2.8 (p. 8-30) `MUL.L EA,Dn` 43 and Table 8.2.2 (p. 8-14)
+/// `#<data>.W,#<data>.L` 6 (the extension word and the 32-bit operand); the
+/// same for `DIVS.L` 90 + 6. `mulu.l #imm` was UNMEASURED.
+#[test]
+fn a_68020_long_multiply_by_an_immediate_adds_the_immediate_fetch() {
+    assert_eq!(clocks(Cpu::M68020, "mulu.l #1000, %d0"), 43 + 6);
+    assert_eq!(clocks(Cpu::M68020, "muls.l #1000, %d1"), 43 + 6);
+    assert_eq!(clocks(Cpu::M68020, "divs.l #10, %d1"), 90 + 6);
+}
+
+/// Table 8.2.9 `CMPI #<data>,EA` 2 plus Table 8.2.2 `#<data>.L,(bd,An)` 7;
+/// the PC form is the address-register form, as in 8.2.1 and 8.2.3 where the
+/// manual prints one row for both.
+#[test]
+fn a_68020_compare_immediate_to_a_pc_relative_operand_is_priced() {
+    assert_eq!(clocks(Cpu::M68020, "cmpi.l #5, (0,%pc)"), 2 + 7);
+    assert_eq!(clocks(Cpu::M68020, "cmpi.l #5, (0,%pc)"), clocks(Cpu::M68020, "cmpi.l #5, (0,%a0)"));
+}
+
+/// Table 8.2.3 (p. 8-15): `LEA` 2 plus calculate `(d8,An,Xn)` 4, `(d16,An,Xn)`
+/// 6, `(B)` 6, `(d32,B)` 12. A base displacement past 8 bits was priced as the
+/// brief format's `(d8,An,Xn)` (6 clocks for the 16-bit one, 8 right), and
+/// `(%a0,%d1.l*4)` was UNMEASURED. Scale and size of Xn do not affect timing.
+#[test]
+fn a_68020_full_format_index_is_priced_by_its_base_displacement() {
+    assert_eq!(clocks(Cpu::M68020, "lea (100,%a0,%d1.l*4), %a1"), 2 + 4);
+    assert_eq!(clocks(Cpu::M68020, "lea (1000,%a0,%d1.l*4), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68020, "lea (-1000,%a0,%d1.w), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68020, "lea (%a0,%d1.l*4), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68020, "lea (100000,%a0,%d1.l*4), %a1"), 2 + 12);
+    assert_eq!(clocks(Cpu::M68020, "lea (0x12345,%a0,%d1.l), %a1"), 2 + 12);
+}
+
+/// MC68000UM Table 8-7: a shift by a register is `8+2n` long, `n` the count
+/// register modulo 64; the pricer saw `n = 0` and called the total a bound.
+#[test]
+fn a_68000_shift_by_a_register_costs_two_clocks_a_place_once_the_count_is_known() {
+    use llrm_m68k::isa::Cpu as Model;
+    use llrm_m68k::timing::{DataRegisters, cost_on_counted};
+    let by_register = |places| cost_on_counted(Model::M68000, "lsr.l %d2, %d0", 2, false, places).unwrap();
+    assert_eq!((by_register(None).clocks, by_register(None).partial), (8, true));
+    assert_eq!((by_register(Some(16)).clocks, by_register(Some(16)).partial), (40, false));
+    // derived by hand from the immediate form: `lsr.l #8` is 8 + 2 x 8
+    assert_eq!(by_register(Some(8)).clocks, clocks(Cpu::M68000, "lsr.l #8, %d0"));
+    let mut registers = DataRegisters::new();
+    registers.execute("moveq #-1,%d2");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), Some(63), "-1 is 63 places modulo 64");
+    registers.execute("addq.l #1, %d2");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), None, "an add writes the register");
+    registers.execute("move.l #0x10,%d2");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), Some(16));
+    registers.execute("move.l %d2, %d0");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), Some(16), "a read leaves it");
+    registers.execute("movem.l (%sp)+, %d2-%d5");
+    assert_eq!(registers.places_of("lsr.l %d2, %d0"), None, "a register list reloads it");
+}
+
+/// binutils prints an index displacement as bare hex (`%a1@(100,%d1:w)` is 256,
+/// `%a2@(10,%d0:w)` is 16, a negative is sign-extended to 64 bits) and a
+/// suppressed base as `@(ffffffff800020a0,%d0:l)`. All-digit hex was read as
+/// decimal (256 priced as a brief index, 16 as 10) and the rest was unpriced:
+/// 84 exes at 68000 and 103 at 68020 carried `operand ... is not in the tables`.
+#[test]
+fn an_objdump_index_displacement_is_hex() {
+    assert_eq!(gnu("moveb %a1@(7e,%d1:w),%d0"), "move.b (126,%a1,%d1), %d0");
+    assert_eq!(gnu("moveb %a2@(10,%d0:w),%d1"), "move.b (16,%a2,%d0), %d1");
+    assert_eq!(gnu("moveb %a3@(ffffffffffffffff,%d1:l),%d0"), "move.b (-1,%a3,%d1), %d0");
+    // Table 8.2.3, LEA = 2 + calculate: (d8,An,Xn) 4, (d16,An,Xn) 6, (d32,B) 12
+    let lea = |operand: &str| clocks(Cpu::M68020, &gnu(&format!("lea {operand},%a0")));
+    assert_eq!(lea("%a2@(10,%d0:w)"), 2 + 4, "0x10 is 16");
+    assert_eq!(lea("%a3@(ffffffffffffffff,%d1:l)"), 2 + 4);
+    assert_eq!(lea("%a3@(ffffffffffffff80,%d1:l)"), 2 + 4, "-128 is the brief format's lowest");
+    assert_eq!(lea("%a1@(80,%d1:w)"), 2 + 6, "0x80 is 128, past the brief format");
+    assert_eq!(lea("%a1@(100,%d1:w)"), 2 + 6, "0x100 is 256, a base displacement");
+    assert_eq!(lea("@(ffffffff800020a0,%d0:l)"), 2 + 12, "a suppressed base with a 32-bit displacement");
+    assert!(cost(Cpu::M68000, &gnu("moveb %a1@(7e,%d1:w),%d0"), 2, false).is_ok());
+}
+
+/// A displacement the parser cannot read is a parser fault, not a missing table
+/// row: it was reported as `?1` unpriced and the total looked merely partial.
+#[test]
+fn an_unreadable_index_displacement_is_a_parser_fault() {
+    let why = cost(Cpu::M68020, "lea (zz,%a0,%d1), %a1", 2, false).unwrap_err();
+    assert!(why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
+}

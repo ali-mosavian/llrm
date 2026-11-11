@@ -55,7 +55,7 @@ fn results_leave_in_a_then_de_then_hlde() {
     let one = |width| calling.native().result_registers(width).expect("a result register").to_vec();
     assert_eq!(one(1), ["a"]);
     assert_eq!(one(2), ["e", "d"]);
-    assert_eq!(one(4), ["e", "d", "l", "h"]);
+    assert_eq!(one(4), ["l", "h", "e", "d"]);
 }
 
 #[test]
