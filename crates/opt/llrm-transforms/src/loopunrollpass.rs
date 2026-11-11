@@ -2520,14 +2520,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
-            // `LoopUnrollPass` does); the loops the peeled copy holds are
-            // new siblings, visited next.
-            let mut fresh: Vec<BlockId> =
-                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
-            fresh.reverse();
-            for one in fresh {
-                work.push_front(one);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled; the
+            // loops the peeled copy holds are new siblings, visited next
+            // (`addSiblingLoops`). `LoopUnrollPass` walks the loops it began
+            // with: it adds none.
+            if !run.options.target_unrolling {
+                let mut fresh: Vec<BlockId> =
+                    siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+                fresh.reverse();
+                for one in fresh {
+                    work.push_front(one);
+                }
             }
             continue;
         }
@@ -2599,8 +2602,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for &one in &fresh {
-            work.push_front(one);
+        if !run.options.target_unrolling {
+            for &one in &fresh {
+                work.push_front(one);
+            }
         }
         revisited.extend(fresh);
     }

@@ -18,3 +18,25 @@ fn two_loops_with_one_count_do_not_mask_it_to_16_bits() {
     let asm = String::from_utf8_lossy(&out.stdout);
     assert!(!asm.contains("65535"), "{asm}");
 }
+
+fn runtime_unrolls(ir: &str) -> usize {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir").join(ir);
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .env("LLRM_DEBUG", "unroll")
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stderr).matches("unrolling by").count()
+}
+
+/// `LoopUnrollPass` walks the loops it began with; ours queued the loops its
+/// own unrolls made, so the copy of a peeled inner loop in an outer loop's
+/// epilog was unrolled by 8 again (known_loads_walks -O2: 11 loops unrolled
+/// where the pin does 10, `f` 4308 B against the pin's 4111).
+#[test]
+fn the_loops_an_unroll_makes_are_not_unrolled_in_the_same_pass() {
+    let unrolls = runtime_unrolls("unroll_no_revisit.ll");
+    assert_eq!(unrolls, 1, "{unrolls} loops unrolled");
+}
