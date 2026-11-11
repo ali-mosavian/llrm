@@ -244,7 +244,7 @@ fn trial_inlined(
 ) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_instructions()).unwrap_or(0);
     if request.level != Level::Os || sites.is_empty() {
         return Ok((built, Vec::new()));
     }

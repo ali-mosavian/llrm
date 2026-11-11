@@ -232,11 +232,10 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
-    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model is within 25% of the written
-    /// bytes for two functions in three; a module over 512 instructions takes seconds to compile once
-    /// (div_constants_long -Os: 3.0 s, 13.0 s with the trial).
-    fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
-        Some((25, 512))
+    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): a module over 512 instructions takes seconds
+    /// to compile once (div_constants_long -Os: 3.0 s, 13.0 s with the trial).
+    fn opt_size_inline_trial_instructions(&self) -> Option<usize> {
+        Some(512)
     }
 
     /// A 32-bit counter or product is four byte adds; the datalayout's `n8`
