@@ -436,6 +436,11 @@ impl llrm_target::Target for M32 {
         Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
     }
 
+    /// `GR32_NOSP`/`GR64_NOSP`'s caller-saved registers, in the pin's order.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        vec![RegId::EAX, RegId::ECX, RegId::EDX]
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         CALLING.native().frame_wrap_split_size
     }

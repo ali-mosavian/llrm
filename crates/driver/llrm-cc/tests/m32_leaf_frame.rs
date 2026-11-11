@@ -68,9 +68,10 @@ fn test_a_leaf_frame_has_no_cell_for_the_omitted_frame_register() {
 fn test_a_one_slot_leaf_frame_is_push_and_pop_where_the_bytes_matter() {
     for level in ["-O1", "-O2", "-Os"] {
         let asm = compiled(level);
-        for name in ["one", "narrow"] {
+        for (name, pops) in [("one", "pop ecx"), ("narrow", "pop eax"), ("none", "pop eax")] {
             let body = function(&asm, name);
-            let (open, close) = if level == "-Os" { ("push eax", "pop ecx") } else { ("sub esp, 4", "add esp, 4") };
+            // the pop is the pin's first dead caller-saved register (findDeadCallerSavedReg)
+            let (open, close) = if level == "-Os" { ("push eax", pops) } else { ("sub esp, 4", "add esp, 4") };
             assert!(
                 body.contains(&open) && body.contains(&close),
                 "{level} {name}: expected {open} / {close}:\n{}",

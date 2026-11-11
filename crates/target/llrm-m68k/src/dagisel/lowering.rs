@@ -318,6 +318,16 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
 }
 
 impl Hooks for M68kLowering {
+    /// `getStackPointerRegisterToSaveRestore` and the frame's stack alignment,
+    /// which the shared expansion of `DYNAMIC_STACKALLOC`, `STACKSAVE` and
+    /// `STACKRESTORE` reads: the node sequence the pin's
+    /// `LowerDYNAMIC_STACKALLOC` builds (`M68kISelLowering.cpp:3362`), with the
+    /// alignment the frames keep (`frame::SHIPPED_STACK_ALIGN`, the pin's
+    /// is 8: see there).
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        Some((crate::reg::SP, crate::frame::SHIPPED_STACK_ALIGN as u64))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -363,6 +373,13 @@ impl Hooks for M68kLowering {
         signed: bool,
     ) -> Option<Vec<SDValue>> {
         use super::call::{Ext, In, Out};
+        // DEVIATE: a result wider than a long (`RetCC_M68k_C` has i32 in D0, D1:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kCallingConv.td#L26-L32)
+        // is not modeled, so the caller expands the operation inline. Exit:
+        // a two-register result in `lower_call`, by 2026-11-14.
+        if rets.iter().any(|ret| ret.size_in_bits() > 32) {
+            return None;
+        }
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let out = |value: SDValue, dag: &SelectionDAG| Out {
             value,

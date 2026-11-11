@@ -6232,15 +6232,17 @@ impl Compiler {
             let word = self.word_type();
             let lower = self.descriptor_field(descriptor, self.ad().lower(record), word);
             let lower = self.convert(Operand::Value(lower), word, LONG)?;
-            let count = self.descriptor_field(descriptor, self.ad().count(record), word);
-            let count = self.convert(Operand::Value(count), word, LONG)?;
+            // A count is unsigned: 8000h is 32768 elements, not -32768.
+            let unsigned = integer_type(self.width(word), false);
+            let count = self.descriptor_field(descriptor, self.ad().count(record), unsigned);
+            let count = self.convert(Operand::Value(count), unsigned, LONG)?;
             self.subscript_checked(subscripts[dimension].clone(), offset_type, lower, count)?;
         }
         Ok(())
     }
 
     /// ERROR 9 unless `subscript` of `type_id` less `lower` is below `count`,
-    /// both LONG.
+    /// both LONG, the offset compared unsigned.
     fn subscript_checked(
         &mut self,
         subscript: Operand,
@@ -6249,11 +6251,13 @@ impl Compiler {
         count: Operand,
     ) -> Result<(), SemanticError> {
         let subscript = self.convert(subscript, type_id, LONG)?;
+        // One unsigned compare: a negative offset is above any count below
+        // 2^31, as clang's EmitBoundsCheckImpl compares (CGExpr.cpp).
         let from = self.computed("sub", LONG, vec![subscript, lower]);
-        let below = self.computed("lt", BOOLEAN, vec![from.clone(), Operand::Constant(LONG, Number::Integer(0))]);
-        self.raise_if(below, 9)?;
-        let above = self.computed("ge", BOOLEAN, vec![from, count]);
-        self.raise_if(above, 9)
+        let from = self.convert(from, LONG, UNSIGNED_LONG)?;
+        let count = self.convert(count, LONG, UNSIGNED_LONG)?;
+        let outside = self.computed("aboveeq", BOOLEAN, vec![from, count]);
+        self.raise_if(outside, 9)
     }
 
     /// An array subscript's value and numeric type.

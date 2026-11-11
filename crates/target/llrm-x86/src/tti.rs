@@ -717,6 +717,10 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        self.tuning.unroll_prices_nest
+    }
+
     fn unroll_never_grows_at_o1(&self) -> bool {
         self.tuning.unroll_never_grows_at_o1
     }
@@ -735,6 +739,14 @@ impl Tti for X86 {
 
     fn narrow_divide_live_limit(&self) -> u32 {
         self.tuning.narrow_divide_live_limit
+    }
+
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        self.tuning.narrow_divide_live_max_bits
+    }
+
+    fn narrow_divide_live_at_size(&self) -> bool {
+        self.tuning.narrow_divide_live_at_size
     }
 
     /// DEVIATE INL-O1 SIZE: the inliner counts a callee in bytes of code.
@@ -1076,6 +1088,10 @@ impl Tti for X86 {
         self.tuning.unroll_promotion_fits_registers
     }
 
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        self.tuning.unroll_store_immediate_bits
+    }
+
     fn lsr_size_order(&self) -> bool {
         self.tuning.lsr_size_order
     }
@@ -1180,6 +1196,19 @@ impl Tti for X86 {
         ty: Ty,
     ) -> bool {
         matches!(ty, Ty::Float | Ty::Double | Ty::X87)
+    }
+
+    fn partial_libcalls_skip_at_size(&self) -> bool {
+        self.tuning.partial_libcalls_skip_at_size
+    }
+
+    /// `X86TTIImpl::isFCmpOrdCheaperThanFCmpZero`
+    /// ([X86TargetTransformInfo.cpp#L7435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7435)).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     fn is_type_legal(

@@ -886,6 +886,11 @@ pub trait Tti {
         false
     }
 
+    /// The signed bits of the immediate a store takes; 0: none (the stored constant needs a register).
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        0
+    }
+
     /// The same for the floats of an x87 target, against the stack's slots.
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         false
@@ -1104,6 +1109,16 @@ pub trait Tti {
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
     fn narrow_divide_live_limit(&self) -> u32 {
         0
+    }
+
+    /// `Tuning::narrow_divide_live_max_bits`.
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        31
+    }
+
+    /// `Tuning::narrow_divide_live_at_size`.
+    fn narrow_divide_live_at_size(&self) -> bool {
+        true
     }
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
@@ -2310,6 +2325,21 @@ pub trait Tti {
         &self,
         _ty: Ty,
     ) -> bool {
+        false
+    }
+
+    /// `isFCmpOrdCheaperThanFCmpZero`
+    /// ([TargetTransformInfoImpl.h:581](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L581)):
+    /// whether `fcmp ord v, v` is cheaper than `fcmp oge v, 0.0` (X86: no).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        true
+    }
+
+    /// `Tuning::partial_libcalls_skip_at_size`.
+    fn partial_libcalls_skip_at_size(&self) -> bool {
         false
     }
 
