@@ -33,10 +33,10 @@
 //! The copy is an internal function `<origin>.constprop.N` with each known
 //! parameter replaced by its constant. A later call with the same constants
 //! (`Cloning::contexts`) goes to the copy already made. A function gets at
-//! most eight clones (`ipa-cp-max-recursive-depth`), which also bounds the
+//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH below), which also bounds the
 //! recursion: a clone that calls itself with a new constant (`place(q, row + 1,
 //! n)` in the clone for `row`) is a candidate for the next clone, so GCC's -O3
-//! unrolls `queens` into eight, one a row. The copy is an ordinary function:
+//! unrolls `queens` into eight, one a row (four here). The copy is an ordinary function:
 //! the inliner takes a clone with one caller into it.
 //!
 //! GCC propagates lattices over the whole call graph and prices a value with
@@ -126,7 +126,13 @@ use crate::profit::{self, OperationCosts};
 const EVAL_THRESHOLD: i64 = 500;
 /// `ipa-cp-max-recursive-depth` (params.opt:225), which
 /// `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
-const MAX_CLONES: usize = 8;
+/// DEVIATE IPACP-DEPTH (owner x86-m32-c, exit 2026-12-05; gcc's is 8): the
+/// clones' compile cost grows faster than their number. m32 -O3, instructions
+/// against no clones, clocks of queens: depth 2 x1.55 151,615; 4 x4.13
+/// 140,365; 6 x18.95 113,064; 8 x71.1 79,692 (121 programs, total +3.3% /
+/// +4.2% / +8.8% / +24.9%). Each superlinear pass fixed lets a deeper depth
+/// fit the bar (row M32-QUEENS-O3).
+const MAX_CLONES: usize = 4;
 /// Our clocks, at our block frequencies (held to ten trips), per GCC time unit:
 /// `place` with `row` known saves 667 here and 245.8 in GCC's dump
 /// (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1)

@@ -5328,12 +5328,14 @@ fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
 #[test]
 fn a_recursion_called_with_a_constant_row_is_cloned_for_it_at_o3() {
     let text = include_str!("tests_data/queens_place.ll");
-    let lines = |level: &str| {
-        let (built, _) = compiled(&flags(&["-m32", level, "-march=i486"]), text, "queens").unwrap();
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "queens").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
     };
-    let (o2, o3) = (lines("-O2"), lines("-O3"));
-    assert!(o3 > 3 * o2, "-O3 made no clones: {o3} lines against -O2's {o2}");
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert!(default > 2 * without, "-O3 made no clones: {default} lines against {without} without clones");
 }
 
 /// x86-m32 recchop -O3: `chop(0, 64)` halves its range, so neither `lo = 0` nor `hi = 64` alone makes
