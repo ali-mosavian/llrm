@@ -18,6 +18,7 @@ pub fn nodes() -> LoweringNodes {
         wide_divide: Some(own::LLRM_UDIV64BY32),
         call_flags: Some(own::LLRM_CALL_FLAGS),
         port_io: Some(own::LLRM_PORT),
+        push_flags: Some(own::LLRM_PUSHF),
         copy128: Some(own::LLRM_COPY128),
         move128: Some(own::LLRM_MOVE128),
         zero128: Some(own::LLRM_ZERO128),
