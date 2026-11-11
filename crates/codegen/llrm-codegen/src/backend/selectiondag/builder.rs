@@ -372,8 +372,10 @@ impl BuilderTarget {
     pub fn with_div_live_limit(
         mut self,
         limit: u32,
+        max_bits: u32,
     ) -> BuilderTarget {
         self.dag.div_live_limit = limit;
+        self.dag.div_live_max_bits = max_bits;
         self
     }
 
