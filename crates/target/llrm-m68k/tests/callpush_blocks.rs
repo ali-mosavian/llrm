@@ -7,7 +7,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use llrm_m68k::callpush::plan;
 use llrm_m68k::driver::{self, Level};
+use llrm_m68k::dagisel::hooks::Cpu;
+use llrm_m68k::mfunc::{Inst, Kind, Operand, Reg};
+use llrm_m68k::reg;
+use llrm_m68k::regalloc::Assignment;
+use llrm_m68k::timing::Price;
 
 mod support;
 
@@ -59,12 +65,33 @@ fn a_call_on_each_path_of_a_diamond_keeps_its_own_cleanup_at_68020() {
     run_with("68020");
 }
 
-/// The arguments of a call are pushed before a diamond the call is after
+/// The arguments of a call are stored before a diamond the call is after
 /// (`compare_to_int64`: the `pea 25:w` of a `__mulsi3`). Pairing a call with a
-/// cleanup only from its own block dropped that push too: 4 bytes more.
+/// cleanup only from its own block dropped that push too: 4 bytes more. Built
+/// on the call sequence itself: the whole-program shape came from the unroller
+/// and the inliner, so a price change moved it away (11-11: the test read 3
+/// `pea` for 5 and passed again with the fixture's callees `noinline`, the
+/// revert of the fix included).
 #[test]
-fn arguments_pushed_before_a_diamond_stay_pushes_at_68000() {
-    let ir = std::fs::read_to_string(fixture("diamond_push.ll")).unwrap();
-    let text = driver::assembly(&ir, driver::cpu_of("68000").expect("a cpu"), Level::O2).expect("compiles");
-    assert!(text.matches("pea\t").count() >= 5, "a push became a store:\n{text}");
+fn arguments_stored_before_a_diamond_stay_pushes_at_68000() {
+    let sp = || Operand::Use(Reg::Phys(reg::SP));
+    let mut call = Inst::new(Kind::Op("JSR32"), vec![]);
+    call.call = true;
+    let insts = [
+        Inst::new(Kind::Op("ADJCALLSTACKDOWN"), vec![Operand::Imm(8)]),
+        Inst::new(Kind::Op("MOV32jr"), vec![sp(), Operand::Use(Reg::Phys(reg::D5))]),
+        Inst::new(Kind::Op("MOV32pi"), vec![Operand::Imm(4), sp(), Operand::Imm(25)]),
+        // the two arms of a diamond between the stores and the call
+        Inst::new(Kind::Op("ADD32dr"), vec![Operand::Def(Reg::Phys(reg::D4)), Operand::Use(Reg::Phys(reg::D0))]),
+        Inst::new(Kind::Op("ADD32dr"), vec![Operand::Def(Reg::Phys(reg::D4)), Operand::Use(Reg::Phys(reg::D1))]),
+        call,
+        Inst::new(Kind::Op("ADJCALLSTACKUP"), vec![Operand::Imm(8), Operand::Imm(0)]),
+    ];
+    let refs: Vec<&Inst> = insts.iter().collect();
+    let blocks = [0, 0, 0, 1, 2, 3, 3];
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+        Ok(if area > 0 { (8, 16) } else { (0, 0) })
+    })
+    .expect("plans");
+    assert!(found.deferred_offset(1).is_some(), "the stores became pushes nowhere: 4 bytes more");
 }

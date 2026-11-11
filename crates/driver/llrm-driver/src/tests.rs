@@ -5117,3 +5117,20 @@ fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o
     let on = ["-m64", "-O3", "--isel=dag"];
     assert!(calls_of_h(&on) >= 1);
 }
+
+/// `p >= 65535.0f ? 65535.0f : p` was branched before selection (`ucomiss`,
+/// `jb`, `movss`): fp selects never reached the DAG, so its `pseudo_fmin` was
+/// dead code and the clamps of jpeg_fixed and stft_single grew 24-80 B at m64.
+/// It is `minss`.
+#[test]
+fn a_float_clamp_is_minss_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(float %p) {\n\
+                  %c = fcmp oge float %p, 6.553500e+04\n\
+                  %q = select i1 %c, float 6.553500e+04, float %p\n\
+                  ret float %q\n}\n";
+    let (built, _) = compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("minss") && !listing.contains("ucomiss"), "{listing}");
+}
