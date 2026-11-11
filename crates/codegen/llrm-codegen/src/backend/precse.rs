@@ -89,10 +89,19 @@ use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
 
+/// Whether value `to` may stand for value `from`: the register classes of both
+/// allow it (`MRI->constrainRegClass`), and `to` is held to the class both
+/// allow once it does. The oracle states what it granted by being asked.
+pub type Constrain = Rc<dyn Fn(u32, u32) -> bool>;
+
 pub struct MachineCse {
     pub classes: Rc<RegisterClasses>,
     /// `Target::cse_keeps_compare_with_live_minuend`.
     pub keep_compare: bool,
+    /// The target's register classes of the values, where the body does not
+    /// carry them: asked where a copy is propagated and where an instruction is
+    /// replaced by another's result. None: every value is of one class.
+    pub constrain: Option<Constrain>,
 }
 
 impl LIRTransform for MachineCse {
@@ -108,7 +117,7 @@ impl LIRTransform for MachineCse {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(shared_with(&body, &self.classes, self.keep_compare))
+        Ok(shared_constrained(&body, &self.classes, self.keep_compare, self.constrain.as_deref()))
     }
 }
 
@@ -244,11 +253,21 @@ struct Walk<'a> {
     regs: llrm_lir::registers::Regs,
     /// Each block's predecessors, as block numbers.
     preds: Vec<Vec<usize>>,
+    constrain: Option<&'a dyn Fn(u32, u32) -> bool>,
     /// `Target::cheap_move_immediate`.
     cheap_immediate: fn(u8, i64) -> bool,
 }
 
 impl Walk<'_> {
+    /// `constrainRegClass`: whether `to` may be read where `from` was.
+    fn allows(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> bool {
+        self.constrain.is_none_or(|constrain| constrain(from, to))
+    }
+
     fn name(
         &self,
         mut value: u32,
@@ -301,6 +320,10 @@ impl Walk<'_> {
                         .count(),
                 );
             let only_one = reads == 1 && self.readers.get(&used).is_some_and(|readers| readers.len() == 1);
+            // `MRI->constrainRegClass(SrcReg, ...)`: not where the source cannot be of the class the reader needs
+            if !self.allows(used, source) {
+                continue;
+            }
             self.moved.entry(id).or_default().push((used, source));
             if let Some(readers) = self.readers.get_mut(&used) {
                 readers.remove(&Reader::Insn(id));
@@ -837,6 +860,17 @@ pub fn shared_with(
     classes: &RegisterClasses,
     keep_compare: bool,
 ) -> LirBody {
+    shared_constrained(body, classes, keep_compare, None)
+}
+
+/// [`shared_with`], where `constrain` states whether a value may stand for
+/// another.
+pub fn shared_constrained(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    keep_compare: bool,
+    constrain: Option<&dyn Fn(u32, u32) -> bool>,
+) -> LirBody {
     let by_at: IndexMap<i64, usize> =
         body.blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
     let dominance = AddressDominance::of(body.blocks.iter().map(|block| (block.at, &block.succ[..])), Some(body.entry));
@@ -907,6 +941,7 @@ pub fn shared_with(
         moved: HashMap::default(),
         table: HashMap::default(),
         regs,
+        constrain,
         cheap_immediate: classes.cheap_move_immediate,
     };
     // Depth first over the dominator tree; an entry is `(block, keys to drop)`
@@ -977,6 +1012,12 @@ pub fn shared_with(
                 continue;
             }
             if !walk.profitable(shared_value, old, shared_block, one, number) {
+                walk.table.insert(key.clone(), (old, number));
+                mine.push(key);
+                continue;
+            }
+            // not where the shared result cannot be of the class the removed one's readers need
+            if !walk.allows(old, shared_value) {
                 walk.table.insert(key.clone(), (old, number));
                 mine.push(key);
                 continue;

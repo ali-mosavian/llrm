@@ -109,7 +109,9 @@ fn calibrate(costs: &mut OperationCosts) {
     costs.call = 12;
     costs.argument = 2;
     costs.multiply = 9;
+    costs.multiply_long = 9;
     costs.divide = 22;
+    costs.divide_long = 22;
     // `llvm.lifetime.*` writes nothing.
     costs.free_intrinsics = true;
 }

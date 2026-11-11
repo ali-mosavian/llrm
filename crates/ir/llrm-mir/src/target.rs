@@ -40,10 +40,9 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
-    /// DEVIATE SD446: a divide by a constant is chosen against the
-    /// multiply-high sequence by clocks plus bytes at
-    /// `speed_milliclocks_per_byte` (`hardware_divide_wins`); false: the
-    /// clocks and margin alone.
+    /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
+    /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
+    /// (`hardware_divide_wins`); false: the clocks and margin alone.
     pub divide_by_bytes: bool,
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): at -Os a divide by a
     /// constant of a type narrower than a word keeps its `div` (DIV-OPTSIZE-1)
@@ -51,6 +50,12 @@ pub struct Tuning {
     /// `div` pins eax, edx and the divisor's register, the narrow multiply
     /// sequence none.
     pub narrow_divide_live_limit: u32,
+    /// The widest divide (in bits) `narrow_divide_live_limit` governs: 31 is
+    /// "narrower than a word" on a 32-bit target; a 16-bit target whose `div
+    /// edx:eax` pins the same registers at 32 bits sets 32.
+    pub narrow_divide_live_max_bits: u32,
+    /// Whether `narrow_divide_live_limit` also holds at -Os (false: -O1 only).
+    pub narrow_divide_live_at_size: bool,
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
     /// leaves an instruction where it is when moving it would replace its one
     /// result by more operands that die at it, across a later instruction that
@@ -72,6 +77,11 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
+    /// counts a callee in bytes of encoded code by instruction kind
+    /// (`Tti::inline_size_view`), not in the pin's units of one per
+    /// instruction. false: the pin's units.
+    pub inline_size_bytes: bool,
     /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
@@ -166,27 +176,22 @@ pub struct Tuning {
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
-    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
-    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at
-    /// `minsize` only, so the pin keeps the `idiv` at `-Oz` and expands at
-    /// `-Os`; clang `-Os` does not set `minsize`). DEVIATE SDIV-POW2-OS
-    /// (owner x86-m32, exit 2026-11-30): at `-Os` this is a DEVIATION from
-    /// the pin's optsize. 4 m32 cells, -131 B, none worse (jpeg_fixed 3149
-    /// -> 3104, stft_fixed 980 -> 929, nbody_fixed 416 -> 395, sat_builtins
-    /// 520 -> 506). Clocks on a 486: `idiv` ~40 against ~6 for `sar; shr;
-    /// add; sar`; jpeg_fixed +60% clocks (measured by x87), nbody_fixed
-    /// ~2.4M clk (72000 executed divides x ~34, estimated), stft_fixed and
-    /// sat_builtins unmeasured. The level is bytes-strict, so it is off at
-    /// `-O2` and `-O3`.
+    /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
+    /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
+    /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
+    /// 188.9M clk (+95%) and jpeg_fixed +64% against main, for -127 B and -790 B; `-Os` is strict per axis.
     ///
-    /// [X86ISelLowering.cpp#L65389]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
     /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
     /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`). DEVIATE
     /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
     /// against the `mov`'s one; the level is bytes-strict.
     pub push_imm_at_size: bool,
+    /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
+    /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
+    /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
+    pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -232,13 +237,12 @@ pub struct Tuning {
     /// which shares any two slots whose ranges do not overlap.
     pub slots_loop_width_rule: bool,
     /// DEVIATE CARRY-SI (x86 m16, m32, m64: owners the three x86 sessions, exit
-    /// 2026-11-21): the coalescer's slot indexes reach the allocator through
-    /// the pre-RA scheduler with the entries its erased and moved
-    /// instructions left empty (the pin's one `SlotIndexes`), so range
-    /// sizes, and the dequeue and spill weights that divide by them, are
-    /// the pin's. false: the function is numbered afresh after the
-    /// scheduler, as the x86 numbers were tuned (A/B 2026-11-07: x86_32 O1
-    /// 14 cells +704 B worse).
+    /// 2026-11-21): the coalescer's slot indexes reach the allocator through the
+    /// pre-RA scheduler with the entries its erased and moved instructions left
+    /// empty (the pin's one `SlotIndexes`), so range sizes, and the dequeue and
+    /// spill weights that divide by them, are the pin's. false: the function
+    /// is numbered afresh after the scheduler, as the x86 numbers were tuned
+    /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
     pub carry_slot_indexes: bool,
     /// DEVIATE RA-CLK (x86 m16; owner x86-m16, exit 2026-11-29): the spill
     /// weight of a value that is an address component (the base, index or
@@ -267,10 +271,10 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose
-    /// loop-carried latency exceeds its issue-bound time is not unrolled at
-    /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
-    /// nothing of the loop. false: the pin's.
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
+    /// latency exceeds its issue-bound time is not unrolled at run time
+    /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
+    /// the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
@@ -301,15 +305,18 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
-    /// An -Os caller's SZ2 trial also inlines the sites its splice brings,
-    /// priced by the ordinary rules, before it measures: `foo` into `main`
-    /// and then `bar` into that copy meet the constants together, as the
-    /// pin's callee-first order gives. One round.
+    /// An -Os caller's SZ2 trial also inlines the sites its splice brings, priced by the
+    /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
+    /// meet the constants together, as the pin's callee-first order gives. One round.
     pub inline_chain_trial: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// The signed width of the immediate a store of an integer takes (x86-64: 32, sign-extended to the
+    /// store's width); 0: the target has no store-immediate form. A full unroll's constants that fit it
+    /// are instruction bytes, not live values (`Tti::unroll_store_immediate_bits`).
+    pub unroll_store_immediate_bits: u32,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_order`.
     pub lsr_size_order: bool,
@@ -371,10 +378,17 @@ pub struct Tuning {
     /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
     /// -O2/-O3. 0: the pin's threshold alone.
     pub unroll_milliclocks_per_byte: i64,
+    /// DEVIATE UP1-NEST (`Tti::unroll_prices_nest_loops_without_outer_counter`).
+    pub unroll_prices_nest: bool,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE PIL-OS (owner alim, exit 2026-11-27): PartiallyInlineLibCalls
+    /// leaves a call in a function tuned for size (`optsize`, `minsize`)
+    /// alone. false: the pin's, which splits it there too and grows the code
+    /// by a compare, a branch and a copy of the call.
+    pub partial_libcalls_skip_at_size: bool,
     /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
     /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
@@ -382,12 +396,11 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
-    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541:
-    /// tuned for size, a constant `memcpy`/`memmove` whose load and store
-    /// pieces take more bytes than the call of the library routine (`mov
-    /// edx, n` and the call) is the call, at the target's `CopyPrice`. The pin
-    /// counts pieces (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B
-    /// (mv64 10 B against the pin's 31). None: the pin's pieces.
+    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
+    /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
+    /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
+    /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
+    /// None: the pin's pieces.
     pub size_copy_price: Option<CopyPrice>,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
@@ -399,10 +412,8 @@ pub struct Tuning {
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
 /// triple is [frame object, global]: a short displacement against an absolute
 /// address.
-/// The bytes a constant copy tuned for size is priced in
-/// (`Tuning::size_copy_price`): the library call (`mov edx, n` and the call)
-/// against the load and store pieces, a wide one (16 or 8 bytes) or a narrower
-/// one.
+/// The bytes a constant copy tuned for size is priced in (`Tuning::size_copy_price`): the library call
+/// (`mov edx, n` and the call) against the load and store pieces, a wide one (16 or 8 bytes) or a narrower one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CopyPrice {
     pub call: u64,
@@ -438,12 +449,15 @@ impl Tuning {
         multiply_by_clocks: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
+        narrow_divide_live_max_bits: 31,
+        narrow_divide_live_at_size: true,
         sink_spares_ranges: false,
         promote_va_list: false,
         branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
+        inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
@@ -465,6 +479,7 @@ impl Tuning {
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
         push_imm_at_size: false,
+        merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -488,6 +503,7 @@ impl Tuning {
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
+        unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
@@ -502,7 +518,9 @@ impl Tuning {
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
+        unroll_prices_nest: false,
         sink_select_arms: false,
+        partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
@@ -573,6 +591,22 @@ pub trait Machine {
         None
     }
 
+    /// The target's throughput model, where it states one: `None` prices a loop
+    /// by the sum of `costs()` (every target but x86-64).
+    fn throughput(&self) -> Option<&Throughput> {
+        None
+    }
+
+    /// Whether a dynamic `alloca` (a variable size, or outside the entry block)
+    /// keeps the alignment it asks for: `DYNAMIC_STACKALLOC` masks the
+    /// address, so it needs neither the clamp to [`Machine::kept_stack_align`]
+    /// nor the refusal at [`Machine::max_alloca_align`], which are for the
+    /// frame's own objects. False: clamped and refused like every other
+    /// `alloca`.
+    fn honors_dynamic_alloca_align(&self) -> bool {
+        false
+    }
+
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
@@ -603,9 +637,9 @@ pub trait Machine {
         false
     }
 
-    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide
-    /// value by a variable count is an instruction, not a call or a loop.
-    /// False: a switch builds no bit tests (`1 << x` and a mask).
+    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide value by a variable
+    /// count is an instruction, not a call or a loop. False: a switch builds no bit tests
+    /// (`1 << x` and a mask).
     fn variable_shift_legal(&self) -> bool {
         true
     }
@@ -825,6 +859,26 @@ pub const fn step_cost(add: i64) -> i64 {
     4 * add
 }
 
+/// How a core that overlaps instructions runs a loop of operations: the resources they occupy, and the latency
+/// of each. `MachineTraceMetrics::Trace::getResourceLength` reads a trace's resource bound as the largest, over
+/// the model's processor resources, of the cycles the instructions put on one over its units, the issue width
+/// being one more resource (micro-ops over `IssueWidth`); `SelectOptimize::computeLoopCosts` chains the
+/// latencies through a loop's dependences. The integer clock API of [`OperationCosts`] is unchanged.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Throughput {
+    /// Latency of each operation, thousandths of a clock.
+    pub latency: OperationCosts,
+    pub resources: Vec<Resource>,
+}
+
+/// One processor resource: `costs` holds, for each operation, the thousandths of a cycle it occupies it, and
+/// `units` how many of it the core has (the issue width, for the resource of micro-ops, whose `costs` count them).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Resource {
+    pub units: i64,
+    pub costs: OperationCosts,
+}
+
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
@@ -843,6 +897,12 @@ pub struct OperationCosts {
     /// equal to `multiply`/`divide` elsewhere.
     pub multiply_long: i64,
     pub divide_long: i64,
+    /// An integer product wider than the target's word (an `i64` on a 32-bit CPU), where the CPU's own multiply is
+    /// narrower: the CPU's whole sequence. 0: priced as `multiply_long`.
+    pub multiply_wide: i64,
+    /// The product of two values extended from the word (`i32` by `i32` into `i64`), the form a fixed-point multiply
+    /// expands to. 0: priced as `multiply_wide`.
+    pub multiply_widening: i64,
     /// Percent by which a constant divide's multiply-high sequence must cost
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
@@ -971,26 +1031,25 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
-    /// Whether a GEP with only constant indices costs nothing: the displacement
-    /// is part of the load or store that reads the address (`ldy #offset`,
-    /// an absolute address plus a constant). False: priced as `address`.
+    /// Whether a GEP with only constant indices costs nothing: the displacement is part of the load or store that
+    /// reads the address (`ldy #offset`, an absolute address plus a constant). False: priced as `address`.
     pub constant_offsets_fold: bool,
-    /// Whether the branch is priced with its compare (the `branch` snippet is a
-    /// compare and a jump, which `ICmp` already prices): a `br` costs
-    /// nothing, as an unconditional jump is mostly a fall-through. False:
-    /// `branch` each.
+    /// Whether the branch is priced with its compare (the `branch` snippet is a compare and a jump, which `ICmp`
+    /// already prices): a `br` costs nothing, as an unconditional jump is mostly a fall-through. False: `branch`
+    /// each.
     pub branch_in_compare: bool,
-    /// What a load from a global or a stack slot costs per native word (an
-    /// absolute address, no pointer to form); 0: what any load does.
+    /// What a load from a global or a stack slot costs per native word (an absolute address, no pointer to
+    /// form); 0: what any load does.
     pub direct_load: i64,
     /// The same for a store.
     pub direct_store: i64,
-    /// Whether a call to an intrinsic the cost model calls free
-    /// (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a function's
-    /// estimate. False: priced as a call, which is what the inlining bars of
-    /// the targets fit before this field were calibrated on (x86 m16: a
-    /// stack-record call stopped being inlined when it was 0).
+    /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
+    /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
+    /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
     pub free_intrinsics: bool,
+    /// Whether a fixed-point or saturating intrinsic (`llvm.{s,u}mul.fix[.sat]`, `llvm.{s,u}shl.sat`) is priced as the
+    /// operations it expands to, on this target's table, in a function's estimate. False: priced as a call.
+    pub expanded_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -999,6 +1058,16 @@ pub struct OperationCosts {
 }
 
 impl OperationCosts {
+    /// An integer product wider than the word: `multiply_wide`, else `multiply_long`.
+    pub fn wide_product(&self) -> i64 {
+        if self.multiply_wide > 0 { self.multiply_wide } else { self.multiply_long }
+    }
+
+    /// The product of two word-wide values in a double-wide result: `multiply_widening`, else [`Self::wide_product`].
+    pub fn widening_product(&self) -> i64 {
+        if self.multiply_widening > 0 { self.multiply_widening } else { self.wide_product() }
+    }
+
     /// The ratio under which a constant memset of `zero` bytes, or of any other
     /// byte, is stores; 0 where none is stated. `size`: tuned for size.
     pub fn pieces(
@@ -1093,6 +1162,8 @@ impl Default for OperationCosts {
             divide: 1,
             multiply_long: 1,
             divide_long: 1,
+            multiply_wide: 0,
+            multiply_widening: 0,
             divide_margin: 0,
             multiply_high: 1,
             shift: 1,
@@ -1150,6 +1221,7 @@ impl Default for OperationCosts {
             direct_load: 0,
             direct_store: 0,
             free_intrinsics: false,
+            expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }

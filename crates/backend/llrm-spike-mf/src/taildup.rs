@@ -21,7 +21,9 @@
 //! Here it is a pass before placement: the block is copied when it has at most
 //! `max_size` instructions (`TailDupSize`) and two ways on, the predecessor has
 //! no other way, and both lie in one loop (a trip through the copy saves the
-//! taken branch); no triangle chains, no profile. Reason: bsearch at 68040 -O2
+//! taken branch); no triangle chains, no profile; m68k keeps
+//! the copies only where its priced trial of the function with and without
+//! them prefers them. Reason: bsearch at 68040 -O2
 //! runs 13 clk behind gcc, which copies the loop's latch compare into both
 //! arms. Owner m68k. Exit: 2026-11-28, when the placement host takes over
 //! (`llrm-codegen`'s port, `placement/taildup.rs`).
