@@ -1,6 +1,13 @@
 # Snapshot-resume for trial passes (design note, 2026-11-11)
 
-Owner x86-m32-c. Status: design, nothing coded. For llrm-oversight and llrm-coordinator.
+Owner x86-m32-c. Status: **closed 2026-11-11 (llrm-oversight ruling)**; S1 was built and falsified, S2/S3 not pursued. For llrm-oversight and llrm-coordinator.
+
+## Outcome
+- S1 (resume at the Late list) was built: `PassManager` hold/resume, shallow `ModuleAnalyses` fork. A replay with no trial equals the kept run (x_life, x_adler, x_jpeg_fixed at -O1), so the fork carries the stale GlobalsAA/Summaries faithfully.
+- The premise was false: the unroll trial acts inside the walk too. `unroll@753` runs fused in the LPM2 slot of the walk's Simplify list at -O1, and the trial unrolls there (x_life: body 110 -> 129 instructions) before the Late list. A trial resumed at the Late list gives different code: x_life -O1 md5 83954c00 (today) vs bcf347e0, work saved +1533175 vs +1518242.
+- The earliest affected pass is the walk for both trials, so the only output-identical resume point is before it: it saves the head, 5.9-16.1% of the mid-end (S2 table), on the trial compile only. Not worth it (ruling).
+- S3 bound (`-Os`, 3x/2x counters, wall under load 15): second mid-end share of total compile x_jpeg_fixed 33%, x_idioms 39%, huge_runs.c 34%; known_loads_walks.c has no trial. Per-body resume can skip at most the bodies before the first noted one (35 of 60, 39 of 66, 30 of 62 body runs): about 17-19% of total, before the callers' re-runs. Not pursued.
+- Work kept unpushed on branch `alim/snapshot-resume-s1` (local WIP commit).
 
 ## Scope
 - LLVM has no trial: the pin makes each decision once. These are DEVIATEs: UNROLL-O1-TRIAL (#9101) and ROTATION-TRIAL (#9141) in `codegen/driver/trial.rs`; the 6502's UNROLL-TRIAL / UP1 (`llrm-6502/src/driver.rs`) share the noting state (`transforms::trial`).
