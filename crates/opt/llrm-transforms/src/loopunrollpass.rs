@@ -1082,7 +1082,14 @@ fn should_full_unroll(
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
         let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
-        if !unroll {
+        // Only a step of a nest of known trips that the pin's threshold unrolls whole is noted: a loop
+        // that goes with its parent takes the counters and registers of both away, which is what an
+        // unroll can pay in bytes (x_life); a lone loop refused by one instruction did not (1 of 46
+        // programs with such a loop paid), nor did a nest too large (matmul +1601 B), and the trial
+        // compiles the module again.
+        if !unroll
+            && run.tti.unroll_trial_threshold().is_some_and(|limit| price::nest_unroll_fits(run, se, analyzed, lp, up, limit))
+        {
             note_for_trial(run, unrolled_size);
         }
         return unroll.then_some(full_unroll_trip_count);
