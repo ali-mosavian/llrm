@@ -111,12 +111,12 @@ fn test_an_address_after_a_push_is_counted_from_the_frames_esp() {
     assert_eq!(address_taken_from_esp(&text(&["sub esp, 44", "push edi", "pop edi", "lea ebp, [esp+16]"])), Some(16));
 }
 
-/// A wrapped frame (set up where it is first used, not at the entry) pushed
-/// its registers after `sub esp`, the old order, because the wrap kept the
-/// frame's own sequence apart from them: the Save block now has the pin's
-/// order and the early return builds none.
+/// The frame pushes its registers before it reserves (`sub esp`), the pin's
+/// order; the old order pushed after the reserve. The pin's `llc` does not wrap
+/// this source (it pushes, then tests `n`), and since #8191 neither do we: the
+/// early return builds the frame too.
 #[test]
-fn test_a_shrink_wrapped_frame_pushes_its_registers_before_it_reserves() {
+fn test_a_frame_pushes_its_registers_before_it_reserves() {
     let source = r#"extern int g(int *);
 int h(int n, int *p)
 {
@@ -131,7 +131,6 @@ int h(int n, int *p)
     let lines = instructions(&text);
     let first_push = lines.iter().position(|line| line.starts_with("push ")).expect("a push");
     let sub = lines.iter().position(|line| line.starts_with("sub esp,")).expect("locals");
-    assert!(lines[..first_push].iter().any(|line| line.starts_with('j')), "the early return comes first: {lines:?}");
     assert!(
         lines[first_push..sub].iter().all(|line| line.starts_with("push ") || line.ends_with(':')),
         "registers pushed before sub esp: {lines:?}"
