@@ -202,3 +202,67 @@ go:
     let one = facts(&module, "walk", 0);
     assert!(one.no_capture() && one.read_only());
 }
+
+fn returned(
+    module: &Module,
+    name: &str,
+) -> Vec<bool> {
+    let function = module.global(module.named(name).unwrap()).function().unwrap();
+    function.parameter_attrs.iter().map(|attrs| attrs.iter().any(is_returned)).collect()
+}
+
+fn stated_returned(text: &str) -> Module {
+    let mut module = parsed(text);
+    let members: BTreeSet<GlobalId> = BTreeSet::from([module.named("m").expect("@m")]);
+    add_argument_returned_attrs(&mut module, &members);
+    module
+}
+
+/// `static long m1(long x) { return x * 1; }` returns its argument, and no
+/// pass said so: callers kept the call and its result (wasm mulconst_i64 +22 B
+/// over the pin, which passes the argument on).
+#[test]
+fn the_parameter_every_ret_returns_is_returned() {
+    let module = stated_returned(
+        "define i32 @m(i32 %x, i32 %y) {
+b0:
+  ret i32 %x
+}
+",
+    );
+    assert_eq!(returned(&module, "m"), [true, false]);
+}
+
+#[test]
+fn rets_of_different_parameters_state_nothing() {
+    let module = stated_returned(
+        "define i32 @m(i1 %c, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %a, label %b
+a:
+  ret i32 %x
+b:
+  ret i32 %y
+}
+",
+    );
+    assert_eq!(returned(&module, "m"), [false, false, false]);
+}
+
+/// A computed value on one path is not the parameter.
+#[test]
+fn a_ret_of_a_computed_value_states_nothing() {
+    let module = stated_returned(
+        "define i32 @m(i1 %c, i32 %x) {
+b0:
+  br i1 %c, label %a, label %b
+a:
+  ret i32 %x
+b:
+  %s = add i32 %x, 1
+  ret i32 %s
+}
+",
+    );
+    assert_eq!(returned(&module, "m"), [false, false]);
+}

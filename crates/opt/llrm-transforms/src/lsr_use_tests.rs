@@ -650,3 +650,210 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
         assert_eq!(insns(1), insns(0) + 1);
     });
 }
+
+/// A target with `(An)` and `d16(An)`, and the hooks of LU16, LU17 and LU20.
+#[derive(Default)]
+struct Lu {
+    folds_offsets: bool,
+    step_multiplies: u32,
+    exit_bound_live: bool,
+}
+
+impl Tti for Lu {
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        self.exit_bound_live
+    }
+
+    fn unfolded_address_offsets_fold(&self) -> bool {
+        self.folds_offsets
+    }
+
+    fn lsr_written_step_multiplies(
+        &self,
+        _: i64,
+        _: u32,
+    ) -> u32 {
+        self.step_multiplies
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        _: CmpSel,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn memory_op_cost(
+        &self,
+        _: MemoryOp,
+        _: TtiTy,
+        _: CostKind,
+        _: bool,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> TtiCost {
+        if phi && kind != CostKind::RecipThroughput { TtiCost::FREE } else { TtiCost::BASIC }
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        _: ImmUser,
+        _: u32,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::FREE
+    }
+
+    fn is_truncate_free(
+        &self,
+        _: TtiTy,
+        _: TtiTy,
+    ) -> bool {
+        false
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        !base_gv && has_base_reg && scale == 0 && (0..=255).contains(&base_offset)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        _: ArithOp,
+        _: TtiTy,
+        _: CostKind,
+        _: OperandInfo,
+        _: OperandInfo,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn cast_cost(
+        &self,
+        _: CastKind,
+        _: TtiTy,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+}
+
+/// 54 stores `g[i][k]` kept 53 unfolded offsets, one base add each, and the
+/// loop kept its `__mulhi3` (rep_count, 6502 -O1): the pin rates an offset a
+/// target takes in the address itself as an add. Where the target says the
+/// offset folds later, an address use pays nothing for it; a basic use still
+/// does.
+#[test]
+fn an_unfolded_offset_of_an_address_is_no_add_where_the_target_folds_it_later() {
+    with_loop(|cx, se, _, _, header, ar| {
+        let f =
+            Formula { base_regs: vec![ar], has_base_reg: true, unfolded_offset: Immediate(53), ..Formula::default() };
+        let (folds, keeps) =
+            (Lu { folds_offsets: true, ..Lu::default() }, Lu { folds_offsets: false, ..Lu::default() });
+        let adds = |tti: &dyn Tti, kind, se: &mut ScalarEvolution| {
+            rated_by(tti, cx, se, header, &use_of(kind, &[0]), &f, &HashSet::default()).c.num_base_adds
+        };
+        assert_eq!(adds(&keeps, Kind::Address, se), 1, "the pin: an add");
+        assert_eq!(adds(&folds, Kind::Address, se), 0);
+        assert_eq!(adds(&folds, Kind::Basic, se), 1, "a basic use has no address to fold it into");
+    });
+}
+
+/// `memset(g[i], 0, 16)` over 54-byte rows: the baseline is one recurrence
+/// `{g,+,54}`, the written loop is a counter and a multiply per trip
+/// (`__mulhi3`), so the reduced loop looked dearer (3 instructions against 2)
+/// and was dropped. Only the loop as written pays, and only where no phi of the
+/// loop is that recurrence.
+#[test]
+fn the_loop_as_written_pays_for_the_multiply_that_forms_a_recurrence() {
+    with_loop(|cx, se, _, _, header, _| {
+        let ty = Ty::Int(32);
+        let (zero, step) = (se.get_constant_of_type(cx, ty, 0), se.get_constant_of_type(cx, ty, 54));
+        let row =
+            se.get_add_rec_expr(cx, vec![Operand32::of(zero), Operand32::of(step)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
+        let tti = Lu { step_multiplies: 1, ..Lu::default() };
+        let rate = |as_written: bool, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: false,
+                across_call: false,
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Address, &[0]), None);
+            cost.c.num_iv_muls
+        };
+        assert_eq!(rate(true, se), 1, "as written: a multiply");
+        assert_eq!(rate(false, se), 0, "a candidate's recurrence is a pointer that steps");
+    });
+}
+
+/// `for (i = 0; i != n; ++i)`: the exit test is the one recurrence `{-n,+,1}`
+/// against zero (the pin's `getUse`: `N - other`), so the baseline held one
+/// register where the loop as written holds two, `i` and `n`; every rewrite
+/// that keeps the bound in a register then looked one dearer and, tied on
+/// work, was dropped (known_loads_walks at 6502 -O1: 2441 B to 2570 B, the
+/// counter out of Y into a cell). Only the loop as written pays, and only for
+/// a bound that is not a constant.
+#[test]
+fn the_loop_as_written_keeps_the_exit_bound_live() {
+    with_loop(|cx, se, a, _, header, _| {
+        let ty = Ty::Int(32);
+        let one = se.get_constant_of_type(cx, ty, 1);
+        let counted = |se: &mut ScalarEvolution, start: Scev| {
+            se.get_add_rec_expr(cx, vec![Operand32::of(start), Operand32::of(one)], header, Flags::default()).scev
+        };
+        let (to_bound, to_const) = (counted(se, a), counted(se, one));
+        let regs = |as_written: bool, live: bool, reg: Scev, se: &mut ScalarEvolution| {
+            let tti = Lu { exit_bound_live: live, ..Lu::default() };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: false,
+                across_call: false,
+            };
+            let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };
+            let (mut cost, mut seen) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut seen, &HashSet::default(), &use_of(Kind::ICmpZero, &[0]), None);
+            cost.c.num_regs
+        };
+        assert_eq!(regs(true, true, to_bound, se), 2, "as written: the counter and the bound");
+        assert_eq!(regs(true, false, to_bound, se), 1, "the target does not ask");
+        assert_eq!(regs(false, true, to_bound, se), 1, "a candidate is what it says");
+        assert_eq!(regs(true, true, to_const, se), 1, "a constant bound is no register");
+    });
+}

@@ -29,4 +29,5 @@ pub mod pipeline;
 pub mod predicates;
 pub mod scaled;
 pub mod short;
+pub mod switchprice;
 pub mod widemul;

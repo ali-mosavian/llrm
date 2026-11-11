@@ -66,3 +66,68 @@ b0:
     assert!(after.contains("or i32 %x, -1"), "{after}");
     assert!(!after.contains("freeze"), "{after}");
 }
+
+/// `foldFreezeIntoRecurrence`: a freeze of the phi of `add nsw` recurrence
+/// from a constant was kept, and the `nsw` with it; the pin drops the flag
+/// and the freeze. `compare_to_int64` -O3 (m68k) kept `freeze i32 %iv` and
+/// the `nsw` on the outer induction step into the unroller: 171 instructions
+/// where the pin's IR folds to 7.
+#[test]
+fn a_freeze_of_a_recurrence_drops_the_flag_and_the_freeze() {
+    let after = combined(
+        "define i32 @f() {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ -1, %entry ], [ %n, %loop ]
+  %n = add nsw i32 %i, 1
+  %fr = freeze i32 %i
+  %c = icmp slt i32 %n, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 %fr
+}
+",
+    );
+    assert!(!after.contains("freeze"), "{after}");
+    assert!(!after.contains("add nsw"), "{after}");
+}
+
+/// A recurrence whose start may be poison keeps a freeze, on the start.
+#[test]
+fn a_freeze_of_a_recurrence_moves_to_the_start() {
+    let after = combined(
+        "define i32 @f(i32 %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ %s, %entry ], [ %n, %loop ]
+  %n = add nsw i32 %i, 1
+  %fr = freeze i32 %i
+  %c = icmp slt i32 %n, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 %fr
+}
+",
+    );
+    assert!(after.contains("freeze i32 %s"), "{after}");
+    assert!(!after.contains("freeze i32 %i"), "{after}");
+    assert!(!after.contains("add nsw"), "{after}");
+}
+
+/// `freezeOtherUses`: every use the freeze dominates reads the frozen value,
+/// so two reads of one possibly-poison value agree.
+#[test]
+fn the_other_uses_of_a_frozen_value_read_the_freeze() {
+    let after = combined(
+        "define i32 @f(i32 %a, i1 %p) {
+b0:
+  %fr = freeze i32 %a
+  %s = add i32 %a, %fr
+  ret i32 %s
+}
+",
+    );
+    assert!(after.contains("add i32 %fr, %fr"), "{after}");
+}

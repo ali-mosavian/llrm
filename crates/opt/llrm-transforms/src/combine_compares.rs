@@ -280,6 +280,12 @@ pub fn visit_icmp(
     if let Some(r) = fold_select_icmp(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
+    if let Some(r) = crate::combine_icmp_minmax::fold_icmp_with_min_max(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = crate::combine_icmp_minmax::fold_icmp_with_min_max(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
     if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
         return r;
     }
@@ -290,6 +296,9 @@ pub fn visit_icmp(
     // OWED: the other arms of foldICmpInstWithConstantNotInt, the rest of
     // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
     // the two-select fold.
+    if let Some(r) = fold_sub_add_pair(c, inst, pred, op0, op1) {
+        return r;
+    }
     if changed { Visit::Changed } else { Visit::None }
 }
 
@@ -912,14 +921,17 @@ fn canonicalize_cmp_with_constant(
     }
     let (bits, width) = constant(c, op1)?;
     let ty = c.type_of(op1);
+    let same_sign = c.function.instruction(inst).flags.contains(Flags::SAMESIGN);
     let flipped = {
         let q = query(c, None);
-        range::get_flipped_strictness_predicate_and_constant(&q, pred, false, SelectOperand::Int { ty, bits })
+        range::get_flipped_strictness_predicate_and_constant(&q, pred, same_sign, SelectOperand::Int { ty, bits })
     }?;
-    let (new_pred, _, SelectOperand::Int { bits: new_bits, .. }) = flipped else { return None };
+    let (new_pred, new_same_sign, SelectOperand::Int { bits: new_bits, .. }) = flipped else { return None };
     let _ = width;
     let new = c.int(ty, new_bits);
-    Some(new_icmp(c, inst, new_pred, op0, new))
+    let flags = if new_same_sign { Flags::SAMESIGN } else { Flags::default() };
+    let i1 = c.context.types.int(1);
+    Some(c.replace_with_new(inst, Opcode::ICmp(new_pred), i1, vec![op0, new], flags))
 }
 
 /// The bits `a pred b` compares: `ICmpInst::compare(KnownBits, KnownBits,
@@ -1006,14 +1018,36 @@ fn fold_icmp_using_known_bits(
     if changed {
         return Some(Visit::Changed);
     }
+    // If an unsigned samesign comparison is not poison, both operands have the
+    // same sign bit. Propagate a known sign bit between the temporary KnownBits
+    // values so the existing range folds can use that constraint.
+    let sign_bit = 1u128 << (width - 1);
+    let same_sign = c.function.instruction(inst).flags.contains(Flags::SAMESIGN);
+    if same_sign && !is_signed(pred) && !matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+        let propagate = |from: &KnownBits, to: &mut KnownBits| {
+            if (to.zero | to.one) & sign_bit != 0 {
+                return;
+            }
+            if from.one & sign_bit != 0 {
+                to.one |= sign_bit;
+            } else if from.zero & sign_bit != 0 {
+                to.zero |= sign_bit;
+            }
+        };
+        let (from0, from1) = (known0.clone(), known1.clone());
+        propagate(&from0, &mut known1);
+        propagate(&from1, &mut known0);
+    }
     let is_constant = |operand: Operand| matches!(operand, Operand::Constant(_));
+    let keep = if same_sign { Flags::SAMESIGN } else { Flags::default() };
+    let i1 = c.context.types.int(1);
     if !is_constant(op0) && known0.is_constant() {
         let value = c.int(ty, known0.constant_value());
-        return Some(new_icmp(c, inst, pred, value, op1));
+        return Some(c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![value, op1], keep));
     }
     if !is_constant(op1) && known1.is_constant() {
         let value = c.int(ty, known1.constant_value());
-        return Some(new_icmp(c, inst, pred, op0, value));
+        return Some(c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![op0, value], keep));
     }
     if let Some(res) = compare_known(pred, &known0, &known1) {
         let i1 = c.context.types.int(1);
@@ -1283,6 +1317,54 @@ fn fold_icmp_with_zero(
         }
     }
     None
+}
+
+/// `icmp slt (sub nsw x, y), (add nsw x, y)` is `icmp sgt y, 0`; likewise
+/// `ult` with `nuw`; `eq`/`ne` need `nuw` or `nsw` on each
+/// ([:8148](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L8148)).
+fn fold_sub_add_pair(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let (sub_first, y, flags) = {
+        let q = query(c, None);
+        let shape = |sub: Operand, add: Operand| {
+            let (a, b, sub_flags) = crate::combine_shared::binop(&q, sub, BinaryOp::Sub)?;
+            let (p, r, add_flags) = crate::combine_shared::binop(&q, add, BinaryOp::Add)?;
+            ((p, r) == (a, b) || (p, r) == (b, a)).then_some((b, (sub_flags, add_flags)))
+        };
+        match shape(op0, op1) {
+            Some((y, flags)) => (true, y, flags),
+            None => {
+                let (y, flags) = shape(op1, op0)?;
+                (false, y, flags)
+            }
+        }
+    };
+    // `m_c_ICmp` states the predicate with the sub on the left.
+    let matched = if sub_first { pred } else { pred.swapped() };
+    let (sub, add) = flags;
+    let both = |flag: Flags| sub.contains(flag) && add.contains(flag);
+    let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    let holds = if equality {
+        (sub.contains(Flags::NUW) || sub.contains(Flags::NSW)) && (add.contains(Flags::NUW) || add.contains(Flags::NSW))
+    } else if pred.is_signed() {
+        both(Flags::NSW)
+    } else {
+        both(Flags::NUW)
+    };
+    if !holds {
+        return None;
+    }
+    let ty = c.type_of(y);
+    let zero = c.int(ty, 0);
+    let i1 = c.context.types.int(1);
+    let keep =
+        if c.function.instruction(inst).flags.contains(Flags::SAMESIGN) { Flags::SAMESIGN } else { Flags::default() };
+    Some(c.replace_with_new(inst, Opcode::ICmp(matched.swapped()), i1, vec![y, zero], keep))
 }
 
 /// The two folds of a `umax` against its own complement in `visitICmpInst`

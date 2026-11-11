@@ -183,11 +183,31 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    let select = |name: &str, ilp: bool| {
+    let select_form = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
+        crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
+        crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+        one
+    };
+    // A form whose long adds became carry ops is also selected with them left to the generic expansion, kept on the
+    // selection (`Selection::generic`): the allocated function is the cheaper of the two (`compile::lines_of`).
+    // DEVIATE Z80-CARRY-PRICE (owner z80, exit 2026-11-24): the pin's `ExpandIntRes_ADDSUB` takes the carry ops
+    // whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties each sum to `hl`, which costs spills
+    // where several longs are live (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
+    let select = |name: &str, ilp: bool| {
+        crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
+        let mut one = select_form(name, ilp);
+        if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
+            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
+            let generic = select_form(name, ilp);
+            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
+            if let (Ok(one), Ok(generic)) = (&mut one, generic) {
+                one.generic = Some(Box::new(generic));
+            }
+        }
         one
     };
     // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
@@ -310,6 +330,8 @@ impl llrm_mir::target::Machine for Z80Machine {
         llrm_mir::target::Tuning {
             max_stores_per_memcpy: MEMCPY_STORES,
             max_stores_per_memcpy_opt_size: MEMCPY_STORES,
+            max_stores_per_memset: memset_stores(llrm_mir::target::Tuning::PIN.max_stores_per_memset),
+            max_stores_per_memset_opt_size: memset_stores(llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size),
             ..llrm_mir::target::Tuning::PIN
         }
     }
@@ -324,6 +346,19 @@ impl llrm_mir::target::Machine for Z80Machine {
 /// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word pairs, 72 B each. Exit: none; the number
 /// is the target's price, as m16's `Dos::tuning` is.
 const MEMCPY_STORES: usize = 1;
+
+/// `MaxStoresPerMemset` where the level allows no trade between bytes and clocks (-O1, -Os, -Oz): one store of the widest
+/// width, then the fill is an `ldir`. The pin's x86 limits (16 at speed, 8 at size) count 4-byte stores, which are two
+/// word stores of 3 B each through IX here: a 34 B zero fill was 102 B against an `ldir` fill of 13 B for 1.1% of its
+/// clocks (huffman_decode -O1 +70 B over the -Os form). Where bytes are priced at 3 T (-O2, -O3) the two forms are within
+/// the noise of that rate and the pin's limit stays.
+///
+/// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-24), as Z80-MEMCPY-LIMIT.
+const MEMSET_STORES: usize = 1;
+
+fn memset_stores(pin: usize) -> usize {
+    if crate::dagisel::pipeline::STRICT_LEVEL.with(std::cell::Cell::get) { MEMSET_STORES } else { pin }
+}
 
 thread_local! {
     /// Parses of a module's text for its source file since the last

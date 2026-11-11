@@ -70,7 +70,7 @@ emitted/nib-examples-basic-sortlib define internal cc 1005 i16 @abi.qb45.string_
 emitted/nib-examples-basic-sortlib define internal cc 1005 ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-basic-sortlib define cc 1000 void @SORTSCORES(ptr nocapture nofree readonly %0, ptr nocapture nofree readonly "llrm.reads"="0:2" "llrm.writes"="" %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(readwrite, inaccessiblemem: none) nounwind nofree nosync norecurse
 emitted/nib-examples-basic-sortlib define cc 1000 void @UPPER(ptr nocapture nofree readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" memory(readwrite, inaccessiblemem: none) nounwind nofree nosync norecurse
-emitted/nib-examples-basic-sortlib define cc 1000 ptr @AVERAGE(ptr nocapture nofree readonly %0, ptr nocapture nofree readonly "llrm.reads"="0:2" "llrm.writes"="" %1, ptr nofree writeonly %2) addrspace(1) "llrm-fp-eval"="x87-extended"
+emitted/nib-examples-basic-sortlib define cc 1000 ptr @AVERAGE(ptr nocapture nofree readonly %0, ptr nocapture nofree readonly "llrm.reads"="0:2" "llrm.writes"="" %1, ptr returned nofree writeonly %2) addrspace(1) "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-basic-sortlib define cc 1000 i16 @ROWTOTAL(ptr nocapture nofree readonly %0, ptr nocapture nofree readonly "llrm.reads"="0:2" "llrm.writes"="" %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(read, inaccessiblemem: none) nounwind nofree nosync norecurse
 emitted/nib-examples-basic-sortlib define cc 1000 ptr @INITIALS(ptr nocapture nofree readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-bigframe define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(inaccessiblemem: readwrite)
@@ -118,7 +118,7 @@ emitted/nib-examples-digits define internal cc 1005 i32 @first_even(ptr addrspac
 emitted/nib-examples-digits define internal cc 1005 void @report(ptr %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-digits define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-dot-dot define internal cc 1005 i32 @dot(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture "llrm.reads"="0:2,4:8" "llrm.writes"="" %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture "llrm.reads"="0:2,4:8" "llrm.writes"="" %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(read, inaccessiblemem: readwrite)
-emitted/nib-examples-easing define internal cc 1005 i16 @linear(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
+emitted/nib-examples-easing define internal cc 1005 i16 @linear(i16 returned %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-examples-easing define internal cc 1005 i16 @ease_in(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-examples-easing define internal cc 1005 i16 @ease_out(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-examples-easing define internal cc 1005 i16 @Slide.at(ptr addrspace(1) nonnull dereferenceable(6) readonly noalias nocapture "llrm.reads"="0:6" "llrm.writes"="" %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(argmem: read) willreturn nounwind nofree nosync norecurse
@@ -291,7 +291,7 @@ emitted/nib-examples-speaker define internal cc 1005 i8 @wait(i16 %0) addrspace(
 emitted/nib-examples-speaker define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-tally define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-examples-tally define internal cc 1005 i8 @i16.eq(i16 %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
-emitted/nib-examples-tally define internal cc 1005 i16 @i16.hash(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
+emitted/nib-examples-tally define internal cc 1005 i16 @i16.hash(i16 returned %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-examples-tally define internal cc 1005 i8 @Card.eq(ptr addrspace(1) nonnull dereferenceable(2) readonly noalias nocapture "llrm.reads"="0:2" "llrm.writes"="" %0, ptr addrspace(1) nonnull dereferenceable(2) readonly noalias nocapture "llrm.reads"="0:2" "llrm.writes"="" %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(argmem: read) willreturn nounwind nofree nosync norecurse
 emitted/nib-examples-tally define internal cc 1005 i8 @u8.eq(i8 %0, i8 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-examples-tally define internal cc 1005 i16 @Card.hash(ptr addrspace(1) nonnull dereferenceable(2) readonly noalias nocapture "llrm.reads"="0:2" "llrm.writes"="" %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(argmem: read) willreturn nounwind nofree nosync norecurse
@@ -432,7 +432,7 @@ emitted/nib-port-c0a583f56f-priced_unroll define internal cc 1005 i16 @main() ad
 emitted/nib-port-c10b6470a4-dictionary define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-port-c10b6470a4-dictionary define internal cc 1005 i16 @count() addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 emitted/nib-port-c10b6470a4-dictionary define internal cc 1005 i8 @i16.eq(i16 %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
-emitted/nib-port-c10b6470a4-dictionary define internal cc 1005 i16 @i16.hash(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
+emitted/nib-port-c10b6470a4-dictionary define internal cc 1005 i16 @i16.hash(i16 returned %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-port-c25dc48fc2-program define internal cc 1005 i16 @value() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-port-d87b415216-struct_values define internal cc 1005 i16 @calculate() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-port-dc2d8cd94c-program define internal cc 1005 i32 @value() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
@@ -477,7 +477,7 @@ emitted/nib-runtime define cc 1005 void @N$ECNV() addrspace(1) "llrm-fp-eval"="x
 emitted/nib-runtime define cc 1005 void @N$ESHF() addrspace(1) "llrm-fp-eval"="x87-extended"
 emitted/nib-runtime define cc 1005 void @N$EBND() addrspace(1) "llrm-fp-eval"="x87-extended"
 emitted/nib-runtime define cc 1005 void @N$EKEY() addrspace(1) "llrm-fp-eval"="x87-extended"
-emitted/nib-runtime define internal cc 1005 ptr @heap.header(ptr nofree readnone %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
+emitted/nib-runtime define internal cc 1005 ptr @heap.header(ptr returned nofree readnone %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-runtime define internal cc 1005 i16 @heap.block_size(ptr nofree readonly %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(read, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse
 emitted/nib-runtime define internal cc 1005 ptr @heap.next(ptr nofree readnone %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
 emitted/nib-runtime define internal cc 1005 ptr @heap.previous(ptr nofree readnone %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(none) willreturn nounwind nofree nosync norecurse
@@ -579,8 +579,8 @@ emitted/qb-bounds define cc 1000 void @RAISES() addrspace(1) noinline "llrm-fp-e
 emitted/qb-bounds define cc 1000 void @SHARED2() addrspace(1) noinline "llrm-fp-eval"="x87-extended" personality ptr addrspace(1) @llrm.qb.personality
 emitted/qb-bounds define internal i16 @__main$handler(i16 %0, i16 %1) addrspace(1) "llrm-fp-eval"="x87-extended" personality ptr addrspace(1) @llrm.qb.personality
 emitted/qb-byref2 define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended"
-emitted/qb-byref2 define cc 1000 ptr @"HALF!"(ptr dereferenceable(4) nocapture nofree readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr nofree writeonly initializes((0, 4)) %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
-emitted/qb-byref2 define cc 1000 ptr @"DOUBLED#"(ptr dereferenceable(8) nocapture nofree readonly "llrm.reads"="0:8" "llrm.writes"="" %0, ptr nofree writeonly initializes((0, 8)) %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
+emitted/qb-byref2 define cc 1000 ptr @"HALF!"(ptr dereferenceable(4) nocapture nofree readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr returned nofree writeonly initializes((0, 4)) %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
+emitted/qb-byref2 define cc 1000 ptr @"DOUBLED#"(ptr dereferenceable(8) nocapture nofree readonly "llrm.reads"="0:8" "llrm.writes"="" %0, ptr returned nofree writeonly initializes((0, 8)) %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
 emitted/qb-chain define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn
 emitted/qb-clear_stack define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn
 emitted/qb-clear_stack define cc 1000 void @DEEP(ptr dereferenceable(2) nocapture nofree readonly "llrm.reads"="0:2" "llrm.writes"="" %0) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: read) nounwind nofree nosync
@@ -832,7 +832,7 @@ optimized/nib-descriptors define cc 1005 range(i16 0, 2) i16 @main() addrspace(1
 optimized/nib-examples-attributes define cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended"
 optimized/nib-examples-basic-sortlib define cc 1000 void @SORTSCORES(ptr nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr nocapture readonly "llrm.reads"="0:2" "llrm.writes"="" %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(readwrite, inaccessiblemem: none) nounwind nofree nosync norecurse
 optimized/nib-examples-basic-sortlib define cc 1000 void @UPPER(ptr nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0) addrspace(1) "llrm-fp-eval"="x87-extended" memory(readwrite, inaccessiblemem: none) nounwind nofree nosync norecurse willreturn
-optimized/nib-examples-basic-sortlib define cc 1000 ptr @AVERAGE(ptr nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr nocapture readonly "llrm.reads"="0:2" "llrm.writes"="" %1, ptr writeonly nofree %2) addrspace(1) "llrm-fp-eval"="x87-extended"
+optimized/nib-examples-basic-sortlib define cc 1000 ptr @AVERAGE(ptr nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr nocapture readonly "llrm.reads"="0:2" "llrm.writes"="" %1, ptr writeonly returned nofree %2) addrspace(1) "llrm-fp-eval"="x87-extended"
 optimized/nib-examples-basic-sortlib define cc 1000 i16 @ROWTOTAL(ptr nocapture readonly "llrm.reads"="0:4,14:16,18:20" "llrm.writes"="" %0, ptr nocapture readonly "llrm.reads"="0:2" "llrm.writes"="" %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(read, inaccessiblemem: none) nounwind nofree nosync norecurse willreturn
 optimized/nib-examples-basic-sortlib define cc 1000 ptr @INITIALS(ptr nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0) addrspace(1) "llrm-fp-eval"="x87-extended"
 optimized/nib-examples-bigframe define cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(inaccessiblemem: readwrite)
@@ -988,8 +988,8 @@ optimized/qb-bounds define cc 1000 void @RAISES() addrspace(1) noinline "llrm-fp
 optimized/qb-bounds define cc 1000 void @SHARED2() addrspace(1) noinline "llrm-fp-eval"="x87-extended" personality ptr addrspace(1) @llrm.qb.personality
 optimized/qb-bounds define internal fastcc i16 @__main$handler(i16 %0) addrspace(1) "llrm-fp-eval"="x87-extended" personality ptr addrspace(1) @llrm.qb.personality
 optimized/qb-byref2 define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" norecurse
-optimized/qb-byref2 define cc 1000 ptr @"HALF!"(ptr dereferenceable(4) nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr writeonly initializes((0, 4)) nofree %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
-optimized/qb-byref2 define cc 1000 ptr @"DOUBLED#"(ptr dereferenceable(8) nocapture readonly "llrm.reads"="0:8" "llrm.writes"="" %0, ptr writeonly initializes((0, 8)) nofree %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
+optimized/qb-byref2 define cc 1000 ptr @"HALF!"(ptr dereferenceable(4) nocapture readonly "llrm.reads"="0:4" "llrm.writes"="" %0, ptr writeonly initializes((0, 4)) returned nofree %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
+optimized/qb-byref2 define cc 1000 ptr @"DOUBLED#"(ptr dereferenceable(8) nocapture readonly "llrm.reads"="0:8" "llrm.writes"="" %0, ptr writeonly initializes((0, 8)) returned nofree %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: readwrite) willreturn nounwind nofree nosync norecurse
 optimized/qb-chain define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn norecurse
 optimized/qb-clear_stack define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn
 optimized/qb-clear_stack define cc 1000 void @DEEP(ptr dereferenceable(2) nocapture readonly "llrm.reads"="0:2" "llrm.writes"="" %0) addrspace(1) "llrm-fp-eval"="x87-extended" memory(argmem: read) nounwind nofree nosync

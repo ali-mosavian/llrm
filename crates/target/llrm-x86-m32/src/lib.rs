@@ -74,8 +74,9 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
-/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-10
-/// evening; oversight 2026-11-08: a Pareto chain search, equal clocks and
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-24, re-dated
+/// 2026-11-11 from 2026-11-10; the O1 rule is strict per axis, so the exit is a priced choice that
+/// keeps the chain only where its clocks and bytes are both no worse; oversight 2026-11-08: a Pareto chain search, equal clocks and
 /// fewer bytes, replaces the fewest-clocks chain; per-site pricing stays
 /// unshipped, it moves no row). Open vs the byte bar: bintree +32, recpow +29,
 /// x_spill_store_order +54 B (also tail_calls_edges +32, stft_fixed +32,
@@ -115,10 +116,22 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // ROW M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz 84 -> 85 B (best 74),
         // an unrotated inner loop changes the outer loop's registers (cause card to the greedy owners).
         rotation_guard_must_fold_at_size: true,
+        // DEVIATE ROTATION-TRIAL (owner greedy-os-causes, exit 2026-12-05, with RS1): a counted loop
+        // RS1 rotates is also tried unrotated in a second compile, kept only if the object is
+        // smaller. Os, 98 cells, unrotated everywhere: 21 smaller (x_jpeg_fixed -213 B, x_radix -20,
+        // x_idioms -16, x_prefix -12), 64 larger (x_transpose +34, x_matmul_f +29, x_life +25).
+        rotation_trial_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
         unroll_never_grows_at_o1: true,
+        // DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05, with UNROLL-O1): a loop
+        // that rule refuses is unrolled by the pin's threshold (150 units,
+        // `UnrollThresholdDefault`) in a second compile, kept only if neither the bytes nor the
+        // executed work grow. x_life O1: the 3x3 nest unrolled is -15 B and -62% clk (the rolled
+        // nest spills); matmul O1 is +1601 B and stays rolled.
+        unroll_trial_at_o1: Some(150),
+        unroll_trial_nests_only: true,
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
@@ -134,16 +147,17 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
         lftr_any_stride: true,
-        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24, as m16): at the 486 and P5 rates a
-        // merged `a && b` is two `setcc`, a logic op, a `test` and a `jcc`, and byte registers
-        // are scarce; split, the second compare runs only if the first holds and the branch
-        // costs 1 clk not taken. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb; and;
-        // cmp 1; jne`.
-        split_merged_conditions: true,
+        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24): the pin's cost rule, with the price
+        // of a merged `a && b` it omits taken from the table: two `setcc`, a logic op and a
+        // `test`, less the branch saved. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb;
+        // and; cmp 1; jne`, 20% more clocks; a pair the DAG folds to one compare stays merged.
+        merged_condition_clocks: 2 * costs.set + 2 * costs.add - costs.branch,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
-        sdiv_pow2_stays_at_size: true,
+        sdiv_pow2_stays_at_size: false,
         push_imm_at_size: true,
+        // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): see `Tuning::merge_functions_at_size`.
+        merge_functions_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
@@ -161,7 +175,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50 packed ops) is vector-shaped: vector-deferred list.
         unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
-        inline_o1_unit_bytes_milli: 3500,
+        // DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner counts a callee in
+        // bytes of encoded code by instruction kind (`sizes`), not one unit an instruction scaled by
+        // a fitted 3.5. x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an estimated 82 B:
+        // +1533 B and +0.5 M clk.
+        inline_size_bytes: true,
+        inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: per_byte,
         sdiv_by_magnitude: true,
         call_sequence_fixed_clocks: costs.call + costs.return_,
@@ -181,6 +200,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
         // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
         keep_constant_arith_operands: true,
+        // DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): see `Tti::folds_phi_constant_chains`.
+        phi_constant_chains: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
             value: [2, 3, 5],
@@ -427,6 +448,11 @@ impl llrm_target::Target for M32 {
     ) -> Option<(RegId, RegId)> {
         let (push, pop) = convention.frame_slot_scratch.as_ref()?;
         Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
+    /// `GR32_NOSP`/`GR64_NOSP`'s caller-saved registers, in the pin's order.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        vec![RegId::EAX, RegId::ECX, RegId::EDX]
     }
 
     fn frame_wrap_split_size(&self) -> bool {
@@ -697,6 +723,14 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// #9101 narrowed every target's -O1 unroll trial to nests; only m32 was fit on that (a lone loop
+    /// paid in 1 of 46 programs), so m32 says so itself.
+    #[test]
+    fn test_the_o1_unroll_trial_takes_nests_only() {
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        assert!(tuning.unroll_trial_at_o1.is_some() && tuning.unroll_trial_nests_only);
+    }
+
     /// -O3 copied a recursion to depth 8 with the loop first, gcc's setting,
     /// while -O2 copies to depth 2 with the tree first. Over 12 recursion
     /// programs -O3 was bigger by 5556 B and ran 1.12 M more instructions than

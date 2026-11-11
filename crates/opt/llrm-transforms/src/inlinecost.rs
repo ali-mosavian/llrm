@@ -75,6 +75,9 @@
 //!   one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
 //!   The last call of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
+//! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
+//!   callee's instruction with the call site's constant arguments, not only
+//!   a GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot or a global the caller stored a constant to and
 //!   whose callee loads through that parameter, is inlined if the caller,
@@ -93,7 +96,8 @@
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
+//! - D10 (`-finline-recursive`; on by default at -O2 and -O3 where the target
+//!   states bounds (x86), `-fno-inline-recursive` turns it off): a callee that calls itself is
 //!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
 //!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
 //!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
@@ -201,6 +205,8 @@ pub struct InlineParams {
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
+    /// DEVIATE BFS-1 (owner x86-m16-b, exit: A/B, then land or drop): the cold-site test reads the frequency in which failure sinks carry no mass. Off: the pin's.
+    pub cold_site_ignores_sinks: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -234,6 +240,7 @@ impl InlineParams {
             recursive_callee_limit: i64::MAX,
             recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
+            cold_site_ignores_sinks: false,
             tti: Tti::Generic,
         }
     }
@@ -284,6 +291,8 @@ pub struct Site<'a> {
     pub caller_size: CallerSize,
     /// The site's block frequency over the caller's entry block's (D1).
     pub relative_frequency: Option<f64>,
+    /// [`Self::relative_frequency`] with failure sinks carrying no mass (BFS-1); read by the cold-site test when `InlineParams::cold_site_ignores_sinks`.
+    pub cold_frequency: Option<f64>,
     /// How often the caller runs per run of the program, from the calls to it
     /// up the call graph (read only where the target weighs it,
     /// `Tti::inline_o1_weighs_entry`); none: once.
@@ -1709,6 +1718,10 @@ impl<'a> Analyzer<'a> {
             let compares = 3 * clusters as i64 / 2 - 1;
             self.add_cost(compares * 2 * INSTR_COST);
         }
+        if let Some(tti) = self.site.tti {
+            let view = tti.inline_size_view();
+            self.size_units += view.as_deref().unwrap_or(tti).switch_code_size(clusters, table);
+        }
         false
     }
 
@@ -1778,6 +1791,8 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
+                self.size_units += self.code_size_of(inst);
+            } else if self.free_but_encoded(inst) {
                 self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
@@ -1853,7 +1868,9 @@ impl<'a> Analyzer<'a> {
                     .filter(|_| frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ));
                 if caller_size != CallerSize::OptSize && locally_hot.is_some() {
                     self.threshold = locally_hot.expect("some");
-                } else if frequency.is_some_and(|ratio| ratio < COLD_CALLSITE_REL_FREQ / 100.0) {
+                } else if (if self.params.cold_site_ignores_sinks { self.site.cold_frequency } else { frequency })
+                    .is_some_and(|ratio| ratio < COLD_CALLSITE_REL_FREQ / 100.0)
+                {
                     single_bb_percent = 0;
                     vector_percent = 0;
                     last_call_bonus = 0;
@@ -2035,22 +2052,74 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    /// Whether an instruction the analyzer prices at nothing still encodes
+    /// bytes in the spliced body. The pin counts phis, jumps, the first
+    /// return and free casts as free because they cost no work, not because
+    /// they vanish; only a folded result (a known constant, an SROA'd
+    /// address) vanishes. The byte view prices what stays.
+    fn free_but_encoded(&self, inst: InstId) -> bool {
+        let operation = self.callee.instruction(inst);
+        let stays = match &operation.opcode {
+            Opcode::Phi | Opcode::Cast(_) => true,
+            Opcode::Br => operation.operands.len() == 1,
+            Opcode::Ret => true,
+            _ => false,
+        };
+        stays
+            && self.measured()
+            && operation.result.is_none_or(|result| self.simplified.get(&result).is_none() && self.offsets.get(&result).is_none())
+    }
+
+    /// The target's byte view of the callee's code, for a speed caller only: a
+    /// size caller keeps the units its -Os bound was fitted in (DEVIATE
+    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14).
+    fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        let tti = self.site.tti?;
+        tti.inline_size_view().filter(|_| !tti.inline_size_view_is_measured() || self.site.caller_size == CallerSize::Speed)
+    }
+
+    /// Whether the size view is the measured one (`inline_size_view_is_measured`)
+    /// and serves this caller.
+    fn measured(&self) -> bool {
+        self.size_view().is_some() && self.site.tti.is_some_and(|tti| tti.inline_size_view_is_measured())
+    }
+
     fn code_size_of(
         &self,
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        let view = tti.inline_size_view();
-        llrm_mir::instructioncost::instruction_cost(
+        let view = self.size_view();
+        llrm_mir::instructioncost::instruction_cost_known(
             view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
             self.callee,
             inst,
+            &self.callee.instruction(inst).operands,
             llrm_mir::tti::CostKind::CodeSize,
+            &|operand| self.site_constant_info(operand),
         )
         .value
+    }
+
+    /// What a callee operand is at this site when the call's constant arguments
+    /// fix it (`SimplifiedValues`), for a size priced as the copy would be: a
+    /// shift by 5 is not a library call of a variable amount.
+    ///
+    /// DEVIATE SZ1-SITE (owner m68k-b, exit 2026-11-24): the pin prices only a GEP with
+    /// the site's constants (`isGEPFree`); the byte size view prices every instruction
+    /// the analysis could not fold. Exit: the pin's flat `InstrCost` there, or keep with
+    /// the measured numbers.
+    fn site_constant_info(
+        &self,
+        operand: Operand,
+    ) -> Option<llrm_mir::tti::OperandInfo> {
+        match self.constant(operand)? {
+            Simple::Int(width, bits) => Some(llrm_mir::tti::OperandInfo::constant(bits as i128, width)),
+            _ => None,
+        }
     }
 
     /// The target's code size of the call and the pushes of its arguments,
@@ -2061,7 +2130,7 @@ impl<'a> Analyzer<'a> {
         if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
             return sequence;
         }
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let size = llrm_mir::instructioncost::instruction_cost(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2072,7 +2141,8 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
-        (size * tti.call_code_size_percent() + 50) / 100 + self.byval_copy_size()
+        let percent = if self.measured() { view.as_deref().unwrap_or(tti).call_code_size_percent() } else { tti.call_code_size_percent() };
+        (size * percent + 50) / 100 + self.byval_copy_size()
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2186,7 +2256,7 @@ impl<'a> Analyzer<'a> {
     /// marker: any other use keeps the stores.
     fn folded_caller_stores(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let caller = self.site.caller;
         let mut total = 0;
         for root in self.enabled_sroa.iter() {
@@ -2265,7 +2335,7 @@ impl<'a> Analyzer<'a> {
             return None;
         }
         let tti = self.site.tti?;
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let caller = self.site.caller;
         let callee_id = llrm_mir::memory::callee(self.context, caller, call)?;
         let llrm_mir::module::GlobalKind::Function(callee) = &self.site.module.global(callee_id).kind else { return None };
@@ -2362,6 +2432,9 @@ impl<'a> Analyzer<'a> {
             self.threshold -= self.vector_bonus;
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
+        }
+        if llrm_support::debug::enabled("inline") {
+            eprintln!("inline:   size={} call={} k={} dies={}", self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls, self.site.callee_dies);
         }
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
@@ -2718,6 +2791,7 @@ pub fn shadow(
                     callee_linear_recursive: false,
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
+                    cold_frequency: caller.parent(inst).and_then(|block| cold_relative_to_entry(&frequencies, block)),
                     entry_weight: None,
                     planned: None,
                     // The shadow is the oracle's: opt without a triple prices
@@ -2829,6 +2903,13 @@ pub fn call_frequencies(
 
 /// `block`'s frequency over the entry's, as `isColdCallSite` and
 /// `getHotCallSiteThreshold` compare them; none where the entry's is 0.
+fn cold_relative_to_entry(
+    frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
+    block: BlockId,
+) -> Option<f64> {
+    (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.sink_free_relative_to_entry(block))
+}
+
 fn relative_to_entry(
     frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
     block: BlockId,
@@ -3219,6 +3300,7 @@ pub fn decide(
         callee_linear_recursive: context.linear_recursive.contains(&callee_id),
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),
+        cold_frequency: caller.parent(call).and_then(|block| cold_relative_to_entry(frequencies, block)),
         entry_weight: Some(&entry_weight),
         planned,
         tti: context.tti,
@@ -3232,6 +3314,30 @@ pub fn decide(
             describe(&cost),
             site.relative_frequency
         );
+        // The callee's whole body in the size view's units (bytes where the
+        // target has a byte view): what the estimate is checked against the
+        // callee's symbol size with.
+        if let Some(tti) = context.tti {
+            let view = tti.inline_size_view();
+            let bytes: i64 = callee
+                .layout()
+                .iter()
+                .flat_map(|&block| callee.iter_block(block))
+                .map(|inst| {
+                    llrm_mir::instructioncost::instruction_cost(
+                        view.as_deref().unwrap_or(tti),
+                        &module.context,
+                        layout,
+                        &module.globals,
+                        callee,
+                        inst,
+                        llrm_mir::tti::CostKind::CodeSize,
+                    )
+                    .value
+                })
+                .sum();
+            eprintln!("inline:   callee-size {} {bytes}", callee_global.name.as_deref().unwrap_or("?"));
+        }
     }
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.

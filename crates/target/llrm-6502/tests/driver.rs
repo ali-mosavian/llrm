@@ -1741,6 +1741,87 @@ define i8 @sub_overflow() {
     assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
 }
 
+/// A 64-bit multiply stays inline on the 6502: it names no size routine for the
+/// product (DEVIATE in `expand_mul`, exit when the call is measured), so
+/// `release/next` makes no `__muldi3` call. #6858 asserted the call and went red
+/// there. The routine in the module is the shift-and-add loop a C library would
+/// hold, and must stay uncalled; the inline path is `__mulsi3` calls.
+#[test]
+fn a_64_bit_multiply_stays_inline_until_the_call_is_measured() {
+    let ir = module(
+        r#"@a = internal global i64 4294967299
+@b = internal global i64 4294967297
+define i64 @__muldi3(i64 %a, i64 %b) {
+entry:
+  br label %loop
+loop:
+  %acc = phi i64 [ 0, %entry ], [ %acc2, %loop ]
+  %x = phi i64 [ %a, %entry ], [ %x2, %loop ]
+  %y = phi i64 [ %b, %entry ], [ %y2, %loop ]
+  %bit = and i64 %y, 1
+  %mask = sub i64 0, %bit
+  %add = and i64 %x, %mask
+  %acc2 = add i64 %acc, %add
+  %x2 = shl i64 %x, 1
+  %y2 = lshr i64 %y, 1
+  %done = icmp eq i64 %y2, 0
+  br i1 %done, label %out, label %loop
+out:
+  ret i64 %acc2
+}
+define i8 @probe() {
+  %x = load volatile i64, ptr @a
+  %y = load volatile i64, ptr @b
+  %p = mul i64 %x, %y
+  %h = lshr i64 %p, 32
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("jsr __muldi3"), "the product called the routine:\n{text}");
+    assert!(text.contains("jsr __mulsi3"), "the product was not expanded through 32-bit multiplies:\n{text}");
+}
+
+/// A variable `i64` shift is a call to libgcc's `__ashldi3 (u64, int)`. The
+/// hook that makes the call was missing: `u64.c` (`shl`, `mul`) was refused
+/// ("no library call"), so no program shifting or multiplying a `long long`
+/// compiled. The routine here is the loop a C library would hold; the call
+/// passes the value as four words and the count as a word, and `3 << 37 >> 32`
+/// is 96.
+#[test]
+fn a_variable_i64_shift_calls_the_library_routine() {
+    let ir = module(
+        r#"@k = internal global i8 37
+define i64 @__ashldi3(i64 %a, i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %loop
+loop:
+  %x = phi i64 [ %a, %entry ], [ %y, %loop ]
+  %i = phi i16 [ %n, %entry ], [ %j, %loop ]
+  %y = shl i64 %x, 1
+  %j = sub i16 %i, 1
+  %c = icmp eq i16 %j, 0
+  br i1 %c, label %done, label %loop
+done:
+  %r = phi i64 [ %a, %entry ], [ %y, %loop ]
+  ret i64 %r
+}
+define i8 @probe() {
+  %k = load volatile i8, ptr @k
+  %n = zext i8 %k to i64
+  %v = shl i64 3, %n
+  %h = lshr i64 %v, 32
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("jsr __ashldi3"), "no call:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 96, "{text}");
+}
+
 /// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`) failed
 /// to compile for the 6502 ("CtLzZeroPoison ... convert node to libcall"): any C
 /// program using them was lost. `check` counts the results that are wrong for
@@ -2526,6 +2607,40 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
         let text = assembly(&ir, &Request::new(level)).unwrap();
         assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
     }
+}
+
+/// A long multiply in a 200 trip loop called the compact `__mulsi3` (32 bits
+/// of multiplier a call): mul_constants 20.7M clocks against 16.8M, and
+/// overflow_builtins 720k against 426k with `__mulsi3_fast`. A module links
+/// the speed routine where its multiply sites count three runs
+/// (`hotmultiply`): a loop, or a function called from one; -Os never does.
+#[test]
+fn a_long_multiply_in_a_loop_calls_the_fast_routine_at_speed() {
+    let looped = module(
+        "define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = mul i32 %s, 1664525\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr __mulsi3_fast\n"), "a loop at -O2:\n{text}");
+    let small = assembly(&looped, &Request::new(Level::Os)).unwrap();
+    assert!(small.contains("__mulsi3") && !small.contains("_fast"), "a loop at -Os:\n{small}");
+}
+
+/// `__builtin_mul_overflow` in a loop is `llvm.umul.with.overflow.i32`, no `mul`:
+/// the site count saw no multiply and overflow_builtins kept the compact routine
+/// (720k clocks against 426k).
+#[test]
+fn a_long_multiply_with_overflow_in_a_loop_calls_the_fast_routine_at_speed() {
+    let looped = module(
+        "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)\n\
+         define i32 @f(i32 %a, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %p = call {i32, i1} @llvm.umul.with.overflow.i32(i32 %s, i32 1664525)\n  \
+         %r = extractvalue {i32, i1} %p, 0\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&looped, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr __mulsi3_fast\n"), "{text}");
 }
 
 /// LSR left every 16- and 32-bit induction variable of the 6502 alone (its

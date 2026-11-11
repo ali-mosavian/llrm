@@ -498,8 +498,16 @@ pub fn compiled_dumping(
     // The soft-float routines are C compiled under the program's own
     // convention, not the Watcom library's.
     options.libcalls.extend(soft_float_calls(default, format.name()));
-    Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+    let objects = bound.target.objects();
+    let bytes = |built: &masm::Module| {
+        objbuild::written_in(built, name, layout_of(flags, format), format, objects).ok().map(|object| object.len() as i64)
+    };
+    let unpadded = |built: &masm::Module| {
+        objbuild::unpadded_bytes(built, name, layout_of(flags, format), format, objects).ok()
+    };
+    Ok((llrm_codegen::driver::trial::compiled_module_trying(module, name, &options, &bytes, &unpadded)?, format))
 }
+
 
 /// The C library's rounding routines, in the convention and spelling a call
 /// the source declared would have: what `llvm.floor` and its family become

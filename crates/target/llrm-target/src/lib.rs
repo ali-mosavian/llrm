@@ -16,6 +16,7 @@ pub mod pressure;
 pub mod registers;
 pub mod routines;
 pub mod runtime;
+pub mod schedule;
 pub mod timings;
 pub mod tune;
 pub mod testing;
@@ -205,7 +206,19 @@ pub fn described_with(
     tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
     lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
 ) -> Rc<dyn llrm_mir::target::Machine> {
+    described_throughput(prices, sizes, tti, lowering, None)
+}
+
+/// `described_with`, and the target's throughput model (`Machine::throughput`).
+pub fn described_throughput(
+    prices: &CpuPrices,
+    sizes: Option<OperationCosts>,
+    tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
+    throughput: Option<llrm_mir::target::Throughput>,
+) -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Described {
+        throughput,
         tti,
         lowering,
         registers: prices.registers,
@@ -230,6 +243,7 @@ pub fn described_with(
 }
 
 struct Described {
+    throughput: Option<llrm_mir::target::Throughput>,
     tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
     lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
     registers: i64,
@@ -246,6 +260,10 @@ struct Described {
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn throughput(&self) -> Option<&llrm_mir::target::Throughput> {
+        self.throughput.as_ref()
+    }
+
     /// The platform's table: a port it does not list may reach any memory.
     fn port_touches_memory(
         &self,
@@ -629,6 +647,13 @@ pub trait Target {
         x86_cheap_move_immediate
     }
 
+    /// Whether `MachineLICM` refuses a hoist by the register pressure of the
+    /// loop (the pin's `CanCauseHighRegPressure`); false: by the count of
+    /// values the loop names against the registers (the rule before it).
+    fn hoist_by_pressure(&self) -> bool {
+        true
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
@@ -945,6 +970,7 @@ pub trait Target {
             vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
+            object_align: self.stack_alignment(),
             optional: self.frame_optional(),
             saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
@@ -992,6 +1018,14 @@ pub trait Target {
         None
     }
 
+    /// The registers a one-slot frame's `pop` may take, first choice first
+    /// (`X86RegisterInfo::findDeadCallerSavedReg` walks `GR32_NOSP`): the first
+    /// that no return takes a result in and the function does not save. Empty
+    /// where the target keeps the pair its convention declares.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        Vec::new()
+    }
+
     /// `frame_slot_scratch` for a function of `convention`, where the target's
     /// frames differ by convention (m32's DOS ones keep Watcom's layout).
     fn frame_slot_scratch_of(
@@ -1036,6 +1070,9 @@ pub struct FrameRegisters {
     /// assumes it (its frame cells then sit on their alignments): a slot's
     /// worth where the target says no more.
     pub align: i64,
+    /// The most an object of the frame is aligned to: `align`, but for a
+    /// convention that keeps the stack wider than the target's objects need.
+    pub object_align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
     /// The registers are pushed before the locals' space even where nothing is

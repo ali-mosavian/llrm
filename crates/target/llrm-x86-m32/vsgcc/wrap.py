@@ -6,10 +6,21 @@ front end (Watcom's) does not take it.
 """
 import re
 import sys
+from pathlib import Path
+
+SHIM = Path(__file__).resolve().parent / "bench_io_shim.h"
+IO_INCLUDE = re.compile(r'^#include\s+"\.\./bench_io\.h"[^\n]*$', re.M)
+
+
+def with_file_api(source: str) -> str:
+    """bench_io.h is Watcom's file API (llrm_os.h) or DOS's <io.h>: gcc and clang get neither, so every compiler's copy
+    takes the same plain external calls (bench_io_shim.h) in its place."""
+    return IO_INCLUDE.sub(lambda _: SHIM.read_text().rstrip(), source)
 
 
 def wrapped(program: str, source: str) -> str:
     kernel = f"bench_{program}"
+    source = with_file_api(source)
     if program.startswith("run_"):
         return wrapped_run(program, source)
     definition = re.search(rf"^([a-z][a-z ]*[ *])({kernel})\(([^)]*)\)", source, re.M)

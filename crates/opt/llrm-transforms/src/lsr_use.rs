@@ -666,6 +666,16 @@ impl Cost {
             && parts >= 2
             && r.tti.address_form_adds_offsets(narrowest_bits(r, lu, f))
             && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
+        // DEVIATE LU16: where the target says so, the unfolded offset of an
+        // address use that the target takes beside its one base register
+        // (no scale) is the address's own immediate once the offset is folded
+        // after this pass: no add.
+        let absorbed = absorbed
+            || (f.unfolded_offset.is_non_zero()
+                && lu.kind == Kind::Address
+                && f.scale == 0
+                && r.tti.unfolded_address_offsets_fold()
+                && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, 0));
         if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
         }
@@ -863,6 +873,27 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            // DEVIATE LU17: the loop as written forms an addrec that is no phi
+            // by multiplying a counter; the target says what that costs.
+            if r.as_written
+                && !is_existing_phi(r.se, r.cx, reg)
+                && let Some((_, step, _)) = r.se.match_affine_add_rec(reg)
+                && let Some(c) = r.se.as_constant(step)
+            {
+                let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+                self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
+            }
+            // DEVIATE LU20: the loop as written keeps the bound of its exit
+            // test next to the counter; the folded `{-bound,+,1}` counts one.
+            if r.as_written
+                && lu.kind == Kind::ICmpZero
+                && r.tti.lsr_written_exit_bound_is_live()
+                && let Some((start, _, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+            {
+                self.c.num_regs += 1;
+            }
             if loop_cost > 0 && self.size && r.tti.lsr_size_order() {
                 self.size_bytes += 3;
             }

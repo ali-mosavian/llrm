@@ -2,7 +2,7 @@
 	.module umulhisi3
 	.area _CODE
 
-; hl * de -> de:hl, the full 32-bit product of two 16-bit values (de low word, hl high word, as a long result): one multiplier bit per step.
+; hl * de -> de:hl, the full 32-bit product of two 16-bit values (hl low word, de high word, as a long result): one multiplier bit per step.
 ; The 32x32 -> 64 of the soft-float library is four of these; __mulsi3 would compute two cross terms against zero.
 	.globl __umulhisi3
 __umulhisi3:
@@ -19,5 +19,4 @@ __umulhisi3:
 	inc	de
 2$:	dec	a
 	jr	nz,1$
-	ex	de,hl
 	ret

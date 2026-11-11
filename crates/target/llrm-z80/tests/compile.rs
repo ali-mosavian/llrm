@@ -1837,6 +1837,21 @@ fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
     }
 }
 
+/// The pair a divide routine leaves (quotient in `de`, remainder in `hl`) is the registers of a long result, so
+/// its low word, the first part, is the one in `hl`. The lowering took the quotient as the first part: with a long
+/// result low in `hl`, div_constants_short returned 17761 where 0 was expected.
+#[test]
+fn a_word_divide_and_remainder_call_hands_back_the_quotient_from_de() {
+    for (op, rem, call) in [("udiv", "urem", "call __udivhi3"), ("sdiv", "srem", "call __divremhi4")] {
+        let ir = format!(
+            "@g = global i16 0\ndefine i16 @f(i16 %a, i16 %b) {{\n  %q = {op} i16 %a, %b\n  %r = {rem} i16 %a, %b\n  store i16 %r, ptr @g\n  ret i16 %q\n}}"
+        );
+        let out = compiled(&ir, "f");
+        let after = out.split(call).nth(1).unwrap_or_else(|| panic!("{call}: {out}"));
+        assert!(!after.contains("ex de, hl") && !after.contains("ld e, l"), "{op}: the quotient moved out of de: {out}");
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
@@ -1979,6 +1994,21 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
     );
 }
 
+/// The product of two zero-extended words was a full `__mulsi3` at -Os (15 B,
+/// 32 steps). In a function tuned for size it is one call of `__umulhisi3`,
+/// the 16 x 16 -> 32 routine; at -O2 the partial products stay.
+#[test]
+fn the_product_of_two_extended_words_is_one_widening_multiply() {
+    let ir = "define i32 @product(i16 %a, i16 %b) {\n  %x = zext i16 %a to i32\n  %y = zext i16 %b to i32\n  %r = mul i32 %x, %y\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    for level in [Level::Os, Level::Oz] {
+        let out = text(&ir, "product", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+        assert!(out.contains("__umulhisi3") && !out.contains("__mulsi3") && !out.contains("__mulhi3"), "{out}");
+        assert!(instructions <= 8, "{instructions}\n{out}");
+    }
+}
+
 /// The shift routines of the z80 (`__ashlsi3` and the others) read their count
 /// from `a`, one byte; the pin makes a library shift's amount the C `int`, so
 /// the shared legalizer's default would hand them a word in `bc` and every
@@ -2021,9 +2051,10 @@ fn a_slot_that_is_a_stack_is_not_refused() {
 
 /// copy_runs and loop_versioning at -Os gave wrong sums (164226 for 929463):
 /// `sum` kept its loop count in a byte slot stored from `e` and reloaded into
-/// `d`, and `push de` / `pop de` restores `e` into `e`. A byte slot whose
-/// stores and loads use different halves of a pair stays in the frame; a word
-/// may come back in another pair.
+/// `d`, and `push de` / `pop de` restores `e` into `e`. `sum` has stores from
+/// both halves of a pair: such a byte slot stays in the frame (a load into the
+/// other half than the one stored from is a pop and a copy,
+/// `tests/stack_slots.rs`); a word may come back in another pair.
 #[test]
 fn a_byte_stored_from_one_half_of_a_pair_and_loaded_into_the_other_stays_in_the_frame() {
     let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
@@ -2363,6 +2394,7 @@ fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
     let ir = include_str!("kernels/ir/long_compare_folded_borrow.ll");
     for level in [Level::O1, Level::O2, Level::Os] {
         let out = text(ir, "sign_branch", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(out.contains("bit 7, d"), "{level:?}: {out}");
+        // the register is the convention's business (the high word of `a` is on the stack, loaded into bc)
+        assert!(out.contains("bit 7, ") && !out.contains("sbc"), "{level:?}: {out}");
     }
 }

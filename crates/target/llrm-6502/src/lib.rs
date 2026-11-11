@@ -11,6 +11,8 @@ pub mod elf;
 pub mod emit;
 pub mod frame;
 pub mod hotdivision;
+pub mod hotmultiply;
+pub mod ir_lowering;
 pub mod mulimage;
 pub mod opcosts;
 pub mod peephole;

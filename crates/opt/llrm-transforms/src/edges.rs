@@ -252,6 +252,46 @@ pub fn split_edge(
     bridge
 }
 
+/// `SplitBlockAndInsertIfThen(Cond, SplitBefore, false)`
+/// ([BasicBlockUtils.cpp:1788](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1788)):
+/// the block of `split_before` ends in a branch on `cond` to a new block
+/// that jumps to the rest, from `split_before` on. The new block and the
+/// rest.
+pub fn split_block_and_insert_if_then(
+    function: &mut Function,
+    cond: Operand,
+    split_before: InstId,
+) -> (BlockId, BlockId) {
+    let head = function.parent(split_before).expect("a placed instruction");
+    let run: Vec<InstId> = function.iter_from(split_before).collect();
+    let void = function.instruction(*run.last().expect("a terminator")).ty;
+    let tail = function.create_block(None);
+    function.insert_block(tail, Some(head)).expect("a new block");
+    function.splice(&run, Position::End(tail)).expect("a placed run");
+    for succ in function.successors(tail).into_iter().collect::<Vec<_>>() {
+        for phi in phis(function, succ) {
+            let incoming: Vec<_> = arms(function, phi)
+                .into_iter()
+                .map(|(value, from)| (value, if from == head { tail } else { from }))
+                .collect();
+            function.set_operands(phi, from_arms(&incoming));
+        }
+    }
+    let then_bb = function.create_block(None);
+    function.insert_block(then_bb, Some(head)).expect("a new block");
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+    function.insert(jump, Position::End(then_bb)).expect("a placed block");
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![cond, Operand::Block(then_bb), Operand::Block(tail)],
+        Flags::default(),
+        None,
+    );
+    function.insert(branch, Position::End(head)).expect("a placed block");
+    (then_bb, tail)
+}
+
 /// `SplitBlock(old, old->begin())`
 /// ([BasicBlockUtils.cpp:1079](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1079)):
 /// the instructions of `old` after its phis move to a new block, `old` jumps
