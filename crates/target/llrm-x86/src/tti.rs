@@ -721,6 +721,10 @@ impl Tti for X86 {
         self.tuning.unroll_prices_nest
     }
 
+    fn folds_phi_constant_chains(&self) -> bool {
+        self.tuning.phi_constant_chains
+    }
+
     fn unroll_never_grows_at_o1(&self) -> bool {
         self.tuning.unroll_never_grows_at_o1
     }

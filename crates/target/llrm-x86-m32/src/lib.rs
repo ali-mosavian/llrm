@@ -194,6 +194,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
         // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
         keep_constant_arith_operands: true,
+        // DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): see `Tti::folds_phi_constant_chains`.
+        phi_constant_chains: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
             value: [2, 3, 5],

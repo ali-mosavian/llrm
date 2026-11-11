@@ -908,6 +908,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): a phi of constants is
+    /// folded into the users that fold, in a loop, and through a phi of
+    /// constants behind a diamond. A move per edge the fold adds is paid by
+    /// the operation it removes, which pays only where a byte is cheap against
+    /// a clock: x86 m32 (x_cordic -O3 -800 clk); m16 grew 5 to 11 B (rate 2 B
+    /// a clock).
+    fn folds_phi_constant_chains(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.

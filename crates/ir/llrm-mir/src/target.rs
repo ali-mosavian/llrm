@@ -394,6 +394,8 @@ pub struct Tuning {
     pub unroll_milliclocks_per_byte: i64,
     /// DEVIATE UP1-NEST (`Tti::unroll_prices_nest_loops_without_outer_counter`).
     pub unroll_prices_nest: bool,
+    /// DEVIATE PHICONST-2 (`Tti::folds_phi_constant_chains`).
+    pub phi_constant_chains: bool,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
@@ -535,6 +537,7 @@ impl Tuning {
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,
+        phi_constant_chains: false,
         sink_select_arms: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
