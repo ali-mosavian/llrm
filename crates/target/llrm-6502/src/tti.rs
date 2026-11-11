@@ -478,6 +478,10 @@ impl Tti for Mos6502 {
         let (to, from) = (self.parts(dst), self.parts(src));
         match op {
             CastKind::Trunc | CastKind::BitCast => Cost::FREE,
+            // llvm-mos: `isZExtFree` holds for every widening of an integer (MOSISelLowering.cpp), so
+            // `BasicTTIImplBase::getCastInstrCost` prices it 0 in every cost kind the passes ask for but the
+            // bytes: each widened byte is a `lda #0; sta`, which the size models count.
+            CastKind::ZExt if !matches!(kind, CostKind::CodeSize) => Cost::FREE,
             // `lda #0; sta` a new byte; the sign byte is a branch and a fill
             CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr => {
                 self.code(kind, (to - from).max(0), || 4 * (to - from).max(0))
