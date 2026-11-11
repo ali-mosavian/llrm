@@ -402,7 +402,7 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
-            options.inline.recursive = true;
+            options.inline.recursive = Some(true);
             crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
@@ -438,7 +438,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: Some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut analyses)?;
@@ -447,7 +447,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     speed_rate: true,
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
-                    flag: true,
+                    flag: Some(true),
                     o3: false,
                     inlining: true,
                 };
@@ -503,7 +503,7 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: Some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut analyses).expect("the walk runs");
@@ -654,7 +654,7 @@ b0:
                 promote_rate: None,
                 rerun_unchanged: true,
                 speed_rate: true,
-                inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                inline: crate::inline::Threshold { recursive: Some(true), ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
             };
             walk.run(program, &mut Default::default())
@@ -877,7 +877,7 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: recursive.then_some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut Default::default())
@@ -980,7 +980,7 @@ b0:
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: recursive.then_some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut Default::default())
@@ -1134,7 +1134,7 @@ fn walked_top_with(
                 promote_rate: None,
                 rerun_unchanged: true,
                 speed_rate: true,
-                inline: crate::inline::Threshold { recursive, ..Default::default() },
+                inline: crate::inline::Threshold { recursive: recursive.then_some(true), ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
             };
             walk.run(program, &mut Default::default())
@@ -2537,7 +2537,7 @@ fn calls_of_copying(
 #[test]
 fn test_the_real_mode_target_copies_no_tree_recursion_by_default() {
     assert!(calls_of_tree(0, false) <= 3, "copies of a tree recursion in itself: {}", calls_of_tree(0, false));
-    let flagged = crate::inline::Threshold { recursive: true, ..crate::inline::Threshold::default() };
+    let flagged = crate::inline::Threshold { recursive: Some(true), ..crate::inline::Threshold::default() };
     assert!(calls_of_tree_with(0, false, flagged) > 3, "control: the flag copies it");
 }
 
@@ -2727,7 +2727,7 @@ fn calls_left_in(source: &llrm_mir::module::Module) -> usize {
         std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
-            options.inline.recursive = true;
+            options.inline.recursive = Some(true);
             crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
@@ -2897,7 +2897,7 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
-            options.inline.recursive = false;
+            options.inline.recursive = None;
             crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
@@ -2937,6 +2937,24 @@ fn m32_tree_calls(
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
     assert_eq!(calls, 6, "-O2 left {calls} calls of fib");
+}
+
+/// `-fno-inline-recursive` copied nothing on x86-m32 and changed no byte: the
+/// target states bounds, so `Recursion::of` took them whatever the flag said
+/// (fib -O2: the 6 calls of the default stood with the flag off, AM-8's D10-off
+/// A/B had no switch). Off leaves the calls the pin's inliner leaves; the
+/// default and `-finline-recursive` still copy.
+#[test]
+fn test_no_inline_recursive_copies_no_recursion_where_the_target_copies_by_default() {
+    let with = |flag: Option<bool>| {
+        let mut options = crate::pipeline::Options::default();
+        options.inline.recursive = flag;
+        m32_fib_calls(options)
+    };
+    assert_eq!(with(None), 6, "the default copies");
+    assert_eq!(with(Some(true)), 6, "-finline-recursive is unchanged where the target copies");
+    let off = with(Some(false));
+    assert!(off < 6, "-fno-inline-recursive left {off} calls of fib, the default's 6");
 }
 
 /// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's

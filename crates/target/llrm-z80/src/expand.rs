@@ -689,6 +689,21 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
                 self.restore_pointer(rest);
             }
+            // the pointer comes back stepped past the word (`post_update`): the data pair is BC or DE
+            "LD16rm_pi" => {
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                self.push(format!("ld {}, (hl)", name(lo)));
+                self.push("inc hl");
+                self.push(format!("ld {}, (hl)", name(hi)));
+                self.push("inc hl");
+            }
+            "LD16mr_pi" => {
+                let (lo, hi) = lanes(self.register(inst, 1)?)?;
+                self.push(format!("ld (hl), {}", name(lo)));
+                self.push("inc hl");
+                self.push(format!("ld (hl), {}", name(hi)));
+                self.push("inc hl");
+            }
             "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
                 self.push(format!("ld {to}, ({at})"));
