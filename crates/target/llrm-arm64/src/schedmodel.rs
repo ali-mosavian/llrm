@@ -505,19 +505,20 @@ mod tests {
     }
 
     /// With the vector types live the generated tables dropped `FMOVWSr` (a
-    /// scalar float bitcast, `fmov w, s`) and gave `MOVIv2d_ns` a class: with
+    /// scalar float bitcast, `fmov w, s`) and gave `MVNIv2i32` a class: with
     /// the vectors off the first was priced by default and the second by its
     /// row, and `sfm16_float` scheduled its `fmov` after the `fcmp` (8 of 188
-    /// objects differed from release/next). The bitcast keeps its class; the
-    /// vector `movi` has none until the vectors are on.
+    /// objects differed from release/next). The bitcast keeps its class; an
+    /// opcode only the vectors reach has none until they are on (`MOVIv2d_ns`
+    /// is hand-selected too, so the model always priced it).
     #[test]
     fn a_scalar_bitcast_has_a_class_and_a_vector_movi_has_none_with_the_vectors_off() {
         assert!(!crate::machine::vectors_enabled(), "the test runs with LLRM_ARM64_VECTORS unset");
         let model = Arm64Model::generic();
         let bitcast = Arc::new(form("FMOVWSr", vec![held(2)]));
         assert_ne!(model.def_latency(&bitcast), default_def_latency(&bitcast, 3), "FMOVWSr is priced by its row");
-        let movi = Arc::new(form("MOVIv2d_ns", vec![imm(0)]));
-        assert_eq!(model.def_latency(&movi), default_def_latency(&movi, 3), "MOVIv2d_ns is unmodeled");
+        let mvni = Arc::new(form("MVNIv2i32", vec![imm(0), imm(0)]));
+        assert_eq!(model.def_latency(&mvni), default_def_latency(&mvni, 3), "MVNIv2i32 is unmodeled");
     }
 
     /// AArch64 schedules from both ends and keeps the latency heuristic on

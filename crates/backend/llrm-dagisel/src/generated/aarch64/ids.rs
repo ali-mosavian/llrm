@@ -3382,6 +3382,8 @@ pub mod opcode {
     pub const LDRBBroW: u16 = 5152;
     pub const LDRBBroX: u16 = 5153;
     pub const LDRBBui: u16 = 5154;
+    pub const LDRBpost: u16 = 5155;
+    pub const LDRBpre: u16 = 5156;
     pub const LDRBroW: u16 = 5157;
     pub const LDRBroX: u16 = 5158;
     pub const LDRBui: u16 = 5159;
