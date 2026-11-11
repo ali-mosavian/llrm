@@ -192,7 +192,7 @@ fn objects_of(
 }
 
 /// The intrinsic a call names.
-fn callee_intrinsic(
+pub(crate) fn callee_intrinsic(
     module: &Module,
     function: &llrm_mir::module::Function,
     inst: InstId,

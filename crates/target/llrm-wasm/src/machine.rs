@@ -228,6 +228,11 @@ impl Tti for Wasm {
         true
     }
 
+    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an 8-bit access).
+    fn selects_odd_sized_integers(&self) -> bool {
+        true
+    }
+
     /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
     fn folds_select_to_cmp(&self) -> bool {
         true

@@ -1278,6 +1278,16 @@ impl Tti for X86 {
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
     }
 
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, .. } = self.tuning;
+        // a shift-and-add chain is a shift and an add for each term past the first
+        let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
+        multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
+    }
+
     fn splits_merged_conditions(&self) -> bool {
         self.tuning.split_merged_conditions
     }
@@ -1903,4 +1913,19 @@ impl Tti for X86 {
         }
         generic_arithmetic(op, ty, kind, first, second, self)
     }
+}
+
+/// The nonzero digits of `n` in signed-digit (non-adjacent) form: a multiply by
+/// `n` is that many shifted terms added or subtracted.
+fn signed_digits(n: u128) -> u32 {
+    let (mut n, mut count) = (n, 0);
+    while n > 0 {
+        if n & 1 == 1 {
+            // 1 mod 4 takes the digit +1, 3 mod 4 takes -1
+            n = if n & 3 == 1 { n - 1 } else { n + 1 };
+            count += 1;
+        }
+        n >>= 1;
+    }
+    count
 }

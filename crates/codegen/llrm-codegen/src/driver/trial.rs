@@ -22,11 +22,10 @@
 //! object is smaller. What rotating costs or frees is in the passes after it
 //! (x_prefix -12 B unrotated, x_transpose +34 B), so the finished code decides.
 
-use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{GlobalKind, Module};
+use llrm_mir::module::Module;
 use llrm_mir::program::Program;
-use llrm_transforms::trial;
+use llrm_transforms::trial::{self, differing, only};
 
 use super::{Options, assembled, assembled_module, compiled_module, optimized_program, stage_files};
 use crate::backend::{executed, masm};
@@ -97,51 +96,6 @@ impl Trial {
         }
         pays
     }
-}
-
-/// The names of the functions whose finished bodies differ between two modules
-/// of one source (one that only one of them defines counts).
-fn differing(
-    one: &Module,
-    other: &Module,
-) -> BTreeSet<String> {
-    // Printed, not compared: a constant's id means a value only within its own
-    // module.
-    let bodies = |module: &Module| -> BTreeMap<String, Option<String>> {
-        module
-            .globals
-            .iter()
-            .filter_map(|global| {
-                let function = global.function().filter(|one| !one.is_declaration());
-                Some((
-                    global.name.as_deref()?.to_owned(),
-                    function.map(|one| llrm_mir::print::body(&module.context, one)),
-                ))
-            })
-            .collect()
-    };
-    let (one, other) = (bodies(one), bodies(other));
-    one.keys().chain(other.keys()).filter(|name| one.get(*name) != other.get(*name)).cloned().collect()
-}
-
-/// `module` with every function outside `keep` cut to its declaration: the
-/// backend then works on `keep` alone, in a module whose other functions stand
-/// as they do in both versions.
-fn only(
-    module: &Module,
-    keep: &BTreeSet<String>,
-) -> Module {
-    let mut cut = module.clone();
-    for global in &mut cut.globals {
-        let named = global.name.as_deref().is_some_and(|name| keep.contains(name));
-        if let GlobalKind::Function(function) = &mut global.kind
-            && !named
-            && !function.is_declaration()
-        {
-            **function = function.declaration();
-        }
-    }
-    cut
 }
 
 /// `module` compiled as `compiled_module` does, then, on a target with a trial
@@ -238,37 +192,4 @@ pub fn compiled_module_trying(
     };
     let (Some(kept_price), Some(other_price)) = (price(&kept), price(&other)) else { return Ok(kept) };
     Ok(if kind.keeps(kept_price, other_price) { other } else { kept })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn module(first_returns: &str) -> Module {
-        llrm_mir::parse::module(&format!(
-            "define i32 @f() {{\n  ret i32 {first_returns}\n}}\ndefine i32 @g() {{\n  ret i32 7\n}}\ndeclare i32 @h()\n"
-        ))
-        .unwrap()
-    }
-
-    /// The trial's second backend run once covered the whole module, so a file
-    /// with one counted loop and 400 other functions compiled its backend
-    /// twice (memory_expansion.c -Os: 2.09x). It covers the functions whose
-    /// bodies differ, the others standing as declarations.
-    #[test]
-    fn the_second_backend_run_covers_only_the_functions_that_differ() {
-        let (one, other) = (module("1"), module("2"));
-        let cut = differing(&one, &other);
-        assert_eq!(cut, BTreeSet::from(["f".to_owned()]));
-        let kept = only(&one, &cut);
-        let defined = |name: &str| {
-            kept.globals
-                .iter()
-                .find(|g| g.name.as_deref() == Some(name))
-                .and_then(|g| g.function())
-                .is_some_and(|f| !f.is_declaration())
-        };
-        assert!(defined("f") && !defined("g"));
-        assert!(differing(&one, &module("1")).is_empty());
-    }
 }

@@ -3444,13 +3444,22 @@ fn no_function_sections_is_the_default_object() {
 
 /// Every function's COMDAT is allocated in the module's code segment
 /// (`<MODULE>_TEXT`), the segment the one-segment layout names: function
-/// sections change the grouping, not the segment. (`-mcode-segment=` is not
-/// read on this path, with or without the flag.)
+/// sections change the grouping, not the segment.
 #[test]
 fn function_sections_allocate_in_the_modules_code_segment() {
     let has = |object: &[u8]| object.windows(8).any(|window| window == b"TWO_TEXT");
     assert!(has(&omf_of(&["-ffunction-sections"])));
     assert!(has(&omf_of(&[])));
+}
+
+/// `-mcode-segment=` was read only on the Nib/QB path: a C module from llrm-cc
+/// always went to `<MODULE>_TEXT`, so a BCC caller's near call into it left the
+/// segment and the harness cell CNBL crashed.
+#[test]
+fn mcode_segment_names_the_segment_of_an_llvm_ir_module() {
+    let has = |object: &[u8], name: &[u8]| object.windows(name.len()).any(|window| window == name);
+    let object = omf_of(&["-mcode-segment=HOT_TEXT"]);
+    assert!(has(&object, b"HOT_TEXT") && !has(&object, b"TWO_TEXT"));
 }
 
 /// `llrm-llc` on a module stated for Windows or macOS x86-64 answered `no
@@ -5195,6 +5204,19 @@ fn a_masked_byte_wanted_past_a_call_stays_a_movzx_at_o2() {
     assert!(listing.contains("movzx"), "the extension was made a mask: {listing}");
 }
 
+/// x_cordic -O2: both arms of the body joined in the loop latch (`inc; cmp; branch back`), one reached by a taken
+/// `jmp` that ran 3 clocks a trip (50,829 clk; 49,539 with the latch copied into each arm, gcc 49,031). The pin's
+/// tail-duplication bound (2 instructions) kept the latch; the priced copy (DEVIATE TAILDUP-HOT) takes it.
+#[test]
+fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
+    let text = include_str!("tests_data/latch_arms.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "arms").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The latch's `xor` of 5 stands once in each arm, not once behind a `jmp` from one of them.
+    let copies = listing.lines().filter(|line| line.trim() == "xor esi, 5").count();
+    assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
+}
+
 /// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
 /// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
 /// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
@@ -5251,4 +5273,25 @@ fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
     compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
     let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
     assert_eq!(selections, 6, "{selections} selections of three functions");
+}
+
+/// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
+/// backend against it must too. `llrm-llc` ran the whole mid-end over any IR it was handed (a hand-made
+/// branch form of x_heapsort's child select compiled to the same 37,923 clk as the unedited IR), so
+/// "the pin's code on our IR" could not be isolated. With the switch a slot that mem2reg promotes stays
+/// a stack slot.
+#[test]
+fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+        define i32 @f(i32 %x) {\n  %p = alloca i32, align 4\n  store i32 %x, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  ret i32 %v\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O2", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "slot").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let optimized = listing(&[]);
+    let given = listing(&["--no-midend"]);
+    assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
+    assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
 }
