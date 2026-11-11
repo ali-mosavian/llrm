@@ -224,7 +224,84 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let built = program(text, request)?;
-    trial_unrolled(built, text, request)
+    let (built, inlined) = trial_inlined(built, text, request)?;
+    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
+}
+
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os byte model
+/// refused within its error, inlined in a second compile and kept per chain (caller and callees)
+/// if the backend writes those functions in fewer bytes. The model is within 25% of the written
+/// bytes for two functions in three, so a refusal that close is the backend's to decide.
+///
+/// Compile time: a program with no such refusal compiles once. One with some runs the mid-end
+/// twice and the backend on the functions whose bodies differ twice (`trial::differing`),
+/// never on the whole program; a chain set that is only partly kept compiles the mid-end a third
+/// time.
+fn trial_inlined(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
+    use llrm_transforms::trial;
+    let sites = trial::take_refused();
+    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    if request.level != Level::Os || sites.is_empty() {
+        return Ok((built, Vec::new()));
+    }
+    if instructions(&built) > limit {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial inline: skipped, {} sites in {} instructions (limit {limit})", sites.len(), instructions(&built));
+        }
+        return Ok((built, Vec::new()));
+    }
+    let kept_unroll = trial::take();
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let chain = |program: &Program, cut: &std::collections::BTreeSet<String>| -> Option<std::collections::BTreeMap<String, i64>> {
+        let mut only = program.clone();
+        only.modules[0] = trial::only(&program.modules[0], cut);
+        let rows = tail(only, request, false, true).ok()?.functions;
+        Some(rows.into_iter().filter(|(name, _)| cut.contains(name)).collect())
+    };
+    let Ok(other) = trial::with_inlined(&sites, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let other_unroll = trial::take();
+    let cut = trial::differing(&built.modules[0], &other.modules[0]);
+    let (Some(kept_bytes), Some(other_bytes)) = (chain(&built, &cut), chain(&other, &cut)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
+    if debug {
+        eprintln!("trial inline: {} sites, {} kept; {} functions differ; {} instructions", sites.len(), flags.iter().filter(|one| **one).count(), cut.len(), instructions(&built));
+    }
+    if flags.iter().all(|one| !one) {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    }
+    if flags.iter().all(|one| *one) {
+        trial::restore(other_unroll);
+        return Ok((other, sites));
+    }
+    let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
+    let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let third_unroll = trial::take();
+    let cut = trial::differing(&built.modules[0], &third.modules[0]);
+    let pays = match (chain(&built, &cut), chain(&third, &cut)) {
+        (Some(kept), Some(third)) => third.values().sum::<i64>() < kept.values().sum::<i64>(),
+        _ => false,
+    };
+    if pays {
+        trial::restore(third_unroll);
+        Ok((third, chosen))
+    } else {
+        trial::restore(kept_unroll);
+        Ok((built, Vec::new()))
+    }
 }
 
 /// One function of [`size_audit`].
