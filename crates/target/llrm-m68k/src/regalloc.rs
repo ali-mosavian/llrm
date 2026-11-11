@@ -165,6 +165,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         root == reg::SP || root == reg::A6
     }
 
+    fn flags_register() -> Option<RegId> {
+        Some(reg::CCR)
+    }
+
     fn hoist_window() -> usize {
         4
     }

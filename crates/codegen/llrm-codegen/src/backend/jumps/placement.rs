@@ -7,6 +7,7 @@
 //! d1106deb71cc81016406a1917d0508d2df296266; the function-by-function check
 //! is `docs/architecture/jumps-placement-check.md`.
 
+mod ext_tsp;
 mod postdom;
 mod taildup;
 
@@ -172,9 +173,16 @@ pub(super) fn order(
     tail_dup: Option<usize>,
     hot: Option<HotTailDup>,
     epilogue: usize,
+    ext_tsp: bool,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
+    // `-apply-ext-tsp-for-size` skips `buildCFGChains` altogether.
+    if ext_tsp && size {
+        if let Some(order) = ext_tsp::apply_for_size(blocks, &index, entry) {
+            return (order.into_iter().map(|one| blocks[one].clone()).collect(), odds.clone());
+        }
+    }
     let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
     placer.epilogue = epilogue;
     for found in natural {
