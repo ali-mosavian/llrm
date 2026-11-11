@@ -313,3 +313,27 @@ fn machine_sink_keeps_every_instruction_attached_to_its_origin() {
     assert_eq!(before, 0, "the converted body already mis-attaches: the check is wrong");
     assert_eq!(after, sunk, "MachineSink moved instructions onto another instruction's origin");
 }
+
+/// The prelude `Options::shared_prelude` runs (`regalloc::shared_prelude`) sinks
+/// instructions, and every one stays attached to its own origin: read by `at`,
+/// 30 of the fixture functions' instructions named a neighbour's. Counted over
+/// the prelude's own output, not a replay of its phases.
+#[test]
+fn the_prelude_sinks_and_every_instruction_keeps_its_origin() {
+    let (mut moved, mut open) = (0, 0);
+    for (_, function) in functions() {
+        let converted = llrm_spike_mf::tolir::to_ssa_lir::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO)).expect("converts");
+        let _lanes = llrm_codegen::backend::lanes::enter(Regs(&llrm_m68k::REGISTER_INFO));
+        let body = llrm_m68k::regalloc::shared_prelude(converted.body.clone()).unwrap_or_else(|why| panic!("prelude refuses: {why}"));
+        open += misattached(&function, &converted, &body);
+        moved += body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|insn| insn.numbered.is_some_and(|n| i64::from(n) != insn.at / 2))
+            .count();
+    }
+    println!("sunk {moved}, mis-attached {open}");
+    assert!(moved > 0, "the prelude moved no instruction: it runs no MachineSink");
+    assert_eq!(open, 0, "the prelude left instructions attached to another instruction's origin");
+}
