@@ -29,9 +29,10 @@ use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
 use llrm_analysis::scev::expr::Scev;
-use llrm_mir::context::Context;
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Function, InstId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::tti::Tti;
 
@@ -39,6 +40,52 @@ use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
 use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
+
+/// Whether `operand` is computed with a multiply the target prices as worth
+/// reducing in an outer loop (`Tti::reduces_outer_multiply`), through adds,
+/// subtracts and casts to `depth` levels.
+fn computed_by_priced_multiply(
+    tti: &dyn Tti,
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    operand: Operand,
+    depth: u32,
+) -> bool {
+    let Operand::Value(value) = operand else { return false };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+    let inst = function.instruction(inst);
+    match inst.opcode {
+        Opcode::Binary(BinaryOp::Mul) => {
+            let constant = match inst.operands.get(1) {
+                Some(&Operand::Constant(constant)) => match context.get(constant).kind {
+                    ConstantKind::Int(bits) => Some(bits),
+                    _ => None,
+                },
+                _ => None,
+            };
+            tti.reduces_outer_multiply(constant)
+        }
+        // An index of a GEP is multiplied by the size of the element it steps
+        // over: `g[i]` over rows of 54 bytes is `i * 54`.
+        Opcode::GetElementPtr { source } => {
+            let size = layout.alloc_size(&context.types, source);
+            let scaled = size > 1
+                && matches!(inst.operands.get(1), Some(Operand::Value(_)))
+                && tti.reduces_outer_multiply(Some(u128::from(size)));
+            scaled
+                || depth > 0
+                    && inst
+                        .operands
+                        .iter()
+                        .any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+        }
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => {
+            inst.operands.iter().any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+        }
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -263,7 +310,17 @@ fn plan_loop(
     // Skip nested loops until we can model them better with formulae: the
     // shadow variables and the exit tests above are made on every loop, as the
     // pin's constructor does before it looks at the nesting.
-    if !lp.is_innermost() {
+    // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop that
+    // has a subloop): where the target prices it (`Tti::reduces_outer_multiply`: the
+    // multiply's clocks against a counter held across the inner loop) and not at
+    // -Os, an outer loop that computes an affine value with a multiply is reduced as
+    // an inner loop is, so `i * 300` feeding the inner loop becomes a counter stepped
+    // by 300. gcc's ivopts does this on every loop (named behaviour only, its code is
+    // not translated). x_cordic -O1: 200 `imul` x 19 clocks.
+    if !lp.is_innermost()
+        && !(!size
+            && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
+    {
         return planned(None);
     }
 

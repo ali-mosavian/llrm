@@ -313,6 +313,14 @@ pub struct Tuning {
     /// it, except where the DAG folds the pair into one compare
     /// (`foldLogicOfSetCCs`). 0: the pin's budget.
     pub merged_condition_clocks: i64,
+    /// DEVIATE LSR-OUTER (owner x87, exit 2026-11-27): clocks of a multiply
+    /// the CPU executes (`imul`); with `loop_carried_clocks` it prices reducing
+    /// an outer loop's multiply to a counter. 0: the pin (no outer-loop
+    /// reduction).
+    pub multiply_clocks: i64,
+    /// Clocks a value held across an inner loop costs each outer trip: a store
+    /// and a load.
+    pub loop_carried_clocks: i64,
     /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
     /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
     /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
@@ -535,6 +543,8 @@ impl Tuning {
         min_jump_table_density: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
+        multiply_clocks: 0,
+        loop_carried_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
@@ -1105,6 +1115,10 @@ pub struct OperationCosts {
     pub cache_line: i64,
     /// Clocks to fill one such line from memory; 0: not stated.
     pub line_fill_clocks: i64,
+    /// Block placement at -Os/-Oz is `MachineBlockPlacement`'s
+    /// `-apply-ext-tsp-for-size` (Ext-TSP over unit counts), which the pin
+    /// ships off.
+    pub ext_tsp_for_size: bool,
 }
 
 impl OperationCosts {
@@ -1275,6 +1289,7 @@ impl Default for OperationCosts {
             expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
+            ext_tsp_for_size: false,
         }
     }
 }

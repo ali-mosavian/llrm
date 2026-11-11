@@ -295,6 +295,9 @@ pub struct Options {
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
     pub licm: bool,
+    /// The `mergeicmps` slot (the pin's `-enable-mergeicmps`, on by default);
+    /// `LLRM_NO_MERGEICMPS` turns it off.
+    pub merge_icmps: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -360,6 +363,7 @@ impl Default for Options {
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
+            merge_icmps: !llrm_support::env_flag!("LLRM_NO_MERGEICMPS"),
             copy_headers: true,
             for_size: false,
             speed_rate: true,
@@ -1146,10 +1150,14 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
-            slot(
-                "mergeicmps@1672",
-                Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
-            ),
+            if applied.options.merge_icmps {
+                slot(
+                    "mergeicmps@1672",
+                    Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
+                )
+            } else {
+                Box::new(Together { name: "mergeicmps@1672", parts: Vec::new() })
+            },
             slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
