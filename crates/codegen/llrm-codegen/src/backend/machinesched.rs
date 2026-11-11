@@ -2476,4 +2476,20 @@ mod tests {
         let read = graph(&insns, regs, 16, &Exiting, Some(&*end));
         assert_eq!(read.exit_latency, [4, 3], "the end reads the first: it holds the whole latency");
     }
+
+    /// Every target but arm64 keeps `exit_edges()` off: the region end must not
+    /// change its graph (x86, m68k, 6502, z80 and wasm are bit-identical).
+    #[test]
+    fn test_a_model_without_exit_edges_ignores_the_region_end() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+        ];
+        let end = insn(2, semantics(Operation::Move, "mov", vec![cell(8)], vec![held(1)]), vec![], vec![1]);
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let none = graph(&insns, regs, 16, &GenericModel, None);
+        let read = graph(&insns, regs, 16, &GenericModel, Some(&*end));
+        assert_eq!(read.exit_latency, none.exit_latency, "the end's reads are not held");
+        assert_eq!(read.preds, none.preds);
+    }
 }
