@@ -928,7 +928,7 @@ impl FunctionPass for Tabulate {
         _: &mut Analyses,
     ) -> PreservedAnalyses {
         let ty = unit.context.types.int(16);
-        unit.declared.table("t", ty, unit.context.int(ty, 0), crate::module::UnnamedAddr::None);
+        unit.declared.table("t", ty, unit.context.int(ty, 0), crate::module::UnnamedAddr::None, None);
         PreservedAnalyses::none()
     }
 }
