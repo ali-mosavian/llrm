@@ -7,11 +7,11 @@ use llrm_codegen::model::lir::SrcLoc;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
-use crate::mc::visit::{Reg, RegRef, Role};
+use crate::mc::visit::{Reg, RegList, RegRef, Role};
 
 /// A machine instruction: a real one, or a pseudo that a later phase turns into
 /// real ones (LLVM's pseudo instructions and `COPY`).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Op {
     I(Inst),
     /// `dst = src`, registers of one class (LLVM's `COPY`): `mov` or `fmov`
@@ -74,7 +74,7 @@ pub enum Op {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Callee {
     Symbol(String),
     Register(Gpr),
@@ -118,20 +118,21 @@ impl Op {
                     visit_reg(register, Role::Use, f);
                 }
             }
-            // Not a use: the allocator renames it by hand (`regalloc::rewrite`).
+            // Not a use: the allocator renames it by hand
+            // (`regalloc::rewrite`).
             Op::DbgValue { .. } => {}
         }
     }
 
-    /// Whether the operation is debug information only (`MachineInstr::isDebugInstr`).
+    /// Whether the operation is debug information only
+    /// (`MachineInstr::isDebugInstr`).
     pub fn is_debug(&self) -> bool {
         matches!(self, Op::DbgValue { .. })
     }
 
-    pub fn defs_and_uses(&self) -> (Vec<Reg>, Vec<Reg>) {
-        let (mut defs, mut uses) = (Vec::new(), Vec::new());
-        self.clone().visit(&mut |register, role| {
-            let key = register.key();
+    pub fn defs_and_uses(&self) -> (RegList, RegList) {
+        let (mut defs, mut uses) = (RegList::new(), RegList::new());
+        self.for_each_register(&mut |key, role| {
             if role.writes() {
                 defs.push(key);
             }
@@ -140,6 +141,15 @@ impl Op {
             }
         });
         (defs, uses)
+    }
+
+    /// `f` on each register operand with its role, without collecting them:
+    /// the passes that walk every operation of a function many times ask this.
+    pub fn for_each_register(
+        &self,
+        f: &mut dyn FnMut(Reg, Role),
+    ) {
+        self.clone().visit(&mut |register, role| f(register.key(), role));
     }
 }
 
