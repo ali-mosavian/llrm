@@ -688,6 +688,9 @@ pub fn ties_in(
     what: &Semantics,
 ) -> bool {
     let Some(regs) = regs.filter(|regs| regs.ties_by_row) else { return ties(what) };
+    if let Some(pairs) = &what.tied {
+        return pairs.contains(&(0, 0));
+    }
     let name = what.name.as_deref().unwrap_or("");
     (regs.effects)(name, what.dests.len(), what.sources.len()).first().is_some_and(|row| row.ties.contains(&(0, 0)))
 }
@@ -703,13 +706,22 @@ fn tied_pairs(
         return if ties(what) { vec![(0, 0)] } else { Vec::new() };
     };
     let name = what.name.as_deref().unwrap_or("");
-    let mut pairs = (regs.effects)(name, what.dests.len(), what.sources.len())
-        .first()
-        .map_or_else(Vec::new, |row| row.ties.to_vec());
+    let mut pairs = what.tied.clone().unwrap_or_else(|| {
+        (regs.effects)(name, what.dests.len(), what.sources.len()).first().map_or_else(Vec::new, |row| row.ties.to_vec())
+    });
     // the first pair first: it is the one the commuter and the three-address
     // forms know
     pairs.sort_by_key(|&(source, dest)| (source, dest) != (0, 0));
     pairs
+}
+
+/// How many declared ties named an operand their instruction lacks, since the
+/// process began.
+static SKIPPED_TIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// [`SKIPPED_TIES`].
+pub fn skipped_ties() -> usize {
+    SKIPPED_TIES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The copy and the fixed instruction for the first tied pair that is not yet
@@ -734,7 +746,13 @@ fn _untied_pair(
     dest: usize,
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<Vec<Arc<Insn>>> {
-    let (into, first) = (what.dests.get(dest)?, what.sources.get(source)?);
+    let (Some(into), Some(first)) = (what.dests.get(dest), what.sources.get(source)) else {
+        // A declared tie that names an operand the instruction does not have
+        // went unnoticed once (a dropped reserved register moved the row's
+        // numbering): it is counted, and a test of a target asks for none.
+        SKIPPED_TIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    };
     if let Loc::Mem(cell) = into {
         if (source, dest) != (0, 0) {
             return None;

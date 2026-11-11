@@ -205,6 +205,7 @@ fn _restore(
         repeat: false,
         table_id: None,
         pops: None,
+        tied: None,
     };
     let mut made = Insn::new(one.at, Some((at, at)), Some(what), vec![], vec![]);
     made.call = one.call.clone();
