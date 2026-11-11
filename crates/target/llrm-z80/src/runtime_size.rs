@@ -130,7 +130,8 @@ const INTERNAL: [&str; 9] =
 /// and exit date; a routine of `z80_rt.s` that is neither modeled, internal nor named here fails
 /// `every_runtime_routine_is_priced_internal_or_named`. The soft-float library (`__addsf3`, `__muldf3`, ...) comes
 /// from the C library, outside `z80_rt.s`, and is not priced either: owner z80, exit 2026-11-30.
-pub const UNPRICED: [(&str, &str); 11] = [
+pub const UNPRICED: [(&str, &str); 12] = [
+    ("__umulhisi3", "16 x 16 -> 32 multiply: z80, 2026-11-30"),
     ("__ashldi3", "64-bit shift: z80, 2026-11-30"),
     ("__lshrdi3", "64-bit shift: z80, 2026-11-30"),
     ("__ashrdi3", "64-bit shift: z80, 2026-11-30"),
