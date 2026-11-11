@@ -1,5 +1,5 @@
 ; 64-bit remainder for the 6502: u64 __umoddi3(u64 a, u64 b) and __moddi3, llrm-6502 rc2-first layout (as di64.s).
-; Its own member, so only remainder users pay for it: the step loop does not roll a quotient. Division by zero leaves the dividend.
+; Its own member, so only remainder users pay for it: the step loop does not roll a quotient. A zero divisor is undefined in C: the remainder here is the dividend; the generic C members differ.
 
 .setcpu "6502"
 .export __umoddi3, __moddi3
