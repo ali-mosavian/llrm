@@ -377,6 +377,9 @@ impl Combiner<'_> {
                 inner.push(None);
                 continue;
             }
+            if !self.env.hooks.phi_constant_chains {
+                return None;
+            }
             let Operand::Value(v) = value else { return None };
             let ValueDef::Instruction(def) = self.function.value(v).def else { return None };
             if self.function.instruction(def).opcode != Opcode::Phi {
@@ -473,7 +476,7 @@ impl Combiner<'_> {
         // saves: worth it where the code runs often (the first CORDIC step of
         // x_cordic -O3, 803 clocks), not in straight-line code (the shared
         // softfloat routines, arm64 +8 B and no clock).
-        if skipped && !self.in_cycle(phi_block) {
+        if skipped && !(self.env.hooks.phi_constant_chains && self.in_cycle(phi_block)) {
             return None;
         }
         Some((others, mine))

@@ -38,12 +38,21 @@ fn combined_hooks(
     text: &str,
     phi_constant_users: bool,
 ) -> String {
+    combined_with(text, phi_constant_users, phi_constant_users)
+}
+
+/// The same, with DEVIATE PHICONST-2 (`phi_constant_chains`) apart from it.
+fn combined_with(
+    text: &str,
+    phi_constant_users: bool,
+    phi_constant_chains: bool,
+) -> String {
     let mut module = parsed(text);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let callees = llrm_mir::memory::callees(&module);
     let mut declared = llrm_mir::passes::Declared::of(&module);
-    let hooks = crate::combine::TargetHooks { phi_constant_users, ..Default::default() };
+    let hooks = crate::combine::TargetHooks { phi_constant_users, phi_constant_chains, ..Default::default() };
     {
         let (context, function) = module.function_mut("f").expect("@f");
         crate::combine::combine_for(
@@ -438,12 +447,7 @@ x:
     assert!(out.contains("add i32 %p, %y"), "{out}");
 }
 
-/// DEVIATE PHICONST: an incoming that is a phi of constants of its own block,
-/// read by nothing else, folds the users too (x_cordic -O3: the first CORDIC
-/// step's constants come through a diamond that picks them).
-#[test]
-fn a_phi_of_a_phi_of_constants_folds_into_each_user() {
-    let text = "define i32 @f(i1 %c, i1 %d) {
+const NESTED_DIAMOND: &str = "define i32 @f(i1 %c, i1 %d) {
 b0:
   br i1 %c, label %a, label %o
 
@@ -471,11 +475,27 @@ j:
   ret i32 %r
 }
 ";
+
+/// DEVIATE PHICONST: an incoming that is a phi of constants of its own block,
+/// read by nothing else, folds the users too (x_cordic -O3: the first CORDIC
+/// step's constants come through a diamond that picks them).
+#[test]
+fn a_phi_of_a_phi_of_constants_folds_into_each_user() {
+    let text = NESTED_DIAMOND;
     let out = combined_hooks(text, true);
     // (v + 1) ^ (v << 1): v = 10 gives 31, v = 20 gives 61, v = 30 gives 35.
     assert!(out.contains("phi i32 [ 31, %p ], [ 61, %q ]"), "{out}");
     assert!(out.contains("[ 35, %o ]"), "{out}");
     assert!(!out.contains("shl") && !out.contains("xor") && !out.contains("add "), "{out}");
+}
+
+/// Where a byte is dear against a clock (m16: 2 B a clock) the chains stay:
+/// m16 static_pointers, function_table and float_in_place_update -O2 grew 5 to
+/// 11 B with them. PHICONST alone folds the all-constant phi as before.
+#[test]
+fn a_phi_behind_a_diamond_and_a_partial_fold_are_left_where_a_byte_is_dear() {
+    let nested = NESTED_DIAMOND;
+    assert_eq!(combined_with(nested, true, false), printed(&parsed(nested)));
 }
 
 /// At -O1 and -Os (PHICONST off) the pin's one-user rule stands: the corpus
