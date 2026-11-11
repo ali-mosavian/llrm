@@ -16,6 +16,14 @@ def ref(a, b):
         lo, hi = (-(1 << 31), (1 << 31) - 1) if op == 'ftoi' else (0, (1 << 32) - 1)
         t = max(lo, min(hi, int(x))) if abs(x) != float('inf') else (hi if x > 0 else lo)
         return t & 0xffffffff
+    if DIRECTED and op in ('add', 'sub', 'mul', 'div'):
+        # Rule asserted bit for bit (compiler-rt's, which x86 SSE also follows for operands): a NaN operand is returned with its sign and payload and the
+        # quiet bit set, the first NaN operand (a, then b) winning; sub does not flip b's sign. An invalid operation (inf-inf, 0*inf, 0/0, inf/inf)
+        # returns the default NaN 0x7fc00000 (x86 hardware returns 0xffc00000 there, so the host is not the reference for that class).
+        for v in (a, b):
+            if (v >> 23) & 255 == 255 and v & 0x7fffff: return v | 0x400000
+        if (x == 0 and math.isinf(y)) or (math.isinf(x) and y == 0):
+            if op == 'mul': return 0x7fc00000
     if op == 'add': r = x + y
     elif op == 'sub': r = x - y
     elif op == 'mul': r = x * y
@@ -24,6 +32,7 @@ def ref(a, b):
     else: r = x / y
     return 0x7fc00000 if r != r else bits(r)
 random.seed(1)
+DIRECTED = sys.argv[3:] == ['directed']
 sp = [0, 0x80000000, 1, 0x80000001, 0x007fffff, 0x00800000, 0x3f800000, 0xbf800000, 0x7f7fffff, 0xff7fffff,
       0x7f800000, 0xff800000, 0x7fc00000, 0x40000000, 0x3f800001, 0x4b000000, 0x4b800000, 0x33800000, 0x34000000]
 recs = [(a, b) for a in sp for b in sp] if op in ('add', 'sub', 'mul', 'div') else [(a, 0) for a in sp + [0x4f000000, 0xcf000000, 0x4eff_ffff, 0xcf000001, 0x4f800000, 0x4f7fffff, 0x3f7fffff, 0xbf7fffff, 0x3fc00000, 0xbfc00000, 0x4b7fffff, 0x7fffffff, 0xffffffff, 0x7fa00000]]
@@ -96,6 +105,17 @@ if sys.argv[3:] == ['directed']:
         ma = random.getrandbits(23) | 1; ea = random.randint(30, 200)       # a + b where b is exactly half an ulp of a: tie to even
         recs.append((ea << 23 | ma, (ea - 24) << 23))
     recs = recs[:n] if op in ('mul', 'div', 'add', 'sub') else recs
+    # conversions: NaN/inf/zero/denormal classes, range edges, and int->float exact half-ulp ties (24-bit significand, dropped bits = 1 << (L-25))
+    if op in ('ftoi', 'ftou'):
+        recs = [(v, 0) for v in nans + [0, 0x80000000, 0x7f800000, 0xff800000, 1, 0x80000001, 0x007fffff, 0x807fffff, 0x4f000000, 0xcf000000, 0x4f800000, 0xcf800000, 0x4effffff, 0xceffffff, 0x4f7fffff, 0x3f7fffff, 0xbf7fffff, 0xbf800000]]
+        while len(recs) < n: recs.append(((random.getrandbits(32) & 0x807fffff) | random.randint(110, 165) << 23, 0))
+    if op in ('itof', 'utof'):
+        recs = [(v, 0) for v in (0, 1, 0xffffffff, 0x80000000, 0x7fffffff, 0x80000001)]
+        while len(recs) < n:
+            L = random.randint(25, 32); m = random.getrandbits(23) | 1 << 23
+            a = (m << (L - 24)) | 1 << (L - 25)
+            if random.random() < .5: a = (-a) & 0xffffffff if op == 'itof' else a
+            recs.append((a & 0xffffffff, 0))
 print("nrec = %d\nvec:" % len(recs))
 for a, b in recs:
     print("  .dword $%08x, $%08x, $%08x" % (a, b, ref(a, b)))
