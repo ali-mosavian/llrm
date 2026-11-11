@@ -1,0 +1,49 @@
+# Snapshot-resume for trial passes (design note, 2026-11-11)
+
+Owner x86-m32-c. Status: design, nothing coded. For llrm-oversight and llrm-coordinator.
+
+## Scope
+- LLVM has no trial: the pin makes each decision once. These are DEVIATEs: UNROLL-O1-TRIAL (#9101) and ROTATION-TRIAL (#9141) in `codegen/driver/trial.rs`; the 6502's UNROLL-TRIAL / UP1 (`llrm-6502/src/driver.rs`) share the noting state (`transforms::trial`).
+- Out: #9145 (a price in placement, no second compile); m68k's trial (`llrm-m68k/trial.rs`, private, m68k-matrix owns it).
+- The default path (no trial noted, or a target with none) is untouched: it is today's single compile.
+
+## Today
+`compiled_module_trying`: `optimized_program(module.clone())`; if a candidate was noted, `optimized_program(module)` again with the decision reversed, both through the whole mid-end; the backend runs on the differing functions only for rotation (already cut by `only`), on the whole module for unroll.
+
+Where the time sits (`LLRM_DEBUG=time`, x_jpeg_fixed -Os, llrm-cc): `mir walk` 105 ms of the mid-end (the CGSCC inline walk), `mir unroll@1476` 8 runs (one per body, in the Late list), `mir rotate@728` 18 runs (inside the walk's Simplify list, once per simplification of a body).
+
+## Where each trial pass sits (`pipeline::recorded`)
+| pass | slot | runs | what comes after it |
+|---|---|---|---|
+| unroll@1476 (Phase::Late) | after `Interprocedural`, `WriteOnly`, `Dead`, `LoopDeletion`, `GlobalDce`, walk2, `ReversePostOrderFunctionAttrs`, `CalleePop` | once per body | GlobalsAA recompute, LSR and the codegen-prep list, the post-pipeline steps of `driver::optimized`, the backend |
+| rotate@728 (Phase::Simplify) | inside `walk::Walk` (callee first) and the `again`/`cleaned` lists | per simplification | the rest of the walk, `Interprocedural`, everything above |
+
+The two differ: unroll is late and body-local, so a resume point is cheap and clean; rotate is inside the walk, whose decisions (inlining) read the simplified callee.
+
+## Design
+**S1, unroll (first PR).** `PassManager` runs `passes: Vec<Pass>` in order. Add `PassManager::run_from(program, index)` and let `recorded` return the index of the Late stage. The kept compile runs `0..index`, clones the `Program` (modules, target), then runs `index..`. If the trial noted candidates, a second manager is built by the same builder, the clone restored, and `index..` run with the trial on. Cost of a trial: the Late list + codegen prep + post steps + backend (as today), not the walk and IPO.
+**S2, rotation (same PR if it holds, else second).** Snapshot at the `Walk` pass's index: saves the head (InferFunctionAttrs, GlobalOpt, Ports, Stamp, Early, ModuleIpo, Cleanup), not the walk. The saving is small; stated so the number is not oversold.
+**S3, rotation inside the walk (only if S2 under-delivers).** Per-body: snapshot at the first body whose simplification notes a rotation, resume the walk for the bodies after it (callers re-run: inline decisions read the changed callee). Needs `Walk`'s worklist and `rerun` state made clonable. A larger change; not started without a number from S2.
+
+## Captured state
+- The `Program`: modules, `Context`, target. Cloned once at the snapshot point.
+- Not cloned, recomputed in the tail: every cached analysis (`GlobalsAA`, `GlobalsModRefAnalysis`, `Summaries`, `ProgramSummaries`): the tail manager `require`s/`recompute`s them as the builder already does at that point; `freeze::<Summaries>` happens inside the tail.
+- Pass-object state: the Late list is `Fixed::linear(applied, Phase::Late)` built from `Applied` alone; it holds no `Rc` shared with the head (`cloning`, `fused` belong to `ModuleIpo`/`Interprocedural`/`PerLoop`). To check for each pass in the tail by reading, not assuming; the check goes in the PR.
+- Thread-locals: ~280 exist, nearly all counters for `LLRM_DEBUG=time`. State that reads: `TRIGGER` (cleared between passes), the trial notes (`take`/`with`), `FACTS`, `SEEN`, and the id counters (`NEXT_LINEAGE`, `NAMES_MADE`). Today's second compile runs after the first in the same thread with whatever the first left, so no output may depend on them; the md5 identity run is the proof, and the PR lists the readers found.
+- Dump directory: off for the second run, as today (`again.dump = None`).
+
+## Callee-fact ripple
+- Unroll changes one body. Facts the tail reads from other bodies (attrs, `CalleePop`, nounwind, argmemonly) were fixed before the snapshot and the trial does not change them: `ReversePostOrderFunctionAttrs` and `CalleePop` run before Late. A body the trial changes can change its own derived facts only after the snapshot point, which the tail recomputes for it; callers read them in the tail only through summaries that are recomputed.
+- Rotation inside the walk (S3) does ripple: an inlined callee carries the rotation. Handled by S3's re-run of later bodies; before S3 exists, rotation uses S2 and keeps today's full second mid-end from the walk on, so there is no ripple to handle.
+- Fallback: if a tail pass reports that it read a fact the snapshot did not hold (a debug assertion on `Applied` version counters), or the tail errors, the compile falls back to today's two full compiles. The fallback is counted in `LLRM_DEBUG=trial`.
+
+## PR bar (as ordered)
+- No output change on any target: md5 identity of x86_16/32/64, arm64, m68k, z80, 6502, wasm32 at O1/O2/O3/Os on tests/run/c, and x86-m32 vsgcc x_*, counts per level (compiled/total), both llc md5s stated, base vs candidate from the same tree.
+- Positive control: a module where a trial is kept (x_life -O1) and one where it is put back (matmul -O1), both md5-equal to today's; a negative control showing a deliberately wrong tail (snapshot taken one pass late) changes the md5.
+- Compile time down on x_jpeg_fixed, x_idioms, huge_runs.c, known_loads_walks (`instructions:u`, before/after, per level where a trial fires); no kernel up.
+- Tests (fail-first): a `PassManager::run_from` test (tail from index equals the full run's result on a snapshot); a driver test that a noted trial compiles the head once (counter of head runs 1, tail runs 2).
+- PR body: Pass:/Translation:/General solution: at the top; Translation: none, LLVM has no trial; General solution: resume of a function-pass pipeline from a state snapshot, for any pass that wants a trial.
+
+## Open questions
+1. S1 first or S1+S2 in one PR? S2's saving is small; recommendation S1 alone, S2 if its measured saving is above 10% of the mid-end on the trial kernels.
+2. Does any tail pass read `Applied`-time state set by the head (`TRIGGER`, `fused`)? To be answered by a read of the Late and codegen-prep lists before coding; the note is updated with the result.
