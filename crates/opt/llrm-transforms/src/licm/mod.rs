@@ -237,6 +237,9 @@ pub struct Decisions {
     /// How many times a loop's safety info was worked out (the scan of its
     /// blocks for one that may throw): the pin does it once per `runOnLoop`.
     pub safety_scans: usize,
+    /// How many times a block's predecessors were looked up for the loop's
+    /// safety info.
+    pub safety_pred_lookups: usize,
     /// The updater-kept graph was put back in the manager.
     pub graph_kept: bool,
 }
@@ -334,6 +337,7 @@ pub fn decide(
         }
     }
     decisions.safety_scans = memo.scans.get();
+    decisions.safety_pred_lookups = memo.pred_lookups.get();
     decisions
 }
 
@@ -636,6 +640,7 @@ pub fn run(
         decisions.graph_kept = true;
     }
     decisions.safety_scans = memo.scans.get();
+    decisions.safety_pred_lookups = memo.pred_lookups.get();
     decisions
 }
 
@@ -882,6 +887,7 @@ impl FunctionPass for Licm {
             all.rebuilds += found.rebuilds;
             all.rebuilt_instructions += found.rebuilt_instructions;
             all.safety_scans += found.safety_scans;
+            all.safety_pred_lookups += found.safety_pred_lookups;
             all.max_rebuilds = all.max_rebuilds.max(found.rebuilds);
         });
         if self.apply && changed {
