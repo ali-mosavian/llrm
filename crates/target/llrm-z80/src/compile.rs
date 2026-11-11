@@ -300,6 +300,7 @@ fn allocated_with(
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
+    merge_lone_constant_stores(&mut function);
     let mut hoisted = function.clone();
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
@@ -350,13 +351,13 @@ fn priced_in_loops(
     lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
 }
 
-/// Whether a variant is priced before the printer's peepholes. At the speed
-/// levels the price is weighted clocks, good to a few tenths of a percent, and
-/// a peephole moved a near-tie to the worse variant (copy_runs -O2: 2 B and
-/// 600 T). At the size levels the price is bytes, exact, and a peephole's
-/// bytes are real: without them pattern_fill -Os chose a variant 1 B bigger.
+/// Whether a variant is priced before the printer's peepholes. Only at -O2 and up, where the price is weighted
+/// clocks, good to a few tenths of a percent, and a peephole moved a near-tie to the worse variant (copy_runs -O2:
+/// 2 B and 600 T). Where the price is bytes (-Os, -Oz) or both axes are strict (-O1) the peephole's bytes and
+/// clocks are real: priced before them, clear -O1 chose the allocation that is larger and slower once emitted
+/// (96 B / 577 T against 95 B / 550 T at -Os).
 fn priced_before_peepholes(level: Level) -> bool {
-    !matches!(level, Level::Os | Level::Oz)
+    matches!(level, Level::O2 | Level::O3)
 }
 
 /// Whether the price `one` beats `other`: bytes first at the size levels;
@@ -417,6 +418,8 @@ mod tests {
     fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
         assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
         assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+        // -O1 prices what is emitted (`clear` -O1: 96 B / 577 T priced before them, 548 T after)
+        assert!(!priced_before_peepholes(Level::O1));
     }
 
     /// The push and pop form is smaller and dearer in weighted clocks: kept at
@@ -1473,6 +1476,53 @@ fn split_loop_constant_stores(function: &mut MFunction) -> bool {
     changed
 }
 
+/// A constant word made in a block and stored there from a pair, with no other reader, is stored as immediates
+/// (4 B and 38 T against 9 B and 48 T in the frame): the one case the choice needs no pricing. The selector took the
+/// pair because the DAG's constant had a second user that became something else (an `adc` of zero, a counter), so
+/// the pair serves one store. Nearest pin step `InlineSpiller::reMaterializeFor`; DEVIATE Z80-IMM-USES (owner
+/// llrm-target-z80, exit 2026-11-30). Whether anything changed. Linear in the instructions.
+pub fn merge_lone_constant_stores(function: &mut MFunction) -> bool {
+    let mut users: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    let mut defs: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            match operand {
+                Operand::Use(Reg::Virt(v)) => *users.entry(*v).or_default() += 1,
+                Operand::Def(Reg::Virt(v)) => *defs.entry(*v).or_default() += 1,
+                _ => {}
+            }
+        }
+    }
+    let mut changed = false;
+    for block in &mut function.blocks {
+        let mut made: llrm_support::hash::HashMap<u32, i64> = llrm_support::hash::HashMap::default();
+        let mut gone: Vec<u32> = Vec::new();
+        for inst in &mut block.insts {
+            if let (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(value)]) = (inst.kind, &inst.operands[..]) {
+                if users.get(v) == Some(&1) && defs.get(v) == Some(&1) {
+                    made.insert(*v, *value as i64);
+                }
+                continue;
+            }
+            let immediate = match inst.kind {
+                Kind::Op("LD16mr") => "LD16mi",
+                Kind::Op("LD16fr") => "LD16fi",
+                _ => continue,
+            };
+            let Some(Operand::Use(Reg::Virt(v))) = inst.operands.first().cloned() else { continue };
+            let Some(value) = made.remove(&v) else { continue };
+            inst.kind = Kind::Op(immediate);
+            inst.operands[0] = Operand::Imm(value as _);
+            gone.push(v);
+            changed = true;
+        }
+        block.insts.retain(|inst| {
+            !matches!((inst.kind, &inst.operands[..]), (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(_)]) if gone.contains(v))
+        });
+    }
+    changed
+}
+
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting
 /// of a trivially rematerializable instruction): `find` made `ld hl, #buf` on
 /// every trip. Where the registers run out the allocator makes the constant
@@ -2381,6 +2431,14 @@ fn decomposed_functions(
         })
         .collect();
     let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
+    // The generic form of a function's carry ops (`Z80-CARRY-PRICE`) is taken where the level is strict on both
+    // axes (O1, Os, Oz) only when it is no worse on either: those levels allow no trade.
+    let strict = matches!(level, Level::O1 | Level::Os | Level::Oz);
+    let generic_carry: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| alternatives.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.generic_carry)))
+        .collect();
+    let every: HashSet<usize> = every.into_iter().filter(|at| !(strict && generic_carry[*at])).collect();
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2395,7 +2453,10 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] {
+                let better = if strict && generic_carry[at] {
+                    let (new, old) = (own_price(&variants, &other, at), own_price(&variants, &chosen, at));
+                    new != old && new.0 <= old.0 && new.1 <= old.1
+                } else if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))

@@ -290,6 +290,9 @@ pub fn visit_icmp(
     // OWED: the other arms of foldICmpInstWithConstantNotInt, the rest of
     // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
     // the two-select fold.
+    if let Some(r) = fold_sub_add_pair(c, inst, pred, op0, op1) {
+        return r;
+    }
     if changed { Visit::Changed } else { Visit::None }
 }
 
@@ -1283,6 +1286,54 @@ fn fold_icmp_with_zero(
         }
     }
     None
+}
+
+/// `icmp slt (sub nsw x, y), (add nsw x, y)` is `icmp sgt y, 0`; likewise
+/// `ult` with `nuw`; `eq`/`ne` need `nuw` or `nsw` on each
+/// ([:8148](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L8148)).
+fn fold_sub_add_pair(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let (sub_first, y, flags) = {
+        let q = query(c, None);
+        let shape = |sub: Operand, add: Operand| {
+            let (a, b, sub_flags) = crate::combine_shared::binop(&q, sub, BinaryOp::Sub)?;
+            let (p, r, add_flags) = crate::combine_shared::binop(&q, add, BinaryOp::Add)?;
+            ((p, r) == (a, b) || (p, r) == (b, a)).then_some((b, (sub_flags, add_flags)))
+        };
+        match shape(op0, op1) {
+            Some((y, flags)) => (true, y, flags),
+            None => {
+                let (y, flags) = shape(op1, op0)?;
+                (false, y, flags)
+            }
+        }
+    };
+    // `m_c_ICmp` states the predicate with the sub on the left.
+    let matched = if sub_first { pred } else { pred.swapped() };
+    let (sub, add) = flags;
+    let both = |flag: Flags| sub.contains(flag) && add.contains(flag);
+    let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    let holds = if equality {
+        (sub.contains(Flags::NUW) || sub.contains(Flags::NSW)) && (add.contains(Flags::NUW) || add.contains(Flags::NSW))
+    } else if pred.is_signed() {
+        both(Flags::NSW)
+    } else {
+        both(Flags::NUW)
+    };
+    if !holds {
+        return None;
+    }
+    let ty = c.type_of(y);
+    let zero = c.int(ty, 0);
+    let i1 = c.context.types.int(1);
+    let keep =
+        if c.function.instruction(inst).flags.contains(Flags::SAMESIGN) { Flags::SAMESIGN } else { Flags::default() };
+    Some(c.replace_with_new(inst, Opcode::ICmp(matched.swapped()), i1, vec![y, zero], keep))
 }
 
 /// The two folds of a `umax` against its own complement in `visitICmpInst`

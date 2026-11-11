@@ -954,3 +954,40 @@ fn test_a_compare_of_a_narrower_inttoptr_is_kept() {
     );
     assert!(out.contains("icmp eq ptr"), "{out}");
 }
+
+/// `icmp-subadd.ll`: `sub`/`add` of the same operands under `pred`, as in
+/// the pin's cases, left as the compare of `y` alone.
+fn sub_add(
+    sub: &str,
+    add: &str,
+    pred: &str,
+    swapped: bool,
+    after: &str,
+) {
+    let (l, r) = if swapped { ("%add", "%sub") } else { ("%sub", "%add") };
+    let body = format!(
+        "  %sub = sub {sub} i8 %a, %b\n  %add = add {add} i8 %a, %b\n  %cmp = icmp {pred} i8 {l}, {r}\n  ret i1 %cmp\n"
+    );
+    check("i8 %a, i8 %b", &body, after);
+}
+
+/// `icmp sgt (sub nsw a, b), (add nsw a, b)` stayed three instructions
+/// instead of `icmp slt b, 0`; `slt`, `sle`, the commuted order and
+/// equality with `nsw` or `nuw` on each side follow.
+#[test]
+fn a_sub_and_an_add_of_the_same_operands_compare_as_b_against_zero() {
+    sub_add("nsw", "nsw", "sgt", false, "  %0 = icmp slt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "slt", false, "  %0 = icmp sgt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "sle", false, "  %0 = icmp sgt i8 %b, -1\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "sgt", true, "  %0 = icmp sgt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nuw", "eq", false, "  %0 = icmp eq i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "eq", false, "  %0 = icmp eq i8 %b, 0\n  ret i1 %0\n");
+}
+
+/// A signed compare of `nuw` operands (and the reverse) is not the fold's.
+#[test]
+fn a_sub_and_an_add_without_the_flag_of_the_predicate_stay() {
+    let kept =
+        "  %sub = sub nuw i8 %a, %b\n  %add = add nuw i8 %a, %b\n  %cmp = icmp sge i8 %add, %sub\n  ret i1 %cmp\n";
+    sub_add("nuw", "nuw", "sge", true, kept);
+}

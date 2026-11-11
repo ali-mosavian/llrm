@@ -117,9 +117,10 @@ pub struct Unit {
     pub begin_group: bool,
     pub end_group: bool,
     pub writes: Vec<WriteRes>,
-    /// Uses a resource whose buffer is 0 (`SU->isUnbuffered`).
+    /// Uses a resource whose buffer size is 1 (`SU->isUnbuffered`:
+    /// `initSUnits`, ScheduleDAGInstrs.cpp#L603).
     pub is_unbuffered: bool,
-    /// Uses a reserved (unbuffered, grouped) resource (`hasReservedResource`).
+    /// Uses a resource whose buffer size is 0 (`SU->hasReservedResource`).
     pub has_reserved_resource: bool,
     pub depth: u32,
     pub height: u32,

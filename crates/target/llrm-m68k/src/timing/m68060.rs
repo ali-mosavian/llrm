@@ -168,6 +168,8 @@ fn label(
         Mode::PcDisp => "(d16,PC)",
         Mode::PcIndex => "(d8,PC,Xi*SF)",
         Mode::Imm => "#<data>",
+        // full-format forms are not read for the 68060: no row matches
+        Mode::IndexW | Mode::IndexL | Mode::IndexB => "(full-format index)",
     }
 }
 
