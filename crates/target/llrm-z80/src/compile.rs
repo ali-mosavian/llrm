@@ -1147,9 +1147,10 @@ pub enum StackRefusal {
     /// A spill between the reservation of a call's stack arguments and the
     /// call.
     CallArea,
-    /// A byte stored from one half of a pair and loaded into the other half:
-    /// `pop` puts the low byte back in a low half (copy_runs `sum` spilled `e`
-    /// and reloaded `d`). A word may be loaded into any pair.
+    /// A byte stored from both halves of a pair (a pop puts it back in one), or
+    /// a slot read as a word and as a byte. A byte loaded into the other half
+    /// than it was stored from is a pop and a copy (huffman_decode -O1); a word
+    /// may be loaded into any pair.
     DifferentLane,
     /// A store with the slot already on the stack.
     StoreOnStack,
@@ -1210,6 +1211,8 @@ pub fn stack_slot_report_by(
     let mut barred: std::collections::BTreeMap<i32, StackRefusal> = std::collections::BTreeMap::new();
     let mut accesses: std::collections::BTreeMap<i32, (usize, usize)> = std::collections::BTreeMap::new();
     let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
+    let mut load_lanes: std::collections::BTreeMap<i32, std::collections::BTreeSet<u8>> =
+        std::collections::BTreeMap::new();
     let areas = call_areas(function);
     for (b, block) in function.blocks.iter().enumerate() {
         for (at, inst) in block.insts.iter().enumerate() {
@@ -1222,9 +1225,15 @@ pub fn stack_slot_report_by(
                 } else {
                     counts.1 += 1;
                 }
+                // only the stores say which half the pop puts the byte back in: a load
+                // into the other half is a copy after the pop
                 let lane = pair_lane(register);
-                if *lane_of.entry(slot).or_insert(lane) != lane {
-                    barred.entry(slot).or_insert(StackRefusal::DifferentLane);
+                if store {
+                    if *lane_of.entry(slot).or_insert(lane) != lane {
+                        barred.entry(slot).or_insert(StackRefusal::DifferentLane);
+                    }
+                } else {
+                    load_lanes.entry(slot).or_default().insert(lane);
                 }
                 if stack_pair(register).is_none() {
                     barred.entry(slot).or_insert(StackRefusal::NoPair);
@@ -1234,9 +1243,23 @@ pub fn stack_slot_report_by(
             }
         }
     }
+    // a byte comes back in the other half through a copy; a word and a byte do not meet
+    let mut crossing: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    for (slot, lanes) in &load_lanes {
+        let Some(stored) = lane_of.get(slot) else { continue };
+        if lanes.iter().any(|lane| lane != stored && (*lane == 0 || *stored == 0)) {
+            barred.entry(*slot).or_insert(StackRefusal::DifferentLane);
+        } else if lanes.iter().any(|lane| lane != stored) {
+            crossing.insert(*slot);
+        }
+    }
     chosen.retain(|slot| !barred.contains_key(slot));
+    // the slots that need a copy are tried after the others, one by one, and
+    // kept only where they take no other slot from the stack
+    let chosen_crossing: Vec<i32> = chosen.iter().copied().filter(|slot| crossing.contains(slot)).collect();
+    chosen.retain(|slot| !crossing.contains(slot));
     let mut refused: Vec<(i32, StackRefusal)> = barred.into_iter().collect();
-    if chosen.is_empty() {
+    if chosen.is_empty() && chosen_crossing.is_empty() {
         return StackReport { pushed: Vec::new(), refused, accesses };
     }
     let succs = llrm_spike_mf::regalloc::successors(function);
@@ -1385,22 +1408,47 @@ pub fn stack_slot_report_by(
         chosen.remove(&slot);
         refused.push((slot, why));
     }
+    if !chosen_crossing.is_empty() {
+        for slot in chosen_crossing {
+            chosen.insert(slot);
+            if let Some((_, why)) = violation(function, &chosen, &mut peeks) {
+                chosen.remove(&slot);
+                refused.push((slot, why));
+            }
+        }
+        // the reads to peek are those of the stack as kept
+        let settled = violation(function, &chosen, &mut peeks);
+        debug_assert!(settled.is_none(), "{settled:?}");
+    }
     for (b, block) in function.blocks.iter_mut().enumerate() {
-        for (at, inst) in block.insts.iter_mut().enumerate() {
-            match spill(inst) {
+        let mut rewritten = Vec::with_capacity(block.insts.len());
+        for (at, mut inst) in std::mem::take(&mut block.insts).into_iter().enumerate() {
+            let mut after = None;
+            match spill(&inst) {
                 Some((true, slot, _)) if chosen.contains(&slot) => {
                     inst.kind = Kind::Op("PUSHP");
                     inst.operands.remove(0);
                     inst.may_store = false;
                 }
-                Some((false, slot, _)) if chosen.contains(&slot) => {
+                Some((false, slot, loaded)) if chosen.contains(&slot) => {
                     inst.kind = Kind::Op(if peeks.contains(&(b, at)) { "PEEKP" } else { "POPP" });
                     inst.operands.remove(1);
                     inst.may_load = false;
+                    // the pop put the byte back in the half it was stored from
+                    if let (Some(&stored), Some(pair)) = (lane_of.get(&slot), stack_pair(loaded)) {
+                        if stored != pair_lane(loaded) {
+                            let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                            let from = if stored == 1 { lo } else { hi };
+                            after = Some(Inst::copy(Reg::Phys(loaded), Reg::Phys(from)));
+                        }
+                    }
                 }
                 _ => {}
             }
+            rewritten.push(inst);
+            rewritten.extend(after);
         }
+        block.insts = rewritten;
     }
     refused.sort_by_key(|(slot, _)| *slot);
     StackReport { pushed: chosen.into_iter().collect(), refused, accesses }
