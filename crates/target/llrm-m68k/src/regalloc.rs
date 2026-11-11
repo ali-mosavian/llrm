@@ -495,6 +495,11 @@ pub fn relax_copy_only_classes(function: &mut MFunction) {
         for (at, operand) in inst.operands.iter().enumerate() {
             let (Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = operand else { continue };
             let v = *v as usize;
+            // a move into an address register leaves the codes alone: a value a
+            // flag setter defines stays in a data register
+            if inst.sets_flags && matches!(operand, Operand::Def(_)) {
+                fixed[v] = true;
+            }
             match inst.kind {
                 Kind::Op(name) => match crate::mfunc::operand_class(name, at).and_then(|class| wanted[v].meet(class)) {
                     Some(class) => wanted[v] = class,
