@@ -455,8 +455,8 @@ impl Peephole {
 /// a target that says so (`Tuning::push_imm_at_size`), in blocks that run at
 /// most once per call. `-Os` has no clocks-for-bytes rate, and the pair is
 /// 5 clocks on the 486 (`push` 1, `pop` 4) against the `mov`'s 1: in a loop
-/// it was jpeg_fixed `-Os` +1.3% clk (244k pops) for 46 B. A block of unknown
-/// frequency keeps the `mov`.
+/// it was jpeg_fixed `-Os` +1.3% clk (244k pops) for 46 B. The frequency is the
+/// block's, relative to the entry's.
 ///
 /// [X86InstrInfo.cpp:6236]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6236
@@ -470,8 +470,9 @@ pub fn pushed_immediates(
     }
     // The pin's `minsize` rewrites everywhere; the `-Os` deviation only where the pair runs at most once per call.
     let everywhere = body.min_size || cpu.min_size;
-    let once = |at: i64| {
-        everywhere || body.frequencies.as_ref().and_then(|kept| kept.0.get(&at)).is_some_and(|runs| *runs <= 1.0)
+    let frequencies = (!everywhere).then(|| crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body));
+    let once = |index: usize| {
+        frequencies.as_ref().is_none_or(|mbfi| mbfi.get_block_freq_relative_to_entry_block(index) <= 1.0)
     };
     let regs = body.regs();
     let sp = Loc::Reg(reg(regs.named(regs.stack, 4), 4));
@@ -499,9 +500,10 @@ pub fn pushed_immediates(
     let blocks = body
         .blocks
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(index, block)| {
             let mut insns = Vec::with_capacity(block.insns.len());
-            let once = once(block.at);
+            let once = once(index);
             for one in &block.insns {
                 match imm8(one).filter(|_| once) {
                     Some(dest) => {

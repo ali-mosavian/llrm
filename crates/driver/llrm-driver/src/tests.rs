@@ -1139,7 +1139,8 @@ fn a_small_immediate_at_m32_os_is_a_mov_in_a_loop() {
     let text = "target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 define i32 @f(i32 %n, ptr %p) optsize {\n\
-                entry:\n  %first = load volatile i32, ptr %p\n  %lead = select i1 icmp slt (i32 0, i32 1), i32 41, i32 43\n  br label %loop\n\
+                entry:\n  %first = load volatile i32, ptr %p\n  %z = icmp slt i32 %first, 0\n  br i1 %z, label %early, label %loop\n\
+                early:\n  ret i32 41\n\
                 loop:\n  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i32 [ %first, %entry ], [ %s2, %loop ]\n\
                 \x20 %v = load volatile i32, ptr %p\n  %c = icmp slt i32 %v, 0\n  %k = select i1 %c, i32 40, i32 50\n\
                 \x20 %s2 = add i32 %s, %k\n  %i2 = add i32 %i, 1\n  %d = icmp eq i32 %i2, %n\n  br i1 %d, label %out, label %loop\n\
@@ -1147,6 +1148,7 @@ fn a_small_immediate_at_m32_os_is_a_mov_in_a_loop() {
     let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("pushd 40") && !listing.contains("pushd 50"), "{listing}");
+    assert!(listing.contains("pushd 41"), "the once-per-call constant stays push/pop: {listing}");
 }
 
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
