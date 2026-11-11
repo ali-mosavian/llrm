@@ -3113,3 +3113,35 @@ fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_a
     assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
     assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
 }
+
+/// The div_ceil idiom of the pin's `divceil.ll` reached `visitAdd` in the
+/// -O2 pipeline unfolded: the backend divided twice (`udiv` and `urem`).
+#[test]
+fn test_o2_folds_the_div_ceil_idiom_to_one_udiv() {
+    let text = "define i8 @f(i8 range(i8 0, 101) %x, i8 range(i8 1, 11) %y) {
+b:
+  %q = udiv i8 %x, %y
+  %r = urem i8 %x, %y
+  %c = icmp ne i8 %r, 0
+  %z = zext i1 %c to i8
+  %res = add i8 %q, %z
+  ret i8 %res
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("urem"), "premise: with no passes the idiom stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("udiv") && !after.contains("urem"), "{after}");
+}
