@@ -115,11 +115,6 @@ pub fn phi_elimination(f: &mut Function) -> bool {
 /// needs sits on the edge and the coalescer can join it. Back edges of a loop
 /// are kept whole, to leave the loop free of out-of-line blocks.
 ///
-/// DEVIATE: run at -O2 and above only; the pin runs it wherever `LiveVariables`
-/// does, -O1 too, where it pays the split block's bytes (pin `llc -O1` sieve
-/// 529 B -> 539 B with it). Reason: wasm has no coalescer at -O1 either, and
-/// at -O2 the pin's size is the same with and without it. Exit: none.
-///
 /// DEVIATE: the edges are chosen on the function as it is before any split,
 /// and split afterwards; the pin decides one block at a time on the function
 /// so far. Reason: a split adds an empty block, which changes no register's
@@ -162,7 +157,7 @@ pub fn split_phi_edges(f: &mut Function) -> bool {
                     // An edge entering a loop from outside is kept.
                     split = pre.is_some_and(|pre| !pre.contains_loop(cur));
                 }
-                if split {
+                if split && can_split_critical_edge(f, pred) {
                     edges.push((pred, block));
                 }
             }
@@ -181,6 +176,21 @@ pub fn split_phi_edges(f: &mut Function) -> bool {
         }
     }
     !edges.is_empty()
+}
+
+/// `MachineBasicBlock::canSplitCriticalEdge`: the terminators of `pred` have
+/// to be ones `analyzeBranch` understands, so a block ending in `BR_TABLE`
+/// keeps its edges whole and the PHI copy goes before the jump. The pin's
+/// jump-table path (`findJumpTableIndex`) does not apply: wasm's `BR_TABLE`
+/// names its blocks, not a jump table (pin `-debug-only=phi-node-elimination`:
+/// "Failed to split critical edge").
+fn can_split_critical_edge(
+    f: &Function,
+    pred: usize,
+) -> bool {
+    // Both exits to one block is a degenerate input the pin leaves alone.
+    crate::tail_merge::analyze_branch(&f.blocks[pred])
+        .is_some_and(|exits| exits.taken.is_none() || exits.taken != exits.other)
 }
 
 /// A block of one `BR` between `pred` and `block`, laid out after `pred`.
@@ -300,6 +310,20 @@ mod tests {
         assert!(split_phi_edges(&mut f));
         assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(2)])), "{:?}", f.blocks[0]);
         assert_eq!(f.blocks[0][2].operands[0], Operand::Block(1));
+    }
+
+    /// bb0 ends in a `BR_TABLE`, which `analyzeBranch` cannot read, so the pin
+    /// refuses to split its edge: the PHI copy goes in bb0. We split anyway
+    /// and left an empty block on the switch's first case (wasm
+    /// div_constants -O1 +7 B per function).
+    #[test]
+    fn an_edge_out_of_a_br_table_is_not_split() {
+        let mut f = function();
+        let last = f.blocks[0].len() - 2;
+        f.blocks[0].truncate(last);
+        f.blocks[0].push(Inst::new(op::BR_TABLE_I32, &[Operand::Use(1), Operand::Block(2), Operand::Block(1)]));
+        assert!(!split_phi_edges(&mut f));
+        assert_eq!(f.blocks.len(), 3);
     }
 
     /// A branch-free function has no edge to split.

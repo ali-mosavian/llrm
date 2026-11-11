@@ -273,11 +273,22 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// A loop with an address use keeps LSR's solution (DEVIATE LU15): the
-    /// baseline prices every address as one register, so the pointer that
-    /// replaces `base + i * size` always looks worse than the multiply it
-    /// removes.
-    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+    /// `i * 54` is a `__mulhi3` call where the step is not `(2^k +- 1) * 2^z`
+    /// (`mul_by_constant_stays_in_line`): LSR's baseline charges the call that
+    /// the reduction removes (DEVIATE LU17).
+    fn lsr_written_step_multiplies(
+        &self,
+        step: i64,
+        bits: u32,
+    ) -> u32 {
+        u32::from(!crate::dagisel::combine::mul_by_constant_stays_in_line(bits, i128::from(step), false))
+    }
+
+    /// A constant offset in an address with one pointer cell is the `y` of
+    /// `(zp),y`, loaded after LSR (`gepoffset`): LSR's unfolded add of it is
+    /// no instruction. 54 stores of `g[i][k]` otherwise cost 53 base adds and
+    /// the loop kept its `__mulhi3` call (DEVIATE LU16).
+    fn unfolded_address_offsets_fold(&self) -> bool {
         true
     }
 

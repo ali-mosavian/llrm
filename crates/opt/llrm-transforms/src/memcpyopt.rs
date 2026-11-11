@@ -152,11 +152,17 @@ impl FunctionPass for MemCpyOpt {
             accesses,
             updater: MemorySsaUpdater::new(),
         };
-        if state.run_impl() {
-            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
-        } else {
-            PreservedAnalyses::all()
+        if !state.run_impl() {
+            return PreservedAnalyses::all();
         }
+        // `PA.preserve<MemorySSAAnalysis>()`: the graph the updater kept is
+        // the manager's from here.
+        let State { mssa, accesses, .. } = state;
+        analyses.replace::<llrm_analysis::manager::MemorySsa>(
+            &*unit.function,
+            Ok(Rc::new(llrm_analysis::manager::MssaGraph::new(mssa, Some(Rc::new(accesses))))),
+        );
+        PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve_updated::<llrm_analysis::manager::MemorySsa>()
     }
 }
 

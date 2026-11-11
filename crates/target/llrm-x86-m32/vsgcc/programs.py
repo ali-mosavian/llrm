@@ -17,6 +17,11 @@ LLRM_FLAGS = ["-m32", "-mabi=sysv", "-mlong-double-80", "-march=i486"]  # build.
 CC_FLAGS = ["-mabi=sysv"]  # llrm-cc's: the target is a row, named by llrmbin.c_args(32)
 
 
+# The programs that read or write files (`// data:`): bench_io_shim.h and the harness's file emulation run them. Opt in by name (build.sh, harness.py):
+# run.sh's list and the compile-time tools build without a file API, so these stay out of `sources()`.
+FILE_PROGRAMS = ("stft_fixed", "stft_single", "grep", "jpeg_fixed", "jpeg_single")
+
+
 def sources() -> dict[str, Path]:
     """Program name -> its source: bench/ and the x_ kernels written for the comparison."""
     found = {p.name: p / f"{p.name}.c" for p in benchlist.directories(REPO / "bench", parity=False)
@@ -43,4 +48,4 @@ def stale_skips() -> list[str]:
 
 
 if __name__ == "__main__":
-    print(" ".join(sources()))  # run.sh's list
+    print(" ".join(FILE_PROGRAMS if sys.argv[1:] == ["files"] else sources()))  # run.sh's list; `files`: the opt-in list

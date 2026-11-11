@@ -32,17 +32,22 @@ fn the_68000_has_no_32_bit_multiply_so_a_near_power_of_two_is_always_shifts_and_
 }
 
 #[test]
-fn the_68020_keeps_muls_l_at_size_and_strict_levels_and_takes_the_chain_where_clocks_are_priced() {
+fn the_68020_keeps_muls_l_at_size_and_takes_the_chain_where_clocks_are_priced() {
     // the chain is 6 B or more against `muls.l`'s 4 (its constant register is
-    // shared): -Os and -O1 keep the multiply
-    for (level, c) in [(Level::Os, 6), (Level::Os, 9), (Level::O1, 9), (Level::O1, 127)] {
-        let out = compile("68020", level, c);
-        assert!(out.contains("muls.l"), "68020 {level:?} x*{c}: a longer chain:\n{out}");
+    // shared): -Os keeps the multiply
+    for c in [6, 9] {
+        let out = compile("68020", Level::Os, c);
+        assert!(out.contains("muls.l"), "68020 -Os x*{c}: a longer chain:\n{out}");
     }
     // -O2 prices clocks beside bytes: shifts and an add against a 40-odd clock
-    // multiply
-    for c in [3, 9, 127] {
-        let out = compile("68020", Level::O2, c);
-        assert!(!out.contains("muls.l"), "68020 -O2 x*{c}: a multiply:\n{out}");
+    // multiply. -O1 stands on the pin's chain unless the multiply is no worse in
+    // bytes and in clocks: `x * 9` at -O1 read `moveq #9; muls.l` (43 clocks)
+    // where the pin's clang has shifts and an add (byte_multiply, shift_int64_variable,
+    // select_of_constants: 43 68020 O1 cells with a multiply the best column does not execute).
+    for level in [Level::O1, Level::O2] {
+        for c in [3, 9, 127] {
+            let out = compile("68020", level, c);
+            assert!(!out.contains("muls.l"), "68020 {level:?} x*{c}: a multiply:\n{out}");
+        }
     }
 }
