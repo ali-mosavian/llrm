@@ -179,13 +179,16 @@ pub fn compiled_module_trying(
                 one.globals.iter().filter(|global| global.function().is_some_and(|f| !f.is_declaration())).count();
             eprintln!("trial unrotated: {} of {defined} functions differ: {cut:?}", cut.len());
         }
-        // Pricing the cut twice and assembling the winner costs `2 * cut + all` instructions of backend
-        // work; both modules whole cost `2 * all`. The cut is the cheaper only while it is under half.
+        // Pricing the cut twice and assembling the winner costs `2 * cut + all`
+        // instructions of backend work; both modules whole cost `2 *
+        // all`. The cut is the cheaper only while it is under half.
         let size = |module: &Module, only: Option<&BTreeSet<String>>| -> usize {
             module
                 .globals
                 .iter()
-                .filter_map(|global| Some((global.name.as_deref()?, global.function().filter(|f| !f.is_declaration())?)))
+                .filter_map(|global| {
+                    Some((global.name.as_deref()?, global.function().filter(|f| !f.is_declaration())?))
+                })
                 .filter(|(name, _)| only.is_none_or(|cut| cut.contains(*name)))
                 .map(|(_, function)| function.instruction_count())
                 .sum()
