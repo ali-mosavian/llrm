@@ -140,6 +140,12 @@ pub struct Target {
     /// a latch branch on a compare tested one block up.
     #[serde(default)]
     pub thread_jumps_at_o1: bool,
+    /// `-fwhole-program` is the default where the driver links one C source
+    /// into an executable: nothing else names its globals, so what `main`
+    /// does not reach is not in the program (LLVM's `InternalizePass` with
+    /// `GlobalDCE`; llvm-mos's `--gc-sections` does the same).
+    #[serde(default)]
+    pub whole_program: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -691,6 +697,19 @@ fn threads_jumps_at_o1(
         && !build.llc.iter().any(|flag| flag == "-fthread-jumps" || flag == "-fno-thread-jumps")
 }
 
+/// Whether the build links a single C source into an executable on a target
+/// that sweeps what `main` does not reach, unless the command line states
+/// either `-f[no-]whole-program`.
+fn sweeps_whole_program(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.whole_program
+        && build.stop == Stop::Executable
+        && matches!(build.inputs.as_slice(), [Input::Source(_)])
+        && !build.llc.iter().any(|flag| flag == "-fwhole-program" || flag == "-fno-whole-program")
+}
+
 /// Whether `flag` is one of the backend pipeline's `-f[no-]PASS` switches.
 fn is_pass_switch(flag: &str) -> bool {
     backend_pass(flag).is_some()
@@ -728,6 +747,9 @@ pub fn llc_args(
     }
     if threads_jumps_at_o1(target, build) {
         args.push("-fthread-jumps".into());
+    }
+    if sweeps_whole_program(target, build) {
+        args.push("-fwhole-program".into());
     }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
