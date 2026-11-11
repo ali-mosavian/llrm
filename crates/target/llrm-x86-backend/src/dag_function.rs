@@ -586,6 +586,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_x86_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
                         (llrm_x86_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
                         (llrm_x86_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_x86_dagisel::x86_llrm::PUSHF_OPCODE, "PUSH_FLAGS"),
                         (llrm_x86_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
                         (llrm_x86_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
                         (llrm_x86_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),

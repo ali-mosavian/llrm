@@ -2612,6 +2612,11 @@ impl Emitter<'_, '_> {
                 self.inline_places.push((at, patched));
                 return Ok(Some(()));
             }
+            // The flags an interrupt function's `iret` pops.
+            "PUSH_FLAGS" => {
+                self.push(Operation::Nothing, "pushf", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
             // `llrm.ia16.in`/`out`: a barrier the later passes give `in`/`out`
             // forms; the port is an immediate byte or `dx`. A node with a
             // value result reads.
