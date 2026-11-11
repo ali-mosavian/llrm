@@ -184,7 +184,7 @@ pub fn split_phi_edges(f: &mut Function) -> bool {
 /// jump-table path (`findJumpTableIndex`) does not apply: wasm's `BR_TABLE`
 /// names its blocks, not a jump table (pin `-debug-only=phi-node-elimination`:
 /// "Failed to split critical edge").
-fn can_split_critical_edge(
+pub(crate) fn can_split_critical_edge(
     f: &Function,
     pred: usize,
 ) -> bool {
