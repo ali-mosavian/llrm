@@ -84,6 +84,8 @@ pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
     /// DEVIATE TA-LC (`Profile::commute_loop_carried`).
     pub loop_carried: bool,
+    /// DEVIATE TA-LC2 (`Profile::commutes_loop_carried_flow`).
+    pub loop_carried_flow: bool,
     /// -O0: only the copies that untie, no liveness (the pin's
     /// `tryInstructionTransform` returns at `CodeGenOptLevel::None`,
     /// TwoAddressInstructionPass.cpp#L1352-L1354).
@@ -107,7 +109,11 @@ impl LIRTransform for TwoAddress {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(if self.unoptimized { untied_only(&body) } else { tied_with(&body, self.lea, self.loop_carried) })
+        Ok(if self.unoptimized {
+            untied_only(&body)
+        } else {
+            tied_with(&body, self.lea, self.loop_carried, self.loop_carried_flow)
+        })
     }
 }
 
@@ -152,14 +158,15 @@ pub fn tied(
     body: &LirBody,
     lea: crate::twoaddress::ThreeAddress,
 ) -> LirBody {
-    tied_with(body, lea, false)
+    tied_with(body, lea, false, false)
 }
 
-/// [`tied`], with DEVIATE TA-LC on or off.
+/// [`tied`], with DEVIATE TA-LC and TA-LC2 on or off.
 pub fn tied_with(
     body: &LirBody,
     lea: crate::twoaddress::ThreeAddress,
     loop_carried: bool,
+    loop_carried_flow: bool,
 ) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
@@ -186,8 +193,9 @@ pub fn tied_with(
                 .get(&block.at)
                 .is_some_and(crate::backend::lanes::Lanes::is_empty)
         };
-        let mut walk =
-            crate::twoaddress::Commuter::sized(&facts, at, block.insns.len()).with_loop_carried(loop_carried);
+        let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len())
+            .with_loop_carried(loop_carried)
+            .with_loop_carried_flow(loop_carried_flow);
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;
@@ -1431,9 +1439,63 @@ mod tests {
                     _ => None,
                 })
         };
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false)), Some(8), "off is the pin's order");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false)), Some(8), "off is the pin's order");
         assert_eq!(copied_from(&tied(&loop_body(), Off)), Some(8), "the default is off");
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true)), Some(7), "on ties the loop-carried source");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, false)), Some(7), "on ties the loop-carried source");
+    }
+
+    /// x_adler's `a += (i * 31 + 7) & 255` (m32 -O2, 53,972 clk against gcc's
+    /// 49,551): after phi elimination `v8` is a copy of the loop-carried `v28`
+    /// and the sum `v9 = add v7, v8` goes back to `v28` through copies in the
+    /// following blocks (`v29 := v9` in the `a -= 65521` merge, `v28 := v29` on
+    /// the back edge). The pin ties the fresh `v7` and copies `v8` first, a
+    /// `mov` per iteration; DEVIATE TA-LC2 (the flow of the result through
+    /// copies into other blocks counts as TA-LC's copy-back) ties `v8`.
+    #[test]
+    fn test_a_sum_that_reaches_its_loop_carried_source_through_later_blocks_ties_that_source_when_on() {
+        let loop_body = || {
+            LirBody::new(
+                "t",
+                0,
+                vec![
+                    LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![imm_def(0, 28)]) }.into(),
+                    LirBlock {
+                        succ: vec![2].into(),
+                        ..LirBlock::new(1, vec![copy_insn(1, 8, 28), imm_def(2, 7), sum_into(3, 9, 7, 8), read(4, 9)])
+                    }
+                    .into(),
+                    LirBlock { succ: vec![3].into(), ..LirBlock::new(2, vec![copy_insn(5, 29, 9)]) }.into(),
+                    LirBlock { succ: vec![1, 4].into(), ..LirBlock::new(3, vec![copy_insn(6, 28, 29)]) }.into(),
+                    LirBlock::new(4, vec![read(7, 28)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        // The copy the tied `add` needs is made from the operand the result
+        // ties to: `v7` (the pin) or `v8`, the loop-carried value.
+        let copied_from = |body: &LirBody| {
+            body.iter_insns()
+                .find(|one| {
+                    one.what
+                        .as_ref()
+                        .is_some_and(
+                            |what| what.name.as_deref() == Some("mov")
+                                && matches!(what.dests.first(), Some(Loc::Held(into)) if into.value == 9),
+                        )
+                })
+                .and_then(|one| match one.what.as_ref()?.sources.first()? {
+                    Loc::Held(from) => Some(from.value),
+                    _ => None,
+                })
+        };
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false)), Some(7), "off is the pin's order");
+        assert_eq!(
+            copied_from(&tied_with(&loop_body(), Off, true, false)),
+            Some(7),
+            "TA-LC alone does not follow copies into other blocks (-O1)"
+        );
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, true)), Some(8), "on ties the loop-carried source");
     }
 
     /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the

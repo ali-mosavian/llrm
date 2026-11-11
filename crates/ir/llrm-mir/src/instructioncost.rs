@@ -56,6 +56,51 @@ pub fn operand_type(
     }
 }
 
+/// `llvm.fshl` or `llvm.fshr` of any integer width.
+fn is_funnel_shift(name: &str) -> bool {
+    ["llvm.fshl", "llvm.fshr"]
+        .iter()
+        .any(|one| name.strip_prefix(one).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+}
+
+/// `BasicTTIImplBase::getIntrinsicInstrCost` for `fshl` and `fshr` with the
+/// call's operands: `(X << (Z % BW)) | (Y >> (BW - (Z % BW)))`, so an `or`, a
+/// `shl` and a `lshr`; a variable `Z` adds the `sub`, the modulo (an `and`
+/// at a power-of-two width, else a `urem`) and, unless it is a rotate
+/// (`X == Y`), the compare and select that guard a shift by zero. A target
+/// that prices the intrinsic itself keeps its price.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2112>
+fn funnel_shift_cost(
+    tti: &dyn Tti,
+    ty: Ty,
+    kind: CostKind,
+    operands: &[Operand],
+    info: &dyn Fn(usize) -> OperandInfo,
+) -> Cost {
+    let amount = info(2);
+    let by_amount = OperandInfo { constant: amount.constant, ..OperandInfo::ANY };
+    let width_constant = OperandInfo { constant: true, ..OperandInfo::ANY };
+    let mut cost = tti.arithmetic_cost(ArithOp::Or, ty, kind, OperandInfo::ANY, OperandInfo::ANY)
+        + tti.arithmetic_cost(ArithOp::Shl, ty, kind, info(0), by_amount)
+        + tti.arithmetic_cost(ArithOp::LShr, ty, kind, info(1), by_amount);
+    if !amount.constant {
+        let power_of_two = matches!(ty, Ty::Int(bits) if bits.is_power_of_two());
+        cost = cost
+            + tti.arithmetic_cost(ArithOp::Sub, ty, kind, OperandInfo::ANY, OperandInfo::ANY)
+            + tti.arithmetic_cost(
+                if power_of_two { ArithOp::And } else { ArithOp::URem },
+                ty,
+                kind,
+                amount,
+                width_constant,
+            );
+        if operands[0] != operands[1] {
+            cost = cost + tti.cmp_sel_cost(CmpSel::ICmp, ty, kind) + tti.cmp_sel_cost(CmpSel::Select, ty, kind);
+        }
+    }
+    cost
+}
+
 fn arith_of(op: BinaryOp) -> ArithOp {
     match op {
         BinaryOp::Add => ArithOp::Add,
@@ -287,7 +332,15 @@ pub fn instruction_cost_with(
                     operands[..operands.len() - 1].iter().map(|&one| modelled(one)).collect();
                 let ret = result;
                 return match arguments {
-                    Some(arguments) => tti.intrinsic_cost(name.unwrap_or(""), ret, &arguments, kind),
+                    Some(arguments) => {
+                        let priced = tti.intrinsic_cost(name.unwrap_or(""), ret, &arguments, kind);
+                        match ret {
+                            Some(ty @ Ty::Int(_)) if !priced.valid && is_funnel_shift(name.unwrap_or("")) => {
+                                funnel_shift_cost(tti, ty, kind, operands, &|at| info(at))
+                            }
+                            _ => priced,
+                        }
+                    }
                     None => Cost::INVALID,
                 };
             }

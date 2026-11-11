@@ -28,7 +28,7 @@ fn the_prg_runs_in_vice_and_leaves_7_on_the_screen() {
 fn a_compiled_program_runs_in_vice() {
     let ir = "define i8 @sum(i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [0, %entry], [%i2, %loop]\n  %s = phi i8 [0, %entry], [%s2, %loop]\n  %i2 = add i8 %i, 1\n  %s2 = add i8 %s, %i2\n  %c = icmp ult i8 %i2, %n\n  br i1 %c, label %loop, label %done\ndone:\n  ret i8 %s2\n}\n\
 define i8 @_main() {\n  %s = call i8 @sum(i8 5)\n  %r = mul i8 %s, 2\n  ret i8 %r\n}";
-    let text = format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n{ir}");
+    let text = format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n{ir}");
     let module = llrm_mir::parse::module(&text).expect("parses");
     let code: String = ["sum", "_main"]
         .iter()
