@@ -16,7 +16,7 @@ Identity for a target that keeps the bar. DEVIATE UNROLL-ANALYZE, owner m68k flo
 
 ## A/B (release/next 7ca36f1e02 vs this commit, tests/run/c, 68000+68020, -O2/-O3/-Os)
 
-md5: base llrm-cc 4a889abc, llrm-llc 593c6eeb, llrm-m68k-llc d902b219; head llrm-cc 7af42b1c, llrm-llc 2ba30998, llrm-m68k-llc c5b95cfb.
+md5: base llrm-cc 4a889abc, llrm-llc 593c6eeb, llrm-m68k-llc d902b219; head llrm-cc 32f9e8e8, llrm-llc 0305f632, llrm-m68k-llc dfa12180 (wasm/arm64/6502/z80 llcs in dist md5.txt, kept in ~/scratch/fml).
 834 cells compiled on both sides; 792 objects identical (all -Os); 42 differ (21 programs, -O2/-O3). All 84 changed exes run under qemu with the reference stdout.
 A first A/B had a base worktree one merge ahead of the parent and showed 3 false -Os differences; redone.
 
@@ -32,5 +32,14 @@ Clocks (cycles --exe 5110bd14; 68000 base -> head; 68020 similar) and object byt
 | loop_versioning | O3 | 592,166 -> 590,838 | 1252 -> 2400 |
 | huffman_decode | O2/O3 | 136,142 -> 137,364 (+0.9%) | 1672 -> 1716 |
 
-Open: huffman_decode is slower and loop_versioning +1148 B for -0.2% clocks (both unrolled by the analysis's folded cost, as the pin would at its own bar).
+## Other targets (same two dists, tests/run/c, -O2/-O3/-Os)
+
+x86_16-wat 534, x86_32-wat 522, x86_32-linux 426, x86_64-linux 417, arm64 417, wasm32 414, z80 348 cells: all compiled, all objects identical.
+6502-sim65 351 cells: 348 compiled on both sides (3 refused on both), 350 identical; memmove_overlap -O3 16056 -> 6334 B.
+
+## The two worse rows
+
+Pin opt (m68k triple, same C, `default<O3>`): loop_versioning "completely unrolled loop with 40 iterations" twice; huffman_decode -O2 unrolls a 6- and a 16-trip loop.
+Ours now unrolls the same 40-trip loops (size 7 and 8, unrolled 280 and 320; the pin's -O3 bar is 300). The pin unrolls them at its own bar; the m68k override (32) was suppressing that.
+m68k `unroll_milliclocks_per_byte` is 0 (unpriced), so a price veto needs a judged O2/O3 rate. Ruling asked of oversight.
 The outer loop of sum_of_steps stays a loop; the pin closes it through IndVarSimplify exit values (main folds, so not executed here).
