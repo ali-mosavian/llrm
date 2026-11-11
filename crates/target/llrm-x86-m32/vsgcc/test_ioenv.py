@@ -1,6 +1,7 @@
 """Regression tests of the file programs' instrument: each name says what went wrong and what it produced."""
 import subprocess
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,14 @@ def test_a_file_program_builds_under_gcc_through_wrap_py(name, tmp_path):
     assert "#include" not in "".join(l for l in source.read_text().splitlines() if "bench_io" in l)
     done = subprocess.run(["gcc", "-m32", "-w", "-fsyntax-only", str(source)], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr[:400]
+
+
+def test_a_kernel_copy_of_a_bench_program_finds_the_data_its_original_names():
+    """x_jpeg_single named `photo.jpg` beside the kernel, where it is not: harness.py died with FileNotFoundError and no cell
+    of the program had a row (x87 session, 11-11)."""
+    source = Path(__file__).parent / "kernels/x_jpeg_single/x_jpeg_single.c"
+    files, stdin = ioenv.inputs(source)
+    assert list(files) == ["PHOTO.JPG"] and files["PHOTO.JPG"][:2] == b"\xff\xd8" and stdin is None
 
 
 class Memory:
