@@ -311,6 +311,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::machinesched::MachineScheduler {
             classes: Rc::clone(classes),
             segments: segments.clone(),
+            model: Rc::new(crate::backend::schedmodel::GenericModel),
         }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
