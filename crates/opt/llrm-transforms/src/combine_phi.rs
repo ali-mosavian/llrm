@@ -75,6 +75,16 @@ use crate::combine_shared::query;
 pub(crate) const UB_IMPLYING: [&str; 6] =
     ["range", "nonnull", "align", "dereferenceable", "dereferenceable_or_null", "noundef"];
 
+/// What an incoming of a phi of constants becomes under one user (DEVIATE
+/// PHICONST).
+enum Folded {
+    /// A constant.
+    Constant(Operand),
+    /// The incoming is a phi of constants of its own block: the user applied to
+    /// each, as a phi there.
+    Nested { phi: InstId, values: Vec<Operand> },
+}
+
 impl Combiner<'_> {
     /// `Value::DoPHITranslation(block, pred)`: the incoming value from `pred`
     /// if `op` is a phi of `block`, else `op`.
@@ -190,7 +200,8 @@ impl Combiner<'_> {
         // Only a phi with one user, or whose users are all the same operation.
         let one_use = self.function.users(phi_value).has_one_use();
         let mut identical_users = false;
-        let mut constant_users: Vec<(InstId, Vec<Operand>)> = Vec::new();
+        let mut constant_users: Vec<(InstId, Vec<Folded>)> = Vec::new();
+        let mut own: Option<Vec<Folded>> = None;
         if !allow_multiple_uses && !one_use {
             if self
                 .function
@@ -198,16 +209,18 @@ impl Combiner<'_> {
                 .iter()
                 .any(|one| one.user != inst && !self.is_identical_to(inst, one.user))
             {
-                // DEVIATE PHICONST: every user folds to a constant on every incoming.
+                // DEVIATE PHICONST: every user folds to a constant on every
+                // incoming.
                 let users = if self.env.hooks.phi_constant_users {
                     self.users_folding_to_constants(inst, phi, &incoming)
                 } else {
                     None
                 };
-                let Some(users) = users else {
+                let Some((users, mine)) = users else {
                     return Visit::None;
                 };
                 constant_users = users;
+                own = Some(mine);
             } else {
                 identical_users = true;
             }
@@ -223,6 +236,10 @@ impl Combiner<'_> {
         let mut move_to_incoming: Vec<usize> = Vec::new();
         let mut seen_unsimplified = false;
         for (index, &(value, from)) in incoming.iter().enumerate() {
+            if let Some(mine) = &own {
+                new_values.push(Some(self.constant_of(&mine[index])));
+                continue;
+            }
             if let Some(found) = self.simplify_instruction_with_phi(inst, phi, value, from) {
                 new_values.push(Some(found));
                 continue;
@@ -312,8 +329,8 @@ impl Combiner<'_> {
         for (user, values) in constant_users {
             let ty = self.function.instruction(user).ty;
             let mut operands = Vec::with_capacity(incoming.len() * 2);
-            for (&(_, from), &value) in incoming.iter().zip(&values) {
-                operands.push(value);
+            for (&(_, from), value) in incoming.iter().zip(&values) {
+                operands.push(self.constant_of(value));
                 operands.push(Operand::Block(from));
             }
             let user_phi = self.insert_before(phi, Opcode::Phi, ty, operands, Default::default());
@@ -325,21 +342,47 @@ impl Combiner<'_> {
     }
 
     /// DEVIATE PHICONST: the users of `phi` other than `inst`, each with its
-    /// constant on every incoming, when `phi`'s incoming values are all
-    /// constants and every user (`inst` included) is a binary operator or cast
-    /// whose other operands are phi-translatable and which simplifies
-    /// to a constant on every incoming. `None` if any user does not.
+    /// constant on every incoming, and `inst`'s own, when `phi`'s incoming
+    /// values are all constants (or, DEVIATE PHICONST-2, a one-use phi of
+    /// constants in the incoming block, itself) and every user (`inst`
+    /// included) is a binary operator or cast whose other operands are
+    /// phi-translatable and which simplifies to a constant on every incoming.
+    /// `None` if any user does not.
     fn users_folding_to_constants(
         &mut self,
         inst: InstId,
         phi: InstId,
         incoming: &[(Operand, BlockId)],
-    ) -> Option<Vec<(InstId, Vec<Operand>)>> {
+    ) -> Option<(Vec<(InstId, Vec<Folded>)>, Vec<Folded>)> {
         let is_constant = |c: &Self, op: Operand| {
-            matches!(op, Operand::Constant(id) if !matches!(c.context.get(id).kind, ConstantKind::Expr(_)))
+            matches!(
+                op,
+                Operand::Constant(id) if !matches!(c.context.get(id).kind, ConstantKind::Expr(_))
+            )
         };
-        if !incoming.iter().all(|&(value, _)| is_constant(self, value)) {
-            return None;
+        // Each incoming is a constant, or a phi of constants of its own block
+        // that only this phi reads: the join of a diamond that picks the
+        // constant (x_cordic -O3's first CORDIC step).
+        let mut inner: Vec<Option<(InstId, Vec<(Operand, BlockId)>)>> = Vec::new();
+        for &(value, from) in incoming {
+            if is_constant(self, value) {
+                inner.push(None);
+                continue;
+            }
+            let Operand::Value(v) = value else { return None };
+            let ValueDef::Instruction(def) = self.function.value(v).def else { return None };
+            if self.function.instruction(def).opcode != Opcode::Phi {
+                return None;
+            }
+            let nested: Vec<(Operand, BlockId)> = pattern::phi_incoming(self.function.instruction(def)).collect();
+            if self.function.parent(def) != Some(from)
+                || !self.function.users(v).has_one_use()
+                || nested.is_empty()
+                || !nested.iter().all(|&(c, _)| is_constant(self, c))
+            {
+                return None;
+            }
+            inner.push(Some((def, nested)));
         }
         let phi_value = self.function.instruction(phi).result.expect("a phi's value");
         let phi_block = self.function.parent(phi).expect("a placed phi");
@@ -350,29 +393,95 @@ impl Combiner<'_> {
             }
         }
         let mut others = Vec::new();
+        let mut mine = Vec::new();
         for user in users {
             // Compares are left out: two compares of one phi become two phis of
-            // booleans, one the complement of the other (m16 float_in_place_update
-            // -O2 +12 B, +7 clocks), and a compare that feeds a branch is
-            // JumpThreading's.
-            if !matches!(self.function.instruction(user).opcode, Opcode::Binary(_) | Opcode::Cast(_))
+            // booleans, one the complement of the other (m16
+            // float_in_place_update -O2 +12 B, +7 clocks), and a
+            // compare that feeds a branch is JumpThreading's.
+            if !matches!(
+                self.function.instruction(user).opcode,
+                Opcode::Binary(_) | Opcode::Cast(_)
+            )
                 || !self.operands_phi_translatable(user, phi_value, phi_block)
             {
-                return None;
-            }
-            let mut values = Vec::with_capacity(incoming.len());
-            for &(value, from) in incoming {
-                let found = self.simplify_instruction_with_phi(user, phi, value, from)?;
-                if !is_constant(self, found) {
+                if user == inst {
                     return None;
                 }
-                values.push(found);
+                continue;
             }
-            if user != inst {
+            let mut values = Vec::with_capacity(incoming.len());
+            let mut folds = true;
+            for (&(value, from), nested) in incoming.iter().zip(&inner) {
+                match nested {
+                    None => match self.simplify_instruction_with_phi(user, phi, value, from) {
+                        Some(found) if is_constant(self, found) => values.push(Folded::Constant(found)),
+                        _ => {
+                            folds = false;
+                            break;
+                        }
+                    },
+                    Some((def, nested)) => {
+                        // The other operands must not depend on the edge.
+                        let others_constant = self
+                            .function
+                            .instruction(user)
+                            .operands
+                            .iter()
+                            .all(|&op| op == Operand::Value(phi_value) || is_constant(self, op));
+                        let mut folded = Vec::with_capacity(nested.len());
+                        for &(c, via) in nested {
+                            match self.simplify_instruction_with_phi(user, phi, c, via) {
+                                Some(found) if others_constant && is_constant(self, found) => folded.push(found),
+                                _ => {
+                                    folds = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if !folds {
+                            break;
+                        }
+                        values.push(Folded::Nested { phi: *def, values: folded });
+                    }
+                }
+            }
+            if !folds {
+                if user == inst {
+                    return None;
+                }
+                continue;
+            }
+            if user == inst {
+                mine = values;
+            } else {
                 others.push((user, values));
             }
         }
-        Some(others)
+        Some((others, mine))
+    }
+
+    /// The operand a folded incoming stands for; a nested one makes its phi of
+    /// the folded constants, where the phi it replaces is.
+    fn constant_of(
+        &mut self,
+        folded: &Folded,
+    ) -> Operand {
+        match folded {
+            Folded::Constant(op) => *op,
+            Folded::Nested { phi, values } => {
+                let ty = self.function.instruction(*phi).ty;
+                let blocks: Vec<BlockId> =
+                    pattern::phi_incoming(self.function.instruction(*phi)).map(|(_, from)| from).collect();
+                let mut operands = Vec::with_capacity(values.len() * 2);
+                for (&value, from) in values.iter().zip(blocks) {
+                    operands.push(value);
+                    operands.push(Operand::Block(from));
+                }
+                let made = self.insert_before(*phi, Opcode::Phi, ty, operands, Default::default());
+                Operand::Value(self.function.instruction(made).result.expect("a phi's value"))
+            }
+        }
     }
 
     /// Every operand of `inst` is `phi_value`, a phi of `phi_block`, or defined

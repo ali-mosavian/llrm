@@ -34,7 +34,10 @@ fn combined(text: &str) -> String {
 }
 
 /// The same, with DEVIATE PHICONST (`phi_constant_users`) on or off.
-fn combined_hooks(text: &str, phi_constant_users: bool) -> String {
+fn combined_hooks(
+    text: &str,
+    phi_constant_users: bool,
+) -> String {
     let mut module = parsed(text);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
@@ -44,7 +47,16 @@ fn combined_hooks(text: &str, phi_constant_users: bool) -> String {
     {
         let (context, function) = module.function_mut("f").expect("@f");
         crate::combine::combine_for(
-            context, &globals, &callees, &metadata, &DataLayout::default(), function, visit, true, &mut declared, hooks,
+            context,
+            &globals,
+            &callees,
+            &metadata,
+            &DataLayout::default(),
+            function,
+            visit,
+            true,
+            &mut declared,
+            hooks,
         );
     }
     declared.place(&mut module).expect("places");
@@ -129,7 +141,8 @@ fn two_unknown_incoming_values_leave_the_add_where_it_is() {
 
 /// The phi has two users that are not the same operation and one reads a
 /// run-time value: folding the other into the phi would leave this one reading
-/// the old phi, so it stays (the pin's rule; PHICONST needs every user to fold).
+/// the old phi, so it stays (the pin's rule; PHICONST needs every user to
+/// fold).
 #[test]
 fn a_phi_with_another_kind_of_user_is_left() {
     let text = DIAMOND.replace("ret i16 %r", "%s = mul i16 %p, %y\n  %t = add i16 %r, %s\n  ret i16 %t");
@@ -363,29 +376,75 @@ j:
 }
 ";
 
-/// DEVIATE PHICONST. x_cordic -O3 at m32 kept `ashr (phi [-39797, 39797]), 1` and
-/// `add (phi ..), 19898` as run-time operations because the phi has two
+/// DEVIATE PHICONST. x_cordic -O3 at m32 kept `ashr (phi [-39797, 39797]), 1`
+/// and `add (phi ..), 19898` as run-time operations because the phi has two
 /// different users: 1746 more instructions than gcc, whose arms hold the
 /// constants. Both users become phis of constants and the old phi goes.
 #[test]
 fn a_phi_of_constants_with_several_users_folds_into_each_of_them() {
     let text = combined_hooks(TWO_USERS, true);
-    // ashr -39797 1 + (-39797 + 19898) = -39798; ashr 39797 1 + (39797 + 19898) = 79593:
-    // the sum of the two new phis folds as well.
+    // ashr -39797 1 + (-39797 + 19898) = -39798; ashr 39797 1 + (39797 + 19898)
+    // = 79593: the sum of the two new phis folds as well.
     assert!(text.contains("phi i32 [ -39798, %a ], [ 79593, %b ]"), "{text}");
     assert!(!text.contains("ashr") && !text.contains("add "), "{text}");
 }
 
-/// A user that does not simplify on every incoming (`add %p, %y` reads a run-time
-/// value) leaves the phi and its other users alone: no second live phi.
+/// A user that does not simplify on every incoming (`add %p, %y` reads a
+/// run-time value) stays on the phi; the users that do fold still fold (DEVIATE
+/// PHICONST: x_cordic -O3 at m32 has `add %24, %27` beside the `ashr %24, 2`
+/// that starts the chain; folding only when every user folds left the whole
+/// chain at run time, 803 clocks).
 #[test]
-fn a_phi_of_constants_with_a_user_that_does_not_fold_is_left_alone() {
+fn a_phi_of_constants_with_a_user_that_does_not_fold_still_folds_the_others() {
     let text = TWO_USERS.replace("%t = add i32 %p, 19898", "%t = add i32 %p, %y");
-    assert_eq!(combined_hooks(&text, true), printed(&parsed(&text)));
+    let out = combined_hooks(&text, true);
+    assert!(out.contains("phi i32 [ -19899, %a ], [ 19898, %b ]"), "{out}");
+    assert!(!out.contains("ashr"), "{out}");
+    assert!(out.contains("add i32 %p, %y"), "{out}");
 }
 
-/// At -O1 and -Os (PHICONST off) the pin's one-user rule stands: the corpus grew
-/// 2 to 12 B with it on (m16 float_in_place_update -O1).
+/// DEVIATE PHICONST: an incoming that is a phi of constants of its own block,
+/// read by nothing else, folds the users too (x_cordic -O3: the first CORDIC
+/// step's constants come through a diamond that picks them).
+#[test]
+fn a_phi_of_a_phi_of_constants_folds_into_each_user() {
+    let text = "define i32 @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %a, label %o
+
+a:
+  br i1 %d, label %p, label %q
+
+p:
+  br label %m
+
+q:
+  br label %m
+
+m:
+  %inner = phi i32 [ 10, %p ], [ 20, %q ]
+  br label %j
+
+o:
+  br label %j
+
+j:
+  %v = phi i32 [ %inner, %m ], [ 30, %o ]
+  %s = add i32 %v, 1
+  %t = shl i32 %v, 1
+  %r = xor i32 %s, %t
+  ret i32 %r
+}
+";
+    let out = combined_hooks(text, true);
+    // (v + 1) ^ (v << 1): v = 10 gives 31, v = 20 gives 61, v = 30 gives 35.
+    assert!(out.contains("phi i32 [ 31, %p ], [ 61, %q ]"), "{out}");
+    assert!(out.contains("[ 35, %o ]"), "{out}");
+    assert!(!out.contains("shl") && !out.contains("xor") && !out.contains("add "), "{out}");
+}
+
+/// At -O1 and -Os (PHICONST off) the pin's one-user rule stands: the corpus
+/// grew 2 to 12 B with it on (m16 float_in_place_update -O1).
 #[test]
 fn a_phi_of_constants_with_several_users_is_left_where_bytes_are_strict() {
     assert_eq!(combined_hooks(TWO_USERS, false), printed(&parsed(TWO_USERS)));
