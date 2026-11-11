@@ -10,6 +10,8 @@ use llrm_codegen::backend::{masm, objbuild};
 use llrm_codegen::driver::flags::{Flags, write_output};
 use llrm_target::Target;
 
+use std::borrow::Cow;
+
 use crate::Bound;
 
 /// How the i8086 clang writes llrm's BASIC convention (1000, `opcode::BASIC`):
@@ -36,7 +38,11 @@ fn without_triple(text: &str) -> (Option<String>, String) {
             kept.push('\n');
             continue;
         }
-        let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
+        let line = if line.contains(" dso_local") || line.contains(CLANG_PASCAL) {
+            Cow::Owned(line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 "))
+        } else {
+            Cow::Borrowed(line)
+        };
         kept.push_str(&port_intrinsic(&lifetime_markers_with_a_size(&line)));
         kept.push('\n');
     }
@@ -55,14 +61,18 @@ const PORTS: [(&str, &str, bool); 4] = [
 /// `line` with a Borland port function written as its intrinsic. An `out`
 /// answers the value written, which the C function returns and clang numbers
 /// even when unused, so the numbering stays dense.
-fn port_intrinsic(line: &str) -> String {
+fn port_intrinsic(line: &str) -> Cow<'_, str> {
     for (borland, intrinsic, writes) in PORTS {
+        // Most lines name none: no string is made to look.
+        if !line.contains(borland) {
+            continue;
+        }
         let Some(at) = line.find(&format!("@{borland}(")) else { continue };
         let width = intrinsic.rsplit('.').next().unwrap_or("i16");
         let parameters = if writes { format!("i16, {width}") } else { "i16".to_owned() };
         if line.starts_with("declare") {
             let result = if writes { "void" } else { width };
-            return format!("declare {result} @{intrinsic}({parameters})");
+            return format!("declare {result} @{intrinsic}({parameters})").into();
         }
         let arguments =
             line[at..].split_once('(').and_then(|(_, rest)| rest.split_once(')')).map_or("", |(inside, _)| inside);
@@ -80,27 +90,28 @@ fn port_intrinsic(line: &str) -> String {
             (true, None) => format!("  call void @{intrinsic}({call})"),
             (false, Some(name)) => format!("  {name} = call {width} @{intrinsic}({call})"),
             (false, None) => format!("  call {width} @{intrinsic}({call})"),
-        };
+        }
+        .into();
     }
-    line.to_owned()
+    Cow::Borrowed(line)
 }
 
 /// The pin's `llvm.lifetime.start.p0(ptr)` as MIR's `(i64 size, ptr)`: MIR's
 /// markers still take the size `Intrinsics.td` dropped, and a marker it cannot
 /// read is a call that makes its alloca escape (nothing is promoted). The size
 /// is -1, which LangRef calls unknown.
-fn lifetime_markers_with_a_size(line: &str) -> String {
+fn lifetime_markers_with_a_size(line: &str) -> Cow<'_, str> {
     for marker in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
         if let Some(at) = line.find(marker) {
             let (head, tail) = line.split_at(at + marker.len());
             if tail.starts_with("i64") {
-                return line.to_owned();
+                return Cow::Borrowed(line);
             }
             let size = if line.starts_with("declare") { "i64 immarg, " } else { "i64 -1, " };
-            return format!("{head}{size}{tail}");
+            return format!("{head}{size}{tail}").into();
         }
     }
-    line.to_owned()
+    Cow::Borrowed(line)
 }
 
 /// `setFunctionAttributes` of `CommandFlags.cpp`
@@ -119,7 +130,7 @@ fn with_frame_pointer(
         {
             continue;
         }
-        function.attrs.push(Attribute::Str("frame-pointer".to_owned(), Some(policy.to_owned())));
+        function.attrs.push(Attribute::Str("frame-pointer".into(), Some(policy.to_owned())));
     }
 }
 
@@ -405,7 +416,7 @@ pub fn compiled(
     compiled_dumping(flags, text, name, None)
 }
 
-/// `compiled`, writing each stage to `dump` (llrm-c's `--dump DIR`) or where
+/// `compiled`, writing each stage to `dump` (llrm-cc's `--dump DIR`) or where
 /// `LLRM_MIR_STAGES` names.
 pub fn compiled_dumping(
     flags: &Flags,
@@ -564,7 +575,7 @@ fn allow_near_calls(module: &mut llrm_mir::module::Module) {
         }
         let GlobalKind::Function(function) = &mut global.kind else { continue };
         if !function.is_declaration() {
-            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.into()));
         }
     }
 }
@@ -659,6 +670,15 @@ fn options_for(
             _ if format == "elf" => Some(llrm_mir::libfunc::HOSTED_COMPARE.to_vec()),
             _ => None,
         };
+        // DEVIATE DIV64-LIBCALL (owner x86-m32, exit 2026-11-20): a hosted
+        // 32-bit object calls libgcc's i64 divide routines, as the pin does;
+        // the inline routine stays where the runtime lists none (DOS).
+        if format == "elf" && bound.target.layout().mode == 32 {
+            options.libcalls.extend(
+                ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3"]
+                    .map(|name| (name.to_owned(), number, pattern.replace('*', name))),
+            );
+        }
         if let Some(names) = stated {
             options.pipeline.library =
                 llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
@@ -885,6 +905,20 @@ mod text_tests {
     #[test]
     fn a_plain_line_is_copied_once_into_the_text() {
         let line = "  %5 = add nsw i32 %3, %4\n";
+        let text = line.repeat(5000);
+        COUNTING.with(|count| count.set(Some(0)));
+        let (_, kept) = without_triple(&text);
+        let made = COUNTING.with(|count| count.take()).expect("counting");
+        assert_eq!(kept, text);
+        assert!(made < 50, "{made} allocations for 5000 untouched lines");
+    }
+
+    /// A line with an `@` and none of the rewrites' words still went through
+    /// two `replace`s, four `format!`s and two copies: 2.6 M of a 185 M -O0
+    /// compile of 3.9 K lines, most of them calls and globals.
+    #[test]
+    fn a_line_with_a_symbol_and_no_rewrite_is_copied_once() {
+        let line = "  %5 = call i32 @foo(i32 %3, ptr @bar)\n";
         let text = line.repeat(5000);
         COUNTING.with(|count| count.set(Some(0)));
         let (_, kept) = without_triple(&text);

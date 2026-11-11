@@ -111,6 +111,9 @@ pub fn forms(cpu: Cpu) -> Vec<(&'static str, Vec<Inst>)> {
 pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("argument", "2: a register push, which is what the default says; also a form"),
     ("prefix", "m68k has no operand-size prefix"),
+    ("native_bits", "0: a price is for the operation as the type has it, as on every target but the 6502"),
+    ("address_dword", "m68k states no address-size prefix; the price is `address` alone"),
+    ("address_third", "same"),
     ("return_pops", "the caller pops its arguments"),
     ("carry", "no segmented or huge pointers"),
     ("carry_step", "no segmented or huge pointers"),
@@ -144,12 +147,14 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
 /// median over `tests/run/c` of the object function's bytes against this table's estimate was 1.46 at the 68000 and
 /// 1.50 at the 68020 (train split by symbol hash; hold-out median |error| 0.31 and 0.35 against 0.38 and 0.41 at 1.0,
 /// aggregate 0.92 and 0.89 of the objects). The aggregate alone would say 1.7 to 1.8; the many small functions the
-/// decisions are about set the median.
+/// decisions are about set the median. Re-measured 2026-11-09 (`tools/m68k_size_fit.py --corpus`, 1962 functions of
+/// tests/run/c, -O2 and -Os): the median is 1.500 at both CPUs, hold-out median |error| 0.17 and 0.15 against 0.33 at 1.0.
 const FUNCTION_SCALE_PERCENT: i64 = 150;
 
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
-    let mut costs = OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, ..OperationCosts::default() };
+    let mut costs =
+        OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, free_intrinsics: true, ..OperationCosts::default() };
     for (class, form) in forms(cpu) {
         let size = bytes(&form)?;
         match class {

@@ -24,6 +24,7 @@ fn legalized(
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -33,6 +34,7 @@ fn legalized(
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -96,6 +98,7 @@ fn an_unsigned_i64_adds_the_fudge_when_the_sign_was_set() {
     let converted = dag.get_node(ISD::UIntToFp, double(), &[x]);
     dag.set_root(converted);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: false,
@@ -105,6 +108,7 @@ fn an_unsigned_i64_adds_the_fudge_when_the_sign_was_set() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);

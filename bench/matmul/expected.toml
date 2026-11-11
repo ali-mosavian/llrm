@@ -1,10 +1,23 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "3d054ea69d89664869a7fa345eb4407a"
+
+[ow.O1]
+instructions = 22555
+memory_operands = 8045
+clocks = 56145
+code_bytes = 425
+helper_bytes = 24
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.3019
 
 [ow.O2]
 instructions = 22524
 memory_operands = 7374
-code_bytes = 407
+clocks = 51906
+code_bytes = 431
+helper_bytes = 24
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3015
@@ -12,15 +25,29 @@ kernel_ms = 0.3015
 [ow.Os]
 instructions = 22555
 memory_operands = 8045
-code_bytes = 401
+clocks = 56145
+code_bytes = 425
+helper_bytes = 24
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3019
 
+[bcc.O1]
+instructions = 14925
+memory_operands = 2050
+clocks = 35138
+code_bytes = 298
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2001
+
 [bcc.O2]
 instructions = 7221
 memory_operands = 3886
+clocks = 25081
 code_bytes = 352
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0974
@@ -28,15 +55,29 @@ kernel_ms = 0.0974
 [bcc.Os]
 instructions = 14925
 memory_operands = 2050
+clocks = 35138
 code_bytes = 298
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.2001
 
+[tc.O1]
+instructions = 27875
+memory_operands = 7578
+clocks = 69951
+code_bytes = 423
+helper_bytes = 25
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.3729
+
 [tc.O2]
 instructions = 27301
 memory_operands = 7578
-code_bytes = 403
+clocks = 69364
+code_bytes = 428
+helper_bytes = 25
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3652
@@ -44,15 +85,29 @@ kernel_ms = 0.3652
 [tc.Os]
 instructions = 27875
 memory_operands = 7578
-code_bytes = 398
+clocks = 69951
+code_bytes = 423
+helper_bytes = 25
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3729
 
+[tcpp.O1]
+instructions = 26719
+memory_operands = 5060
+clocks = 66900
+code_bytes = 362
+helper_bytes = 23
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.3574
+
 [tcpp.O2]
 instructions = 26209
 memory_operands = 4018
-code_bytes = 365
+clocks = 64340
+code_bytes = 388
+helper_bytes = 23
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3506
@@ -60,7 +115,9 @@ kernel_ms = 0.3506
 [tcpp.Os]
 instructions = 26719
 memory_operands = 5060
-code_bytes = 339
+clocks = 66900
+code_bytes = 362
+helper_bytes = 23
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3574
@@ -68,7 +125,7 @@ kernel_ms = 0.3574
 [bc.O2]
 instructions = 32657
 memory_operands = 15513
-code_bytes = 707
+code_bytes = 703
 data_bytes = 7
 bss_bytes = 12
 kernel_ms = 0.4509
@@ -76,7 +133,7 @@ kernel_ms = 0.4509
 [pds71.O2]
 instructions = 32036
 memory_operands = 15517
-code_bytes = 705
+code_bytes = 702
 data_bytes = 7
 bss_bytes = 12
 kernel_ms = 0.4399
@@ -84,7 +141,7 @@ kernel_ms = 0.4399
 [vbdos.O2]
 instructions = 32236
 memory_operands = 15585
-code_bytes = 707
+code_bytes = 704
 data_bytes = 7
 bss_bytes = 12
 kernel_ms = 0.4398

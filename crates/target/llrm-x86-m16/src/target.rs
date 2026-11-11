@@ -66,6 +66,9 @@ pub struct Dos {
     /// The pin's tuning limits instead of the table's overrides: for tests of
     /// a pass's own thresholds.
     pub pin_tuning: bool,
+    /// `Tuning.constant_hoisting` on: m64 runs the pass first (CH-STAGED), so a
+    /// test of the pass asks for it here.
+    pub constant_hoisting: bool,
     /// REC-1: (depth, callee size) of the recursion the target copies at
     /// speed. None by default (the entry in `RealMode` below); tests of the
     /// mechanism set it.
@@ -96,6 +99,7 @@ impl Default for Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            constant_hoisting: false,
             recursive_inlining: None,
         }
     }
@@ -149,6 +153,7 @@ impl Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            constant_hoisting: false,
             recursive_inlining: None,
         }
     }
@@ -200,6 +205,14 @@ impl Machine for Dos {
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
             std::rc::Rc::new(one.in_real_mode(real).with_tuning(self.tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>
         })
+    }
+
+    fn kept_stack_align(&self) -> Option<u64> {
+        crate::stack_keeps().0
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        crate::stack_keeps().1
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
@@ -261,6 +274,7 @@ impl Machine for Dos {
     }
 
     fn tuning(&self) -> llrm_mir::target::Tuning {
+        let table = (|| {
         if self.pin_tuning {
             return llrm_mir::target::Tuning::PIN;
         }
@@ -286,6 +300,11 @@ impl Machine for Dos {
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             price_fills: true,
+            // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
+            // its bytes at the rate against the multiply-high sequence; the pin's
+            // `isIntDivCheap` is `minsize` alone
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
+            divide_by_bytes: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -295,6 +314,8 @@ impl Machine for Dos {
             unroll_max_percent_threshold_boost: Some(100),
             x87_stack_slots: Some(8),
             x87_share_negated_products: true,
+            unroll_promotion_fits_x87_stack: true,
+            x87_zero_fill_at_size: true,
             // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
             // the pin's ColorSlot shares any two slots whose ranges do not
             // overlap. Here a word shares no slot a double word holds through a
@@ -302,6 +323,10 @@ impl Machine for Dos {
             // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk),
             // jpeg_fixed and jpeg_single nib -O2 +1 B each (-1 clk).
             slots_loop_width_rule: true,
+            // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see Tuning.
+            carry_slot_indexes: false,
+            // DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29): see Tuning.
+            address_reference_milliweight: 3000,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -325,6 +350,14 @@ impl Machine for Dos {
             // it), and frame reloads in sum_three. Exit 2026-11-30: the
             // bytes those rows hold above main recovered by the register
             // allocator, then re-price the chain.
+            // DEVIATE M16-JT-DENSITY (owner llrm-m16-c, exit 2026-11-23): a
+            // jump table pays from 40% of its range filled at every level,
+            // as the pin asks only tuned for size (10% otherwise): an entry is
+            // 2 B and a compare-and-branch about as many, so a table 14% full
+            // is bytes lost for no clock won. jpeg_fixed and jpeg_single -O1:
+            // four cases over 28 values, a 56 B table, data +58 B and +60 B
+            // over bcc.
+            min_jump_table_density: Some(40),
             // DEVIATE: a constant offset is a displacement of the access at
             // m16; behind a sunk phi it costs an add and a register
             // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
@@ -335,8 +368,12 @@ impl Machine for Dos {
             // `setcc` pair and an `or` that took `bp` addressing out of the
             // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
             split_merged_conditions: true,
+            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+            lftr_any_stride: true,
             ..llrm_mir::target::Tuning::PIN
         }
+        })();
+        llrm_mir::target::Tuning { constant_hoisting: self.constant_hoisting, ..table }
     }
 
     fn size_costs(&self) -> OperationCosts {

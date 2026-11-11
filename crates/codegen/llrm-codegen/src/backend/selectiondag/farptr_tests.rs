@@ -30,7 +30,7 @@ fn built(body: &str) -> super::dag::SelectionDAG {
         &module,
         function,
         &layout,
-        &BuilderTarget::m16(),
+        &BuilderTarget::for_pointer_bits(16),
         &llrm_x86_m16::M16,
         &convention,
         &mut info,

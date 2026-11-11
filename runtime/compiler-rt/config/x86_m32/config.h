@@ -21,6 +21,10 @@ unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__
 #define SF_NORM_SUB_FIRST 1 /* the shift count lives in cl: m32 mul -Os 102727 -> 101059 clk, -55 B in the -Os image */
 #define SF_CLZ32(x) ((int)__builtin_clz(x))
 #define SF_CMP_OUTLINE 1 /* compare entries call one core: f64 cmp.c -O2 1026 -> see tests/cmp_outline_size_test.sh */
+#ifdef __DOS__
+#define SF_ALIAS_PREFIX "__regcall3__" /* llrm-cc's DOS target mangles its regcall default; an alias names the mangled symbol */
+#endif
+#define SF_CMP_ALIAS_ENTRIES 1 /* eq/ne/lt/le are aliases of cmp, gt of ge: no tail-jump wrappers (f32 cmp.c -Os 120 -> 95 B, f64 193 -> 168; -O2 213 -> 175, 349 -> 307) */
 #define SF_WIDE_ABS_MASK 1 /* f64 compare: masks, not 64-bit shifts */
 #define SF_STICKY_MASK 1 /* f64 mul: mask test for the sticky bit */
 #endif

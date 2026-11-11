@@ -11,6 +11,7 @@ fn legalized(offset: i64) -> (SelectionDAG, SDValue) {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -20,6 +21,7 @@ fn legalized(offset: i64) -> (SelectionDAG, SDValue) {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )

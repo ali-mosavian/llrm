@@ -18,8 +18,8 @@ mod memops;
 mod mergedcond;
 mod switch;
 mod tailcall;
-
 use llrm_lir::registers::RegId;
+pub use tailcall::tail_position;
 
 use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG};
 use super::fold::mask;
@@ -82,6 +82,17 @@ pub struct BuilderTarget {
     pub shift_amount_of: Option<fn(EVT) -> EVT>,
     /// `getMinimumJumpTableEntries`.
     pub min_jump_table_entries: usize,
+    /// `getMinimumJumpTableDensity`, where the target states one.
+    pub min_jump_table_density: Option<u64>,
+    /// Name prefix of the blocks the target added to the IR before selection
+    /// (phi edges): the pin has none at this point, so a switch's layout
+    /// successor is the next block without it.
+    pub preselection_blocks: Option<&'static str>,
+    /// A call of an `llvm.` name nothing lowered is refused by name; where unset it stays a call of that
+    /// symbol (a target that names its own intrinsics by call).
+    pub refuse_unknown_intrinsics: bool,
+    /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
+    pub variable_shift_legal: bool,
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
     /// tests and peeling run.
     pub switch_optimize: bool,
@@ -90,6 +101,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The narrowest integer an argument register carries: a narrower one is
+    /// promoted to it (`CCPromoteToType`).
+    pub min_argument_bits: u32,
     /// The target description has no floating-point registers: the same as
     /// `use-soft-float` on every function (`TypeSoftenFloat`).
     pub soft_float: bool,
@@ -100,6 +114,22 @@ pub struct BuilderTarget {
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
+    /// The largest `alloca` alignment the target keeps; none: it realigns
+    /// the stack. A larger one is a named refusal, never a misaligned object.
+    pub max_alloca_align: Option<u64>,
+    /// The largest alignment the platform ABI gives a variadic argument's
+    /// stack slot; `VAARG` rounds its list pointer to the type's ABI alignment
+    /// capped at this. None: the type's own, as the pin's `expandVAArg` does.
+    ///
+    /// DEVIATE VA-ALIGN (row M68K-VA-DOUBLE): m68k sets 4. The pin leaves it
+    /// to the IR alignment (`double` is 8 under a datalayout with no `f64`
+    /// entry, [`M68kISelLowering.cpp:169`]: `VAARG` is `Expand`), so a callee
+    /// skipped the word a gcc caller, and ours, put the first `double` in.
+    /// Exit: none while the ABI packs stack arguments at 4.
+    ///
+    /// [`M68kISelLowering.cpp:169`]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelLowering.cpp#L169
+    pub va_arg_align_cap: Option<u32>,
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
@@ -116,6 +146,9 @@ pub struct BuilderTarget {
     /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
     /// `hasOptSize`): a jump table needs 40% density.
     pub opt_size: bool,
+    /// Bytes decide over clocks (`Profile::bytes_strict`: -O1, -Os): a
+    /// deviation that trades bytes for clocks at speed stays off.
+    pub bytes_strict: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
     /// The store limits a memset, memcpy or memmove is inlined for: the
@@ -163,6 +196,83 @@ pub struct TargetNodes {
     /// The target's `LowerCall`, `LowerReturn` and `LowerFormalArguments`;
     /// none: the builder places values by the `Convention`, as x86's do.
     pub calling: Option<&'static dyn TargetCalling>,
+}
+
+/// The target nodes the shared builder creates beyond the generic ones: each
+/// is a role the target may or may not have, named by what it does. A target
+/// supplies its own (x86's `REP_MOVS`, wasm's none); the builder refuses a
+/// construct whose node the target lacks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoweringNodes {
+    pub call: Option<ISD>,
+    pub ret: Option<ISD>,
+    /// A repeated string move and store (`rep movs`, `rep stos`).
+    pub string_move: Option<ISD>,
+    pub string_store: Option<ISD>,
+    /// A float call's result, popped from the target's float stack.
+    pub pop_float_result: Option<ISD>,
+    /// A sibling call, and the far form where the target has one.
+    pub tail_return: Option<ISD>,
+    pub far_tail_return: Option<ISD>,
+    /// `va_start`'s save of the vector argument registers.
+    pub vector_save: Option<ISD>,
+    /// A 64-by-32 divide in one instruction.
+    pub wide_divide: Option<ISD>,
+    /// The flags a call leaves, read back.
+    pub call_flags: Option<ISD>,
+    pub port_io: Option<ISD>,
+    pub copy128: Option<ISD>,
+    pub move128: Option<ISD>,
+    pub zero128: Option<ISD>,
+    /// Huge-pointer arithmetic: the window move, the difference, the byte add.
+    pub window: Option<ISD>,
+    pub ptrdiff: Option<ISD>,
+    pub huge_add: Option<ISD>,
+    /// The selector of the segment a global lives in.
+    pub segment_of: Option<ISD>,
+    /// A symbol's address wrapped for the target, and the form addressed from
+    /// the program counter (used for a 64-bit pointer unless the symbols are
+    /// absolute).
+    pub wrapper: Option<ISD>,
+    pub wrapper_rip: Option<ISD>,
+    /// Far-pointer nodes: a load of the offset leaving the selector in a
+    /// segment register (offset-only and data-segment forms), the register it
+    /// leaves it in, and a call through a far pointer.
+    pub far_load_es: Option<ISD>,
+    pub far_load_ds: Option<ISD>,
+    pub far_selector_register: Option<u32>,
+    pub far_call: Option<ISD>,
+    /// A boolean from a condition of the flags (`0` or `1`).
+    pub flag_boolean: Option<ISD>,
+    /// An inline assembly block, and inline code naming frame places.
+    pub asm: Option<ISD>,
+    pub code: Option<ISD>,
+}
+
+impl LoweringNodes {
+    /// The nodes of the installed backend (`backend::hooks`), none where no
+    /// backend is installed.
+    pub fn installed() -> LoweringNodes {
+        crate::backend::hooks::installed().map_or_else(LoweringNodes::default, |hooks| hooks.lowering_nodes())
+    }
+
+    /// The wrapper node for a symbol address of type `vt`.
+    pub fn wrapper_of(
+        &self,
+        dag: &SelectionDAG,
+        vt: EVT,
+    ) -> Result<ISD, Refused> {
+        let rip = vt == EVT::I64 && !dag.config().absolute_symbols;
+        Self::need(if rip { self.wrapper_rip } else { self.wrapper }, "symbol wrapper")
+    }
+
+    /// `node`, or the refusal for a target without it.
+    pub fn need(
+        node: Option<ISD>,
+        what: &'static str,
+    ) -> Result<ISD, Refused> {
+        node.ok_or(Refused(what))
+    }
 }
 
 /// The clock side of a fill at speed (`fill_is_smaller`): the longer form is
@@ -257,13 +367,49 @@ impl BuilderTarget {
         self
     }
 
+    /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`.
+    pub fn with_div_live_limit(
+        mut self,
+        limit: u32,
+    ) -> BuilderTarget {
+        self.dag.div_live_limit = limit;
+        self
+    }
+
     /// This target with a divide by a constant kept where its priced clocks
     /// beat the multiply-high sequence's.
+    /// This target with a signed divide by a negative constant made from the
+    /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_pow2_stays(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_pow2_stays = on;
+        self
+    }
+
+    pub fn with_sdiv_by_magnitude(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_by_magnitude = on;
+        self
+    }
+
     pub fn with_div_prices(
         mut self,
         prices: Option<super::dag::DivPrices>,
     ) -> BuilderTarget {
         self.dag.div_prices = prices;
+        self
+    }
+
+    /// This target with `getMinimumJumpTableDensity` stated at every level.
+    pub fn with_min_jump_table_density(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.min_jump_table_density = percent;
         self
     }
 
@@ -282,6 +428,15 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.opt_size = on;
+        self
+    }
+
+    /// This target's bytes decide over clocks (-O1, -Os) or not.
+    pub fn with_bytes_strict(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.bytes_strict = on;
         self
     }
 
@@ -340,22 +495,34 @@ impl BuilderTarget {
         self
     }
 
-    /// i486 and P5: 32-bit pointers, `i8`/`i16`/`i32` in registers.
-    pub fn m32() -> BuilderTarget {
+    /// A target with `bits`-bit pointers: integers up to the larger of 32 and
+    /// the pointer are legal in registers (the pin's `In16BitMode` has `GR32`
+    /// legal).
+    pub fn for_pointer_bits(bits: u32) -> BuilderTarget {
         BuilderTarget {
-            dag: DagConfig { offset_folding: true, ..DagConfig::default() },
+            dag: DagConfig { pointer: EVT::integer(bits), offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             shift_amount_of: None,
             min_jump_table_entries: 4,
+            min_jump_table_density: None,
+            preselection_blocks: None,
+            refuse_unknown_intrinsics: false,
+            variable_shift_legal: true,
             switch_optimize: true,
             trap_unreachable: false,
-            legal_ints: vec![8, 16, 32],
+            legal_ints: std::iter::successors(Some(8), |width| Some(width * 2))
+                .take_while(|width| *width <= bits.max(32))
+                .collect(),
+            min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
             stack_align: None,
+            max_alloca_align: None,
+            va_arg_align_cap: None,
             float_store: false,
             jump_tables: true,
             opt_size: false,
+            bytes_strict: false,
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
@@ -369,59 +536,6 @@ impl BuilderTarget {
             target_nodes: None,
             legal_f128: false,
         }
-    }
-
-    /// x86-64: 64-bit pointers, `i8`..`i64` in registers.
-    pub fn m64() -> BuilderTarget {
-        BuilderTarget {
-            dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
-            legal_ints: vec![8, 16, 32, 64],
-            soft_float: false,
-            ..BuilderTarget::m32()
-        }
-    }
-
-    /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
-    /// pin's `In16BitMode` has `GR32` legal).
-    pub fn m16() -> BuilderTarget {
-        BuilderTarget {
-            dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
-            shift_amount: EVT::I8,
-            shift_amount_of: None,
-            min_jump_table_entries: 4,
-            switch_optimize: true,
-            trap_unreachable: false,
-            legal_ints: vec![8, 16, 32],
-            soft_float: false,
-            libcalls: None,
-            stack_align: None,
-            float_store: false,
-            jump_tables: true,
-            opt_size: false,
-            min_size: false,
-            tuning: llrm_mir::target::Tuning::PIN,
-            size_trade: None,
-            ordered_copies: false,
-            string_instructions: true,
-            native_atomics: false,
-            tail_calls: false,
-            is_zext_free: |_, _, _| false,
-            tti: None,
-            runtime_calls: None,
-            target_nodes: None,
-            legal_f128: false,
-        }
-    }
-}
-
-/// The stack pointer the pointer type names: `sp`, `esp` or `rsp`.
-pub(super) fn stack_pointer_name(pointer: EVT) -> &'static str {
-    if pointer == EVT::I16 {
-        "sp"
-    } else if pointer == EVT::I64 {
-        "rsp"
-    } else {
-        "esp"
     }
 }
 
@@ -531,6 +645,53 @@ pub fn build_block(
     Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls, values })
 }
 
+/// The empty DAG of `block`, with the function's names: the one `Builder`
+/// starts from and FastISel's blocks do.
+pub fn fresh_dag(
+    module: &Module,
+    function: &Function,
+    target: &BuilderTarget,
+    info: &mut FunctionLoweringInfo,
+    block: BlockId,
+    synthetic_name: Option<String>,
+) -> SelectionDAG {
+    let fp_extended = function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::Attribute::Str(name, Some(value))
+                if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
+        )
+    });
+    let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+    let module_tables = info.module_tables.clone();
+    let tables = info
+        .tables
+        .get_or_insert_with(|| {
+            let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
+                super::function_lowering::module_tables(
+                    module,
+                    target.dag.dso_local_symbols,
+                    target.dag.defined_dso_local,
+                )
+            });
+            super::function_lowering::Tables {
+                global_names,
+                local_symbols,
+                block_names: std::rc::Rc::new(
+                    (0..function.block_capacity())
+                        .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
+                        .collect(),
+                ),
+            }
+        })
+        .clone();
+    dag.global_names = tables.global_names;
+    dag.local_symbols = tables.local_symbols;
+    dag.block_names = tables.block_names;
+    dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
+    dag
+}
+
 fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
@@ -594,40 +755,7 @@ impl<'a> Builder<'a> {
         next_synthetic: u32,
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
-        let fp_extended = function
-            .attrs
-            .iter()
-            .any(
-                |attr| matches!(
-                    attr,
-                    llrm_mir::Attribute::Str(name, Some(value))
-                        if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
-                ),
-            );
-        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
-        let module_tables = info.module_tables.clone();
-        let tables = info
-            .tables
-            .get_or_insert_with(|| {
-                let (global_names, local_symbols) = module_tables
-                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
-                super::function_lowering::Tables {
-                    global_names,
-                    local_symbols,
-                    block_names: std::rc::Rc::new(
-                        (0..function.block_capacity())
-                            .map(|at| {
-                                function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))
-                            })
-                            .collect(),
-                    ),
-                }
-            })
-            .clone();
-        dag.global_names = tables.global_names;
-        dag.local_symbols = tables.local_symbols;
-        dag.block_names = tables.block_names;
-        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
+        let dag = fresh_dag(module, function, target, info, block, synthetic_name);
         Builder {
             current: None,
             prelowered: Default::default(),
@@ -649,7 +777,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
-            variadic_count: true,
+            variadic_count: None,
             win64_va: false,
             variadic_shadows: Vec::new(),
             call_clobbers: Vec::new(),
@@ -700,7 +828,9 @@ struct Builder<'a> {
     variadic_call: bool,
     /// The convention of the variadic call being lowered counts its vector
     /// registers in `al` (SysV); Win64 has no count.
-    variadic_count: bool,
+    /// The register a variadic call sets to the number of vector registers it
+    /// uses, in the call's convention.
+    variadic_count: Option<RegId>,
     /// The function being lowered keeps Win64's `va_list`, the bare pointer.
     win64_va: bool,
     /// Win64: the integer register of each argument position, where a vector
@@ -846,9 +976,13 @@ impl Builder<'_> {
             Err(_) => {
                 let widest = EVT::integer(*self.target.legal_ints.last().expect("a legal integer"));
                 // `getNumRegisters`: an integer wider than a register is
-                // that many registers when the width is a power of two of them
-                let count = vt.size_in_bits() / widest.size_in_bits();
-                if vt.is_integer() && vt.size_in_bits() % widest.size_in_bits() == 0 && count.is_power_of_two() {
+                // that many registers when the width is a power of two of them;
+                // an odd width is first promoted to the next power of two
+                // (`getTypeConversion`: `i63` is `i64`, as many registers as
+                // that).
+                let bits = vt.size_in_bits().next_power_of_two();
+                let count = bits / widest.size_in_bits();
+                if vt.is_integer() && bits % widest.size_in_bits() == 0 && count.is_power_of_two() {
                     Ok((widest, count as usize))
                 } else {
                     Err(Refused("integer wider than a power-of-two count of registers"))
@@ -921,6 +1055,14 @@ impl Builder<'_> {
         part: EVT,
         count: usize,
     ) -> Vec<SDValue> {
+        // `getCopyToParts`: a value narrower than its parts together (`i63` in
+        // eight bytes) is extended to their width first.
+        let total = part.size_in_bits() * count as u32;
+        let value = if self.dag.value_type(value).size_in_bits() < total {
+            self.dag.get_node(ISD::AnyExtend, EVT::integer(total), &[value])
+        } else {
+            value
+        };
         if count == 2 {
             return self.split_value(value, part).to_vec();
         }
@@ -939,6 +1081,14 @@ impl Builder<'_> {
         pieces: &[SDValue],
         pointer: bool,
     ) -> SDValue {
+        // `getCopyFromParts`: parts wider together than the value (eight bytes
+        // for an `i63`) are joined at their width and truncated.
+        let total = pieces.iter().map(|piece| self.dag.value_type(*piece).size_in_bits()).sum::<u32>();
+        if vt.is_integer() && total > vt.size_in_bits() {
+            let wide = EVT::integer(total);
+            let joined = self.join_parts(wide, pieces, false);
+            return self.dag.get_node(ISD::Truncate, vt, &[joined]);
+        }
         if pieces.len() == 2 {
             return self.dag.get_node_flags(ISD::BuildPair, vt, pieces, pair_kind(vt, pointer));
         }
@@ -1186,6 +1336,7 @@ impl Builder<'_> {
         // fixed object, which `va_start` stores the address of
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
+            self.info.vararg_frame_index = Some(-(fixed + 1));
             if self.target.dag.pointer == EVT::I64 {
                 self.save_variadic_registers(fixed)?;
             }
@@ -1367,6 +1518,8 @@ impl Builder<'_> {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
+            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same first variadic argument
+            self.info.vararg_frame_index = Some(index);
         }
         Ok(())
     }
@@ -1383,7 +1536,7 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
-            return Err(Refused("va_start at m64 in a function with no convention"));
+            return Err(Refused("va_start in a function with no convention"));
         };
         if found.positional {
             return self.home_variadic_registers(found, fixed);
@@ -1400,7 +1553,7 @@ impl Builder<'_> {
         let registers: Vec<RegId> =
             found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect();
         let Some(save) = self.info.variadic_save else {
-            return Err(Refused("va_start at m64 with no register save area"));
+            return Err(Refused("va_start with no register save area"));
         };
         let pointer = self.target.dag.pointer;
         for (at, &register) in registers.iter().enumerate().skip(named) {
@@ -1439,7 +1592,8 @@ impl Builder<'_> {
             .sum::<usize>();
         if vector_registers > named_vectors {
             let vreg = self.info.new_reg();
-            self.live_ins.push((RegId::AL, vreg));
+            let count = found.variadic_vector_register.as_deref().expect("a save area with a vector count register");
+            self.live_ins.push((self.byte_view(self.arch.register_named(count)), vreg));
             let entry = self.dag.entry_node();
             let al = self.dag.get_copy_from_reg(entry, vreg, EVT::I8);
             let frame = self.dag.get_constant_with(save as u128, EVT::I32, true, false);
@@ -1452,7 +1606,13 @@ impl Builder<'_> {
                     false,
                 );
             let root = self.control_root();
-            let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
+            let saved = self
+                .dag
+                .get_node(
+                    LoweringNodes::need(self.target.dag.nodes.vector_save, "va_start vector save")?,
+                    EVT::OTHER,
+                    &[root, al, frame, first],
+                );
             self.dag.set_root(saved);
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
@@ -1706,7 +1866,13 @@ impl Builder<'_> {
         let arguments = &instruction.operands[..instruction.operands.len() - 1];
         let [hi, lo, divisor] = arguments else { return Err(Refused("a wide divide of other than three operands")) };
         let (hi, lo, divisor) = (self.get_value(*hi)?, self.get_value(*lo)?, self.get_value(*divisor)?);
-        let node = self.dag.get_node_multi(super::x86isd::LLRM_UDIV64BY32, &[EVT::I32, EVT::I32], &[hi, lo, divisor]);
+        let node = self
+            .dag
+            .get_node_multi(
+                LoweringNodes::need(self.target.dag.nodes.wide_divide, "wide divide")?,
+                &[EVT::I32, EVT::I32],
+                &[hi, lo, divisor],
+            );
         let pair = [SDValue { node: node.node, res: 0 }, SDValue { node: node.node, res: 1 }];
         let value = self.dag.get_node(ISD::BuildPair, EVT::I64, &pair);
         self.set_value(instruction.result.ok_or(Refused("a wide divide without a result"))?, value);
@@ -1768,10 +1934,25 @@ impl Builder<'_> {
         {
             return self.visit_target_intrinsic(instruction, info, found);
         }
+        // An `llvm.` name that no case above lowered is an intrinsic nobody
+        // wrote: a call to a symbol of that name is silent wrong code
+        // (`llvm.frameaddress` was tail called by name on z80).
+        if self.target.refuse_unknown_intrinsics
+            && let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
+        }
         if let Some(calling) = self.calling()
             && !calling.supports_convention(info.calling_convention)
         {
             return Err(Refused("a calling convention the target's hook does not place"));
+        }
+        if let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+            && self.calling().is_some_and(|calling| !calling.calls_unlowered_intrinsic(&name))
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
         }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
@@ -1949,7 +2130,9 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         let found = self.full_arch().ok().and_then(|arch| arch.calling().by_number(info.calling_convention));
-        self.variadic_count = found.is_none_or(|found| found.variadic_vector_register.is_some());
+        self.variadic_count = found
+            .and_then(|found| found.variadic_vector_register.as_deref())
+            .map(|name| self.byte_view(self.arch.register_named(name)));
         self.variadic_shadows = found
             .filter(|found| variadic && found.positional)
             .map(|found| found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect())
@@ -2061,11 +2244,11 @@ impl Builder<'_> {
         value
     }
 
-    /// The stack pointer register: x86's by pointer width, else the target's.
+    /// The stack pointer register: the target's, or the one its node set names.
     fn stack_pointer_register(&self) -> RegId {
-        let name =
-            self.target.target_nodes.map_or_else(|| stack_pointer_name(self.target.dag.pointer), |t| t.stack_pointer);
-        self.arch.register_named(name)
+        self.target
+            .target_nodes
+            .map_or_else(|| self.arch.stack_pointer(), |t| self.arch.register_named(t.stack_pointer))
     }
 
     /// Whether an attribute of `attrs` moves its argument out of the ordinary
@@ -2230,6 +2413,11 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
+        // This call's own state, taken before the byval copies below: a copy that is a library call is itself a
+        // `lower_call_with` and would otherwise take it (a variadic call's unnamed-argument state sent the
+        // `memcpy` count and source to the stack, and left the call it was for a fixed one).
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2261,8 +2449,6 @@ impl Builder<'_> {
             *value = copy_to;
         }
         let mut outs = Vec::new();
-        let variadic = std::mem::take(&mut self.variadic_call);
-        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
@@ -2358,6 +2544,8 @@ impl Builder<'_> {
         // `IsTailCall`: the call in tail position, if the target takes it, ends
         // the block
         if let Some(tail) = self.tail_candidate.take()
+            && !(calling.byval_parameter_blocks_tail_call()
+                && self.function.parameter_attrs.iter().any(|attrs| self.byval_of(attrs).is_some()))
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
             self.tail_calls.push(tail);
@@ -2439,11 +2627,15 @@ impl Builder<'_> {
     }
 
     fn call_node(&self) -> ISD {
-        self.target.target_nodes.map_or(super::x86isd::CALL, |t| t.call)
+        self.target
+            .target_nodes
+            .map_or_else(|| self.target.dag.nodes.call.expect("a target with a call node"), |t| t.call)
     }
 
     fn ret_node(&self) -> ISD {
-        self.target.target_nodes.map_or(super::x86isd::RET_GLUE, |t| t.ret)
+        self.target
+            .target_nodes
+            .map_or_else(|| self.target.dag.nodes.ret.expect("a target with a return node"), |t| t.ret)
     }
 
     /// Where a narrow argument sits in its stack slot: the high end on a
@@ -2581,7 +2773,8 @@ impl Builder<'_> {
                         // promoted to the register (`i40` to `i64`, as
                         // `getCopyToParts` does).
                         let bits = vt.size_in_bits();
-                        let promoted = if bits > 32 && bits < width { width } else { width.min(bits.max(32)) };
+                        let least = self.target.min_argument_bits;
+                        let promoted = if bits > least && bits < width { width } else { width.min(bits.max(least)) };
                         let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(promoted), &[piece])
@@ -2607,7 +2800,8 @@ impl Builder<'_> {
         }
         // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
         // number of vector registers it uses in `al`
-        if std::mem::take(&mut self.variadic_call) && self.variadic_count && self.target.dag.pointer == EVT::I64 {
+        let variadic_call = std::mem::take(&mut self.variadic_call);
+        if let Some(register) = self.variadic_count.filter(|_| variadic_call) {
             let vectors = plan
                 .parameters
                 .iter()
@@ -2617,7 +2811,7 @@ impl Builder<'_> {
                 })
                 .sum::<usize>();
             let count = self.dag.get_constant(vectors as u128, EVT::I8);
-            copies.push((RegId::AL, count));
+            copies.push((register, count));
         }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
@@ -2642,9 +2836,9 @@ impl Builder<'_> {
             ops.insert(2, fpdiff);
             // the pin has no 16-bit pattern: m16 has a node of its own
             let node = if self.target.dag.pointer == EVT::I16 {
-                super::x86isd::LLRM_TC_RETURN
+                LoweringNodes::need(self.target.dag.nodes.far_tail_return, "far sibling call")?
             } else {
-                super::x86isd::TC_RETURN
+                LoweringNodes::need(self.target.dag.nodes.tail_return, "sibling call")?
             };
             let tc = self.dag.get_node_multi(node, &[EVT::OTHER], &ops);
             self.dag.set_root(tc);
@@ -2706,7 +2900,11 @@ impl Builder<'_> {
             let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
             self.dag.set_root(SDValue { node: flags.node, res: 1 });
             let flags = SDValue { node: flags.node, res: 0 };
-            return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
+            return Ok(Some(self.dag.get_node(
+                LoweringNodes::need(self.target.dag.nodes.call_flags, "call flags")?,
+                vt,
+                &[flags],
+            )));
         }
         // No FPU: a float comes back as the integer of its width.
         let soft = self.softens(vt);
@@ -2741,6 +2939,15 @@ impl Builder<'_> {
 
     /// The convention names a result register by its widest view; the DAG
     /// names the one the value's width is (`AX` for an `i16`, not `EAX`).
+    /// The byte view of `reg`'s root.
+    fn byte_view(
+        &self,
+        reg: RegId,
+    ) -> RegId {
+        let registers = self.arch.registers();
+        registers.view(registers.root(reg), 8).expect("the register file has a byte view")
+    }
+
     fn sized_register(
         &self,
         reg: RegId,
@@ -2766,9 +2973,15 @@ impl Builder<'_> {
             self.dag.set_root(SDValue { node: copy.node, res: 1 });
             return SDValue { node: copy.node, res: 0 };
         }
-        let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
-        let pop =
-            self.dag.get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
+        let top = self.arch.x87_stack_top().expect("a float result popped from the x87 stack");
+        let fp0 = self.dag.get_phys_register(vt, top);
+        let pop = self
+            .dag
+            .get_node_multi(
+                self.target.dag.nodes.pop_float_result.expect("a float result popped from the target's float stack"),
+                &[vt, EVT::OTHER, EVT::GLUE],
+                &[chain, fp0, glue],
+            );
         self.dag.set_root(SDValue { node: pop.node, res: 1 });
         pop
     }
@@ -2989,10 +3202,14 @@ impl Builder<'_> {
             }
         }
         if let Some(reg) = self.info.sret_reg {
-            // the pointer is returned in eax as well
+            // the pointer is returned in the result register as well
             let pointer = self.target.dag.pointer;
             let saved = self.dag.get_copy_from_reg(chain, reg, pointer);
-            let eax = self.sized_register(self.arch.register_named("eax"), pointer);
+            let found = self.full_arch()?.calling().by_number(self.function.calling_convention);
+            let name = found
+                .and_then(|found| found.pointer_result_register(i64::from(pointer.size_in_bits() / 8)))
+                .ok_or(Refused("an sret pointer with no result register"))?;
+            let eax = self.sized_register(self.arch.register_named(name), pointer);
             let copy = self.dag.get_copy_to_phys_reg(chain, eax, saved, glue);
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
@@ -3039,12 +3256,15 @@ impl Builder<'_> {
             // two zero words): `get_constant` of the pair's type panicked
             // ('integer constant of Far', 35 QCport functions).
             ConstantKind::Int(bits) if vt == MVT::Far.into() => {
-                let offset = self.dag.get_constant(*bits & 0xFFFF, EVT::I16);
-                let segment = self.dag.get_constant((*bits >> 16) & 0xFFFF, EVT::I16);
+                let half = EVT::from(MVT::Far).size_in_bits() / 2;
+                let part = EVT::integer(half);
+                let mask = (1u128 << half) - 1;
+                let offset = self.dag.get_constant(*bits & mask, part);
+                let segment = self.dag.get_constant((*bits >> half) & mask, part);
                 Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[offset, segment], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Null | ConstantKind::Zero if vt == MVT::Far.into() => {
-                let zero = self.dag.get_constant(0, EVT::I16);
+                let zero = self.dag.get_constant(0, EVT::integer(EVT::from(MVT::Far).size_in_bits() / 2));
                 Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[zero, zero], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
@@ -3282,9 +3502,12 @@ impl Builder<'_> {
             Opcode::Store { align, volatile } => self.visit_store(inst, &instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
-            Opcode::Alloca { .. }
-                if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
-            Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
+            Opcode::Alloca { allocated, align, .. } => {
+                self.refuse_unkeepable_alignment(*allocated, *align)?;
+                if !instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) {
+                    self.visit_alloca(&instruction, *allocated, *align)?
+                }
+            }
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
@@ -3602,12 +3825,13 @@ impl Builder<'_> {
         &mut self,
         global: Option<u32>,
     ) -> SDValue {
-        self.dag.get_segment_of(global)
+        self.dag.get_segment_of(self.target.dag.nodes.segment_of.expect("a target with segment selectors"), global)
     }
 
     /// `SS`, the stack's selector.
     fn stack_selector(&mut self) -> SDValue {
-        let ss = self.sized_register(self.arch.register_named("ss"), EVT::I16);
+        let ss = self.arch.registers().stack_segment.expect("a target with a stack selector names its register");
+        let ss = self.sized_register(ss, EVT::I16);
         let entry = self.dag.entry_node();
         self.dag.get_copy_from_phys_reg_plain(entry, ss, EVT::I16)
     }
@@ -3707,6 +3931,24 @@ impl Builder<'_> {
     /// `visitAlloca` for a dynamic one: the size scaled by the element size,
     /// rounded up to the stack alignment, and `DYNAMIC_STACKALLOC` on the
     /// root.
+    /// A target that cannot realign its stack (`max_alloca_align`) refuses an
+    /// object aligned past what it keeps: the object would land misaligned
+    /// and `ptr & (align - 1)` fold to zero. The pin realigns (`hasFP`).
+    fn refuse_unkeepable_alignment(
+        &self,
+        allocated: TypeId,
+        align: Option<u64>,
+    ) -> Result<(), Refused> {
+        let wanted = self.layout.pref_align(&self.module.context.types, allocated).max(align.unwrap_or(1));
+        match self.target.max_alloca_align {
+            Some(kept) if wanted > kept => Err(Refused(Box::leak(
+                format!("an object aligned to {wanted} needs stack realignment, not supported yet (keeps {kept})")
+                    .into_boxed_str(),
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     fn visit_alloca(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -3812,7 +4054,10 @@ impl Builder<'_> {
         inst: llrm_mir::module::InstId,
         pointer: Operand,
     ) -> MemInfo {
-        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+        // A global is recorded too: the pin's pointer info always carries `V`,
+        // and alias analysis needs it to compare a global with a pointer
+        // computed from another.
+        if !self.dag.config().use_aa || !matches!(info.base, MemBase::Unknown | MemBase::Global(_)) {
             return info;
         }
         let location = super::dag::MemLocation {
@@ -3929,7 +4174,11 @@ impl Builder<'_> {
         if self.layout.carries(*space) {
             let zero = self.dag.get_constant(0, EVT::I32);
             let delta = self.gep_value(zero, source, nuw, nusw, inbounds, indices)?;
-            return Ok(self.dag.get_node(super::x86_lowering::x86isd::HUGE_ADD, MVT::Far.into(), &[base, delta]));
+            return Ok(self.dag.get_node(
+                LoweringNodes::need(self.target.dag.nodes.huge_add, "huge pointer add")?,
+                MVT::Far.into(),
+                &[base, delta],
+            ));
         }
         let [offset, selector] = self.split_value(base, pointer_vt);
         let moved = self.gep_value(offset, source, nuw, nusw, inbounds, indices)?;
@@ -4193,6 +4442,21 @@ pub(super) fn f80_from_double_bits(bits: u64) -> u128 {
 }
 
 #[cfg(test)]
+mod pointer_width_tests {
+    use super::*;
+
+    /// The legal integer widths follow the pointer: a 16-bit pointer still has
+    /// `i32` in registers, a 64-bit one adds `i64`.
+    #[test]
+    fn test_legal_ints_follow_the_pointer_width() {
+        let widths = |bits| BuilderTarget::for_pointer_bits(bits).legal_ints;
+        assert_eq!(widths(16), [8, 16, 32]);
+        assert_eq!(widths(32), [8, 16, 32]);
+        assert_eq!(widths(64), [8, 16, 32, 64]);
+    }
+}
+
+#[cfg(test)]
 mod f80_tests {
     use llrm_lir::registers::RegId;
     use llrm_mir::datalayout::DataLayout;
@@ -4204,6 +4468,7 @@ mod f80_tests {
     use super::super::mvt::EVT;
     use super::super::mvt::MVT;
     use super::super::target_calling::{FixedObject, In, LiveIn, Out, TargetCalling};
+    use super::LoweringNodes;
     use super::{BuilderTarget, TargetNodes, build_block, f80_from_double_bits};
 
     /// A long double constant in a block is the x87 encoding in the DAG, for
@@ -4221,7 +4486,7 @@ mod f80_tests {
             &module,
             function,
             &layout,
-            &BuilderTarget::m32(),
+            &BuilderTarget::for_pointer_bits(32),
             &llrm_x86_m32::M32,
             &convention,
             &mut info,
@@ -4290,7 +4555,11 @@ mod f80_tests {
                 .unwrap()
                 .push((outs.len(), outs.iter().filter(|o| dag.value_type(o.value) == EVT::I8).count()));
             *self.ins.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
-            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let call = dag.get_node_multi(
+                LoweringNodes::installed().call.unwrap(),
+                &[EVT::OTHER, EVT::GLUE],
+                &[chain, callee],
+            );
             let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
             (SDValue { node: call.node, res: 0 }, values)
         }
@@ -4316,7 +4585,7 @@ mod f80_tests {
                 .lock()
                 .unwrap()
                 .push((outs.len(), outs.iter().filter(|o| dag.value_type(o.value) == EVT::I8).count()));
-            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+            dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain])
         }
     }
 
@@ -4335,13 +4604,13 @@ mod f80_tests {
             legal_ints: vec![8],
             soft_float: false,
             target_nodes: Some(TargetNodes {
-                call: super::super::x86isd::CALL,
-                ret: super::super::x86isd::RET_GLUE,
+                call: LoweringNodes::installed().call.unwrap(),
+                ret: LoweringNodes::installed().ret.unwrap(),
                 stack_pointer: "esp",
                 big_endian: false,
                 calling: Some(stub),
             }),
-            ..BuilderTarget::m32()
+            ..BuilderTarget::for_pointer_bits(32)
         };
         build_block(
             &module,
@@ -4420,7 +4689,11 @@ mod f80_tests {
         ) -> (SDValue, Vec<SDValue>) {
             *self.calls.lock().unwrap() += 1;
             *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
-            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let call = dag.get_node_multi(
+                LoweringNodes::installed().call.unwrap(),
+                &[EVT::OTHER, EVT::GLUE],
+                &[chain, callee],
+            );
             let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
             (SDValue { node: call.node, res: 0 }, values)
         }
@@ -4442,7 +4715,7 @@ mod f80_tests {
             chain: SDValue,
             _outs: &[Out],
         ) -> SDValue {
-            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+            dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain])
         }
     }
 
@@ -4461,13 +4734,13 @@ mod f80_tests {
             legal_ints: vec![8],
             soft_float: false,
             target_nodes: Some(TargetNodes {
-                call: super::super::x86isd::CALL,
-                ret: super::super::x86isd::RET_GLUE,
+                call: LoweringNodes::installed().call.unwrap(),
+                ret: LoweringNodes::installed().ret.unwrap(),
                 stack_pointer: "esp",
                 big_endian: false,
                 calling: Some(stub),
             }),
-            ..BuilderTarget::m32()
+            ..BuilderTarget::for_pointer_bits(32)
         };
         build_block(
             &module,
@@ -4514,7 +4787,11 @@ mod f80_tests {
         ) -> (SDValue, Vec<SDValue>) {
             *self.calls.lock().unwrap() += 1;
             *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
-            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let call = dag.get_node_multi(
+                LoweringNodes::installed().call.unwrap(),
+                &[EVT::OTHER, EVT::GLUE],
+                &[chain, callee],
+            );
             let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
             (SDValue { node: call.node, res: 0 }, values)
         }
@@ -4528,7 +4805,7 @@ mod f80_tests {
         ) -> Option<SDValue> {
             self.takes.then(|| {
                 *self.tails.lock().unwrap() += 1;
-                dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain, callee])
+                dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain, callee])
             })
         }
 
@@ -4549,7 +4826,7 @@ mod f80_tests {
             chain: SDValue,
             _outs: &[Out],
         ) -> SDValue {
-            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+            dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain])
         }
     }
 
@@ -4568,13 +4845,13 @@ mod f80_tests {
             legal_ints: vec![8],
             soft_float: false,
             target_nodes: Some(TargetNodes {
-                call: super::super::x86isd::CALL,
-                ret: super::super::x86isd::RET_GLUE,
+                call: LoweringNodes::installed().call.unwrap(),
+                ret: LoweringNodes::installed().ret.unwrap(),
                 stack_pointer: "esp",
                 big_endian: false,
                 calling: Some(stub),
             }),
-            ..BuilderTarget::m32()
+            ..BuilderTarget::for_pointer_bits(32)
         };
         build_block(
             &module,

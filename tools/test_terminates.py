@@ -1,4 +1,4 @@
-"""llrm-c finishes: a generated program that once made the register allocator spill its own spills, without end."""
+"""llrm-cc finishes: a generated program that once made the register allocator spill its own spills, without end."""
 import subprocess
 import sys
 from pathlib import Path

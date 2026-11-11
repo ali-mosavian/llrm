@@ -144,7 +144,22 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `getScalarShiftAmountTy`: wasm shifts by the type of the value shifted
+    /// (the combiner's default is a byte).
+    fn shift_amount_type(
+        &self,
+        shifted: EVT,
+    ) -> EVT {
+        shifted
+    }
+
     fn fold_and_of_extload(&self) -> bool {
+        true
+    }
+
+    /// `visitSUB`'s `C2-(A+C1)` is `(C2-C1)-A` (DAGCombiner.cpp#L4432) and the
+    /// folds beside it: the pin has them on for every target.
+    fn sub_algebra_folds(&self) -> bool {
         true
     }
 

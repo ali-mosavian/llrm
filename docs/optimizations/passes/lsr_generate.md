@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_generate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_generate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:70adcbe7ae6a9a01ef58bc6c0242911fc47d8ec74368b11268060b3b4444b3f3 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:aad74d391c93398d3c179bd3af79a21efa0a1bb1b909cfad398b234ebfd16a6e -->
 
 # lsr_generate
 
@@ -48,3 +48,5 @@ value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although
 only 0 then has a product of 0. Without it a byte-stepped loop kept a second
 counter beside the byte index (examples/dot m16: `dec cx` and a spill).
 Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.
+Not at size: the doubled limit costs an `add` and a `cmp` over the `dec`
+(m16 -Os corpus: idioms +51 B, idiom_edges +15, none smaller).

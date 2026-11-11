@@ -71,7 +71,7 @@ pub fn raised(
                     attrs.resize(index + 1, Vec::new());
                 }
                 attrs[index].retain(|attr| !matches!(attr, Attribute::Int(name, _) if name == "align"));
-                attrs[index].push(Attribute::Int("align".to_owned(), known));
+                attrs[index].push(Attribute::Int("align".into(), known));
                 changed = true;
             }
             if changed {

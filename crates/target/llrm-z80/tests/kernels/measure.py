@@ -43,7 +43,7 @@ EXTRA = [
     ("indirect", "i16", [("i16", "21")], 42),
     ("carry32", "i16", [("i32", "65535"), ("i8", "1")], 1),
 ]
-HEADER = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"\n'
+HEADER = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"\n'
 CRT0 = "\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n"
 DATA = """\t.module data
 \t.area _DABS (ABS)
@@ -247,4 +247,5 @@ def main():
         print(f"| {name} | {size} | {t1 - t0} | {i1 - i0} | {b} | {t} | {n} | {verdict(size, b)} | {verdict(t1 - t0, t)} | {verdict(i1 - i0, n)} |")
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -6,7 +6,7 @@ use crate::backend::regalloc_input::{before_regalloc, through};
 
 /// `horner`'s `s = (s * x + cf[i]) % 10007` divides in place: `idiv` reads
 /// `s` in ax and writes the remainder to `s` in dx. The allocator refused it
-/// ("value#9 is required in two registers at once"); llrm-c stopped (#99).
+/// ("value#9 is required in two registers at once"); llrm-cc stopped (#99).
 /// Since TwoAddress commutes as the pin's `tryInstructionCommute` this input
 /// no longer reaches the allocator with the value in two registers (cause not
 /// examined; the premise check was removed with it); the shape is

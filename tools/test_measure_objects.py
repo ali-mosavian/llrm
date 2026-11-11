@@ -12,7 +12,7 @@ def test_the_object_placeholder_is_an_obj_path_of_one_length_whatever_the_direct
     """A longer argv moved an instruction count by 1.6e-4 to 5e-4 (see llrmbin.pinned): the path must not vary between runs."""
     lengths = set()
     for _ in range(3):
-        with llrmbin.with_object(["llrm-c", "-o", llrmbin.OBJECT, "x.c"]) as command:
+        with llrmbin.with_object(["llrm-cc", "-o", llrmbin.OBJECT, "x.c"]) as command:
             path = Path(command[2])
             assert path.suffix == ".obj" and path.parent.is_dir()
             lengths.add(len(command[2]))

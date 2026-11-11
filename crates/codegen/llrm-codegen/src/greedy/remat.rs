@@ -57,8 +57,10 @@ pub fn is_trivially_re_materializable(
         return false;
     }
     match (what.op, what.name.as_deref(), what.sources.as_slice()) {
-        // `MOV32ri`: a literal and nothing else.
-        (Operation::Move, Some("mov"), [Loc::Imm(imm)]) => def.uses.is_empty() && into.width == imm.width,
+        // `MOV32ri`, `MOVi32imm`: a literal and nothing else. Any name: the
+        // pin flags each target's literal move `isReMaterializable` in its
+        // own .td, and arm64 names it `MOVImm`.
+        (Operation::Move, _, [Loc::Imm(imm)]) => def.uses.is_empty() && into.width == imm.width,
         // `LEA32r` of a frame index or a global, no register in it.
         // `LEA32r` of registers: the
         // generic `isReallyTriviallyReMaterializable` takes a virtual-register
@@ -150,6 +152,24 @@ pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
 /// needs no per-live-range proof. Incoming arguments are the frame cells above
 /// the frame pointer. An x87 `fld` of one is such a load too.
 pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
+    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    argument_load_insns(body)
+        .into_iter()
+        .filter_map(|(_, value, _)| (definitions.get(&value) == Some(&1)).then_some(value))
+        .collect()
+}
+
+/// The loads of `argument_loads`' kind with the value each defines, whatever
+/// else defines that value: the pin remakes a load per value number
+/// (`isRematerializable` of one `VNInfo`), and a value here that an
+/// instruction also redefines in place (a tied `add`) has a value number the
+/// load alone defines.
+pub fn argument_load_insns(body: &LirBody) -> Vec<(u64, u32, (i64, u32))> {
     let incoming = |cell: &crate::model::ir::Mem| {
         cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
             && cell.base.is_none()
@@ -163,17 +183,17 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
             match place {
                 // Its address is taken: any callee may write it.
                 Loc::Address(a) if a.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
-                    return BTreeSet::new();
+                    return Vec::new();
                 }
                 Loc::Imm(imm) if imm.address.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
-                    return BTreeSet::new();
+                    return Vec::new();
                 }
                 _ => {}
             }
             if what.op == Operation::Address {
                 if let Loc::Mem(cell) = place {
                     if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) {
-                        return BTreeSet::new();
+                        return Vec::new();
                     }
                 }
             }
@@ -183,12 +203,6 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
                     written.push(span(cell.addr.expect("an address"), cell.width));
                 }
             }
-        }
-    }
-    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-        for value in &one.defines {
-            *definitions.entry(*value).or_default() += 1;
         }
     }
     body.blocks
@@ -206,11 +220,29 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
             ((integer || float)
                 && incoming(cell)
                 && one.defines == [into.value]
-                && definitions.get(&into.value) == Some(&1)
                 && !written.iter().any(|(start, end)| *start < to && from < *end))
-            .then_some(into.value)
+            .then_some((one.id(), into.value, (addr.disp, cell.width)))
         })
         .collect()
+}
+
+/// The incoming argument cell (frame displacement, width) `one` loads, if it
+/// is a plain load of one: the shape `argument_load_insns` takes.
+pub fn argument_load_cell(one: &Insn) -> Option<(i64, u32)> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(into)], [Loc::Mem(cell)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+        return None;
+    };
+    let addr = cell.addr?;
+    let integer = what.op == Operation::Move && what.name.as_deref() == Some("mov") && into.width == cell.width;
+    let float = what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld");
+    ((integer || float)
+        && addr.space == Space::Frame
+        && addr.disp > 0
+        && cell.base.is_none()
+        && cell.index.is_none()
+        && one.defines == [into.value])
+    .then_some((addr.disp, cell.width))
 }
 
 /// The values of `body` with one definition that
@@ -331,6 +363,16 @@ mod tests {
         assert!(is_trivially_re_materializable(&load, true));
     }
 
+    /// arm64 names its literal move `MOVImm`: the predicate asked for the
+    /// name `mov`, so the shared MachineLICM never hoisted a constant out of a
+    /// loop on arm64 (nbody_fixed's `movz #512` stayed in the innermost loop
+    /// with the sink stage on, +29995 instructions at -O2).
+    #[test]
+    fn test_a_literal_move_is_made_again_under_any_name() {
+        let literal = def(vec![Loc::Imm(Imm { value: 512, width: 4, address: None })], Operation::Move, "MOVImm");
+        assert!(is_trivially_re_materializable(&literal, false));
+    }
+
     /// nbody_single -Os: a hoisted `fld1` with the x87 stack full was stored
     /// to a frame cell and reloaded in the loop (+18 B); the pin remakes
     /// `LD_Fp164` where it is read.
@@ -393,7 +435,12 @@ mod tests {
             values(
                 &body,
                 &BTreeSet::new(),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             ),
             BTreeSet::from([1])
         );
@@ -441,6 +488,28 @@ mod tests {
         let body =
             one_block(vec![move_of(0, word(1), argument(6), vec![1]), move_of(1, word(2), argument(8), vec![2])]);
         assert_eq!(argument_loads(&body), BTreeSet::from([1, 2]));
+    }
+
+    /// The pin remakes a load per value number: a load of an argument whose
+    /// register an `or` also defines in place is a remattable value number,
+    /// though the register has two definitions (`sf32_pack` of x_sf_add m32
+    /// -Os spilled and reloaded its first parameter, +5 B).
+    #[test]
+    fn test_a_load_of_a_register_also_defined_in_place_is_a_load_to_remake() {
+        let or = {
+            let what = crate::model::ir::Semantics {
+                name: Some("or".into()),
+                dests: vec![word(1)],
+                sources: vec![word(1), Loc::Imm(crate::model::ir::Imm { value: 1, width: 2, address: None })],
+                ..crate::model::ir::Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(1, None, Some(what), vec![1], vec![1]))
+        };
+        let body = one_block(vec![move_of(0, word(1), argument(6), vec![1]), or]);
+        assert!(argument_loads(&body).is_empty(), "two definitions: not a register to remake");
+        let loads = argument_load_insns(&body);
+        assert_eq!(loads.len(), 1);
+        assert_eq!((loads[0].1, loads[0].2), (1, (6, 2)), "value 1, the cell [6] two bytes");
     }
 
     /// A parameter the function assigns, or whose address it takes, is not
@@ -508,7 +577,12 @@ mod tests {
             values(
                 &body,
                 &flagged_loads(&body),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             ),
             BTreeSet::from([1])
         );
@@ -516,7 +590,12 @@ mod tests {
             values(
                 &body,
                 &BTreeSet::new(),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             )
             .is_empty(),
             "the flag is what takes the load"

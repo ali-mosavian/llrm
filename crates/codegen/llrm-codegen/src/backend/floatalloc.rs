@@ -619,6 +619,8 @@ pub struct FloatAlloc<'a> {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub classes: Rc<RegisterClasses>,
     pub cpu: Option<&'a crate::backend::cpu::Profile>,
+    /// Where the float constants are kept (FF2): which cells hold 0.0 and 1.0.
+    pub pool: Option<Rc<RefCell<crate::backend::constpool::Pool>>>,
 }
 
 impl LIRTransform for FloatAlloc<'_> {
@@ -636,9 +638,15 @@ impl LIRTransform for FloatAlloc<'_> {
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
         let propagated = crate::backend::fpcopyprop::propagated(&body);
-        crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes, self.cpu)
-            .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
-            .map_err(|error| error.to_string())
+        let constants = self.pool.as_ref().map(|pool| pool.borrow().x87_cells()).unwrap_or_default();
+        crate::backend::fpstack::converted_with(
+            propagated.as_ref().unwrap_or(&body),
+            &self.classes,
+            self.cpu,
+            &constants,
+        )
+        .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
+        .map_err(|error| error.to_string())
     }
 }
 
