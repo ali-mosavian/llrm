@@ -5407,3 +5407,26 @@ fn a_recursion_permuting_its_parameters_is_not_cloned_at_o3() {
     let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
     assert_eq!(default, without, "-O3 cloned mv: {default} lines against {without} without clones");
 }
+
+/// A call of an `interrupt` function was emitted as a plain `call far`, so the
+/// handler's `iret` popped flags that were never pushed and left SP 8 bytes
+/// off (harness cells CFLB and CFLL `i_plain`: `lost 0008`).
+#[test]
+fn a_call_of_an_interrupt_function_pushes_the_flags_first() {
+    let directory = unique_directory("intrcall");
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("caller.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+         define void @f(ptr %p) addrspace(1) {\n  store i16 1, ptr %p\n  call x86_intrcc addrspace(1) void @isr()\n  ret void\n}\n\
+         declare void @isr() addrspace(1)\n",
+    )
+    .unwrap();
+    let output = directory.join("caller.s");
+    crate::llc::compile(&flags(&["-m16", "-S", "-O0", "-o", output.to_str().unwrap()]), &source, None).unwrap();
+    let text = std::fs::read_to_string(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    let at = text.find("call far ptr _isr").expect(&text);
+    assert!(text[..at].trim_end().ends_with("pushf"), "{text}");
+}

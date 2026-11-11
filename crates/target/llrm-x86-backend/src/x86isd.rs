@@ -49,6 +49,10 @@ pub const LLRM_TC_RETURN: ISD = ISD::Target(24587);
 /// DEVIATE: the pin has no port intrinsics; the old selector made `in`/`out`
 /// barriers. Owner sdag-a (w9).
 pub const LLRM_PORT: ISD = ISD::Target(24586);
+/// The flags pushed for the `iret` of an interrupt function a call enters:
+/// `chain`, giving the chain; no register is read or written.
+/// DEVIATE: the pin never calls an interrupt handler. Owner x86-m16.
+pub const LLRM_PUSHF: ISD = ISD::Target(24588);
 /// 16 zero bytes stored at an address: `chain, pointer`, giving the chain.
 /// Selected as `V_SET0` and a 16-byte store; no vector or `i128` value is made.
 ///
@@ -103,6 +107,7 @@ pub fn private_name(code: u16) -> Option<&'static str> {
         24582 => "X86ISD::LLRM_CODE",
         24584 => "X86ISD::LLRM_FARCALL",
         24586 => "X86ISD::LLRM_PORT",
+        24588 => "X86ISD::LLRM_PUSHF",
         24587 => "X86ISD::LLRM_TC_RETURN",
         24585 => "X86ISD::LLRM_CALL_FLAGS",
         24583 => "X86ISD::LLRM_PTRDIFF",
