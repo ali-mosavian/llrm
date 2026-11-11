@@ -4446,3 +4446,27 @@ fn test_a_checked_subscript_of_a_32768_element_array_can_pass() {
     );
     assert!(text.contains("es:[bx], 7"), "{text}");
 }
+
+/// The check of an INTEGER subscript of a constant-bounded array widened the
+/// subscript to a 32-bit value and compared against a 32-bit count held in a
+/// register (quicksort -O1 +11 B): it compares in 16 bits against an immediate.
+#[test]
+fn test_a_checked_integer_subscript_compares_in_16_bits() {
+    let text = listing_in("qb45", &["-fsanitize=bounds"], "narrowck", "DIM a%(100)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n");
+    assert!(text.contains("cmp ax, 101"), "{text}");
+    assert!(!text.contains("movsx e"), "{text}");
+}
+
+/// ERROR 9 still fires at -1 and at the count: the 16-bit offset wraps, and
+/// with the largest static count (2^15) no wrapped offset passes.
+#[test]
+fn test_a_checked_integer_subscript_keeps_both_edges_of_a_negative_lower_bound() {
+    let text = listing_in(
+        "qb45",
+        &["-fsanitize=bounds"],
+        "edgeck",
+        "DIM a%(-5 TO 5)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n",
+    );
+    assert!(text.contains("add ax, 5") || text.contains("sub ax, -5") || text.contains("lea"), "{text}");
+    assert!(text.contains(", 11"), "{text}");
+}

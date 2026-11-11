@@ -6250,6 +6250,21 @@ impl Compiler {
         lower: Operand,
         count: Operand,
     ) -> Result<(), SemanticError> {
+        // An INTEGER subscript of a constant-bounded array is checked in its
+        // own width, as LLVM narrows a compare to the type that holds it:
+        // the 16-bit offset wraps, and with count <= 2^15 a wrapped negative
+        // offset is still >= count while no positive one reaches 2^16.
+        if let (INTEGER, Operand::Constant(_, Number::Integer(low)), Operand::Constant(_, Number::Integer(len))) =
+            (type_id, &lower, &count)
+            && i16::try_from(*low).is_ok()
+            && (1..=1 << 15).contains(len)
+        {
+            let from = self.computed("sub", INTEGER, vec![subscript, Operand::Constant(INTEGER, Number::Integer(*low))]);
+            let from = self.convert(from, INTEGER, UNSIGNED_INTEGER)?;
+            let count = Operand::Constant(UNSIGNED_INTEGER, Number::Integer(*len));
+            let outside = self.computed("aboveeq", BOOLEAN, vec![from, count]);
+            return self.raise_if(outside, 9);
+        }
         let subscript = self.convert(subscript, type_id, LONG)?;
         // One unsigned compare: a negative offset is above any count below
         // 2^31, as clang's EmitBoundsCheckImpl compares (CGExpr.cpp).
