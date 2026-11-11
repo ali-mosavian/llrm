@@ -432,6 +432,16 @@ impl Profile {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
+    /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
+    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
+    /// register-immediate operation, and code is not tuned for size (the test
+    /// is two bytes longer).
+    pub fn tests_status_word(&self) -> bool {
+        !self.size
+            && !self.min_size
+            && matches!((self.cost("sahf"), self.cost("alu_ri")), (Ok(sahf), Ok(alu)) if alu < sahf)
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where code is tuned
     /// for size (the target's, none elsewhere).
     pub fn size_milliclocks_per_byte(&self) -> i64 {
