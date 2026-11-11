@@ -4054,7 +4054,10 @@ impl Builder<'_> {
         inst: llrm_mir::module::InstId,
         pointer: Operand,
     ) -> MemInfo {
-        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+        // A global is recorded too: the pin's pointer info always carries `V`,
+        // and alias analysis needs it to compare a global with a pointer
+        // computed from another.
+        if !self.dag.config().use_aa || !matches!(info.base, MemBase::Unknown | MemBase::Global(_)) {
             return info;
         }
         let location = super::dag::MemLocation {
