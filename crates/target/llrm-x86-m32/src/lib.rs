@@ -119,6 +119,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
         unroll_never_grows_at_o1: true,
+        // DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05, with UNROLL-O1): a loop
+        // that rule refuses is unrolled by the pin's threshold (150 units,
+        // `UnrollThresholdDefault`) in a second compile, kept only if neither the bytes nor the
+        // executed work grow. x_life O1: the 3x3 nest unrolled is -15 B and -62% clk (the rolled
+        // nest spills); matmul O1 is +1601 B and stays rolled.
+        unroll_trial_at_o1: Some(150),
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
@@ -188,6 +194,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
         // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
         keep_constant_arith_operands: true,
+        // DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): see `Tti::folds_phi_constant_chains`.
+        phi_constant_chains: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
             value: [2, 3, 5],

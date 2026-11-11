@@ -386,13 +386,10 @@ fn an_i32_funnel_shift_expands_to_two_half_width_funnel_shifts() {
     }
 }
 
-/// An `i64` product on a target with no widening multiply of its halves took
-/// `force_expand_multiply` and never the pin's `MUL_I64` (`__muldi3`): 445
-/// lines of assembly and four `__mulsi3` calls for one `u64 * u64` on the 6502.
-/// `ExpandIntRes_MUL` tries `expandMUL`, then the library call, then the
-/// forced expansion; it is now one call of two operands.
-#[test]
-fn a_64_bit_product_without_a_widening_multiply_is_the_pins_default_libcall() {
+/// The `__muldi3` call `ExpandIntRes_MUL` makes where a product of two words
+/// has no widening multiply, for a target that does (`size_routine`) or does
+/// not name a routine for functions tuned for size (the gate in `expand_mul`).
+fn product_calls(size_routine: bool) -> Vec<(&'static str, usize)> {
     use super::super::legalize_dag::Hooks;
     #[derive(Default)]
     struct Calls(Vec<(&'static str, usize)>);
@@ -421,6 +418,9 @@ fn a_64_bit_product_without_a_widening_multiply_is_the_pins_default_libcall() {
     for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
         tli.set_operation_action(op, MVT::I32, Action::Expand);
     }
+    if size_routine {
+        tli.set_size_libcall_name(ISD::Mul, MVT::I64, "__muldi3");
+    }
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
@@ -442,7 +442,23 @@ fn a_64_bit_product_without_a_widening_multiply_is_the_pins_default_libcall() {
     dag.set_root(low);
     let mut calls = Calls::default();
     TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
-    assert_eq!(calls.0, vec![("__muldi3", 2)]);
+    calls.0
+}
+
+
+/// A target that names a size routine for the `i64` product calls it: one
+/// `__muldi3` of two operands, not 445 lines and four `__mulsi3` calls.
+#[test]
+fn a_target_with_a_size_routine_calls_it_for_a_64_bit_product() {
+    assert_eq!(product_calls(true), vec![("__muldi3", 2)]);
+}
+
+/// The 6502, m68k and wasm name no size routine for the product (DEVIATE in
+/// `expand_mul`: inline until measured). #6858's tests expected the call from
+/// them anyway and went red on `release/next`; the product stays inline.
+#[test]
+fn a_target_without_a_size_routine_keeps_a_64_bit_product_inline() {
+    assert_eq!(product_calls(false), vec![]);
 }
 
 /// A hook that cannot make the call (`make_lib_call` is `None`, as the m68k
@@ -478,6 +494,7 @@ fn a_hook_that_declines_the_product_call_leaves_the_inline_expansion() {
     for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
         tli.set_operation_action(op, MVT::I32, Action::Expand);
     }
+    tli.set_size_libcall_name(ISD::Mul, MVT::I64, "__muldi3");
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();

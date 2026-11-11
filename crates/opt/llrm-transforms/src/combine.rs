@@ -341,6 +341,8 @@ pub struct TargetHooks {
     /// its users. Off where bytes are strict: a phi of constants costs a move
     /// per edge.
     pub phi_constant_users: bool,
+    /// DEVIATE PHICONST-2 (`Tti::folds_phi_constant_chains`).
+    pub phi_constant_chains: bool,
 }
 
 pub struct Env<'a> {
