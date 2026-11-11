@@ -56,8 +56,18 @@ fn run_example(
 ) -> (String, Vec<String>) {
     let tmp = support::unique_path("scratch-tmpdir");
     std::fs::create_dir_all(&*tmp).unwrap();
-    let exe = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("examples").join(name);
-    assert!(exe.exists(), "{} is not built: cargo build -p llrm-m68k --example {name}", exe.display());
+    let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+    let exe = profile_dir.join("examples").join(name);
+    if !exe.exists() {
+        // `cargo test --test scratch` builds no examples; only a full `cargo test` does.
+        let profile = profile_dir.file_name().unwrap().to_string_lossy().into_owned();
+        let mut build = std::process::Command::new(env!("CARGO"));
+        build.args(["build", "-p", "llrm-m68k", "--example", name]);
+        if profile != "debug" {
+            build.args(["--profile", &profile]);
+        }
+        assert!(build.status().unwrap().success(), "cargo build -p llrm-m68k --example {name} failed");
+    }
     let out =
         std::process::Command::new(&exe).args(args).envs(envs.iter().copied()).env("TMPDIR", &*tmp).output().unwrap();
     let left = std::fs::read_dir(&*tmp)
@@ -92,4 +102,23 @@ fn cycles_leaves_no_scratch_directory_when_it_panics() {
     let (stderr, left) = run_example("cycles", &["--exe", "/nonexistent/exe"], &[("GCC_M68K", "/nonexistent")]);
     assert!(!stderr.is_empty(), "the run stopped silently:\n{stderr}");
     assert_eq!(left, Vec::<String>::new(), "left in $TMPDIR");
+}
+
+/// Symptom: `MATRIX_CPUS=68010,68030` named columns the table did not have and
+/// the run printed nothing and exited 0, so a sweep of two CPUs read as "no
+/// worse cells".
+#[test]
+fn matrix_stops_on_a_cpu_it_has_no_column_for() {
+    let (stderr, _) = run_example(
+        "matrix",
+        &["kernels"],
+        &[
+            ("LLRM_PIN_CLANG", "/nonexistent"),
+            ("LLRM_CC", "/nonexistent"),
+            ("LLVM_M68K", "/nonexistent"),
+            ("GCC_M68K", "/nonexistent"),
+            ("MATRIX_CPUS", "68099"),
+        ],
+    );
+    assert!(stderr.contains("MATRIX_CPUS: no column"), "the run did not name the bad column:\n{stderr}");
 }

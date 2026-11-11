@@ -908,6 +908,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): a phi of constants is
+    /// folded into the users that fold, in a loop, and through a phi of
+    /// constants behind a diamond. A move per edge the fold adds is paid by
+    /// the operation it removes, which pays only where a byte is cheap against
+    /// a clock: x86 m32 (x_cordic -O3 -800 clk); m16 grew 5 to 11 B (rate 2 B
+    /// a clock).
+    fn folds_phi_constant_chains(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
@@ -1131,6 +1141,11 @@ pub trait Tti {
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
+    fn cold_site_ignores_sinks(&self) -> bool {
         false
     }
 
@@ -2183,6 +2198,19 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// Whether the loop as written keeps the bound of its exit test live next
+    /// to the counter. LSR rates an exit test against a variable bound as one
+    /// add-recurrence, `{-bound,+,1}` compared with zero (`getUse`, ICmpZero:
+    /// `N - other`), so the baseline holds one register where the written
+    /// loop holds two (`i` and `bound`) and any rewrite that keeps the bound
+    /// in a register looks one register dearer; with `should_drop_lsr_
+    /// solution_if_less_profitable` the tie then drops the rewrite. The rating
+    /// of the baseline adds a register for it. DEVIATE LU20 (`lsr_use.rs`);
+    /// false where a register is not the scarce thing.
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        false
     }
 
     /// Multiplies the loop as written does to form an induction variable that

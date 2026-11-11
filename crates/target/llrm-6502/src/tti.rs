@@ -290,6 +290,11 @@ impl Tti for Mos6502 {
         u32::from(!crate::dagisel::combine::mul_by_constant_stays_in_line(bits, i128::from(step), false))
     }
 
+    /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        true
+    }
+
     /// A constant offset in an address with one pointer cell is the `y` of
     /// `(zp),y`, loaded after LSR (`gepoffset`): LSR's unfolded add of it is
     /// no instruction. 54 stores of `g[i][k]` otherwise cost 53 base adds and

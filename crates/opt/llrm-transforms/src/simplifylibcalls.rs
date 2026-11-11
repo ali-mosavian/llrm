@@ -504,7 +504,7 @@ fn string(
     let i8 = unit.context.types.int(8);
     let ty = unit.context.types.intern(Type::Array { element: i8, count: raw.len() as u64 });
     let initializer = unit.context.constant(Constant { ty, kind: ConstantKind::Bytes(raw) });
-    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global);
+    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global, None);
     let pointer = unit.context.types.ptr(0);
     Operand::Constant(unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
 }

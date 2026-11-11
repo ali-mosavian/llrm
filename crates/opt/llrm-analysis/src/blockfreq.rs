@@ -53,6 +53,56 @@ impl<P: Fn(i64, i64) -> Option<f64>> EdgeProbabilities for Bpi<'_, P> {
     }
 }
 
+/// Whether some block has a successor that ends in `unreachable` and another
+/// that does not.
+fn has_sink_edge(function: &Function) -> bool {
+    let sink = |block: &BlockId| {
+        function.terminator(*block).is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
+    };
+    function.layout().iter().any(|&block| {
+        let children = function.children(block);
+        let sinks = children.iter().filter(|one| sink(one)).count();
+        sinks != 0 && sinks != children.len()
+    })
+}
+
+/// Edge probabilities in which a successor that ends in `unreachable` has none
+/// while another successor of its block does, the others renormalised.
+struct WithoutSinks<'a, E: EdgeProbabilities> {
+    function: &'a Function,
+    inner: E,
+}
+
+impl<E: EdgeProbabilities> EdgeProbabilities for WithoutSinks<'_, E> {
+    fn get_edge_probability(
+        &self,
+        src: BlockId,
+        index: usize,
+    ) -> BranchProbability {
+        let children = self.function.children(src);
+        let sink = |block: &BlockId| {
+            self.function
+                .terminator(*block)
+                .is_some_and(|last| self.function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        };
+        let sinks = children.iter().filter(|one| sink(one)).count();
+        if sinks == 0 || sinks == children.len() {
+            return self.inner.get_edge_probability(src, index);
+        }
+        let mut probs: Vec<BranchProbability> = (0..children.len())
+            .map(|at| {
+                if sink(&children[at]) {
+                    BranchProbability::get_zero()
+                } else {
+                    self.inner.get_edge_probability(src, at)
+                }
+            })
+            .collect();
+        BranchProbability::normalize_probabilities(&mut probs);
+        probs[index]
+    }
+}
+
 /// A loop of `natural` whose trips are proven (`trips`, by header) leaves by
 /// its exit test one time in `trips + 1 - tested` (`tested` is 1 for a test
 /// after the trip, at a latch, 0 for one before it, at the header): a lone
@@ -110,6 +160,9 @@ pub fn trip_adjusted(
 pub struct BlockFrequencies {
     freqs: Vec<u64>,
     entry: u64,
+    /// The same with the edges into failure sinks given no mass (BFS-1); none
+    /// where no block has both a sink and another way on.
+    sink_free: Option<(Vec<u64>, u64)>,
 }
 
 impl BlockFrequencies {
@@ -128,7 +181,7 @@ impl BlockFrequencies {
         let freqs =
             (0..function.block_capacity() as u32).map(|b| bfi.get_block_freq(BlockId(b)).get_frequency()).collect();
         let entry = if function.entry().is_some() { bfi.get_entry_freq().get_frequency() } else { 0 };
-        Self { freqs, entry }
+        Self { freqs, entry, sink_free: None }
     }
 
     /// `BlockFrequencyInfo::calculate` over `bpi`, as LLVM's
@@ -142,7 +195,15 @@ impl BlockFrequencies {
         let freqs =
             (0..function.block_capacity() as u32).map(|b| bfi.get_block_freq(BlockId(b)).get_frequency()).collect();
         let entry = if function.entry().is_some() { bfi.get_entry_freq().get_frequency() } else { 0 };
-        Self { freqs, entry }
+        let sink_free = has_sink_edge(function).then(|| {
+            let edges = WithoutSinks { function, inner: bpi.edges(function) };
+            let bfi = BlockFrequencyInfo::calculate(function, &edges, &ci);
+            let freqs = (0..function.block_capacity() as u32)
+                .map(|b| bfi.get_block_freq(BlockId(b)).get_frequency())
+                .collect();
+            (freqs, if function.entry().is_some() { bfi.get_entry_freq().get_frequency() } else { 0 })
+        });
+        Self { freqs, entry, sink_free }
     }
 
     pub fn get_block_freq(
@@ -150,6 +211,23 @@ impl BlockFrequencies {
         block: BlockId,
     ) -> BlockFrequency {
         BlockFrequency(self.freqs.get(block.0 as usize).copied().unwrap_or(0))
+    }
+
+    /// [`Self::relative_to_entry`] in the flow where a failure sink (a block
+    /// ending in `unreachable`) takes no mass from a block that has another way
+    /// on. DEVIATE BFS-1 (owner x86-m16-b, exit: A/B on the corpus, then land
+    /// or drop): the pin's `BlockFrequencyInfo` lets a bounds check's
+    /// `{2^20 - 1, 1}` failure edge take its share of every pass, and over a
+    /// nest of 32^5 passes that is all of it, so the code after the nest reads
+    /// cold. The same as `relative_to_entry` where there is no such edge.
+    pub fn sink_free_relative_to_entry(
+        &self,
+        block: BlockId,
+    ) -> f64 {
+        match &self.sink_free {
+            Some((freqs, entry)) if *entry > 0 => freqs.get(block.0 as usize).copied().unwrap_or(0) as f64 / *entry as f64,
+            _ => self.relative_to_entry(block),
+        }
     }
 
     pub fn get_entry_freq(&self) -> BlockFrequency {

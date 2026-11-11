@@ -497,7 +497,7 @@ pub fn trial_pays(
     match level {
         Level::Os => added < 0 || (added == 0 && saved >= 0),
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
-        Level::O1 => added <= 0 && saved >= 0,
+        Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added),
         _ => saved * 1000 >= added * rate,
     }
 }

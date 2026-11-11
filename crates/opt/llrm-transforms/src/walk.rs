@@ -290,6 +290,7 @@ impl ProgramPass for Walk {
             recursive_edge_growth: edge_growth_bar(program.target.tti().as_deref(), self.inline.limit >= 250),
             last_call_to_static: self.inline.last,
             o1_bound: !self.speed_rate,
+            cold_site_ignores_sinks: program.target.tti().is_some_and(|tti| tti.cold_site_ignores_sinks()),
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table.
