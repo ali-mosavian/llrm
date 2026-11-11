@@ -34,6 +34,19 @@ class HeaderFlags(unittest.TestCase):
     def test_no_header_no_flags(self):
         self.assertEqual(header_flags_fn()(self.write("int x;")), [])
 
+class Manifest(unittest.TestCase):
+    def test_the_f32_arithmetic_links_the_hand_asm_not_the_generic_c(self):
+        """The product link took generic C for __addsf3, __mulsf3, __floatsisf...: x87rotate cost 115481 clk and 9904 B, 3.7x the clocks and 1.6x
+        the bytes of the repo's sf32*.s, which no index named (2026-11-11). config/6502/members.txt now lists them and they win over the C index."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        for name, file in {"__addsf3": "sf32_abi.s", "__subsf3": "sf32_abi.s", "__mulsf3": "sf32_abi.s", "__divsf3": "sf32_abi.s",
+                           "__floatsisf": "sf32_conv.s", "__fixsfsi": "sf32_conv.s", "__mul32x32": "mul32x32.s"}.items():
+            self.assertEqual(index[name], "config/6502/" + file, name)
+
+
 class PadSpan(unittest.TestCase):
     """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
     a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""
@@ -137,7 +150,7 @@ class Members(unittest.TestCase):
         import crlib
         rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
         index = crlib.index(rt)
-        self.assertEqual((index["__mulsf3"], index["__divsf3"]), ("config/6502/sf32_6502.c",) * 2)
+        self.assertEqual(crlib.asm_members(rt)[-1], "config/6502/sf32_abi.s")
         text = crlib.member(rt, CC, "config/6502/sf32_6502.c", ["-Os"])
         for name in ("__mulsf3", "__divsf3"):
             self.assertIn(name + ":", text)
