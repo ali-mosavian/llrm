@@ -2270,6 +2270,17 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE LU21 (`lsr_use.rs`): base adds the loop as written pays each
+    /// trip to rebuild an addrec that is no phi of its own (an address made
+    /// from a narrower counter: extend, scale, add the base). LSR rates it as
+    /// a free recurrence, which kept `g[zext i8 j]` over a pointer phi.
+    fn lsr_written_derivation_adds(
+        &self,
+        _bits: u32,
+    ) -> u32 {
+        0
+    }
+
     /// Whether an offset LSR leaves unfolded in an address that has one base
     /// register and no scale is folded into that address after LSR (the 6502's
     /// `(zp),y` with a constant `y`): then it costs no add. DEVIATE LU16
