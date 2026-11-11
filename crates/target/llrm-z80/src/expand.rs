@@ -689,6 +689,21 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
                 self.restore_pointer(rest);
             }
+            // the pointer comes back stepped past the word (`post_update`): the data pair is BC or DE
+            "LD16rm_pi" => {
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                self.push(format!("ld {}, (hl)", name(lo)));
+                self.push("inc hl");
+                self.push(format!("ld {}, (hl)", name(hi)));
+                self.push("inc hl");
+            }
+            "LD16mr_pi" => {
+                let (lo, hi) = lanes(self.register(inst, 1)?)?;
+                self.push(format!("ld (hl), {}", name(lo)));
+                self.push("inc hl");
+                self.push(format!("ld (hl), {}", name(hi)));
+                self.push("inc hl");
+            }
             "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
                 self.push(format!("ld {to}, ({at})"));
@@ -1946,7 +1961,15 @@ fn layout(
                     Some(Operand::Imm(bytes)) if *bytes != 0
                 ),
         );
-    frame.active = frame.size > 0 || !function.fixed.is_empty() || stack_arguments;
+    // A fixed object nothing reads or writes (an argument home the optimizer left unused) needs no frame: the
+    // pin's `X86FrameLowering::hasFP` keys on the accesses and calls, not on what the frame could hold.
+    let fixed_used = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Frame(index) if function.fixed.contains_key(index)));
+    frame.active = frame.size > 0 || fixed_used || stack_arguments;
     frame
 }
 

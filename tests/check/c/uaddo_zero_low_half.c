@@ -8,6 +8,5 @@ unsigned long long f(unsigned long long sign, unsigned a, unsigned b)
 // CHECK-LABEL: f proc
 // CHECK-NOT: xor eax, eax
 // CHECK: add eax
-// CHECK-NEXT: mov edx
 // CHECK-NEXT: adc edx
 // CHECK-NOT: adc edx, 0

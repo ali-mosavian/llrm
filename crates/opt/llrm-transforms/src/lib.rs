@@ -149,6 +149,7 @@ pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
+pub mod combine_icmp_intrinsic;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
@@ -198,6 +199,7 @@ pub mod condtocond;
 pub mod congruentiv;
 pub mod constanthoisting;
 pub mod constmerge;
+pub mod mergefunc;
 pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]

@@ -212,8 +212,8 @@ pub struct Walk {
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
 /// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and
 /// inlining is on (`-fno-inline-functions` asks for no copies of a body, a
-/// recursive one included). None: the pin's inliner, which copies no recursive
-/// callee (`IsRecursiveCall`).
+/// recursive one included). `-fno-inline-recursive` or neither: the pin's
+/// inliner, which copies no recursive callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Recursion {
     pub depth: usize,
@@ -222,12 +222,16 @@ pub struct Recursion {
 
 impl Recursion {
     pub fn of(
-        flag: bool,
+        flag: Option<bool>,
         single: bool,
         inlining: bool,
         o3: bool,
         tti: Option<&dyn llrm_mir::tti::Tti>,
     ) -> Option<Self> {
+        // `-fno-inline-recursive` is off whatever the target says.
+        if flag == Some(false) {
+            return None;
+        }
         match tti.and_then(|tti| tti.recursive_inlining()) {
             Some((depth, callee)) if !single && inlining => {
                 let depth = tti
@@ -235,7 +239,7 @@ impl Recursion {
                     .map_or(depth, |(o2, o3_depth)| if o3 { o3_depth } else { o2 });
                 Some(Self { depth: depth as usize, callee })
             }
-            _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
+            _ => (flag == Some(true)).then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
         }
     }
 }
@@ -1151,8 +1155,8 @@ pub struct SelfInline {
     pub for_size: bool,
     /// -O2 and -O3: the target's byte price at speed counts.
     pub speed_rate: bool,
-    /// `-finline-recursive`.
-    pub flag: bool,
+    /// `-f[no-]inline-recursive`; `None`: the target's default.
+    pub flag: Option<bool>,
     /// -O3: gcc's `max-inline-insns-auto` is the larger bar.
     pub o3: bool,
     /// Inlining is on (`Threshold.limit != 0`).
