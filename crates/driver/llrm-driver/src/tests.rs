@@ -5430,3 +5430,21 @@ fn a_call_of_an_interrupt_function_pushes_the_flags_first() {
     let at = text.find("call far ptr _isr").expect(&text);
     assert!(text[..at].trim_end().ends_with("pushf"), "{text}");
 }
+
+/// x86-m64 recpow -Os: the square-and-multiply loop RS1 rotates for a guard that does not fold
+/// kept its copy, 204 B of code against gcc's 175 B. ROTATION-TRIAL compiles the module again with
+/// the loop unrotated and keeps the smaller one: 189 B against 204 B rotated.
+#[test]
+fn a_counted_loop_that_is_smaller_unrotated_stays_unrotated_at_os_on_m64() {
+    let text = include_str!("tests_data/recpow_os.ll");
+    let (built, format) = compiled(&flags(&["-m64", "-Os"]), text, "bench_recpow").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "recpow_os.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    assert!(bytes <= 195, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
+}
