@@ -890,12 +890,13 @@ impl llrm_codegen::backend::selectiondag::emit_api::ConstantCells for PoolCells<
 
 /// DEVIATE DIV-LIVE: for each block with a divide by a constant of a type
 /// narrower than a word, the most values live across one (a value of more
-/// than a word counts its words). O(function) once, and only when the function
+/// than a word counts its words, the target's own). O(function) once, and only when the function
 /// has such a divide.
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
     max_bits: u32,
+    word_bits: u32,
 ) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
@@ -917,7 +918,7 @@ fn narrow_divide_live(
         return live;
     }
     let weight = |value: llrm_mir::module::ValueId| {
-        module.context.types.int_bits(function.value(value).ty).map_or(0, |bits| bits.div_ceil(32) as usize)
+        module.context.types.int_bits(function.value(value).ty).map_or(0, |bits| bits.div_ceil(word_bits) as usize)
     };
     let found = llrm_analysis::liveness::live_where(function, &|value| weight(value) > 0);
     for block in blocks {
@@ -1456,7 +1457,7 @@ fn selected_in(
             llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
         });
     let div_live = if cpu.bytes_strict() { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function, machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits())) } else { llrm_mir::dense::IdMap::new() };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function, machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()), arch.object().bitness.min(32)) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
