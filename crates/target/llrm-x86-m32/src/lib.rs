@@ -262,6 +262,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // full unroll must repay its bytes at the speed rate.
         unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
+        // DEVIATE SELECT-OPT-I486 (owner x86-m32-c, exit 2026-12-20; the pin's
+        // `llc` has `-disable-select-optimize` on): the i486 has no `cmov`, so
+        // a select is a branch whatever is done; `SelectOptimize` makes it at
+        // IR level, where the arm's slice is sunk into the arm. A taken `jcc`
+        // is 3 clocks, a fallen-through one 1 (`timings.times`).
+        select_optimize_penalty: Some(2),
         // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
         // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):
         // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it

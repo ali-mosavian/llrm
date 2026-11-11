@@ -515,7 +515,7 @@ impl Options {
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
-            "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
+            "cgpaddr" | "cgpselectarms" | "selectoptimize" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
@@ -1829,6 +1829,14 @@ pub fn recorded(
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
         manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
+    }
+    // DEVIATE SELECT-OPT-I486: the pin's `SelectOptimize` (after
+    // `ExpandReductions`, before CodeGenPrepare) for a target that asks. Here
+    // instead, after CS1 and CS2 have taken the selects they branch on: a
+    // select made a phi first leaves `fptosi (select c, K, x)` no arm to sink
+    // the conversion into (x_fclip -O2 195,797 -> 253,468 clk).
+    if !applied.options.for_size && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize_pass::SelectOptimizePass);
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its

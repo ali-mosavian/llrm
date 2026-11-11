@@ -1052,6 +1052,11 @@ impl Tti for X86 {
         self.tuning.sink_select_arms
     }
 
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
+    }
+
     fn inlines_variable_memcpy(&self) -> bool {
         self.tuning.inline_variable_memcpy
     }

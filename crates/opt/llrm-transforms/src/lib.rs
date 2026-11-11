@@ -405,6 +405,7 @@ pub mod runtimechecks;
 pub mod sccp;
 pub mod sccpsolver;
 pub mod selectoptimize;
+pub mod selectoptimize_pass;
 pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;

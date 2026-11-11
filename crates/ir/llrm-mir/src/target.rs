@@ -413,6 +413,11 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE SELECT-OPT-I486 (`Tti::select_optimize_penalty`): the clocks a
+    /// taken branch costs over a fallen-through one. `Some`: where there is no
+    /// conditional move, `SelectOptimize` runs, pricing a mispredicted branch
+    /// at it. `None`: the pin's `llc`, which leaves the pass off.
+    pub select_optimize_penalty: Option<u64>,
     /// DEVIATE PIL-OS (owner alim, exit 2026-11-27): PartiallyInlineLibCalls
     /// leaves a call in a function tuned for size (`optsize`, `minsize`)
     /// alone. false: the pin's, which splits it there too and grows the code
@@ -555,6 +560,7 @@ impl Tuning {
         unroll_prices_nest: false,
         phi_constant_chains: false,
         sink_select_arms: false,
+        select_optimize_penalty: None,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
         size_copy_price: None,
