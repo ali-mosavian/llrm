@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::mc::inst::Cond;
-use crate::mc::inst::{Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Rounding};
+use crate::mc::inst::{Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding};
 
 const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Mov, "FMOV"),
@@ -157,6 +157,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![imm(i64::from(*imm8))],
             None,
         ),
+        Inst::FpLaneToFp { signed, size, rd, rn } => semantics(
+            Operation::Unary,
+            format!("{}CVTFv1i{}", if *signed { 'S' } else { 'U' }, if *size == FpSize::D { 64 } else { 32 }),
+            vec![f(*rd, *size)],
+            vec![f(*rn, *size)],
+            None,
+        ),
         Inst::FpToFp { to, from, rd, rn } => semantics(
             Operation::Unary,
             format!("FCVT{}{}r", size_letter(*to), size_letter(*from)),
@@ -184,11 +191,31 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         }
         Inst::VectorFill { rd, fill } => {
             let (name, sources) = match fill {
-                Fill::Zero => ("MOVIv2d", vec![]),
-                Fill::Byte(byte) => ("MOVIv16b", vec![imm(i64::from(*byte))]),
-                Fill::Gpr(register) => ("DUPv16b", vec![gpr_loc(*register, Width::W)]),
+                Fill::Zero => ("MOVIv2d".to_string(), vec![]),
+                Fill::Byte(byte) => ("MOVIv16b".to_string(), vec![imm(i64::from(*byte))]),
+                Fill::Dup(arrangement, register) => {
+                    let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
+                    (dup_name(*arrangement).to_string(), vec![gpr_loc(*register, width)])
+                }
+                Fill::Imm { invert, shape, imm8 } => {
+                    let (lanes, shift) = match shape {
+                        ImmShape::H8(shift) => ("8i16", shift),
+                        ImmShape::S4(shift) => ("4i32", shift),
+                        ImmShape::S2(shift) => ("2i32", shift),
+                        ImmShape::S4Msl(shift) => ("4s_msl", shift),
+                    };
+                    let stem = if *invert { "MVNI" } else { "MOVI" };
+                    (format!("{stem}v{lanes}"), vec![imm(i64::from(*imm8)), imm(i64::from(*shift))])
+                }
+                Fill::Mask(imm8) => ("MOVIv2d_ns".to_string(), vec![imm(i64::from(*imm8))]),
+                Fill::MaskD(imm8) => ("MOVID".to_string(), vec![imm(i64::from(*imm8))]),
             };
-            semantics(Operation::Move, name, vec![vreg_loc(*rd, 128)], sources, None)
+            let narrow = matches!(
+                fill,
+                Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+            );
+            let width = if narrow { 64 } else { 128 };
+            semantics(Operation::Move, name, vec![vreg_loc(*rd, width)], sources, None)
         }
         _ => return None,
     })
@@ -210,6 +237,17 @@ fn convert_name(
     }
 }
 
+/// The form of `dup v.<arrangement>, w`: the pin's name for it (the
+/// sixteen-byte one is the producer's older spelling).
+fn dup_name(arrangement: Arrangement) -> &'static str {
+    match arrangement {
+        Arrangement::B16 => "DUPv16b",
+        Arrangement::H8 => "DUPv8i16gpr",
+        Arrangement::S4 => "DUPv4i32gpr",
+        Arrangement::D2 => "DUPv2i64gpr",
+    }
+}
+
 pub(super) fn back(what: &Semantics) -> Option<Inst> {
     let name = what.name.as_deref()?;
     let (dest, s) = (what.dests.first(), &what.sources);
@@ -217,8 +255,36 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
         "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
         "MOVIv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte(value_of(&s[0]) as u8) }),
-        "DUPv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Gpr(gpr_of(&s[0])) }),
+        "MOVIv2d_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Mask(value_of(&s[0]) as u8) }),
+        "MOVID" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::MaskD(value_of(&s[0]) as u8) }),
+        "SCVTFv1i32" | "UCVTFv1i32" | "SCVTFv1i64" | "UCVTFv1i64" => {
+            let size = if name.ends_with("64") { FpSize::D } else { FpSize::S };
+            return Some(Inst::FpLaneToFp {
+                signed: name.starts_with('S'),
+                size,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+            });
+        }
         _ => {}
+    }
+    if let Some(arrangement) = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .find(|one| name == dup_name(*one))
+    {
+        return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Dup(arrangement, gpr_of(&s[0])) });
+    }
+    for (stem, invert) in [("MOVI", false), ("MVNI", true)] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')) else { continue };
+        let (imm8, shift) = (value_of(s.first()?) as u8, s.get(1).map_or(0, value_of) as u8);
+        let shape = match lanes {
+            "8i16" => ImmShape::H8(shift),
+            "4i32" => ImmShape::S4(shift),
+            "2i32" => ImmShape::S2(shift),
+            "4s_msl" => ImmShape::S4Msl(shift),
+            _ => continue,
+        };
+        return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Imm { invert, shape, imm8 } });
     }
     let at = |i: usize| vreg_of(&s[i]);
     let first = |text: &str| size_named(text.chars().next().unwrap_or('H'));

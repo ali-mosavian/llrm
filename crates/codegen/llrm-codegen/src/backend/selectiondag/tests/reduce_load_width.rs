@@ -30,6 +30,7 @@ fn combined_with(
     let root = build(&mut dag, load);
     dag.set_root(root);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         share_products: false,
         imul_if_smaller: false,
         cmov: true,

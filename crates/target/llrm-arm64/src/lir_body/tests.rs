@@ -12,7 +12,7 @@ use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
     FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
 };
-use crate::mc::inst::{Addr, Gpr};
+use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape};
 use crate::mfunc::Callee;
 
 fn g(n: u32) -> Gpr {
@@ -212,6 +212,11 @@ pub(super) fn instructions() -> Vec<Inst> {
         for from in SIZES {
             out.push(Inst::FpToFp { to: size, from, rd: v(0), rn: v(1) });
         }
+        if size != FpSize::H {
+            for signed in [false, true] {
+                out.push(Inst::FpLaneToFp { signed, size, rd: v(0), rn: v(1) });
+            }
+        }
         for width in WIDTHS {
             for op in [
                 FpConvert::ToFp { signed: true },
@@ -229,7 +234,17 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for fill in [Fill::Zero, Fill::Byte(0xa5), Fill::Gpr(rn)] {
+    for fill in [
+        Fill::Zero,
+        Fill::Byte(0xa5),
+        Fill::Dup(Arrangement::B16, rn),
+        Fill::Dup(Arrangement::H8, rn),
+        Fill::Dup(Arrangement::D2, rn),
+        Fill::Imm { invert: false, shape: ImmShape::H8(8), imm8: 7 },
+        Fill::Imm { invert: true, shape: ImmShape::S4(16), imm8: 0xa5 },
+        Fill::Imm { invert: false, shape: ImmShape::S4Msl(8), imm8: 3 },
+        Fill::Mask(0b1010_0101),
+    ] {
         out.push(Inst::VectorFill { rd: v(0), fill });
     }
     out
@@ -276,6 +291,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::FpSelect { .. } => "FpSelect",
         Inst::FpMoveImm { .. } => "FpMoveImm",
         Inst::FpToFp { .. } => "FpToFp",
+        Inst::FpLaneToFp { .. } => "FpLaneToFp",
         Inst::FpInt { .. } => "FpInt",
         Inst::FpFixed { .. } => "FpFixed",
         Inst::VectorFill { .. } => "VectorFill",
@@ -291,7 +307,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 46] = [
+const ALL: [&str; 47] = [
     "Mark",
     "Label",
     "Cfi",
@@ -329,6 +345,7 @@ const ALL: [&str; 46] = [
     "FpSelect",
     "FpMoveImm",
     "FpToFp",
+    "FpLaneToFp",
     "FpInt",
     "FpFixed",
     "VectorFill",
@@ -549,13 +566,17 @@ fn a_load_rebuilt_without_its_memory_operand_is_refused() {
     };
     let function = function(vec![Op::I(load)]);
     let mut lowered = to_lir(&function).expect("maps");
-    lowered.body.blocks[0].insns.edit(|insns| {
-        for one in insns.iter_mut() {
-            let mut bare = (**one).clone();
-            bare.memory = None;
-            *one = Arc::new(bare);
-        }
-    });
+    lowered
+        .body
+        .blocks[0]
+        .insns
+        .edit(
+            |insns| for one in insns.iter_mut() {
+                let mut bare = (**one).clone();
+                bare.memory = None;
+                *one = Arc::new(bare);
+            },
+        );
     let Err(Unmapped(why)) = from_lir(&lowered, &function) else { panic!("rebuilt a load with no memory operand") };
     assert!(why.starts_with("LDR"), "{why}");
 }
@@ -566,7 +587,8 @@ fn a_load_rebuilt_without_its_memory_operand_is_refused() {
 /// apart; the same slot stays ordered.
 #[test]
 fn a_load_from_another_slot_is_not_ordered_after_a_store() {
-    let at = |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let at =
+        |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
     let store = |slot: u32| {
         Op::I(Inst::Store {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
@@ -588,18 +610,20 @@ fn a_load_from_another_slot_is_not_ordered_after_a_store() {
         Regs(&crate::REGISTER_INFO),
         64,
         &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
     );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
 }
 
-/// The allocator's own path (`lir_view` -> the spike converter -> the scheduler's
-/// body) carried only the memory lane, so the scheduler's graph ordered a load
-/// after a store to another slot; `lir_body::to_lir`, which the check path
-/// uses, was not the producer the default compile runs.
+/// The allocator's own path (`lir_view` -> the spike converter -> the
+/// scheduler's body) carried only the memory lane, so the scheduler's graph
+/// ordered a load after a store to another slot; `lir_body::to_lir`, which the
+/// check path uses, was not the producer the default compile runs.
 #[test]
 fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
-    let at = |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let at =
+        |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
     let store = |slot: u32| {
         Op::I(Inst::Store {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
@@ -625,6 +649,7 @@ fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
         registers,
         body.bits,
         &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
     );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
@@ -796,10 +821,10 @@ fn a_float_register_is_not_a_segment_register() {
     assert!(segment.is_empty(), "{segment:?}");
 }
 
-/// The shared MachineSink splits an edge only when its probability is at most 40%
-/// (`SPLIT_EDGE_PROBABILITY_THRESHOLD`). The body carried no odds, so every edge read
-/// as even and the entry -> join edge of a `icmp sgt a, 0` branch (37.5% in the pin)
-/// was never split: a constant stayed in the entry.
+/// The shared MachineSink splits an edge only when its probability is at most
+/// 40% (`SPLIT_EDGE_PROBABILITY_THRESHOLD`). The body carried no odds, so every
+/// edge read as even and the entry -> join edge of a `icmp sgt a, 0` branch
+/// (37.5% in the pin) was never split: a constant stayed in the entry.
 #[test]
 fn the_body_carries_the_edge_odds_by_block_position() {
     use llrm_mir::blockfrequency::BranchProbability;
@@ -834,6 +859,53 @@ fn a_constant_made_in_a_loop_is_made_in_its_preheader() {
             "loop",
             vec![
                 wide(divisor, 512),
+                Op::I(Inst::Divide { op: Div::Udiv, width: WIDTHS[1], rd: quotient, rn: value, rm: divisor }),
+                Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: true, set_flags: false },
+                    width: WIDTHS[1],
+                    rd: counter,
+                    rn: counter,
+                    imm12: 1,
+                    shift12: false,
+                }),
+                Op::I(Inst::CompareBranch { nonzero: true, width: Width::X, rt: counter, target: label("loop") }),
+            ],
+        ),
+        block("done", vec![Op::Return { uses: vec![], tail: None }]),
+    ];
+    let body = to_lir(&function).expect("the forms map").body;
+    let after = hoisted(&body, &RegisterClasses::of(&crate::description::Arm64));
+    let has = |body: &LirBody, at: usize, name: &str| {
+        body.blocks[at].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(name)))
+    };
+    assert!(has(&body, 1, "MOVImm"), "the premise: the constant starts in the loop");
+    assert!(has(&after, 0, "MOVImm") && !has(&after, 1, "MOVImm"), "the constant stayed in the loop");
+}
+
+/// A constant a copy in the loop reads, and no phi takes, is made once in the
+/// preheader: `HasLoopPHIUse` looks past a copy only to a phi
+/// (MachineLICM.cpp#L1166). Any copy of the value kept it in the loop, so
+/// nbody_fixed's `movz #512` (selected as `movz; mov`) stayed in the innermost
+/// loop of the sink stage (+29997 executed instructions at -O2).
+#[test]
+fn a_constant_a_loop_copies_is_made_in_the_preheader() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::machinelicm::hoisted;
+
+    let r = |n| Gpr(Gpr::FIRST_VIRTUAL + n);
+    let (value, constant, divisor, quotient, counter) = (r(2), r(5), r(1), r(3), r(4));
+    let wide = |dst, value| Op::Imm { dst, bits: 64, value };
+    let mut function = MFunc::new("t");
+    function.next_register = Gpr::FIRST_VIRTUAL + 16;
+    let block =
+        |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    function.blocks = vec![
+        block("pre", vec![wide(value, 7), wide(counter, 9)]),
+        block(
+            "loop",
+            vec![
+                wide(constant, 512),
+                Op::Copy { dst: Reg::Gpr(divisor), src: Reg::Gpr(constant) },
                 Op::I(Inst::Divide { op: Div::Udiv, width: WIDTHS[1], rd: quotient, rn: value, rm: divisor }),
                 Op::I(Inst::AddSubImm {
                     op: AddSub { subtract: true, set_flags: false },

@@ -15,6 +15,7 @@ fn lowered(code: CondCode) -> (SelectionDAG, SDValue) {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,

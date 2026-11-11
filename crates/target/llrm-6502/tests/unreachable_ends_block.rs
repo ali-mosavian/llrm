@@ -10,7 +10,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_items_with_places;
 
-const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"
 @tbl = internal constant [8 x ptr] [ptr @a, ptr @a, ptr @a, ptr @a, ptr @a, ptr @a, ptr @a, ptr null]
 declare void @a()
 declare void @err() noreturn
