@@ -5090,6 +5090,7 @@ fn a_swap_of_two_64_bit_arguments_for_a_call_is_one_xchg_at_m64_os() {
     assert_eq!(size, 1, "{listing}");
     let (speed, listing) = xchgs("-O2");
     assert_eq!(speed, 0, "{listing}");
+}
 
 /// A 16-trip loop of calls in an internal function that nothing will inline
 /// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
