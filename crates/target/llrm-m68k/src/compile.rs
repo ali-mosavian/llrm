@@ -302,6 +302,17 @@ pub fn items_with(
     };
     let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if llrm_support::debug::enabled("builds") {
+        eprintln!(
+            "[builds] {name} trials: return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            touched.return_dup,
+            touched.class_split,
+            touched.compare_destinations,
+            touched.carry_chain,
+            touched.global_copies,
+            touched.mul_trial
+        );
+    }
     if !touched.any() {
         return Ok(kept);
     }
@@ -317,14 +328,6 @@ pub fn items_with(
         let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
         if crate::trial::prefers_without(&kept, &plain, cpu, price) {
-            kept = plain;
-            options = without;
-        }
-    }
-    if touched.sext_adds {
-        let without = Options { sext_adds: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
-        if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
         }
@@ -418,7 +421,6 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
-    sext_adds: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -435,8 +437,7 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds
-            || self.return_dup
+        self.return_dup
             || self.class_split
             || self.compare_destinations
             || self.carry_chain
@@ -484,6 +485,12 @@ fn items_once(
     cpu: Cpu,
     options: Options,
 ) -> Result<(Vec<Item>, Touched), String> {
+    // one full select, allocate and emit; a function with optional rewrites
+    // runs it again per trial
+    let _build = llrm_support::debug::span("m68k build");
+    if llrm_support::debug::enabled("builds") {
+        eprintln!("[builds] {name}");
+    }
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -543,12 +550,14 @@ fn items_once(
         if options.compare_destinations {
             touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
         }
+        // priced inside the pass (`Price`), so a function it changed is not
+        // built again
         if options.sext_adds {
-            touched.sext_adds = crate::sextacc::sign_extended_words(
+            crate::sextacc::sign_extended_words(
                 &mut function,
                 cpu,
                 crate::timing::Price::of(wants_size, options.strict),
-            ) > 0;
+            );
         }
         if options.class_split {
             touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
@@ -586,6 +595,7 @@ fn items_once(
     }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+    let allocating = llrm_support::debug::span("m68k allocate");
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
@@ -599,6 +609,7 @@ fn items_once(
             options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
         )?
     };
+    drop(allocating);
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);

@@ -341,6 +341,113 @@ fn index_section(
     section
 }
 
+impl Cpu {
+    /// `ST->getMaxInterleaveFactor()`: 2, 4 with `FeatureMaxInterleaveFactor4`
+    /// (`TuneAppleA14`, which `apple-m1` tunes for, AArch64Processors.td#L422).
+    fn max_interleave_factor(self) -> u32 {
+        match self {
+            Cpu::Generic => 2,
+            Cpu::AppleM1 => 4,
+        }
+    }
+
+    /// `ST->isMisaligned128StoreSlow()`: only the pre-A14 Apple cores and the
+    /// Exynos set it; neither cpu here does.
+    fn misaligned_128_store_slow(self) -> bool {
+        false
+    }
+}
+
+/// `getTypeLegalizationCost(<count x lane>).first`: the number of NEON
+/// registers the vector takes, and its legal lane count per register. A lane
+/// of 8, 16, 32 or 64 bits and a power-of-two count only (DEVIATE VT1: other
+/// shapes are widened or split by `TypeLegalizer` and are not priced).
+fn vector_pieces(ty: VectorTy) -> Option<(i64, u32)> {
+    let lane = match ty.lane {
+        Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
+        Ty::Float => 32,
+        Ty::Double => 64,
+        _ => return None,
+    };
+    if !ty.count.is_power_of_two() {
+        return None;
+    }
+    let total = u64::from(lane) * u64::from(ty.count);
+    // A type of at most 128 bits is one register; wider ones split in halves.
+    let pieces = total.div_ceil(128).max(1) as i64;
+    Some((pieces, lane))
+}
+
+/// `AArch64TTIImpl::getMemoryOpCost` for a fixed vector, the throughput
+/// kinds: L5664 (DEVIATE VT2: `TCK_Latency` reads the scheduling model and is
+/// not priced).
+fn vector_memory_op_cost(
+    cpu: Cpu,
+    op: MemoryOp,
+    ty: VectorTy,
+    align: u64,
+    kind: CostKind,
+) -> Option<Cost> {
+    let (first, lane) = vector_pieces(ty)?;
+    match kind {
+        CostKind::Latency => return None,
+        CostKind::CodeSize | CostKind::SizeAndLatency => return Some(Cost::of(first)),
+        CostKind::RecipThroughput => {}
+    }
+    // Unaligned 128-bit stores, on the cpus that set the feature.
+    if cpu.misaligned_128_store_slow() && op == MemoryOp::Store && u64::from(lane) * u64::from(ty.count) == 128 && align < 16 {
+        const AMORTIZATION_COST: i64 = 6;
+        return Some(Cost::of(first * 2 * AMORTIZATION_COST));
+    }
+    // `useNeonVector`: an element of a power of two between 8 and 64 bits, and an access that is
+    // not byte-aligned, costs the registers it takes.
+    if align != 1 {
+        return Some(Cost::of(first));
+    }
+    // Byte-aligned: broken into the power-of-two pieces `ld1`/`st1` take.
+    if ty.count == 3 && lane == 8 {
+        return Some(Cost::of(first));
+    }
+    let per_register = 128 / lane;
+    let mut cost = i64::from(ty.count / per_register);
+    let remainder = ty.count % per_register;
+    if remainder != 0 {
+        let mut work = vec![(remainder, 0u32)];
+        while let Some((current, offset)) = work.pop() {
+            if current.is_power_of_two() {
+                cost += 1 + i64::from(offset != 0);
+                continue;
+            }
+            let previous = current.next_power_of_two() / 2;
+            work.push((previous, offset));
+            work.push((current - previous, offset + previous));
+        }
+    }
+    Some(Cost::of(cost))
+}
+
+/// `AArch64TTIImpl::getArithmeticInstrCost` for a fixed vector, throughput:
+/// `add`/`sub`/`mul` and the bitwise and shift operations of a legal type are one
+/// instruction per register (L4985-4990, then `BaseT`). DEVIATE VT3: a `mul` of
+/// `<2 x i64>` (14 in the pin: no `mul.2d`) and the divisions and floating-point
+/// operations are not priced, so a loop that has one is not vectorized.
+fn vector_arithmetic_cost(
+    op: ArithOp,
+    ty: VectorTy,
+    kind: CostKind,
+) -> Option<Cost> {
+    if kind != CostKind::RecipThroughput {
+        return None;
+    }
+    let (first, lane) = vector_pieces(ty)?;
+    match op {
+        ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => Some(Cost::of(first)),
+        ArithOp::Shl | ArithOp::LShr | ArithOp::AShr => Some(Cost::of(first)),
+        ArithOp::Mul if lane < 64 => Some(Cost::of(first)),
+        _ => None,
+    }
+}
+
 impl Tti for AArch64 {
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
@@ -444,6 +551,10 @@ impl Tti for AArch64 {
     /// scoring rate 0.3 makes both worse in bytes and instructions (+540 B,
     /// +688k instructions on jpeg_single -O2). Kept at the fitted rate.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        // Scan knob (w15/rate-scan only, never merged): milliclocks per byte.
+        if let Some(rate) = std::env::var("LLRM_INL_RATE").ok().and_then(|value| value.parse().ok()) {
+            return rate;
+        }
         INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }
 
@@ -588,6 +699,55 @@ impl Tti for AArch64 {
 
     fn vector_register_bits(&self) -> u32 {
         128
+    }
+
+    /// `AArch64TTIImpl::getNumberOfRegisters`: 32 NEON registers, 31 general.
+    fn number_of_registers(
+        &self,
+        class: RegisterClass,
+    ) -> u32 {
+        match class {
+            RegisterClass::Vector => 32,
+            RegisterClass::Scalar => 31,
+        }
+    }
+
+    /// `AArch64TTIImpl::getMaxInterleaveFactor`:
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5951>
+    fn max_interleave_factor(
+        &self,
+        vf: u32,
+        has_unordered_reductions: bool,
+    ) -> u32 {
+        if vf == 1 || (has_unordered_reductions && vf <= 4) {
+            return 4;
+        }
+        self.cpu.max_interleave_factor()
+    }
+
+    /// `AArch64TTIImpl::shouldMaximizeVectorBandwidth`: true for fixed-width
+    /// NEON (L375).
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        true
+    }
+
+    fn vector_memory_op_cost(
+        &self,
+        op: MemoryOp,
+        ty: VectorTy,
+        align: u64,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_memory_op_cost(self.cpu, op, ty, align, kind)
+    }
+
+    fn vector_arithmetic_cost(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_arithmetic_cost(op, ty, kind)
     }
 
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of

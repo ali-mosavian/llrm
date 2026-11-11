@@ -319,7 +319,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             | Op::I(Inst::Store { mem: Memory::Fp { bytes: 16, reg }, .. }) => {
                 wide.insert(Reg::Fpr(*reg));
             }
-            Op::I(Inst::VectorFill { rd, .. }) => {
+            Op::I(Inst::VectorFill { rd, fill }) if fill.is_quad() => {
                 wide.insert(Reg::Fpr(*rd));
             }
             Op::I(Inst::LoadPair { first, second, .. }) | Op::I(Inst::StorePair { first, second, .. }) => {
@@ -987,6 +987,29 @@ mod tests {
         allocate(&mut function);
         let ops = &function.blocks[0].ops;
         assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
+    }
+
+    /// A `movi d` / `movi .2s` made a 64-bit value that the allocator treated as
+    /// 128-bit: across a call it could not take `d8` and was spilled as a `q`
+    /// (jpeg_single -O3: two 16-byte slots and a reload per iteration, +192
+    /// instructions).
+    #[test]
+    fn a_narrow_fill_across_a_call_stays_in_a_callee_saved_register() {
+        let fill = Op::I(Inst::VectorFill { rd: Vreg(100), fill: Fill::MaskD(0x55) });
+        let store = Op::I(Inst::Store {
+            mem: Memory::Fp { bytes: 8, reg: Vreg(100) },
+            addr: Addr::Slot { slot: 0, offset: 0 },
+            mmo: MemOperand::default(),
+        });
+        let mut function = function(vec![fill, call(), store]);
+        function.next_register = 101;
+        allocate(&mut function);
+        let ops = &function.blocks[0].ops;
+        let spills = ops
+            .iter()
+            .filter(|op| matches!(op, Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, .. }) if *slot != 0))
+            .count();
+        assert_eq!(spills, 0, "{ops:?}");
     }
 
     /// A copy of a 128-bit value that is not coalesced was `fmov d`, which

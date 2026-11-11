@@ -173,7 +173,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return false;
         }
         let bits = vt.size_in_bits();
-        if config.div_live_limit == 0 || bits >= 32 || config.div_live <= config.div_live_limit {
+        if config.div_live_limit == 0 || bits > config.div_live_max_bits || config.div_live <= config.div_live_limit {
             return true;
         }
         let Some(d) = self.dag.constant(n1).map(|c| c & super::fold::mask(bits)) else { return true };

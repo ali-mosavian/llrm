@@ -243,12 +243,7 @@ impl<T: Target> Converted<T> {
         function: &MFunction<T::Class>,
         registers: Regs,
     ) {
-        let mut sets: Vec<(T::Class, u32)> = Vec::new();
-        for class in &function.classes {
-            if !sets.iter().any(|(one, _)| one == class) {
-                sets.push((*class, T::candidates(*class).len() as u32));
-            }
-        }
+        let sets = pressure_sets::<T>(&function.classes);
         let limit = T::candidates(T::any()).len();
         let known = function.classes.len() as u32;
         let pins = self.body.pins.clone();
@@ -261,14 +256,13 @@ impl<T: Target> Converted<T> {
         self.body = self.with_effects(function, registers);
         let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
             let mut model =
-                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|(_, limit)| *limit).collect());
+                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|set| set.len() as u32).collect());
             for value in 1..=known {
                 if pins.contains_key(&value) || !counted(value) {
                     continue;
                 }
                 let class = function.classes[value as usize - 1];
-                let at = sets.iter().position(|(one, _)| *one == class).expect("a class of the function has a set");
-                model.count(value, 1, std::rc::Rc::from(vec![at]));
+                model.count(value, 1, std::rc::Rc::from(sets_of::<T>(&sets, class)));
             }
             model
         });
@@ -1791,6 +1785,11 @@ fn buffer_loads<T: Target>(
 /// load of it follows that call in its block with no call between, so a value
 /// loaded is the object's content wherever the value lives, and a load made
 /// again where it is read gives the same value.
+///
+/// Worse row (owner greedy-subreg, exit 2026-11-28): z80 `float_in_memory_loop`
+/// -Os 326 -> 332 B. A remade load splits one value into two pieces and the
+/// allocation after it shifts; no single defect.
+/// z80 `fcmp_all` -O2 23661 -> 23670 B, clocks unpriced.
 fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
     let mut found = BTreeSet::new();
     let mut frames: BTreeSet<i32> = BTreeSet::new();
@@ -2918,6 +2917,32 @@ pub fn from_lir<T: Target>(
         }
     }
     Ok(Rewritten { function, assignment: Assignment(assignment), slots })
+}
+
+/// The pressure sets of a function: each distinct register list a class of
+/// `classes` may take, sorted. The pin counts register units; classes over the
+/// same registers (Dr8, Dr16 and Dr32) are one set, not one each.
+pub fn pressure_sets<T: Target>(classes: &[T::Class]) -> Vec<Vec<RegId>> {
+    let mut sets: Vec<Vec<RegId>> = Vec::new();
+    for class in classes {
+        let mut registers = T::candidates(*class);
+        registers.sort();
+        if !sets.contains(&registers) {
+            sets.push(registers);
+        }
+    }
+    sets
+}
+
+/// The indexes in `sets` a value of `class` counts against: every set that
+/// shares a register with it (an Xr32 value lies in the data, the address and
+/// the whole set).
+pub fn sets_of<T: Target>(
+    sets: &[Vec<RegId>],
+    class: T::Class,
+) -> Vec<usize> {
+    let own = T::candidates(class);
+    (0..sets.len()).filter(|at| sets[*at].iter().any(|one| own.contains(one))).collect()
 }
 
 /// `function` allocated by greedy: converted, its copies joined by the

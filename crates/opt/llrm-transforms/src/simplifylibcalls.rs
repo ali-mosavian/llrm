@@ -175,11 +175,11 @@ fn constant_string(
 
 /// A call of a stated library routine to form: `emitPutChar`, `emitPutS`,
 /// `emitFWrite`, `emitFPutC`, `emitFPutS`.
-struct NewCall {
-    standard: &'static str,
-    args: Vec<Operand>,
-    returns: llrm_mir::types::TypeId,
-    params: Vec<llrm_mir::types::TypeId>,
+pub(crate) struct NewCall {
+    pub(crate) standard: &'static str,
+    pub(crate) args: Vec<Operand>,
+    pub(crate) returns: llrm_mir::types::TypeId,
+    pub(crate) params: Vec<llrm_mir::types::TypeId>,
 }
 
 enum Rewrite {
@@ -190,13 +190,13 @@ enum Rewrite {
     Call(NewCall),
 }
 
-/// The call of the stated routine `new`, placed before `at`; none where the
+/// The call of the stated routine `new`, placed at `at`; none where the
 /// compile does not state it.
-fn emit(
+pub(crate) fn emit(
     unit: &mut Unit,
     routines: &[Routine],
     new: NewCall,
-    at: InstId,
+    at: Position,
 ) -> Option<InstId> {
     let routine = routines.iter().find(|one| one.standard == new.standard)?;
     let ty =
@@ -219,7 +219,7 @@ fn emit(
     operands.push(callee);
     let call =
         unit.function.create_instruction(Opcode::Call(Box::new(info)), new.returns, operands, Flags::default(), None);
-    unit.function.insert(call, Position::Before(at)).expect("a placed call");
+    unit.function.insert(call, at).expect("a placed call");
     Some(call)
 }
 
@@ -575,7 +575,7 @@ impl FunctionPass for SimplifyLibCalls {
                     Operand::Constant(unit.context.int(ty, 0))
                 }
                 Rewrite::Value(value) => value,
-                Rewrite::Call(new) => match emit(unit, &self.routines, new, call) {
+                Rewrite::Call(new) => match emit(unit, &self.routines, new, Position::Before(call)) {
                     Some(new) => Operand::Value(unit.function.instruction(new).result.expect("a result")),
                     None => continue,
                 },

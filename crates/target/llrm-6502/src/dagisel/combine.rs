@@ -646,6 +646,32 @@ fn synthesized_mul(
     Some(result)
 }
 
+/// Whether `x * c` of `width` bits is expanded in line by `decompose_mul`
+/// (a shift, or `(2^k +- 1) * 2^z`) and not left as a `__mulhi3` call. The
+/// synthesis of `mulimage` (32 bits, a re-selection) is not counted.
+pub fn mul_by_constant_stays_in_line(
+    width: u32,
+    c: i128,
+    sized: bool,
+) -> bool {
+    let mut magnitude = c.unsigned_abs();
+    if magnitude <= 1 || magnitude.is_power_of_two() {
+        return true;
+    }
+    let zeros = magnitude.trailing_zeros();
+    magnitude >>= zeros;
+    let bits = match (magnitude - 1, magnitude + 1) {
+        (below, _) if below.is_power_of_two() => below,
+        (_, above) if above.is_power_of_two() => above,
+        _ => return false,
+    };
+    let k = bits.trailing_zeros();
+    if k + zeros >= width {
+        return false;
+    }
+    !(width == 32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0))
+}
+
 /// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
 /// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
 /// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative

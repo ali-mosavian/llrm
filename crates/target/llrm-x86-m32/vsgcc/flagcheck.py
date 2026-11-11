@@ -18,10 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
 import external_flags  # noqa: E402
 import headerflags  # noqa: E402
 
-STACK = {"gcc": "-mpreferred-stack-boundary=2", "clang": "-mstack-alignment=4"}
-# Flags only the externals carry: the target spelled as -m32, the stack alignment our target states (S32), the shared list's
+# Flags only the externals carry: the target spelled as -m32, the shared list's
 # distro defaults (the same tokens `external_flags.flags` returns), -Dfar= (the DOS keyword the kernels never use in C).
-EXTERNAL_ONLY = ("-m32", "-mpreferred-stack-boundary=2", "-mstack-alignment=4", "-Dfar=", "-c")
+EXTERNAL_ONLY = ("-m32", "-Dfar=", "-c")
 # Front-end settings of llrm-cc's clang that are not codegen: the Watcom headers, the DOS ABI spelling, the IR-only run. The
 # one codegen flag is -funroll-loops at -O1 (DEVIATE UNROLL-O1, llrm-cc lib.rs: the pin's -O1 marks every loop unroll.disable).
 # Ours-only front-end settings and what they change: -fshort-wchar makes wchar_t 2 bytes (gcc/clang on Linux: 4), so a program
@@ -52,8 +51,8 @@ def header_flags(kind, level):
 
 
 def check_external(kind, level, tokens):
-    # `check_gcc_flags` requires each of these: the column is built with exactly them (build.sh `F`, then the stack alignment).
-    allowed = [*external_flags.flags("x86", ("-fno-pic",)), "-m32", "-Dfar=", STACK[kind], *header_flags(kind, level)]
+    # `check_gcc_flags` requires each of these: the column is built with exactly them (build.sh `F`, then the program's header flags).
+    allowed = [*external_flags.flags("x86", ("-fno-pic",)), "-m32", "-Dfar=", *header_flags(kind, level)]
     try:
         external_flags.check_gcc_flags(shared(level), [t for t in tokens if t != "-mlong-double-64"], allowed_extra=allowed)
     except ValueError as e:

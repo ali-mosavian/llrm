@@ -1961,7 +1961,15 @@ fn layout(
                     Some(Operand::Imm(bytes)) if *bytes != 0
                 ),
         );
-    frame.active = frame.size > 0 || !function.fixed.is_empty() || stack_arguments;
+    // A fixed object nothing reads or writes (an argument home the optimizer left unused) needs no frame: the
+    // pin's `X86FrameLowering::hasFP` keys on the accesses and calls, not on what the frame could hold.
+    let fixed_used = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Frame(index) if function.fixed.contains_key(index)));
+    frame.active = frame.size > 0 || fixed_used || stack_arguments;
     frame
 }
 

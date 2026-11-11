@@ -36,7 +36,7 @@ nou32:	ld	l,h
 	jr	done
 retnan:	ld	de,#0x7fc0
 retlo0:	ld	hl,#0
-done:	ex	de,hl		; the long result: low word in de, high word in hl
+done:				; the long result: low word in hl, high word in de
 	ld	iy,#24
 	add	iy,sp
 	ld	sp,iy

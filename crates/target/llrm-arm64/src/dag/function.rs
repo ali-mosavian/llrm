@@ -37,6 +37,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             boolean_contents: BooleanContents::ZeroOrOne,
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
+            vectors: crate::machine::vectors_enabled(),
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,

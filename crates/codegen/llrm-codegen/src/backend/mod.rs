@@ -208,6 +208,7 @@ pub mod fixupbw;
 pub mod fixupleas;
 pub mod fixupsetcc;
 pub mod flagscopy;
+pub mod statustest;
 pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
