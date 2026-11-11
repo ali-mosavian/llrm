@@ -152,6 +152,7 @@ pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
 pub mod combine_icmp_intrinsic;
+pub mod combine_icmp_minmax;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;

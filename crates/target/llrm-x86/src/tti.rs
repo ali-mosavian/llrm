@@ -721,8 +721,16 @@ impl Tti for X86 {
         self.tuning.unroll_prices_nest
     }
 
+    fn folds_phi_constant_chains(&self) -> bool {
+        self.tuning.phi_constant_chains
+    }
+
     fn unroll_never_grows_at_o1(&self) -> bool {
         self.tuning.unroll_never_grows_at_o1
+    }
+
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        self.tuning.unroll_trial_at_o1
     }
 
     fn second_ipsccp(&self) -> bool {
@@ -798,6 +806,10 @@ impl Tti for X86 {
 
     fn inline_never_grows_without_rate(&self) -> bool {
         self.tuning.inline_never_grows_without_rate
+    }
+
+    fn cold_site_ignores_sinks(&self) -> bool {
+        self.tuning.cold_site_ignores_sinks
     }
 
     fn unroll_object_bound(&self) -> Option<u32> {

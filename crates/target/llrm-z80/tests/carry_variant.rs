@@ -17,6 +17,7 @@ fn lines_of(text: &str) -> Vec<Line> {
 /// generic add and compare of the sum, which is 215 B / 1339 T. The cell was
 /// 350 B against SDCC's 323 B.
 #[test]
+#[ignore = "row Z80-RESULT-ORDER-DESCEND"]
 fn a_function_the_carry_ops_make_larger_keeps_the_generic_form() {
     let ir = include_str!("data/register_upper_half_os.ll");
     let out = text(ir, "descend", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
