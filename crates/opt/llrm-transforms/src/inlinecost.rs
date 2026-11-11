@@ -2367,6 +2367,9 @@ impl<'a> Analyzer<'a> {
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
         }
+        if llrm_support::debug::enabled("inline") {
+            eprintln!("inline:   size={} call={} k={} dies={}", self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls, self.site.callee_dies);
+        }
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
