@@ -3415,6 +3415,32 @@ fn unique_directory(tag: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
 }
 
+/// Borland's `interrupt` takes the registers it saved as parameters
+/// (`bp, di, si, ds, es, dx, cx, bx, ax`). They were read as the frame's words
+/// in address order, so `ax` was the high half of EDI and the harness cell
+/// CFLL saw `bp = 0, di = 0, si = ES, ds = DS` for a handler that was given
+/// BP = 0xB0B0. The description names each parameter's slot; `ax` is the low
+/// word of EAX.
+#[test]
+fn an_interrupt_handler_parameter_is_the_low_word_of_the_register_slot_it_names() {
+    let directory = unique_directory("intr");
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("isr.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+         @g = global i16 0\n\
+         define x86_intrcc void @isr(i16 %bp, i16 %di, i16 %si, i16 %ds, i16 %es, i16 %dx, i16 %cx, i16 %bx, i16 %ax) {\n  store i16 %ax, ptr @g\n  ret void\n}\n",
+    )
+    .unwrap();
+    let output = directory.join("isr.s");
+    crate::llc::compile(&flags(&["-m16", "-S", "-O0", "-o", output.to_str().unwrap()]), &source, None).unwrap();
+    let text = std::fs::read_to_string(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    // gs fs es ds (2 each), edi esi ebp esp ebx edx ecx (4 each): EAX is 36 bytes up the frame, past BP.
+    assert!(text.contains("word ptr [bp+38]"), "{text}");
+}
+
 #[test]
 fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
     assert_ne!(unique_directory("t"), unique_directory("t"));
@@ -3444,13 +3470,22 @@ fn no_function_sections_is_the_default_object() {
 
 /// Every function's COMDAT is allocated in the module's code segment
 /// (`<MODULE>_TEXT`), the segment the one-segment layout names: function
-/// sections change the grouping, not the segment. (`-mcode-segment=` is not
-/// read on this path, with or without the flag.)
+/// sections change the grouping, not the segment.
 #[test]
 fn function_sections_allocate_in_the_modules_code_segment() {
     let has = |object: &[u8]| object.windows(8).any(|window| window == b"TWO_TEXT");
     assert!(has(&omf_of(&["-ffunction-sections"])));
     assert!(has(&omf_of(&[])));
+}
+
+/// `-mcode-segment=` was read only on the Nib/QB path: a C module from llrm-cc
+/// always went to `<MODULE>_TEXT`, so a BCC caller's near call into it left the
+/// segment and the harness cell CNBL crashed.
+#[test]
+fn mcode_segment_names_the_segment_of_an_llvm_ir_module() {
+    let has = |object: &[u8], name: &[u8]| object.windows(name.len()).any(|window| window == name);
+    let object = omf_of(&["-mcode-segment=HOT_TEXT"]);
+    assert!(has(&object, b"HOT_TEXT") && !has(&object, b"TWO_TEXT"));
 }
 
 /// `llrm-llc` on a module stated for Windows or macOS x86-64 answered `no
@@ -5195,6 +5230,19 @@ fn a_masked_byte_wanted_past_a_call_stays_a_movzx_at_o2() {
     assert!(listing.contains("movzx"), "the extension was made a mask: {listing}");
 }
 
+/// x_cordic -O2: both arms of the body joined in the loop latch (`inc; cmp; branch back`), one reached by a taken
+/// `jmp` that ran 3 clocks a trip (50,829 clk; 49,539 with the latch copied into each arm, gcc 49,031). The pin's
+/// tail-duplication bound (2 instructions) kept the latch; the priced copy (DEVIATE TAILDUP-HOT) takes it.
+#[test]
+fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
+    let text = include_str!("tests_data/latch_arms.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "arms").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The latch's `xor` of 5 stands once in each arm, not once behind a `jmp` from one of them.
+    let copies = listing.lines().filter(|line| line.trim() == "xor esi, 5").count();
+    assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
+}
+
 /// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
 /// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
 /// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
@@ -5229,4 +5277,47 @@ fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
     )
     .unwrap();
     assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
+}
+
+/// COMPILE-OSROT: the rotation trial assembled the functions that differ twice and the module once
+/// more, so a module of two loop functions and a leaf that does not change cost three assemblies
+/// where two are the floor (x_jpeg_fixed -Os, 6 of 8 functions differ: 2.0x the compile time). Each
+/// of the three functions is selected once per assembly, twice in all.
+#[test]
+fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
+    let one = include_str!("tests_data/prefix_sums.ll");
+    let start = one.find("; Function Attrs").unwrap();
+    let end = one[start..].find("\n}\n").unwrap() + start + 3;
+    let function = &one[start..end];
+    let second = function.replace("@bench_prefix", "@bench_prefix2").replace("mul nsw i32 %11, 5", "mul nsw i32 %11, 7");
+    let text = format!(
+        "{}\n{second}\ndefine dso_local i32 @leaf(i32 %x) {{\n  ret i32 %x\n}}\n{}",
+        &one[..end],
+        &one[end..]
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+    compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
+    let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
+    assert_eq!(selections, 6, "{selections} selections of three functions");
+}
+
+/// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
+/// backend against it must too. `llrm-llc` ran the whole mid-end over any IR it was handed (a hand-made
+/// branch form of x_heapsort's child select compiled to the same 37,923 clk as the unedited IR), so
+/// "the pin's code on our IR" could not be isolated. With the switch a slot that mem2reg promotes stays
+/// a stack slot.
+#[test]
+fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+        define i32 @f(i32 %x) {\n  %p = alloca i32, align 4\n  store i32 %x, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  ret i32 %v\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O2", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "slot").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let optimized = listing(&[]);
+    let given = listing(&["--no-midend"]);
+    assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
+    assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
 }

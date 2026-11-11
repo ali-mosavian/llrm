@@ -170,6 +170,7 @@ fn loop_members(
 fn price_of(
     items: &[Item],
     cpu: Cpu,
+    cold_clocks: bool,
 ) -> Option<(usize, u32)> {
     let labels: HashMap<&str, usize> = items
         .iter()
@@ -232,6 +233,9 @@ fn price_of(
             + callee_clocks(inst, cpu, &hoisted);
         let depth = members.iter().filter(|member| member[at]).count().min(3);
         bytes += size;
+        if depth == 0 && !cold_clocks {
+            continue;
+        }
         clocks += u64::from(cost) * share[at] * 10u64.pow(depth as u32);
     }
     // thousandths of a run, rounded to the nearest clock
@@ -246,7 +250,7 @@ pub fn keeps(
     cpu: Cpu,
     price: Price,
 ) -> bool {
-    match (price_of(with, cpu), price_of(without, cpu)) {
+    match (price_of(with, cpu, true), price_of(without, cpu, true)) {
         (Some(with_cost), Some(without_cost)) => price.beats(cpu, with_cost, without_cost),
         _ => false,
     }
@@ -256,14 +260,19 @@ pub fn keeps(
 /// only where it beats `without` (a tie goes to `without`). The strict price
 /// (-O1: no worse in bytes and in clocks) replaces `with` only where `without`
 /// is no worse in both: where each wins one, `with` stands, so neither axis is
-/// given up for the other. False when either cannot be priced.
+/// given up for the other. `cold_clocks` false credits clocks only inside loops
+/// (a straight-line multiply may never run: size decides, as in the pin). False
+/// when either cannot be priced.
 pub fn prefers_without(
     with: &[Item],
     without: &[Item],
     cpu: Cpu,
     price: Price,
+    cold_clocks: bool,
 ) -> bool {
-    let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu), price_of(without, cpu)) else { return false };
+    let (Some(with_cost), Some(without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks)) else {
+        return false;
+    };
     match price {
         Price::Strict => without_cost.0 <= with_cost.0 && without_cost.1 <= with_cost.1,
         Price::Size | Price::Rate => !price.beats(cpu, with_cost, without_cost),
@@ -277,7 +286,7 @@ pub fn cheaper(
     cpu: Cpu,
     price: Price,
 ) -> Vec<Item> {
-    match (price_of(&with, cpu), price_of(&without, cpu)) {
+    match (price_of(&with, cpu, true), price_of(&without, cpu, true)) {
         (Some(with_cost), Some(without_cost)) if price.beats(cpu, with_cost, without_cost) => with,
         _ => without,
     }

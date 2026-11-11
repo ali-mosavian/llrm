@@ -702,6 +702,29 @@ pub fn convention_for_abi(
             parameters.reverse();
         }
     }
+    if interrupt {
+        // Each parameter is the low word of the frame slot the description names.
+        if let Some(handler) = arch.calling().interrupt().filter(|one| !one.interrupt_parameters.is_empty()) {
+            if parameters.len() > handler.interrupt_parameters.len() {
+                return refuse("an interrupt handler with more parameters than the description names");
+            }
+            for (parameter, name) in parameters.iter_mut().zip(&handler.interrupt_parameters) {
+                let mut at = 0;
+                let mut found = false;
+                for (slot, bytes) in &handler.interrupt_frame {
+                    if slot == name {
+                        found = true;
+                        break;
+                    }
+                    at += bytes;
+                }
+                if !found {
+                    return refuse(format!("an interrupt parameter {name} that the frame does not hold"));
+                }
+                *parameter = Parameter::Cell(first + at);
+            }
+        }
+    }
     for (index, parameter) in parameters.iter_mut().enumerate() {
         if let (Parameter::Cell(disp), Some(_)) =
             (&*parameter, byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)))
