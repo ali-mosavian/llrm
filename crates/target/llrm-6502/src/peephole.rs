@@ -40,8 +40,8 @@
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
 //!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
 //!   both.
-//! - [`zero_cells_with_stz`]: 65C02 `lda #0; sta m` (a run of stores of the zero)
-//!   with `a` dead after: `stz m` each.
+//! - [`zero_cells_with_stz`]: 65C02 `lda #0; sta m` (a run of stores of the
+//!   zero) with `a` dead after: `stz m` each.
 //! - [`step_in_place`]: `lda #1; clc; adc m; sta m` (also `lda m; clc; adc #1;
 //!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta m`,
 //!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
@@ -161,7 +161,10 @@ fn duplicate_return_tail_into_fall_through(asm: &mut Asm) -> bool {
             at += 1;
             continue;
         };
-        let straight = matches!(first.op, Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Lda | Op::Ldx | Op::Ldy);
+        let straight = matches!(
+            first.op,
+            Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Lda | Op::Ldx | Op::Ldy
+        );
         let falls_in = matches!(
             &asm.lines[at - 1],
             Line::Inst(before) if !matches!(before.op, Op::Jmp | Op::Bra | Op::Rts)
@@ -190,6 +193,8 @@ fn run_passes(
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
     zero_cells_with_stz(asm);
+    place_store_where_a_is_dead(asm);
+    merge_saves_of_a(asm);
     if known_loads {
         drop_known_loads(asm);
     }
@@ -218,7 +223,8 @@ fn run_passes(
     }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
-    // a transfer that fed an `or` of zero is gone: the load is next to its store
+    // a transfer that fed an `or` of zero is gone: the load is next to its
+    // store
     drop_reloads(asm);
     crate::peephole_cells::store_then_index_load(asm);
     // last of the cell passes: the choice is by the final size, after the
@@ -1205,7 +1211,11 @@ fn walk<'a>(
             (Op::Ora | Op::Eor, _, Operand::Imm(_) | Operand::Direct(_))
                 if state[0] == Some(Value::Imm("0")) && (operand.is_cell() || matches!(operand, Operand::Imm(_))) =>
             {
-                stores.push((at, Inst { op: Op::Lda, operand: operand.clone(), place: line.inst().map_or(0, |inst| inst.place) }, 0));
+                stores.push((
+                    at,
+                    Inst { op: Op::Lda, operand: operand.clone(), place: line.inst().map_or(0, |inst| inst.place) },
+                    0,
+                ));
                 state[0] = match operand {
                     Operand::Imm(value) => Some(Value::Imm(value.as_str())),
                     Operand::Direct(name) => Some(Value::Cell(name.as_str())),
@@ -1367,7 +1377,9 @@ fn load_straight_once(asm: &mut Asm) -> bool {
     let mut drops: Vec<(usize, usize)> = Vec::new();
     for (at, line) in lines.iter().enumerate() {
         let Line::Inst(Inst {
-            op: load @ (Op::Ldx | Op::Ldy), operand: from @ (Operand::Direct(_) | Operand::Imm(_)), ..
+            op: load @ (Op::Ldx | Op::Ldy),
+            operand: from @ (Operand::Direct(_) | Operand::Imm(_)),
+            ..
         }) = line
         else {
             continue;
@@ -1530,6 +1542,136 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
         }
     }
     asm.lines = out;
+}
+
+/// `pha; lda src; sta dst; pla` (a cell made from a literal or another cell
+/// while `a` is live) with `a` dead earlier in the same straight-line run: the
+/// load and the store move there, and the bracket (6 B, 12 clocks) is 4 B and
+/// 5 clocks. `a` is dead before an instruction that writes it without reading
+/// it ([`dead_from`]); the run between holds no label, branch, call or stack
+/// operation and nothing that touches `dst` or writes `src`. The bracket's
+/// `pla` set N and Z from the value it restored, which nothing reads after.
+pub fn place_store_where_a_is_dead(asm: &mut Asm) {
+    loop {
+        let exits = Exits::of(asm);
+        let lines = &asm.lines;
+        let found = (0..lines.len().saturating_sub(3)).find_map(|at| {
+            let [Some(Line::Inst(push)), Some(Line::Inst(load)), Some(Line::Inst(store)), Some(Line::Inst(pull))] =
+                [0, 1, 2, 3].map(|n| lines.get(at + n))
+            else {
+                return None;
+            };
+            if (push.op, load.op, store.op, pull.op) != (Op::Pha, Op::Lda, Op::Sta, Op::Pla) {
+                return None;
+            }
+            let Operand::Direct(dst) = &store.operand else { return None };
+            if !store.operand.is_cell() || !matches!(load.operand, Operand::Imm(_)) && !load.operand.is_cell() {
+                return None;
+            }
+            if !nz_dead_from(lines, at + 4, &mut HashSet::default()) {
+                return None;
+            }
+            for k in (0..at).rev() {
+                let Some(Line::Inst(between)) = lines.get(k) else { return None };
+                if blocks_a_store(between, &load.operand, dst) {
+                    return None;
+                }
+                if dead_from(lines, k, Registers::A, &mut HashSet::default(), exits) {
+                    return Some((at, k));
+                }
+            }
+            None
+        });
+        let Some((at, to)) = found else { return };
+        let moved: Vec<Line> = asm.lines.drain(at..at + 4).skip(1).take(2).collect();
+        for line in moved.into_iter().rev() {
+            asm.lines.insert(to, line);
+        }
+    }
+}
+
+/// Whether `inst` stops a load of `src` and a store to the cell `dst` from
+/// moving above it.
+fn blocks_a_store(
+    inst: &Inst,
+    src: &Operand,
+    dst: &str,
+) -> bool {
+    if matches!(
+        inst.op,
+        Op::Jsr | Op::Jmp | Op::Rts | Op::Pha | Op::Pla | Op::Php | Op::Plp | Op::Phx | Op::Phy | Op::Plx | Op::Ply | Op::Tsx | Op::Txs
+    ) || inst.op.is_branch()
+    {
+        return true;
+    }
+    // the cell after a pointer's low byte is its high byte
+    let covers = |name: &str, cell: &str| {
+        name == cell
+            || name
+                .strip_prefix("rc")
+                .zip(cell.strip_prefix("rc"))
+                .is_some_and(|(a, b)| matches!((a.parse::<u32>(), b.parse::<u32>()), (Ok(a), Ok(b)) if a + 1 == b))
+    };
+    let named = match &inst.operand {
+        Operand::Direct(name) | Operand::Indexed(name, _) => Some((name, false)),
+        Operand::IndirectY(name) | Operand::IndirectX(name) | Operand::Indirect(name) => Some((name, true)),
+        _ => None,
+    };
+    if let Some((name, pointer)) = named
+        && (name == dst || pointer && covers(name, dst))
+    {
+        return true;
+    }
+    let writes = matches!(
+        inst.op,
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror
+    ) && !matches!(inst.operand, Operand::Acc | Operand::None);
+    match (writes, src) {
+        (true, Operand::Direct(from)) => !matches!(&inst.operand, Operand::Direct(name) if name != from),
+        _ => false,
+    }
+}
+
+/// `pha; X; pla; pha; Y; pla` where `Y` is straight-line code that starts
+/// with a load into `a`: `pha; X; Y; pla`. `Y` writes `a` before it reads it
+/// and holds the stack as the second `pha` left it, so the `pla; pha` that
+/// restored `a` for it was dead, as were the flags it set (`Y`'s load sets
+/// them before anything reads). Two literals stored into cells while `a` is
+/// live (`known_loads_walks` -O1: two brackets of 12 clocks, run 576 times)
+/// are one bracket, and the second `lda #n` is then a known load.
+pub fn merge_saves_of_a(asm: &mut Asm) {
+    loop {
+        let lines = &asm.lines;
+        let found = (0..lines.len().saturating_sub(2)).find(|&at| {
+            let op = |n: usize| lines.get(at + n).and_then(Line::inst).map(|inst| inst.op);
+            if (op(0), op(1)) != (Some(Op::Pla), Some(Op::Pha)) || op(2) != Some(Op::Lda) {
+                return false;
+            }
+            // the second bracket's body: straight-line up to its `pla`
+            let mut n = 2;
+            loop {
+                let Some(Line::Inst(inst)) = lines.get(at + n) else { return false };
+                match inst.op {
+                    Op::Pla => return true,
+                    Op::Pha
+                    | Op::Php
+                    | Op::Plp
+                    | Op::Phx
+                    | Op::Phy
+                    | Op::Tsx
+                    | Op::Txs
+                    | Op::Jsr
+                    | Op::Jmp
+                    | Op::Rts => return false,
+                    op if op.is_branch() => return false,
+                    _ => {}
+                }
+                n += 1;
+            }
+        });
+        let Some(at) = found else { return };
+        asm.lines.drain(at..at + 2);
+    }
 }
 
 /// `jmp l` where `l:` starts a block of straight-line loads, stores and
@@ -2148,7 +2290,10 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
             lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Lda && i.operand == Operand::Imm("0".into()))
         };
         let cell = |n: usize| {
-            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
+            lines
+                .get(n)
+                .and_then(Line::inst)
+                .is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
         };
         let mut runs = Vec::new();
         let mut at = 0;
@@ -2157,7 +2302,8 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                 at += 1;
                 continue;
             }
-            // the run: stores, each after a `lda #0` or straight after the last store
+            // the run: stores, each after a `lda #0` or straight after the last
+            // store
             let mut end = at + 2;
             loop {
                 if cell(end) {
