@@ -395,7 +395,16 @@ pub fn shared_licm(
     function: &MFunction,
     size: bool,
 ) -> Result<MFunction, String> {
-    shared_stage(function, |classes, _| Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, size }))
+    use llrm_target::Target as _;
+    let arch = crate::target::M68k;
+    let segments = llrm_codegen::backend::target::Segments::of(
+        &arch.machine(),
+        llrm_lir::registers::Regs(arch.registers()),
+        arch.operand_bytes(),
+    );
+    shared_stage(function, |classes, _| {
+        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size })
+    })
 }
 
 /// `BranchFolder` over the m68k function.

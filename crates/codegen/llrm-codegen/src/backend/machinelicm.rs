@@ -990,12 +990,21 @@ impl licm::Policy<Wrapped> for X86<'_> {
 }
 
 /// `body` with the loop-invariant computations in the preheaders.
-#[cfg(test)]
 pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> LirBody {
-    hoisted_sized(body, classes, false, &crate::backend::target::BUILT_IN)
+    let Some(registers) = body.registers else { return body.clone() };
+    // A flat machine: no selector to place, as `Segments::of` makes for one.
+    let flat = Segments {
+        selectors: Vec::new(),
+        data: registers.data_segment,
+        through: None,
+        huge_shift: None,
+        offset_bytes: 0,
+        registers,
+    };
+    hoisted_sized(body, classes, false, &flat)
 }
 
 /// `hoisted`, where `size` keeps the x87 pool constants in their loops.
@@ -1072,6 +1081,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    /// `hoisted` on the built-in (m16) machine's segments.
+    fn hoisted(
+        body: &LirBody,
+        classes: &RegisterClasses,
+    ) -> LirBody {
+        hoisted_sized(body, classes, false, &crate::backend::target::BUILT_IN)
+    }
     use crate::model::ir::{Held, Semantics};
     use crate::model::lir::LirBlock;
     use crate::support::hash::IndexMap;
