@@ -175,6 +175,29 @@ fn without_reserved_symbols(
     out
 }
 
+/// `-fwhole-program`: the module is the whole link but its runtime.
+fn whole_program(request: &Request) -> bool {
+    request.passes.iter().rev().find_map(|flag| match flag.as_str() {
+        "-fwhole-program" => Some(true),
+        "-fno-whole-program" => Some(false),
+        _ => None,
+    }) == Some(true)
+}
+
+/// What a linker's `--gc-sections` does for a whole program, as LTO does it:
+/// everything but `main` becomes internal (`Internalize`), then what nothing
+/// live names is deleted (`GlobalDCE`). Run after the mid-end, so nothing
+/// else about the code changes.
+fn whole_program_swept(
+    program: &mut Program,
+    main: &str,
+) -> Result<(), String> {
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_program(llrm_transforms::internalize::Internalize::new([main.to_owned()]));
+    manager.add_program(llrm_transforms::globaldce::GlobalDce);
+    manager.run(program).map(|_| ())
+}
+
 /// `text` through the mid-end at the request's level.
 fn program(
     text: &str,
@@ -214,6 +237,9 @@ fn program(
     }
     // The pin lowers `llvm.is.constant` and `llvm.objectsize` at every level.
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
+    if whole_program(request) {
+        whole_program_swept(&mut program, &format!("{}main", request.platform.c_symbol_prefix))?;
+    }
     Ok(program)
 }
 
