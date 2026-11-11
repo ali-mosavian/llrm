@@ -87,3 +87,13 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 - IC is 1 wherever no epilogue is allowed (tiny trip count too), as `selectInterleaveCount` L3705.
 - `LLRM_ARM64_VECTORS=0` is off.
 - VP5/VP6/VP8 (planner header) state the register-pressure, low-trip and control-price deviations.
+
+## LV-X2: integer binary operations (2026-11-11)
+
+- Pass: LoopVectorize `VPWidenRecipe` (widen `add`, `sub`, `mul`, `and`, `or`, `xor`, `shl`, `lshr`, `ashr` over loaded and loop-invariant operands); NEON `addTypeForNEON`, `LowerVectorSRA_SRL_SHL`.
+- Planner: the PIN rows already priced `add`; `mul <2 x i64>` is invalid (the pin leaves it scalar).
+- Backend: `VectorBinary`, `VectorShift`, `VectorNot` (mc, text, encode checked against the pinned `llvm-mc`, lir round trip, regalloc wide registers); shifts by a constant splat lower to `VSHL`/`VLSHR`/`VASHR`.
+- Fixed on the way (each with a fail-first test): the builder and legalizer truncated a vector shift amount to a scalar; predicate 13 (`1..16`) resolved to the SVE stub, so `ushr`/`sshr` of `<8 x i16>` never selected; instcombine and reassociate panicked on vector operations (DEVIATE COMBINE-VEC, REASSOC-VEC).
+- DEVIATE LVP6/VEC4: a shift by a non-constant amount (`ushl`/`sshl`) is left scalar. Casts (`sext`, `zext`, `trunc`) need the type legalizer to split `<8 x i32>`: not translated, the loops with C integer promotion stay scalar. Exit LV-X4.
+- Flag on vs off, same binary, unicorn ok (B, executed instructions): particle O2 272 -> 580 B, 154,349 -> 24,182 (clang 1000 B / 23,899; gcc 700 B / 28,495), O3 316 -> 516, 67,615 -> 24,266; sieve 172 -> 236, 17,927 -> 14,990; bintree 264 -> 288, 32,646 -> 29,599.
+- Correct: 12 kernels (all lane widths, trips 0..90, in place and out of place) equal the gcc -O0 reference under qemu at O2 and O3.
