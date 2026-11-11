@@ -89,6 +89,9 @@ pub fn target_lowering(
         );
     }
     set(&[StackSave, StackRestore], &[MVT::Other], Action::Expand);
+    // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value type
+    // is asked (as for x86).
+    set(&[StackSave], &[pointer(cpu)], Action::Expand);
     set(&[DynamicStackAlloc], &[pointer(cpu)], Action::Expand);
     set(&[FrameIndex], &words, Action::Custom);
     set(&[BrCC, SelectCC], &words, Action::Expand);
@@ -171,9 +174,18 @@ fn f32_name(name: &'static str) -> &'static str {
 /// `MJTI`.
 pub struct WasmLowering<'a> {
     pub tables: &'a [Vec<u32>],
+    /// `setStackPointerRegisterToSaveRestore`: `SP32`, or `SP64`.
+    pub stack_pointer: llrm_lir::registers::RegId,
 }
 
 impl Hooks for WasmLowering<'_> {
+    /// The register the shared `DYNAMIC_STACKALLOC`, `STACKSAVE` and
+    /// `STACKRESTORE` expansions read and write, and the 16-byte stack
+    /// alignment of `WebAssemblyFrameLowering`.
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        Some((self.stack_pointer, 16))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,

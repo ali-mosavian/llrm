@@ -15,7 +15,7 @@ fn legalize(
     cpu: Cpu,
 ) -> SDValue {
     let tli = target_lowering(cpu, Features::default());
-    DagLegalizer::new(dag, &tli, &mut WasmLowering { tables: &[] }).run().expect("legalizes");
+    DagLegalizer::new(dag, &tli, &mut WasmLowering { tables: &[], stack_pointer: llrm_wasm::reg::SP32 }).run().expect("legalizes");
     dag.get_root()
 }
 

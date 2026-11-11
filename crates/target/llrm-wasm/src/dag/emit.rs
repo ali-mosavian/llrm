@@ -27,7 +27,13 @@ use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 
 use super::function::{PhiCopy, Selected};
 use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};
-use crate::mir::{EH_LABEL, Function, IMPLICIT_DEF, Inst, Mem, Operand, PHI, VReg, ValType};
+use crate::mir::{EH_LABEL, Function, IMPLICIT_DEF, Inst, Mem, Operand, PHI, SP_READ, SP_WRITE, VReg, ValType};
+
+/// `SP32` and `SP64`: the registers `setStackPointerRegisterToSaveRestore`
+/// names.
+fn is_stack_pointer(reg: llrm_lir::registers::RegId) -> bool {
+    reg == crate::reg::SP32 || reg == crate::reg::SP64
+}
 
 /// The register class of a value type, `None` for a chain or glue.
 fn class(vt: EVT) -> Option<ValType> {
@@ -157,6 +163,16 @@ impl Emitter<'_> {
             line = dag.lines.get(data.order as usize).copied().flatten().map_or(0, |at| at.line);
             match data.opcode {
                 ISD::CopyFromReg => {
+                    // The stack pointer is the one physical register the
+                    // selector copies: its value is made by the frame lowering.
+                    if let NodeData::PhysReg(sp) = dag.node(data.ops[1]).data {
+                        if let (true, Some(ty)) = (is_stack_pointer(sp), class(data.values[0])) {
+                            let reg = self.f.new_vreg(ty);
+                            out.push(Inst::new(SP_READ, &[Operand::Def(reg)]));
+                            self.results.insert((node, 0), reg);
+                        }
+                        continue;
+                    }
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
                     if let Some(ty) = class(data.values[0]) {
                         let reg = self.builder_reg(number, ty);
@@ -164,6 +180,12 @@ impl Emitter<'_> {
                     }
                 }
                 ISD::CopyToReg => {
+                    if let NodeData::PhysReg(sp) = dag.node(data.ops[1]).data {
+                        if let (true, Some(Operand::Use(src))) = (is_stack_pointer(sp), self.operand(dag, data.ops[2])) {
+                            out.push(Inst::new(SP_WRITE, &[Operand::Use(src)]));
+                        }
+                        continue;
+                    }
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
                     let value = data.ops[2];
                     match (class(dag.value_type(value)), self.operand(dag, value)) {

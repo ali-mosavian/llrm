@@ -181,6 +181,7 @@ pub fn compile_function_with(
         })
         .unwrap_or_default();
     f.argument_variables = blocks.first().map(|first| first.argument_variables.clone()).unwrap_or_default();
+    f.var_sized = blocks.iter().any(|block| block.var_sized);
     f.nothrow = facts.nothrow.clone();
     f.callee_memory = facts.callee_memory.clone();
     f.personality = unwinding
