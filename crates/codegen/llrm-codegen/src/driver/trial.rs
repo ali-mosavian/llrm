@@ -23,6 +23,8 @@
 //! (x_prefix -12 B unrotated, x_transpose +34 B), so the finished code decides.
 
 
+use std::collections::BTreeSet;
+
 use llrm_mir::module::Module;
 use llrm_mir::program::Program;
 use llrm_transforms::trial::{self, differing, only};
@@ -131,7 +133,34 @@ pub fn compiled_module_trying(
         if llrm_support::debug::enabled("trial") {
             let defined =
                 one.globals.iter().filter(|global| global.function().is_some_and(|f| !f.is_declaration())).count();
-            eprintln!("trial unrotated: {} of {defined} functions differ", cut.len());
+            eprintln!("trial unrotated: {} of {defined} functions differ: {cut:?}", cut.len());
+        }
+        // Pricing the cut twice and assembling the winner costs `2 * cut + all`
+        // instructions of backend work; both modules whole cost `2 *
+        // all`. The cut is the cheaper only while it is under half.
+        let size = |module: &Module, only: Option<&BTreeSet<String>>| -> usize {
+            module
+                .globals
+                .iter()
+                .filter_map(|global| {
+                    Some((global.name.as_deref()?, global.function().filter(|f| !f.is_declaration())?))
+                })
+                .filter(|(name, _)| only.is_none_or(|cut| cut.contains(*name)))
+                .map(|(_, function)| function.instruction_count())
+                .sum()
+        };
+        if 2 * size(one, Some(&cut)) >= size(one, None) {
+            let first = assembled(&kept, name, options)?;
+            let second = assembled(&other, name, &again)?;
+            let pays = matches!(
+                (unpadded(&first), unpadded(&second)),
+                (Some(a), Some(b)) if kind.keeps((a, 0.0), (b, 0.0))
+            );
+            if !pays {
+                return Ok(first);
+            }
+            stage_files(options, "", &second)?;
+            return Ok(second);
         }
         let each =
             |module: &Module, program: &Program| assembled_module(&only(module, &cut), program, name, &again).ok();
