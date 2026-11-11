@@ -229,13 +229,7 @@ fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
         order.remove(at);
         order.push(first);
     }
-    let mut at = function.outgoing;
-    for &index in order.iter().rev() {
-        let slot = &function.slots[index];
-        at = at.next_multiple_of(slot.align.max(1));
-        slots[index] = at;
-        at += slot.size;
-    }
+    let (mut slots, mut at) = fill(function, &order);
     // The dense order can put an object past what a pair reaches
     // (`ldp`/`stp` of an 8-byte register: 504 bytes from the base). Ordered
     // by the pairs per byte instead, the pairs are the ones near the base; it
@@ -247,19 +241,36 @@ fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
         by_pairs.sort_by(|&a, &b| {
             (pairs[a] * size(b)).cmp(&(pairs[b] * size(a))).then(function.slots[a].align.cmp(&function.slots[b].align))
         });
-        let mut paired = vec![0; slots.len()];
-        let mut end = function.outgoing;
-        for &index in by_pairs.iter().rev() {
-            let slot = &function.slots[index];
-            end = end.next_multiple_of(slot.align.max(1));
-            paired[index] = end;
-            end += slot.size;
-        }
+        let (paired, end) = fill(function, &by_pairs);
         if formable_pairs(function, &paired) > formable_pairs(function, &slots) {
             (slots, at) = (paired, end);
         }
     }
+    // The pin's own order (the index order, the first object at the top) where
+    // it lets more accesses pair: a slot of four bytes is dense, and the dense
+    // order put one between the scalars a run of `stp xzr, xzr` stored.
+    let index_order: Vec<usize> = (0..function.slots.len()).collect();
+    let (by_index, end) = fill(function, &index_order);
+    if formable_pairs(function, &by_index) > formable_pairs(function, &slots) {
+        (slots, at) = (by_index, end);
+    }
     (slots, at.next_multiple_of(16))
+}
+
+/// The objects placed from the stack pointer up, the last of `order` lowest.
+fn fill(
+    function: &MFunc,
+    order: &[usize],
+) -> (Vec<u64>, u64) {
+    let mut slots = vec![0; function.slots.len()];
+    let mut at = function.outgoing;
+    for &index in order.iter().rev() {
+        let slot = &function.slots[index];
+        at = at.next_multiple_of(slot.align.max(1));
+        slots[index] = at;
+        at += slot.size;
+    }
+    (slots, at)
 }
 
 /// How many adjacent same-kind access pairs (`ldp`/`stp` candidates) start in
@@ -1007,5 +1018,31 @@ mod tests {
         // A lone `d8` is a single access too (`ldr d8, [sp], #256`).
         let float = frame(256, Save::FprPair(8, None));
         assert_eq!((float.folded_bump(true), float.folded_bump(false)), (Some(256), None));
+    }
+
+    /// A four-byte spill slot is dense, so the dense order put one between two
+    /// eight-byte scalars that a run of `stp xzr, xzr` stored (jpeg_fixed -O2:
+    /// `stp xzr, xzr, [sp]` became `str xzr` ×2, +5 instructions, +20 B once
+    /// `w` values spilled in four bytes). The order that lets the stores pair
+    /// is the one taken.
+    #[test]
+    fn a_dense_small_slot_does_not_split_the_scalars_a_pair_stores() {
+        use crate::mfunc::{MBlock, OpList};
+        let mut function = MFunc::new("f");
+        let (first, second, spill) = (function.slot(8, 8), function.slot(8, 8), function.slot(4, 4));
+        let store = |slot: u32, bytes: u8| {
+            let reg = Gpr(31);
+            let width = if bytes == 4 { Width::W } else { Width::X };
+            Op::I(Inst::Store {
+                mem: Memory::Int { width, bytes, sign: false, reg },
+                addr: Addr::Slot { slot, offset: 0 },
+                mmo: Default::default(),
+            })
+        };
+        let mut ops = vec![store(first, 8), store(second, 8)];
+        ops.extend((0..8).map(|_| store(spill, 4)));
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        let (slots, _) = place_objects(&function);
+        assert_eq!(formable_pairs(&function, &slots), 1, "{slots:?}");
     }
 }

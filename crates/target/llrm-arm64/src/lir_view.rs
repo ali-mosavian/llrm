@@ -20,7 +20,11 @@ use crate::regalloc::{Allocation, spill_access};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Class {
     Gpr,
+    /// A general register every access of names as `w`: spilled in four bytes.
+    Gpr32,
     Fpr,
+    /// A float register every access of names as `s`: spilled in four bytes.
+    Fpr32,
     /// A vector register read whole: a call keeps only the low 64 bits of
     /// `v8`-`v15`, so it never takes one.
     Quad,
@@ -33,9 +37,9 @@ pub(crate) fn id(
     n: u32,
 ) -> RegId {
     match (class, n) {
-        (Class::Gpr, 31) => crate::reg::XZR,
-        (Class::Gpr, n) => RegId::from_raw(crate::reg::X0.index() as u8 + n as u8),
-        (Class::Fpr | Class::Quad, n) => RegId::from_raw(crate::reg::V0.index() as u8 + n as u8),
+        (Class::Gpr | Class::Gpr32, 31) => crate::reg::XZR,
+        (Class::Gpr | Class::Gpr32, n) => RegId::from_raw(crate::reg::X0.index() as u8 + n as u8),
+        (Class::Fpr | Class::Fpr32 | Class::Quad, n) => RegId::from_raw(crate::reg::V0.index() as u8 + n as u8),
     }
 }
 
@@ -69,8 +73,8 @@ pub(crate) fn from_lir(
         (LirReg::Phys(r), _) if r == crate::reg::XZR || r == crate::reg::SP => Reg::Gpr(Gpr(31)),
         (LirReg::Phys(r), _) if r.index() >= crate::reg::V0.index() => Reg::Fpr(Vreg(number(crate::reg::V0, r))),
         (LirReg::Phys(r), _) => Reg::Gpr(Gpr(number(crate::reg::X0, r))),
-        (LirReg::Virt(n), Class::Gpr) => Reg::Gpr(Gpr(n + Gpr::FIRST_VIRTUAL)),
-        (LirReg::Virt(n), Class::Fpr | Class::Quad) => Reg::Fpr(Vreg(n + Gpr::FIRST_VIRTUAL)),
+        (LirReg::Virt(n), Class::Gpr | Class::Gpr32) => Reg::Gpr(Gpr(n + Gpr::FIRST_VIRTUAL)),
+        (LirReg::Virt(n), Class::Fpr | Class::Fpr32 | Class::Quad) => Reg::Fpr(Vreg(n + Gpr::FIRST_VIRTUAL)),
     }
 }
 
@@ -216,6 +220,7 @@ fn view_with(
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
     let wide = crate::regalloc::wide_registers(function);
+    let mut widths = Widths::new(function.next_register - Gpr::FIRST_VIRTUAL);
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
@@ -284,6 +289,9 @@ fn view_with(
             let mut ties = Vec::new();
             let mut op = op.clone();
             let mut page_read = fused;
+            let narrow = crate::regalloc::narrow_operands(&op);
+            let mut narrow_left = vec![true; narrow.len()];
+            let copy = matches!(op, Op::Copy { .. });
             op.visit(&mut |register, role| {
                 let key = register.key();
                 // The page register of a fused `MOVaddr` is not a value.
@@ -300,6 +308,17 @@ fn view_with(
                         _ if wide.contains(&key) => Class::Quad,
                         _ => Class::Fpr,
                     };
+                    // A copy says nothing of its own: it joins the widths of
+                    // its two ends below.
+                    if !copy {
+                        let narrow_here = narrow
+                            .iter()
+                            .zip(&mut narrow_left)
+                            .find(|(one, left)| **left && **one == key)
+                            .map(|(_, left)| *left = false)
+                            .is_some();
+                        widths.mention(n, narrow_here);
+                    }
                 }
                 match role {
                     Role::Def => operands.push(Operand::Def(reg)),
@@ -311,6 +330,9 @@ fn view_with(
                     }
                 }
             });
+            if let (Op::Copy { dst, src }, false) = (&op, zero) {
+                widths.copy(*dst, *src);
+            }
             if let Op::I(inst) = &op
                 && let Some(target) = label_of(inst).and_then(|label| labels.get(label))
             {
@@ -361,7 +383,92 @@ fn view_with(
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
     }
+    widths.narrow_classes(&mut lir.classes);
     lir
+}
+
+/// Which virtual registers hold 32 bits: every access of one (and of the
+/// registers it is copied to and from) names `w` or `s`. The pin has the
+/// class as a fact of the register (`GPR32`, `FPR32`); here it is read off the
+/// operations, joined along copies. A value a copy brings in from a physical
+/// register has no known width (an `x0` argument read as `w`, then passed on
+/// whole) and stays 64 bits; a copy out to one reads the low bits only.
+struct Widths {
+    /// Per register: bit 0 a narrow access, bit 1 any other, bit 2 a copy in
+    /// from a physical register.
+    seen: Vec<u8>,
+    /// The registers joined by copies, as a forest.
+    parent: Vec<u32>,
+}
+
+impl Widths {
+    const NARROW: u8 = 1;
+    const OTHER: u8 = 2;
+    const FROM_PHYSICAL: u8 = 4;
+
+    fn new(registers: u32) -> Self {
+        Self { seen: vec![0; registers as usize], parent: (0..registers).collect() }
+    }
+
+    fn mention(
+        &mut self,
+        register: u32,
+        narrow: bool,
+    ) {
+        let root = self.root(register);
+        self.seen[root as usize] |= if narrow { Self::NARROW } else { Self::OTHER };
+    }
+
+    fn root(
+        &mut self,
+        mut register: u32,
+    ) -> u32 {
+        while self.parent[register as usize] != register {
+            let up = self.parent[register as usize];
+            self.parent[register as usize] = self.parent[up as usize];
+            register = up;
+        }
+        register
+    }
+
+    fn copy(
+        &mut self,
+        dst: Reg,
+        src: Reg,
+    ) {
+        match (to_lir(dst), to_lir(src)) {
+            (LirReg::Virt(dst), LirReg::Virt(src)) => {
+                let (dst, src) = (self.root(dst), self.root(src));
+                self.parent[src as usize] = dst;
+                self.seen[dst as usize] |= self.seen[src as usize];
+            }
+            (LirReg::Virt(dst), LirReg::Phys(_)) => {
+                let dst = self.root(dst);
+                self.seen[dst as usize] |= Self::FROM_PHYSICAL;
+            }
+            _ => {}
+        }
+    }
+
+    /// `Gpr32` / `Fpr32` for each register all of whose component's accesses
+    /// are narrow.
+    fn narrow_classes(
+        mut self,
+        classes: &mut [Class],
+    ) {
+        for (at, class) in classes.iter_mut().enumerate() {
+            let narrow = match class {
+                Class::Gpr => Class::Gpr32,
+                Class::Fpr => Class::Fpr32,
+                _ => continue,
+            };
+            let root = self.root(at as u32);
+            let seen = self.seen[root as usize];
+            if seen == Self::NARROW {
+                *class = narrow;
+            }
+        }
+    }
 }
 
 /// `function`, its registers the physical ones greedy chose in `lir`
@@ -468,9 +575,17 @@ fn rebuild_with(
     // argument or result, copied between `v0`..`v7`) included.
     let wide = crate::regalloc::wide_registers(function);
     let mut slots: HashMap<i32, u32> = HashMap::default();
+    // The bytes a spill moves are the slot's (`str xzr` into a four-byte slot
+    // is `str wzr`).
+    let mut slot_bytes: HashMap<i32, u8> = HashMap::default();
     for (slot, class) in spill_slots {
-        let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
-        slots.insert(*slot, function.slot(size, align));
+        let size: u8 = match class {
+            Class::Quad => 16,
+            Class::Gpr32 | Class::Fpr32 => 4,
+            Class::Gpr | Class::Fpr => 8,
+        };
+        slots.insert(*slot, function.slot(size.into(), size.into()));
+        slot_bytes.insert(*slot, size);
     }
     let physical = |register: LirReg| match register {
         LirReg::Virt(v) => LirReg::Phys(assignment.0[v as usize]),
@@ -540,9 +655,9 @@ fn rebuild_with(
                 }
                 Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {
                     let Some(Operand::Frame(slot)) = inst.operands.last() else { panic!("a spill names no slot") };
+                    let bytes = slot_bytes[slot];
                     let slot = slots[slot];
-                    let quad = registers[0].1 == Class::Quad;
-                    ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
+                    ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", bytes));
                 }
                 Kind::Op(_)
                     if matches!(
@@ -744,6 +859,12 @@ pub fn candidate_orders_built() -> usize {
 /// interval allocated, 4,274 times for shellsort's two functions: it is built
 /// once per such state.
 pub fn candidate_order(class: Class) -> Vec<RegId> {
+    // The width a class spills in does not change which registers it takes.
+    let class = match class {
+        Class::Gpr32 => Class::Gpr,
+        Class::Fpr32 => Class::Fpr,
+        other => other,
+    };
     cached_order((class, darwin(), scratch_free(), frame_pointer_free()))
 }
 
@@ -763,8 +884,8 @@ fn cached_order(state: Flags) -> Vec<RegId> {
 /// The order itself: a function of the class and the three flags only.
 fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<RegId> {
     match class {
-        Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
-        Class::Fpr => fpr_order(),
+        Class::Gpr | Class::Gpr32 => gpr_order(darwin, scratch_free, frame_pointer_free),
+        Class::Fpr | Class::Fpr32 => fpr_order(),
         Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
     }
 }
@@ -786,6 +907,11 @@ impl AllocTarget for Arm64 {
     ) -> Option<Class> {
         match (one, other) {
             (one, other) if one == other => Some(one),
+            // The same register file at two widths: the value needs the
+            // wider.
+            (Class::Gpr, Class::Gpr32) | (Class::Gpr32, Class::Gpr) => Some(Class::Gpr),
+            (Class::Fpr, Class::Fpr32) | (Class::Fpr32, Class::Fpr) => Some(Class::Fpr),
+            (Class::Fpr32, Class::Quad) | (Class::Quad, Class::Fpr32) => Some(Class::Quad),
             (Class::Fpr, Class::Quad) | (Class::Quad, Class::Fpr) => Some(Class::Quad),
             _ => None,
         }
@@ -914,7 +1040,8 @@ impl AllocTarget for Arm64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mc::inst::{AddSub, Cond, Wide, Width};
+    use crate::mc::inst::{AddSub, Addr, Cond, FpSize, Memory, Wide, Width};
+    use crate::mfunc::Callee;
     use crate::mfunc::{MBlock, OpList};
 
     fn sample() -> MFunc {
@@ -1012,6 +1139,107 @@ mod tests {
         assert_eq!(order((Class::Gpr, false, false, true)), fp);
         let (fpr, quad) = (order((Class::Fpr, false, false, false)), order((Class::Quad, false, false, false)));
         assert!(quad.len() < fpr.len(), "the classes have their own orders");
+    }
+
+    /// Bytes of every store to a frame object, in order.
+    fn slot_store_bytes(function: &MFunc) -> Vec<u8> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter())
+            .filter_map(|op| match op {
+                Op::I(Inst::Store { mem: Memory::Fp { bytes, .. } | Memory::Int { bytes, .. }, addr: Addr::Slot { .. }, .. }) => {
+                    Some(*bytes)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 24 values of one width load, a call, then all are read: more live
+    /// across it than the callee-saved registers hold, so some are spilled.
+    /// `read` makes the instruction that reads two of them.
+    fn spill_pressure(
+        load: impl Fn(&mut MFunc, Gpr, i64) -> (Reg, Op),
+        read: impl Fn(Reg, Reg) -> Op,
+    ) -> MFunc {
+        let mut function = MFunc::new("f");
+        let base = function.gpr();
+        let mut ops = vec![Op::Copy { dst: Reg::Gpr(base), src: Reg::Gpr(Gpr(0)) }];
+        let mut values = Vec::new();
+        for at in 0..24 {
+            let (value, op) = load(&mut function, base, at * 8);
+            values.push(value);
+            ops.push(op);
+        }
+        ops.push(Op::Call { callee: Callee::Symbol("g".into()), uses: vec![], defs: vec![], tail: false });
+        for pair in values.chunks(2) {
+            ops.push(read(pair[0], pair[1]));
+        }
+        ops.push(Op::Return { uses: vec![], tail: None });
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        function
+    }
+
+    /// An `f32` live across a call was spilled with `str d` (8 bytes), where
+    /// the pin stores `str s` (`AArch64InstrInfo::storeRegToStackSlot` by
+    /// register class, a slot of `getSpillSize`): fpbench -O3 had 174 `d`
+    /// spill accesses and no `s`, 19 pairs against the pin's 45 (+132 B).
+    #[test]
+    fn a_single_float_is_spilled_as_four_bytes() {
+        let mut function = spill_pressure(
+            |function, base, imm| {
+                let reg = function.fpr();
+                let op = Op::I(Inst::Load {
+                    mem: Memory::Fp { bytes: 4, reg },
+                    addr: Addr::Offset { base, imm },
+                    mmo: Default::default(),
+                });
+                (Reg::Fpr(reg), op)
+            },
+            |a, b| {
+                let (Reg::Fpr(a), Reg::Fpr(b)) = (a, b) else { unreachable!() };
+                Op::I(Inst::FpCompare { signalling: false, size: FpSize::S, rn: a, rm: Some(b) })
+            },
+        );
+        allocate(&mut function, false).expect("allocates");
+        let stores = slot_store_bytes(&function);
+        assert!(!stores.is_empty(), "the premise: some values are spilled");
+        assert!(stores.iter().all(|bytes| *bytes == 4), "{stores:?}");
+    }
+
+    /// An `i32` live across a call was spilled with `str x` (8 bytes), where
+    /// the pin stores `str w`: jpeg_fixed -O2 had 4 `w` spill accesses to the
+    /// pin's 48, and 46 pairs of the pin's pairs not formed (+25 B).
+    #[test]
+    fn a_word_is_spilled_as_four_bytes() {
+        let mut function = spill_pressure(
+            |function, base, imm| {
+                let reg = function.gpr();
+                let op = Op::I(Inst::Load {
+                    mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg },
+                    addr: Addr::Offset { base, imm },
+                    mmo: Default::default(),
+                });
+                (Reg::Gpr(reg), op)
+            },
+            |a, b| {
+                let (Reg::Gpr(a), Reg::Gpr(b)) = (a, b) else { unreachable!() };
+                Op::I(Inst::AddSubShifted {
+                    op: AddSub { subtract: false, set_flags: true },
+                    width: Width::W,
+                    rd: Gpr(31),
+                    rn: a,
+                    rm: b,
+                    shift: Shift::Lsl,
+                    amount: 0,
+                })
+            },
+        );
+        allocate(&mut function, false).expect("allocates");
+        let stores = slot_store_bytes(&function);
+        assert!(!stores.is_empty(), "the premise: some values are spilled");
+        assert!(stores.iter().all(|bytes| *bytes == 4), "{stores:?}");
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a

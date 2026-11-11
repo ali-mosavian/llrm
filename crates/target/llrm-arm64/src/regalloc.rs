@@ -31,7 +31,7 @@ use llrm_codegen::model::lir::SrcLoc;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
-use crate::mc::visit::{Reg, RegRef, Role};
+use crate::mc::visit::{Reg, RegList, RegRef, Role};
 use crate::mfunc::{Callee, MFunc, Op};
 
 /// The registers the allocator hands out, in order of preference, and those it
@@ -349,6 +349,118 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
     wide
 }
 
+fn narrow_memory(
+    narrow: &mut RegList,
+    mem: &Memory,
+    load: bool,
+) {
+    match mem {
+        Memory::Int { width, bytes, reg, .. } if (load && *width == Width::W) || (!load && *bytes <= 4) => {
+            narrow.push(Reg::Gpr(*reg))
+        }
+        Memory::Fp { bytes, reg } if *bytes <= 4 => narrow.push(Reg::Fpr(*reg)),
+        _ => {}
+    }
+}
+
+/// The registers `op` accesses at 32 bits or less (a `w` or `s` operand, a
+/// load or store of at most four bytes), one entry per operand the visit
+/// reports. Every other mention of a register is of its whole 64 bits.
+///
+/// A register all of whose mentions are narrow is a `GPR32` or `FPR32` value:
+/// the pin gives it a four-byte spill slot and a `str w` / `str s` store
+/// (`VirtRegMap::createSpillSlot`: `getSpillSize` of the register class), where
+/// a 64-bit slot left the pair pass no adjacent slots to join.
+pub(crate) fn narrow_operands(op: &Op) -> RegList {
+    let mut narrow = RegList::new();
+    let (g, f) = (|r: &Gpr| Reg::Gpr(*r), |r: &Vreg| Reg::Fpr(*r));
+    match op {
+        Op::Imm { bits: 32, dst, .. } => narrow.push(Reg::Gpr(*dst)),
+        Op::I(inst) => match inst {
+            Inst::Load { mem, .. } => narrow_memory(&mut narrow, mem, true),
+            Inst::Store { mem, .. } => narrow_memory(&mut narrow, mem, false),
+            Inst::LoadPair { first, second, .. } => {
+                narrow_memory(&mut narrow, first, true);
+                narrow_memory(&mut narrow, second, true);
+            }
+            Inst::StorePair { first, second, .. } => {
+                narrow_memory(&mut narrow, first, false);
+                narrow_memory(&mut narrow, second, false);
+            }
+            Inst::AddSubImm { width: Width::W, rd, rn, .. }
+            | Inst::LogicImm { width: Width::W, rd, rn, .. }
+            | Inst::OneSource { width: Width::W, rd, rn, .. }
+            | Inst::BitfieldMove { width: Width::W, rd, rn, .. } => {
+                narrow.push(g(rd));
+                narrow.push(g(rn));
+            }
+            Inst::AddSubShifted { width: Width::W, rd, rn, rm, .. }
+            | Inst::LogicShifted { width: Width::W, rd, rn, rm, .. }
+            | Inst::Divide { width: Width::W, rd, rn, rm, .. }
+            | Inst::CondSelect { width: Width::W, rd, rn, rm, .. }
+            | Inst::Extract { width: Width::W, rd, rn, rm, .. }
+            | Inst::AddCarry { width: Width::W, rd, rn, rm, .. } => {
+                narrow.push(g(rd));
+                narrow.push(g(rn));
+                narrow.push(g(rm));
+            }
+            Inst::ThreeSource { width: Width::W, rd, rn, rm, ra, .. } => {
+                for r in [rd, rn, rm, ra] {
+                    narrow.push(g(r));
+                }
+            }
+            Inst::MoveWide { width: Width::W, rd, .. } => narrow.push(g(rd)),
+            Inst::CompareBranch { width: Width::W, rt, .. } => narrow.push(g(rt)),
+            Inst::CondCompare { width: Width::W, rn, rm_or_imm, .. } => {
+                narrow.push(g(rn));
+                if let CcOperand::Reg(rm) = rm_or_imm {
+                    narrow.push(g(rm));
+                }
+            }
+            Inst::FpUnary { size: FpSize::S, rd, rn, .. } => {
+                narrow.push(f(rd));
+                narrow.push(f(rn));
+            }
+            Inst::FpBinary { size: FpSize::S, rd, rn, rm, .. } | Inst::FpSelect { size: FpSize::S, rd, rn, rm, .. } => {
+                for r in [rd, rn, rm] {
+                    narrow.push(f(r));
+                }
+            }
+            Inst::FpFused { size: FpSize::S, rd, rn, rm, ra, .. } => {
+                for r in [rd, rn, rm, ra] {
+                    narrow.push(f(r));
+                }
+            }
+            Inst::FpCompare { size: FpSize::S, rn, rm, .. } => {
+                narrow.push(f(rn));
+                if let Some(rm) = rm {
+                    narrow.push(f(rm));
+                }
+            }
+            Inst::FpMoveImm { size: FpSize::S, rd, .. } => narrow.push(f(rd)),
+            Inst::FpToFp { to, from, rd, rn } => {
+                if *to == FpSize::S {
+                    narrow.push(f(rd));
+                }
+                if *from == FpSize::S {
+                    narrow.push(f(rn));
+                }
+            }
+            Inst::FpInt { width, size, gpr, fpr, .. } | Inst::FpFixed { width, size, gpr, fpr, .. } => {
+                if *width == Width::W {
+                    narrow.push(g(gpr));
+                }
+                if *size == FpSize::S {
+                    narrow.push(f(fpr));
+                }
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    narrow
+}
+
 /// `function` with every register physical.
 pub fn allocate(function: &mut MFunc) -> Allocation {
     coalesce(function);
@@ -529,7 +641,7 @@ fn rewrite(
                     Some(slot) => {
                         let scratch = Reg::Gpr(Gpr(pool::GPR_SCRATCH[0]));
                         out.extend(aimed_at(def, scratch).into_iter().map(|one| (one, loc)));
-                        out.push((spill_access(scratch, *slot, false, false), loc));
+                        out.push((spill_access(scratch, *slot, false, 8), loc));
                     }
                 }
                 continue;
@@ -605,7 +717,7 @@ fn rewrite(
                 }
             });
             for (register, slot, quad) in loads {
-                out.push((spill_access(register, slot, true, quad), loc));
+                out.push((spill_access(register, slot, true, bytes_of(quad)), loc));
             }
             for (register, key) in again {
                 out.extend(aimed_at(&made_again[&key], register).into_iter().map(|one| (one, loc)));
@@ -618,7 +730,7 @@ fn rewrite(
             }
             debug_assert!(!(is_return && !stores.is_empty()));
             for (register, slot, quad) in stores {
-                out.push((spill_access(register, slot, false, quad), loc));
+                out.push((spill_access(register, slot, false, bytes_of(quad)), loc));
             }
         }
         block.ops = forward_copies(forward_spills(out, &spill_slots)).into_iter().collect();
@@ -806,28 +918,35 @@ fn spilled_copy(
     let physical = |register: Reg| assigned.get(&register).copied().unwrap_or(register);
     match (spilled.get(&dst), spilled.get(&src)) {
         (None, None) => None,
-        (Some(slot), None) => Some(vec![spill_access(physical(src), *slot, false, quad)]),
-        (None, Some(slot)) => Some(vec![spill_access(physical(dst), *slot, true, quad)]),
+        (Some(slot), None) => Some(vec![spill_access(physical(src), *slot, false, bytes_of(quad))]),
+        (None, Some(slot)) => Some(vec![spill_access(physical(dst), *slot, true, bytes_of(quad))]),
         (Some(to), Some(from)) => {
             let scratch = match dst {
                 Reg::Gpr(_) => Reg::Gpr(Gpr(pool::GPR_SCRATCH[0])),
                 Reg::Fpr(_) => Reg::Fpr(Vreg(pool::FPR_SCRATCH[0])),
             };
-            Some(vec![spill_access(scratch, *from, true, quad), spill_access(scratch, *to, false, quad)])
+            Some(vec![spill_access(scratch, *from, true, bytes_of(quad)), spill_access(scratch, *to, false, bytes_of(quad))])
         }
     }
 }
 
+fn bytes_of(quad: bool) -> u8 {
+    if quad { 16 } else { 8 }
+}
+
+/// A spill of `bytes` (4, 8 or 16) of `register`: the access of the register
+/// class's size (`AArch64InstrInfo::storeRegToStackSlot`: `str w`/`x`,
+/// `s`/`d`/`q`).
 pub(crate) fn spill_access(
     register: Reg,
     slot: u32,
     load: bool,
-    quad: bool,
+    bytes: u8,
 ) -> Op {
     let addr = Addr::Slot { slot, offset: 0 };
     let mem = match register {
-        Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
-        Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
+        Reg::Gpr(reg) => Memory::Int { width: if bytes == 4 { Width::W } else { Width::X }, bytes: bytes.min(8), sign: false, reg },
+        Reg::Fpr(reg) => Memory::Fp { bytes, reg },
     };
     Op::I(if load {
         Inst::Load { mem, addr, mmo: MemOperand::default() }
