@@ -92,6 +92,12 @@
 //!   words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a
 //!   load through a pointer argument, so it never sees the loop or the
 //!   arithmetic fold.
+//! - D13 (SZ5, owner x86-m32, exit 2026-11-24; extends D12): at -Os the credit for the
+//!   callee that goes with its last call (`(k - 1) * size > k * call + frame`) is not taken
+//!   in the instruction units; those sites are tried in bytes (SZ2). The units count the
+//!   callee's own instructions, not what a copy carries at the site: QCport `pl_box_axis`
+//!   (9 arguments, floats), 21 units, ~70 B a copy, inlined three times was +181 B. The pin
+//!   has no byte trial; its `OptSizeThreshold` alone decides.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -2245,7 +2251,12 @@ impl<'a> Analyzer<'a> {
         let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         // the callee's frame goes once, with the callee
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
-        if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call + frame } else { size > call }
+        // At -Os the credit for the callee that goes is left to the trial (SZ2 prices the
+        // copies in bytes): the units cannot see what a copy carries at the site (a
+        // 9-argument float callee, 21 units against ~70 B a copy, inlined three times
+        // was +193 B).
+        let credit = self.site.callee_dies && k >= 2 && self.site.caller_size == CallerSize::Speed;
+        if credit { (k - 1) * size > k * call + frame } else { size > call }
     }
 
     /// Bytes of the caller's stores into a local that the callee reads only
@@ -2434,7 +2445,14 @@ impl<'a> Analyzer<'a> {
             self.threshold -= self.vector_bonus / 2;
         }
         if llrm_support::debug::enabled("inline") {
-            eprintln!("inline:   size={} call={} k={} dies={}", self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls, self.site.callee_dies);
+            eprintln!(
+                "inline:   size={} call={} frame={} k={} dies={}",
+                self.size_units - self.folded_caller_stores(),
+                self.call_size(),
+                self.callee_frame(llrm_mir::tti::CostKind::CodeSize),
+                self.site.callee_calls,
+                self.site.callee_dies
+            );
         }
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
