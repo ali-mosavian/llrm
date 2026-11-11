@@ -18,8 +18,8 @@
 //!   8224-8229) and a constant expression splat (8162-8167).
 //! * `nofpclass` and `addrspacecast nonnull`
 //!   (`hasPoisonGeneratingAnnotations`): MIR cannot state them.
-//!   `nocreateundeforpoison` (8025) is read but no MIR declaration carries it,
-//!   intrinsics included.
+//!   `nocreateundeforpoison` (8025) is read from the intrinsic table, not the
+//!   declaration.
 //! * Operand bundles: `getKnowledgeValidInContext` (8287) finds none.
 //! * Atomics, `catchpad` and the other funclet instructions (8387-8398,
 //!   8571-8579, `mayThrow`), `GlobalAlias` and `MetadataAsValue` (8140).
@@ -422,7 +422,13 @@ fn can_create_undef_or_poison_kind(
         Operator::Instruction(inst) => inst,
     };
     let instruction = q.function.instruction(inst);
-    let call_base = |q: &Query| !has_ret_attr(q, inst, "noundef") && !has_fn_attr(q, inst, "nocreateundeforpoison");
+    // The declaration of an intrinsic does not carry the attribute
+    // `Intrinsics.td` gives it, so the table is asked.
+    let call_base = |q: &Query| {
+        !has_ret_attr(q, inst, "noundef")
+            && !has_fn_attr(q, inst, "nocreateundeforpoison")
+            && !q.callee_name(inst).is_some_and(crate::intrinsics::never_creates_undef_or_poison)
+    };
     match &instruction.opcode {
         Opcode::Binary(BinaryOp::Shl | BinaryOp::AShr | BinaryOp::LShr) => {
             includes_poison(kind) && !shift_amount_known_in_range(q, instruction.operands[1])

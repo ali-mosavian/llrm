@@ -777,3 +777,47 @@ fn test_a_merged_partial_overlap_store_follows_the_byte_order() {
         assert!(after.contains(&format!("store i16 {merged},")), "{layout}: {after}");
     }
 }
+
+/// `text` through Dse alone, not run: @f printed.
+fn dropped_unrun(text: &str) -> String {
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    after[after.find("@f(").unwrap()..].to_owned()
+}
+
+/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's `createNewAccess`
+/// gives it none), so the load of other bytes before it read as a clobber and the
+/// byte store a later `i64` store covers survived: bitfield_long_long wasm32 +12 B
+/// (`i32.const 12; i32.store8` beside the covering `i64.store`).
+#[test]
+fn a_noalias_scope_declaration_does_not_keep_a_covered_store() {
+    let text = dropped_unrun(
+        "@g = global i64 0
+
+declare void @llvm.experimental.noalias.scope.decl()
+
+define void @f() {
+b0:
+  store i8 12, ptr @g
+  %p = getelementptr inbounds nuw i8, ptr @g, i32 5
+  %l = load i24, ptr %p, align 1
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  %e = zext i24 %l to i64
+  %s = shl nuw i64 %e, 40
+  %o = or disjoint i64 %s, 884479243276
+  store i64 %o, ptr @g
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(!text.contains("store i8 12"), "{text}");
+}
