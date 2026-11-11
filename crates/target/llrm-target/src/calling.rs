@@ -206,6 +206,12 @@ pub struct Convention {
     /// group's selector, the first from the group, each next from the one
     /// before.
     pub interrupt_data: Vec<String>,
+    /// For an interrupt handler: the frame slot each parameter is, in order. A
+    /// parameter is the low word of its slot, so an assignment to it is what
+    /// the handler's return restores (Borland's `bp, di, si, ds, es, dx, cx,
+    /// bx, ax, ip, cs, flags`). Empty: the parameters are the frame's words in
+    /// address order.
+    pub interrupt_parameters: Vec<String>,
 }
 
 /// A target's description of its conventions, by its address: one per target,
@@ -316,6 +322,7 @@ const KEYS: &[&str] = &[
     "interrupt_frame",
     "interrupt_saves",
     "interrupt_data",
+    "interrupt_parameters",
 ];
 
 impl Calling {
@@ -807,6 +814,10 @@ impl Convention {
             },
             interrupt_data: match table.get("interrupt_data") {
                 Some(_) => names(table.get("interrupt_data"), "interrupt_data")?,
+                None => Vec::new(),
+            },
+            interrupt_parameters: match table.get("interrupt_parameters") {
+                Some(_) => names(table.get("interrupt_parameters"), "interrupt_parameters")?,
                 None => Vec::new(),
             },
             interrupt_frame: match table.get("interrupt_frame") {
@@ -1366,5 +1377,21 @@ mod interrupt_frame_tests {
         assert_eq!(frame.iter().map(|slot| slot.1).sum::<i64>(), 46);
         let bad = text.replace("[\"gs\", 2]", "[\"gs\"]");
         assert!(Calling::parse(&bad).is_err());
+    }
+
+    /// Borland's `interrupt` register parameters were the frame's words in
+    /// address order; the description names each one's slot, and every name is a
+    /// slot of the frame.
+    #[test]
+    fn test_interrupt_parameters_name_slots_of_the_frame() {
+        let text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../llrm-x86-m16/src/machines/calling.toml"))
+                .unwrap();
+        let handler = Calling::parse(&text).unwrap();
+        let handler = handler.interrupt().expect("m16 has an interrupt handler");
+        assert_eq!(handler.interrupt_parameters[..3], ["ebp", "edi", "esi"]);
+        for name in &handler.interrupt_parameters {
+            assert!(handler.interrupt_frame.iter().any(|slot| &slot.0 == name), "{name}");
+        }
     }
 }
