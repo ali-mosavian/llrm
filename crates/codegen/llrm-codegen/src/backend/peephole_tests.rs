@@ -6600,6 +6600,28 @@ fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
     );
 }
 
+/// wrapv_overflow_check -O1 stored its lone zero as `xor eax,eax; mov [m],eax` (7 B for the pin's 10 B): +1 clk for 3 B, a worse
+/// cell against main. A lone literal store stays at -O1 (the pin); a run of two still shares.
+#[test]
+fn test_a_lone_literal_store_is_not_shared_at_o1() {
+    let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
+    cpu.share_literal_stores = true;
+    cpu.speed_rate = false;
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    let shared = |count: usize| {
+        let stores: Vec<Arc<Insn>> =
+            (0..count).map(|at| literal_store(at as i64, 4, -4 * (at as i64 + 1), 0)).collect();
+        let input = body(
+            "stores",
+            0,
+            vec![block(0, stores, vec![1]).into(), block(1, after_stores(false, &[]), vec![]).into()],
+        );
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns)
+    };
+    assert_eq!(shared(1), ["mov"], "a lone store");
+    assert_eq!(shared(2), ["xor", "mov", "mov"], "a run of two");
+}
+
 /// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a move into the
 /// stack pointer, zero, -1, a wider immediate and a non-32-bit body stay as they are.
 #[test]

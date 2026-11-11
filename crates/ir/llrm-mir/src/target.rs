@@ -165,17 +165,10 @@ pub struct Tuning {
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
-    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
-    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
-    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
-    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
-    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
-    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
-    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
-    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
-    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
-    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
-    /// it is off at `-O2` and `-O3`.
+    /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
+    /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
+    /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
+    /// 188.9M clk (+95%) and jpeg_fixed +64% against main, for -127 B and -790 B; `-Os` is strict per axis.
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
