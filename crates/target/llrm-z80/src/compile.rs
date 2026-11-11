@@ -218,6 +218,10 @@ fn machine_function_with(
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
     let selection = selection.as_ref().map_err(Clone::clone)?;
+    let selection = match &selection.generic {
+        Some(generic) if crate::dagisel::pipeline::GENERIC_FORM.with(std::cell::Cell::get) => generic,
+        _ => selection,
+    };
     let mut function = emit(name, selection)?;
     function.returns_twice = selection.returns_twice;
     expand_cmov(&mut function)?;
@@ -2431,14 +2435,6 @@ fn decomposed_functions(
         })
         .collect();
     let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
-    // The generic form of a function's carry ops (`Z80-CARRY-PRICE`) is taken where the level is strict on both
-    // axes (O1, Os, Oz) only when it is no worse on either: those levels allow no trade.
-    let strict = matches!(level, Level::O1 | Level::Os | Level::Oz);
-    let generic_carry: Vec<bool> = either
-        .iter()
-        .map(|(name, ..)| alternatives.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.generic_carry)))
-        .collect();
-    let every: HashSet<usize> = every.into_iter().filter(|at| !(strict && generic_carry[*at])).collect();
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2453,10 +2449,7 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if strict && generic_carry[at] {
-                    let (new, old) = (own_price(&variants, &other, at), own_price(&variants, &chosen, at));
-                    new != old && new.0 <= old.0 && new.1 <= old.1
-                } else if size_first[at] {
+                let better = if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
@@ -2515,7 +2508,43 @@ fn prefers(
     }
 }
 
+/// The function `name` allocated, in the cheaper of its two carry forms where it has both (`Selection::generic`,
+/// DEVIATE Z80-CARRY-PRICE): the levels strict on both axes (O1, Os, Oz) take the generic add only where it is no
+/// worse on either, the others the cheaper at 1 B = 3 T.
 fn lines_of(
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    let carry = lines_of_form(selected, name, number, request);
+    let has_generic = selected.iter().any(|(one, source, scheduled)| {
+        one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.generic.is_some()))
+    });
+    if !has_generic {
+        return carry;
+    }
+    crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(true));
+    let generic = lines_of_form(selected, name, number, request);
+    crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(false));
+    match (carry, generic) {
+        (Ok(carry), Ok(generic)) => {
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
+            let (with, without) = (price(&carry), price(&generic));
+            let strict = matches!(request.level, Level::O1 | Level::Os | Level::Oz);
+            let take = if strict {
+                without != with && without.0 <= with.0 && without.1 <= with.1
+            } else {
+                cheaper(request.level, without, with)
+            };
+            Ok(if take { generic } else { carry })
+        }
+        (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+        (Err(why), Err(_)) => Err(why),
+    }
+}
+
+fn lines_of_form(
     selected: &Selections,
     name: &str,
     number: usize,

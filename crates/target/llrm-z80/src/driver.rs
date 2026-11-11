@@ -183,11 +183,29 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    let select = |name: &str, ilp: bool| {
+    let select_form = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+        one
+    };
+    // A form whose long adds became carry ops is also selected with them left to the generic expansion, kept on the
+    // selection (`Selection::generic`): the allocated function is the cheaper of the two (`compile::lines_of`).
+    // DEVIATE Z80-CARRY-PRICE (owner z80, exit 2026-11-24): the pin's `ExpandIntRes_ADDSUB` takes the carry ops
+    // whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties each sum to `hl`, which costs spills
+    // where several longs are live (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
+    let select = |name: &str, ilp: bool| {
+        crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
+        let mut one = select_form(name, ilp);
+        if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
+            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
+            let generic = select_form(name, ilp);
+            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
+            if let (Ok(one), Ok(generic)) = (&mut one, generic) {
+                one.generic = Some(Box::new(generic));
+            }
+        }
         one
     };
     // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
@@ -210,18 +228,7 @@ pub fn selections_with_alternatives(
             })
         })
     };
-    let mut carry_ops: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let main: Vec<Selected> = names
-        .iter()
-        .map(|name| {
-            crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
-            let selected = (name.clone(), select(name, false), select(name, true));
-            if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
-                carry_ops.insert(name.clone());
-            }
-            selected
-        })
-        .collect();
+    let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
@@ -230,13 +237,7 @@ pub fn selections_with_alternatives(
             // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
             let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
             let fills = has_fills(name);
-            // A function whose long adds became carry ops, with no other alternative to price, is also selected with
-            // them left to the generic expansion (one alternative per function: a function with both keeps the carry
-            // ops). DEVIATE Z80-CARRY-PRICE (owner z80, exit 2026-11-24): the pin's `ExpandIntRes_ADDSUB` takes the
-            // carry ops whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties each sum to `hl`, which
-            // costs spills where several longs are live (register_upper_half -Os +28 B).
-            let generic = muls.is_none() && !fills && carry_ops.contains(name);
-            if muls.is_none() && !fills && !generic {
+            if muls.is_none() && !fills {
                 return None;
             }
             let switch = muls.map(|sized| {
@@ -246,9 +247,7 @@ pub fn selections_with_alternatives(
                 switch.with(|one| one.set(true));
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
-            crate::dagisel::pipeline::GENERIC_CARRY.with(|one| one.set(generic));
             let selected = (name.clone(), select(name, false), select(name, true));
-            crate::dagisel::pipeline::GENERIC_CARRY.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
