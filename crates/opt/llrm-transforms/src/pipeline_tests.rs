@@ -3113,3 +3113,34 @@ fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_a
     assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
     assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
 }
+
+/// `x == INT_MAX ? INT_MIN : x + 1` (`add nsw`) of `foldSelectValueEquivalence`'s
+/// own comment reached the backend as a compare and a select; -O2 makes it
+/// the add.
+#[test]
+fn test_o2_folds_a_select_guarding_an_overflow_to_the_add() {
+    let text = "define i32 @f(i32 %x) {
+b:
+  %c = icmp eq i32 %x, 2147483647
+  %a = add nsw i32 %x, 1
+  %s = select i1 %c, i32 -2147483648, i32 %a
+  ret i32 %s
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("select"), "premise: with no passes the select stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(!after.contains("select") && after.contains("add i32 %x, 1"), "{after}");
+}
