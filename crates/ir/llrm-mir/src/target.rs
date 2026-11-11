@@ -395,6 +395,10 @@ pub struct Tuning {
     /// `pass_tail_recursion` runs early, `passes.def` before
     /// `pass_ipa_inline`), not after (D10).
     pub recursive_tre_first: (bool, bool),
+    /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
+    /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
+    /// (`Tti::ipa_cp_clones_at_speed`).
+    pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -550,6 +554,7 @@ impl Tuning {
         recursive_inlining_growth: None,
         recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
+        ipa_cp_clones_at_speed: false,
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         unroll_prices_nest: false,

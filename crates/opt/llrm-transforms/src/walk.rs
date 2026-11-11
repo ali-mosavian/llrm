@@ -139,7 +139,7 @@ impl ProgramPass for ModuleIpo {
                         &procedures[at],
                         &private[at],
                         &costs,
-                        self.inline.cp_clone,
+                        self.inline.cp_clone.unwrap_or(false),
                         &mut cloning,
                     )
                 });
@@ -281,7 +281,7 @@ impl ProgramPass for Walk {
             self.inline.recursive,
             self.inline.single,
             self.inline.limit != 0 && self.speed_rate,
-            self.inline.cp_clone,
+            self.inline.cp_clone.unwrap_or(false),
             program.target.tti().as_deref(),
         );
         let mut params = crate::inlinecost::InlineParams {
