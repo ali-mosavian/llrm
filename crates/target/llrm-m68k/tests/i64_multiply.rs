@@ -1,0 +1,22 @@
+//! A 64-bit multiply with no widening multiply reaches the library-call step
+//! of the type legalizer (`ExpandIntRes_MUL`); `make_lib_call` named no
+//! register for an 8-byte result and panicked ("RetCC_M68k_C names a register"),
+//! so `x_fixmul` stopped compiling. It is expanded inline again.
+
+use llrm_m68k::compile::{Options, items_with};
+use llrm_m68k::dagisel::hooks::Cpu;
+
+const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
+
+#[test]
+fn a_64_bit_multiply_compiles() {
+    let ir = "
+define i64 @f(i64 %a, i64 %b) {
+  %p = mul i64 %a, %b
+  ret i64 %p
+}";
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        items_with(&module, "f", cpu, Options::default()).unwrap_or_else(|e| panic!("{cpu:?}: {e}"));
+    }
+}

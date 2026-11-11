@@ -737,6 +737,14 @@ impl Tti for X86 {
         self.tuning.narrow_divide_live_limit
     }
 
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        self.tuning.narrow_divide_live_max_bits
+    }
+
+    fn narrow_divide_live_at_size(&self) -> bool {
+        self.tuning.narrow_divide_live_at_size
+    }
+
     /// DEVIATE INL-O1 SIZE: the inliner counts a callee in bytes of code.
     fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
         (self.tuning.inline_size_bytes && !self.size_bytes)
@@ -1180,6 +1188,19 @@ impl Tti for X86 {
         ty: Ty,
     ) -> bool {
         matches!(ty, Ty::Float | Ty::Double | Ty::X87)
+    }
+
+    fn partial_libcalls_skip_at_size(&self) -> bool {
+        self.tuning.partial_libcalls_skip_at_size
+    }
+
+    /// `X86TTIImpl::isFCmpOrdCheaperThanFCmpZero`
+    /// ([X86TargetTransformInfo.cpp#L7435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7435)).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     fn is_type_legal(

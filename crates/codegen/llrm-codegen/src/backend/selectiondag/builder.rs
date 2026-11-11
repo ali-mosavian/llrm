@@ -372,8 +372,10 @@ impl BuilderTarget {
     pub fn with_div_live_limit(
         mut self,
         limit: u32,
+        max_bits: u32,
     ) -> BuilderTarget {
         self.dag.div_live_limit = limit;
+        self.dag.div_live_max_bits = max_bits;
         self
     }
 
@@ -1970,6 +1972,11 @@ impl Builder<'_> {
             && name.starts_with("llvm.")
         {
             return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
+        }
+        if let Some(global) = direct
+            && self.visit_float_libcall(instruction, info, global)?
+        {
+            return Ok(());
         }
         if let Some(calling) = self.calling()
             && !calling.supports_convention(info.calling_convention)
