@@ -1063,6 +1063,8 @@ fn should_full_unroll(
     // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
     // cost more than the rolled loop: by size, or by the cost the analysis
     // finds once the trip's constants fold (gcc's size-neutral complete unroll).
+    // A loop this refuses goes to the trial (DEVIATE UNROLL-O1-TRIAL, `note_for_trial`): the
+    // driver compiles again with it unrolled and keeps that only if bytes and work do not grow.
     if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
         let rolled = u64::from(uce.rolled_loop_size());
         let fits = unrolled_size <= rolled
