@@ -183,7 +183,7 @@ pub fn select_cost(
 }
 
 /// `isa<Constant>`-and-a-small-integer: the value of an integer constant.
-fn constant_int(
+pub fn constant_int(
     context: &Context,
     operand: Operand,
 ) -> Option<u128> {

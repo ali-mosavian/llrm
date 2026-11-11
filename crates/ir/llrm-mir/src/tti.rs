@@ -1297,6 +1297,16 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE D6: `select_branch_extra` for a select with a constant arm of 0,
+    /// 1 or all ones, which lowers to `setcc`/`or`/`sbb` and no branch. Targets
+    /// whose answer does not depend on the arms keep the default.
+    fn select_branch_extra_constant_arm(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        self.select_branch_extra(optsize)
+    }
+
     /// `Tuning::carry_slot_indexes`.
     fn carries_slot_indexes(&self) -> bool {
         true

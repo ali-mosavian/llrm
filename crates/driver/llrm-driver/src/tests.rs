@@ -1105,6 +1105,49 @@ fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
     assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
 }
 
+/// One restoring-division step, `if (r >= d) { r -= d; q |= 1 } r <<= 1`, was
+/// folded at m32 -Os into two selects (the threshold, 4 of 4): cmp/setae or sbb
+/// with a masked subtrahend, 10-11 instructions a step against 9 as a branch
+/// (sfm16_dbg +15 B). DEVIATE D6.
+#[test]
+fn a_division_step_at_m32_os_stays_a_branch() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %r0, i32 %d) optsize {\n\
+                entry:\n  br label %head\n\
+                head:\n\
+                \x20 %i = phi i32 [ 0, %entry ], [ %i2, %cont ]\n\
+                \x20 %r = phi i32 [ %r0, %entry ], [ %rn, %cont ]\n\
+                \x20 %q = phi i32 [ 0, %entry ], [ %qn, %cont ]\n\
+                \x20 %more = icmp ult i32 %i, 28\n  br i1 %more, label %body, label %exit\n\
+                body:\n  %q1 = shl i32 %q, 1\n  %ge = icmp uge i32 %r, %d\n  br i1 %ge, label %take, label %cont\n\
+                take:\n  %r1 = sub i32 %r, %d\n  %q2 = or i32 %q1, 1\n  br label %cont\n\
+                cont:\n\
+                \x20 %qn = phi i32 [ %q2, %take ], [ %q1, %body ]\n\
+                \x20 %rm = phi i32 [ %r1, %take ], [ %r, %body ]\n\
+                \x20 %rn = shl i32 %rm, 1\n  %i2 = add i32 %i, 1\n  br label %head\n\
+                exit:\n  ret i32 %q\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("set") && !listing.contains("sbb"), "{listing}");
+}
+
+/// A select with a constant arm is `setcc`/`or`, not a diamond: `isnan(a) ||
+/// isnan(b)` as an int stays branch-free at m32 -Os (the first D6 try made it a
+/// branch, +2 B in 12 cells).
+#[test]
+fn a_select_with_a_constant_arm_at_m32_os_stays_a_setcc() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %a, i32 %b) optsize {\n\
+                entry:\n  %x = shl i32 %a, 1\n  %c1 = icmp ugt i32 %x, -16777216\n  br i1 %c1, label %done, label %next\n\
+                next:\n  %y = shl i32 %b, 1\n  %c2 = icmp ugt i32 %y, -16777216\n  %z = zext i1 %c2 to i32\n  br label %done\n\
+                done:\n  %r = phi i32 [ 1, %entry ], [ %z, %next ]\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.lines().any(|line| line.trim().starts_with('j')), "{listing}");
+}
+
 /// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
 /// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
 /// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.

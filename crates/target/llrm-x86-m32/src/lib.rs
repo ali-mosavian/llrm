@@ -183,6 +183,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a fitted 3.5. x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an estimated 82 B:
         // +1533 B and +0.5 M clk.
         inline_size_bytes: true,
+        select_is_branch_at_size: true,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: per_byte,
         sdiv_by_magnitude: true,

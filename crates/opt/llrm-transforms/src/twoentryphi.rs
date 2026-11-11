@@ -37,6 +37,16 @@
 //!   select where the clocks pay). Owner llrm-target-x86-m32. A boolean
 //!   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
 //!   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
+//! - D6. At `optsize`, where a select is a branch and
+//!   `Tuning::select_is_branch_at_size` is set (x86-m32), a select of two
+//!   computed values counts one more against the threshold: a diamond, branch
+//!   and move. A select with a constant arm of 0, 1 or all ones is a
+//!   `setcc`/`or`/`sbb` and counts as at D5. sfm16_dbg's `div_bits` step (`if
+//!   (r >= d) { r -= d; q |= 1 }`, two hoisted insns and two selects, 4 of 4)
+//!   kept cmp/setae/sub-of-select, 11 insns a step against 9 as a branch;
+//!   sfm16_dbg -15 B, x_jpeg_fixed/single -8 B each, f2i -2 B: four cells
+//!   smaller, none larger (m32 -Os, 95 programs). Owner greedy-os-causes, exit
+//!   2026-12-05.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -54,7 +64,7 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
-use llrm_mir::instructioncost::{instruction_cost, select_cost, select_logic};
+use llrm_mir::instructioncost::{constant_int, instruction_cost, select_cost, select_logic};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
@@ -345,8 +355,8 @@ pub fn folded(
     let optsize = function.attrs.iter().any(
         |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
     );
-    let extra = Cost::of(spec.tti.select_branch_extra(optsize));
-    if (!spec.tti.has_cmov() || extra.value > 0) && !hoist.is_empty() {
+    let extra = spec.tti.select_branch_extra(optsize);
+    if (!spec.tti.has_cmov() || extra > 0) && !hoist.is_empty() {
         let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {
             let ty = function.instruction(phi).ty;
             let arm = |from| arms(function, phi).into_iter().find(|&(_, one)| one == from).expect("an arm").0;
@@ -355,6 +365,15 @@ pub fn folded(
             if select_logic(context, ty, on_true, on_false).is_some() {
                 return all;
             }
+            let ones = context.types.int_bits(ty).map(|bits| u128::MAX >> (128 - bits));
+            let constant_arm = [on_true, on_false]
+                .iter()
+                .any(|&arm| constant_int(context, arm).is_some_and(|value| value <= 1 || Some(value) == ones));
+            let extra = Cost::of(if constant_arm {
+                spec.tti.select_branch_extra_constant_arm(optsize)
+            } else {
+                spec.tti.select_branch_extra(optsize)
+            });
             all + extra
                 + select_cost(context, spec.tti, ty, if_cond, on_true, on_false, crate::speculate::cost_kind(function))
         });

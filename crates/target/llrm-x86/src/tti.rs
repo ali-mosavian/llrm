@@ -946,6 +946,22 @@ impl Tti for X86 {
         self.tuning.rep_stos_at_size
     }
 
+    /// DEVIATE D6: without a conditional move a select of two computed values
+    /// is a diamond.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        i64::from(optsize && !self.cmov && self.tuning.select_is_branch_at_size)
+    }
+
+    fn select_branch_extra_constant_arm(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        0
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }

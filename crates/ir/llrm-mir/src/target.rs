@@ -92,6 +92,11 @@ pub struct Tuning {
     /// (`Tti::inline_size_view`), not in the pin's units of one per
     /// instruction. false: the pin's units.
     pub inline_size_bytes: bool,
+    /// DEVIATE D6 (`twoentryphi.rs`; owner greedy-os-causes, exit 2026-12-05):
+    /// at `optsize`, where there is no conditional move, a two-entry phi is not
+    /// folded into a `select` whose arms are both computed (a diamond: branch
+    /// and move), at the price the fold saves. false: the pin's.
+    pub select_is_branch_at_size: bool,
     /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
@@ -497,6 +502,7 @@ impl Tuning {
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
+        select_is_branch_at_size: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
