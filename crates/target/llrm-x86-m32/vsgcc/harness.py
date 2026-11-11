@@ -17,7 +17,7 @@ from pathlib import Path
 
 from iced_x86 import Code, CpuidFeature, Decoder, MemorySize, MemorySizeExt, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
+from unicorn.x86_const import UC_X86_REG_FPCW, UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
@@ -60,6 +60,8 @@ STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 # main is entered as after a call from code that keeps the System V stack boundary: esp + 4, the caller's, a multiple of 16.
 ENTRY_ESP = STACK_TOP - 4
 BASE = 0x10000
+# The x87 control word a process starts with (extended precision, round to nearest, exceptions masked); a fresh unicorn CPU holds 0.
+FPU_CONTROL_WORD = 0x37F
 OMF_VARIANTS = ("llrmO1", "llrm", "llrmO3", "llrmOs")   # "llrm" is -O2
 X87 = {CpuidFeature.FPU, CpuidFeature.FPU287, CpuidFeature.FPU287XL_ONLY, CpuidFeature.FPU387, CpuidFeature.FPU387SL_ONLY}
 # The rest of the 486's x87 table (Intel 240440-002, least of each range): no compiler is favoured by a price it lacks.
@@ -479,6 +481,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     for va, blob, msz in segs + elf_segments(OUT / "stub.elf"):
         uc.mem_write(va, blob)
     uc.mem_write(SENT, b"\xf4")
+    uc.reg_write(UC_X86_REG_FPCW, FPU_CONTROL_WORD)
     esp = ENTRY_ESP
     uc.mem_write(esp, struct.pack("<III", SENT, 0, 0))
     uc.reg_write(UC_X86_REG_ESP, esp)
@@ -585,6 +588,9 @@ def run(prog, variant, hot=False, limit=300_000_000):
     uc.emu_start(main, SENT, count=limit)
     assert uc.reg_read(UC_X86_REG_EIP) == SENT, f"{prog} {variant}: stopped at the {limit}-instruction cap, not at the end of main"
     assert total["ins"], f"{prog} {variant}: the kernel was never entered"
+    if files and os.environ.get("VSGCC_IO_DUMP"):   # the files the program wrote, to diff against a native run
+        for name, data in files.written.items():
+            (Path(os.environ["VSGCC_IO_DUMP"]) / f"{prog}.{variant}.{name}").write_bytes(bytes(data))
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
     return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"], clocks=total["clocks"], reports=reports,

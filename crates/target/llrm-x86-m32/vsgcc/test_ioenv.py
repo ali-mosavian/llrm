@@ -88,3 +88,40 @@ def test_a_run_stopped_by_the_instruction_cap_is_an_error_not_a_short_count(fib_
     assert harness.run("fib", "gccO2")["clocks"] > 0
     with pytest.raises(AssertionError, match="cap"):
         harness.run("fib", "gccO2", limit=50)
+
+
+XPREC = """extern void report(long value);
+volatile double half = 1.5;
+long bench_xprec(void)
+{
+    double d = 1.0;
+    int i;
+    long first = (long)half;    /* fnstcw / fldcw / fistp / fldcw: the word it restores is the one it saved */
+    for (i = 0; i < 1000; ++i)
+        d += 1e-9;
+    return (long)((d - 1.0) * 1e9 + 0.5) + first - 1;
+}
+int main(void)
+{
+    report(bench_xprec());
+    return 0;
+}
+"""
+
+
+def test_x87_code_runs_in_extended_precision_as_a_process_starts(fib_built):
+    """A fresh unicorn CPU holds an x87 control word of 0, and the float-to-integer conversion saves and restores it (`fnstcw; fldcw; fistp;
+    fldcw`): from the first conversion on every x87 result was rounded to 24 bits. stft_single wrote 1 bin of 65,919 one low in all 16
+    cells, its checksum 204598972 against the 78803551 of the same gcc object run natively, and read `ok: false`."""
+    import os
+    import sys
+    sys.path.insert(0, str(harness.REPO / "tools"))
+    import linkrecipe
+    source = fib_built / "b" / "xprec.c"
+    source.write_text(XPREC)
+    build = subprocess.run(["gcc", "-m32", "-O1", "-march=i486", "-fno-pic", "-c", "-o", str(fib_built / "b" / "xprec.gccO1.o"), str(source)], capture_output=True, text=True)
+    assert build.returncode == 0, build.stderr
+    link = subprocess.run(["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x10000", f"--just-symbols={fib_built / 'stub.elf'}", "-o",
+                           str(fib_built / "b" / "xprec.gccO1.elf"), str(fib_built / "b" / "xprec.gccO1.o")], capture_output=True, text=True)
+    assert link.returncode == 0, link.stderr
+    assert harness.run("xprec", "gccO1")["reports"] == [1000]
