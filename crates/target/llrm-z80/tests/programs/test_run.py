@@ -19,6 +19,18 @@ def classified(text):
         return run.program_flags(source)[1]
 
 
+class LinkVerdict(unittest.TestCase):
+    def test_undefined_symbols_with_the_extra_library_unset_name_it(self):
+        """Z80_LIBC_EXTRA unset (11-10): 12 float programs read LINK with bare undefined names, taken for missing members;
+        the library was never given."""
+        why = run.link_detail(["___adddf3"], extra="")
+        self.assertIn("Z80_LIBC_EXTRA unset", why)
+        self.assertIn("___adddf3", why)
+        long = [f"__symbol_number_{i}" for i in range(30)]
+        self.assertTrue(run.link_detail(long, extra="").endswith("Z80_LIBC_EXTRA unset"))
+        self.assertNotIn("unset", run.link_detail(["___adddf3"], extra="/some/dir"))
+
+
 class WidthClass(unittest.TestCase):
     def test_a_width_token_in_a_later_alternative_or_line_marks_the_program(self):
         """select_of_constants, shl_of_a_zero_extended_dividend and mulconst_i64 hold x86/m64 `int` and `long` values; the
