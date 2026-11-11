@@ -78,3 +78,33 @@ define i16 @probe() {{
         assert_eq!(exit_code(&format!("va-mix-{target}"), &ir, target), 0x28, "{target}");
     }
 }
+
+/// `va_copy` copies the list pointer: reading the copy does not move the original.
+#[test]
+fn a_copied_list_reads_the_same_arguments_again() {
+    let ir = format!(
+        "{PRELUDE}declare void @llvm.va_copy.p0.p0(ptr, ptr)
+define i16 @twice(i16 %n, ...) {{
+  %ap = alloca ptr, align 1
+  %ap2 = alloca ptr, align 1
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_copy.p0.p0(ptr %ap2, ptr %ap)
+  %x = va_arg ptr %ap, i16
+  %y = va_arg ptr %ap2, i16
+  %z = va_arg ptr %ap2, i16
+  call void @llvm.va_end.p0(ptr %ap2)
+  call void @llvm.va_end.p0(ptr %ap)
+  %s = add i16 %x, %y
+  %r = add i16 %s, %z
+  ret i16 %r
+}}
+define i16 @probe() {{
+  %r = call i16 (i16, ...) @twice(i16 2, i16 10, i16 20)
+  ret i16 %r
+}}"
+    );
+    // x = y = 10 (first unnamed), z = 20: 40
+    for target in ["sim6502", "sim65c02"] {
+        assert_eq!(exit_code(&format!("va-copy-{target}"), &ir, target), 40, "{target}");
+    }
+}
