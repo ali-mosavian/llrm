@@ -43,7 +43,9 @@ newly above its bar from #9013. `recmany_o1` is not worse. `shrink_wrapped_frame
 `wide_shift_by_one` O1 (+26 B, -5.4% T): `main` only, 971 -> 996 B; both sides keep the call form (price call 1028 -> 1054 B,
 decomposed 892 -> 827 B; the O1 rule picks by relative regret). The delta is allocation churn around the long `fold32`
 argument and result, now HL low / DE high. Output of `LLRM_Z80_PRICE_WHY` (local instrument, not committed).
-Other cells (recdeep +36, idioms +77, word_compare_branches +28, loop_versioning +22, rep_count +17 at O2): first
+`idioms` O2 (+77 B, -116k T): one `main`, 2091 -> 2058 instructions but `(ix+d)` accesses 854 -> 909 (3 B each), register moves 234 -> 182,
+pushes 57 -> 31: more stack-slot traffic, fewer moves; the first differing allocation decision is not yet read.
+Other cells (recdeep +36, word_compare_branches +28, loop_versioning +22, rep_count +17 at O2): first
 differing decision not yet read.
 
 ## Against the best SDCC (the bar), cells with a bar
