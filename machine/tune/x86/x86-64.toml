@@ -164,3 +164,53 @@ nop = 1
 lahf = 2
 sahf = 1
 unknown = 2
+
+# The processor resources and what each form puts on them: the pin's SandyBridgeModel
+# (X86SchedSandyBridge.td at d1106deb71, X86.td:2264 `x86-64`; line numbers below are that file's).
+# `uops` is the form's NumMicroOps, a resource's number its ReleaseAtCycles. A form not listed is one
+# micro-op occupying no resource (the x87, SSE and string forms: priced by their latency alone).
+[schedule.resources]
+p015 = 3
+p05 = 2
+p01 = 2
+p23 = 2
+p4 = 1
+p5 = 1
+p0 = 1
+p1 = 1
+divider = 1
+
+[schedule.forms]
+alu_rr = { uops = 1, p015 = 1 }  # WriteALU [SBPort015] :127
+alu_ri = { uops = 1, p015 = 1 }  # WriteALU :127
+alu_rm = { uops = 2, p015 = 1, p23 = 1 }  # WriteALU folded, +SBPort23 :127
+alu_mr = { uops = 4, p015 = 1, p23 = 2, p4 = 1 }  # WriteALU + WriteRMW [SBPort23,SBPort4] :108,:127
+cmov = { uops = 2, p05 = 1, p015 = 1 }  # WriteCMOV [SBPort05,SBPort015] :177
+xchg_rr = { uops = 3, p015 = 3 }  # WriteXCHG [SBPort015] x3 :148
+mov_rr = { uops = 1, p015 = 1 }  # WriteMove [SBPort015] :113
+mov_ri = { uops = 1, p015 = 1 }  # WriteMove :113
+mov_rm = { uops = 1, p23 = 1 }  # WriteLoad [SBPort23] :112
+mov_mr = { uops = 1, p23 = 1, p4 = 1 }  # WriteStore [SBPort23,SBPort4] :110
+shift_ri = { uops = 1, p05 = 1 }  # WriteShift [SBPort05] :169
+shift_r1 = { uops = 1, p05 = 1 }  # WriteShift :169
+movzx = { uops = 1, p015 = 1 }  # WriteALU :127
+setcc = { uops = 1, p05 = 1 }  # WriteSETCC [SBPort05] :179
+cdq = { uops = 1, p05 = 1 }  # SBWriteResGroup4 [SBPort05] :626
+lea = { uops = 1, p01 = 1 }  # WriteLEA [SBPort01] :196
+imul_r32 = { uops = 3, p1 = 1, p05 = 1, p015 = 1 }  # WriteIMul32 [SBPort1,SBPort05,SBPort015] :135
+imul_m32 = { uops = 4, p1 = 1, p05 = 1, p015 = 1, p23 = 1 }  # WriteIMul32 folded :135
+mul_r32 = { uops = 3, p1 = 1, p05 = 1, p015 = 1 }  # WriteIMul32 :135
+idiv_r32 = { uops = 1, p0 = 1, divider = 10 }  # WriteIDiv32 [SBPort0,SBDivider] [1,10] :160
+idiv_m32 = { uops = 2, p0 = 1, divider = 10, p23 = 1 }  # WriteIDiv32 folded :160
+push_r = { uops = 2, p4 = 1, p23 = 1 }  # SBWriteResGroup33 [SBPort4,SBPort23] :767
+push_i = { uops = 2, p4 = 1, p23 = 1 }  # SBWriteResGroup33 :767
+pop_r = { uops = 1, p23 = 1 }  # SBWriteResGroup48 [SBPort23] :834
+leave = { uops = 3, p23 = 1, p015 = 2 }  # SBWriteResGroup25_1 [SBPort23,SBPort015 x2] :717
+jmp_short = { uops = 1, p5 = 1 }  # WriteJump [SBPort5] :174
+jcc = { uops = 1, p5 = 1 }  # WriteJump :174
+jcc_not_taken = { uops = 1, p5 = 1 }  # WriteJump :174
+call_near = { uops = 3, p4 = 1, p5 = 1, p23 = 1 }  # SBWriteResGroup36 [SBPort4,SBPort5,SBPort23] :789
+ret_near = { uops = 1, p5 = 1 }  # SBWriteResGroup2 [SBPort5] :617
+lahf = { uops = 1, p05 = 1 }  # WriteLAHFSAHF [SBPort05] :185
+sahf = { uops = 1, p05 = 1 }  # WriteLAHFSAHF :185
+nop = { uops = 1 }  # WriteNop [] :591

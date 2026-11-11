@@ -16,6 +16,7 @@ pub mod pressure;
 pub mod registers;
 pub mod routines;
 pub mod runtime;
+pub mod schedule;
 pub mod timings;
 pub mod tune;
 pub mod testing;
@@ -205,7 +206,19 @@ pub fn described_with(
     tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
     lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
 ) -> Rc<dyn llrm_mir::target::Machine> {
+    described_throughput(prices, sizes, tti, lowering, None)
+}
+
+/// `described_with`, and the target's throughput model (`Machine::throughput`).
+pub fn described_throughput(
+    prices: &CpuPrices,
+    sizes: Option<OperationCosts>,
+    tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
+    throughput: Option<llrm_mir::target::Throughput>,
+) -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Described {
+        throughput,
         tti,
         lowering,
         registers: prices.registers,
@@ -230,6 +243,7 @@ pub fn described_with(
 }
 
 struct Described {
+    throughput: Option<llrm_mir::target::Throughput>,
     tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
     lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
     registers: i64,
@@ -246,6 +260,10 @@ struct Described {
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn throughput(&self) -> Option<&llrm_mir::target::Throughput> {
+        self.throughput.as_ref()
+    }
+
     /// The platform's table: a port it does not list may reach any memory.
     fn port_touches_memory(
         &self,

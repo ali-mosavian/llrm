@@ -717,6 +717,10 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        self.tuning.unroll_prices_nest
+    }
+
     fn unroll_never_grows_at_o1(&self) -> bool {
         self.tuning.unroll_never_grows_at_o1
     }
@@ -1082,6 +1086,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        self.tuning.unroll_store_immediate_bits
     }
 
     fn lsr_size_order(&self) -> bool {
