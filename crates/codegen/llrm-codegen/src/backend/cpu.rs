@@ -200,6 +200,8 @@ pub struct Profile {
     /// Equal literal stores share a register at the speed levels too
     /// (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
+    /// DEVIATE SD408 (`TimingTable::consume_call_results_early`).
+    pub consume_call_results_early: bool,
     /// At -Os a 1 is `xor r,r; inc r` (`TimingTable::size_one_is_xor_inc`).
     pub size_one_is_xor_inc: bool,
     /// A select of two constants in a block at least this often run is a branch
@@ -415,6 +417,7 @@ impl Profile {
             speed_rate: true,
             post_ra_tail_duplicate: false,
             share_literal_stores: false,
+            consume_call_results_early: false,
             size_one_is_xor_inc: false,
             branch_constant_selects: 0,
             spills_extended: false,
@@ -701,6 +704,7 @@ fn _profile(
         share_congruent_phis: table.share_congruent_phis,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         share_literal_stores: table.share_literal_stores,
+        consume_call_results_early: table.consume_call_results_early,
         size_one_is_xor_inc: table.size_one_is_xor_inc,
         branch_constant_selects: table.branch_constant_selects,
         mispredict_penalty: table.mispredict_penalty,
