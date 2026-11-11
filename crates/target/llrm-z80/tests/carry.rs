@@ -128,3 +128,31 @@ fn a_step_by_one_in_the_low_word_with_a_constant_above_compiles() {
     let text = assembly("stepj", "define i32 @g(i32 %a) {\n  %r = add i32 %a, 65537\n  ret i32 %r\n}\n");
     assert!(!text.is_empty(), "{text}");
 }
+
+/// Eight long arguments on the stack, five adds of products: five of the seven carries were rebuilt by a compare (`pack` of
+/// os_locals_between_pushes at -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the same chain with seven
+/// arguments, or each add alone, took `adc hl, rr`.
+#[test]
+fn the_carries_of_a_chain_of_long_adds_over_stack_arguments_stay_in_the_flag() {
+    let text = assembly(
+        "chain",
+        "define i32 @g(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, i32 %g, i32 %h) {
+  %a10 = mul i32 %a, 10
+  %s1 = add i32 %a10, %b
+  %s1m = mul i32 %s1, 10
+  %s2 = add i32 %s1m, %c
+  %s2m = mul i32 %s2, 10
+  %s3 = add i32 %s2m, %d
+  %s3m = mul i32 %s3, 10
+  %s4 = add i32 %s3m, %e
+  %s4m = mul i32 %s4, 10
+  %s5 = add i32 %s4m, %f
+  %s5m = mul i32 %s5, 100
+  %g10 = mul i32 %g, 10
+  %s6 = add i32 %s5m, %g10
+  %r = add i32 %s6, %h
+  ret i32 %r
+}\n",
+    );
+    assert!(!text.contains("jr c"), "{text}");
+}

@@ -261,6 +261,12 @@ impl<'a> TypeLegalizer<'a> {
                     self.soften_float_result(value)?;
                     return Ok(true);
                 }
+                // The builder creates a vector only where a register class
+                // holds it.
+                TypeAction::ScalarizeVector => {
+                    let op = self.dag.node(value).opcode;
+                    return Err(LegalizeError::Unsupported { op, ty: vt, what: "vector with no register class" });
+                }
             }
         }
         Ok(false)
@@ -284,6 +290,14 @@ impl<'a> TypeLegalizer<'a> {
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
                 TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
+                TypeAction::ScalarizeVector => {
+                    let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
+                    return Err(LegalizeError::Unsupported {
+                        op,
+                        ty: operand_vt,
+                        what: "vector with no register class",
+                    });
+                }
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);
@@ -1459,6 +1473,29 @@ impl<'a> TypeLegalizer<'a> {
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::Truncate, vt, &[operand])
             }
+            ISD::BuildVector => {
+                // `PromoteIntOp_BUILD_VECTOR`: the vector is legal and its lane
+                // type is not; the operands, all promoted, may be wider than
+                // the lanes.
+                let ops: Vec<SDValue> =
+                    self.dag.node(node).ops.clone().into_iter().map(|op| self.promoted_integer(op)).collect();
+                let updated = self.dag.update_node_operands(n, &ops);
+                SDValue { node: updated, res: 0 }
+            }
+            ISD::InsertVectorElt if at == 1 => {
+                // `PromoteIntOp_INSERT_VECTOR_ELT`: the inserted element, wider
+                // than the lane.
+                let (vector, index) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
+                let element = self.promoted_integer(self.dag.operand(node, 1));
+                let updated = self.dag.update_node_operands(n, &[vector, element, index]);
+                SDValue { node: updated, res: 0 }
+            }
+            ISD::ScalarToVector => {
+                // `PromoteIntOp_SCALAR_TO_VECTOR`.
+                let element = self.promoted_integer(self.dag.operand(node, 0));
+                let updated = self.dag.update_node_operands(n, &[element]);
+                SDValue { node: updated, res: 0 }
+            }
             ISD::ZeroExtend => {
                 // Extend the promoted source to the result type, then clear
                 // what the source did not have (`getZeroExtendInReg`).
@@ -2502,10 +2539,10 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_SADDSUBO`: where the target has the signed carry operation
-    /// on the half type, the low halves with `UADDO`/`USUBO` and the high halves
-    /// with it, whose flag is the overflow. Without one, the plain sum or
-    /// difference, and the overflow as the sign of `(~(l ^ r) & (l ^ sum))` for
-    /// an add, `((l ^ r) & (l ^ sum))` for a subtract.
+    /// on the half type, the low halves with `UADDO`/`USUBO` and the high
+    /// halves with it, whose flag is the overflow. Without one, the plain
+    /// sum or difference, and the overflow as the sign of `(~(l ^ r) & (l ^
+    /// sum))` for an add, `((l ^ r) & (l ^ sum))` for a subtract.
     fn expand_signed_addsub_overflow(
         &mut self,
         value: SDValue,
@@ -2522,15 +2559,22 @@ impl<'a> TypeLegalizer<'a> {
         // makes of a wide one (two for an i64), a branch each; the sign test
         // is one `test; jns`. A flag stored as a value is read once, by a
         // `setcc`, and takes the carry chain.
-        let read_by_branch = self.dag.users(SDValue { node: value.node, res: 1 }).any(|user| {
-            matches!(self.dag.opcode(SDValue { node: user, res: 0 }), ISD::Select | ISD::SelectCC | ISD::BrCond | ISD::BrCC)
-        });
+        let read_by_branch = self
+            .dag
+            .users(SDValue { node: value.node, res: 1 })
+            .any(
+                |user| matches!(
+                    self.dag.opcode(SDValue { node: user, res: 0 }),
+                    ISD::Select | ISD::SelectCC | ISD::BrCond | ISD::BrCC
+                ),
+            );
         if !read_by_branch && self.tli.is_operation_legal_or_custom(carry_op, half) {
             let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
             let overflow_vt = self.dag.node(value).values[1];
             let lo_op = if op == ISD::SAddO { ISD::UAddO } else { ISD::USubO };
             let lo = self.dag.get_node_multi(lo_op, &[half, overflow_vt], &[ll, rl]);
-            let hi = self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
+            let hi =
+                self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
             self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: hi.node, res: 1 });
             return (SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 });
         }
@@ -2991,11 +3035,14 @@ impl<'a> TypeLegalizer<'a> {
         Some(self.dag.get_select(vt, adjust, below, quotient))
     }
 
-    /// `ExpandIntRes_CTPOP`'s `LibCall` arm for a count too wide for a register: the routine the target names for
-    /// `op` of this type (`__popcountdi2`), called through `makeLibCall`, its `int` result widened and split. DEVIATE
-    /// BC1 (owner softfloat, exit 2026-11-30) takes the same arm for the zero-poison clz and ctz (the pin splits those
-    /// into halves). `None` where the action is not `LibCall`, no routine is named or the target makes no such call
-    /// (the pin falls back to the split too).
+    /// `ExpandIntRes_CTPOP`'s `LibCall` arm for a count too wide for a
+    /// register: the routine the target names for `op` of this type
+    /// (`__popcountdi2`), called through `makeLibCall`, its `int` result
+    /// widened and split. DEVIATE BC1 (owner softfloat, exit 2026-11-30)
+    /// takes the same arm for the zero-poison clz and ctz (the pin splits those
+    /// into halves). `None` where the action is not `LibCall`, no routine is
+    /// named or the target makes no such call (the pin falls back to the
+    /// split too).
     fn expand_count_by_libcall(
         &mut self,
         value: SDValue,
@@ -3926,12 +3973,7 @@ impl<'a> TypeLegalizer<'a> {
             // DEVIATE SD602: the pin has no expand case, so a 16-bit target
             // dies on `llvm.smul.fix.i16`. Exit: none, the pin's gap. Owner
             // z80. Review 2026-11-27.
-            ISD::SMulFix
-            | ISD::UMulFix
-            | ISD::SMulFixSat
-            | ISD::UMulFixSat
-                if at == 2 =>
-            {
+            ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat if at == 2 => {
                 let (scale, _) = self.expanded_integer(self.dag.operand(node, 2));
                 let ops = [self.dag.operand(node, 0), self.dag.operand(node, 1), scale];
                 let updated = self.dag.update_node_operands(n, &ops);

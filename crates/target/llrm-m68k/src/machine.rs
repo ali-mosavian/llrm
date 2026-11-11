@@ -103,6 +103,23 @@ impl Machine for M68kMachine {
     }
 }
 
+/// Whether `(d8,An,Xn)` is dearer than `(An)` on `cpu`, read from the timing
+/// tables: clocks first, then the extension word's bytes at the CPU's price
+/// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
+pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
+    use crate::dagisel::hooks::Cpu;
+    static DEARER: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let price = |text: &str, bytes: u32| {
+                let clocks = crate::timing::cost(cpu, text, bytes, false).expect("a priced move").clocks;
+                crate::timing::order(cpu, false, clocks, bytes)
+            };
+            price("move.l (0,%a1,%d1), %d0", 4) > price("move.l (%a1), %d0", 2)
+        })
+    });
+    DEARER[cpu as usize]
+}
+
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct M68k {
@@ -334,14 +351,17 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// `InlineParams::DefaultThreshold`, 50 where the pin's is 225: a call is
-    /// about 20 B (arguments, `jsr`, `addq`, `rts`) and 50 clk, so a copy of a
-    /// body pays for itself only up to a dozen instructions; a 30-operation
-    /// body at six sites was inlined six times. 300 seeds -O2 68020: 516950
-    /// -> 472526 B, the 24 programs unchanged. DEVIATE: the pin's target sets
-    /// none. Exit: review 2026-11-20.
-    fn inline_threshold_override(&self) -> Option<i64> {
-        Some(50)
+    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
+    /// speed caller (-O2, -O3) that grows the code is refused when its bytes at
+    /// the CPU's `timings.times` rate cost more clocks than the call saves at
+    /// the site's frequency; the rate is the one the O2/O3 verdicts are judged
+    /// at (0.5 B per clk on the 68000, 1.33 on the 68020, 3.2 from the 68030).
+    /// The pin inlines to its threshold (225) alone; the flat 50 this replaces
+    /// kept a loop's call to a 100-instruction callee (a call per trip).
+    /// No exemption for a callee loop with a constant bound: it admitted
+    /// growth with no gain (`switch`, `sieve` 68020).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        crate::timing::byte_milliclocks(self.cpu)
     }
 
     /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
@@ -376,6 +396,16 @@ impl Tti for M68k {
         true
     }
 
+    /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
+    /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
+    /// range check, the dispatch and a word a case.
+    fn switch_code_size(&self, clusters: u64, table: u64) -> i64 {
+        if !self.code_size_bytes {
+            return 0;
+        }
+        if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
@@ -398,6 +428,29 @@ impl Tti for M68k {
             2 if !self.scaled_index => !(has_base_reg || base_offset != 0),
             2 | 4 | 8 => self.scaled_index,
             _ => false,
+        }
+    }
+
+    /// `getScalingFactorCost`: a second register in the address is one where
+    /// the tables say it is dearer than a plain address
+    /// ([`index_is_dearer_than_plain`]), else nothing; an illegal mode is
+    /// invalid. The pin's M68k has no override (the base class prices every
+    /// legal mode 0); x86 and arm64 state the rule
+    /// ([X86TargetTransformInfo.cpp#L8045](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8045)).
+    /// DEVIATE M68K-LSR-INDEX (owner m68k-lsr-addressing, exit none: the
+    /// table is the cause): LSR keeps a pointer where an index needs as many
+    /// registers. Closes M68K-LSR-IDX-CLOCKS.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::of(i64::from(scale != 0 && index_is_dearer_than_plain(self.cpu)))
+        } else {
+            Cost::INVALID
         }
     }
 
@@ -487,7 +540,16 @@ impl Tti for M68k {
         if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::cmp_sel(op, ty);
         }
-        Basic.cmp_sel_cost(op, ty, kind)
+        // `BasicTTIImplBase::getCmpSelInstrCost`: a legal operation costs 1
+        // times the type-legalization overhead, `LT.first`: the registers the
+        // type splits into (an `i64` or a `double` two, an `i128` four).
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1454
+        let registers = match ty {
+            Ty::Int(bits) => bits.div_ceil(32).max(1),
+            Ty::Double => 2,
+            Ty::Float | Ty::X87 | Ty::Pointer => 1,
+        };
+        Basic.cmp_sel_cost(op, ty, kind) * i64::from(registers)
     }
 
     fn memory_op_cost(

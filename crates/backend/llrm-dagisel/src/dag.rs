@@ -268,6 +268,20 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `ISD::isBuildVectorAllZeros` / `isBuildVectorAllOnes`: a `BUILD_VECTOR`
+    /// whose defined lanes are all zero (all ones), at least one defined.
+    fn is_build_vector_all(
+        &self,
+        _value: SDValue,
+        _ones: bool,
+    ) -> bool {
+        false
+    }
+    /// `SDNodeFlags::hasExact`.
+    fn has_exact_flag(
+        &self,
+        node: u32,
+    ) -> bool;
     /// `AtomicSDNode::getMergedOrdering`, as LLVM's `AtomicOrdering` number
     /// (monotonic 2, acquire 4, release 5, acq_rel 6, seq_cst 7); none for a
     /// node that is not atomic.
@@ -516,6 +530,10 @@ pub trait PatternContext {
     fn has_min_size(&self) -> bool;
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     fn has_frame_pointer(&self) -> bool;
+    /// `Subtarget->isNeonAvailable()`: false unless the target takes vectors.
+    fn neon_available(&self) -> bool {
+        false
+    }
     /// `Subtarget->isLegalToCallImmediateAddr()`.
     fn is_legal_to_call_immediate_addr(&self) -> bool;
     /// `Subtarget->hasX()` for a target whose features differ per function.
