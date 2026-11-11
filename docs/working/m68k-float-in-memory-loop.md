@@ -45,3 +45,11 @@ Pin opt (m68k triple, same C, `default<O3>`): loop_versioning "completely unroll
 Ours now unrolls the same 40-trip loops (size 7 and 8, unrolled 280 and 320; the pin's -O3 bar is 300). The pin unrolls them at its own bar; the m68k override (32) was suppressing that.
 m68k `unroll_milliclocks_per_byte` is 0 (unpriced), so a price veto needs a judged O2/O3 rate. Ruling asked of oversight.
 The outer loop of sum_of_steps stays a loop; the pin closes it through IndVarSimplify exit values (main folds, so not executed here).
+
+## Tried and dropped: an m68k unroll byte price
+
+`unroll_milliclocks_per_byte = timing::byte_milliclocks(cpu)` (2000 mclk/B at 68000, 750 at 68020), A/B on the same 834 cells, 68000 clocks:
+fixes loop_versioning -O3 at 68000 (-1148 B) and huffman bytes (-16 B, clocks +1.1%); 68020 loop_versioning/huffman unchanged.
+Hurts logical_value -O3 3,112 -> 4,182 clk (+34%, +68 B; 68020 +9%), extension_chain_fused +2.4% clk, int64_division +8 B.
+Cause (logical_value -O3, `LLRM_DEBUG=unroll`): loop %1, 3 trips, size 15, "saves 17 clk, adds 54 B (rate 2000)" is vetoed; base unrolls it and the whole nest folds to constants (`main` 7 instructions, against 20 with a loop). The estimate counts the loop's own folds (30 of 45 units live), not what the cleanup folds after the unroll.
+The pin has no price veto, so it is only as good as its estimate. No rate is set; the 25 cells are not a held-out set. A nest-aware estimate would be a separate study.
