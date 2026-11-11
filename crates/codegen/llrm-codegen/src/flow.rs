@@ -86,6 +86,7 @@ const UNOPTIMIZED: &[&str] = &[
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
+    "StatusWordTest",
     "CallFrameOpt",
     "TailDuplicate",
     // The pin's -O0 `addMachinePasses` has none of these (TargetPassConfig.cpp
@@ -109,6 +110,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
+    ("StatusWordTest", "statustest@5"),
     ("OptimizePHIs", "optimizephis@1"),
     ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
@@ -343,6 +345,8 @@ pub fn machine_with<'a>(
         // After frame finalization, as the pin: a constant loaded again where
         // the allocator or rematerialization left it.
         Box::new(crate::backend::latecleanup::LateCleanup),
+        // DEVIATE X87-FCMP-AH: after the stackifier made the `sahf`.
+        Box::new(crate::backend::statustest::StatusWordTest),
         Box::new(peephole::Peephole::with_rules(
             frame.clone(),
             target,
@@ -401,6 +405,9 @@ pub fn machine_with<'a>(
     }
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");
+    }
+    if !target.tests_status_word() || classes.status_word().is_none() {
+        phases.retain(|phase| phase.class_name() != "StatusWordTest");
     }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
