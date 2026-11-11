@@ -237,6 +237,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse {
             classes: Rc::clone(classes),
             keep_compare: classes.cse_keeps_compare_with_live_minuend,
+            constrain: None,
         }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink {
@@ -303,6 +304,7 @@ pub fn machine_with<'a>(
         Box::new(twoaddr::TwoAddress {
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
+            loop_carried_flow: target.commutes_loop_carried_flow(),
             unoptimized: !target.optimized,
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),

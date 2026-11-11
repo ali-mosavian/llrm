@@ -588,6 +588,7 @@ fn a_load_from_another_slot_is_not_ordered_after_a_store() {
         Regs(&crate::REGISTER_INFO),
         64,
         &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
     );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
@@ -625,6 +626,7 @@ fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
         registers,
         body.bits,
         &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
     );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
