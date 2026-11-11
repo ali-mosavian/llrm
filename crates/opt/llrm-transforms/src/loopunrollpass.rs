@@ -85,7 +85,7 @@ use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_bl
 mod price;
 mod throughput;
 mod recurrence;
-pub mod trial;
+pub use crate::trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
@@ -1088,7 +1088,9 @@ fn should_full_unroll(
         // programs with such a loop paid), nor did a nest too large (matmul +1601 B), and the trial
         // compiles the module again.
         if !unroll
-            && run.tti.unroll_trial_threshold().is_some_and(|limit| price::nest_unroll_fits(run, se, analyzed, lp, up, limit))
+            && run.tti.unroll_trial_threshold().is_some_and(|limit| {
+                !run.tti.unroll_trial_nests_only() || price::nest_unroll_fits(run, se, analyzed, lp, up, limit)
+            })
         {
             note_for_trial(run, unrolled_size);
         }

@@ -682,6 +682,36 @@ pub fn written_in(
     })
 }
 
+/// The bytes of `module` as an object holds them without alignment padding: each function's
+/// body (its symbol's size, not the padding before it) and each data section's image. The
+/// size a code-size trial compares: the padding between functions is the layout's, not the
+/// code's.
+pub fn unpadded_bytes(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<i64, Error> {
+    use llrm_object::{Definition, Role};
+    let object = built_inner(module, source, layout, format, objects)?.object;
+    let code: usize = object
+        .symbols
+        .iter()
+        .filter_map(|symbol| match symbol.definition {
+            Definition::Defined { section, .. } if object.sections[section].role == Role::Text => Some(symbol.size),
+            _ => None,
+        })
+        .sum();
+    let data: usize = object
+        .sections
+        .iter()
+        .filter(|section| matches!(section.role, Role::ROData | Role::Data))
+        .map(|section| section.image.len())
+        .sum();
+    Ok((code + data) as i64)
+}
+
 /// What `format` says of the code it holds, from the target's table.
 pub fn asm_info(
     objects: &dyn ObjectTarget,
@@ -1064,7 +1094,13 @@ pub fn _code_by(
                 let displacement = if model.flat() {
                     i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 } else {
-                    i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
+                    // Real mode adds the 16-bit displacement to IP modulo 64K, so
+                    // any offset of the segment is reachable (+33288 is -32248);
+                    // only a callee beyond the segment is not.
+                    if distance.unsigned_abs() >= 0x1_0000 {
+                        return Err(far().into());
+                    }
+                    (distance as i16).to_le_bytes().to_vec()
                 };
                 segment.put(&[&opcode[..], &displacement].concat(), &[]);
             }
@@ -2162,6 +2198,78 @@ mod tests {
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
         );
+    }
+
+    /// One group of three procedures: `_a` calls `_b` across a `_pad` of `pad` bytes.
+    fn call_across(pad: usize) -> Result<(Segment, IndexMap<String, (usize, usize)>), Error> {
+        let procedures: Vec<masm::Procedure> =
+            ["_a", "_pad", "_b"].iter().map(|name| procedure(name, true, body(name, vec![]), 0, vec![])).collect();
+        let module = masm::Module {
+            debug: None,
+            registers: crate::backend::registerinfo::test_regs(),
+            code: "M_TEXT".into(),
+            names: IndexMap::default(),
+            externs: vec![],
+            publics: strings(&["_a", "_pad", "_b"]),
+            visibility: Default::default(),
+            preemptible: Default::default(),
+            aliases: Vec::new(),
+            data: vec![],
+            procedures,
+            private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
+            code_segments: Default::default(),
+            comdats: Default::default(),
+            padding: Default::default(),
+            object: llrm_target::Target::object(&llrm_x86_m16::M16),
+            requests: BTreeSet::new(),
+            stack: 0,
+        };
+        let returned = || masm::Item::Semantics(std::borrow::Cow::Owned(semantics(Operation::Return, "ret", vec![], vec![])));
+        let mut segment = Segment::new("M_TEXT", Role::Text, true);
+        let (mut symbols, mut sizes) = (IndexMap::default(), IndexMap::default());
+        _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, false, |procedure, _| {
+            Ok(match procedure.name.as_str() {
+                "_a" => vec![masm::Item::Callee(masm::Callee::new("_b", true)), returned()],
+                "_pad" => (0..pad).map(|_| returned()).collect(),
+                _ => vec![returned()],
+            })
+        })?;
+        Ok((segment, symbols))
+    }
+
+    /// A far call to a procedure of the same group is `push cs; call near`; deedlines'
+    /// DEEDSAKS.BAS at -O1 had `_SUCKING` 33288 bytes past its caller and failed to
+    /// build ("a near call to SUCKING 33288 bytes away"): a rel16 wraps modulo 64K in
+    /// real mode, so the call is encodable, and its displacement must land on the callee.
+    #[test]
+    fn a_near_call_more_than_32k_ahead_wraps_to_its_callee() {
+        let (segment, symbols) = call_across(33_000).expect("a call 33 KB ahead is encodable");
+        let image = &segment.image;
+        let at = symbols["_a"].1;
+        assert_eq!(&image[at..at + 2], [0x0E, 0xE8], "push cs; call near");
+        let rel = i16::from_le_bytes([image[at + 2], image[at + 3]]);
+        let target = (at + 4).wrapping_add_signed(isize::from(rel)) & 0xFFFF;
+        assert_eq!(target, symbols["_b"].1, "the displacement {rel} must reach _b");
+    }
+
+    /// The limit is the segment: 65_534 bytes ahead wraps to -2 and lands on the
+    /// callee, 65_536 is back at the call and cannot. (The distance is the pad
+    /// plus the caller's `ret`.)
+    #[test]
+    fn a_near_call_reaches_65534_bytes_and_refuses_65536() {
+        let (segment, symbols) = call_across(65_533).expect("65534 bytes ahead is encodable");
+        let at = symbols["_a"].1;
+        let rel = i16::from_le_bytes([segment.image[at + 2], segment.image[at + 3]]);
+        assert_eq!((at + 4).wrapping_add_signed(isize::from(rel)) & 0xFFFF, symbols["_b"].1 & 0xFFFF);
+        assert!(call_across(65_535).is_err());
+    }
+
+    /// Past the 64K segment no displacement reaches the callee.
+    #[test]
+    fn a_near_call_a_segment_or_more_ahead_is_still_refused() {
+        assert!(call_across(65_600).is_err());
     }
 
     /// `object_of` looked each symbol up in the module's public list, a
