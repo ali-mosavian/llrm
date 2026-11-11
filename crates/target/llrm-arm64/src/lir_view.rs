@@ -127,6 +127,12 @@ const ONE_INSN_IMM: &str = "Imm1";
 /// hoists with the constant it reads.
 pub(crate) const FMOV_TO_FPR: &str = "FmovToFpr";
 
+/// `fmov s, wzr` / `fmov d, xzr`: the pin's `FMOVS0` / `FMOVD0`, which are
+/// `isReMaterializable` and `isAsCheapAsAMove`.
+fn is_fp_zero(op: &Op) -> bool {
+    matches!(op, Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, gpr: Gpr(31), .. }))
+}
+
 fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
 }
@@ -374,7 +380,7 @@ fn view_with(
                     Op::Imm { .. }
                         | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
                         | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
-                );
+                ) || is_fp_zero(&op);
             inst.invariant_load = matches!(
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
@@ -383,7 +389,8 @@ fn view_with(
                 inst.memory =
                     Some(crate::lir_body::memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
             }
-            inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move =
+                zero || cheap_alu(&op) || is_fp_zero(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
