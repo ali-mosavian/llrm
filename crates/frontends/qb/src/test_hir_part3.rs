@@ -4453,20 +4453,16 @@ fn test_a_checked_subscript_of_a_32768_element_array_can_pass() {
 #[test]
 fn test_a_checked_integer_subscript_compares_in_16_bits() {
     let text = listing_in("qb45", &["-fsanitize=bounds"], "narrowck", "DIM a%(100)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n");
-    assert!(text.contains("cmp ax, 101"), "{text}");
-    assert!(!text.contains("movsx e"), "{text}");
+    assert!(text.contains(", 101\n"), "{text}");
+    assert!(!text.contains("eax") && !text.contains("movsx"), "{text}");
 }
 
-/// ERROR 9 still fires at -1 and at the count: the 16-bit offset wraps, and
-/// with the largest static count (2^15) no wrapped offset passes.
+/// A negative lower bound is one 16-bit offset and one compare, no 32-bit
+/// register: the 16-bit offset wraps and, with count <= 2^15, a wrapped
+/// negative offset still fails the compare (ERROR 9 at -6 and at 6).
 #[test]
-fn test_a_checked_integer_subscript_keeps_both_edges_of_a_negative_lower_bound() {
-    let text = listing_in(
-        "qb45",
-        &["-fsanitize=bounds"],
-        "edgeck",
-        "DIM a%(-5 TO 5)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n",
-    );
-    assert!(text.contains("add ax, 5") || text.contains("sub ax, -5") || text.contains("lea"), "{text}");
-    assert!(text.contains(", 11"), "{text}");
+fn test_a_checked_integer_subscript_with_a_negative_lower_bound_is_one_16_bit_compare() {
+    let text = listing_in("qb45", &["-fsanitize=bounds"], "edgeck", "DIM a%(-5 TO 5)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n");
+    assert_eq!(text.matches("\n    cmp ").count(), 1, "{text}");
+    assert!(!text.contains("eax") && !text.contains("movsx"), "{text}");
 }
