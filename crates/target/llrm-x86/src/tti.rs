@@ -1163,6 +1163,10 @@ impl Tti for X86 {
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
     }
 
+    fn splits_merged_conditions(&self) -> bool {
+        self.tuning.split_merged_conditions
+    }
+
     /// X86's `getJumpConditionMergingParams`: `x86-br-merging-base-cost` 2,
     /// one more for `a == b && a == c` (a fast pattern); an `or` of two `==`
     /// splits (no CCMP on these targets). Likely bias 0, unlikely bias -1.

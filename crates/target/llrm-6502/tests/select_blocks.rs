@@ -131,3 +131,43 @@ fn a_word_select_is_right_on_the_carry_the_sign_and_the_zero_flag() {
         assert_eq!(common::run_on(target, &format!("selw-{target}"), &main, &extra).0, 0, "{target}");
     }
 }
+
+const ZERO_SELECT: &str = "define i16 @k_zsel(i16 %x) {
+  %t = and i16 %x, 1
+  %c = icmp eq i16 %t, 0
+  %r = select i1 %c, i16 7, i16 9
+  ret i16 %r
+}";
+
+/// The select's head loads the false value between the `and` and the branch,
+/// and a load sets N and Z, so `cmp #0` was redone at the branch (+2 B, +2 clk
+/// per select; long_compare_chain +32 B, +9,125 clk, 2026-11-10). The loads go
+/// above the `and`, which sets the flags the branch reads
+/// (`X86InstrInfo::optimizeCompareInstr`).
+#[test]
+fn a_zero_compare_after_the_instruction_that_made_the_byte_is_dropped() {
+    let asm = function(ZERO_SELECT, "k_zsel", Level::O1);
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    assert!(!lines.contains(&"cmp #0"), "the compare was redone:\n{asm}");
+    let and = lines.iter().position(|l| *l == "and #1").unwrap_or_else(|| panic!("no and in\n{asm}"));
+    let branch = lines.iter().position(|l| l.starts_with("bne ")).unwrap_or_else(|| panic!("no bne in\n{asm}"));
+    assert_eq!(and + 1, branch, "something stands between the and and the branch:\n{asm}");
+}
+
+/// The loads moved above the `and` must not change the answer: every byte, both
+/// CPUs.
+#[test]
+fn a_select_on_a_dropped_zero_compare_is_right_for_every_byte_on_both_cpus() {
+    let ir = format!("target datalayout = \"{}\"\n{ZERO_SELECT}", datalayout());
+    let compiled = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    let functions: String =
+        compiled.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+    // want = 7 for an even byte, else 9; `bad` is set by any mismatch
+    let main = "  lda #0\n  sta bad\n  sta ia\nloop:\n  lda ia\n  sta rc2\n  lda #0\n  sta rc3\n  jsr k_zsel\n  sta got\n  \
+                lda ia\n  and #1\n  bne odd\n  lda #7\n  jmp cmpw\nodd:\n  lda #9\ncmpw:\n  cmp got\n  beq ok\n  lda #1\n  sta bad\n\
+                ok:\n  inc ia\n  bne loop\n  lda bad\n";
+    let extra = format!("{functions}.segment \"BSS\"\nia: .res 1\ngot: .res 1\nbad: .res 1\n.segment \"CODE\"\n");
+    for target in ["sim6502", "sim65c02"] {
+        assert_eq!(common::run_on(target, &format!("zsel-{target}"), main, &extra).0, 0, "{target}");
+    }
+}

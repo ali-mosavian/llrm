@@ -5,9 +5,9 @@
 //! MIRROR: the order of the arms and each condition. Like the pin, the shift
 //! pair returns `None` for the whole function when its amounts differ.
 //!
-//! OWED, in place as `// OWED:` comments: `foldICmpIntrinsicWithIntrinsic`,
-//! the power-of-two canonicalizations, the `fshr` rotate, the `xor` constant
-//! move, the add/sub/xor power-of-two mask and `foldICmpEqualityWithOffset`.
+//! OWED, in place as `// OWED:` comments: the power-of-two canonicalizations,
+//! the `fshr` rotate, the `xor` constant move, the add/sub/xor power-of-two
+//! mask and `foldICmpEqualityWithOffset`.
 //!
 //! DEVIATE: the constants are integers (MIR has no vectors), and a constant of
 //! the `or` arm that is a constant expression does not match.
@@ -251,7 +251,9 @@ pub fn fold_icmp_equality(
         return new_icmp(c, inst, pred, and, compared);
     }
 
-    // OWED: foldICmpIntrinsicWithIntrinsic.
+    if let Some(r) = crate::combine_icmp_intrinsic::fold_icmp_intrinsic_with_intrinsic(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
 
     // icmp eq (ashr (trunc A), BW-1), (trunc (lshr A, BW)) checks that the top
     // BW + 1 bits are all the same: A >=s INT_MIN && A <=s INT_MAX.

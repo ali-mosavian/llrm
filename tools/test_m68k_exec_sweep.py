@@ -21,6 +21,16 @@ def test_a_program_without_reference_output_is_noref_not_ok():
     assert sweep.verdict(0, b"anything\n", None)[0] == "noref"
 
 
+def test_crlf_output_matches_an_lf_reference_and_nothing_else_is_forgiven():
+    """os_console writes "ab\\r\\ncd\\r\\n" (the OS layer puts exactly its bytes out); its .out has LF. The sweep read ours at every level
+    and both CPUs as a miscompile. Only CRLF -> LF is forgiven: a missing final newline, a trailing blank or different text still fail."""
+    assert sweep.verdict(0, b"ab\r\ncd\r\n", b"ab\ncd\n") == ("ok", "")
+    assert sweep.verdict(0, b"ab\r\ncx\r\n", b"ab\ncd\n")[0] == "output"
+    assert sweep.verdict(0, b"ab\ncd", b"ab\ncd\n")[0] == "output"
+    assert sweep.verdict(0, b"ab \ncd\n", b"ab\ncd\n")[0] == "output"
+    assert sweep.verdict(0, b"AB\ncd\n", b"ab\ncd\n")[0] == "output"
+
+
 def test_a_failing_exit_is_run_even_when_stdout_matches():
     assert sweep.verdict(1, b"1\n", b"1\n")[0] == "run"
     assert sweep.verdict(-11, b"", None)[0] == "run"
@@ -58,3 +68,18 @@ def test_llrm_os_exit_ends_the_program_under_qemu(tmp_path):
     assert built.returncode == 0, built.stderr
     ran = subprocess.run([QEMU, "-cpu", "m68020", str(exe)], capture_output=True, timeout=10)
     assert (ran.returncode, ran.stdout) == (0, b"1\n")
+
+
+def test_a_bench_program_gets_the_input_it_opens():
+    """bench grep, stft_* and jpeg_* ran with no input and printed another program's output (grep, stft: 'stdout differs'; jpeg: 'PHOTO.JPG not found', exit 0): nothing was compared."""
+    root = HERE.parent / "bench"
+    files, stdin = sweep.inputs_of(root / "stft_fixed/stft_fixed.c")
+    assert list(files) == ["SIGNAL"] and len(files["SIGNAL"]) == 131072 and stdin is None
+    files, stdin = sweep.inputs_of(root / "jpeg_fixed/jpeg_fixed.c")
+    assert list(files) == ["PHOTO.JPG"] and files["PHOTO.JPG"] == (root / "jpeg_single/photo.jpg").read_bytes()
+    assert sweep.inputs_of(root / "recgcd/recgcd.c") == ({}, None)
+
+
+def test_the_stubs_define_keep():
+    """bench parity and scalar did not link: `keep`, the opaque identity the bench driver supplies, was undefined."""
+    assert "int keep(int" in (HERE / "m68k_exec/os.c").read_text()

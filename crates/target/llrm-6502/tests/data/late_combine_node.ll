@@ -1,4 +1,4 @@
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 
 @__r_s = internal unnamed_addr global [48 x i16] zeroinitializer, align 2
 @t = internal global [49 x i16] zeroinitializer, align 2
