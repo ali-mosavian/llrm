@@ -20,9 +20,17 @@
 //! `ashr (phi [-39797, 39797]), 1` and `add (phi ..), 19898` ran 1746
 //! instructions more than gcc's per-arm constants). N users become N phis of
 //! constants and no instruction is copied; the old phi has no user left. Work
-//! is O(users x incoming). Only where bytes are priced (-O2, -O3): a phi of
-//! constants is a move per edge, and at -O1/-Os the corpus grew by 2 to 12 B
-//! (m16 float_in_place_update -O1 +12, m32 -Os +2) with no cell smaller.
+//! is O(users x incoming). DEVIATE PHICONST-2 (same owner and exit): an
+//! incoming that is itself a phi of constants of its own block, read by this
+//! phi alone (a diamond that picks the constant), folds the same way, the user
+//! applied to each of its constants in a phi there; and in a loop the users
+//! that fold fold while the others stay on the phi (x_cordic -O3: `add %24,
+//! %27` beside the `ashr %24, 2` that starts the chain, 28,326 -> 27,526
+//! clocks, same bytes); outside a loop a user left on the phi leaves all of
+//! them (the shared softfloat routines grew 6 to 8 B for no clock). Only where
+//! bytes are priced (-O2, -O3): a phi of constants is a move per edge, and at
+//! -O1/-Os the corpus grew by 2 to 12 B (m16 float_in_place_update -O1 +12, m32
+//! -Os +2) with no cell smaller.
 //!
 //! DEVIATE 1: the `icmp` of a `ucmp`/`scmp` intrinsic with a constant (the
 //! first `WillFold` case) is not made: MIR has no `ucmp`/`scmp`.
@@ -394,6 +402,7 @@ impl Combiner<'_> {
         }
         let mut others = Vec::new();
         let mut mine = Vec::new();
+        let mut skipped = false;
         for user in users {
             // Compares are left out: two compares of one phi become two phis of
             // booleans, one the complement of the other (m16
@@ -408,6 +417,7 @@ impl Combiner<'_> {
                 if user == inst {
                     return None;
                 }
+                skipped = true;
                 continue;
             }
             let mut values = Vec::with_capacity(incoming.len());
@@ -450,6 +460,7 @@ impl Combiner<'_> {
                 if user == inst {
                     return None;
                 }
+                skipped = true;
                 continue;
             }
             if user == inst {
@@ -458,7 +469,36 @@ impl Combiner<'_> {
                 others.push((user, values));
             }
         }
+        // A user left on the phi costs a move on every edge for the one it
+        // saves: worth it where the code runs often (the first CORDIC step of
+        // x_cordic -O3, 803 clocks), not in straight-line code (the shared
+        // softfloat routines, arm64 +8 B and no clock).
+        if skipped && !self.in_cycle(phi_block) {
+            return None;
+        }
         Some((others, mine))
+    }
+
+    /// Whether `block` can reach itself: it is in a loop.
+    fn in_cycle(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut work = vec![block];
+        while let Some(at) = work.pop() {
+            let Some(terminator) = self.function.terminator(at) else { continue };
+            for &op in self.function.instruction(terminator).operands.iter() {
+                let Operand::Block(next) = op else { continue };
+                if next == block {
+                    return true;
+                }
+                if seen.insert(next) {
+                    work.push(next);
+                }
+            }
+        }
+        false
     }
 
     /// The operand a folded incoming stands for; a nested one makes its phi of

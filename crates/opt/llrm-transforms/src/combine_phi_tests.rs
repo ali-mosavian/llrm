@@ -390,14 +390,49 @@ fn a_phi_of_constants_with_several_users_folds_into_each_of_them() {
 }
 
 /// A user that does not simplify on every incoming (`add %p, %y` reads a
-/// run-time value) stays on the phi; the users that do fold still fold (DEVIATE
-/// PHICONST: x_cordic -O3 at m32 has `add %24, %27` beside the `ashr %24, 2`
-/// that starts the chain; folding only when every user folds left the whole
-/// chain at run time, 803 clocks).
+/// run-time value) leaves the phi and its other users alone in straight-line
+/// code: no second live phi for one saved operation that runs once (the shared
+/// softfloat routines, arm64 +8 B and no clock).
 #[test]
-fn a_phi_of_constants_with_a_user_that_does_not_fold_still_folds_the_others() {
+fn a_phi_of_constants_with_a_user_that_does_not_fold_is_left_alone() {
     let text = TWO_USERS.replace("%t = add i32 %p, 19898", "%t = add i32 %p, %y");
-    let out = combined_hooks(&text, true);
+    assert_eq!(combined_hooks(&text, true), printed(&parsed(&text)));
+}
+
+/// In a loop the users that fold still fold (DEVIATE PHICONST: x_cordic -O3 at
+/// m32 has `add %24, %27` beside the `ashr %24, 2` that starts the chain;
+/// folding only when every user folds left the first step at run time,
+/// 803 clocks).
+#[test]
+fn a_phi_of_constants_in_a_loop_folds_the_users_that_fold() {
+    let text = "define i32 @f(i1 %c, i32 %y, i32 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i2, %j ]
+  br i1 %c, label %a, label %b
+
+a:
+  br label %j
+
+b:
+  br label %j
+
+j:
+  %p = phi i32 [ -39797, %a ], [ 39797, %b ]
+  %s = ashr i32 %p, 1
+  %t = add i32 %p, %y
+  %r = add i32 %s, %t
+  %i2 = add i32 %i, %r
+  %e = icmp slt i32 %i2, %n
+  br i1 %e, label %h, label %x
+
+x:
+  ret i32 %i2
+}
+";
+    let out = combined_hooks(text, true);
     assert!(out.contains("phi i32 [ -19899, %a ], [ 19898, %b ]"), "{out}");
     assert!(!out.contains("ashr"), "{out}");
     assert!(out.contains("add i32 %p, %y"), "{out}");
