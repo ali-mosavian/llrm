@@ -115,6 +115,22 @@ fn pin_opcode(insn: &Insn) -> Option<&'static str> {
     }
 }
 
+/// `MachineInstr::isCopy()` and which of its operands are physical, for
+/// `biasPhysReg`: a zero is `COPY $xzr` (the register is no operand of ours);
+/// a copy names a physical register as a register location where a virtual
+/// one is a held value.
+fn copy_physical(insn: &Insn) -> Option<(bool, bool)> {
+    let what = insn.what.as_ref()?;
+    match what.name.as_deref()? {
+        "Zero" => Some((false, true)),
+        "COPY" | "COPY_FPR" => Some((
+            matches!(what.dests.first(), Some(Loc::Reg(_))),
+            matches!(what.sources.first(), Some(Loc::Reg(_))),
+        )),
+        _ => None,
+    }
+}
+
 /// The shift amount of a shifted-register form: its last source, an
 /// immediate.
 fn shift_amount(insn: &Insn) -> Option<i64> {
@@ -199,8 +215,10 @@ impl SchedulingModel for Arm64Model {
                 if class.is_some() { "hit" } else { "miss" }
             );
         }
-        let Some(class) = class else { return Unit { micro_ops: 1, ..Unit::default() } };
+        let copy_physical = copy_physical(insn);
+        let Some(class) = class else { return Unit { micro_ops: 1, copy_physical, ..Unit::default() } };
         let mut unit = Unit {
+            copy_physical,
             micro_ops: u32::from(class.num_micro_ops),
             begin_group: class.begin_group,
             end_group: class.end_group,
@@ -416,6 +434,18 @@ mod tests {
         let model = Arm64Model::generic();
         let latency = |name: &str, source: Loc| model.def_latency(&form(name, vec![source]));
         assert_eq!((latency("FMOVSWr", wzr), latency("FMOVSWr", held(2))), (4, 3));
+    }
+
+    /// `COPY $xzr` is a copy of a physical register in; a virtual copy is
+    /// none: `biasPhysReg` starts the first from the top (nbody O2).
+    #[test]
+    fn a_zero_is_a_copy_of_a_physical_register() {
+        let model = Arm64Model::generic();
+        assert_eq!(model.unit(&form("Zero", vec![])).copy_physical, Some((false, true)));
+        let phys = Loc::Reg(llrm_lir::Reg { register: crate::reg::X0, width: 8 });
+        assert_eq!(model.unit(&form("COPY", vec![phys])).copy_physical, Some((false, true)));
+        assert_eq!(model.unit(&form("COPY", vec![held(2)])).copy_physical, Some((false, false)));
+        assert_eq!(model.unit(&form("ADDXri", vec![held(2), imm(1), imm(0)])).copy_physical, None);
     }
 
     /// A register offset is `roX` for a 64-bit index (`uxtx`, `sxtx`) and
