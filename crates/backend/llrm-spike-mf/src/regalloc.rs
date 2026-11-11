@@ -79,6 +79,16 @@ pub trait Target {
     }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
+    /// The pin's pressure sets of the target's classes where they share
+    /// storage (`llrm_target::pressure::derive`), for the pre-RA scheduler.
+    /// `None`: one set per distinct register list, each value weighing one.
+    fn pressure_sets() -> Option<&'static llrm_target::pressure::PressureSets> {
+        None
+    }
+    /// The class of [`Target::pressure_sets`] a value of `class` counts as.
+    fn pressure_class(_class: Self::Class) -> &'static str {
+        ""
+    }
     /// Whether two allocatable registers share storage (a pair and its
     /// bytes); a register overlaps itself.
     fn overlaps(

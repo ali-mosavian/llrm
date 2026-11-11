@@ -650,6 +650,7 @@ dependencies = [
  "llrm-lir",
  "llrm-mir",
  "llrm-support",
+ "llrm-target",
  "llrm-x86-m16",
 ]
 

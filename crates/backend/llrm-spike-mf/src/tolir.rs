@@ -261,6 +261,7 @@ impl<T: Target> Converted<T> {
         registers: Regs,
     ) {
         let sets = pressure_sets::<T>(&function.classes);
+        let derived = T::pressure_sets();
         let limit = T::candidates(T::any()).len();
         let known = function.classes.len() as u32;
         let pins = self.body.pins.clone();
@@ -271,18 +272,27 @@ impl<T: Target> Converted<T> {
         let before = self.body.registers.replace(registers);
         let allocatable = self.body.clone();
         self.body = self.with_effects(function, registers);
-        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
-            let mut model =
-                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|set| set.len() as u32).collect());
-            for value in 1..=known {
-                if pins.contains_key(&value) || !counted(value) {
-                    continue;
+        let scheduled =
+            llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
+                // A target whose classes share storage states its sets: a value
+                // weighs its class, in the sets that class lies in.
+                let limits: Vec<u32> = match derived {
+                    Some(derived) => (0..derived.sets.len()).map(|set| derived.limit(set, |_| true)).collect(),
+                    None => sets.iter().map(|set| set.len() as u32).collect(),
+                };
+                let mut model = llrm_codegen::backend::regpressure::Model::new(limits);
+                for value in 1..=known {
+                    if pins.contains_key(&value) || !counted(value) {
+                        continue;
+                    }
+                    let class = function.classes[value as usize - 1];
+                    match derived.and_then(|derived| derived.class(T::pressure_class(class))) {
+                        Some(held) => model.count(value, held.weight, std::rc::Rc::from(held.sets.clone())),
+                        None => model.count(value, 1, std::rc::Rc::from(sets_of::<T>(&sets, class))),
+                    }
                 }
-                let class = function.classes[value as usize - 1];
-                model.count(value, 1, std::rc::Rc::from(sets_of::<T>(&sets, class)));
-            }
-            model
-        });
+                model
+            });
         // What allocation reads is the original instruction, in the order the
         // scheduler chose.
         // By identity: the coalescer's clones of an instruction share its `at`.
@@ -1081,7 +1091,8 @@ impl<T: Target> Made<'_, T> {
         let (mut target, mut symbol) = (None, false);
         // Reads before writes: a physical register read and rewritten by one
         // instruction is read as it was.
-        // where each operand stands in `sources` / `dests`, for the pairs it ties
+        // where each operand stands in `sources` / `dests`, for the pairs it
+        // ties
         let mut source_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
         let mut dest_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
         for (index, operand) in inst.operands.iter().enumerate() {
@@ -1204,8 +1215,9 @@ impl<T: Target> Made<'_, T> {
             Kind::Copy => COPY,
             Kind::Op(name) => name,
         };
-        // the machine instruction's own tied operands, in the lists' numbering: a
-        // dropped operand (a reserved register) moves the ones after it
+        // the machine instruction's own tied operands, in the lists' numbering:
+        // a dropped operand (a reserved register) moves the ones after
+        // it
         let tied = (!inst.ties.is_empty()).then(|| {
             inst.ties.iter().filter_map(|&(def, used)| Some((source_at[used]?, dest_at[def]?))).collect::<Vec<_>>()
         });
@@ -2458,8 +2470,13 @@ pub fn from_ssa<T: Target>(
     }
     let known = original.classes.len() as u32;
     // what each instruction read before the stage, by its place
-    let before: llrm_support::hash::HashMap<i64, &Insn> =
-        converted.body.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (ordinal_of(insn) as i64, &**insn)).collect();
+    let before: llrm_support::hash::HashMap<i64, &Insn> = converted
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .map(|insn| (ordinal_of(insn) as i64, &**insn))
+        .collect();
     // a value another replaces, found from the readers the stage rewrote
     let mut renamed: IndexMap<u32, u32> = IndexMap::default();
     let mut note = |from: u32, to: u32| -> Result<(), String> {
@@ -3280,11 +3297,8 @@ mod form_tests {
     /// ops). The form's numbers are those of the operands it was made from.
     #[test]
     fn a_read_renamed_after_the_form_was_made_keeps_its_form() {
-        let form = Semantics {
-            dests: vec![held(3)],
-            sources: vec![held(1), held(2)],
-            ..Semantics::new(Operation::Binary)
-        };
+        let form =
+            Semantics { dests: vec![held(3)], sources: vec![held(1), held(2)], ..Semantics::new(Operation::Binary) };
         // Operands when the form was made: defs [3], uses [1, 2]; the body's
         // values are one more than the registers, the read now being v9's.
         let got = renumbered(&form, vec![3], vec![1, 2], &[4], &[2, 10]).expect("the form stays");

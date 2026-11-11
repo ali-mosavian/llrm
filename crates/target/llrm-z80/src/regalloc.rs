@@ -41,6 +41,36 @@ impl Class {
     }
 }
 
+/// The classes the pressure sets are made of, with the name each has there.
+/// `Any` is not one: it counts as a pair, the widest value.
+const CLASSES: [(Class, &str); 7] = [
+    (Class::Gr8, "GR8"),
+    (Class::Acc, "ACC"),
+    (Class::Gr16, "GR16"),
+    (Class::Hlr, "HLR"),
+    (Class::Der, "DER"),
+    (Class::Bcr, "BCR"),
+    (Class::Iy, "IYR"),
+];
+
+/// The pin's pressure sets of the classes above (`pressure::derive`, DEVIATE
+/// PS1): the pairs lie in the byte set, as the pin's tblgen makes them of the
+/// same description.
+static PRESSURE: std::sync::LazyLock<llrm_target::pressure::PressureSets> = std::sync::LazyLock::new(|| {
+    let classes: Vec<llrm_target::pressure::ClassSpec> = CLASSES
+        .iter()
+        .map(|&(class, name)| llrm_target::pressure::ClassSpec {
+            name,
+            members: Z80Registers::candidates(class)
+                .into_iter()
+                .map(|register| REGISTER_INFO.name(register).expect("a described register"))
+                .collect(),
+        })
+        .collect();
+    llrm_target::pressure::derive(&llrm_target::registers::file(crate::REGISTERS).expect("registers.regs"), &classes)
+        .expect("the z80 classes derive")
+});
+
 /// The Z80 behind the allocator.
 pub struct Z80Registers;
 
@@ -92,6 +122,14 @@ impl Target for Z80Registers {
 
     fn any() -> Class {
         Class::Any
+    }
+
+    fn pressure_sets() -> Option<&'static llrm_target::pressure::PressureSets> {
+        Some(&PRESSURE)
+    }
+
+    fn pressure_class(class: Class) -> &'static str {
+        CLASSES.iter().find(|(one, _)| *one == class).map_or("GR16", |(_, name)| name)
     }
 
     fn candidates(class: Class) -> Vec<RegId> {
@@ -230,9 +268,11 @@ impl Target for Z80Registers {
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
     }
 
-    /// Worse rows (owner greedy-subreg, exit 2026-12-05; net -1083 B O2, -2636 B Os): O2 mem_length_boundaries_m32 +12,
-    /// sat_sub_u64_shared_compare +3, switch_peeled_table +4; Os mem_length_boundaries_m32 +1, sat_sub_u64_shared_compare
-    /// +1, rep_tails +2, wide_shift_by_one +3. Allocation shifts after a remade address; clocks unpriced.
+    /// Worse rows (owner greedy-subreg, exit 2026-12-05; net -1083 B O2, -2636
+    /// B Os): O2 mem_length_boundaries_m32 +12, sat_sub_u64_shared_compare
+    /// +3, switch_peeled_table +4; Os mem_length_boundaries_m32 +1,
+    /// sat_sub_u64_shared_compare +1, rep_tails +2, wide_shift_by_one +3.
+    /// Allocation shifts after a remade address; clocks unpriced.
     fn remats_symbol_addresses() -> bool {
         true
     }
@@ -306,5 +346,26 @@ impl llrm_spike_mf::Jump for Z80Registers {
                 },
             )?;
         Some(Inst { kind: Kind::Op(opposite), ..branch.clone() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scheduler counted the z80's bytes and pairs as two sets that
+    /// share nothing (7 bytes, 3 pairs), so three live pairs and seven live
+    /// bytes read as within limits where they need 13 of the 7 units. The
+    /// pin's tblgen puts both classes in one set of seven units, a pair
+    /// weighing two.
+    #[test]
+    fn bytes_and_pairs_count_against_one_set_of_seven_units() {
+        let sets = Z80Registers::pressure_sets().expect("the z80 states its sets");
+        let class = |name| sets.class(Z80Registers::pressure_class(name)).expect("a class");
+        let (byte, pair) = (class(Class::Gr8), class(Class::Gr16));
+        let shared: Vec<_> = byte.sets.iter().filter(|set| pair.sets.contains(set)).collect();
+        assert_eq!(shared.len(), 1, "bytes {:?} and pairs {:?} share one set", byte.sets, pair.sets);
+        assert_eq!((byte.weight, pair.weight), (1, 2));
+        assert_eq!(sets.limit(*shared[0], |_| true), 7);
     }
 }

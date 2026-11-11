@@ -10,6 +10,7 @@ llrm-codegen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-support = { workspace = true }
+llrm-target = { workspace = true }
 
 [dev-dependencies]
 libc = { workspace = true }
