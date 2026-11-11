@@ -342,3 +342,45 @@ fn a_68000_shift_by_a_register_costs_two_clocks_a_place_once_the_count_is_known(
     registers.execute("movem.l (%sp)+, %d2-%d5");
     assert_eq!(registers.places_of("lsr.l %d2, %d0"), None, "a register list reloads it");
 }
+
+/// MC68010 Table 9-19 (printed 9-13): `TRAP Instruction` 38 (4/4). The row was
+/// in the table but its column header printed blank, so the lookup by
+/// "Periods" found nothing and every 68010 program that exits by `trap #0`
+/// read UNMEASURED (368 of 556 cells at -O2).
+#[test]
+fn a_68010_trap_is_the_exception_table_row() {
+    assert_eq!(clocks(Cpu::M68010, "trap #0"), 38);
+}
+
+/// MC68030UM Table 11.6.17 (printed 11-50): `TRAP #n`, I-cache case 18 (1/0/4).
+/// The row was transcribed and never read: 363 cells UNMEASURED.
+#[test]
+fn a_68030_trap_is_the_exception_table_row() {
+    assert_eq!(clocks(Cpu::M68030, "trap #0"), 18);
+}
+
+/// Table 11.6.8 `MULU.L`/`MULS.L EA,Dn` 44 plus Table 11.6.2 `#<data>.W,#<data>.L`
+/// 6, as the 68020's 43 + 6. `mulu.l #imm` was UNMEASURED (17 cells).
+#[test]
+fn a_68030_long_multiply_by_an_immediate_adds_the_immediate_fetch() {
+    assert_eq!(clocks(Cpu::M68030, "mulu.l #1000, %d0"), 44 + 6);
+    assert_eq!(clocks(Cpu::M68030, "muls.l #1000, %d1"), 44 + 6);
+}
+
+/// Table 11.6.16 `LEA` 2 plus Table 11.6.3: `(d16,An,Xn)` 6, `(B)` 6, `(d32,B)`
+/// 12, as for the 68020. A full-format index was UNMEASURED.
+#[test]
+fn a_68030_full_format_index_is_priced_by_its_base_displacement() {
+    assert_eq!(clocks(Cpu::M68030, "lea (3619,%a0,%d1), %a0"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68030, "lea (%a0,%d1.l*4), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68030, "lea (100000,%a0,%d1.l*4), %a1"), 2 + 12);
+}
+
+/// MC68060UM Table 10-10 prints `CMPI` by destination without a PC column;
+/// Table 10-5 prints `(d16,PC)` at the time of `(d16,An)` (0), so the PC form
+/// is the address-register form, as for the 68020. UNMEASURED (6 cells).
+#[test]
+fn a_68060_compare_immediate_to_a_pc_relative_operand_is_priced_as_the_address_form() {
+    assert_eq!(clocks(Cpu::M68060, "cmpi.l #5, (0,%pc)"), clocks(Cpu::M68060, "cmpi.l #5, (0,%a0)"));
+    assert_eq!(clocks(Cpu::M68060, "cmpi.l #5, (0,%pc)"), 2);
+}
