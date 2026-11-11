@@ -23,6 +23,7 @@
 
 use std::sync::LazyLock;
 
+use llrm_codegen::backend::selectiondag::actions::LoadExt;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue as Value, SelectionDAG};
@@ -32,6 +33,7 @@ use llrm_dagisel::interp::Outcome;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
+use super::generated::ids::reg as pin;
 use super::generated::instrinfo;
 use super::generated::m68k_m68000::MACHINE_OPCODES;
 
@@ -57,8 +59,14 @@ struct Writeback {
     /// A move from `(An)+` to memory (`MOV32po`, `MOV32oo`): a load and the
     /// store of its value, `drops` leading results being the updated bases.
     memory_move: bool,
+    /// A store of an argument slot's bytes through `(An)+` (`MOV8op`): made
+    /// by [`crate::foldarg`], never selected.
+    slot: bool,
     /// How many leading operands are updated bases the printed row lacks.
     drops: usize,
+    /// A compare whose destination is an address register: `cmpa.l (%a1)+,
+    /// %a0`.
+    address_dest: bool,
 }
 
 macro_rules! writeback {
@@ -72,7 +80,9 @@ macro_rules! writeback {
             base: $name,
             source: false,
             memory_move: false,
+            slot: false,
             drops: 1,
+            address_dest: false,
         }),*]
     };
 }
@@ -84,6 +94,7 @@ const MOVES: &[Writeback] = writeback![
     "MOV8de" true true, "MOV16de" true true, "MOV32de" true true, "MOV32ae" true true,
     "MOV8od" false false, "MOV16od" false false, "MOV32od" false false, "MOV32oa" false false,
     "MOV8ed" false true, "MOV16ed" false true, "MOV32ed" false true, "MOV32ea" false true,
+    "MOV32ro" true false,
 ];
 
 /// Every writeback: the moves, and one for each pin instruction that reads its
@@ -110,13 +121,33 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             base,
             source: true,
             memory_move: false,
+            slot: false,
             drops: 1,
+            address_dest: false,
+        });
+    }
+    // the compare of a long with `(An)+` whose destination is an address
+    // register: the source twin of the pin's `CMP32dj` with the
+    // address-destination encoding (`crate::addrcmp` makes it after allocation)
+    if has_register_indirect_source("CMP32dj") {
+        all.push(Writeback {
+            name: "CMPA32o_WB",
+            prints_as: "CMPA32o",
+            load: true,
+            pre: false,
+            drop: 0,
+            base: "CMP32dj",
+            source: true,
+            memory_move: false,
+            slot: false,
+            drops: 1,
+            address_dest: true,
         });
     }
     // a load through `(An)+` stored at once: the pin's move from `(An)+` to an
     // `(An)`, `(d,An)` or `(An)+` destination, with the bases it updates
     for bits in ["8", "16", "32"] {
-        for (to, updates) in [('j', 0), ('p', 0), ('o', 1)] {
+        for (to, updates) in [('j', 0), ('p', 0), ('f', 0), ('o', 1)] {
             let printed = leak(format!("MOV{bits}{to}o"));
             if code_of_pin(printed).is_none() {
                 continue;
@@ -130,12 +161,70 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
                 base: printed,
                 source: false,
                 memory_move: true,
+                slot: false,
                 drops: updates + 1,
+                address_dest: false,
             });
         }
     }
+    // a store through `(An)+` of what an argument slot holds
+    for bits in ["8", "16", "32"] {
+        let printed = leak(format!("MOV{bits}op"));
+        if code_of_pin(printed).is_none() {
+            continue;
+        }
+        all.push(Writeback {
+            name: leak(format!("{printed}_WB")),
+            prints_as: printed,
+            load: false,
+            pre: false,
+            drop: 0,
+            base: printed,
+            source: false,
+            memory_move: false,
+            slot: true,
+            drops: 1,
+            address_dest: false,
+        });
+    }
+    // a byte or word loaded through `(An)+` and extended: the pin's extension
+    // pseudo with the mode of `(An)+`, which `expand` makes a clear and a move
+    // (or a move and an extension)
+    for (signed, to, from) in EXTENSIONS {
+        let (kind, base) =
+            (if signed { "S" } else { "Z" }, leak(format!("MOV{}Xd{to}j{from}", if signed { "S" } else { "Z" })));
+        if code_of_pin(base).is_none() {
+            continue;
+        }
+        let printed = leak(format!("MOV{kind}Xd{to}o{from}"));
+        all.push(Writeback {
+            name: leak(format!("{printed}_WB")),
+            prints_as: printed,
+            load: true,
+            pre: false,
+            drop: 1,
+            base,
+            source: false,
+            memory_move: false,
+            slot: false,
+            drops: 1,
+            address_dest: false,
+        });
+    }
     all
 });
+
+/// `(sign extended, result bits, loaded bits)` of the extending loads that
+/// have a `(An)+` writeback.
+const EXTENSIONS: [(bool, u32, u32); 5] =
+    [(false, 16, 8), (false, 32, 8), (false, 32, 16), (true, 32, 8), (true, 32, 16)];
+
+/// The pseudo an extending writeback expands as (`MOVZXd32o8_WB` is
+/// `MOVZXd32o8`).
+pub fn extension_of(name: &str) -> Option<&'static str> {
+    let one = WRITEBACKS.iter().find(|one| one.name == name)?;
+    (one.prints_as.starts_with("MOVZX") || one.prints_as.starts_with("MOVSX")).then_some(one.prints_as)
+}
 
 fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
@@ -201,11 +290,13 @@ pub fn memory_move_rows() -> impl Iterator<Item = &'static str> {
     WRITEBACKS.iter().filter(|one| one.memory_move).map(|one| one.prints_as)
 }
 
-/// The width in bits of a post-increment load into a data register.
+/// The width in bits of a post-increment load into a data register (or either
+/// kind, `MOV32ro`).
 pub fn post_load_bits(name: &str) -> Option<&'static str> {
     let one = WRITEBACKS.iter().find(|one| one.name == name)?;
-    let move_to_data = !one.source && one.load && !one.pre && one.prints_as.ends_with("do");
-    move_to_data.then(|| one.prints_as.trim_start_matches("MOV").trim_end_matches("do"))
+    let move_to_register =
+        !one.source && one.load && !one.pre && (one.prints_as.ends_with("do") || one.prints_as.ends_with("ro"));
+    move_to_register.then(|| one.prints_as.trim_start_matches("MOV").trim_end_matches(char::is_alphabetic))
 }
 
 /// The instruction a writeback prints as, with the operand to drop (the
@@ -216,12 +307,37 @@ pub fn printed_as(name: &str) -> Option<(&'static str, usize, usize)> {
     Some((one.prints_as, one.drop, one.drops))
 }
 
+/// Whether operand `index` of the `count` operands of writeback `name` is an
+/// address base. A load or a source twin names its base last; a store names
+/// the stored value last, after its base; a load-and-store has only bases.
+pub fn is_base_operand(
+    name: &str,
+    index: usize,
+    count: usize,
+) -> bool {
+    let Some(one) = WRITEBACKS.iter().find(|one| one.name == name) else { return false };
+    if one.memory_move {
+        true
+    } else if one.load || one.source {
+        index + 1 == count
+    } else {
+        index == 1
+    }
+}
+
 /// The load-and-store writeback for the store `user` of a loaded value
 /// (`MOV32pd` is `MOV32po_WB`, `MOV32od_WB` is `MOV32oo_WB`).
 pub fn store_twin(user: &str) -> Option<&'static str> {
     let stem = user.strip_suffix("_WB").unwrap_or(user);
     let stem = stem.strip_suffix('d').or_else(|| stem.strip_suffix('r'))?;
     WRITEBACKS.iter().find(|one| one.memory_move && one.prints_as.strip_suffix('o') == Some(stem)).map(|one| one.name)
+}
+
+/// The writeback that stores through `(An)+` what a slot holds, for the
+/// writeback store `user` (`MOV8od_WB` is `MOV8op_WB`).
+pub fn slot_store_twin(user: &str) -> Option<&'static str> {
+    let stem = user.strip_suffix("d_WB").or_else(|| user.strip_suffix("r_WB"))?;
+    WRITEBACKS.iter().find(|one| one.slot && one.prints_as.strip_suffix('p') == Some(stem)).map(|one| one.name)
 }
 
 static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
@@ -271,8 +387,13 @@ static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
                 if one.load {
                     operands.extend([base.operands[0], register, used]);
                 } else {
-                    operands.extend([register, used, base.operands[1]]);
+                    operands.extend([register, used]);
+                    operands.extend_from_slice(&base.operands[1..]);
                 }
+            }
+            if one.address_dest {
+                // the updated base first, then the destination
+                operands[one.drop + 1].reg_class = pin::AR32RegClassID as i16;
             }
             InstrDesc {
                 num_operands: operands.len() as u8,
@@ -305,6 +426,10 @@ pub fn source_asm(name: &str) -> Option<&'static (&'static str, &'static str, &'
                         },
                     })
                     .collect();
+                let text = match text.split_once('.').filter(|_| one.address_dest) {
+                    Some((_, rest)) => leak(format!("cmpa.{rest}")),
+                    None => text,
+                };
                 (one.prints_as, text, &*Box::leak(kept.into_boxed_slice()))
             })
             .collect();
@@ -325,6 +450,15 @@ pub fn source_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
                 let mut pieces = pieces.to_vec();
                 let at = indirect_mode(one.base).expect("the mode of (An)");
                 pieces[at] = Piece::Const { lo: 3, width: 3, value: 3 };
+                if one.address_dest {
+                    // the opmode: long to a data register is 010, to an address
+                    // register 111
+                    for piece in &mut pieces {
+                        if matches!(piece, Piece::Const { lo: 6, width: 3, value: 2 }) {
+                            *piece = Piece::Const { lo: 6, width: 3, value: 7 };
+                        }
+                    }
+                }
                 (one.prints_as, width, &*Box::leak(pieces.into_boxed_slice()))
             })
             .collect();
@@ -342,14 +476,38 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
     }
 }
 
+/// The extending writeback that loads `load`, if it has one.
+fn extension_row(
+    dag: &SelectionDAG,
+    load: Value,
+) -> Option<&'static str> {
+    let NodeData::Mem(MemInfo { mem_vt, ext: Some(ext), .. }) = dag.node(load).data else { return None };
+    if !matches!(dag.opcode(load), ISD::Load | ISD::LoadPost) {
+        return None;
+    }
+    let signed = match ext {
+        LoadExt::ZExtLoad => false,
+        LoadExt::SExtLoad => true,
+        _ => return None,
+    };
+    let (to, from) = (dag.value_type(load).size_in_bits() as u32, mem_vt.size_in_bits() as u32);
+    EXTENSIONS.contains(&(signed, to, from)).then_some(())?;
+    let wanted = format!("MOV{}Xd{to}o{from}", if signed { "S" } else { "Z" });
+    WRITEBACKS.iter().find(|one| one.prints_as == wanted).map(|one| one.name)
+}
+
 /// The bytes an access moves, when it is one the writeback forms cover: a plain
-/// load, or a store of a whole value, of a byte, word or long.
+/// load or an extending one the rows cover, or a store of a whole value, of a
+/// byte, word or long.
 fn width(
     dag: &SelectionDAG,
     access: Value,
 ) -> Option<i64> {
-    let NodeData::Mem(MemInfo { mem_vt, ext: None, .. }) = dag.node(access).data else { return None };
-    if dag.opcode(access) == ISD::Store && dag.value_type(dag.operand(access, 1)) != mem_vt {
+    let NodeData::Mem(MemInfo { mem_vt, ext, .. }) = dag.node(access).data else { return None };
+    if dag.opcode(access) == ISD::Store && (ext.is_some() || dag.value_type(dag.operand(access, 1)) != mem_vt) {
+        return None;
+    }
+    if ext.is_some() && extension_row(dag, access).is_none() {
         return None;
     }
     [(EVT::I8, 1), (EVT::I16, 2), (EVT::I32, 4)].into_iter().find(|(vt, _)| *vt == mem_vt).map(|(_, bytes)| bytes)
@@ -394,7 +552,7 @@ fn code(
         };
         let letters = &one.prints_as[one.prints_as.len() - 2..];
         let to_address = letters.starts_with('a') || letters.ends_with('a');
-        !one.source && one.load == load && one.pre == pre && narrow && to_address == address_register
+        !one.source && !one.slot && one.load == load && one.pre == pre && narrow && to_address == address_register
     };
     WRITEBACKS.iter().position(|one| wanted(&one)).map(|at| FIRST + at as u16)
 }
@@ -418,9 +576,18 @@ pub fn select(
     let operand = |index| adapter.operand(node, index);
     // loads read (chain, base, offset), stores (chain, value, base, offset)
     let (chain, base) = if load { (operand(0), operand(1)) } else { (operand(0), operand(2)) };
+    let extended = if load && !pre { extension_row(&adapter.dag, here).and_then(code_of) } else { None };
+    if load && info.ext.is_some() && extended.is_none() {
+        return None;
+    }
     let (selected, vts, operands) = if load {
         (
-            code(bytes, true, pre, false)?,
+            match extended {
+                Some(row) => row,
+                // a long may land in either kind of register
+                None if bytes == 4 && !pre => code_of("MOV32ro_WB")?,
+                None => code(bytes, true, pre, false)?,
+            },
             vec![adapter.value_type(at(0)), adapter.value_type(at(1)), adapter.value_type(at(2))],
             vec![base, chain],
         )

@@ -35,18 +35,6 @@
 //! `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
 //! rewrite that spills (real mode).
 //!
-//! DEVIATE LS1: the pin's rule that a single-register formula of the first
-//! use is "visited" (formulae later in the search that name it lose) is off.
-//! It keeps the search short, but the narrowing already holds the space under
-//! `ComplexityLimit` and the search is pruned by the best cost, so the work
-//! stays bounded by the same limit times the uses
-//! (`the_whole_search_is_linear_in_the_uses`). With the rule on, a counter
-//! that serves two uses is hidden from the second by the first's other
-//! formulae: a loop that sums `a[i] * (i + 1)` keeps a pointer beside the
-//! counter and a `cmp`, where the byte index ending at zero shares the
-//! counter and saves the `cmp`. Exit: none while the pin's rule picks the
-//! worse solution under its own cost model.
-//!
 //! DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
 //! values its body defines that SCEV does not make a recurrence, in registers
 //! of the target's width, `Tti::gpr_bits`) are taken off the budget the solver
@@ -78,8 +66,9 @@ impl Collection<'_, '_> {
         cur_cost: &Cost,
         cur_regs: &HashSet<Scev>,
         visited: &mut HashSet<Scev>,
+        order: &[usize],
     ) {
-        let lu_idx = workspace.len();
+        let lu_idx = order[workspace.len()];
         let lu = &self.uses[lu_idx];
         // A register of the solution so far that this use could reference is
         // required of its formula, which prunes the search.
@@ -112,7 +101,10 @@ impl Collection<'_, '_> {
             if new_cost.is_less(self.tti, solution_cost) {
                 workspace.push(f_idx);
                 if workspace.len() != self.uses.len() {
-                    self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited);
+                    self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited, order);
+                    if self.tti.lsr_visited_registers_lose() && f.num_regs() == 1 && workspace.len() == 1 {
+                        visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
+                    }
                 } else {
                     *solution_cost = new_cost.clone();
                     *solution = workspace.clone();
@@ -208,6 +200,45 @@ impl Collection<'_, '_> {
         &self,
         se: &mut ScalarEvolution,
     ) -> Vec<usize> {
+        self.solve_with_cost(se).0
+    }
+
+    /// One `SolveRecurse` from the empty solution with the uses taken in
+    /// `order`: the formula chosen for each use (by use, empty if none) and
+    /// what it costs.
+    fn search(
+        &self,
+        se: &mut ScalarEvolution,
+        order: &[usize],
+    ) -> (Vec<usize>, Cost) {
+        let mut by_position = Vec::new();
+        let mut solution_cost = Cost::new();
+        solution_cost.lose();
+        let mut workspace = Vec::with_capacity(self.uses.len());
+        let mut visited = HashSet::default();
+        self.solve_recurse(
+            se,
+            &mut by_position,
+            &mut solution_cost,
+            &mut workspace,
+            &Cost::new(),
+            &HashSet::default(),
+            &mut visited,
+            order,
+        );
+        let mut by_use = vec![0; by_position.len()];
+        for (position, &formula) in by_position.iter().enumerate() {
+            by_use[order[position]] = formula;
+        }
+        (by_use, solution_cost)
+    }
+
+    /// `solve`, and what the solution it returns costs (nothing to compare for
+    /// the empty one).
+    pub fn solve_with_cost(
+        &self,
+        se: &mut ScalarEvolution,
+    ) -> (Vec<usize>, Cost) {
         if llrm_support::debug::enabled("lsr-all") {
             self.trace_candidates(se);
         }
@@ -216,23 +247,36 @@ impl Collection<'_, '_> {
                 llrm_support::debug!("lsr", "  candidate use {at} {:?}: {:?}", lu.kind, formula);
             }
         }
+        let forward: Vec<usize> = (0..self.uses.len()).collect();
+        let reversed: Vec<usize> = forward.iter().rev().copied().collect();
         let mut solution = Vec::new();
         let mut solution_cost;
         loop {
-            solution.clear();
-            solution_cost = Cost::new();
-            solution_cost.lose();
-            let mut workspace = Vec::with_capacity(self.uses.len());
-            let mut visited = HashSet::default();
-            self.solve_recurse(
-                se,
-                &mut solution,
-                &mut solution_cost,
-                &mut workspace,
-                &Cost::new(),
-                &HashSet::default(),
-                &mut visited,
-            );
+            (solution, solution_cost) = self.search(se, &forward);
+            // DEVIATE LU14: `SolveRecurse` requires of a use the registers the
+            // uses before it chose, so a cheaper combination that starts with
+            // a later use is never rated (rcflip's RAMP loop: 4 instructions
+            // against 2 with the uses the other way round). The uses are also taken
+            // in the opposite order, and its solution kept where it costs less
+            // by the target's comparator; a tie keeps the pin's order. A
+            // target opts in (`lsr_solves_both_use_orders`). Cost: one more
+            // search per instance.
+            if self.uses.len() > 1 && !solution.is_empty() && self.tti.lsr_solves_both_use_orders() {
+                let (other, other_cost) = self.search(se, &reversed);
+                // It must save an instruction over the first order's solution
+                // and over the loop as written: a tie in instructions is
+                // settled by the cost's later terms (`AddRecCost`, immediates),
+                // which rate a rewrite better that the code is not (m16 recpow
+                // +10 B, matmul +64 instructions).
+                if !other.is_empty()
+                    && other_cost.is_less(self.tti, &solution_cost)
+                    && other_cost.c.insns < solution_cost.c.insns
+                    && other_cost.c.insns < self.baseline_cost.c.insns
+                {
+                    solution = other;
+                    solution_cost = other_cost;
+                }
+            }
             // DEVIATE LU3b: where the loop's other values leave less than a
             // base and an index, the cut tells no solution from
             // another; search again without it.
@@ -243,7 +287,7 @@ impl Collection<'_, '_> {
             self.ignore_pressure.set(true);
         }
         if solution.is_empty() {
-            return solution;
+            return (solution, solution_cost);
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
         llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, self.baseline_cost.c);
@@ -256,12 +300,15 @@ impl Collection<'_, '_> {
         let spills = solution_cost.c.num_regs > budget
             && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
+        // DEVIATE LU15: a loop with an address keeps the solution that
+        // reduces it, where the target says so.
+        let spared = self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
         if self.baseline_cost.is_less(self.tti, &solution_cost)
-            && (self.tti.should_drop_lsr_solution_if_less_profitable()
+            && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
                 || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }
-        solution
+        (solution, solution_cost)
     }
 }

@@ -98,7 +98,7 @@ fn used(
                     // A frame cell indexed by a value the allocator has not
                     // placed cannot be encoded yet, and reads the registers
                     // it does name (the frame register, its segment).
-                    None if named && unplaced => {
+                    None if named && (unplaced || select::awaits_frame_layout(one)) => {
                         add(reads, one.through);
                         add(reads, one.index_through);
                         if [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&one.through) {

@@ -12,8 +12,6 @@
 //! calls) needs none. Reason: frame objects wait for the Z80 machine function.
 //! Exit: M4.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::DagConfig;
@@ -35,6 +33,9 @@ use super::hooks::Cpu;
 use super::pipeline::select_block;
 use crate::target::Z80;
 
+/// The C library routines the runtime has, and the symbols it names them by.
+pub const LIBCALLS: [(&str, &str); 3] = [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")];
+
 /// The builder's view of the Z80: 16-bit pointers, `i8` and `i16` in
 /// registers, a byte shift count, and the `CALL`/`RET_GLUE` nodes of
 /// `own_ids.txt`.
@@ -43,16 +44,19 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
-        jump_tables: false,
+        jump_tables: true,
+        // An entry is 2 B, a 16-bit compare-and-branch about 6: a table pays
+        // from a third of its range filled, at speed as well as size.
+        min_jump_table_density: Some(40),
+        preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        refuse_unknown_intrinsics: true,
+        variable_shift_legal: false,
         string_instructions: false,
+        max_alloca_align: Some(crate::MAX_ALLOCA_ALIGN),
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
-        libcalls: Some(
-            [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")]
-                .map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned()))
-                .to_vec(),
-        ),
+        libcalls: Some(LIBCALLS.map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned())).to_vec()),
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
@@ -66,9 +70,21 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
         // the symbol's linkage (`isOffsetFoldingLegal`)
-        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::m16().dag },
-        ..BuilderTarget::m16()
+        dag: DagConfig {
+            dso_local_symbols: true,
+            sext_bool_add_max_bits: u32::MAX,
+            ..BuilderTarget::for_pointer_bits(16).dag
+        },
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
+        ..BuilderTarget::for_pointer_bits(16)
     }
+}
+
+thread_local! {
+    /// The pin's block frequencies as they are (`Request::flat_loop_trips`), for
+    /// the selections made on this thread.
+    pub static FLAT_LOOP_TRIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// One block, selected and scheduled.
@@ -102,9 +118,32 @@ pub struct Selection {
     /// The width in bits of the register of every value that has one: a phi
     /// input is read on an edge laid out before any block that names it (a
     /// loop's back edge).
-    pub widths: HashMap<u32, u32>,
+    /// The bit width of each register a value lives in, by register number; 0
+    /// where nothing is recorded.
+    pub widths: Vec<u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
     pub variables: Vec<Variable>,
+    /// The function calls a routine that returns twice (`setjmp`).
+    pub returns_twice: bool,
+    /// `internal` or `private` linkage: the label is not exported.
+    pub local: bool,
+    /// The function carries `optsize` or `minsize`: tuned for size at any level.
+    pub sized: bool,
+    /// Selected with each long shift and multiply site priced (`pipeline::PRICED_SITES`).
+    pub site_priced: bool,
+    /// The same function selected with its long adds as the generic expansion, not carry ops
+    /// (`pipeline::GENERIC_CARRY`); none where it has no carry ops.
+    pub generic: Option<Box<Selection>>,
+    /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
+    /// machine CFG comes from the IR); here a block with no terminator falls
+    /// into the next one, so emission states the end.
+    pub unreachable: llrm_mir::dense::IdSet<BlockId>,
+    /// The pin's block frequency of each IR block over the entry's
+    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
+    /// the prices that choose between variants of the function weigh by.
+    pub frequencies: Vec<(u32, f64)>,
+    /// The jump tables: the block of each entry, by table.
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -139,6 +178,10 @@ pub fn select_function_with(
     let arch = Z80;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
+    let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
+    let tuned_for_size = sized;
+    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
+        && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -165,11 +208,19 @@ pub fn select_function_with(
         }
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, cpu, optimize, &mut info, &mut selected)?;
+        select_built(
+            Some((function, block)),
+            block,
+            built,
+            cpu,
+            (optimize, sized, long_multiply),
+            &mut info,
+            &mut selected,
+        )?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
-    let mut widths: HashMap<u32, u32> = info
+    let mut sized: Vec<(u32, u32)> = info
         .value_regs
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
@@ -183,11 +234,29 @@ pub fn select_function_with(
         .filter(|(_, parts)| *parts > 1)
         .collect();
     for (reg, parts) in wide {
-        widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+        sized.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+    }
+    let mut widths = vec![0; sized.iter().map(|(reg, _)| *reg as usize + 1).max().unwrap_or(0)];
+    for (reg, width) in sized {
+        widths[reg as usize] = width;
     }
     let variables =
         variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+    let returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    let mut unreachable = llrm_mir::dense::IdSet::new();
+    for &block in function.layout() {
+        if function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable) {
+            unreachable.insert(block);
+        }
+    }
+    let local =
+        matches!(
+            module.global(id).linkage,
+            llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+        );
+    let tables = info.jump_tables.clone();
+    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, site_priced: super::pipeline::PRICED_SITES.with(std::cell::Cell::get), unreachable, frequencies, tables })
 }
 
 /// The variables of `function` (after the debug import): parameters in the
@@ -274,14 +343,15 @@ fn select_built(
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
-    optimize: bool,
+    (optimize, sized, long_multiply): (bool, bool, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units = select_block(&mut built.dag, cpu, info, optimize).map_err(|why| format!("{why:?}"))?;
+    let units =
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply)).map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -319,7 +389,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, optimize, info, selected)?;
+        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), info, selected)?;
     }
     Ok(())
 }

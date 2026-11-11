@@ -668,3 +668,46 @@ b0:
     assert!(lattice_of(&module, &results, "g", "u").is_overdefined());
     assert!(lattice_of(&module, &results, "f", "y").is_unknown());
 }
+
+/// recpow -O2 (REC-5): `power(i % 97 + 2, ...)` is called from a loop whose
+/// counter grows by one each solver step. Ten extensions and the pin's
+/// `mergeIn` makes it overdefined, so `i % 97` spans both signs and the
+/// callee's argument is signed all the way down (27268 cycles against 19758 for
+/// the `unsigned` source). With the target's widening the counter keeps its
+/// sign.
+const COUNTED_CALL: &str = "define internal i64 @g(i64 %b) {
+b0:
+  ret i64 %b
+}
+
+define i64 @f(i32 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i32 [ 1, %b0 ], [ %j, %h ]
+  %r = srem i32 %i, 97
+  %a = add i32 %r, 2
+  %w = sext i32 %a to i64
+  %x = call i64 @g(i64 %w)
+  %j = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %i, %n
+  br i1 %c, label %done, label %h
+
+done:
+  ret i64 %x
+}
+";
+
+#[test]
+fn a_counter_widened_for_growing_keeps_its_sign_where_the_target_says_so() {
+    let non_negative = |keeps: bool| {
+        let (module, results) = module_solved(COUNTED_CALL, &["g"], &["g"], |solver| {
+            solver.keep_sign_when_widening(keeps);
+            solve_all(solver);
+        });
+        lattice_of(&module, &results, "g", "b").get_constant_range(true).is_all_non_negative()
+    };
+    assert!(!non_negative(false), "premise: the pin's widening loses the sign");
+    assert!(non_negative(true));
+}

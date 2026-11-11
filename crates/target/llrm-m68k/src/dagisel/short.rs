@@ -18,7 +18,6 @@
 //! # See also
 //! `X86DAGToDAGISel::PostprocessISelDAG`.
 
-use llrm_support::hash::HashSet;
 use std::sync::LazyLock;
 
 use llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter;
@@ -26,6 +25,7 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::{SDValue as Value, SelectionDAG};
 use llrm_dagisel::dag::{Dag, SDValue};
 use llrm_dagisel::instr::InstrDesc;
+use llrm_support::hash::HashSet;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Enc, Piece, encoding};
@@ -40,6 +40,8 @@ enum Form {
     Add,
     Sub,
     Test,
+    /// `extb.l`: the pin's `ext.l` with the opmode of a byte source.
+    Extb,
 }
 
 /// A short form: the pin's row it narrows, and what it prints as.
@@ -96,6 +98,8 @@ static QUICKS: LazyLock<Vec<Quick>> = LazyLock::new(|| {
             });
         }
     }
+    // `extb.l %dn` (68020 and later): the pin's `ext.l` row, opmode 7
+    all.push(Quick { name: "EXTB32", base: "EXT32", mnemonic: "extb", mode: 0, form: Form::Extb, size: 2 });
     all
 });
 
@@ -200,6 +204,16 @@ static ENCODINGS: LazyLock<Vec<(&'static str, u16, &'static [Piece])>> = LazyLoc
         .iter()
         .map(|one| {
             let &(_, width, base) = encoding(one.base).expect("the pin row encodes");
+            if one.form == Form::Extb {
+                let pieces: Vec<Piece> = base
+                    .iter()
+                    .map(|piece| match *piece {
+                        Piece::Const { lo: 6, width: 3, .. } => Piece::Const { lo: 6, width: 3, value: 7 },
+                        other => other,
+                    })
+                    .collect();
+                return (one.name, width, &*Box::leak(pieces.into_boxed_slice()));
+            }
             let imm_at = immediate_at(one.base).expect("an immediate");
             let slot = immediate_bits(one.size);
             if one.form == Form::Test {
@@ -274,19 +288,25 @@ pub fn short_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
     ENCODINGS.binary_search_by_key(&name, |row| row.0).ok().map(|at| (ENCODINGS[at].1, ENCODINGS[at].2))
 }
 
-/// After the selector: narrows each selected add or subtract of an immediate
-/// from 1 to 8 to its short instruction, in place.
-pub fn narrow(dag: &mut SelectionDAG) {
-    let mut adapter = DagisAdapter::new(dag);
+/// The nodes reachable from the root, in node-number order.
+pub fn reachable_nodes(dag: &SelectionDAG) -> Vec<u32> {
     let mut seen = HashSet::default();
-    let mut work = vec![adapter.dag.get_root().node];
+    let mut work = vec![dag.get_root().node];
     while let Some(node) = work.pop() {
         if seen.insert(node) {
-            work.extend(adapter.dag.node(Value { node, res: 0 }).ops.iter().map(|op| op.node));
+            work.extend(dag.node(Value { node, res: 0 }).ops.iter().map(|op| op.node));
         }
     }
     let mut nodes: Vec<u32> = seen.into_iter().collect();
     nodes.sort_unstable();
+    nodes
+}
+
+/// After the selector: narrows each selected add or subtract of an immediate
+/// from 1 to 8 to its short instruction, in place.
+pub fn narrow(dag: &mut SelectionDAG) {
+    let nodes = reachable_nodes(dag);
+    let mut adapter = DagisAdapter::new(dag);
     for node in nodes {
         narrow_node(&mut adapter, node);
     }

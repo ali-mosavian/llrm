@@ -27,8 +27,7 @@
 //!   IEEE (`DenormalMode::getIEEE`), as `getDenormalMode` answers for a
 //!   function with no attribute.
 //! - DEVIATE 4: no `nofpclass` on an argument, a call result or a load's
-//!   `!nofpclass`; an `x86_fp80` constant is held as the nearest double, so it
-//!   is unknown. The `fma` recurrence of a phi
+//!   `!nofpclass`. The `fma` recurrence of a phi
 //!   (`matchSimpleTernaryIntrinsicRecurrence`) is not translated.
 //! - DEVIATE 5: no `experimental.constrained.*`, `amdgcn.*`, `vector.reduce.*`,
 //!   `vector.reverse` or `convert.from.arbitrary.fp`, and no `ppc_fp128`
@@ -55,7 +54,7 @@ use super::fpredicate;
 use super::pattern::{self, IntrinsicId};
 use super::query::Query;
 use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known, range};
-use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem, semantics_of};
+use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_QUAD, IEEE_SINGLE, Sem, semantics_of};
 use crate::constantrange::ConstantRange;
 use crate::context::ConstantKind;
 use crate::context::{mask, signed};
@@ -106,7 +105,7 @@ fn denormal_mode() -> DenormalMode {
     DenormalMode::get_ieee()
 }
 
-/// The floating constant `v` is, an `x86_fp80` one excepted (DEVIATE 4).
+/// The floating constant `v` is.
 fn constant_value(
     q: &Query,
     v: Operand,
@@ -117,10 +116,12 @@ fn constant_value(
     let sem = match kind {
         FloatKind::Float => IEEE_SINGLE,
         FloatKind::Double => IEEE_DOUBLE,
-        FloatKind::X86Fp80 | FloatKind::F128 => return None,
+        FloatKind::X86Fp80 => return crate::fp80::value(&constant.kind),
+        FloatKind::F128 => IEEE_QUAD,
     };
     match constant.kind {
         ConstantKind::Float(bits) => Some(ApFloat::from_bits(sem, u128::from(bits))),
+        ConstantKind::Float128(bits) => Some(ApFloat::from_bits(sem, bits)),
         ConstantKind::Null | ConstantKind::Zero => Some(ApFloat::from_bits(sem, 0)),
         _ => None,
     }

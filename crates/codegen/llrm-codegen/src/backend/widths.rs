@@ -41,12 +41,12 @@ pub(crate) fn _read_widths(one: &Insn) -> Vec<(u32, u32)> {
     let mut out = Vec::new();
     if let Some(what) = &one.what {
         for place in what.sources.iter().flat_map(ir::values) {
-            out.push((place.value, place.width));
+            out.push((place.value, place.offset + place.width));
         }
         for dest in &what.dests {
             for place in ir::values(dest) {
                 if !matches!(dest, Loc::Held(_)) || one.uses.contains(&place.value) {
-                    out.push((place.value, place.width));
+                    out.push((place.value, place.offset + place.width));
                 }
             }
         }
@@ -76,6 +76,35 @@ pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_
         .flat_map(|what| what.dests.iter().chain(&what.sources))
         .flat_map(ir::values)
         .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place))
-        .map(|place| (place.value, place.width))
+        // A lane of a value (`offset` bytes up) is named at its extent: a pair
+        // only its bytes are copied into is still a pair, not a byte.
+        .map(|place| (place.value, place.offset + place.width))
         .chain(one.widths.iter().copied())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Loc, Operation, Semantics};
+
+    /// `v1:1@1 := mov v2:1` copies a byte into the high byte of a pair: the
+    /// pair is named two bytes wide there. Named by its own width alone it was
+    /// one byte, a value only bytes were copied into got a byte register's
+    /// order, and its clone was placed in `d` and reloaded 16 bits wide (lz4c
+    /// -Oz on Z80: "d has no byte halves").
+    #[test]
+    fn test_a_lane_is_named_at_its_extent() {
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 1, offset: 1 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })],
+            ..Semantics::new(Operation::Move)
+        };
+        let copy = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]));
+        let named: Vec<(u32, u32)> = _named_widths(&copy).collect();
+        assert!(named.contains(&(1, 2)), "the pair is two bytes wide there: {named:?}");
+        assert!(named.contains(&(2, 1)), "the byte stays one: {named:?}");
+    }
 }

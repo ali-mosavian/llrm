@@ -510,7 +510,7 @@ b2:
 
 /// `int a = *p; *q = 1; return a + *p` with `q` a `char *`: C lets the char
 /// store write `*p`, so the second load stays. TypeBasedAA's `omnipotent char`
-/// was not read as the parent of `int2`, and llrm-c's -O2 added `*p` to itself.
+/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to itself.
 #[test]
 fn a_char_store_between_two_int_loads_leaves_the_second_load() {
     let text = "define i16 @f(ptr %p, ptr %q) {
@@ -1323,6 +1323,41 @@ x:
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
 
+/// The pipeline gave `LoopFullUnroll` `opt_level` 2 at -O1, so the m32 rule
+/// "an -O1 unroll never grows" (`unroll_never_grows_at_o1`, which tests
+/// `opt_level == 1`) never ran: matmul -O1 grew 776 -> 2538 B. Its unit tests
+/// set the level by hand and passed.
+#[test]
+fn test_at_o1_the_pipeline_keeps_a_loop_rolled_whose_copies_grow() {
+    let text = "define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %m = mul i32 %v, %n
+  %s = add i32 %acc, %m
+  %next = add i32 %i, 1
+  %go = icmp slt i32 %next, 8
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 %s
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let options = pipeline::Options { loop_unrolling: true, ..pipeline::Options::basic() };
+    Program::lend(&mut module, crate::indvars::tests::m32(), |program| {
+        pipeline::applied(program, &Applied { options, ..Applied::default() })
+    })
+    .and_then(|done| done)
+    .unwrap();
+    assert!(llrm_mir::print::module(&module).contains("phi i32"), "{}", llrm_mir::print::module(&module));
+}
+
 /// A compile has the four stages (early, cleanup, simplify, late), each run
 /// once.
 #[test]
@@ -1392,7 +1427,9 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
+            "loop-vectorize@1354",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
@@ -2222,7 +2259,9 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
+            "loop-vectorize@1354",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
@@ -2305,6 +2344,31 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     for (slot, parts) in &parts(&o1) {
         assert!(parts.contains(&"promote"), "{slot} {parts:?}");
+    }
+}
+
+/// `write_through: false` leaves the write-through `Promote` out at -O1 too:
+/// wasm32 jpeg_fixed -O1 forwarded 29 `@inpos` loads across blocks, which the
+/// pin's -O1 (no GVN) does not, and was 259 B over.
+#[test]
+fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let options = |write_through| pipeline::Options { pre: false, write_through, ..Default::default() };
+    let on = Applied { options: options(true), ..Applied::default() };
+    let off = Applied { options: options(false), ..Applied::default() };
+    assert!(parts(&on).iter().all(|(_, parts)| parts.contains(&"promote")));
+    for (slot, parts) in &parts(&off) {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
     }
 }
 
@@ -2934,4 +2998,245 @@ fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
     assert!(early.contains("switch i32"), "the early slot made the range an icmp:\n{early}");
     let later = run("decide@1244");
     assert!(!later.contains("switch i32"), "premise: the later slot folds the range:\n{later}");
+}
+
+thread_local! {
+    static GETENVS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the calling thread's `getenv` calls in this test binary, then answers
+/// from `environ` as libc does.
+#[unsafe(no_mangle)]
+pub extern "C" fn getenv(name: *const std::ffi::c_char) -> *const std::ffi::c_char {
+    unsafe extern "C" {
+        static environ: *const *const std::ffi::c_char;
+    }
+    GETENVS.with(|count| count.set(count.get() + 1));
+    let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
+    let mut at = unsafe { environ };
+    while !at.is_null() && !unsafe { *at }.is_null() {
+        let entry = unsafe { std::ffi::CStr::from_ptr(*at) }.to_bytes();
+        if entry.len() > name.len() && entry.starts_with(name) && entry[name.len()] == b'=' {
+            return unsafe { (*at).add(name.len() + 1) };
+        }
+        at = unsafe { at.add(1) };
+    }
+    std::ptr::null()
+}
+
+/// `Slot::run` read the environment (`W2_SLOT_COUNT`) on every pass run: 17,322
+/// `getenv` calls, 10.3 M Ir on memory_expansion, for a debug switch. The reads
+/// of a compile do not grow with the functions it compiles.
+#[test]
+fn getenv_calls_do_not_grow_with_the_functions_compiled() {
+    let function = |name: usize| {
+        format!(
+            "define i32 @f{name}(i32 %n) {{\nb0:\n  br label %h\nh:\n  %i = phi i32 [ 0, %b0 ], [ %j, %h ]\n  %a = phi i32 [ 0, %b0 ], [ %b, %h ]\n  %b = add i32 %a, %i\n  %j = add i32 %i, 1\n  %c = icmp slt i32 %j, %n\n  br i1 %c, label %h, label %x\nx:\n  ret i32 %b\n}}\n"
+        )
+    };
+    let reads = |functions: usize| {
+        let text: String = (0..functions).map(function).collect();
+        let mut module = llrm_analysis::testing::parsed(&text);
+        let applied =
+            Applied { only: Some("decide@1178".to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        let before = GETENVS.with(std::cell::Cell::get);
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the pipeline runs");
+        GETENVS.with(std::cell::Cell::get) - before
+    };
+    reads(1); // the first run reads what is read once
+    let (one, eight) = (reads(1), reads(8));
+    assert_eq!(one, eight, "getenv calls grow with the work: {one} for 1 function, {eight} for 8");
+    assert_eq!(eight, 0, "a pass run reads the environment: {eight} calls");
+}
+
+/// `loops` counted loops one after the other, each added to a running sum, the
+/// trip count too large to unroll.
+fn chained_loops(loops: usize) -> String {
+    let mut text = String::from("define i16 @main(ptr %a) {\nentry:\n  br label %h0\n");
+    for at in 0..loops {
+        let from = if at == 0 { "entry".to_owned() } else { format!("x{}", at - 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %h{at} ]\n  %s{at} = phi i16 [ {at}, %{from} ], [ %t{at}, %h{at} ]\n  %p{at} = getelementptr i16, ptr %a, i16 %i{at}\n  %v{at} = load i16, ptr %p{at}\n  %t{at} = add i16 %s{at}, %v{at}\n  %n{at} = add nuw nsw i16 %i{at}, 1\n  %c{at} = icmp ult i16 %n{at}, 1000\n  br i1 %c{at}, label %h{at}, label %x{at}\nx{at}:\n"
+        );
+        text += &if at + 1 == loops { format!("  ret i16 %t{at}\n") } else { format!("  br label %h{}\n", at + 1) };
+    }
+    text + "}\n"
+}
+
+/// How many times the costly end of the guard queries ran while the pipeline
+/// took `loops` chained loops.
+fn operand_queries_over(loops: usize) -> usize {
+    let before = llrm_analysis::scev::implied::operand_queries();
+    pipelined(&chained_loops(loops), pipeline::Options::default());
+    llrm_analysis::scev::implied::operand_queries() - before
+}
+
+/// LPM2 runs the loop passes on one loop at a time. All of `indvars` ran
+/// before any loop's exit test was rewritten, so each loop's guard query
+/// walked the exit tests of the loops before it in their original form, and
+/// proved them with `isImpliedCondOperands` where the rewritten tests of the
+/// pin never get that far, and the queries grew with the square of the loops
+/// (huge at 100 loops: 692 M Ir in `indvars`, 419 M with the order).
+#[test]
+fn the_exit_tests_of_earlier_loops_are_rewritten_before_the_next_loop_is_asked() {
+    let (small, large) = (operand_queries_over(10), operand_queries_over(20));
+    assert!(
+        2 * large < 5 * small,
+        "queries: {small} at 10 loops, {large} at 20 (220 and 440 in order, 625 and 2150 not)"
+    );
+}
+
+/// A body that dead-argument elimination changed after the inliner went
+/// through the whole cleanup list again (promote, combine@1242, dead,
+/// simplify-cfg): 63 of the 129 extra InstCombine runs on memory_expansion -O2.
+/// The pin runs GlobalCleanup once, before the inliner, and nothing follows
+/// `DeadArgumentEliminationPass`. Here `@g`'s argument is read only by a call
+/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only after it.
+#[test]
+fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_again() {
+    let text = "define internal i16 @h(i16 %p, i16 %q) {\nb0:\n  %c = icmp eq i16 %q, 0\n  %r = select i1 %c, i16 1, i16 %p\n  ret i16 %r\n}\n\ndefine internal i16 @g(i16 %x, i16 %u) noinline {\nb0:\n  %k = call i16 @h(i16 %u, i16 0)\n  %m = call i16 @h(i16 %x, i16 1)\n  %r = add i16 %m, %k\n  ret i16 %r\n}\n\ndefine i16 @f(i16 %a, i16 %b) {\nb0:\n  %c = call i16 @g(i16 %a, i16 %b)\n  ret i16 %c\n}\n";
+    llrm_mir::counts::per_pass();
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied::default();
+    let before = llrm_mir::counts::lines();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let after = llrm_mir::counts::lines();
+    let runs = |lines: &[String]| {
+        lines
+            .iter()
+            .filter_map(|line| line.strip_prefix("[counts] pass combine@1242 ")?.split(' ').next()?.parse::<u64>().ok())
+            .sum::<u64>()
+    };
+    let printed = llrm_mir::print::module(&module);
+    assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
+    assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
+}
+
+/// `icmp sgt (sub nsw a, b), (add nsw a, b)` of the pin's `icmp-subadd.ll`
+/// reached the backend as a `sub`, an `add` and a compare; -O2 makes it
+/// `icmp slt b, 0`.
+#[test]
+fn test_o2_folds_a_compare_of_a_sub_and_an_add_to_b_against_zero() {
+    let text = "define i1 @f(i8 %a, i8 %b) {
+b:
+  %sub = sub nsw i8 %a, %b
+  %add = add nsw i8 %a, %b
+  %cmp = icmp sgt i8 %sub, %add
+  ret i1 %cmp
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("sub nsw"), "premise: with no passes the sub stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("icmp slt i8 %b, 0") && !after.contains("sub nsw"), "{after}");
+}
+
+/// `icmp samesign uge i8 %x, 127` of the pin's
+/// `icmp-samesign-canonicalize.ll` reached the backend as an unsigned
+/// compare; -O2 makes it `icmp eq i8 %x, 127`.
+#[test]
+fn test_o2_folds_an_unsigned_samesign_compare_with_a_known_sign() {
+    let text = "define i1 @f(i8 %x) {
+b:
+  %cmp = icmp samesign uge i8 %x, 127
+  ret i1 %cmp
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("samesign uge"), "premise: with no passes the compare stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("icmp eq i8 %x, 127"), "{after}");
+}
+
+/// The div_ceil idiom of the pin's `divceil.ll` reached `visitAdd` in the
+/// -O2 pipeline unfolded: the backend divided twice (`udiv` and `urem`).
+#[test]
+fn test_o2_folds_the_div_ceil_idiom_to_one_udiv() {
+    let text = "define i8 @f(i8 range(i8 0, 101) %x, i8 range(i8 1, 11) %y) {
+b:
+  %q = udiv i8 %x, %y
+  %r = urem i8 %x, %y
+  %c = icmp ne i8 %r, 0
+  %z = zext i1 %c to i8
+  %res = add i8 %q, %z
+  ret i8 %res
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("urem"), "premise: with no passes the idiom stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("udiv") && !after.contains("urem"), "{after}");
+}
+
+/// `x == INT_MAX ? INT_MIN : x + 1` (`add nsw`) of `foldSelectValueEquivalence`'s
+/// own comment reached the backend as a compare and a select; -O2 makes it
+/// the add.
+#[test]
+fn test_o2_folds_a_select_guarding_an_overflow_to_the_add() {
+    let text = "define i32 @f(i32 %x) {
+b:
+  %c = icmp eq i32 %x, 2147483647
+  %a = add nsw i32 %x, 1
+  %s = select i1 %c, i32 -2147483648, i32 %a
+  ret i32 %s
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("select"), "premise: with no passes the select stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(!after.contains("select") && after.contains("add i32 %x, 1"), "{after}");
 }

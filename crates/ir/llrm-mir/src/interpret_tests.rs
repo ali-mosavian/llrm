@@ -618,3 +618,56 @@ define i16 @f() {{
     assert_eq!(shift("ushl.sat", -1, 1), int(0xffff, 16));
     assert_eq!(shift("ushl.sat", 3, 2), int(12, 16));
 }
+
+const V4: &str = "<4 x i32> <i32 10, i32 20, i32 30, i32 40>";
+
+/// MIR had no `extractelement`/`insertelement`/`shufflevector`, so no loop could
+/// say a vector value (VECTORS-1). Each reads and writes the lane the pin's
+/// semantics name; an index past the end is poison.
+#[test]
+fn lane_operations_read_and_write_the_named_lane() {
+    let extract = |index: u32| {
+        result(&format!("define i32 @f() {{\n  %x = extractelement {V4}, i32 {index}\n  ret i32 %x\n}}\n"))
+    };
+    assert_eq!(extract(2), int(30, 32));
+    assert_eq!(extract(4), Ok(Val::Poison));
+    let insert = format!(
+        "define i32 @f() {{\n  %v = insertelement {V4}, i32 7, i32 1\n  %x = extractelement <4 x i32> %v, i32 1\n  ret i32 %x\n}}\n"
+    );
+    assert_eq!(result(&insert), int(7, 32));
+}
+
+#[test]
+fn a_shuffle_picks_lanes_across_both_inputs_and_poisons_negative_lanes() {
+    let lane = |mask: &str, index: u32| {
+        result(&format!(
+            "define i32 @f() {{\n  %s = shufflevector {V4}, <4 x i32> <i32 1, i32 2, i32 3, i32 4>, <4 x i32> <{mask}>\n  %x = extractelement <4 x i32> %s, i32 {index}\n  ret i32 %x\n}}\n"
+        ))
+    };
+    let reverse = "i32 3, i32 2, i32 1, i32 0";
+    assert_eq!(lane(reverse, 0), int(40, 32));
+    assert_eq!(lane(reverse, 3), int(10, 32));
+    assert_eq!(lane("i32 4, i32 7, i32 poison, i32 0", 1), int(4, 32), "lane 7 is the second input's lane 3");
+    assert_eq!(lane("i32 4, i32 7, i32 poison, i32 0", 2), Ok(Val::Poison));
+}
+
+#[test]
+fn the_verifier_rejects_a_shuffle_lane_past_both_inputs_and_mismatched_inputs() {
+    let verify = |text: &str| crate::verify::verify(&parse::module(text).expect("parses"));
+    let bad_lane = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 8, i32 0, i32 0, i32 0>\n  ret <4 x i32> %s\n}}\n");
+    assert!(!verify(&bad_lane).is_empty());
+    let mixed = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, <2 x i32> <i32 1, i32 2>, <4 x i32> zeroinitializer\n  ret <4 x i32> %s\n}}\n");
+    assert!(parse::module(&mixed).is_err(), "the parser already refuses inputs of two types");
+    let fine = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 7, i32 0, i32 poison, i32 0>\n  ret <4 x i32> %s\n}}\n");
+    assert_eq!(verify(&fine), Vec::<String>::new());
+}
+
+#[test]
+fn printed_lane_operations_parse_back_to_the_same_text() {
+    let text = format!(
+        "define <4 x i32> @f() {{\n  %a = insertelement {V4}, i32 7, i32 1\n  %s = shufflevector <4 x i32> %a, {V4}, <4 x i32> <i32 3, i32 poison, i32 5, i32 0>\n  ret <4 x i32> %s\n}}\n"
+    );
+    let once = crate::print::module(&parse::module(&text).expect("parses"));
+    let twice = crate::print::module(&parse::module(&once).expect("the printed form parses"));
+    assert_eq!(once, twice, "{once}");
+}

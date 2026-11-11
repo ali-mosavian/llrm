@@ -26,20 +26,23 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
 
 impl Level {
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -49,12 +52,13 @@ impl Level {
             Self::O1 => Options::basic(),
             Self::O2 => Options::default(),
             Self::O3 => Options::speed(),
+            Self::Omax => Options::aggressive(),
             Self::Os => Options::size(),
             Self::Oz => Options::min_size(),
         }
     }
 
-    fn tuning(self) -> Tuning {
+    pub(crate) fn tuning(self) -> Tuning {
         match self {
             Self::Os | Self::Oz => Tuning::SIZE,
             _ => Tuning::SPEED,
@@ -127,9 +131,14 @@ fn reserved(name: &str) -> bool {
 }
 
 /// `text` with every `@name` that `reserved` prefixed by `__r_`, a name C code
-/// cannot spell, so the assembly names the symbol and not the opcode. A string
-/// that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
-fn without_reserved_symbols(text: &str) -> String {
+/// cannot spell, so the assembly names the symbol and not the opcode; where
+/// the platform has a `c_symbol_prefix`, every C symbol takes that instead
+/// (intrinsics, `llvm.*`, and the private `.str` names are not C symbols). A
+/// string that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
+fn without_reserved_symbols(
+    text: &str,
+    c_symbol_prefix: &str,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(['@', '"']) {
@@ -154,7 +163,10 @@ fn without_reserved_symbols(text: &str) -> String {
         if quote {
             out.push('"');
         }
-        if reserved(&body[..end]) {
+        let name = &body[..end];
+        if !c_symbol_prefix.is_empty() && !name.starts_with("llvm.") && !name.starts_with('.') {
+            out.push_str(c_symbol_prefix);
+        } else if reserved(name) {
             out.push_str("__r_");
         }
         rest = body;
@@ -169,7 +181,8 @@ fn program(
     request: &Request,
 ) -> Result<Program, String> {
     let mut module =
-        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text))).map_err(|error| error.to_string())?;
+        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
+            .map_err(|error| error.to_string())?;
     module.refuse_aliases("the 6502")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Mos.layout().datalayout;
@@ -182,12 +195,24 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
+        options.second_inline = !request.passes.iter().any(|flag| flag == "-fno-second-inline")
+            && std::env::var_os("LLRM_6502_NO_ROUND2").is_none();
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+        let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
+            && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
+        if static_locals {
+            for module in &mut program.modules {
+                crate::staticlocals::applied(module, request.level != Level::Os)?;
+            }
+        }
     }
+    // The pin lowers `llvm.is.constant` and `llvm.objectsize` at every level.
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     Ok(program)
 }
 
@@ -197,7 +222,35 @@ pub fn assembly(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
-    let mut program = program(text, request)?;
+    let built = program(text, request)?;
+    trial_unrolled(built, text, request)
+}
+
+thread_local! {
+    static SELECTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The functions this thread has selected: the cost of a compile, which the
+/// trial's pricing doubled and then tripled (2026-11-08: +16.9% at -O2).
+pub fn selected() -> usize {
+    SELECTED.with(std::cell::Cell::get)
+}
+
+/// A program's assembly and, when asked for, its price: the clocks and bytes
+/// of the functions as the pass that wrote them estimates them.
+struct Assembled {
+    text: String,
+    clocks: i64,
+    bytes: i64,
+}
+
+/// The assembly of `program`: every function selected (the copies as loops and
+/// the paged walks where they price cheaper) and written out.
+fn tail(
+    mut program: Program,
+    request: &Request,
+    price: bool,
+) -> Result<Assembled, String> {
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -237,9 +290,15 @@ pub fn assembly(
         .collect();
     let data = data_text(module, &program.layout)?;
     let mut selections = Vec::new();
+    let mut from_module = Vec::new();
+    // The module each function was selected from: its blocks are the text's.
+    let mut sources: Vec<Option<&llrm_mir::module::Module>> = Vec::new();
     for name in &names {
+        SELECTED.with(|count| count.set(count.get() + 1));
         let mut selection = select_function(module, name, request.cpu)?;
         let mut as_called = true;
+        let mut paged_chosen = false;
+        let mut source = None;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
@@ -249,6 +308,7 @@ pub fn assembly(
             if cheaper(module, name, &other, looped, &selection, request)? {
                 selection = other;
                 as_called = false;
+                source = Some(looped);
             }
         }
         if let Some((_, paged)) = paged.as_ref().filter(|(names, _)| as_called && names.contains(name)) {
@@ -257,10 +317,15 @@ pub fn assembly(
             other.tuning = request.level.tuning();
             if cheaper(module, name, &other, paged, &selection, request)? {
                 selection = other;
+                paged_chosen = true;
+                source = Some(paged);
             }
         }
         selections.push(selection);
+        sources.push(source);
+        from_module.push(as_called && !paged_chosen);
     }
+    crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {
@@ -268,12 +333,117 @@ pub fn assembly(
         selection.source = file.clone().map(|file| (file, scope));
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
-    let mut text = module_text(module, &parts)?.concat();
+    let pieces = module_text(module, &parts)?;
+    let (mut clocks, mut bytes) = (0i64, 0i64);
+    if price {
+        let weights: Vec<Vec<u64>> = names
+            .iter()
+            .zip(&sources)
+            .map(|(name, source)| {
+                let from = source.unwrap_or(module);
+                let function = from.named(name).and_then(|id| from.global(id).function());
+                function
+                    .map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, &program.layout))
+            })
+            .collect();
+        let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
+        (clocks, bytes) = (run as i64, size as i64);
+    }
+    let mut text = pieces.concat();
     for (name, label) in &data.1 {
         text = text.replace(name.as_str(), label);
     }
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
-    Ok(equates(&request.platform) + &files + &text + &data.0)
+    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes })
+}
+
+/// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the program
+/// compiled again with every loop under the target's trial size unrolled, kept
+/// if its assembly is priced cheaper. The pin's threshold unrolls a loop by its
+/// own units and by what the loop folds of itself (at most ten trips); an array
+/// filled by one loop and read by the next folds only when both are gone. Only
+/// a program with a loop the threshold refused is compiled twice, and each
+/// build is written out once: the winner's text is the one priced.
+///
+/// DEVIATE UNROLL-TRIAL-TIME (owner llrm-target-6502, exit 2026-12-05): the
+/// second compile costs a program with a candidate loop about 2.5x (the 43 of
+/// 176 corpus programs that have one); the corpus total is +16.9% at -O2 and
+/// +27.7% at -Os in user-mode instructions, the median program unchanged.
+fn trial_unrolled(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    use llrm_transforms::loopunrollpass::trial;
+    let tti = built.target.tti();
+    let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
+        return Ok(tail(built, request, false)?.text);
+    };
+    let (eligible, units) = trial::take();
+    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
+        return Ok(tail(built, request, false)?.text);
+    }
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial candidates: {} functions, {units} units", eligible.len());
+    }
+    let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
+    let other = trial::with(limit, || program(text, request))?;
+    let growth = instructions(&other).saturating_sub(instructions(&built));
+    if !trial_fits(growth) {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial unroll: {growth} instructions more: put back unpriced");
+        }
+        return Ok(tail(built, request, false)?.text);
+    }
+    let (kept, tried) = (tail(built, request, true)?, tail(other, request, true)?);
+    let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
+    let pays = trial_pays(request.level, rate, saved, added);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial unroll: {added:+} bytes, {saved:+} clocks saved: {}", if pays { "kept" } else { "put back" });
+    }
+    Ok(if pays { tried.text } else { kept.text })
+}
+
+/// The instructions a trial may add before it is priced: the byte limit below
+/// at about eight bytes an instruction (the programs' trials cost 5 to 60).
+/// Pricing selects every function, which is where the time goes: `fcmp_all`'s
+/// trial grew 1,423 instructions to 4,231 and took 14 s to price, 85,508 bytes
+/// more.
+const TRIAL_GROWTH_INSTRUCTIONS: usize = 2048;
+
+/// Whether a trial that adds `growth` instructions is priced at all.
+pub fn trial_fits(growth: usize) -> bool {
+    growth <= TRIAL_GROWTH_INSTRUCTIONS
+}
+
+fn instructions(program: &Program) -> usize {
+    program.modules[0].functions().map(|(_, _, function)| function.walk().count()).sum()
+}
+
+/// The most code a trial may add: a quarter of the 6502's 64 KiB address space,
+/// which the stack, the data and the runtime share. `fcmp_all` unrolled to
+/// 85,508 bytes more (2,008,446 clocks saved, 23 clk/B) and would not have
+/// fitted.
+const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
+
+/// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes
+/// only at size, as everywhere else; at speed a byte is worth `rate`
+/// thousandths of a clock.
+pub fn trial_pays(
+    level: Level,
+    rate: i64,
+    saved: i64,
+    added: i64,
+) -> bool {
+    if added > TRIAL_GROWTH_LIMIT {
+        return false;
+    }
+    match level {
+        Level::Os => added < 0 || (added == 0 && saved >= 0),
+        // strict: no more bytes and no more clocks (6502-UNROLL-O1)
+        Level::O1 => added <= 0 && saved >= 0,
+        _ => saved * 1000 >= added * rate,
+    }
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
@@ -295,7 +465,14 @@ fn cheaper(
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
-        let priced = crate::timing::estimate_calling(request.cpu, &text, &routines, Some(&depth_of)).ok()?;
+        // loop depth guesses ten trips a level; a branch with weights (the
+        // page walk's wrap) says how often a block runs against its loop
+        let function = module.global(module.named(name)?).function()?;
+        let mut weights: Vec<u64> =
+            (0..function.block_capacity() as u32).map(|block| 10u64.pow(depth_of(block).min(3))).collect();
+        crate::weights::by_branch_weights(module, function, &mut weights);
+        let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
+        let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
         Some(priced.cycles + byte * u64::from(priced.bytes))
     };
     Ok(matches!(
@@ -320,6 +497,18 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
+    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the soft stack is not realigned and the
+    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is clamped to it at pipeline entry, so
+    /// `ptr & 1` is no longer folded to 0 for an object on an odd frame. The pin states what a frame keeps the same
+    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and argument areas, then 2.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::STACK_ALIGN as u64)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::frame::MAX_ALLOCA_ALIGN)
+    }
+
     /// `lda (zp),y`: the index is `y`.
     fn index_register_bits(&self) -> Option<u32> {
         Some(8)
@@ -338,16 +527,32 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         llrm_mir::target::Neutral.spaces()
     }
 
+    /// Clocks and bytes of the sequences the backend emits, per native byte
+    /// (`crate::opcosts`); `byte_costs` falls back to the bytes.
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_mir::target::Neutral.costs()
+        static CLOCKS: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        CLOCKS.get_or_init(|| crate::opcosts::clocks(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
+    /// The bytes the allocator can put a value in on the smallest zero page
+    /// (`a`, `x`, `y`, `rc2`..`rc15`). 0 left every pressure estimate off: no
+    /// loop was ever too wide for the registers.
+    ///
+    /// DEVIATE (6502-OPCOSTS): `Room` counts values, not bytes, so a wide value
+    /// takes one of these. Exit: residents weighed by `OperationCosts::words`
+    /// (2026-11-20).
     fn registers(&self) -> i64 {
-        llrm_mir::target::Neutral.registers()
+        crate::alloc::register_file(0).0
     }
 
+    /// The bytes a call leaves: the callee-kept cells `rc8`..`rc15`.
     fn call_registers(&self) -> i64 {
-        llrm_mir::target::Neutral.call_registers()
+        crate::alloc::register_file(0).1
     }
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
@@ -356,6 +561,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Mos6502::new()))
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::ir_lowering::MosIrLowering))
     }
 }
 
@@ -387,6 +596,12 @@ fn data_text(
         }
         if crate::select::exported(global.linkage) && label == name {
             out.push_str(&format!(".export {label}\n"));
+        }
+        // a variable of zeros is BSS, which the platform's startup clears: it
+        // costs no bytes in the image
+        if !variable.constant && words.is_empty() && bytes.iter().all(|&b| b == 0) {
+            out.push_str(&format!(".segment \"BSS\"\n{label}: .res {}\n.segment \"CODE\"\n", bytes.len().max(1)));
+            continue;
         }
         out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;

@@ -30,7 +30,7 @@ def test_a_compile_that_panics_with_the_kind_is_red_and_one_that_compiles_is_not
 
 
 def test_a_failure_of_another_kind_is_not_the_asked_one(tmp_path):
-    other = compiler(tmp_path / "other", "llrm-c: a jump to L1_2, which is nowhere", 1)
+    other = compiler(tmp_path / "other", "llrm-cc: a jump to L1_2, which is nowhere", 1)
     assert p.probe("matrix.bas", "-m32", "-O1", KIND, other) == 0
 
 

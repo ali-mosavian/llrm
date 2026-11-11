@@ -23,16 +23,26 @@
 //! integer compare for a legal `n * 8` and aligned pointers; `strcmp(p, "x")`
 //! and `strncmp` of a literal are `memcmp` where the bytes are readable and the
 //! result is only compared with zero, and `memcmp(p, q, n) == 0` is `bcmp`
-//! (`compare.rs`).
+//! (`compare.rs`). `strchr` of a constant string and character, `strpbrk`,
+//! `strspn`, `strcspn` and `strstr` over constant strings fold to an address
+//! into the first string, null or a length, and `memchr` of a constant array
+//! or size folds to compares and a select (`search.rs`).
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
 //!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations.
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
+//!   family is `memops.rs`.
+//! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
+//!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
+//!   the character compare the pin makes of a `strchr` or `strstr` tested
+//!   against its own string: such a call is left as it is.
+//! - D5: `memchr` of a constant array and size tested against null (the pin's
+//!   bit-field and OR-chain rewrite) is not translated.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.
@@ -50,12 +60,30 @@ use llrm_mir::constantfolding::{Env, read_byte_array_from_global};
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::libfunc::{Generic, LibFunc, Routine, TargetLibraryInfo};
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
-use llrm_mir::types::Type;
+use llrm_mir::types::{Type, TypeId};
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
+use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 mod compare;
+mod memops;
+mod search;
+
+/// One table per module: the target's library, else the pin's defaults for
+/// the pointer's width.
+pub(crate) fn target_library_info(
+    outer: &llrm_mir::passes::Outer,
+    size_bits: u32,
+) -> std::rc::Rc<TargetLibraryInfo> {
+    outer.memo::<TargetLibraryInfo>(0, || {
+        let library =
+            outer.program().target.library().unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
+        TargetLibraryInfo::new(&*library)
+    })
+}
 
 pub struct SimplifyLibCalls {
     routines: Vec<Routine>,
@@ -69,29 +97,79 @@ impl SimplifyLibCalls {
     }
 }
 
-/// `getConstantDataArrayInfo` of a pointer that is a constant global: every
-/// byte of the array.
+/// The instruction `opcode` placed before the call, as an operand.
+fn build(
+    unit: &mut Unit,
+    site: &Site,
+    opcode: Opcode,
+    ty: TypeId,
+    operands: Vec<Operand>,
+) -> Operand {
+    let made = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+    unit.function.insert(made, Position::Before(site.call)).expect("a placed instruction");
+    Operand::Value(unit.function.instruction(made).result.expect("a result"))
+}
+
+/// `getConstantDataArrayInfo`
+/// ([L7001](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7001))
+/// of a pointer based on a constant global: every byte from the constant
+/// offset the pointer adds, through GEPs and casts.
 fn constant_array(
     unit: &Unit,
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
-    let Operand::Constant(id) = operand else { return None };
-    let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
-    let bytes = read_byte_array_from_global(unit.context, env, global, 0)?;
+    let query = Query { globals: env.globals, ..Query::bare(unit.context, unit.function, env.layout) };
+    let Operand::Constant(object) = get_underlying_object(&query, operand, 0) else { return None };
+    let ConstantKind::Global(global) = unit.context.get(object).kind else { return None };
+    let space = match unit.context.types.get(query.type_of(operand)?) {
+        Type::Pointer(space) => *space,
+        _ => return None,
+    };
+    let width = env.layout.pointer(space).index_bits;
+    let (base, offset) = strip_and_accumulate_constant_offsets(&query, operand, width, true);
+    if base != Operand::Constant(object) {
+        return None;
+    }
+    let bytes = read_byte_array_from_global(unit.context, env, global, u64::try_from(offset).ok()?)?;
     let ConstantKind::Bytes(raw) = &unit.context.get(bytes).kind else { return None };
     Some(raw.to_vec())
 }
 
-/// `getConstantStringInfo` of a pointer that is a constant global: the bytes
-/// up to the first NUL, which must be there.
+/// `getConstantStringInfo(V, Str, TrimAtNul)` of a pointer that is a constant
+/// global.
+fn string_info(
+    unit: &Unit,
+    site: &Site,
+    operand: Operand,
+    trim_at_nul: bool,
+) -> Option<Vec<u8>> {
+    let bytes = constant_array(unit, site.env, operand)?;
+    Some(if trim_at_nul { bytes.into_iter().take_while(|&byte| byte != 0).collect() } else { bytes })
+}
+
+/// `constant_array` over a context alone.
+pub(crate) fn constant_array_in(
+    context: &llrm_mir::context::Context,
+    env: Env,
+    operand: Operand,
+) -> Option<Vec<u8>> {
+    let Operand::Constant(id) = operand else { return None };
+    let ConstantKind::Global(global) = context.get(id).kind else { return None };
+    let bytes = read_byte_array_from_global(context, env, global, 0)?;
+    let ConstantKind::Bytes(raw) = &context.get(bytes).kind else { return None };
+    Some(raw.to_vec())
+}
+
+/// `getConstantStringInfo` with `TrimAtNul`: the bytes up to the first NUL,
+/// else the whole tail.
 fn constant_string(
     unit: &Unit,
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
     let raw = constant_array(unit, env, operand)?;
-    let end = raw.iter().position(|&byte| byte == 0)?;
+    let end = raw.iter().position(|&byte| byte == 0).unwrap_or(raw.len());
     Some(raw[..end].to_vec())
 }
 
@@ -392,7 +470,7 @@ fn string(
     let i8 = unit.context.types.int(8);
     let ty = unit.context.types.intern(Type::Array { element: i8, count: raw.len() as u64 });
     let initializer = unit.context.constant(Constant { ty, kind: ConstantKind::Bytes(raw) });
-    let global = unit.declared.table("str", ty, initializer);
+    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global);
     let pointer = unit.context.types.ptr(0);
     Operand::Constant(unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
 }
@@ -449,7 +527,9 @@ impl FunctionPass for SimplifyLibCalls {
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
         let size_bits = unit.layout.pointer(0).index_bits;
-        let info = library_info(&outer, size_bits);
+        // One table per module: the target's library, else the pin's defaults
+        // for the pointer's width.
+        let info = target_library_info(&outer, size_bits);
         let env = Env { globals: &outer.globals, layout: unit.layout };
         let mut changed = false;
         let calls: Vec<InstId> = unit
@@ -490,6 +570,17 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
+                LibFunc::Strchr => search::str_chr(unit, &site),
+                LibFunc::Memchr => search::mem_chr(unit, &site),
+                LibFunc::Strpbrk => search::str_pbrk(unit, &site),
+                LibFunc::Strspn => search::str_spn(unit, &site, true),
+                LibFunc::Strcspn => search::str_spn(unit, &site, false),
+                LibFunc::Strstr => search::str_str(unit, &site),
+                LibFunc::Memcpy => memops::mem_copy(unit, &site, crate::loopidioms::How::Apart),
+                LibFunc::Memmove => memops::mem_copy(unit, &site, crate::loopidioms::How::Overlapping),
+                LibFunc::Mempcpy => memops::mem_p_cpy(unit, &site),
+                LibFunc::Memset => memops::mem_set(unit, &site),
+                LibFunc::Memccpy => memops::mem_c_cpy(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };

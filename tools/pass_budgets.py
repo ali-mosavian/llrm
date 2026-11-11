@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instructions per IR instruction per pass run, the table plan step 4.1 judges the passes by.
 
-    QCPORT=<qb-quake src> tools/pass_budgets.py [--llrm llrm-c] [--levels O1,O2,Os] [--budget 300] [source.c]
+    QCPORT=<qb-quake src> tools/pass_budgets.py [--llrm llrm-cc] [--levels O1,O2,Os] [--budget 300] [source.c]
 
 One compile of d_faces (or `source.c`) per level with `LLRM_DEBUG=counts,time`. A pass's cost is its `mir NAME` row's total
 instructions (the analyses it made the manager compute are inside it, as `counts` charges them); its size is the sum of the
@@ -62,7 +62,7 @@ def command(llrm: str, level: str, source: str | None, qcport: Path, work: Path)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", nargs="?", help="a C file; by default d_faces of $QCPORT")
-    parser.add_argument("--llrm", default=str(ROOT / "target/release/llrm-c"))
+    parser.add_argument("--llrm", default=str(ROOT / "target/release/llrm-cc"))
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--budget", type=float, default=300.0, help="instructions per IR instruction per run (plan step 4.1)")
     args = parser.parse_args()

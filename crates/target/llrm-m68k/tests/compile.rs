@@ -189,13 +189,15 @@ fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
     let text =
         text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
+    assert!(text.contains("\tbra\t") || text.contains("\tb"), "no branch at all, nothing was tested:\n{text}");
     assert!(!text.contains(":\n\tbra"), "{text}");
 }
 
 /// Twenty live incoming arguments in a loop: the pin's M68k marks nothing
 /// rematerializable, so each is stored to a frame slot and reloaded
 /// (`movem.l %d0, (N,%sp)`). Running the load of its own slot again where the
-/// value is read was a deviation of ours.
+/// value is read is the named deviation M68K-ARGREMAT, off for `Options::PINNED`,
+/// which this test compiles with.
 #[test]
 fn spilled_incoming_arguments_go_through_frame_slots_as_the_pin_has_it() {
     let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
@@ -237,10 +239,11 @@ fn a_pointer_used_as_an_integer_and_as_a_base_gets_an_address_register() {
 
 /// Loop strength reduction prices addressing modes through the target's
 /// `Tti`. With the m68k one the array walk gets a pointer induction variable
-/// (a `phi ptr`, an `(An)+` access); with a scaled index (the 68020's, and
-/// x86's) it stays indexed.
+/// (a `phi ptr`, an `(An)+` access); a scaled index (the 68020's) does not
+/// change that since the m68k prefers post-indexed addressing: `(An)+` is free.
+/// It used to keep the walk indexed, until the postinc preference (row 29).
 #[test]
-fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
+fn the_m68k_tti_strength_reduces_an_array_walk_with_or_without_a_scaled_index() {
     let ir = "define i32 @k(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}";
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
     let ours = llrm_mir::print::module(&llrm_m68k::compile::mid_end(&module).unwrap());
@@ -253,7 +256,7 @@ fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
         .unwrap(),
     );
     assert!(ours.contains("phi ptr"), "{ours}");
-    assert!(!default.contains("phi ptr"), "{default}");
+    assert!(default.contains("phi ptr"), "{default}");
 }
 
 /// A guard that returns early over a loop branches forward to the cold
@@ -277,7 +280,8 @@ fn a_guard_over_a_loop_branches_forward_to_a_cold_return() {
 fn the_arms_of_an_expanded_select_keep_their_order() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "hex")).expect("parses");
     let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(text.contains("\tcmpi.l\t#10, %d") && text.contains("\tbcc\t.LBB0_3\n"), "{text}");
+    // the compare of the masked digit is a byte `cmpi` since `narrow_cmp`
+    assert!(text.contains("\tcmpi.b\t#10, %d") && text.contains("\tbcc\t.LBB0_3\n"), "{text}");
 }
 
 /// The ILP scheduler put the loop-carried copy between `hex`'s `cmpi` and
@@ -299,5 +303,6 @@ fn a_copy_is_not_scheduled_between_a_compare_and_its_branch() {
 fn a_stored_zero_extended_byte_is_not_a_long_move() {
     let ir = "@buf = external constant [16 x i8], align 1\ndefine void @f(ptr %p) {\n  %v = load i8, ptr @buf, align 1\n  %e = zext i8 %v to i32\n  store i32 %e, ptr %p, align 2\n  ret void\n}";
     let text = compiled(ir, "f");
+    assert!(text.contains("move.b\t(buf,%pc),"), "the byte load is not there, nothing was tested:\n{text}");
     assert!(!text.contains("move.l\t(buf,%pc), ("), "{text}");
 }

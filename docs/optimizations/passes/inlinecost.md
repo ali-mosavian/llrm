@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:7f36cd95273294591a1fde86de28c27d509d374c5b9d71e1804515777836ace8 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:a50f9be81edc554b80ce83f8748684f4adb4747e5f890c2a9d270c1590608c22 -->
 
 # inlinecost
 
@@ -73,8 +73,12 @@ each site's cost and threshold beside the existing decision; with
   `CodeSize` of the callee's instructions that the walk did not fold must
   not exceed the `CodeSize` of the call and the pushes of its arguments.
   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
-  14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
-  of a local callee, which goes with it, is the pin's. No shape of callee
+  14-instruction loop into ten sites (`idioms.bas`, +690 B).
+  Measured 2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule):
+  47 cells worse, 4 better, +22946 B net (`memory_expansion` 23740 ->
+  40688, `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the
+  one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
+  The last call of a local callee, which goes with it, is the pin's. No shape of callee
   but the loop and the one smaller than its call is tested.
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
   address of a stack slot or a global the caller stored a constant to and

@@ -1,7 +1,9 @@
 //! Value types of the DAG: [`MVT`] (the simple ones) and [`EVT`] (also an
 //! integer of any width, as `i24` before promotion).
 
-/// A simple value type, the pin's `MVT` without vectors (DEVIATE SD13).
+/// A simple value type, the pin's `MVT` with the 128-bit integer vectors only
+/// (DEVIATE SD13: no wider or floating-point vectors yet; vector POC, owner
+/// m64).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MVT {
     I1,
@@ -13,6 +15,15 @@ pub enum MVT {
     F32,
     F64,
     F80,
+    /// `v16i8`, `v8i16`, `v4i32`, `v2i64`: the 128-bit integer vectors an SSE
+    /// register holds.
+    V16I8,
+    V8I16,
+    V4I32,
+    V2I64,
+    /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin
+    /// keeps it with the other floats).
+    F128,
     /// A far pointer, a selector and an offset (DEVIATE SD2): m16 only, the
     /// type legalizer expands it into two `i16`.
     Far,
@@ -32,6 +43,47 @@ impl MVT {
             32 => MVT::I32,
             64 => MVT::I64,
             128 => MVT::I128,
+            _ => return None,
+        })
+    }
+
+    /// `MVT::getVectorVT`: the vector of `count` lanes of `element`, if there
+    /// is one.
+    pub fn vector(
+        element: MVT,
+        count: u32,
+    ) -> Option<MVT> {
+        Some(match (element, count) {
+            (MVT::I8, 16) => MVT::V16I8,
+            (MVT::I16, 8) => MVT::V8I16,
+            (MVT::I32, 4) => MVT::V4I32,
+            (MVT::I64, 2) => MVT::V2I64,
+            _ => return None,
+        })
+    }
+
+    pub fn is_vector(self) -> bool {
+        matches!(self, MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64)
+    }
+
+    /// `getVectorElementType`.
+    pub fn element(self) -> Option<MVT> {
+        Some(match self {
+            MVT::V16I8 => MVT::I8,
+            MVT::V8I16 => MVT::I16,
+            MVT::V4I32 => MVT::I32,
+            MVT::V2I64 => MVT::I64,
+            _ => return None,
+        })
+    }
+
+    /// `getVectorNumElements`.
+    pub fn lanes(self) -> Option<u32> {
+        Some(match self {
+            MVT::V16I8 => 16,
+            MVT::V8I16 => 8,
+            MVT::V4I32 => 4,
+            MVT::V2I64 => 2,
             _ => return None,
         })
     }
@@ -58,6 +110,7 @@ impl EVT {
     pub const I16: EVT = EVT::Simple(MVT::I16);
     pub const I32: EVT = EVT::Simple(MVT::I32);
     pub const I64: EVT = EVT::Simple(MVT::I64);
+    pub const I128: EVT = EVT::Simple(MVT::I128);
 
     /// `EVT::getIntegerVT`: the simple type when the width has one, so equal
     /// types compare equal.
@@ -76,8 +129,28 @@ impl EVT {
         }
     }
 
+    pub fn is_vector(self) -> bool {
+        matches!(self, EVT::Simple(vt) if vt.is_vector())
+    }
+
+    /// `getVectorElementType`.
+    pub fn element(self) -> EVT {
+        match self {
+            EVT::Simple(vt) => EVT::Simple(vt.element().expect("a vector type")),
+            EVT::Int(_) => panic!("{self:?} is not a vector"),
+        }
+    }
+
+    /// `getVectorNumElements`.
+    pub fn lanes(self) -> u32 {
+        match self {
+            EVT::Simple(vt) => vt.lanes().expect("a vector type"),
+            EVT::Int(_) => panic!("{self:?} is not a vector"),
+        }
+    }
+
     pub fn is_floating_point(self) -> bool {
-        matches!(self, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
+        matches!(self, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80 | MVT::F128))
     }
 
     /// `getSizeInBits`; a chain or glue has none.
@@ -91,7 +164,7 @@ impl EVT {
                 MVT::I32 | MVT::F32 | MVT::Far => 32,
                 MVT::I64 | MVT::F64 => 64,
                 MVT::F80 => 80,
-                MVT::I128 => 128,
+                MVT::I128 | MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 => 128,
                 MVT::Other | MVT::Glue => panic!("{vt:?} has no size"),
             },
         }

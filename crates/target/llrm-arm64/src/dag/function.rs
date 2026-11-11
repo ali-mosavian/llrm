@@ -37,12 +37,14 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             boolean_contents: BooleanContents::ZeroOrOne,
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
+            vectors: crate::machine::vectors_enabled(),
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         soft_float: false,
         stack_align: Some(16),
+        max_alloca_align: Some(16),
         // The inline expansion has no `q` type (SD13): the calling hook makes
         // every constant copy and fill within the pin's limits.
         tuning: llrm_mir::target::Tuning {
@@ -65,7 +67,8 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             big_endian: false,
             calling: Some(if platform == Platform::Linux { &*LINUX } else { &*DARWIN }),
         }),
-        ..BuilderTarget::m64()
+        legal_f128: true,
+        ..BuilderTarget::for_pointer_bits(64)
     }
 }
 
@@ -125,6 +128,11 @@ pub struct Selected {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The value each `llvm.dbg.value` of this block names, as the selected
+    /// nodes left it (`transferDbgValues`), in source order.
+    pub dbg_values: Vec<(llrm_mir::MetadataId, Option<SDValue>)>,
+    /// The probabilities the builder kept for the edges of merged conditions.
+    pub edge_probs: Vec<(u32, u32, u32)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -175,7 +183,7 @@ pub fn select_function_in(
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
     // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
-    // than the multiply-high sequence. DEVIATE SD534 (exit: none, arm64 is
+    // than the multiply-high sequence. DEVIATE SD535 (exit: none, arm64 is
     // strict on bytes): the pin answers `minsize` only
     // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
     // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions
@@ -189,8 +197,11 @@ pub fn select_function_in(
                 llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
             ),
         );
-    let target = builder_target(platform)
-        .with_int_div_cheap(opt_for_size)
+    let mut target = builder_target(platform).with_int_div_cheap(opt_for_size);
+    // `AArch64TargetLowering::BuildSDIVPow2`: where a divide is cheap, a divide
+    // by a power of two stays one.
+    target.dag.sdiv_pow2_stays = opt_for_size;
+    let target = target
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
@@ -218,8 +229,8 @@ pub fn select_function_in(
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
         let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
-        let units =
-            select_block(&mut built.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
+        let units = select_block(&mut built.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
+            .map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
         for (id, mut extra) in extras {
             // `FinishBasicBlock`: a block the lowering made is a predecessor
@@ -227,8 +238,8 @@ pub fn select_function_in(
             // that made it does.
             extra.phi_updates = parent_updates.clone();
             let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
-            let units =
-                select_block(&mut extra.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
+            let units = select_block(&mut extra.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
+                .map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
         }
     }
@@ -265,6 +276,27 @@ pub fn select_function_in(
                 Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let in_block: llrm_mir::dense::IdSet<llrm_mir::module::InstId> =
+            built.dag.inst_order.iter().map(|&(inst, _)| inst).collect();
+        // A note with no node to follow (the value is in another block) or no
+        // value at all (`undef`, a constant, a piece, an assignment) is kept as
+        // a note of nothing: the variable then says nothing, rather than
+        // leaving an earlier note standing over code it no longer holds.
+        let dbg_values = function
+            .debug_records()
+            .iter()
+            .filter_map(|record| match record.what {
+                llrm_mir::DebugWhat::Declare(_) => None,
+                llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(value)) => {
+                    if !in_block.contains(&record.before) {
+                        return None;
+                    }
+                    let node = built.values.iter().find(|(one, _)| *one == value).map(|(_, node)| *node);
+                    Some((record.variable, node.map(|node| built.dag.resolve(node))))
+                }
+                _ => (at == 0).then_some((record.variable, None)),
+            })
+            .collect();
         selected.push(Selected {
             dag: built.dag,
             units,
@@ -276,6 +308,8 @@ pub fn select_function_in(
             phis,
             tables: info.jump_tables.clone(),
             declared: declared.clone(),
+            dbg_values,
+            edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
         });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));

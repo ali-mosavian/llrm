@@ -26,6 +26,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
@@ -39,7 +40,7 @@ use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
 pub struct TargetEnv {
-    pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
+    pub palettes: RefCell<IndexMap<u32, Rc<BTreeSet<RegId>>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
     /// A join leaves a pinned value standing ([`CoalescerEnv::keeps`]): for a
@@ -52,10 +53,15 @@ pub struct TargetEnv {
     pub joins_pinned_copies: bool,
     /// DEVIATE C13 (`CoalescerEnv::joins_sub_registers`).
     pub joins_sub_registers: bool,
+    /// Whether a copy into or out of a lane above the low one is joined
+    /// ([`CoalescerEnv::can_share_lane`]). Off: such a copy stays.
+    pub joins_lanes: bool,
+    /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`).
+    pub joins_loop_carried_first: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
-    pub should_join: Box<dyn Fn(&Join) -> bool>,
+    pub should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     /// The frequency of each block relative to the entry block
     /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
     /// runs once.
@@ -75,6 +81,10 @@ pub struct TargetEnv {
     /// `LLRM_CHECK_USE_SUMMARY`: each [`JoinSide`] also lists its instructions,
     /// for the target to check the summary against.
     pub check_kinds: bool,
+    /// A join that leaves both values the registers they had is taken without
+    /// building a [`Join`] (`Target::joins_unnarrowed_for_free`): the rule
+    /// prices only what a join takes away.
+    pub free_when_unnarrowed: bool,
     /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI)`: the
     /// target's own test of a definition worth making again. None: a move of
     /// an immediate or an address as x86 names them.
@@ -223,6 +233,17 @@ impl TargetEnv {
         wide: &BTreeSet<RegId>,
         narrow: &BTreeSet<RegId>,
     ) -> BTreeSet<RegId> {
+        self.hosts_at(wide, narrow, 0)
+    }
+
+    /// `hosts` for the byte `offset` of the wide register: the narrow one is
+    /// that many bytes above the wide one's lowest.
+    fn hosts_at(
+        &self,
+        wide: &BTreeSet<RegId>,
+        narrow: &BTreeSet<RegId>,
+        offset: u32,
+    ) -> BTreeSet<RegId> {
         let Some(regs) = &self.regs else { return BTreeSet::new() };
         let low = |register: RegId| regs.lanes(register);
         wide.iter()
@@ -233,7 +254,7 @@ impl TargetEnv {
                     .any(
                         |&small| regs.root(small) == regs.root(big)
                             && low(small) & !low(big) == 0
-                            && low(small).trailing_zeros() == low(big).trailing_zeros(),
+                            && low(small).trailing_zeros() == low(big).trailing_zeros() + offset,
                     )
             })
             .collect()
@@ -241,7 +262,9 @@ impl TargetEnv {
 }
 
 /// See [`TargetEnv::remat_wins`].
-pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool) -> bool>;
+/// `(definition, source's registers, destination's, size build, alone)`:
+/// `alone` is that the source has no other reader, so its own definition goes.
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool, bool) -> bool>;
 
 /// One side of a copy about to be joined.
 pub struct JoinSide {
@@ -272,6 +295,10 @@ impl CoalescerEnv for TargetEnv {
         self.joins_global_copies
     }
 
+    fn joins_loop_carried_first(&self) -> bool {
+        self.joins_loop_carried_first
+    }
+
     fn joins_pinned_copies(&self) -> bool {
         self.joins_pinned_copies
     }
@@ -298,18 +325,23 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn prices_remat(&self) -> bool {
+        self.remat_wins.is_some()
+    }
+
     fn remat_wins(
         &self,
         def: &Insn,
         source: u32,
         destination: u32,
+        alone: bool,
     ) -> bool {
         let palettes = self.palettes.borrow();
         let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
         else {
             return true;
         };
-        wins(def, from, to, self.size)
+        wins(def, from, to, self.size, alone)
     }
 
     fn keeps(
@@ -360,6 +392,40 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn can_share_lane(
+        &self,
+        narrow: u32,
+        wide: u32,
+        offset: u32,
+    ) -> bool {
+        if !self.joins_lanes {
+            return false;
+        }
+        if let (Some(x), Some(y)) = (self.pins.get(&narrow), self.pins.get(&wide)) {
+            if self.regs.as_ref().is_none_or(|regs| regs.root(*x) != regs.root(*y)) {
+                return false;
+            }
+        }
+        let palettes = self.palettes.borrow();
+        match (palettes.get(&wide), palettes.get(&narrow)) {
+            (Some(big), Some(small)) => !self.hosts_at(big, small, offset).is_empty(),
+            _ => self.regs.is_some(),
+        }
+    }
+
+    fn narrow_lane(
+        &self,
+        wide: u32,
+        narrow: u32,
+        offset: u32,
+    ) {
+        let mut palettes = self.palettes.borrow_mut();
+        let Some(small) = palettes.get(&narrow).cloned() else { return };
+        if let Some(big) = palettes.get(&wide).cloned() {
+            palettes.insert(wide, Rc::new(self.hosts_at(&big, &small, offset)));
+        }
+    }
+
     fn narrow_sub(
         &self,
         wide: u32,
@@ -368,7 +434,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(small) = palettes.get(&narrow).cloned() else { return };
         if let Some(big) = palettes.get(&wide).cloned() {
-            palettes.insert(wide, self.hosts(&big, &small));
+            palettes.insert(wide, Rc::new(self.hosts(&big, &small)));
         }
     }
 
@@ -379,12 +445,22 @@ impl CoalescerEnv for TargetEnv {
         src: u32,
         dst: u32,
     ) -> bool {
+        // `TargetRegisterInfo::shouldCoalesce` is no work where the target has
+        // no opinion: no `Join` is built for it.
+        let Some(should_join) = &self.should_join else { return true };
         let palettes = self.palettes.borrow();
         let (Some(x), Some(y)) = (palettes.get(&src), palettes.get(&dst)) else { return true };
         let freq = |key: InstrKey| {
             let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
             self.freq.get(block).copied().unwrap_or(1.0)
         };
+        // A join that narrows neither value takes nothing away: both sides
+        // price 0 and the target's rule says yes (the pin asks no price at all
+        // where the target has no opinion, TargetRegisterInfo.h:1031).
+        let same_width = super::pair::move_copy(lis.instr(copy)).is_none_or(|(d, s)| d.width == s.width);
+        if self.free_when_unnarrowed && same_width && (Rc::ptr_eq(x, y) || x == y) {
+            return true;
+        }
         self.catch_up(lis);
         let side = |value: u32, palette: &BTreeSet<RegId>| {
             let mut kinds = self.use_kinds(lis, value);
@@ -408,7 +484,8 @@ impl CoalescerEnv for TargetEnv {
         // the wide registers that have its registers as their low part.
         let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
         let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
-        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
+        JOINS_BUILT.with(|built| built.set(built.get() + 1));
+        should_join(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
     fn tracks_uses(&self) -> bool {
@@ -423,7 +500,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(from) = palettes.get(&src).cloned() else { return };
         match palettes.get_mut(&dst) {
-            Some(into) => into.retain(|register| from.contains(register)),
+            Some(into) => Rc::make_mut(into).retain(|register| from.contains(register)),
             None => {
                 palettes.insert(dst, from);
             }
@@ -455,6 +532,12 @@ impl JoinMap {
     }
 }
 
+thread_local! {
+    /// How many [`Join`]s `should_coalesce` has built on this thread, for a
+    /// test that a target with no opinion costs none.
+    pub static JOINS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `body` with its copies joined by the translated coalescer.
 pub fn joined(
     body: &LirBody,
@@ -475,7 +558,11 @@ pub fn joined_with_map(
     if env.tracks_uses() {
         lis.track_changes();
     }
-    let stats = driver::run(&mut lis, env, depth);
+    // `RegisterCoalescer::runOnMachineFunction` returns at once for a function
+    // that exposes `returns_twice`: after `longjmp` a joined variable would
+    // hold a value the first return never set
+    // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4338>).
+    let stats = if body.returns_twice { driver::Stats::default() } else { driver::run(&mut lis, env, depth) };
     let after = lis.body_like(body);
     if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
         for reason in why_left(&mut lis, env) {
@@ -497,18 +584,21 @@ pub fn joined_with_map(
 /// come back narrowed to what each surviving value may take.
 pub fn coalesce(
     body: &LirBody,
-    palettes: IndexMap<u32, BTreeSet<RegId>>,
+    palettes: IndexMap<u32, Rc<BTreeSet<RegId>>>,
     pins: IndexMap<u32, RegId>,
     size: bool,
     joins_global_copies: bool,
     joins_pinned_copies: bool,
     joins_sub_registers: bool,
+    joins_lanes: bool,
+    joins_loop_carried_first: bool,
+    free_when_unnarrowed: bool,
     regs: llrm_lir::registers::Regs,
-    should_join: Box<dyn Fn(&Join) -> bool>,
+    should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
     remat_wins: Option<RematWins>,
     kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,
-) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
+) -> (LirBody, IndexMap<u32, Rc<BTreeSet<RegId>>>, JoinMap) {
     let aliases = pins
         .iter()
         .map(|(value, register)| {
@@ -527,13 +617,15 @@ pub fn coalesce(
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
     let env = TargetEnv {
-        palettes: palettes.into(),
+        palettes: RefCell::new(palettes),
         pins,
         size,
         keep_pinned: true,
         joins_global_copies,
         joins_pinned_copies,
         joins_sub_registers,
+        joins_lanes,
+        joins_loop_carried_first,
         aliases,
         should_join,
         freq,
@@ -543,6 +635,7 @@ pub fn coalesce(
         kind_of: Some(kind_of),
         kinds: RefCell::default(),
         check_kinds: llrm_support::env_flag!("LLRM_CHECK_USE_SUMMARY"),
+        free_when_unnarrowed,
     };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();

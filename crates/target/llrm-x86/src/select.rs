@@ -121,12 +121,102 @@ fn create_mem(
     Instruction::with1(code, memory).map_err(|error| error.to_string())
 }
 
+/// The form the pin writes for a register-to-register `op r, r`: the one whose
+/// ModRM `r/m` field is the destination (`MOV32rr` is `89 /r`, `ADD32rr` `01
+/// /r`, X86InstrMisc.td and X86InstrArithmetic.td), not iced's `op r, r/m`
+/// (`8B`, `03`), the pin's `_REV` twin that only a disassembler reads. Same
+/// length, same operands, other bytes.
+fn pin_form(code: Code) -> Code {
+    match code {
+        Code::Mov_r8_rm8 => Code::Mov_rm8_r8,
+        Code::Mov_r16_rm16 => Code::Mov_rm16_r16,
+        Code::Mov_r32_rm32 => Code::Mov_rm32_r32,
+        Code::Mov_r64_rm64 => Code::Mov_rm64_r64,
+        Code::Add_r8_rm8 => Code::Add_rm8_r8,
+        Code::Add_r16_rm16 => Code::Add_rm16_r16,
+        Code::Add_r32_rm32 => Code::Add_rm32_r32,
+        Code::Add_r64_rm64 => Code::Add_rm64_r64,
+        Code::Or_r8_rm8 => Code::Or_rm8_r8,
+        Code::Or_r16_rm16 => Code::Or_rm16_r16,
+        Code::Or_r32_rm32 => Code::Or_rm32_r32,
+        Code::Or_r64_rm64 => Code::Or_rm64_r64,
+        Code::Adc_r8_rm8 => Code::Adc_rm8_r8,
+        Code::Adc_r16_rm16 => Code::Adc_rm16_r16,
+        Code::Adc_r32_rm32 => Code::Adc_rm32_r32,
+        Code::Adc_r64_rm64 => Code::Adc_rm64_r64,
+        Code::Sbb_r8_rm8 => Code::Sbb_rm8_r8,
+        Code::Sbb_r16_rm16 => Code::Sbb_rm16_r16,
+        Code::Sbb_r32_rm32 => Code::Sbb_rm32_r32,
+        Code::Sbb_r64_rm64 => Code::Sbb_rm64_r64,
+        Code::And_r8_rm8 => Code::And_rm8_r8,
+        Code::And_r16_rm16 => Code::And_rm16_r16,
+        Code::And_r32_rm32 => Code::And_rm32_r32,
+        Code::And_r64_rm64 => Code::And_rm64_r64,
+        Code::Sub_r8_rm8 => Code::Sub_rm8_r8,
+        Code::Sub_r16_rm16 => Code::Sub_rm16_r16,
+        Code::Sub_r32_rm32 => Code::Sub_rm32_r32,
+        Code::Sub_r64_rm64 => Code::Sub_rm64_r64,
+        Code::Xor_r8_rm8 => Code::Xor_rm8_r8,
+        Code::Xor_r16_rm16 => Code::Xor_rm16_r16,
+        Code::Xor_r32_rm32 => Code::Xor_rm32_r32,
+        Code::Xor_r64_rm64 => Code::Xor_rm64_r64,
+        Code::Cmp_r8_rm8 => Code::Cmp_rm8_r8,
+        Code::Cmp_r16_rm16 => Code::Cmp_rm16_r16,
+        Code::Cmp_r32_rm32 => Code::Cmp_rm32_r32,
+        Code::Cmp_r64_rm64 => Code::Cmp_rm64_r64,
+        other => other,
+    }
+}
+
+/// Every `op r, r/m` code whose `op r/m, r` twin of the same width exists,
+/// found by name: what `pin_form` must say, kept as its oracle.
+#[cfg(test)]
+fn twins_by_name() -> std::collections::HashMap<Code, Code> {
+    let named: std::collections::HashMap<String, Code> = Code::values().map(|one| (format!("{one:?}"), one)).collect();
+    let mut twins = std::collections::HashMap::new();
+    for one in Code::values() {
+        let name = format!("{one:?}");
+        let Some((mnemonic, forms)) = name.split_once('_') else { continue };
+        if !matches!(
+            mnemonic,
+            "Mov" | "Add" | "Or" | "Adc" | "Sbb" | "And" | "Sub" | "Xor" | "Cmp"
+        ) {
+            continue;
+        }
+        let Some((register, memory)) = forms.split_once('_') else { continue };
+        let (Some(width), Some(other)) = (register.strip_prefix('r'), memory.strip_prefix("rm")) else { continue };
+        if width == other && matches!(width, "8" | "16" | "32" | "64") {
+            if let Some(twin) = named.get(&format!("{mnemonic}_rm{width}_r{width}")) {
+                twins.insert(one, *twin);
+            }
+        }
+    }
+    twins
+}
+
+/// `pin_form` built its table at the first call by formatting the name of each
+/// of iced's ~5000 codes (6.2 M Ir on memory_expansion). It is a match now: the
+/// answer for every code is the by-name derivation's.
+#[cfg(test)]
+mod pin_form_tests {
+    use super::*;
+
+    #[test]
+    fn pin_form_says_what_the_by_name_derivation_says_for_every_code() {
+        let twins = twins_by_name();
+        assert_eq!(twins.len(), 36, "nine mnemonics at four widths");
+        for code in Code::values() {
+            assert_eq!(pin_form(code), twins.get(&code).copied().unwrap_or(code), "{code:?}");
+        }
+    }
+}
+
 fn create_reg_reg(
     code: Code,
     one: RegId,
     other: RegId,
 ) -> Result<Instruction, String> {
-    Instruction::with2(code, one.iced(), other.iced()).map_err(|error| error.to_string())
+    Instruction::with2(pin_form(code), one.iced(), other.iced()).map_err(|error| error.to_string())
 }
 
 fn create_reg_i32(
@@ -374,6 +464,17 @@ pub fn operand_of(
     place_operand(&what.address(), what.base.is_some(), what.index.is_some(), bits)
 }
 
+/// A frame cell reached through the frame token (a word register) by a wide
+/// index: no encoding until the frame layout names the frame register, but
+/// the registers it reads are known.
+pub fn awaits_frame_layout(what: &ir::Mem) -> bool {
+    what.addr.is_some_and(|addr| addr.space == Space::Frame)
+        && what.index.is_some()
+        && what.index_through != RegId::None
+        && width_of(what.index_through) >= Some(4)
+        && width_of(if what.through == RegId::None { RegId::BP } else { what.through }) < Some(4)
+}
+
 /// An address as an encodable memory operand, and whether it is relocated.
 /// `based` and `indexed`: a pass made a value of the cell's base or index, and
 /// `through` is where the allocation put it.
@@ -481,6 +582,17 @@ pub fn got_symbol(
 ) -> Option<Emitted> {
     (width_of(into)? == 8).then_some(())?;
     _assemble(&raised(create_reg_mem(Code::Mov_r64_rm64, into, rip_operand())), at, true)
+}
+
+/// `mov into32, symbol`: the address of a symbol as a value in static code,
+/// zero-extended (R_X86_64_32; the pin's `MOV32ri64`).
+pub fn load_symbol_zero_extended(
+    into: RegId,
+    at: At,
+) -> Option<Emitted> {
+    (width_of(into)? == 8).then_some(())?;
+    let made = create_reg_i32(Code::Mov_r32_imm32, into.full_register32(), 0).ok()?;
+    _assemble(&made, at, true)
 }
 
 /// `lea into, [rip + symbol]`: the address of a symbol as a value in long mode.
@@ -792,6 +904,9 @@ pub enum InPlace {
     Cbw,
     /// `cwde`.
     Cwde,
+    /// `cdqe`: the pin's `optimizeMOVSX` (X86EncodingOptimization.cpp) writes
+    /// `movslq %eax,%rax` as it.
+    Cdqe,
 }
 
 pub fn in_place(
@@ -806,6 +921,7 @@ pub fn in_place(
         ("movzx", RegId::DX, RegId::DL) => Some(InPlace::ZeroHigh(RegId::DH)),
         ("movsx", RegId::AX, RegId::AL) => Some(InPlace::Cbw),
         ("movsx", RegId::EAX, RegId::AX) => Some(InPlace::Cwde),
+        ("movsx", RegId::RAX, RegId::EAX) => Some(InPlace::Cdqe),
         _ => None,
     }
 }
@@ -824,6 +940,7 @@ fn extended_in_place(
         InPlace::ZeroHigh(high) => load(high, 0, at),
         InPlace::Cbw => bare("CBW"),
         InPlace::Cwde => bare("CWDE"),
+        InPlace::Cdqe => bare("CDQE"),
     }
 }
 
@@ -867,7 +984,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
                 InPlace::Cbw => (vec![Loc::Reg(ir::Reg { register: RegId::AH, width: 1 })], what.sources.clone()),
                 // `cwde` is `movsx eax, ax` to the registers it reads and
                 // writes.
-                InPlace::Cwde => return None,
+                InPlace::Cwde | InPlace::Cdqe => return None,
             };
             Some(vec![step(Operation::Move, "mov", dests, sources)])
         }
@@ -953,18 +1070,24 @@ pub fn arith_imm(
     let mut shapes: Vec<(String, i64)> = Vec::new();
     let value = _immediate(value, width);
     let upper = name.to_uppercase();
+    // A quadword operation takes a sign-extended dword.
+    let immediate = (width * 8).min(32);
+    let accumulator = Some(&dest) == ACCUMULATOR.get(&width);
+    // `optimizeToFixedRegisterForm`: a byte immediate has no sign-extended
+    // form to beat the accumulator's `op al, imm8`, so it comes first.
+    if accumulator && width == 1 {
+        shapes.push((format!("{upper}_AL_IMM8"), 8));
+    }
     if fits_in_a_byte(value) && !relocated {
         shapes.push((format!("{upper}_RM{}_IMM8", width * 8), 8));
     }
-    // A quadword operation takes a sign-extended dword.
-    let immediate = (width * 8).min(32);
-    if Some(&dest) == ACCUMULATOR.get(&width) {
-        let accumulator = match width {
+    if accumulator && width > 1 {
+        let register = match width {
             2 => "AX",
             4 => "EAX",
             _ => "RAX",
         };
-        shapes.push((format!("{upper}_{accumulator}_IMM{immediate}"), immediate));
+        shapes.push((format!("{upper}_{register}_IMM{immediate}"), immediate));
     }
     shapes.push((format!("{upper}_RM{}_IMM{immediate}", width * 8), immediate));
     for (shape, _bits) in shapes {
@@ -1240,6 +1363,10 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("pushad", "PUSHAD"),
         ("popad", "POPAD"),
         ("cld", "CLD"),
+        // Windows 64-bit pads a function that ends in a call with it
+        // (X86AvoidTrailingCall)
+        ("int3", "INT3"),
+        ("ud2", "UD2"),
         ("std", "STD"),
         // a call of one: its flags pushed first, as the interrupt does
         ("pushf", "PUSHFW"),
@@ -1386,7 +1513,19 @@ pub fn test_immediate(
     let code = code_of!("TEST_RM", width * 8, "_IMM", (width * 8).min(32))?;
     let value = _immediate(value, width);
     match dest {
-        Loc::Reg(one) => _assemble(&raised(create_reg_i32(code, one.register, value)), at, true),
+        Loc::Reg(one) => {
+            // `optimizeToFixedRegisterForm`: `test al, imm8` (`a8`) and
+            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7` form.
+            let register = match (width, ACCUMULATOR.get(&width) == Some(&one.register)) {
+                (1, true) => Some("AL"),
+                (2, true) => Some("AX"),
+                (4, true) => Some("EAX"),
+                (8, true) => Some("RAX"),
+                _ => None,
+            };
+            let fixed = register.and_then(|register| code_of!("TEST_", register, "_IMM", (width * 8).min(32)));
+            _assemble(&raised(create_reg_i32(fixed.unwrap_or(code), one.register, value)), at, true)
+        }
         Loc::Mem(cell) => {
             let (r#where, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_mem_i32(code, r#where, value)), at, relocated)
@@ -1510,6 +1649,23 @@ pub fn address_of(
     let width = width_of(into)?;
     let code = code_of!("LEA_R", width * 8, "_M")?;
     let (built, relocated) = address_operand(cell, at.bits)?;
+    // `lea r,[base]` is `mov r,base`, a byte shorter off rsp and r12
+    // (`tryOptimizeLEAtoMOV`, X86RegisterInfo.cpp). Same width only: the pin's
+    // `LEA64_32r` case (a 32-bit move of the base) is not translated.
+    let bare = !relocated
+        && built.index == Register::None
+        && built.displacement == 0
+        && built.segment_prefix == Register::None
+        && built.base != Register::None
+        && built.base != Register::RIP
+        && built.base.size() == width as usize;
+    if bare && at.bits >= 32 && matches!(width, 4 | 8) {
+        return _assemble(
+            &raised(create_reg_reg(code_of!("MOV_R", width * 8, "_RM", width * 8)?, into, RegId::from(built.base))),
+            at,
+            true,
+        );
+    }
     _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
 }
 
@@ -1551,7 +1707,7 @@ pub fn bit_test_immediate(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(register)?;
-    if ![2, 4].contains(&width) {
+    if ![2, 4, 8].contains(&width) {
         return None;
     }
     let code = code_of!("BT_RM", width * 8, "_IMM8")?;
@@ -1565,7 +1721,7 @@ pub fn bit_test_memory(
     bit: i64,
     at: At,
 ) -> Option<Emitted> {
-    if ![2, 4].contains(&cell.width) {
+    if ![2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, relocated) = operand_of(cell, at.bits)?;
@@ -1597,6 +1753,21 @@ pub fn compare_registers(
         code_of!("TEST_RM", width * 8, "_R", width * 8)?
     };
     _assemble(&raised(create_reg_reg(code, one, other)), at, true)
+}
+
+/// `test [cell], reg`.
+pub fn test_mem_reg(
+    cell: &ir::Mem,
+    source: RegId,
+    at: At,
+) -> Option<Emitted> {
+    let width = width_of(source)?;
+    let (r#where, relocated) = operand_of(cell, at.bits)?;
+    if i64::from(cell.width) != width {
+        return None;
+    }
+    let code = code_of!("TEST_RM", width * 8, "_R", width * 8)?;
+    _assemble(&raised(create_mem_reg(code, r#where, source)), at, relocated)
 }
 
 /// `cmp dest,[cell]`. Flags are the whole result, so there is no dest.
@@ -1887,7 +2058,8 @@ pub fn divide_mem(
         return None;
     }
     let built = operand_of(cell, at.bits);
-    if built.is_none() || !memory_widths(at).contains(&cell.width) {
+    // `div m8` takes AX by a byte divisor, which `memory_widths` leaves out.
+    if built.is_none() || (cell.width != 1 && !memory_widths(at).contains(&cell.width)) {
         return None;
     }
     let (r#where, relocated) = built?;
@@ -2242,6 +2414,22 @@ fn scalar_sse(
         ("mov", Operation::Move, _) => "movaps",
         _ => name,
     };
+    // `cmpss xmm0, xmm1, 0`: the predicate rides as an immediate byte.
+    if let ([Loc::Reg(into)], [_, source, Loc::Imm(predicate)]) = (dests.as_slice(), sources.as_slice()) {
+        let upper = Upper(name);
+        let bits = if name.ends_with("sd") { 64 } else { 32 };
+        let code = code_of!(upper, "_XMM_XMMM", bits, "_IMM8")?;
+        return match source {
+            Loc::Reg(outof) => {
+                _assemble(&raised(create_reg_reg_i32(code, into.register, outof.register, predicate.value)), at, true)
+            }
+            Loc::Mem(cell) => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                _assemble(&raised(create_reg_mem_i32(code, into.register, built, predicate.value)), at, relocated)
+            }
+            _ => None,
+        };
+    }
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),
@@ -2405,6 +2593,9 @@ pub fn emit_in(
             // is the dword move, which zeroes the upper half of the register it
             // writes.
             (Loc::Reg(into), Loc::Reg(outof)) if wide(into.register) == 8 && wide(outof.register) == 4 => {
+                if let Some(short) = extended_in_place(name, into.register, outof.register, at) {
+                    return Some(short);
+                }
                 let (code, into) = if name == "movzx" {
                     (Code::Mov_r32_rm32, into.register.full_register32())
                 } else {
@@ -2466,6 +2657,9 @@ pub fn emit_in(
             // `mov sreg,imm` the machine has no encoding for.
             (Loc::Reg(into), Loc::Imm(imm)) if seg(into.register) => load_segment(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Reg(outof)) => r#move(into.register, outof.register, at),
+            (Loc::Reg(into), Loc::Imm(imm)) if at.bits == 64 && imm.width == 4 && imm.address.is_some() => {
+                load_symbol_zero_extended(into.register, at)
+            }
             (Loc::Reg(into), Loc::Imm(imm))
                 if at.bits == 64 && imm.address.is_some_and(|addr| addr.space == Space::External) =>
             {
@@ -2833,8 +3027,9 @@ pub fn emit_in(
             (Loc::Reg(into), Loc::Mem(cell)) if named == "cmp" => compare_mem(into.register, cell, at),
             (Loc::Reg(into), Loc::Reg(outof)) => compare_registers(named, into.register, outof.register, at),
             (Loc::Mem(cell), Loc::Reg(outof)) => {
-                // Only `cmp` here: `test` against memory has its own shapes
-                // and BC writes none of them.
+                if named == "test" {
+                    return test_mem_reg(cell, outof.register, at);
+                }
                 if named != "cmp" {
                     return None;
                 }

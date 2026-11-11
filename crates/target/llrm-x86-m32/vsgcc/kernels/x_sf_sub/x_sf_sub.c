@@ -14,11 +14,28 @@ typedef unsigned char sfu8; typedef signed char sfi8; typedef short sfi16; typed
 #define SF_X86_M32_H
 #define SF_MUL32X32(a, b, h, l) do { sfu64 p_ = (sfu64)(a) * (b); *(h) = (sfu32)(p_ >> 32); *(l) = (sfu32)p_; } while (0)
 #define SF_DIV_HW32 1
+#define SF_FIX_NAN_UNDEF 1 /* NaN to int is undefined in C and poison in IR, and compiler-rt/libgcc do not return 0 either: the check is bytes over the reference */
 #ifndef __OPTIMIZE_SIZE__
+/* f64 div in two 28-bit digits, each one `div` (llrm.x86.udiv64by32: the quotient in the low half, the remainder in the high half; hi < d). Only llrm-cc knows the intrinsic. */
+unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__("llrm.x86.udiv64by32") __attribute__((const));
+#define SF_UDIV64BY32(hi, lo, d) llrm_udiv64by32((hi), (lo), (d))
+#define SF_DIV64_UDIV 1
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
+#define SF_CMP_BRANCHY 1 /* compare core three-way on branches (compiler-rt's form): x_sf_cmp64 -O2 95332 -> 89898 clk, +11 B; -Os keeps the select form (+3 B) */
+#endif
+#ifdef __OPTIMIZE_SIZE__
+#define SF_CONV_DIRECT32 1 /* f64 sidf/unsidf call the exact 32-bit path, not pack: llrm-cc -Os alone m32 516 -> 104 B, 468 -> 89; all four linked +23 B */
+#define SF_UNPACK_OUTLINE 1 /* -Os add reach 471 -> 450 B */
 #endif
 #define SF_NORM_SUB_FIRST 1 /* the shift count lives in cl: m32 mul -Os 102727 -> 101059 clk, -55 B in the -Os image */
 #define SF_CLZ32(x) ((int)__builtin_clz(x))
+#define SF_CMP_OUTLINE 1 /* compare entries call one core: f64 cmp.c -O2 1026 -> see tests/cmp_outline_size_test.sh */
+#ifdef __DOS__
+#define SF_ALIAS_PREFIX "__regcall3__" /* llrm-cc's DOS target mangles its regcall default; an alias names the mangled symbol */
+#endif
+#define SF_CMP_ALIAS_ENTRIES 1 /* eq/ne/lt/le are aliases of cmp, gt of ge: no tail-jump wrappers (f32 cmp.c -Os 120 -> 95 B, f64 193 -> 168; -O2 213 -> 175, 349 -> 307) */
+#define SF_WIDE_ABS_MASK 1 /* f64 compare: masks, not 64-bit shifts */
+#define SF_STICKY_MASK 1 /* f64 mul: mask test for the sticky bit */
 #endif
 /* Soft-float runtime. Every entry point carries its canonical compiler-rt/libgcc name
  * (`__addsf3`, ...); SF_NAME(n) is `__n` in the runtime and `sfb_n` in the host test. */
@@ -33,6 +50,9 @@ typedef unsigned char sfu8; typedef signed char sfi8; typedef short sfi16; typed
 
 typedef sfu32 sf32;
 typedef sfu64 sf64;
+#ifdef __SIZEOF_INT128__
+typedef unsigned __int128 sf128; /* binary128 bit pattern: wasm32 passes it as two i64 and returns it through an sret pointer, as the tf libcalls expect */
+#endif
 
 #define SF32_QNAN 0x7FC00000u
 
@@ -52,6 +72,28 @@ static inline sf32 f2b(float f) { union { float f; sf32 b; } u; u.f = f; return 
 static inline float b2f(sf32 b) { union { float f; sf32 b; } u; u.b = b; return u.f; }
 static inline sf64 d2b(double f) { union { double f; sf64 b; } u; u.f = f; return u.b; }
 static inline double b2d(sf64 b) { union { double f; sf64 b; } u; u.b = b; return u.f; }
+#endif
+
+/* binary128 is carried as bits (unsigned __int128) unless SF_QUAD_FLOAT128 asks for the host's __float128 (tests/host_f128.c; clang rejects __float128 on aarch64, so it
+ * is never the default). Bits are also what wasm32 needs: it has float and double but no fp128 in MIR, and passes unsigned __int128 as two i64 and returns it through an
+ * sret pointer, exactly the tf libcalls' convention. SF_INTABI makes float and double bits too. */
+#ifdef __SIZEOF_INT128__
+#if defined(SF_QUAD_LONGDOUBLE) /* aarch64/riscv64 Linux: the tf libcalls take the IEEE quad `long double` in vector/FP registers, not as bits */
+#if __LDBL_MANT_DIG__ != 113
+#error "SF_QUAD_LONGDOUBLE needs a binary128 long double"
+#endif
+typedef long double sf_quad;
+static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
+static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
+#elif defined(SF_QUAD_FLOAT128)
+typedef __float128 sf_quad;
+static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
+static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
+#else
+typedef sf128 sf_quad;
+static inline sf128 q2b(sf_quad f) { return f; }
+static inline sf_quad b2q(sf128 b) { return b; }
+#endif
 #endif
 
 /* Round and pack: m has three guard bits and its implicit one at bit 26; e may be <= 0 or >= 255. */
@@ -85,11 +127,15 @@ static inline int sf_clz32(sfu32 x)
 #define sf_clz32 SF_CLZ32
 #endif
 
+#ifdef SF_CLZ64
+#define sf_clz64 SF_CLZ64
+#else
 static inline int sf_clz64(sfu64 x)
 {
     sfu32 hi = (sfu32)(x >> 32);
     return hi ? sf_clz32(hi) : 32 + sf_clz32((sfu32)x);
 }
+#endif
 
 /* x >> n, with every dropped bit folded into bit 0. */
 static inline sfu32 sf_shr_sticky32(sfu32 x, int n)
@@ -99,6 +145,22 @@ static inline sfu32 sf_shr_sticky32(sfu32 x, int n)
     return (x >> n) | ((x << (32 - n)) != 0);
 }
 
+#ifdef SF_SHIFT_STEPS
+/* The same as constant steps (bytes, then single bits), for a target whose shift libcall loops one bit per iteration (6502). Only the addition uses it: where
+ * the shift is rare (multiply, divide, pack) the steps cost more bytes than the cycles they save. */
+static inline sfu32 sf_shr_sticky32_add(sfu32 x, int n)
+{
+    sfu32 lost = 0;
+    if (n <= 0) return x;
+    if (n >= 32) return x != 0;
+    while (n >= 8) { lost |= x & 0xFFu; x >>= 8; n -= 8; }
+    while (n > 0) { lost |= x & 1u; x >>= 1; n--; }
+    return x | (lost != 0);
+}
+#else
+#define sf_shr_sticky32_add sf_shr_sticky32
+#endif
+
 static inline sfu64 sf_shr_sticky64(sfu64 x, int n)
 {
     if (n <= 0) return x;
@@ -106,7 +168,35 @@ static inline sfu64 sf_shr_sticky64(sfu64 x, int n)
     return (x >> n) | ((x << (64 - n)) != 0);
 }
 
+#ifdef __SIZEOF_INT128__
+static inline int sf_clz128(unsigned __int128 x)
+{
+    sfu64 hi = (sfu64)(x >> 64);
+    return hi ? sf_clz64(hi) : 64 + sf_clz64((sfu64)x);
+}
+
+static inline unsigned __int128 sf_shr_sticky128(unsigned __int128 x, int n)
+{
+    if (n <= 0) return x;
+    if (n >= 128) return x != 0;
+    return (x >> n) | ((x << (128 - n)) != 0);
+}
+
+/* The same for a 116-bit working mantissa (binary128). */
+static inline unsigned __int128 sf_round3_128(unsigned __int128 m)
+{
+    unsigned r = (unsigned)m & 7;
+    m >>= 3;
+    if (r > 4 || (r == 4 && ((unsigned)m & 1))) m++;
+    return m;
+}
+#endif
+
 /* 32x32 -> 64 as hi:lo from 16x16 partial products: no 64-bit type needed. A target with a widening multiply defines SF_MUL32X32(a, b, &hi, &lo); per 400 calls a uint64 product cuts x86 m32 mul clocks 121.6k -> 92.7k (gcc) and x86 m16 mul 166k -> 128k. */
+#if defined(SF_MUL32X32_6502) && !defined(SF_MUL32X32)
+void __mul32x32(sfu32 a, sfu32 b, sfu32 *hi, sfu32 *lo); /* src/6502/mul32x32.s */
+#define SF_MUL32X32 __mul32x32
+#endif
 #ifndef SF_MUL32X32
 static inline void sf_mul32x32(sfu32 a, sfu32 b, sfu32 *hi, sfu32 *lo)
 {
@@ -179,251 +269,6 @@ static inline sfu32 pack_near(sfu32 sign, int e, sfu32 m)
 
 #endif
 
-/* Round to nearest even and pack (see softfloat.h). */
-/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
- * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
- * at bit 26, three guard bits). */
-
-#define SF_N(n) n
-#define SF_T sfu32
-#define SF_S sfi32
-#define SF_W 32
-#define SF_MB 23
-#define SF_EXPMAX 0xFF
-#define SF_QNAN SF32_QNAN
-#define sf_clz sf_clz32
-#define sf_shr_sticky sf_shr_sticky32
-#define SF_ROUND3 sf_round3
-#define SF_PACK pack_near
-#define SF_UNPACK SF_N(unpack)
-/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
- * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
- * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
-#define SF_SIGN ((SF_T)1 << (SF_W - 1))
-#define SF_HID ((SF_T)1 << SF_MB)
-#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
-#define SF_QUIET (SF_HID >> 1)
-/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
- * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
-#ifdef SF_NORM_SUB_FIRST
-#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
-#else
-#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
-#endif
-#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
-
-/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
- * per-file copy that core_end.inc may undefine without touching the config. */
-#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
-#define SF_USE_SPECIALS_MUL
-#endif
-#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
-#define SF_USE_SPECIALS_DIV
-#endif
-#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
-/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
-#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
-#endif
-
-#ifndef SF_CODEC32
-#define SF_CODEC32
-/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
- * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
- * one translation unit). A translation unit includes this once per width. */
-static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
-
-/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
-static inline SF_T SF_N(unpack)(SF_T a, int *e)
-{
-    SF_T m = a & (SF_HID - 1);
-    int x = (int)((a >> SF_MB) & SF_EXPMAX);
-    if (x) m |= SF_HID; else x = 1;
-    *e = x;
-    return m;
-}
-
-/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
-static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
-{
-    if (e >= SF_EXPMAX) return sign | SF_INF;
-    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
-    m = SF_ROUND3(m);
-    return sign + ((SF_T)(e - 1) << SF_MB) + m;
-}
-
-#endif
-
-
-sf32 sf32_pack(sfu32 sign, int e, sfu32 m) { return pack_any(sign, e, m); }
-
-/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
-#undef SF_T
-#undef SF_S
-#undef SF_W
-#undef SF_MB
-#undef SF_EXPMAX
-#undef SF_QNAN
-#undef SF_N
-#undef SF_PACK
-#undef SF_UNPACK
-#undef SF_UNPACK_ADD
-#undef SF_ROUND3
-#undef sf_clz
-#undef sf_shr_sticky
-#undef SF_SIGN
-#undef SF_HID
-#undef SF_INF
-#undef SF_QUIET
-#undef SF_CLZ_UNPACKED
-#undef SF_NORM_APPLY
-#undef SF_FINITE
-#undef SF_USE_SPECIALS_MUL
-#undef SF_USE_SPECIALS_DIV
-
-
-/* __addsf3, __subsf3. */
-/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
- * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
- * at bit 26, three guard bits). */
-
-#define SF_N(n) n
-#define SF_T sfu32
-#define SF_S sfi32
-#define SF_W 32
-#define SF_MB 23
-#define SF_EXPMAX 0xFF
-#define SF_QNAN SF32_QNAN
-#define sf_clz sf_clz32
-#define sf_shr_sticky sf_shr_sticky32
-#define SF_ROUND3 sf_round3
-#define SF_PACK pack_near
-#define SF_UNPACK SF_N(unpack)
-/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
- * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
- * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
-#define SF_SIGN ((SF_T)1 << (SF_W - 1))
-#define SF_HID ((SF_T)1 << SF_MB)
-#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
-#define SF_QUIET (SF_HID >> 1)
-/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
- * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
-#ifdef SF_NORM_SUB_FIRST
-#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
-#else
-#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
-#endif
-#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
-
-/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
- * per-file copy that core_end.inc may undefine without touching the config. */
-#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
-#define SF_USE_SPECIALS_MUL
-#endif
-#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
-#define SF_USE_SPECIALS_DIV
-#endif
-#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
-/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
-#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
-#endif
-
-#ifndef SF_CODEC32
-#define SF_CODEC32
-/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
- * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
- * one translation unit). A translation unit includes this once per width. */
-static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
-
-/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
-static inline SF_T SF_N(unpack)(SF_T a, int *e)
-{
-    SF_T m = a & (SF_HID - 1);
-    int x = (int)((a >> SF_MB) & SF_EXPMAX);
-    if (x) m |= SF_HID; else x = 1;
-    *e = x;
-    return m;
-}
-
-/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
-static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
-{
-    if (e >= SF_EXPMAX) return sign | SF_INF;
-    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
-    m = SF_ROUND3(m);
-    return sign + ((SF_T)(e - 1) << SF_MB) + m;
-}
-
-#endif
-
-/* Width-generic add and subtract on bit patterns; included after the width header (f32.h, f64.h). */
-/* Decode for add_bits, which calls it twice. At -Os it is a function of its own: inlined into both call sites it costs 21 B more at m32 (mul.inc and div.inc
- * inline theirs, the smaller choice there). */
-#ifdef __OPTIMIZE_SIZE__
-static __attribute__((noinline)) SF_T SF_N(unpack_out)(SF_T a, int *e) { return SF_UNPACK(a, e); }
-#define SF_UNPACK_ADD SF_N(unpack_out)
-#else
-#define SF_UNPACK_ADD SF_UNPACK
-#endif
-
-static SF_T SF_N(add_bits)(SF_T a, SF_T b)
-{
-    if ((a & ~SF_SIGN) < (b & ~SF_SIGN)) { SF_T t = a; a = b; b = t; }
-    /* From here |a| >= |b|: a NaN operand is a, and an infinite a with a NaN b cannot occur. */
-    if ((a << 1) >= (SF_INF << 1)) {
-        if (SF_N(is_nan)(a)) return a | SF_QUIET;
-        return ((a ^ b) & SF_SIGN) && (b << 1) == (SF_INF << 1) ? SF_QNAN : a;
-    }
-    if ((b << 1) == 0) return (a << 1) ? a : a & b;
-    int ea, eb;
-    SF_T ma = SF_UNPACK_ADD(a, &ea) << 3, mb = SF_UNPACK_ADD(b, &eb) << 3;
-    if (ea - eb > SF_MB + 2) return a; /* b is under a quarter of a's last place; MB + 2 is the smallest gap that always rounds away (2^k - 1.5 * 2^(k-MB-2) rounds down) */
-    mb = sf_shr_sticky(mb, ea - eb);
-    SF_T sign = a & SF_SIGN, m;
-    if ((a ^ b) & SF_SIGN) {
-        m = ma - mb;
-        if (!m) return 0;
-        int s = sf_clz(m) - (SF_CLZ_UNPACKED - 3);
-        if (s > ea - 1) s = ea - 1;
-        m <<= s;
-        ea -= s;
-    } else {
-        m = ma + mb;
-        if (m & ((SF_T)1 << (SF_MB + 4))) { m = sf_shr_sticky(m, 1); ea++; }
-    }
-    return SF_PACK(sign, ea, m);
-}
-
-static SF_T SF_N(sub_bits)(SF_T a, SF_T b) { return SF_N(add_bits)(a, b ^ SF_SIGN); }
-
-
-sf_float SF_NAME(addsf3)(sf_float a, sf_float b) { return b2f(add_bits(f2b(a), f2b(b))); }
-sf_float SF_NAME(subsf3)(sf_float a, sf_float b) { return b2f(sub_bits(f2b(a), f2b(b))); }
-
-/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
-#undef SF_T
-#undef SF_S
-#undef SF_W
-#undef SF_MB
-#undef SF_EXPMAX
-#undef SF_QNAN
-#undef SF_N
-#undef SF_PACK
-#undef SF_UNPACK
-#undef SF_UNPACK_ADD
-#undef SF_ROUND3
-#undef sf_clz
-#undef sf_shr_sticky
-#undef SF_SIGN
-#undef SF_HID
-#undef SF_INF
-#undef SF_QUIET
-#undef SF_CLZ_UNPACKED
-#undef SF_NORM_APPLY
-#undef SF_FINITE
-#undef SF_USE_SPECIALS_MUL
-#undef SF_USE_SPECIALS_DIV
-
-
 /* __mulsf3. The kernel multiplies the normalised mantissas; a target that supplies multiplication elsewhere (6502) defines SF_EXT_MULDIV. */
 /* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
  * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
@@ -438,6 +283,7 @@ sf_float SF_NAME(subsf3)(sf_float a, sf_float b) { return b2f(sub_bits(f2b(a), f
 #define SF_QNAN SF32_QNAN
 #define sf_clz sf_clz32
 #define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
 #define SF_ROUND3 sf_round3
 #define SF_PACK pack_near
 #define SF_UNPACK SF_N(unpack)
@@ -509,8 +355,16 @@ static inline sf32 mul_core(sfu32 sign, int ea, int eb, sfu32 ma, sfu32 mb)
     sf_mul32x32(ma, mb, &hi, &lo);
 #endif
     /* The product has its top bit at 47 or 46; keep 27 bits and fold the rest. */
+#ifdef SF_MUL_NORM_SELECT
+    /* Random operands put the top bit at 47 or 46 half the time each: the branch below mispredicts every other call on a deep-pipeline CPU. */
+    sfu32 t = (hi >> 15) ^ 1;
+    int e = ea + eb - 126 - (int)t;
+    hi = (hi << t) | ((lo >> 1) >> (31 - t));
+    lo <<= t;
+#else
     int e = ea + eb - 126;
     if (!(hi >> 15)) { e--; hi = (hi << 1) | (lo >> 31); lo <<= 1; }
+#endif
     sfu32 m = (hi << 11) | (lo >> 21) | ((lo << 11) != 0);
     return pack_near(sign, e, m);
 }
@@ -575,6 +429,7 @@ sf_float SF_NAME(mulsf3)(sf_float a, sf_float b) { return b2f(mul_bits(f2b(a), f
 #undef SF_ROUND3
 #undef sf_clz
 #undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
 #undef SF_SIGN
 #undef SF_HID
 #undef SF_INF
@@ -600,6 +455,7 @@ sf_float SF_NAME(mulsf3)(sf_float a, sf_float b) { return b2f(mul_bits(f2b(a), f
 #define SF_QNAN SF32_QNAN
 #define sf_clz sf_clz32
 #define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
 #define SF_ROUND3 sf_round3
 #define SF_PACK pack_near
 #define SF_UNPACK SF_N(unpack)
@@ -660,6 +516,8 @@ static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
 
 #endif
 
+/* Open compiler issue (6502 backend is branch-polarity sensitive; owner llrm-target-6502, plan 11-07): the 6502 -Os defaults build lays out __divsf3 differently when the TU has another caller of
+ * sf_clz32 (+0.7% cycles); repro ~/scratch/handoff/divsf3-6502/repro. The config/6502 build is unaffected. */
 
 #ifndef SF_EXT_MULDIV
 static inline sf32 div_core(sfu32 sign, int ea, int eb, sfu32 ma, sfu32 mb)
@@ -774,6 +632,7 @@ sf_float SF_NAME(divsf3)(sf_float a, sf_float b) { return b2f(div_bits(f2b(a), f
 #undef SF_ROUND3
 #undef sf_clz
 #undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
 #undef SF_SIGN
 #undef SF_HID
 #undef SF_INF
@@ -785,7 +644,7 @@ sf_float SF_NAME(divsf3)(sf_float a, sf_float b) { return b2f(div_bits(f2b(a), f
 #undef SF_USE_SPECIALS_DIV
 
 
-/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2, __unordsf2. */
+/* __addsf3, __subsf3. */
 /* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
  * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
  * at bit 26, three guard bits). */
@@ -799,6 +658,7 @@ sf_float SF_NAME(divsf3)(sf_float a, sf_float b) { return b2f(div_bits(f2b(a), f
 #define SF_QNAN SF32_QNAN
 #define sf_clz sf_clz32
 #define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
 #define SF_ROUND3 sf_round3
 #define SF_PACK pack_near
 #define SF_UNPACK SF_N(unpack)
@@ -859,27 +719,49 @@ static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
 
 #endif
 
-/* The order of two operands; `unordered` is what a NaN operand returns. */
-static int SF_N(cmp_bits)(SF_T a, SF_T b, int unordered)
+/* Width-generic add and subtract on bit patterns; included after the width header (f32.h, f64.h). */
+/* Decode for add_bits, which calls it twice. A target that finds the call smaller defines SF_UNPACK_OUTLINE (x86 m32 -Os: inlined into both call sites
+ * the decode costs 21 B more; mul.inc and div.inc inline theirs, the smaller choice there). */
+#ifdef SF_UNPACK_OUTLINE
+static __attribute__((noinline)) SF_T SF_N(unpack_out)(SF_T a, int *e) { return SF_UNPACK(a, e); }
+#define SF_UNPACK_ADD SF_N(unpack_out)
+#else
+#define SF_UNPACK_ADD SF_UNPACK
+#endif
+
+static SF_T SF_N(add_bits)(SF_T a, SF_T b)
 {
-    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return unordered;
-    if (!((a | b) << 1)) return 0;
-    SF_S x = (SF_S)a, y = (SF_S)b;
-    if (x < 0) x = (SF_S)SF_SIGN - x;
-    if (y < 0) y = (SF_S)SF_SIGN - y;
-    return x < y ? -1 : x > y;
+    if ((a & ~SF_SIGN) < (b & ~SF_SIGN)) { SF_T t = a; a = b; b = t; }
+    /* From here |a| >= |b|: a NaN operand is a, and an infinite a with a NaN b cannot occur. */
+    if ((a << 1) >= (SF_INF << 1)) {
+        if (SF_N(is_nan)(a)) return a | SF_QUIET;
+        return ((a ^ b) & SF_SIGN) && (b << 1) == (SF_INF << 1) ? SF_QNAN : a;
+    }
+    if ((b << 1) == 0) return (a << 1) ? a : a & b;
+    int ea, eb;
+    SF_T ma = SF_UNPACK_ADD(a, &ea) << 3, mb = SF_UNPACK_ADD(b, &eb) << 3;
+    if (ea - eb > SF_MB + 2) return a; /* b is under a quarter of a's last place; MB + 2 is the smallest gap that always rounds away (2^k - 1.5 * 2^(k-MB-2) rounds down) */
+    mb = SF_SHR_STICKY_ADD(mb, ea - eb);
+    SF_T sign = a & SF_SIGN, m;
+    if ((a ^ b) & SF_SIGN) {
+        m = ma - mb;
+        if (!m) return 0;
+        int s = sf_clz(m) - (SF_CLZ_UNPACKED - 3);
+        if (s > ea - 1) s = ea - 1;
+        m <<= s;
+        ea -= s;
+    } else {
+        m = ma + mb;
+        if (m & ((SF_T)1 << (SF_MB + 4))) { m = sf_shr_sticky(m, 1); ea++; }
+    }
+    return SF_PACK(sign, ea, m);
 }
 
+static SF_T SF_N(sub_bits)(SF_T a, SF_T b) { return SF_N(add_bits)(a, b ^ SF_SIGN); }
 
-/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt; the core takes it as an argument so each entry point is a plain call. */
-int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 1); }
-int SF_NAME(eqsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 1); }
-int SF_NAME(nesf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 1); }
-int SF_NAME(ltsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 1); }
-int SF_NAME(lesf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 1); }
-int SF_NAME(gesf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), -1); }
-int SF_NAME(gtsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), -1); }
-int SF_NAME(unordsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 2) == 2; }
+
+sf_float SF_NAME(addsf3)(sf_float a, sf_float b) { return b2f(add_bits(f2b(a), f2b(b))); }
+sf_float SF_NAME(subsf3)(sf_float a, sf_float b) { return b2f(sub_bits(f2b(a), f2b(b))); }
 
 /* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
 #undef SF_T
@@ -895,6 +777,1827 @@ int SF_NAME(unordsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 
 #undef SF_ROUND3
 #undef sf_clz
 #undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+/* __cmpsf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_CMP
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_CMP
+#endif
+
+/* __eqsf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_EQ
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_EQ
+#endif
+
+/* __nesf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_NE
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_NE
+#endif
+
+/* __ltsf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_LT
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_LT
+#endif
+
+/* __lesf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_LE
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_LE
+#endif
+
+/* __gesf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_GE
+#define sf_cmp_bits sf_cmp_bits_ge /* a copy of its own at -O2, apart from the cmp entry's when both are flattened into one file */
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_GE
+#undef sf_cmp_bits
+#endif
+
+/* __gtsf2 alone (SF_CMP_SPLIT only). */
+#ifdef SF_CMP_SPLIT
+#define SF_CMP_ONLY_GT
+/* __cmpsf2, __eqsf2, __nesf2, __ltsf2, __lesf2, __gesf2, __gtsf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpsf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
+/* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
+ * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
+#define SF_STR_(x) #x
+#define SF_STR(x) SF_STR_(x)
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
+static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for an unordered pair */
+{
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return un;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
+    if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return un;
+    if (!((a | b) << 1)) return 0;
+#endif
+    SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) { if (x < y) return -1; if (x == y) return 0; return 1; }
+    if (x > y) return -1;
+    if (x == y) return 0;
+    return 1;
+#else
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
+#endif
+}
+static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
+#endif
+
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. The core returns 1; ge and gt are the negated reversed compare (unordered stays unordered, ordered flips twice). */
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_OUTLINE) /* OUTLINE: whole objects, no alias; eq/ne/lt/le tail-jump to the cmp entry, ge/gt call it (m32 f64 -O2: seven inlined copies were 1026 B) */
+int SF_NAME(cmpsf2)(sf_float a, sf_float b);
+#define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#if defined(__OPTIMIZE_SIZE__)
+#define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#else
+#define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un(f2b(a), f2b(b), -1)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
+#endif
+#ifdef SF_CMP_OUTLINE /* gt is a jump to ge, which carries the one reversed copy */
+#define SF_CMP_GT(a, b) SF_NAME(gesf2)(a, b)
+#else
+#define SF_CMP_GT(a, b) SF_CMP_REV(a, b)
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
+SF_CMP_CORE int SF_NAME(cmpsf2)(sf_float a, sf_float b) { return sf_cmp_bits(f2b(a), f2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
+#endif
+#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
+SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+#endif
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
+#endif
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+#undef SF_CMP_ONLY_GT
+#endif
+
+/* __unordsf2: only the NaN test, in its own file so a link that needs an ordering compare does not carry it and one that needs this does not carry the ordering core. */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+
+int SF_NAME(unordsf2)(sf_float a, sf_float b) { return is_nan(f2b(a)) || is_nan(f2b(b)); }
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
 #undef SF_SIGN
 #undef SF_HID
 #undef SF_INF
@@ -920,6 +2623,7 @@ int SF_NAME(unordsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b), 
 #define SF_QNAN SF32_QNAN
 #define sf_clz sf_clz32
 #define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
 #define SF_ROUND3 sf_round3
 #define SF_PACK pack_near
 #define SF_UNPACK SF_N(unpack)
@@ -997,6 +2701,7 @@ sf_float SF_NAME(negsf2)(sf_float a) { return b2f(f2b(a) ^ SF_SIGN); }
 #undef SF_ROUND3
 #undef sf_clz
 #undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
 #undef SF_SIGN
 #undef SF_HID
 #undef SF_INF
@@ -1008,7 +2713,114 @@ sf_float SF_NAME(negsf2)(sf_float a) { return b2f(f2b(a) ^ SF_SIGN); }
 #undef SF_USE_SPECIALS_DIV
 
 
-/* __floatsisf, __floatunsisf; no 64-bit type, so every target can build it. */
+/* Round to nearest even and pack (see softfloat.h). */
+/* binary32 width header: the constants and decode/encode of the width-generic core (../macros.inc, ../codec.inc). A file that uses the core includes
+ * this first and ends with ../core_end.inc, so another width can follow in the same translation unit. Working form: 27-bit mantissa (implicit one
+ * at bit 26, three guard bits). */
+
+#define SF_N(n) n
+#define SF_T sfu32
+#define SF_S sfi32
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define SF_QNAN SF32_QNAN
+#define sf_clz sf_clz32
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
+#define SF_ROUND3 sf_round3
+#define SF_PACK pack_near
+#define SF_UNPACK SF_N(unpack)
+/* Width-generic constants and knobs of the soft-float core; a width header (f32.h, f64.h) includes this in every file, and core_end.inc undefines it again.
+ * The includer defines SF_T (bit-pattern type), SF_S (its signed twin), SF_W (width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent), SF_QNAN,
+ * and the width helpers sf_clz, sf_shr_sticky, SF_ROUND3, SF_PACK(sign, e, m). */
+#define SF_SIGN ((SF_T)1 << (SF_W - 1))
+#define SF_HID ((SF_T)1 << SF_MB)
+#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
+#define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
+#define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
+
+/* The config knobs SF_SPECIALS_ONCE (both) and SF_SPECIALS_MUL / SF_SPECIALS_DIV take the special operands out of the common path; SF_USE_* is the
+ * per-file copy that core_end.inc may undefine without touching the config. */
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_MUL)
+#define SF_USE_SPECIALS_MUL
+#endif
+#if defined(SF_SPECIALS_ONCE) || defined(SF_SPECIALS_DIV)
+#define SF_USE_SPECIALS_DIV
+#endif
+#if defined(SF_USE_SPECIALS_MUL) || defined(SF_USE_SPECIALS_DIV)
+/* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
+#define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
+#endif
+
+#ifndef SF_CODEC32
+#define SF_CODEC32
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
+static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
+
+/* Mantissa and exponent; denormals get e = 1, no implicit bit. */
+static inline SF_T SF_N(unpack)(SF_T a, int *e)
+{
+    SF_T m = a & (SF_HID - 1);
+    int x = (int)((a >> SF_MB) & SF_EXPMAX);
+    if (x) m |= SF_HID; else x = 1;
+    *e = x;
+    return m;
+}
+
+/* Round to nearest even and pack: m has three guard bits and its implicit one at bit MB + 3; e may be <= 0 or >= SF_EXPMAX. */
+static inline SF_T SF_N(pack_any)(SF_T sign, int e, SF_T m)
+{
+    if (e >= SF_EXPMAX) return sign | SF_INF;
+    if (e <= 0) { m = sf_shr_sticky(m, 1 - e); e = 1; }
+    m = SF_ROUND3(m);
+    return sign + ((SF_T)(e - 1) << SF_MB) + m;
+}
+
+#endif
+
+
+sf32 sf32_pack(sfu32 sign, int e, sfu32 m) { return pack_any(sign, e, m); }
+
+/* Undefines what macros.inc and the width header defined, so another width can follow in the same translation unit. */
+#undef SF_T
+#undef SF_S
+#undef SF_W
+#undef SF_MB
+#undef SF_EXPMAX
+#undef SF_QNAN
+#undef SF_N
+#undef SF_PACK
+#undef SF_UNPACK
+#undef SF_UNPACK_ADD
+#undef SF_ROUND3
+#undef sf_clz
+#undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
+#undef SF_SIGN
+#undef SF_HID
+#undef SF_INF
+#undef SF_QUIET
+#undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_USE_SPECIALS_MUL
+#undef SF_USE_SPECIALS_DIV
+
+
+/* __floatsisf; no 64-bit type, so every target can build it. */
+/* Shared by float_si.c and float_usi.c; each file keeps its own static copy (one operation per object). */
+#ifndef SF_FLOAT_SI_H
+#define SF_FLOAT_SI_H
 
 #define SIGN 0x80000000u
 
@@ -1020,13 +2832,38 @@ static sf32 from_mag(sfu32 sign, sfu32 x)
     return pack_round(sign, n + 127, m); /* n <= 31: e is 127..158 */
 }
 
-static sf32 from_u32_bits(sfu32 x) { return from_mag(0, x); }
-static sf32 from_i32_bits(sfi32 x) { return x < 0 ? from_mag(SIGN, 0u - (sfu32)x) : from_mag(0, (sfu32)x); }
+#endif
+
+
+static sf32 from_i32_bits(sfi32 x)
+{
+    sfu32 s = (sfu32)(x >> 31); /* all ones for a negative x: one magnitude, one conversion */
+    return from_mag(s & SIGN, ((sfu32)x ^ s) - s);
+}
 
 sf_float SF_NAME(floatsisf)(sfi32 x) { return b2f(from_i32_bits(x)); }
-sf_float SF_NAME(floatunsisf)(sfu32 x) { return b2f(from_u32_bits(x)); }
 
-/* __fixsfsi, __fixunssfsi; no 64-bit type, so every target can build it. */
+/* __floatunsisf; its own file so a program that needs only one of the two links only that one. */
+/* Shared by float_si.c and float_usi.c; each file keeps its own static copy (one operation per object). */
+#ifndef SF_FLOAT_SI_H
+#define SF_FLOAT_SI_H
+
+#define SIGN 0x80000000u
+
+static sf32 from_mag(sfu32 sign, sfu32 x)
+{
+    if (!x) return 0;
+    int n = 31 - sf_clz32(x);
+    sfu32 m = n > 26 ? sf_shr_sticky32(x, n - 26) : x << (26 - n);
+    return pack_round(sign, n + 127, m); /* n <= 31: e is 127..158 */
+}
+
+#endif
+
+
+sf_float SF_NAME(floatunsisf)(sfu32 x) { return b2f(from_mag(0, x)); }
+
+/* __fixsfsi; no 64-bit type, so every target can build it. */
 
 #define SIGN 0x80000000u
 
@@ -1036,24 +2873,42 @@ static sfi32 to_i32_bits(sf32 a)
     int e = (int)((a >> 23) & 0xFF) - 127;
     if (e < 0) return 0;
     if (e >= 31) { /* from 2^31 up: saturates; -2^31 is the saturated value itself */
+#ifndef SF_FIX_NAN_UNDEF
         if ((a << 1) > 0xFF000000u) return 0;
+#endif
         return (a & SIGN) ? INT32_MIN : INT32_MAX;
     }
+#ifdef SF_SHIFT_LOOP
+    /* Shift cost grows with the count (no barrel shifter): the small count of the two-direction form wins. */
     sfu32 m = (a & 0x7FFFFFu) | 0x800000u;
     m = e >= 23 ? m << (e - 23) : m >> (23 - e);
+#else
+    /* The significand with its hidden bit at bit 31, shifted down once: one
+     * shift in one direction, so no register is spilled across it. */
+    sfu32 m = ((a << 8) | SIGN) >> (31 - e);
+#endif
     return (a & SIGN) ? (sfi32)(0u - m) : (sfi32)m;
 }
+
+sfi32 SF_NAME(fixsfsi)(sf_float a) { return to_i32_bits(f2b(a)); }
+
+/* __fixunssfsi; its own file so a program that needs only one of the two links only that one. */
+
+#define SIGN 0x80000000u
 
 static sfu32 to_u32_bits(sf32 a)
 {
     int e = (int)((a >> 23) & 0xFF) - 127;
     if (e < 0 || (a & SIGN)) return 0;
+#ifdef SF_FIX_NAN_UNDEF
+    if (e >= 32) return UINT32_MAX;
+#else
     if (e >= 32) return (a << 1) > 0xFF000000u ? 0 : UINT32_MAX;
+#endif
     sfu32 m = (a & 0x7FFFFFu) | 0x800000u;
     return e >= 23 ? m << (e - 23) : m >> (23 - e);
 }
 
-sfi32 SF_NAME(fixsfsi)(sf_float a) { return to_i32_bits(f2b(a)); }
 sfu32 SF_NAME(fixunssfsi)(sf_float a) { return to_u32_bits(f2b(a)); }
 
 /* generated by tests/gen_vectors.c */

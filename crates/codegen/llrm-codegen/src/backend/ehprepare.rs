@@ -32,7 +32,7 @@
 //! MAKECITYSCAPE and the demotion below stored them all back: 189,936 bytes at
 //! m32 -Os where main's is 47,769. D-EH1 (DEVIATE): MIR has no variadic
 //! intrinsic, so one call per variable stands for `localescape`; exit: the
-//! intrinsic in `llrm-mir` (owner splitkit-port, 2026-11-06).
+//! intrinsic in `llrm-mir` (owner anyisa, 2026-11-06).
 //!
 //! Row D-EH2 (open): GORILLA m32 is 3.5%, 4.6%, 5.4% and 4.4% over main at
 //! -O1, -O2, -O3 and -Os (50,709 against 48,994; 51,219 against 48,976; 51,609
@@ -486,7 +486,7 @@ fn runtime(
     global.address_space = far;
     let GlobalKind::Function(function) = &mut global.kind else { unreachable!("a function") };
     function.calling_convention = BASIC;
-    function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).to_owned())));
+    function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).into())));
 }
 
 /// Each ON ERROR gone, where no call lands.

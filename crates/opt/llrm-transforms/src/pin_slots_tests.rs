@@ -263,13 +263,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "loop-rotate",
-        Why::Missing,
-        "the late loop nest's rotate; DEFERRED: pin ablation (2026-10-27) QCport 65 IRs 3 IRs / -3 instr (i486 -O2), 4 / -2 (m16 -Os); QB 58 IRs 1 / +1 (the pin parses 58 of 101); C examples/bench 49 IRs 3 / -14 (i486 -O2), 3 / -12 (m16 -Os), the pass adds instructions there; revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
         "loop-deletion",
         Why::Missing,
         "pin ablation (2026-10-27, entry kept alive): late loop-deletion changes 0 of 65 QCport, 0 of 49 C examples/bench, 0 of 58 QB (m16 -Os; the pin parses 58 of 101); DEFERRED, revisit after parity-green",
@@ -287,13 +280,6 @@ const ROWS: &[Disposition] = &[
         "inject-tli-mappings",
         NA,
         "maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
-        "",
-    ),
-    row(
-        Late,
-        "loop-vectorize",
-        NA,
-        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
         "",
     ),
     row(
@@ -451,7 +437,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w-6)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w10-instcombine)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),

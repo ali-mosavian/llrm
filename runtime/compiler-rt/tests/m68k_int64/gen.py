@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Writes v.h for main.c: uint64 shl shr add sub mul mulw div mod sticky lt on 3000 fixed-seed pairs (expected values from Python).
-Run: python3 gen.py > v.h; then CFLAGS_EXTRA="-I. -I../../include" m68k-run-c.sh 68020 Os main.c ops64.c ../../lib/int/int64.c ../../lib/int/int32.c
+Run: python3 gen.py > v.h; then CFLAGS_EXTRA="-I. -I../../include" m68k-run-c.sh 68020 Os main.c ops64.c $(../fp_sources.sh int64 | sed "s|^|../../|") ../../lib/int/int32.c
 (m68k-run-c.sh must export labels starting with sf_ as well as __). Expected output: every count 0."""
 import random
 random.seed(7); M = (1 << 64) - 1

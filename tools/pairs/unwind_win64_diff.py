@@ -2,7 +2,7 @@
 """Win64 unwind data (`.pdata`/`.xdata`), ours against the pin's, on one IR.
 
 Each C file goes through the pin clang (x86_64-pc-windows-msvc) and `opt -O2` once; the pin `llc` and `llrm-llc` then make a COFF object of that
-`.ll`. A function whose code is the same instruction for instruction is compared: the size of prolog, the frame register and the unwind codes (what
+`.ll`. A function whose prolog (the instructions the unwind codes describe) is the same instruction for instruction is compared: the size of prolog, the frame register and the unwind codes (what
 `llvm-objdump -u` prints) must match. A function whose code differs is refused, never counted as equal. An object with no unwind data at all gives
 every function as different (the stripped control).
 """
@@ -62,6 +62,41 @@ def tables_of(text: str, symbols: dict[str, int] | None = None) -> dict[int, tup
     return out
 
 
+def by_name(entries: dict[int, object], symbols: dict[str, int]) -> dict[str, object]:
+    """`entries` (by start offset in .text) by the name of the function symbol at that offset. Two objects whose earlier functions differ in length put the same function at other offsets: it is the name that is the same."""
+    names = {offset: name for name, offset in symbols.items()}
+    return {names.get(offset, f".text+{offset:#x}"): entry for offset, entry in entries.items()}
+
+
+def prolog(code: list[str] | None, size: int | None) -> list[str] | None:
+    """The instructions of a function that start inside its prolog of `size` bytes: all the unwind codes depend on (a function's body, padding and epilogue do not move them)."""
+    if code is None or size is None:
+        return None
+    return [line for line in code if int(line.split()[0], 16) < size]
+
+
+def compare(pin_code, our_code, pin_tables, our_tables, pin_symbols, our_symbols):
+    """(same, different, refused, rich, [(name, pin table, our table)]) over the pin's functions, matched by name: a function whose prolog code differs is refused, never counted as equal."""
+    codes = (by_name(pin_code, pin_symbols), by_name(our_code, our_symbols))
+    tables = (by_name(pin_tables, pin_symbols), by_name(our_tables, our_symbols))
+    same = different = refused = rich = 0
+    shown = []
+    for name, table in sorted(tables[0].items()):
+        ours = tables[1].get(name)
+        sizes = [one[1] for one in (table, ours) if one is not None and one[1] is not None]
+        size = max(sizes, default=None)
+        if prolog(codes[1].get(name), size) != prolog(codes[0].get(name), size):
+            refused += 1
+        # the end of the function is the body's, not an unwind code's: it counts only where the whole code is the same
+        elif ours is not None and ours[1:] == table[1:] and (ours[0] == table[0] or codes[0].get(name) != codes[1].get(name)):
+            same += 1
+            rich += bool(table[3])
+        else:
+            different += 1
+            shown.append((name, table, ours))
+    return same, different, refused, rich, shown
+
+
 FIXTURES = [str(Path(__file__).resolve().parent / "win64/unwind_fixtures.c")] + [str(Path(__file__).resolve().parents[2] / "bench" / name) for name in ("fib/fib.c", "crc/crc.c", "hanoi/hanoi.c")]
 SKIPPED = 77  # the gate's SKIPPED verdict
 
@@ -103,8 +138,9 @@ def main() -> int:
             if args.strip:
                 run(["objcopy", "-R", ".pdata", "-R", ".xdata", str(our_o)])
             pin_code, our_code = (code_of(run([f"{args.tools}/llvm-objdump", "-d", "--no-show-raw-insn", str(o)])) for o in (pin_o, our_o))
+            pin_symbols, our_symbols = (symbols_of(run([f"{args.tools}/llvm-objdump", "-t", str(o)])) for o in (pin_o, our_o))
             pin_tables, our_tables = (
-                tables_of(run([f"{args.tools}/llvm-objdump", "-u", str(o)]), symbols_of(run([f"{args.tools}/llvm-objdump", "-t", str(o)]))) for o in (pin_o, our_o)
+                tables_of(run([f"{args.tools}/llvm-objdump", "-u", str(o)]), symbols) for o, symbols in ((pin_o, pin_symbols), (our_o, our_symbols))
             )
         except (RuntimeError, KeyError) as why:
             print(f"  refused {source.name}: {why}")
@@ -112,15 +148,10 @@ def main() -> int:
             pending += "-fallow-pending-abi" in str(why)
             continue
         ours_emit = ours_emit or bool(our_tables)
-        for start, table in sorted(pin_tables.items()):
-            if our_code.get(start) != pin_code.get(start):
-                refused += 1
-            elif our_tables.get(start) == table:
-                same += 1
-                rich += bool(table[3])
-            else:
-                different += 1
-                print(f"  different {source.name} +{start:#x}:\n    pin  {table}\n    ours {our_tables.get(start)}")
+        found = compare(pin_code, our_code, pin_tables, our_tables, pin_symbols, our_symbols)
+        same, different, refused, rich = same + found[0], different + found[1], refused + found[2], rich + found[3]
+        for name, table, ours in found[4]:
+            print(f"  different {source.name} {name}:\n    pin  {table}\n    ours {ours}")
     print(f"unwind_win64_diff: {same + different} functions compared, {refused} refused (code differs), {files} files refused: {same} same ({rich} with unwind codes), {different} different")
     if pending and pending == files == len(args.sources):
         print("SKIPPED: llrm-llc refuses the windows platform as pending (the Win64 rows have not landed)")

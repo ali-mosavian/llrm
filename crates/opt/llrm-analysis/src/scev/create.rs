@@ -8,10 +8,10 @@
 //! `rewriters`.
 //!
 //! # DEVIATE 9 (MIR lacks the construct)
-//! * `llvm.start.loop.iterations`, `llvm.annotation`, `llvm.ptr.annotation`,
-//!   `llvm.vscale` and `llvm.loop.decrement.reg` are not MIR intrinsics
-//!   (`Intrinsic::named` is none for them, tested), so a call to one is an
-//!   unknown, as any call is. (`llvm.usub.sat` and `llvm.uadd.sat` are, and are
+//! * `llvm.annotation`, `llvm.ptr.annotation` and `llvm.vscale` are not MIR
+//!   intrinsics (`Intrinsic::named` is none for them, tested), so a call to
+//!   one is an unknown, as any call is. (`llvm.start.loop.iterations` and
+//!   `llvm.loop.decrement.reg` are, and are translated.) (`llvm.usub.sat` and `llvm.uadd.sat` are, and are
 //!   translated.)
 //! * No separate `ptrtoaddr`: MIR's `ptrtoint` is modelled as one.
 //! * Only a constant `getelementptr` expression has a SCEV; any other constant
@@ -288,7 +288,13 @@ impl ScalarEvolution {
                 Some(BinaryOp { opcode, lhs, rhs, is_nsw: signed, is_nuw: !signed, op: None })
             }
 
-            // The `loop.decrement.reg` intrinsic is not MIR (DEVIATE 9).
+            // Recognise intrinsic loop.decrement.reg, and as this has exactly
+            // the same semantics as a Sub, return a binary sub expression.
+            Opcode::Call(_) => match cx.query(None).intrinsic(inst) {
+                Some(Intrinsic::LoopDecrementReg) => Some(BinaryOp::made(Bop::Sub, operand(0), operand(1))),
+                _ => None,
+            },
+
             _ => None,
         }
     }
@@ -541,7 +547,7 @@ impl ScalarEvolution {
                         ops.push(instruction.operands[0]);
                         ops.push(instruction.operands[1]);
                     }
-                    Some(Intrinsic::Abs) => ops.push(instruction.operands[0]),
+                    Some(Intrinsic::Abs | Intrinsic::StartLoopIterations) => ops.push(instruction.operands[0]),
                     _ => {}
                 }
                 None
@@ -867,6 +873,10 @@ impl ScalarEvolution {
                     return self.get_scev(cx, rv);
                 }
 
+                if let Some(Intrinsic::StartLoopIterations) = cx.query(None).intrinsic(inst) {
+                    // Just equivalent to the first operand for SCEV purposes.
+                    return self.get_scev(cx, instruction.operands[0]);
+                }
                 if let Some(Intrinsic::Abs) = cx.query(None).intrinsic(inst) {
                     let arg = self.get_scev(cx, instruction.operands[0]);
                     // `cast<ConstantInt>(II->getArgOperand(1))->isOne()`.

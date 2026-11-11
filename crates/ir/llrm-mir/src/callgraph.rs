@@ -65,6 +65,7 @@ fn calls(
 
 impl CallGraph {
     pub fn new(module: &Module) -> Self {
+        crate::counts::bump(crate::counts::Event::CallGraphs);
         let mut callees = BTreeMap::new();
         let mut unknown = BTreeSet::new();
         for (id, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {

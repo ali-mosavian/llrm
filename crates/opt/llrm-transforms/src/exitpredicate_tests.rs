@@ -15,7 +15,7 @@ fn predicated(text: &str) -> (bool, String) {
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::lcssa::closed(context, &crate::testing::layout(), function).expect("closes");
     let changed = super::predicated(context, &layout, function, &mut declared, &outer);
     declared.place(&mut module).expect("places");
     (changed, printed(&module))

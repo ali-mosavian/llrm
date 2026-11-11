@@ -50,7 +50,7 @@ FLAGS = {
     "IntrNoCreateUndefOrPoison": "nocreateundeforpoison",
 }
 # What MIR's `Attribute` cannot say: dropped, and counted in the header.
-UNREPRESENTABLE = {"noduplicate", "strictfp", "nocreateundeforpoison", "nofreeobj"}
+UNREPRESENTABLE = {"noduplicate", "strictfp", "nofreeobj"}
 # Properties that are no attribute: nothing to emit.
 NOT_ATTRIBUTES = {"Commutative", "IntrTriviallyScalarizable", "ArgInfo", "RangeSet", "IntrHasSideEffects"}
 ARGUMENT_FLAGS = {
@@ -198,7 +198,7 @@ def attr_text(key: str, value) -> str:
 
 def mir_names() -> set[str]:
     """The `llvm.*` intrinsics `intrinsics.rs` enumerates."""
-    text = (ROOT / "crates/ir/llrm-mir/src/intrinsics.rs").read_text()
+    text = (ROOT / "crates/ir/llrm-mir/src/intrinsics.rs").read_text().split("\n#[cfg(test)]\nmod tests {")[0]
     return set(re.findall(r'"(llvm\.[a-z][a-z0-9_.]*)"', text))
 
 

@@ -245,7 +245,7 @@ fn the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector() {
 #[test]
 fn an_odd_width_min_max_is_promoted_with_extended_operands() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    for (op, extend) in [(ISD::SMin, ISD::Sra), (ISD::UMax, ISD::And)] {
+    for (op, extend) in [(ISD::SMin, ISD::SignExtendInReg), (ISD::UMax, ISD::And)] {
         let mut dag = dag();
         let i12 = EVT::Int(12);
         let (a, b) = (load(&mut dag, i12, 1), load(&mut dag, i12, 2));
@@ -289,31 +289,6 @@ fn a_store_of_a_value_below_the_register_size_is_a_truncating_store() {
     assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I32, "the promoted value");
     let NodeData::Mem(stored) = dag.node(root).data else { panic!("a store has a memory operand") };
     assert_eq!(stored.mem_vt, EVT::Simple(MVT::I16), "still stores 16 bits");
-}
-
-/// The sign-extend of a promoted operand shifted by an `i8` constant whatever
-/// the target's shift-amount type; AArch64 shifts by an `i64`.
-#[test]
-fn a_promotion_shifts_by_the_targets_shift_amount_type() {
-    let info =
-        llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_shift_amount_type(MVT::I64);
-    let tli = TargetLowering::empty(info);
-    let mut dag = dag();
-    let i16 = EVT::Simple(MVT::I16);
-    let (a, b) = (load(&mut dag, i16, 1), load(&mut dag, i16, 2));
-    let (a, b) = (dag.get_node(ISD::Add, i16, &[a, b]), dag.get_node(ISD::Sub, i16, &[a, b]));
-    let best = dag.get_node(ISD::SMin, i16, &[a, b]);
-    let word = dag.get_node(ISD::Truncate, EVT::I8, &[best]);
-    dag.set_root(word);
-    assert_eq!(legalize(&mut dag, &tli), Ok(true));
-    let shifts: Vec<_> = (0..dag.nodes().len() as u32)
-        .map(|node| SDValue { node, res: 0 })
-        .filter(|value| matches!(dag.opcode(*value), ISD::Shl | ISD::Sra))
-        .collect();
-    assert!(!shifts.is_empty(), "the operands are sign-extended in the register");
-    for shift in shifts {
-        assert_eq!(dag.value_type(dag.operand(shift, 1)), EVT::I64, "the shift amount of {:?}", dag.opcode(shift));
-    }
 }
 
 /// A store promoted to a wider register is rebuilt from the old one's memory

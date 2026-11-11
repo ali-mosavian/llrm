@@ -35,7 +35,7 @@ Ours stands in: `prologue.rs` (frame growth, `sub sp,N` and its release),
 Each lands when it builds and passes the gate; the first is a numbered DEVIATE
 until its comparison runs. Owner w-6, plan 10-22, PEI-1 11-06.
 
-## FI-1: frame indices in `frame.rs` (owner w-6, review 2026-11-20)
+## FI-1: frame indices in `frame.rs` (owner object-refactor, review 2026-11-20)
 
 Slot table row 80 is DEVIATE CG7. Today `Frame::slot` returns a displacement
 the spiller writes into the instruction. The pin writes a frame index and
@@ -57,3 +57,18 @@ Dates: oracle (a dry run of 1-2 on the corpus: how many functions' layout and si
 ### Oracle result (w-5, 2026-10-23)
 
 `LLRM_FRAME_ORACLE=1 llrm-c ...` prints, per function, the bytes below BP as ours lays them (`reserve`) and as `calculate_frame_object_offsets` lays the same objects (selector extents then spill slots, natural alignment up to the frame's; no callee-saved object, call frame or stack alignment). Rows corpus, m32 -O2, 158 functions: 153 equal, 4 pin larger (-2, -4, -8, -44 B), 1 ours larger (+4); totals ours 16,986, pin 17,040. The objects' layout is the pin's; what differs in the frame is the callee-saved pushes, the call frame and the stack-alignment rounding (PEI-2), and the alignment the selector gave an object (the 5 above: the oracle assumes the natural one).
+
+## Open frame-lowering rows (owner object-refactor, set 2026-11-09)
+
+| Row | Pin | Exit |
+|---|---|---|
+| PE1 `masm::lowered` | `findDeadCallerSavedReg` picks the one-slot `push`/`pop` register from the entry's live-ins and the return's live-outs; ours reads a pair declared per convention | 2026-11-11 (draft PR), derived per target that asks |
+| RA1/RA2 `masm::realign_refusal` | `hasBasePointer`: locals of a realigned frame with `alloca` through a base pointer; `-g` locations from the CFA | 2026-11-11 (draft PR) |
+| FL-2 `framelowering` | `mergeSPUpdates`, `mergeSPAdd` fold an adjacent stack update (needs the neighbour: a pass over the sequence, not a function of the frame) | 2026-11-20 |
+| CG7/FI-1 | frame indices in `frame.rs`; `emitPrologue`/`emitEpilogue` replace `prologue.rs` and `masm::parts` for flat m32 | review 2026-11-20, PEI-2 2026-11-27 |
+| FL-1 SEH | Win64 `.seh_*` producers in the frame lowerer | 2026-12-04 |
+| FL-1 CFI | declared CFI for x86-64 and arm64 (standing requirement before parity reaches main) | x86-64 2026-12-04, arm64 2026-12-11 |
+| FL-1 rest | funclets, tail-call return-address reserve, Swift context, red zone, stack probe | N/A until a target needs one; none applies to i486 |
+| Row 9 (redesign-plan) | emission and `masm` split: frame sequences, encode/relax, object writers, `masm::text` | first split PR 2026-12-18 |
+
+A date moves only by oversight.

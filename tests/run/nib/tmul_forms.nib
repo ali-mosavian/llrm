@@ -1,0 +1,45 @@
+# flags: -Os
+# tmul: the recursive form (the pin does not inline a self-recursive function, so it stays a call) and the
+# loop-free form agree on every pair; jpeg_fixed uses the loop-free one.
+type Q = fixed i32, fraction=10
+
+fn q(x: i32) -> Q:
+    return Q(x) / Q(1024)
+
+fn recursive(a: Q, b: Q) -> Q:
+    if a < 0:
+        return 0 - recursive(0 - a, b)
+    if b < 0:
+        return 0 - a * (0 - b)
+    return a * b
+
+fn direct(a: Q, b: Q) -> Q:
+    let negative = (a < 0) != (b < 0)
+    let m: Q = (a < 0 ? 0 - a : a) * (b < 0 ? 0 - b : b)
+    return negative ? 0 - m : m
+
+fn row(a: i32, b: i32) -> void:
+    print(i32(recursive(q(a), q(b)) * 1024))
+    print(i32(direct(q(a), q(b)) * 1024))
+
+fn main() -> i16:
+    row(0, 0)
+    row(1024, 1024)
+    row(-1024, 1024)
+    row(1024, -1024)
+    row(-1024, -1024)
+    row(1, -1)
+    row(-1, 1)
+    row(-1, -1)
+    row(1023, 1)
+    row(-1023, 1)
+    row(3, -341)
+    row(-3, -341)
+    row(361, 502)
+    row(-361, 502)
+    row(361, -502)
+    row(-99, -99)
+    row(50000, -20000)
+    row(-32767, 32767)
+    row(1000000, -1000)
+    return 0

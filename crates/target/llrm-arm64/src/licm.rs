@@ -71,6 +71,10 @@ impl CoreInst for Wrapped {
         self.inst.terminator
     }
 
+    fn is_plain_load(&self) -> bool {
+        self.inst.may_load && !self.inst.invariant_load
+    }
+
     fn identical(
         &self,
         other: &Wrapped,

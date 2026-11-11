@@ -81,7 +81,7 @@ fn generated_sized(
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[] };
     let mut users = IvUsers::of(&mut se, &cx, header, &env);
     if post_inc {
         let conds: Vec<InstId> = users
@@ -253,6 +253,9 @@ fn too_many_formulae_are_narrowed_to_the_shared_register() {
 #[test]
 fn the_solver_shares_the_exit_counter_with_the_store() {
     generated_for("i486", STORE, |_, se, lsr, _| {
+        // The pass adds the formulae after the pin's narrowing and keeps the
+        // solution that costs less.
+        lsr.generate_end_biased(se);
         let solution = lsr.solve(se);
         assert_eq!(solution.len(), 2);
         let chosen: Vec<_> = lsr.uses.iter().zip(&solution).map(|(lu, &f)| (lu.kind, &lu.formulae[f])).collect();

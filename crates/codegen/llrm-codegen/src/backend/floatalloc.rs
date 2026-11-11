@@ -284,7 +284,7 @@ pub fn allocated<'a>(
     _basic_semantics: bool,
     _cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<LirBody, Raised> {
-    _truncating(&crate::backend::fpstack::converted(body, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
+    _truncating(&crate::backend::fpstack::converted(body, &RegisterClasses::of(&llrm_x86_m16::M16), None)?, frame)
 }
 
 /// The control word an x87 instruction needs: the one place the fact lives.
@@ -615,12 +615,15 @@ fn _exact(one: &Insn) -> bool {
 }
 
 /// The post-allocation x87 phase: stack form, then `fisttp` mode switching.
-pub struct FloatAlloc {
+pub struct FloatAlloc<'a> {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub classes: Rc<RegisterClasses>,
+    pub cpu: Option<&'a crate::backend::cpu::Profile>,
+    /// Where the float constants are kept (FF2): which cells hold 0.0 and 1.0.
+    pub pool: Option<Rc<RefCell<crate::backend::constpool::Pool>>>,
 }
 
-impl LIRTransform for FloatAlloc {
+impl LIRTransform for FloatAlloc<'_> {
     fn class_name(&self) -> &'static str {
         "FloatAlloc"
     }
@@ -635,9 +638,15 @@ impl LIRTransform for FloatAlloc {
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
         let propagated = crate::backend::fpcopyprop::propagated(&body);
-        crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes)
-            .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
-            .map_err(|error| error.to_string())
+        let constants = self.pool.as_ref().map(|pool| pool.borrow().x87_cells()).unwrap_or_default();
+        crate::backend::fpstack::converted_with(
+            propagated.as_ref().unwrap_or(&body),
+            &self.classes,
+            self.cpu,
+            &constants,
+        )
+        .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
+        .map_err(|error| error.to_string())
     }
 }
 

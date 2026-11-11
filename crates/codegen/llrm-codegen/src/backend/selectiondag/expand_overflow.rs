@@ -47,10 +47,12 @@ pub fn expand_uaddsubo(
 /// halves, the overflow being a high half that is not zero (unsigned) or not
 /// the sign of the low half (signed). The halves come from `UMUL_LOHI` or
 /// `MULHU` where legal, from a legal wider multiply, or from
-/// `forceExpandWideMUL`. A power of two is a shift.
-pub fn expand_mulo(
+/// `forceExpandWideMUL` (the target's wide-multiply routine where it names
+/// one). A power of two is a shift.
+pub fn expand_mulo<H: super::legalize_dag::Hooks>(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
+    hooks: &mut H,
     node: SDValue,
 ) -> Vec<SDValue> {
     let signed = dag.opcode(node) == ISD::SMulO;
@@ -89,7 +91,7 @@ pub fn expand_mulo(
         let shifted = dag.get_node(ISD::Srl, wide, &[product, amount]);
         (dag.get_node(ISD::Truncate, vt, &[product]), dag.get_node(ISD::Truncate, vt, &[shifted]))
     } else {
-        super::expand_fixed::force_expand_multiply(dag, signed, lhs, rhs)
+        super::expand_fixed::force_expand_wide_mul(dag, tli, hooks, signed, lhs, rhs)
     };
 
     let overflow = if signed {

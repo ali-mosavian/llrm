@@ -56,12 +56,25 @@ fn target(inst: &Inst) -> Option<u32> {
         )
 }
 
+/// A jump through a table names every block of it: `analyzeBranch` knows no such terminator.
+pub(crate) fn names_many(inst: &Inst) -> bool {
+    inst.operands.iter().filter(|operand| matches!(operand, Operand::Block(_))).count() > 1
+}
+
+/// Whether a terminator names block `id` anywhere in its operands.
+fn names(
+    inst: &Inst,
+    id: u32,
+) -> bool {
+    inst.terminator && inst.operands.iter().any(|operand| *operand == Operand::Block(id))
+}
+
 fn is_jump(inst: &Inst) -> bool {
-    inst.terminator && inst.barrier && target(inst).is_some()
+    inst.terminator && inst.barrier && target(inst).is_some() && !names_many(inst)
 }
 
 fn is_conditional(inst: &Inst) -> bool {
-    inst.terminator && !inst.barrier && target(inst).is_some()
+    inst.terminator && !inst.barrier && target(inst).is_some() && !names_many(inst)
 }
 
 fn same_branch(
@@ -79,6 +92,15 @@ pub(crate) fn analyze<C>(
 ) -> Option<Branches> {
     let insts = &function.blocks[at].insts;
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+    // The pin's MachineVerifier: "Non-terminator instruction after the first terminator". `analyzeBranch` reads only the run at the end, so
+    // a branch followed by an instruction is invisible and the block after it would be merged while the branch still names it.
+    assert!(
+        !insts[..first].iter().any(|inst| inst.terminator),
+        "block {} of {}: non-terminator after a terminator (an instruction placed after the block's branch): {:?}",
+        function.blocks[at].id,
+        function.name,
+        insts.iter().map(|inst| (&inst.kind, inst.terminator)).collect::<Vec<_>>(),
+    );
     match &insts[first..] {
         [] => Some(Branches { taken: None, other: None, cond: None }),
         [one] if is_jump(one) => Some(Branches { taken: target(one), other: None, cond: None }),
@@ -96,7 +118,7 @@ pub(crate) fn remove_branch<C>(
     at: usize,
 ) {
     let insts = &mut function.blocks[at].insts;
-    while insts.last().is_some_and(|inst| inst.terminator && target(inst).is_some()) {
+    while insts.last().is_some_and(|inst| inst.terminator && target(inst).is_some() && !names_many(inst)) {
         insts.pop();
     }
 }
@@ -166,7 +188,7 @@ fn predecessors<C>(
     let at = position(function, id);
     (0..function.blocks.len())
         .filter(|&other| {
-            function.blocks[other].insts.iter().any(|inst| inst.terminator && target(inst) == Some(id))
+            function.blocks[other].insts.iter().any(|inst| names(inst, id))
                 || (other + 1 == at && can_fall_through(function, other))
         })
         .collect()
@@ -178,7 +200,7 @@ fn is_successor<C>(
     from: usize,
     id: u32,
 ) -> bool {
-    function.blocks[from].insts.iter().any(|inst| inst.terminator && target(inst) == Some(id))
+    function.blocks[from].insts.iter().any(|inst| names(inst, id))
         || (can_fall_through(function, from) && function.blocks[from + 1].id == id)
 }
 
@@ -354,7 +376,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                 if self.function.blocks[at]
                     .insts
                     .first()
-                    .is_some_and(|first| first.terminator && target(first).is_some())
+                    .is_some_and(|first| first.terminator && target(first).is_some() && !names_many(first))
                     && taken != id
                 {
                     remove_branch(self.function, at);
@@ -501,7 +523,7 @@ fn is_branching<C>(
     function: &MFunction<C>,
     at: usize,
 ) -> bool {
-    function.blocks[at].insts.last().is_some_and(|last| last.terminator && target(last).is_some())
+    function.blocks[at].insts.last().is_some_and(|last| last.terminator && target(last).is_some() && !names_many(last))
 }
 
 /// A register or the status flags, as an instruction reads or writes them.
@@ -625,6 +647,66 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         Some((loc - 1, effects))
     }
 
+    /// HC1: moves the instruction of `two` (else of `one`) identical to the
+    /// other block's instruction at `run` up to `run`, past instructions that
+    /// neither read what it writes, write what it reads or writes, nor touch
+    /// the flags (the moved instruction touches no memory), within
+    /// [`Target::hoist_window`]. Whether it moved.
+    fn bring_twin_up(
+        &mut self,
+        one: usize,
+        two: usize,
+        run: usize,
+        assignment: &Assignment,
+    ) -> bool {
+        for (keep, move_in) in [(one, two), (two, one)] {
+            let Some(head) = self.function.blocks[keep].insts.get(run) else { continue };
+            if head.terminator
+                || head.call
+                || !safe_to_move(&self.function.fixed, head, &mut true)
+                || head.may_load
+                || head.may_store
+            {
+                continue;
+            }
+            let own = Effects::of::<T>(head, assignment);
+            let insts = &self.function.blocks[move_in].insts;
+            let end = insts.len().min(run + 1 + T::hoist_window());
+            let mut twin = None;
+            // an instruction that sets the flags is passed only where nothing
+            // reads what the twin set
+            let mut crossed_flags = false;
+            for at in run..end {
+                let inst = &insts[at];
+                if identical(head, inst, assignment) {
+                    twin = Some(at).filter(|&at| !(crossed_flags && flags_live_after(insts, at)));
+                    break;
+                }
+                let theirs = Effects::of::<T>(inst, assignment);
+                let apart = !inst.terminator
+                    && !inst.call
+                    && !inst.barrier
+                    && !inst.side_effects
+                    && !inst.reads_flags
+                    && !(inst.sets_flags && head.reads_flags)
+                    && theirs.defs.iter().all(|place| {
+                        *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
+                    })
+                    && theirs.uses.iter().all(|place| !touches::<T>(&own.defs, *place));
+                if !apart {
+                    break;
+                }
+                crossed_flags |= inst.sets_flags;
+            }
+            if let Some(at) = twin.filter(|&at| at > run) {
+                let inst = self.function.blocks[move_in].insts.remove(at);
+                self.function.blocks[move_in].insts.insert(run, inst);
+                return true;
+            }
+        }
+        false
+    }
+
     /// `HoistCommonCodeInSuccs`.
     fn hoist_common(
         &mut self,
@@ -647,12 +729,23 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         }
         let Some((loc, effects)) = self.hoisting_position(at, assignment) else { return false };
         let (one, two) = (position(self.function, taken), position(self.function, other));
-        let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
         let mut run = 0;
-        while let (Some(head), Some(tail)) = (first.get(run), second.get(run)) {
-            if !identical(head, tail, assignment) || !safe_to_move(&self.function.fixed, head, &mut true) {
+        loop {
+            let same = {
+                let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+                let (Some(head), Some(tail)) = (first.get(run), second.get(run)) else { break };
+                identical(head, tail, assignment) && safe_to_move(&self.function.fixed, head, &mut true)
+            };
+            if !same {
+                // HC1: the twin of one head may sit a few independent
+                // instructions down the other block
+                if T::hoist_window() > 0 && self.bring_twin_up(one, two, run, assignment) {
+                    continue;
+                }
                 break;
             }
+            let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+            let head = &first[run];
             let own = Effects::of::<T>(head, assignment);
             let defs_flags = own.defs.contains(&Place::Flags);
             // the flags it sets are nobody's: the compare sets them again
@@ -770,9 +863,14 @@ pub fn remove_identity_copies<T: Target>(
 /// whether a class copies the whole register; a narrower copy leaves the rest
 /// of the destination as it was.
 ///
-/// DEVIATE: only this case of the pass (no forwarding of uses), within a
-/// block. Reason: it is the one the allocator leaves behind (phi and
-/// two-address copies of one value). Exit: the neutral-LIR task.
+/// DEVIATE: only this case of the pass (no forwarding of uses), and a copy
+/// that repeats one still in force; within a block, and into the blocks whose
+/// only predecessor made it (the pin's pass is block-local). Reason: it is
+/// what the allocator leaves behind (phi and two-address copies of one value),
+/// and the block a target puts on a critical edge (`split_flag_edges`) repeats
+/// the copy its predecessor already made for the other phi (m68k
+/// x87_arguments -Os, +4 B). Owner greedy-subreg, exit 2026-12-05: the pass
+/// is translated whole (`MachineCopyPropagation`) or the carry goes.
 pub fn remove_redundant_copies<T: Target>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
@@ -799,9 +897,29 @@ pub fn remove_redundant_copies_between<T: Target>(
         Reg::Virt(v) => wide(&classes[v as usize]),
         Reg::Phys(id) => whole_fixed(id),
     };
-    for block in &mut function.blocks {
+    // The copies in force at the end of each block, for the block that only
+    // it reaches.
+    let successors = crate::regalloc::successors(function);
+    let mut entered_by = vec![None::<usize>; function.blocks.len()];
+    let mut reached = vec![0usize; function.blocks.len()];
+    for (from, out) in successors.iter().enumerate() {
+        let mut seen: Vec<usize> = Vec::new();
+        for &to in out {
+            if !seen.contains(&to) {
+                seen.push(to);
+                reached[to] += 1;
+                entered_by[to] = Some(from);
+            }
+        }
+    }
+    let mut at_end: Vec<Option<Vec<(_, _)>>> = vec![None; function.blocks.len()];
+    for at in 0..function.blocks.len() {
+        let block = &mut function.blocks[at];
         // `(destination, source)` roots of the copies still in force
-        let mut held: Vec<(_, _)> = Vec::new();
+        let mut held: Vec<(_, _)> = match (reached[at], entered_by[at]) {
+            (1, Some(from)) if from < at && at != 0 => at_end[from].clone().unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let mut keep = Vec::with_capacity(block.insts.len());
         for inst in std::mem::take(&mut block.insts) {
             let copy = match inst.operands[..] {
@@ -811,7 +929,7 @@ pub fn remove_redundant_copies_between<T: Target>(
                 _ => None,
             };
             if let Some((dst, src)) = copy {
-                if held.contains(&(src, dst)) {
+                if held.contains(&(src, dst)) || held.contains(&(dst, src)) {
                     continue;
                 }
             }
@@ -830,5 +948,6 @@ pub fn remove_redundant_copies_between<T: Target>(
             keep.push(inst);
         }
         block.insts = keep;
+        at_end[at] = Some(held);
     }
 }

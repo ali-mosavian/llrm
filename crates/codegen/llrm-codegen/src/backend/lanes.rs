@@ -130,13 +130,63 @@ impl Table {
     }
 }
 
+impl Table {
+    /// The table of a file that states `@lanes bytes`: the 32 flag lanes, then a
+    /// lane for each byte of each root. A view covers the bytes `lane / 8 ..
+    /// (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of `rs1`).
+    fn of_bytes(regs: Regs) -> Table {
+        let entries = || regs.table.iter().flatten();
+        let bytes_of = |entry: &llrm_lir::registers::Entry| ((entry.bits / 8).max(1)) as usize;
+        let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
+        for root in entries().filter(|entry| entry.root == entry.id) {
+            let top = entries()
+                .filter(|view| view.root == root.id)
+                .map(|view| (view.lane / 8) as usize + bytes_of(view))
+                .max()
+                .unwrap_or(1);
+            lanes.extend((0..top).map(|byte| (root.id, byte as u32)));
+        }
+        lanes.sort();
+        assert!(lanes.len() <= 128, "{} lanes of a register file are more than a mask holds", lanes.len());
+        let (mut first, mut count, mut bytes) = ([0_u8; REGISTERS], [0_u8; REGISTERS], [0_u8; REGISTERS]);
+        for (bit, lane) in lanes.iter().enumerate() {
+            let slot = lane.0.index();
+            if count[slot] == 0 {
+                first[slot] = u8::try_from(bit).expect("fits");
+            }
+            count[slot] += 1;
+            bytes[slot] = count[slot];
+        }
+        for entry in entries().filter(|entry| entry.root != entry.id) {
+            let root = entry.root.index();
+            let slot = entry.id.index();
+            first[slot] = first[root] + u8::try_from(entry.lane / 8).expect("a byte offset");
+            count[slot] = u8::try_from(bytes_of(entry)).expect("a register is under 256 bytes");
+            bytes[slot] = count[slot];
+        }
+        Table { lanes, first, count, bytes }
+    }
+}
+
 /// The table the file of `regs` stands under: x86's for an x86 file, else one
 /// built once and kept.
 fn table_of(regs: Regs) -> &'static Table {
     static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
     // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
     // one without writes a root whole (arm64's `w` write clears the `x`).
-    if regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0) {
+    if !regs.0.byte_lanes
+        && let Some((_, small)) = regs
+            .0
+            .entries()
+            .find(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
+    {
+        // Not a default: a z80 file without the line read x86's table for every register (no effect decoded, every
+        // instruction a scheduling barrier).
+        assert!(
+            regs.0.lanes_x86 || regs.0.lanes_none,
+            "a register file with integer views under 32 bits (`{small:?}`) must say `@lanes bytes`, `@lanes x86` \
+             or `@lanes none` in its registers.regs"
+        );
         return &X86;
     }
     let key = regs.0 as *const _ as usize;
@@ -144,9 +194,16 @@ fn table_of(regs: Regs) -> &'static Table {
     if let Some((_, table)) = files.iter().find(|(one, _)| *one == key) {
         return table;
     }
-    let table: &'static Table = Box::leak(Box::new(Table::of_file(regs)));
+    let table: &'static Table =
+        Box::leak(Box::new(if regs.0.byte_lanes { Table::of_bytes(regs) } else { Table::of_file(regs) }));
     files.push((key, table));
     table
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lane-by-lane walks of a set this thread has begun.
+    pub(crate) static WALKS: Cell<usize> = const { Cell::new(0) };
 }
 
 thread_local! {
@@ -155,11 +212,18 @@ thread_local! {
 }
 
 fn active() -> &'static Table {
+    #[cfg(test)]
+    TABLE_READS.with(|count| count.set(count.get() + 1));
     ACTIVE.with(Cell::get).unwrap_or(&X86)
 }
 
+#[cfg(test)]
+thread_local! {
+    static TABLE_READS: Cell<usize> = const { Cell::new(0) };
+}
+
 /// The register file's lane table in force until this drops.
-pub struct Guard(Option<&'static Table>);
+pub struct Guard(Option<&'static Table>, #[allow(dead_code)] llrm_lir::registers::NamedBy);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -167,16 +231,37 @@ impl Drop for Guard {
     }
 }
 
+/// Whether `regs` is a file the x86 table serves: byte lanes under a root of
+/// four, the shapes `machinecp` has its fixed units for.
+pub fn is_x86(regs: Regs) -> bool {
+    // a file that says `@lanes none` has no table; it is not x86's
+    !regs.0.lanes_none && std::ptr::eq(table_of(regs), &*X86)
+}
+
 /// Makes the lanes of `regs`' file the ones this thread reads. A mask made
 /// under one file is not meaningful under another.
 pub fn enter(regs: Regs) -> Guard {
+    // not a default: a consumer of lanes on a target that has none must say so, by stating its lanes
+    assert!(
+        !regs.0.lanes_none,
+        "this register file says `@lanes none` (its target reads no lanes yet), but something reads its lanes: \
+         it needs `@lanes bytes` and a table of its own in registers.regs"
+    );
     let table = table_of(regs);
     let was = ACTIVE.with(|active| active.replace((!std::ptr::eq(table, &*X86)).then_some(table)));
-    Guard(was)
+    // A register prints by its file's name, iced's only for x86.
+    let named = llrm_lir::registers::named_by((!std::ptr::eq(table, &*X86)).then_some(regs.0));
+    Guard(was, named)
 }
 
 fn bit(lane: &Lane) -> Option<u32> {
-    let table = active();
+    bit_in(active(), lane)
+}
+
+fn bit_in(
+    table: &Table,
+    lane: &Lane,
+) -> Option<u32> {
     let slot = lane.0.index();
     (slot < REGISTERS && lane.1 < u32::from(table.bytes[slot]))
         .then(|| u32::from(table.first[slot]) + lane.1.min(u32::from(table.count[slot]) - 1))
@@ -219,6 +304,14 @@ impl Lanes {
     /// The flags emitted code reads (`Flag::READ`).
     pub fn read_flags() -> Self {
         Self::flags(llrm_lir::flag::Flag::READ.bits())
+    }
+
+    /// Whether `register` has lanes at all: the stack pointer and the like
+    /// have none.
+    pub fn exists(register: RegId) -> bool {
+        let table = active();
+        let slot = register.index();
+        slot < REGISTERS && table.bytes[slot] > 0
     }
 
     /// Bytes `start..start + len` of a register: the lanes `(register, byte)`
@@ -293,7 +386,17 @@ impl Lanes {
     }
 
     pub fn iter(&self) -> Iter {
+        #[cfg(test)]
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         Iter(self.0, active())
+    }
+
+    /// The flag lanes among these (`RegId::None`'s), without walking the rest.
+    pub fn flag_part(&self) -> Self {
+        let table = active();
+        let slot = RegId::None.index();
+        let (first, count) = (u32::from(table.first[slot]), u32::from(table.count[slot]));
+        Self(self.0 & (((1u128 << count) - 1) << first))
     }
 
     // The set operations as `BTreeSet` spells them, yielding lanes in order.
@@ -316,6 +419,14 @@ impl Lanes {
         other: &Self,
     ) -> Iter {
         Iter(self.0 & other.0, active())
+    }
+
+    /// Every lane of `other` added: `extend` of its lanes, as one word operation.
+    pub fn include(
+        &mut self,
+        other: Self,
+    ) {
+        self.0 |= other.0;
     }
 
     // The same operations as sets, without an iterator between.
@@ -424,8 +535,9 @@ impl Extend<Lane> for Lanes {
         &mut self,
         lanes: I,
     ) {
+        let table = active();
         for lane in lanes {
-            self.insert(lane);
+            self.0 |= 1 << bit_in(table, &lane).unwrap_or_else(|| panic!("{lane:?} is no lane"));
         }
     }
 }
@@ -494,6 +606,19 @@ mod tests {
     /// Every x86 file stands under x86's table, so a pass of an x86 target
     /// reads the lanes it always did.
     #[test]
+    fn an_x86_register_is_as_wide_in_the_file_as_iced_says() {
+        // `peephole::_lanes` sizes a register by its file; the x86 numbers must
+        // not move by it.
+        for regs in
+            [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
+        {
+            for (id, entry) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0) {
+                assert_eq!(regs.bytes(id), Some(id.size() as i64), "{id:?}");
+            }
+        }
+    }
+
+    #[test]
     fn an_x86_file_enters_the_x86_table() {
         for regs in
             [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
@@ -556,6 +681,24 @@ mod tests {
 
     /// `span` must name the lanes a byte-by-byte `collect` names, including a
     /// root's upper bytes folded into one lane.
+    /// `Lanes::extend` read the thread's lane table once for each lane it added
+    /// (27 M Ir self over a memory_expansion -O2 compile, 111,780 `_lanes`
+    /// asks in the peephole alone); it reads it once, and `include` of a
+    /// mask reads it never.
+    #[test]
+    fn extend_reads_the_lane_table_once_and_include_never() {
+        let lanes: Vec<Lane> = X86.lanes.iter().copied().take(6).collect();
+        let before = TABLE_READS.with(Cell::get);
+        let mut extended = Lanes::new();
+        extended.extend(lanes.iter().copied());
+        assert_eq!(TABLE_READS.with(Cell::get) - before, 1, "one table read for six lanes");
+        let before = TABLE_READS.with(Cell::get);
+        let mut included = Lanes::new();
+        included.include(extended);
+        assert_eq!(TABLE_READS.with(Cell::get) - before, 0);
+        assert_eq!(included, extended);
+    }
+
     #[test]
     fn span_matches_the_lanes_of_each_byte() {
         let registers: BTreeSet<RegId> = X86.lanes.iter().map(|lane| lane.0).collect();
@@ -568,5 +711,69 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A z80 file with 8-bit integer views and no `@lanes` line read x86's table for every register: the
+    /// scheduler found no effect for 94 of 94 instructions of `three` and ordered none of them. A file with
+    /// such views and no lane declaration is refused by name.
+    #[test]
+    #[should_panic(expected = "@lanes")]
+    fn a_register_file_with_small_integer_views_and_no_lane_line_is_refused() {
+        use llrm_lir::registers::{Info, Regs};
+        let base = &llrm_x86_m16::REGISTER_INFO;
+        assert!(base.lanes_x86, "the x86 files say so");
+        let bare = Regs(Box::leak(Box::new(Info {
+            table: base.table,
+            frame: base.frame,
+            stack: base.stack,
+            loads: base.loads,
+            scratch: base.scratch,
+            bytes: base.bytes,
+            data_segment: base.data_segment,
+            stack_segment: base.stack_segment,
+            code_segment: base.code_segment,
+            far_segment: base.far_segment,
+            widths: base.widths,
+            effects: base.effects,
+            cache: Default::default(),
+            views: base.views,
+            byte_lanes: false,
+            lanes_x86: false,
+            lanes_none: false,
+            ties_by_row: base.ties_by_row,
+        })));
+        let _ = table_of(bare);
+    }
+
+    /// m68k's file says `@lanes none`: its private pipeline reads no lanes. A consumer that later reaches
+    /// `enter` (the scheduler, machinecp's fixed units) got x86's table for ids that are not x86's, without a
+    /// word; it is refused by name, and `is_x86` is false for the file.
+    #[test]
+    #[should_panic(expected = "@lanes none")]
+    fn reading_the_lanes_of_a_file_that_says_none_is_refused() {
+        use llrm_lir::registers::{Info, Regs};
+        let base = &llrm_x86_m16::REGISTER_INFO;
+        let none = Regs(Box::leak(Box::new(Info {
+            table: base.table,
+            frame: base.frame,
+            stack: base.stack,
+            loads: base.loads,
+            scratch: base.scratch,
+            bytes: base.bytes,
+            data_segment: base.data_segment,
+            stack_segment: base.stack_segment,
+            code_segment: base.code_segment,
+            far_segment: base.far_segment,
+            widths: base.widths,
+            effects: base.effects,
+            cache: Default::default(),
+            views: base.views,
+            byte_lanes: false,
+            lanes_x86: false,
+            lanes_none: true,
+            ties_by_row: base.ties_by_row,
+        })));
+        assert!(!is_x86(none), "a file that says none is not x86's");
+        let _ = enter(none);
     }
 }

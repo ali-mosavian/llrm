@@ -7,6 +7,9 @@
 use llrm_wasm::dag::{ExceptionModel, Options};
 use llrm_wasm::driver;
 
+#[global_allocator]
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
+
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
@@ -17,7 +20,8 @@ fn run() -> i32 {
     let mut assembly = false;
     let mut object = false;
     let mut triple = "wasm32".to_owned();
-    let mut options = Options::default();
+    // The pin's `llc` defaults to -O2; the library default (-O0) is for the tests that pin it.
+    let mut options = Options { level: driver::Level::O2, ..Options::default() };
     let mut handling = false;
     let mut debug = false;
     let mut output = None;
@@ -42,6 +46,14 @@ fn run() -> i32 {
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if other.starts_with("-f") && driver::pass_flag(other) => {}
+            // `bounds` checks nothing in IR (llrm-cc); `stack` needs a C
+            // runtime this target lacks.
+            "-fsanitize=bounds" | "-fno-sanitize=bounds" | "-fno-sanitize=stack" => {}
+            "-fsanitize=stack" => {
+                eprintln!("llrm-wasm-llc: -fsanitize=stack: wasm has no C runtime stack check yet");
+                return 2;
+            }
             other if llrm_debug::is_debug_flag(other) => {
                 eprintln!("{}", llrm_debug::no_writer("llrm-wasm-llc", other, "wasm"));
                 return 2;

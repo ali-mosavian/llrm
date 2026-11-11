@@ -1,6 +1,7 @@
 //! `getMinMaxExpr` and the `getSMaxExpr`... family.
 
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use llrm_mir::opcode::IntPredicate;
 
@@ -153,10 +154,10 @@ impl ScalarEvolution {
         let ty = self.type_of(ops[0].scev);
         let size = self.compute_expression_size(&ops);
         let node = || match kind {
-            Type::SMax => Kind::SMax(ops.clone()),
-            Type::UMax => Kind::UMax(ops.clone()),
-            Type::SMin => Kind::SMin(ops.clone()),
-            Type::UMin => Kind::UMin(ops.clone()),
+            Type::SMax => Kind::SMax(Rc::from(ops.as_slice())),
+            Type::UMax => Kind::UMax(Rc::from(ops.as_slice())),
+            Type::SMin => Kind::SMin(Rc::from(ops.as_slice())),
+            Type::UMin => Kind::UMin(Rc::from(ops.as_slice())),
             _ => unreachable!(),
         };
         let s = self.intern(key, node, Some(ty), size);

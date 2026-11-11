@@ -185,3 +185,42 @@ b0:
 ";
     assert!(priced(text, true).contains("@get(i16 %"));
 }
+
+/// The walk asks for a component's promotion once per component, and each ask
+/// scanned the whole module for call sites and graphs (`memory_expansion`: 98
+/// asks, 352M of 9.95G instructions) though no member of the component had a
+/// parameter whose uses a promotion takes. A component without one builds no
+/// call graph.
+#[test]
+fn test_a_component_with_nothing_to_promote_builds_no_call_graph() {
+    let mut module = parsed(&format!(
+        "{}define internal i16 @plain(i16 %n) {{
+b0:
+  ret i16 %n
+}}
+
+define i16 @top(i16 %n) {{
+b0:
+  %r = call i16 @plain(i16 %n)
+  ret i16 %r
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
+    let id = module.globals.iter().position(|global| global.name.as_deref() == Some("plain")).expect("plain");
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::CallGraphs);
+    let changed = crate::argpromotion::promoted_among(
+        &mut module,
+        &layout,
+        &llrm_x86_m16::Dos::default().costs(),
+        false,
+        Some(&[llrm_mir::context::GlobalId(id as u32)]),
+    );
+    assert!(changed.is_empty());
+    assert_eq!(
+        llrm_mir::counts::get(llrm_mir::counts::Event::CallGraphs),
+        before,
+        "a call graph was built for nothing"
+    );
+}

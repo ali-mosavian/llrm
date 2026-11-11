@@ -30,6 +30,9 @@ first_argument_offset = 4
 first_argument_offset_far = 6
 # The frame register: a cell is addressed through it, and no value is held in it.
 frame = "bp"
+# DEVIATE ENTER16 (owner m16, exit 2026-11-12): `enter N, 0` is 4 B against `push bp; mov bp, sp; sub sp, N` at 6-7, taken at -Os only (strict
+# bytes there); on the 486 it costs 14 clocks against 3.
+frame_enter = true
 # Not `frame_optional`: 16-bit addressing has no [sp+disp], so a frame cell is addressed through BP (or BX/SI/DI, a register taken from the
 # values to free one), and the register stays the frame's. Only a 32-bit address size (m32) can name SP as the base.
 stack = "sp"
@@ -100,6 +103,10 @@ clobbered = []
 # or `iret` restores. The one statement of the layout: the backend pushes in this order and frontends name
 # registers through it.
 interrupt_frame = [["gs", 2], ["fs", 2], ["es", 2], ["ds", 2], ["edi", 4], ["esi", 4], ["ebp", 4], ["esp", 4], ["ebx", 4], ["edx", 4], ["ecx", 4], ["eax", 4], ["ip", 2], ["cs", 2], ["flags", 2]]
+# The segments its entry pushes after PUSHAD, in push order (the frame above holds them in reverse), and the
+# registers it then loads with DGROUP's selector: the first from the group, each next from the one before.
+interrupt_saves = ["ds", "es", "fs", "gs"]
+interrupt_data = ["ds", "es"]
 
 # watcall16: Open Watcom's 16-bit register convention (`wcc -ecw`, `__watcall`), medium model, read from `bwcc`'s own output.
 # Arguments take AX, DX, BX, CX in order; a long or a far pointer (4 bytes) takes DX:AX or CX:BX (the low word, or a far

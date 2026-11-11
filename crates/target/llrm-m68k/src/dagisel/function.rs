@@ -35,11 +35,13 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             boolean_contents: BooleanContents::ZeroOrNegativeOne,
             big_endian: true,
-            ..BuilderTarget::m32().dag
+            ..BuilderTarget::for_pointer_bits(32).dag
         },
         shift_amount: EVT::I32,
         jump_tables: false,
         string_instructions: false,
+        // no FPU at any CPU: a float travels as the integer of its width
+        soft_float: true,
         // past the inline limit a copy or a fill is a call (the
         // pin: `memcpy`, `memmove`, `memset`)
         libcalls: Some(vec![
@@ -54,7 +56,12 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: true,
             calling: Some(&*CALLING),
         }),
-        ..BuilderTarget::m32()
+        // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
+        // in `BuilderTarget`
+        va_arg_align_cap: Some(super::lowering::VA_SLOT),
+        // `Machine::max_alloca_align`: the frame realigns the stack pointer
+        max_alloca_align: None,
+        ..BuilderTarget::for_pointer_bits(32)
     }
 }
 
@@ -81,6 +88,10 @@ pub struct Selected {
     /// On the entry block: the function's static allocas, `(frame index, size,
     /// alignment)`.
     pub locals: Vec<(i32, i64, i64)>,
+    /// IR `unreachable` ends the block. The pin emits nothing for it (the
+    /// machine CFG comes from the IR); here a block with no terminator falls
+    /// into the next one, so emission states the end.
+    pub ends_unreachable: bool,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -89,12 +100,13 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false)
+    select_function_with(module, name, cpu, false, false, false, false, false, true, Default::default(), &Default::default(), &[])
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
 /// in place of the ILP list scheduler, and `indexed`: `(An)+` and `-(An)`
-/// accesses, and `short`: `addq` and `subq`.
+/// accesses, `short`: `addq` and `subq`, and `absolute_data`: a global's
+/// address is an absolute one, not PC-relative ([`crate::compile::CodeModel`]).
 pub fn select_function_with(
     module: &Module,
     name: &str,
@@ -102,6 +114,12 @@ pub fn select_function_with(
     source_order: bool,
     indexed: bool,
     short: bool,
+    absolute_data: bool,
+    size: bool,
+    carry_chain: bool,
+    price: crate::timing::Price,
+    mul: &super::mulprice::Chain,
+    libcalls: &[crate::libcalls::Kind],
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -113,7 +131,11 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let mut target = builder_target();
+    // DEVIATE M68K-DIVSIZE: from the 68020 a divide by a constant stays one
+    // `divu.l` in a size build (4-6 B) where the pin's default (`isIntDivCheap`
+    // false) makes the multiply-high sequence (10-14 B, `mulu.l` and shifts);
+    // X86 and AArch64 return the size flag here too. Owner m68k. Exit: none.
+    let mut target = builder_target().with_int_div_cheap(size && cpu.at_least(Cpu::M68020));
     target.ordered_copies = indexed;
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
@@ -126,13 +148,48 @@ pub fn select_function_with(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
-            .map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(
+            &mut built.dag,
+            cpu,
+            source_order,
+            indexed,
+            short,
+            absolute_data,
+            carry_chain,
+            price,
+            mul.clone(),
+            libcalls,
+            &mut temporaries,
+        )
+        .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, parent: block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        let ends_unreachable = function
+            .terminator(block)
+            .is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable);
+        selected.push(Selected {
+            block,
+            parent: block,
+            dag: built.dag,
+            units,
+            phis: Vec::new(),
+            locals: Vec::new(),
+            ends_unreachable,
+        });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
-                .map_err(|why| format!("{why:?}"))?;
+            let units = select_block_with(
+                &mut extra.dag,
+                cpu,
+                source_order,
+                indexed,
+                short,
+                absolute_data,
+                carry_chain,
+                price,
+                mul.clone(),
+                libcalls,
+                &mut temporaries,
+            )
+            .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected {
                 block: id,
@@ -141,6 +198,7 @@ pub fn select_function_with(
                 units,
                 phis: Vec::new(),
                 locals: Vec::new(),
+                ends_unreachable: false,
             });
         }
     }

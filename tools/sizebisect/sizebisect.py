@@ -1,6 +1,6 @@
 """Machine instruction counts per stage of two builds' compile of one file (ISEL_DUMP): where a size change enters.
 
-    tools/sizebisect/sizebisect.py BASE_LLRM NEW_LLRM LEVEL SRC [llrm-c args...]
+    tools/sizebisect/sizebisect.py BASE_LLRM NEW_LLRM LEVEL SRC [llrm-cc args...]
 """
 import os,re,sys,glob,subprocess
 base,new,lvl,src=sys.argv[1:5]; extra=sys.argv[5:]

@@ -33,6 +33,11 @@ fn tracked(pattern: &str) -> Vec<Source> {
         .collect()
 }
 
+/// Numbers a `///` or `//` comment names as `DEVIATE SDn` with no registry row,
+/// found when the test began to read those comments (2026-11-07): a ratchet,
+/// each to get its row and leave this list; a number not here needs its row at once.
+const UNREGISTERED: &[u32] = &[];
+
 /// A number outside its owner's block: SD44..SD99 are closed, SD100.. go
 /// to sdag-a, SD200.. to sdag-b, SD300.. to sdag-c, SD400.. to sdag-d.
 fn block_problem(
@@ -58,9 +63,22 @@ fn problems(
     code: &[Source],
     docs: &[Source],
 ) -> Vec<String> {
+    problems_with(plan, code, docs, UNREGISTERED)
+}
+
+/// [`problems`] with the ratchet list `unregistered`.
+fn problems_with(
+    plan: &Source,
+    code: &[Source],
+    docs: &[Source],
+    unregistered: &[u32],
+) -> Vec<String> {
     let row = Regex::new(r"^\|\s*SD(\d+)\s*\|\s*([\w-]+)\s*\|").unwrap();
     let bold = Regex::new(r"^\s*[-*]\s+\*\*SD(\d+)\*\*").unwrap();
     let deviate = Regex::new(r"^//!\s*(?:[-*]\s+\*\*SD(\d+)\*\*|DEVIATE\s+SD(\d+):)").unwrap();
+    // A `///` or `//` comment that opens with `DEVIATE SDn` is a use of the number, not a declaration
+    // (many sites repeat one), but the number needs its row.
+    let mention = Regex::new(r"^\s*///?\s*DEVIATE\s+SD(\d+)").unwrap();
     let mut out = Vec::new();
 
     let mut rows: BTreeMap<u32, usize> = BTreeMap::new();
@@ -96,6 +114,21 @@ fn problems(
         }
         if !rows.contains_key(id) {
             out.push(format!("SD{id} is declared at {} but has no row in the registry of {}", places[0], plan.path));
+        }
+    }
+
+    let mut mentioned: BTreeMap<u32, String> = BTreeMap::new();
+    for file in code {
+        for (at, line) in file.text.lines().enumerate() {
+            if let Some(found) = mention.captures(line) {
+                let id: u32 = found[1].parse().unwrap();
+                mentioned.entry(id).or_insert_with(|| format!("{}:{}", file.path, at + 1));
+            }
+        }
+    }
+    for (id, place) in &mentioned {
+        if !rows.contains_key(id) && !declared.contains_key(id) && !unregistered.contains(id) {
+            out.push(format!("SD{id} is named by a DEVIATE comment at {place} but has no row in the registry of {}", plan.path));
         }
     }
 
@@ -189,4 +222,21 @@ fn references_are_not_declarations() {
         "//! DEVIATE SD1: real\n//! see (DEVIATE SD1) and SD2 in the text\nfn f() { /* DEVIATE SD1: not a header */ }\n",
     )];
     assert!(problems(&plan, &code, &[]).is_empty());
+}
+
+/// `/// DEVIATE SDn` and `// DEVIATE SDn` were never read: SD213 was used in a
+/// `///` comment with no row and the test stayed green. A number so named with
+/// no row is reported; one with a row, or on the ratchet list, is not.
+#[test]
+fn a_comment_naming_a_number_with_no_row_is_reported() {
+    let plan = source("plan.md", PLAN_TEXT);
+    let code = [source("a.rs", "    /// DEVIATE SD3: no row
+    // DEVIATE SD4: no row either
+    // DEVIATE SD1: has one
+    // DEVIATE SD440: on the ratchet
+")];
+    let found = problems_with(&plan, &code, &[], &[440]);
+    assert!(found.iter().any(|problem| problem.contains("SD3") && problem.contains("a.rs:1")), "{found:?}");
+    assert!(found.iter().any(|problem| problem.contains("SD4") && problem.contains("a.rs:2")), "{found:?}");
+    assert_eq!(found.len(), 2, "{found:?}");
 }

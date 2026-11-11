@@ -24,3 +24,6 @@ AM-DI-1..5 of the first version (hanoi, queens, bintree, sieve) are closed by th
 
 ## What is still to find (exit 2026-11-13)
 What remains is the loads only the per-range proof covers (the x87 `fld` of globals in nbody and QCport's d_alias/d_sprite, array descriptors, m16 `es` loads). The pin has no counterpart: either the facts become an invariant-load flag on the instruction (X86InstrInfo's rule with the flag set from the proof), or the default flips per target with the evidence.
+
+## Call-frame pseudos are not writers (2026-11-05)
+`call_frame_setup`/`call_frame_destroy` (ADJCALLSTACKDOWN/UP) only move the stack pointer; `Insn::unmodeled_write` took them for writes of memory, so no load survived a call with stack arguments. Now they are not writers; a call that may write memory still is (`stable_load_across_pure_call32.c`: pure call 0 spills, plain call 3). Default stays off. Bench A/B with the flag on, bytes (m32 -O2/-O3 nbody_fixed +4/+8, m64 nbody_fixed +96/+88, sfm16_float m32 +0/-10/-13 (O2/O3/m16 -Os)); default flags: 0 diffs over 47+47+40 files x O2/O3/Os.
