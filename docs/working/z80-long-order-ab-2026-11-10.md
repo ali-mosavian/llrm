@@ -45,8 +45,9 @@ decomposed 892 -> 827 B; the O1 rule picks by relative regret). The delta is all
 argument and result, now HL low / DE high. Output of `LLRM_Z80_PRICE_WHY` (local instrument, not committed).
 `idioms` O2 (+77 B, -116k T): one `main`, 2091 -> 2058 instructions but `(ix+d)` accesses 854 -> 909 (3 B each), register moves 234 -> 182,
 pushes 57 -> 31: more stack-slot traffic, fewer moves; the first differing allocation decision is not yet read.
-Other cells (recdeep +36, word_compare_branches +28, loop_versioning +22, rep_count +17 at O2): first
-differing decision not yet read.
+Same read at O2 for the others (`(ix+d)` accesses pre -> post): recdeep 94 -> 110, loop_versioning 70 -> 85 (pushes 33 -> 19),
+rep_count 17 -> 25, word_compare_branches 117 -> 120. All five grow in stack-slot traffic: one shared cause class, more values
+in slots where a long lives in HL:DE. The first differing allocation decision (which interval loses HL) is not yet read.
 
 ## Against the best SDCC (the bar), cells with a bar
 
