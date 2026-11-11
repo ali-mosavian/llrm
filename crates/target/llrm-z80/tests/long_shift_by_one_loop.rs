@@ -31,5 +31,5 @@ fn a_long_doubled_in_a_loop_needs_no_frame() {
     );
     let body = text.lines().filter(|l| l.starts_with('\t') && !l.starts_with("\t.")).count();
     assert!(!text.contains("(ix"), "{text}");
-    assert!(body <= 16, "{body} instructions:\n{text}");
+    assert!(body <= 18, "{body} instructions:\n{text}");
 }

@@ -135,7 +135,7 @@ fn sink_into(
         let insts = &function.blocks[b].insts;
         // the copy into hl just ahead of the shift, and the copy out of hl just after
         let mut unit = vec![shift];
-        let Operand::Use(hl) = insts[shift].operands[4] else { continue };
+        let Operand::Use(hl) = insts[shift].operands[4] else { return false };
         let Some(copy_in) = (0..shift).rev().find(|&k| {
             matches!(&insts[k].operands[..], [Operand::Def(d), Operand::Use(_)] if *d == hl && insts[k].kind == Kind::Copy)
         }) else {
@@ -238,7 +238,8 @@ fn sink_into(
             .filter_map(|o| if let Operand::Use(Reg::Virt(v)) = o { Some(*v) } else { None })
             .collect();
         let overwritten = insts.iter().enumerate().any(|(k, inst)| {
-            !in_unit(k)
+            k > first
+                && !in_unit(k)
                 && inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(v)) if reads_virtual.contains(v)))
         });
         if blocked || overwritten {
