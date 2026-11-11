@@ -23,6 +23,8 @@
 //! (x_prefix -12 B unrotated, x_transpose +34 B), so the finished code decides.
 
 
+use std::collections::BTreeSet;
+
 use llrm_mir::module::Module;
 use llrm_mir::program::Program;
 use llrm_transforms::trial::{self, differing, only};
