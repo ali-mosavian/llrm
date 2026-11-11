@@ -394,6 +394,14 @@ pub trait Target {
         1.0
     }
 
+    /// The status-flags register, which a machine instruction that `sets_flags`
+    /// writes without naming it (the pin's `implicit-def $ccr`). The SSA
+    /// converter gives such an instruction a pinned value for it where a later
+    /// instruction of the block reads the register by name.
+    fn flags_register() -> Option<RegId> {
+        None
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.
