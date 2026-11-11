@@ -179,11 +179,12 @@ pub fn observe(function: &crate::mfunc::MFunc) -> Result<(), String> {
 }
 
 /// The phases of the pin's SSA optimization group that move or merge code:
-/// `MachineCSE`, then `MachineSink` (`addMachineSSAOptimization` order). The
+/// `MachineLICM`, `MachineCSE`, then `MachineSink` (`addMachineSSAOptimization`
+/// order). The licm hoists the loop-made constants the others leave. The
 /// sink alone leaves the per-use copies of a constant the selector made in the
 /// entry, and sinks each into its use block; the CSE first makes them one
 /// value with several users, which has no block to sink into.
-const SSA_GROUP: [&str; 2] = ["MachineCSE", "MachineSink"];
+const SSA_GROUP: [&str; 3] = ["MachineLICM", "MachineCSE", "MachineSink"];
 
 /// `function` after the shared phases of [`SSA_GROUP`], which run on the
 /// selector's body with its phis (the pin runs them before `PhiElimination`),
