@@ -653,6 +653,12 @@ impl FunctionPass for LoopVectorize {
             eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         let opt_size = has_opt_size(unit.function);
+        // DEVIATE LV-OS (owner llrm-arm64-vec, exit 2026-11-24): the pin widens an
+        // optsize loop whose trip count VF divides; here none, until the cause card
+        // for the bytes it adds at -Os (histo, scroll, jpeg) is closed.
+        if opt_size {
+            return PreservedAnalyses::all();
+        }
         let mut changed = crate::loopsimplify::simplified(unit.function);
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         let worklist: Vec<BlockId> = {

@@ -90,6 +90,8 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## LV-X2: integer binary operations (2026-11-11)
 
+- **LV-OS (2026-11-11, oversight ruling): no vectorizing at -Os/-Oz** (`optsize`/`minsize`). The pin widens an optsize loop whose trip count VF divides; flag on that added bytes at Os (histo +4, scroll +4, jpeg_fixed +24, jpeg_single +16). Owner llrm-arm64-vec, exit 2026-11-24: the cause card, then the gate goes.
+
 - Pass: LoopVectorize `VPWidenRecipe` (widen `add`, `sub`, `mul`, `and`, `or`, `xor`, `shl`, `lshr`, `ashr` over loaded and loop-invariant operands); NEON `addTypeForNEON`, `LowerVectorSRA_SRL_SHL`.
 - Planner: the PIN rows already priced `add`; `mul <2 x i64>` is invalid (the pin leaves it scalar).
 - Backend: `VectorBinary`, `VectorShift`, `VectorNot` (mc, text, encode checked against the pinned `llvm-mc`, lir round trip, regalloc wide registers); shifts by a constant splat lower to `VSHL`/`VLSHR`/`VASHR`.

@@ -168,6 +168,17 @@ fn no_remainder_is_made_where_the_pin_allows_none() {
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
 }
 
+/// DEVIATE LV-OS: an optsize loop whose trip count VF divides was widened and
+/// added bytes at -Os (histo +4, scroll +4, jpeg_fixed +24); it stays scalar.
+#[test]
+fn an_optsize_loop_stays_scalar_even_when_vf_divides_the_trip_count() {
+    let text = run(&COPY.replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize"));
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+    let text = run(&COPY.replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) minsize"));
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+    assert_eq!(count(&run(COPY), "<8 x i16>") > 0, true);
+}
+
 /// A trip count `n` the loop is given: the pin checks `n < 16` (minimum
 /// iterations), widens `n - n % 16` iterations (`n.vec`), tests `n == n.vec` in
 /// the middle block and enters the remainder at `n.vec`, or at 0 for a short
