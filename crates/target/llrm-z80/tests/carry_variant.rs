@@ -35,15 +35,32 @@ fn a_plain_long_add_keeps_the_carry_ops() {
     }
 }
 
-/// -O1 is strict on both axes. `main` of byte_multiply with the generic form of
-/// its long adds is smaller but slower (the program 340 B against 349 B, +13007
-/// T, 1.2%): the regret rule took it, giving up the clocks the carry
-/// ops win. It is taken only where it is no worse on either axis. Priced as the
-/// choice prices it (as emitted, by loop).
+/// The levels strict on both axes allow no trade. `main` of object_extent_loop
+/// (-Os) with the generic form of its long adds is a byte smaller and slower
+/// (+4896 T over the program): taken only where it is no worse on either axis.
+/// Priced as the choice prices it (as emitted, by loop).
 #[test]
-fn the_generic_form_is_taken_at_o1_only_if_no_slower() {
-    let ir = include_str!("data/byte_multiply_o1.ll");
-    let lines = llrm_z80::compile::lines(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
-    let (bytes, clocks) = price_emitted(&lines, true);
-    assert!(clocks <= 1_082_902, "main is {bytes} B / {clocks} T at -O1, the carry ops' form is 349 B / 1082902 T");
+fn the_generic_form_is_taken_at_a_strict_level_only_if_no_slower() {
+    let ir = include_str!("data/object_extent_loop_os.ll");
+    let lines = llrm_z80::compile::lines(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let (bytes, clocks) = price_emitted(&lines, false);
+    assert!(clocks <= 332_349, "main is {bytes} B / {clocks} T at -Os, the carry ops' form is 703 B / 332349 T");
+}
+
+/// call_keeps -O1: `churn` and `hold` have a multiply alternative (all
+/// multiplies calls) and carry ops. The all-calls form with carry ops is 953 B
+/// against 888 B with the generic add, and the inline form shrank from 1285 B
+/// to 1194 B, so the regret rule flipped to the inline form: the cell went 1473
+/// B / 64413 T to 1740 B / 55322 T (SDCC 1535 B). The carry choice is made for
+/// each form, before the inline-or-calls choice.
+#[test]
+fn a_function_with_a_multiply_alternative_resolves_its_carry_ops_per_form() {
+    let ir = include_str!("data/call_keeps_o1.ll");
+    let size = |name: &str| {
+        let lines =
+            llrm_z80::compile::lines(ir, name, 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+        price_emitted(&lines, true)
+    };
+    let (churn, hold) = (size("churn"), size("hold"));
+    assert!(churn.0 <= 888 && hold.0 <= 434, "churn {churn:?} hold {hold:?}, the all-calls forms are 888 B and 434 B");
 }
