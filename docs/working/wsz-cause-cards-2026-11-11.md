@@ -32,7 +32,7 @@ Instrument: `tools/wasm_corpus.sh` (bytes vs the pin), then per program the func
 | WSZ-22 | idioms +43 O2/O3 | mid-end, one inlined function | scattered opcode deltas, no extension delta |
 | WSZ-23 | loop_interchange +3 | loop-heavy | `shr_u`/`shl` for `and` |
 | WSZ-24 | memcpy_libcall +8 O2/O3 | mid-end +2, backend +6 | `block`/`end` +2, `i32.xor` +2 |
-| WSZ-25 | memfuncs_runtime +7 O2 / +35 O3 | loop-heavy | -1 block, +1 `ge_u`, +1 `and` |
+| WSZ-25 | memfuncs_runtime +7 O2 / +35 O3 | backend or later (post-CGP IR has the same shape both sides: `icmp ult (n-1), 3` sunk into the loop) | the pin holds `(n-1) <u 3` in a local set once before the first loop; ours keeps `n-1` in the local and recomputes `lt_u` at each use (`local.get; i32.const 3; i32.lt_u`), plus one block/`ge_u` shape change. Pin `early-machinelicm` hoists only the constant here, so the pass that moves the compare is not found; our machine_licm.rs hoists constants only (DEVIATE 1) |
 | WSZ-26 | object_extent_loop +4 | mid-end (ours-llc-on-pin-IR 1469 < pin 1489) | locals +1, `i32.shl` +1 |
 | WSZ-29 | stack_arrays_copy +16 O2 | mid-end | two `i8` copies where the pin copies one `i16` |
 
