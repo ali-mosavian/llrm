@@ -113,6 +113,9 @@ pub struct Options {
     /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
     /// ([`crate::cmpshift`]).
     pub reuse_shift_flags: bool,
+    /// A `tst` of the register an `add` of it to itself just doubled reads the
+    /// carry the `add` left instead ([`crate::cmpcarry`]).
+    pub reuse_shift_out_flags: bool,
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
@@ -204,6 +207,7 @@ impl Options {
         short: false,
         hoist_flag_setters: false,
         reuse_shift_flags: false,
+        reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
         shared_cse: false,
         direct_copies: false,
@@ -242,6 +246,7 @@ impl Default for Options {
             short: true,
             hoist_flag_setters: true,
             reuse_shift_flags: true,
+            reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
             shared_cse: false,
             direct_copies: false,
@@ -528,13 +533,13 @@ fn items_once(
         }
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
-        crate::addrarith::address_adds(&mut function, cpu, wants_size);
+        crate::addrroles::address_roles(&mut function);
+        crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
         crate::foldload::fold_loads(&mut function);
         crate::divrem::remainders_from_quotients(&mut function);
         if wants_size {
             crate::foldarg::fold_argument_loads(&mut function);
         }
-        crate::addrroles::address_roles(&mut function);
         if options.compare_destinations {
             touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
         }
@@ -564,6 +569,9 @@ fn items_once(
         function = crate::regalloc::shared_cse(&function)?;
     }
     machine_sink(&mut function);
+    if options.short && options.reuse_shift_out_flags {
+        crate::cmpcarry::reuse_shift_out_flags(&mut function);
+    }
     crate::regalloc::split_flag_edges(&mut function);
     if !options.shared_prelude {
         eliminate_phis_with(&mut function, false);

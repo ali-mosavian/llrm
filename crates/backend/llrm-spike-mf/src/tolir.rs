@@ -259,7 +259,7 @@ impl<T: Target> Converted<T> {
         let before = self.body.registers.replace(registers);
         let allocatable = self.body.clone();
         self.body = self.with_effects(function, registers);
-        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, |_, counted| {
+        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, &*T::scheduling_model(), |_, counted| {
             let mut model =
                 llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|(_, limit)| *limit).collect());
             for value in 1..=known {
@@ -414,6 +414,9 @@ impl<T: Target> Converted<T> {
                             reads.extend(memory.iter().copied());
                         }
                         let mut made = (**one).clone().standing_for(one);
+                        if let Some(form) = inst.form.as_ref().and_then(|form| in_body_values::<T>(form, inst, one)) {
+                            made.what = Some(form);
+                        }
                         made.volatile = made.volatile || inst.side_effects;
                         made.memory = inst.memory;
                         if let Some(what) = made.what.as_mut() {
@@ -2662,7 +2665,7 @@ pub fn from_lir<T: Target>(
                     // A zero stored from the zero register
                     // (`fold_memory_operand`).
                     let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
-                    insts.push(made);
+                    place_spill(&mut insts, made)?;
                     if !slots.iter().any(|(one, _)| *one == slot) {
                         slots.push((slot, T::any()));
                     }
@@ -2702,7 +2705,7 @@ pub fn from_lir<T: Target>(
                 } else {
                     T::spill_load(class, register, slot)
                 };
-                insts.push(made.ok_or("the target states no spill form")?);
+                place_spill(&mut insts, made.ok_or("the target states no spill form")?)?;
                 // a lane store says nothing of the slot's size
                 if lane.is_none() && !slots.iter().any(|(one, _)| *one == slot) {
                     slots.push((slot, class));
@@ -3062,5 +3065,133 @@ mod palette_tests {
         assert_eq!(distinct.len(), 2, "one set per distinct order");
         assert_eq!(palettes[&1].iter().copied().collect::<Vec<_>>(), first);
         assert_eq!(palettes[&100].iter().copied().collect::<Vec<_>>(), second);
+    }
+}
+
+/// A spill goes in before the terminators the block has so far. A def that
+/// shares a bundle with its terminator (`LDI` and the `BEQ` that reads its
+/// flags) is one instruction to greedy, which stores it after the bundle; the
+/// pin stores after the def inside the bundle, before the terminator
+/// (`InlineSpiller::insertSpill`, `std::next(MI)`; SplitKit
+/// `findInsertLocation` likewise stays before the first terminator).
+///
+/// DEVIATE (row S2-BUNDLE-SPILL): an LIR bundle has no position inside it, so
+/// the store is moved here instead of made inside. Exit: 2026-12-01, or when
+/// bundles carry inside positions.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1277-L1299>
+fn place_spill(
+    insts: &mut Vec<Inst>,
+    spill: Inst,
+) -> Result<(), String> {
+    let at = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+    if at < insts.len() && spill.sets_flags && insts[at..].iter().any(|inst| inst.reads_flags) {
+        return Err("a spill between a flag setter and the terminator that reads the flags".into());
+    }
+    insts.insert(at, spill);
+    Ok(())
+}
+
+/// `form` with its values the body's: the k-th def operand of `inst` is the
+/// k-th value `one` defines, the k-th use operand its k-th use (a register the
+/// target reserves is no value). The form names what the target's selector
+/// chose (the scheduler's model reads it); the body's values are what its
+/// graph and pressure read. None where the counts differ or a value has no
+/// operand.
+fn in_body_values<T: Target>(
+    form: &Semantics,
+    inst: &Inst,
+    one: &Insn,
+) -> Option<Semantics> {
+    // The form names the registers `form_operands` had; the body's values
+    // stand at the same positions in the instruction as it is now.
+    let registers = |operands: &[Operand]| {
+        let (mut defs, mut uses) = (Vec::new(), Vec::new());
+        for operand in operands {
+            let (list, register) = match operand {
+                Operand::Def(register) => (&mut defs, register),
+                Operand::Use(register) => (&mut uses, register),
+                _ => continue,
+            };
+            match register {
+                Reg::Virt(n) => list.push(*n),
+                Reg::Phys(register) if !T::reserved(T::root(*register)) => list.push(u32::MAX),
+                Reg::Phys(_) => {}
+            }
+        }
+        (defs, uses)
+    };
+    let ((defs, uses), (now_defs, now_uses)) = (registers(&inst.form_operands), registers(&inst.operands));
+    if defs.len() != one.defines.len()
+        || uses.len() != one.uses.len()
+        || now_defs.len() != defs.len()
+        || now_uses.len() != uses.len()
+    {
+        return None;
+    }
+    renumbered(form, defs, uses, &one.defines, &one.uses)
+}
+
+/// `form` with each register number `defs`/`uses` list (as the instruction's
+/// operands named them, `u32::MAX` for a physical one) standing for the value
+/// at the same position of `defines`/`uses`.
+fn renumbered(
+    form: &Semantics,
+    defs: Vec<u32>,
+    uses: Vec<u32>,
+    defines: &[u32],
+    reads: &[u32],
+) -> Option<Semantics> {
+    let numbered = |numbers: Vec<u32>, values: &[u32]| -> std::collections::HashMap<u32, u32> {
+        numbers.into_iter().zip(values.iter().copied()).filter(|(number, _)| *number != u32::MAX).collect()
+    };
+    let (def_map, use_map) = (numbered(defs, defines), numbered(uses, reads));
+    let held = |held: &Held, map: &std::collections::HashMap<u32, u32>| -> Option<Held> {
+        Some(Held { value: *map.get(&held.value)?, ..*held })
+    };
+    let remap = |loc: &Loc, map: &std::collections::HashMap<u32, u32>| -> Option<Loc> {
+        Some(match loc {
+            Loc::Held(each) => Loc::Held(held(each, map)?),
+            Loc::Mem(cell) => {
+                let mut cell = cell.clone();
+                for slot in [&mut cell.base, &mut cell.index, &mut cell.selector] {
+                    if let Some(each) = slot.as_ref() {
+                        *slot = Some(held(each, map)?);
+                    }
+                }
+                Loc::Mem(cell)
+            }
+            other => other.clone(),
+        })
+    };
+    let dests = form.dests.iter().map(|loc| remap(loc, &def_map)).collect::<Option<Vec<_>>>()?;
+    let sources = form.sources.iter().map(|loc| remap(loc, &use_map)).collect::<Option<Vec<_>>>()?;
+    Some(form.with_operands(form.name.clone(), dests, sources))
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+
+    fn held(value: u32) -> Loc {
+        Loc::Held(Held { value, width: 4, offset: 0 })
+    }
+
+    /// A pass rewrote a read after the form was made (`fadd v3, v1, v2` became
+    /// `fadd v3, v1, v9`): the form still names `v2`, and the instruction was
+    /// left without it, so the scheduler priced `FADDSrr` and `FDIVSrr` of
+    /// arm64 `nbody_single` -O3 by the default latency (14 of its 53 float
+    /// ops). The form's numbers are those of the operands it was made from.
+    #[test]
+    fn a_read_renamed_after_the_form_was_made_keeps_its_form() {
+        let form = Semantics {
+            dests: vec![held(3)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        // Operands when the form was made: defs [3], uses [1, 2]; the body's
+        // values are one more than the registers, the read now being v9's.
+        let got = renumbered(&form, vec![3], vec![1, 2], &[4], &[2, 10]).expect("the form stays");
+        assert_eq!(got.dests, vec![held(4)]);
+        assert_eq!(got.sources, vec![held(2), held(10)]);
     }
 }

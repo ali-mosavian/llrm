@@ -241,6 +241,13 @@ pub trait Target {
         false
     }
 
+    /// The processor the pre-RA scheduler schedules for
+    /// (`TargetSchedModel`). Here the generic one, as before; DEVIATE MS7
+    /// until a target states its own.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        std::rc::Rc::new(llrm_codegen::backend::schedmodel::GenericModel)
+    }
+
     /// Whether the row `name`, loading an incoming stack argument (a frame slot
     /// below zero) that nothing writes or takes the address of, is made again
     /// where it is read, not stored and reloaded: the pin's rule for an

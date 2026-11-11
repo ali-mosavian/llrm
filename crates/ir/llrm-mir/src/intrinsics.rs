@@ -962,7 +962,14 @@ fn from_intrinsics_td(
 ) {
     let Some(set) = table_set(name) else { return };
     let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
-    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).into())).collect();
+    // DEVIATE: the declaration does not carry `nocreateundeforpoison`; see
+    // `never_creates_undef_or_poison`.
+    function.attrs = set
+        .function
+        .iter()
+        .filter(|&&one| one != "nocreateundeforpoison")
+        .map(|one| Attribute::Flag((*one).into()))
+        .collect();
     if !set.memory.is_empty() {
         function.attrs.push(Attribute::Memory(
             set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -1006,6 +1013,12 @@ pub(crate) fn table_set(name: &str) -> Option<&'static intrinsic_attrs::Set> {
         }
         end = name[..end].rfind('.')?;
     }
+}
+
+/// `IntrNoCreateUndefOrPoison`: whether `Intrinsics.td` says the intrinsic
+/// `name` names never creates undef or poison from defined operands.
+pub fn never_creates_undef_or_poison(name: &str) -> bool {
+    table_set(name).is_some_and(|set| set.function.contains(&"nocreateundeforpoison"))
 }
 
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for

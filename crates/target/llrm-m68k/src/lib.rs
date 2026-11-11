@@ -15,6 +15,7 @@ pub mod classcheck;
 pub mod classsplit;
 pub mod cmpdup;
 pub mod cmpelim;
+pub mod cmpcarry;
 pub mod cmpshift;
 pub mod commutative;
 pub mod compile;
