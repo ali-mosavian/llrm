@@ -7,7 +7,11 @@ import sys
 # 78803551, the DOS/x87 value. The float result depends on contraction, so aarch64 cannot reach it.
 # Every level prints 40144774 (O1 and O3 were missed at first: their cells failed the check).
 CAUSE = "verified: value depends on -ffp-contract (off 502187692, on 40144774)"
-EXCEPTIONS = {("stft_single", level): ("40144774", "78803551", CAUSE) for level in ("O1", "O2", "O3", "Os")}
+EXCEPTIONS = {("stft_single", level): ("40144774", "78803551", CAUSE) for level in ("O1", "O2", "O3", "Os", "Oz")}
+# grep: rt.c feeds 64 KiB of fixed text, not the 10 MB corpus the .out (4745 lines, 200504993) was made from, and `reported` holds only the
+# last report (the checksum). gcc -m32 on the same text prints 538 lines, checksum 109617741; clang, gcc and ours agree on it at every level.
+GREP_CAUSE = "verified: rt.c's 64 KiB text, host gcc -m32 checksum 109617741 (the .out is for the 10 MB corpus)"
+EXCEPTIONS.update({("grep", level): ("109617741", "4745", GREP_CAUSE) for level in ("O1", "O2", "O3", "Os", "Oz")})
 
 
 def same_value(reported, expected):
