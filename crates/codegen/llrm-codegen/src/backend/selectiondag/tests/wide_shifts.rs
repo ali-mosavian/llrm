@@ -144,6 +144,60 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     assert_eq!(dag.opcode(dag.operand(high, 1)), ISD::Shl, "the true value is the shift by amount & 31");
 }
 
+fn reachable_opcodes(
+    dag: &SelectionDAG,
+    root: SDValue,
+) -> Vec<ISD> {
+    let (mut seen, mut stack, mut found) = (Vec::new(), vec![root], Vec::new());
+    while let Some(v) = stack.pop() {
+        if seen.contains(&v.node) {
+            continue;
+        }
+        seen.push(v.node);
+        found.push(dag.opcode(v));
+        stack.extend((0..dag.node(v).ops.len()).map(|i| dag.operand(v, i)));
+    }
+    found
+}
+
+/// An `i64` shifted by `n & 31` took the select expansion (a `shl_parts` node
+/// or a funnel shift) because the clear bit 5 was only used with a legal
+/// funnel shift and only bit 5 was read: m68k repeated the `amount < 32` test
+/// five times per iteration, +109% clocks on shift_int64_masked_amount. The
+/// pin shifts by one, then by `amount ^ 31`, with no select and no funnel.
+#[test]
+fn a_shift_by_an_amount_known_below_the_half_width_has_no_select_and_no_funnel() {
+    let expand_funnel = |tli: &mut TargetLowering| {
+        tli.set_operation_action(ISD::FShl, MVT::I32, Action::Expand);
+        tli.set_operation_action(ISD::FShr, MVT::I32, Action::Expand);
+    };
+    for (funnel_legal, op) in [(true, ISD::Shl), (true, ISD::Srl), (false, ISD::Shl), (false, ISD::Sra)] {
+        let mut tli = p5();
+        if !funnel_legal {
+            expand_funnel(&mut tli);
+        }
+        let mut dag = dag();
+        let x = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
+        let register = dag.get_register(EVT::I8, 9);
+        let mask = dag.get_constant(31, EVT::I8);
+        let amount = dag.get_node(ISD::And, EVT::I8, &[register, mask]);
+        let moved = dag.get_node(op, EVT::I64, &[x, amount]);
+        let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
+        let thirty_two = dag.get_constant(32, EVT::I8);
+        let upper = dag.get_node(ISD::Srl, EVT::I64, &[moved, thirty_two]);
+        let high = dag.get_node(ISD::Truncate, EVT::I32, &[upper]);
+        let both = dag.get_node(ISD::Add, EVT::I32, &[low, high]);
+        dag.set_root(both);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let root = dag.get_root();
+        let used = reachable_opcodes(&dag, root);
+        for banned in [ISD::ShlParts, ISD::SrlParts, ISD::SraParts, ISD::FShl, ISD::FShr, ISD::Select, ISD::SelectCC] {
+            assert!(!used.contains(&banned), "{op:?}, funnel legal {funnel_legal}: {banned:?} in {used:?}");
+        }
+        assert!(used.contains(&ISD::Xor), "{op:?}, funnel legal {funnel_legal}: no amount ^ 31 in {used:?}");
+    }
+}
+
 /// A shift with an amount and no `shl_parts` (the table empty) is refused.
 #[test]
 fn a_variable_shift_without_the_parts_node_is_refused() {
