@@ -422,7 +422,10 @@ impl TargetLowering {
             };
         }
         let shift = matches!(op, ISD::Shl | ISD::Srl | ISD::Sra);
-        let sized = (self.opt_for_size || (self.force_shift_calls && shift))
+        // a forced shift call (a module that links the shift routine anyway) takes the size routine of a
+        // constant-or-variable amount, not one that is slower for a size gain only a size-tuned function wants
+        let forced = self.force_shift_calls && shift && !self.maps.size_variable_only.contains_key(&(op, vt));
+        let sized = (self.opt_for_size || forced)
             .then(|| self.maps.size_libcall_names.get(&(op, vt)).copied())
             .flatten();
         sized.or_else(|| self.maps.libcall_names.get(&(op, vt)).copied())
@@ -1208,6 +1211,25 @@ mod tests {
         sized.set_opt_for_size(true);
         assert!(sized.calls_for_size_shift(13, 32));
         assert_eq!(sized.libcall_name(ISD::Mul, EVT::I32), Some("__small_mul"));
+    }
+
+    /// z80's 64-bit size shift routine takes a variable amount (`set_size_variable_libcall_name`) and is slower
+    /// than the speed one by a factor of 3: a forced shift call at -O1 (`set_force_shift_calls`) took it, so
+    /// call_cleanup_keeps_pair was 88 B smaller and 523k T slower. Only a function tuned for size takes it, and
+    /// a constant amount never does.
+    #[test]
+    fn a_variable_only_size_routine_is_for_size_tuned_functions_alone() {
+        let build = |force: bool, size: bool| {
+            let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+            t.set_libcall_name(ISD::Shl, MVT::I64, "__fast_shl");
+            t.set_size_variable_libcall_name(ISD::Shl, MVT::I64, "__small_shl");
+            t.set_force_shift_calls(force);
+            t.set_opt_for_size(size);
+            t
+        };
+        assert_eq!(build(true, false).libcall_name(ISD::Shl, EVT::I64), Some("__fast_shl"), "forced: the speed routine");
+        assert_eq!(build(false, true).libcall_name(ISD::Shl, EVT::I64), Some("__small_shl"), "sized: the size routine");
+        assert!(!build(false, true).has_size_libcall_name(ISD::Shl, EVT::I64), "a constant amount has no size call");
     }
 
     /// `PSEUDO_FMIN`/`FMAX` are Expand unless the target says otherwise (TargetLoweringBase.cpp#L864).
