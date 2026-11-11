@@ -218,6 +218,10 @@ fn machine_function_with(
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
     let selection = selection.as_ref().map_err(Clone::clone)?;
+    let selection = match &selection.generic {
+        Some(generic) if crate::dagisel::pipeline::GENERIC_FORM.with(std::cell::Cell::get) => generic,
+        _ => selection,
+    };
     let mut function = emit(name, selection)?;
     function.returns_twice = selection.returns_twice;
     expand_cmov(&mut function)?;
@@ -351,13 +355,13 @@ fn priced_in_loops(
     lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
 }
 
-/// Whether a variant is priced before the printer's peepholes. At the speed
-/// levels the price is weighted clocks, good to a few tenths of a percent, and
-/// a peephole moved a near-tie to the worse variant (copy_runs -O2: 2 B and
-/// 600 T). At the size levels the price is bytes, exact, and a peephole's
-/// bytes are real: without them pattern_fill -Os chose a variant 1 B bigger.
+/// Whether a variant is priced before the printer's peepholes. Only at -O2 and up, where the price is weighted
+/// clocks, good to a few tenths of a percent, and a peephole moved a near-tie to the worse variant (copy_runs -O2:
+/// 2 B and 600 T). Where the price is bytes (-Os, -Oz) or both axes are strict (-O1) the peephole's bytes and
+/// clocks are real: priced before them, clear -O1 chose the allocation that is larger and slower once emitted
+/// (96 B / 577 T against 95 B / 550 T at -Os).
 fn priced_before_peepholes(level: Level) -> bool {
-    !matches!(level, Level::Os | Level::Oz)
+    matches!(level, Level::O2 | Level::O3)
 }
 
 /// Whether the price `one` beats `other`: bytes first at the size levels;
@@ -418,6 +422,8 @@ mod tests {
     fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
         assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
         assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+        // -O1 prices what is emitted (`clear` -O1: 96 B / 577 T priced before them, 548 T after)
+        assert!(!priced_before_peepholes(Level::O1));
     }
 
     /// The push and pop form is smaller and dearer in weighted clocks: kept at
@@ -432,6 +438,10 @@ mod tests {
         assert!(keeps_stacked(Level::O2, framed, cheaper_stack));
         assert!(!keeps_stacked(Level::Os, framed, framed) && !keeps_stacked(Level::O2, framed, framed));
         assert!(keeps_stacked(Level::O2, None, stacked));
+        // loop_fusion -O1 `same`: 13 B (10%) smaller for 4% more weighted clocks, so the strict level keeps it
+        let (framed, stacked) = (Some((124, 6472)), Some((111, 6746)));
+        assert!(keeps_stacked(Level::O1, framed, stacked) && !keeps_stacked(Level::O2, framed, stacked));
+        assert!(!keeps_stacked(Level::O1, stacked, framed));
     }
 
     #[test]
@@ -651,6 +661,9 @@ fn allocate_once(
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
+    if std::env::var("LLRM_NO_Z80_UPDATE").is_err() {
+        crate::post_update::fold(&mut function, &assignment);
+    }
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
     // the function with every slot in the frame, to keep if the push and pop
@@ -744,15 +757,16 @@ fn drop_repeated_slot_accesses(
 }
 
 /// Whether the push and pop form of a function stays: where it prices lower
-/// by the rule that picks the other variants (bytes first at the size levels,
-/// weighted clocks plus 3 a byte otherwise), or where either price is missing.
+/// by the rule that picks the other variants (`prefers`: bytes first at the
+/// size levels, the smaller relative regret at -O1, weighted clocks plus 3 a
+/// byte otherwise), or where either price is missing.
 fn keeps_stacked(
     level: Level,
     framed: Option<(u32, u64)>,
     stacked: Option<(u32, u64)>,
 ) -> bool {
     match (framed, stacked) {
-        (Some(was), Some(now)) => cheaper(level, now, was),
+        (Some(was), Some(now)) => prefers(level, now, was),
         _ => true,
     }
 }
@@ -2502,7 +2516,43 @@ fn prefers(
     }
 }
 
+/// The function `name` allocated, in the cheaper of its two carry forms where it has both (`Selection::generic`,
+/// DEVIATE Z80-CARRY-PRICE): the levels strict on both axes (O1, Os, Oz) take the generic add only where it is no
+/// worse on either, the others the cheaper at 1 B = 3 T.
 fn lines_of(
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    let carry = lines_of_form(selected, name, number, request);
+    let has_generic = selected.iter().any(|(one, source, scheduled)| {
+        one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.generic.is_some()))
+    });
+    if !has_generic {
+        return carry;
+    }
+    crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(true));
+    let generic = lines_of_form(selected, name, number, request);
+    crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(false));
+    match (carry, generic) {
+        (Ok(carry), Ok(generic)) => {
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
+            let (with, without) = (price(&carry), price(&generic));
+            let strict = matches!(request.level, Level::O1 | Level::Os | Level::Oz);
+            let take = if strict {
+                without != with && without.0 <= with.0 && without.1 <= with.1
+            } else {
+                cheaper(request.level, without, with)
+            };
+            Ok(if take { generic } else { carry })
+        }
+        (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+        (Err(why), Err(_)) => Err(why),
+    }
+}
+
+fn lines_of_form(
     selected: &Selections,
     name: &str,
     number: usize,

@@ -1,6 +1,6 @@
 ; ModuleID = 'sso.ll'
 source_filename = "tests/run/c/spill_store_order.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 
 ; Function Attrs: nounwind
 declare dso_local i16 @gd_read(i16 noundef, i16 noundef) #0

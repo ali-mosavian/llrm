@@ -22,7 +22,7 @@ use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::isa::Cpu as Model;
 use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
-use llrm_m68k::timing::{cost_on, from_gnu};
+use llrm_m68k::timing::{DataRegisters, cost_on, cost_on_counted, from_gnu};
 
 // An explicit path: matrix.rs includes this file as a module, where `mod tempdir;` would look beside it.
 #[path = "tempdir/mod.rs"]
@@ -213,15 +213,17 @@ impl Total {
         text: &str,
         bytes: u32,
         taken: bool,
+        places: Option<u32>,
         seen: &mut std::collections::HashSet<String>,
     ) {
         for (slot, cpu) in models.iter().copied().enumerate() {
-            match cost_on(cpu, text, bytes, taken) {
+            match cost_on_counted(cpu, text, bytes, taken, places) {
                 Ok(one) => {
                     self.clocks[slot] += u64::from(one.clocks);
                     self.partial |= one.partial;
                 }
                 Err(why) => {
+                    assert!(!why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
                     self.unpriced[slot] += 1;
                     if seen.insert(why.clone()) {
                         eprintln!("unpriced: {why}");
@@ -229,6 +231,22 @@ impl Total {
                 }
             }
         }
+    }
+
+    /// [`Self::charge`] for the next instruction of a trace: a shift by a
+    /// register is priced at the places its count register holds, when the
+    /// trace fixed them.
+    pub(crate) fn charge_executed(
+        &mut self,
+        models: &[Model],
+        registers: &mut DataRegisters,
+        text: &str,
+        bytes: u32,
+        taken: bool,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        self.charge(models, text, bytes, taken, registers.places_of(text), seen);
+        registers.execute(text);
     }
 
     /// The table cell of the model in `slot`: its clocks, `*` for a bound,
@@ -279,6 +297,7 @@ mod tests {
     use std::path::Path;
 
     use llrm_m68k::isa::Cpu as Model;
+    use llrm_m68k::timing::DataRegisters;
 
     use super::{Total, parse_listing, qemu_cpu_of, read_trace};
 
@@ -314,12 +333,37 @@ mod tests {
         let mut total = Total::new(&models);
         let mut seen = std::collections::HashSet::new();
         for _ in 0..16 {
-            total.charge(&models, "extb.l %d2", 2, false, &mut seen);
+            total.charge(&models, "extb.l %d2", 2, false, None, &mut seen);
         }
-        total.charge(&models, "addq.l #1, %d0", 2, false, &mut seen);
+        total.charge(&models, "addq.l #1, %d0", 2, false, None, &mut seen);
         assert_eq!(total.unknown_of(0), 16, "68000 lacks extb.l");
         assert_eq!(total.unknown_of(1), 0, "68020 prices extb.l");
         assert!(total.clocks[1] > total.clocks[0]);
+    }
+
+    /// bitcount_idioms 68000 O1 priced `lsr.l %d2,%d0` (`d2` = 16, run 8 times)
+    /// at zero places: 8 clocks where the table says 8 + 2 x 16 = 40, so the
+    /// parked parity change read +1504 clocks instead of +1760.
+    #[test]
+    fn a_shift_by_a_register_the_trace_set_is_priced_at_its_places() {
+        let models = [Model::M68000];
+        let run = |trace: &[&str]| {
+            let mut total = Total::new(&models);
+            let mut registers = DataRegisters::new();
+            let mut seen = std::collections::HashSet::new();
+            for text in trace {
+                total.charge_executed(&models, &mut registers, text, 2, false, &mut seen);
+            }
+            total
+        };
+        let known = run(&["moveq #16,%d2", "move.l %d1, %d0", "lsr.l %d2, %d0"]);
+        assert_eq!(known.clocks[0], 4 + 4 + 8 + 2 * 16);
+        assert!(!known.partial, "the count is known");
+        let copied = run(&["move.l %d1, %d2", "lsr.l %d2, %d0"]);
+        assert_eq!(copied.clocks[0], 4 + 8);
+        assert!(copied.partial, "an unknown count stays a marked bound");
+        let after_call = run(&["moveq #16,%d2", "jsr 0x1000", "lsr.l %d2, %d0"]);
+        assert!(after_call.partial, "a call may write any register");
     }
 
     /// jpeg_single's trace (516 M instructions, 200 s) was killed at the 120 s
@@ -376,18 +420,26 @@ pub(crate) fn price(
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    let mut registers = DataRegisters::new();
+    let mut after_gap = false;
     for (index, pc) in pcs.iter().enumerate() {
         if !ranges.iter().any(|range| range.contains(pc)) {
+            // code the listing does not cover may write any register
+            after_gap = true;
             continue;
+        }
+        if std::mem::take(&mut after_gap) {
+            registers.forget_all();
         }
         total.insns += 1;
         *counts.entry(*pc).or_default() += 1;
         let Some((bytes, text)) = at.get(pc) else {
             total.unknown += 1;
+            registers.forget_all();
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
-        total.charge(models, text, *bytes as u32, taken, &mut seen);
+        total.charge_executed(models, &mut registers, text, *bytes as u32, taken, &mut seen);
     }
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {

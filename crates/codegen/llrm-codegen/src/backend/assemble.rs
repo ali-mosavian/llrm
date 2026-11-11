@@ -160,6 +160,30 @@ const HUGE_SPACE: u32 = 3;
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
 /// selector: what the tests of this crate are written for.
+/// The register a one-slot frame's `pop` takes at the returns of `body`: the
+/// first of `order` that no return takes a result in (the convention's
+/// `returned` registers, and any a return pins) and the function does not save, as `X86RegisterInfo::findDeadCallerSavedReg` walks the register class
+/// at the `RET` (its result registers are the live-outs, the saved ones are
+/// restored before it). `None` where every register is live.
+fn dead_pop(
+    order: &[RegId],
+    body: &LirBody,
+    saved: &[(RegId, RegId)],
+    returned: &[RegId],
+) -> Option<RegId> {
+    let live: Vec<RegId> = returned
+        .iter()
+        .map(|register| register.full_register())
+        .chain(body
+        .insns()
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Return))
+        .flat_map(|one| one.requires.iter().map(|(_, register)| register.full_register()).collect::<Vec<_>>()))
+        .chain(saved.iter().map(|(whole, _)| whole.full_register()))
+        .collect();
+    order.iter().copied().find(|register| !live.contains(&register.full_register()))
+}
+
 #[cfg(test)]
 pub fn assembled(
     module: &Module,
@@ -398,7 +422,10 @@ pub fn assembled_by(
                     // A global of this module is called by the name it is
                     // defined or declared as.
                     let linked = match module.named(callee) {
-                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        Some(id) => names
+                            .get(&(globals::space(module, id), i64::from(id.0)))
+                            .cloned()
+                            .ok_or_else(|| format!("{callee}: a call to an intrinsic this target does not lower"))?,
                         None => abi.linked(callee),
                     };
                     referenced.insert(linked.clone(), far.contains(at));
@@ -1292,6 +1319,7 @@ fn staged(
         slot_scratch: entry
             .and_then(|one| target.arch.frame_slot_scratch_of(one))
             .or(base.slot_scratch)
+            .filter(|_| target.cpu.pops_frame_slot())
             .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
         ..base
     };
@@ -1302,7 +1330,13 @@ fn staged(
         registers.saved.clear();
         registers.vector_saved.clear();
     }
+    let pop_order = target.arch.frame_slot_pop_order();
+    if let Some((push, _)) = registers.slot_scratch.filter(|_| !pop_order.is_empty()) {
+        // No dead register: the pin's `emitSPUpdate` adjusts with `add`.
+        registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
+    }
     registers.align = target.facts.stack_alignment(target.arch, name);
+    registers.object_align = target.facts.object_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
     // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
@@ -1387,6 +1421,7 @@ fn staged(
         timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.align = registers.align.max(registers.slot).max(frame.align);
+    frame.object_align = Some(registers.object_align.max(registers.slot));
     frame.hole = hole;
     frame.alloca_align = alloca_align;
     frame.extents = extents;

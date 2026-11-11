@@ -786,7 +786,9 @@ fn fast_isel_folds_an_address_and_a_load_into_the_access() {
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
         assert!(asm.contains(&format!("cmp dword ptr [{base}-")) && asm.contains(", 8"), "{target}: no cmp on memory: {asm}");
         assert!(asm.contains("*4-") && !asm.contains("lea "), "{target}: the element address was made apart: {asm}");
-        assert!(asm.contains(&format!("imul eax, dword ptr [{base}-")), "{target}: the load was not folded into the imul: {asm}");
+        // `n` is a local at m64, its own argument slot at m32 (argument copy elision)
+        let slot = |sign: &str| asm.contains(&format!("imul eax, dword ptr [{base}{sign}"));
+        assert!(slot("-") || slot("+"), "{target}: the load was not folded into the imul: {asm}");
     }
 }
 
@@ -1016,5 +1018,32 @@ fn fast_isel_takes_global_accesses_at_m32() {
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
     for name in ["f", "at", "where"] {
         assert!(report.lines().any(|line| line == format!("{name} fast") || line == format!("_{name} fast")), "{name} not taken: {report}");
+    }
+}
+
+/// A parameter was stored into a local frame slot and read back (`urem_eq:r5z`,
+/// +9 B and a `sub esp, 4` over the pin's llc): the pin's argument copy elision
+/// makes the local the parameter's own stack slot. Both selectors, m32.
+#[test]
+fn a_parameter_stored_into_a_local_is_not_copied_at_m32() {
+    for fast in ["0", "1"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "unsigned h(unsigned a)\n{\n    return a % 5 == 0;\n}\nint k(int a)\n{\n    a = a + 1;\n    return a * 2;\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", "x86_32-linux")
+            .env("LLRM_FAST_ISEL", fast)
+            .env("LLRM_VERIFY", "1")
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(!asm.contains("ebp-"), "fast={fast}: a local slot is left:\n{asm}");
+        assert!(!asm.contains("sub esp"), "fast={fast}: a frame is reserved:\n{asm}");
     }
 }

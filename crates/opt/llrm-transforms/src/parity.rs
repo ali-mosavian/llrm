@@ -319,6 +319,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    partial(
+        "loop-vectorize@1354",
+        Late,
+        "loop-vectorize",
+        "loopvectorize.rs widens single-block innermost loops of consecutive integer loads and stores whose constant trip count VF x IC divides, with the planner's (loopvectorizeplan.rs) and legality's (loopvectorizelegality.rs) pin factors; a no-op unless the target takes vector values (arm64 with LLRM_ARM64_VECTORS, default off); deviations LV-D1..D7, VP1..VP7, LVP1..LVP4; criterion: VF and IC equal the pin's remark on the tests; exit: epilogue and runtime checks, reductions, widening, FP lanes (ARM64-VEC POC, 2026-11-10)",
+    ),
     entry(
         "drop-unnecessary-assumes@1360",
         Late,
@@ -333,6 +339,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
+    entry("mergeicmps@1672", Late, "mergeicmps", Translated, ""),
     entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
@@ -406,6 +413,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    entry("statustest@5", Backend, "x86 x87 compare read from the status word, no sahf (target; DEVIATE X87-FCMP-AH, no pin pass)", Old, ""),
     entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
     entry("floatunhoist@6", Backend, "x86 hoisted float load made again in the loop (target; DEVIATE M16-NBODY-O2, no pin pass)", Old, ""),
     partial(

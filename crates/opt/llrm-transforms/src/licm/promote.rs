@@ -10,7 +10,7 @@ use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Outer};
 
 use super::{LoopCtx, LoopSafety};
@@ -368,15 +368,31 @@ fn is_not_visible_on_unwind_in_loop(
 }
 
 /// [`isWritableObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L1000):
-/// an alloca. "We don't consider globals as writable: While the physical
+/// an alloca, a `byval` or `writable noalias` argument, or the result of a
+/// `noalias` call. "We don't consider globals as writable: While the physical
 /// memory is writable, we may not have provenance to perform the write."
-/// DEVIATE: the pin also takes a `writable` `noalias` argument, a `byval`
-/// argument and a `noalias` call's result; MIR has none of them here.
 pub(crate) fn is_writable_object(
+    context: &llrm_mir::Context,
+    globals: &[llrm_mir::module::GlobalValue],
     function: &llrm_mir::module::Function,
     object: Operand,
 ) -> bool {
-    is_alloca_in(function, object)
+    if is_alloca_in(function, object) {
+        return true;
+    }
+    let Operand::Value(value) = object else { return false };
+    match function.value(value).def {
+        ValueDef::Argument(at) => {
+            let attrs = function.parameter_attrs.get(at as usize).map(Vec::as_slice).unwrap_or_default();
+            let named = |wanted: &str| {
+                attrs.iter().any(|one| {
+                    matches!(one, Attribute::Flag(name) | Attribute::Type(name, _) if name == wanted)
+                })
+            };
+            named("byval") || (named("writable") && llrm_mir::facts::Fact::NoAlias.stated_by(attrs))
+        }
+        ValueDef::Instruction(inst) => llrm_mir::memory::returns_noalias(context, globals, function, inst),
+    }
 }
 
 /// [`isThreadLocalObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672):
@@ -570,7 +586,9 @@ pub fn promote_loop_accesses_to_scalars(
     // violating the memory model.
     if store_safety == StoreSafety::Unknown {
         let object = underlying_object(unit, first_pointer);
-        if is_writable_object(&*unit.function, object) && is_thread_local_object(unit, outer, exposed, object) {
+        if is_writable_object(&*unit.context, &outer.globals, &*unit.function, object)
+            && is_thread_local_object(unit, outer, exposed, object)
+        {
             store_safety = StoreSafety::Safe;
         }
     }

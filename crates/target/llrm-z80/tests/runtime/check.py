@@ -48,17 +48,17 @@ def run(ihx, dump=None):
 SIGS = {
   "A,L>A":  dict(isz=2, osz=1, load="\tld\ta,0(ix)\n\tld\tl,1(ix)\n", store="\tld\t(hl),a\n"),
   "HL,DE>DE": dict(isz=4, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
-  "L,A>L": dict(isz=5, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\ta,4(ix)\n", pre="\tld\t(0x8010),de\n\tld\t(0x8012),hl\n", store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  "L,A>L": dict(isz=5, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\ta,4(ix)\n", pre="\tld\t(0x8010),hl\n\tld\t(0x8012),de\n", store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   "LL>L": dict(isz=8, osz=4,
     load="\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\tc,4(ix)\n\tld\tb,5(ix)\n",
-    pre="\tpop\taf\n\tld\t(0x8010),de\n\tld\t(0x8012),hl\n",
+    pre="\tpop\taf\n\tld\t(0x8010),hl\n\tld\t(0x8012),de\n",
     store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   # long long: the result through hl (0x8020), the first operand in de, bc and the stack, the second operand's four
   # words, or a count byte, on the stack after them (runtime/z80_rt.s)
   # quotient and remainder: the remainder's address (0x8014) is the last argument, on the stack under the divisor's high word
   "LL>QR": dict(isz=8, osz=8,
     load="\tld\thl,#0x8014\n\tpush\thl\n\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\tc,4(ix)\n\tld\tb,5(ix)\n",
-    pre="\tpop\taf\n\tpop\taf\n\tld\t(0x8010),de\n\tld\t(0x8012),hl\n",
+    pre="\tpop\taf\n\tpop\taf\n\tld\t(0x8010),hl\n\tld\t(0x8012),de\n",
     store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   "QQ>Q": dict(isz=16, osz=8,
     load="".join("\tld\tl,%d(ix)\n\tld\th,%d(ix)\n\tpush\thl\n" % (k + 8, k + 9) for k in (6, 4, 2, 0)) + "\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
@@ -70,6 +70,8 @@ SIGS = {
     store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   # a word pair: the quotient in de, the remainder in hl (answer: quotient, then remainder, a word each)
   "HL,DE>DEHL": dict(isz=4, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n", pre="\tld\t(0x8010),hl\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n\tinc\thl\n\tld\tbc,(0x8010)\n\tld\t(hl),c\n\tinc\thl\n\tld\t(hl),b\n"),
+  # two words, a long back in hl (low) and de (high), the convention's order
+  "HL,DE>L": dict(isz=4, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n", pre="\tld\t(0x8010),hl\n", store="\tld\tbc,(0x8010)\n\tld\t(hl),c\n\tinc\thl\n\tld\t(hl),b\n\tinc\thl\n\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
   "HL,A>DE": dict(isz=3, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\ta,2(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
 }
 
@@ -130,7 +132,7 @@ def enc(sig, v):
     if sig == "QQ>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + tuple((v[1] >> (8 * k)) & 255 for k in range(8))
     if sig == "QA>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + (v[1],)
     if sig == "A,L>A": return v
-    if sig in ("HL,DE>DE", "HL,DE>DEHL"): return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
+    if sig in ("HL,DE>DE", "HL,DE>DEHL", "HL,DE>L"): return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
     return (v[0] & 255, v[0] >> 8, v[1])
 
 def decode(sig, v):
@@ -196,6 +198,7 @@ def main():
         allok &= check(nm, "A,L>A", f, [(a, b) for a in range(256) for b in range(8)])
     w = [(rnd.choice(edges16) if rnd.random() < .3 else rnd.getrandbits(rnd.choice([4, 8, 12, 16])), rnd.choice(edges16) if rnd.random() < .3 else rnd.getrandbits(rnd.choice([4, 8, 12, 16]))) for _ in range(6000)] + [(a, b) for a in edges16 for b in edges16]
     allok &= check("__mulhi3", "HL,DE>DE", lambda a, b: a * b & 0xFFFF, w)
+    allok &= check("__umulhisi3", "HL,DE>L", lambda a, b: a * b, w)
     wd = [p for p in w if p[1]]
     allok &= check("__udivhi3", "HL,DE>DE", lambda a, b: a // b, wd)
     allok &= check("__umodhi3", "HL,DE>DE", lambda a, b: a % b, wd)

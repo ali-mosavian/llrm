@@ -396,7 +396,7 @@ fn unique_predecessor(
 }
 
 /// `setDebugLoc`: `to` stands where `from` did.
-fn copy_location(
+pub(crate) fn copy_location(
     function: &mut Function,
     from: InstId,
     to: InstId,

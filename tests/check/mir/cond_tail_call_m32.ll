@@ -2,6 +2,8 @@ target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8
 target triple = "i486-unknown-linux-gnu"
 declare void @other()
 define void @take(i32 %a, i32 %b) {
+  %slot = alloca i32
+  store volatile i32 %a, ptr %slot
   %c = icmp ult i32 %a, %b
   br i1 %c, label %t, label %done
 t:

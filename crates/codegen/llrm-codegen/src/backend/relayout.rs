@@ -929,6 +929,7 @@ mod tests {
                 saved: Vec::new(),
                 slot: 2,
                 align: 2,
+                object_align: 2,
                 optional: false,
                 enter: false,
                 wrap_split_size: false,

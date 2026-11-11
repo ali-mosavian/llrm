@@ -13,7 +13,7 @@ static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
-    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));
 }
 
@@ -100,7 +100,7 @@ fn run() -> i32 {
         if assembly {
             driver::assembly_flagged(&text, cpu, level, debug, dump.as_deref().or(env.as_deref()), model, &policy).map(String::into_bytes)
         } else {
-            driver::object_flagged(&text, cpu, level, &input, model, &policy)
+            driver::object_flagged(&text, cpu, level, &input, model, &policy, dump.as_deref().or(env.as_deref()))
         }
     });
     match result {

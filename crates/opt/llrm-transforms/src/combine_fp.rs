@@ -143,7 +143,7 @@ pub fn visit_fmuladd(
 }
 
 /// `m_FNeg(Y)`: `fneg Y`, or `fsub -0.0, Y`.
-fn fneg_operand(
+pub(crate) fn fneg_operand(
     c: &Combiner,
     v: Operand,
 ) -> Option<Operand> {
@@ -160,7 +160,7 @@ fn fneg_operand(
 }
 
 /// `ConstantFoldUnaryOpOperand(FNeg, C)` of a float, double or fp128 constant.
-fn negated_constant(
+pub(crate) fn negated_constant(
     c: &mut Combiner,
     v: Operand,
 ) -> Option<Operand> {
@@ -191,6 +191,11 @@ pub fn visit_fdiv(
         return Visit::Replace(found);
     }
     fold_fdiv_constant_divisor(c, inst)
+}
+
+/// `isa<Constant>` of an operand.
+pub(crate) fn is_constant(v: Operand) -> bool {
+    matches!(v, Operand::Constant(_))
 }
 
 /// Whether an fp128 constant is a zero, and if so whether it is `-0.0`.

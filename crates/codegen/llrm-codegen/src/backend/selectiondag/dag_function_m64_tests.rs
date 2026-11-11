@@ -180,6 +180,40 @@ entry:
     }
 }
 
+/// Three unsigned divides read one zero for their high half (`v12 := mov v11`
+/// shared), so the zero lived across all three `EDX` clobbers and greedy gave
+/// it a callee-saved register: recmany m64 -Os, `push rbp` + `xor ebp, ebp` +
+/// 3 `mov edx, ebp`, 10 B where the pin's `$rdx = COPY %22` x3, each made again
+/// as `xor edx, edx`, is 6 B. Each divide reads a zero of its own.
+#[test]
+fn each_m64_divide_reads_its_own_zero_high_half() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %a, i64 %b, i64 %c, i64 %x, i64 %y, i64 %z) {
+entry:
+  %p = udiv i64 %a, %x
+  %q = udiv i64 %b, %y
+  %r = udiv i64 %c, %z
+  %s = add i64 %p, %q
+  %t = add i64 %s, %r
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let highs: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref().filter(|w| w.name.as_deref() == Some("div")))
+        .map(|w| w.sources[0].clone())
+        .collect();
+    assert_eq!(highs.len(), 3, "the premise: three divides: {highs:?}");
+    for (at, high) in highs.iter().enumerate() {
+        assert!(!highs[..at].contains(high), "divide {at} reads a zero an earlier one read: {highs:?}");
+    }
+}
+
 /// A signed divide by a constant at m64 stopped at `CannotSelect("SMulLoHi")`
 /// (the multiply by the magic number): `MUL64r`/`IMUL64r` had no case.
 #[test]
@@ -1428,4 +1462,24 @@ define i1 @f(i128 %a, i128 %b) {
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(names.iter().any(|n| n == "adc"), "the high halves are added with the carry of the low: {names:?}");
+}
+
+/// `p >= 65535.0f ? 65535.0f : p` converted to an integer stayed a compare
+/// and a branch (`ucomiss`, `jb`, `movss`): the DAG had no `pseudo_fmin`, so
+/// the clamps of jpeg_fixed and stft_single grew 24-80 B at m64. It is `minss`.
+#[test]
+fn an_m64_float_clamp_is_minss() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(float %p) {
+entry:
+  %c = fcmp oge float %p, 6.553500e+04
+  %q = select i1 %c, float 6.553500e+04, float %p
+  %r = fptosi float %q to i64
+  ret i64 %r
+}
+",
+    );
+    assert!(names.iter().any(|n| n == "minss"), "{names:?}");
+    assert!(names.iter().all(|n| n != "ucomiss" && !n.starts_with('j')), "{names:?}");
 }

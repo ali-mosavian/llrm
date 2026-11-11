@@ -17,15 +17,22 @@
 //! L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
 //!
 //! # Not translated
-//! - SB2: pressure is followed bottom-up only; a bidirectional region does not
-//!   track it.
-//! - SB3: `ExitSU` (the region end); the critical path is the deepest root.
+//! - SB3: `ExitSU` as a node. The terminator stays a schedulable node, so it
+//!   takes an issue slot the pin's `ExitSU` does not. The edge it holds for an
+//!   unread def (`buildSchedGraph`, latency less one) is translated for a model
+//!   that asks (`SchedulingModel::exit_edges`, arm64); the x86 models do not
+//!   and keep the deepest root as the critical path.
 //! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
 //!   is only asked of a model with a micro-op buffer (Cyclone), not the
 //!   in-order A510.
-//! - SB5: clusters and macro fusion (`ParentClusterIdx`), and
+//! - SB5b: the fast-cluster path of `BaseMemOpClusterMutation` (threshold 1000).
+//! - SB5: macro fusion, and
 //!   `tryBiasPhysRegs`/`reschedulePhysReg` (no region holds a physical
 //!   register, MS4).
+//!
+//! - SB9: a pre/post-indexed access reports no memory operand to the cluster
+//!   mutation (`getMemOperandsWithOffsetWidth`); it exists only after
+//!   `ldst_update`.
 //!
 //! Owner arm64-phi; exit with the model branch that first needs each.
 
@@ -34,17 +41,20 @@ use crate::backend::machinesched::Graph;
 use crate::backend::regpressure::Delta;
 use crate::backend::schedboundary::{Boundary, Machine, Remainder, Unit};
 
-/// What follows the pressure of the bottom zone.
-pub trait BottomPressure {
-    /// `RPDelta` of placing `node` at the bottom.
+/// What follows the pressure of the two zones (`TopRPTracker` and
+/// `BotRPTracker`).
+pub trait ZonePressure {
+    /// `RPDelta` of placing `node` at the top or the bottom.
     fn delta(
         &self,
         node: usize,
+        at_top: bool,
     ) -> Delta;
-    /// `node` is placed at the bottom.
+    /// `node` is placed at the top or the bottom.
     fn place(
         &mut self,
         node: usize,
+        at_top: bool,
     );
 }
 
@@ -84,7 +94,7 @@ pub struct Scheduler<'a> {
     machine: &'a Machine,
     units: Vec<Unit>,
     policy: RegionPolicy,
-    pressure: Option<&'a mut dyn BottomPressure>,
+    pressure: Option<&'a mut dyn ZonePressure>,
     top: Boundary,
     bot: Boundary,
     rem: Remainder,
@@ -94,6 +104,10 @@ pub struct Scheduler<'a> {
     succs_left: Vec<usize>,
     weak_preds_left: Vec<usize>,
     weak_succs_left: Vec<usize>,
+    /// `TopClusterID` and `BotClusterID`: the cluster of the node each zone
+    /// scheduled last.
+    top_cluster: Option<u32>,
+    bot_cluster: Option<u32>,
     scheduled: Vec<bool>,
     top_cand: Cand,
     bot_cand: Cand,
@@ -107,7 +121,7 @@ impl<'a> Scheduler<'a> {
         machine: &'a Machine,
         mut units: Vec<Unit>,
         policy: RegionPolicy,
-        pressure: Option<&'a mut dyn BottomPressure>,
+        pressure: Option<&'a mut dyn ZonePressure>,
     ) -> Scheduler<'a> {
         let n = units.len();
         let mut succ_edges = vec![Vec::new(); n];
@@ -125,8 +139,12 @@ impl<'a> Scheduler<'a> {
                 .unwrap_or(0);
         }
         for node in (0..n).rev() {
-            units[node].height =
-                succ_edges[node].iter().map(|&(succ, lat)| units[succ].height + lat).max().unwrap_or(0);
+            units[node].height = succ_edges[node]
+                .iter()
+                .map(|&(succ, lat)| units[succ].height + lat)
+                .max()
+                .unwrap_or(0)
+                .max(graph.exit_latency[node]);
         }
         let rem = if machine.has_instr_sched_model() { Remainder::new(machine, &units) } else { Remainder::default() };
         let idle = Cand::new(0, false, CandPolicy::default());
@@ -142,6 +160,8 @@ impl<'a> Scheduler<'a> {
             succs_left: graph.succs.iter().map(Vec::len).collect(),
             weak_preds_left: graph.weak_preds.iter().map(Vec::len).collect(),
             weak_succs_left: graph.weak_succs.iter().map(Vec::len).collect(),
+            top_cluster: None,
+            bot_cluster: None,
             scheduled: vec![false; n],
             succ_edges,
             units,
@@ -152,7 +172,7 @@ impl<'a> Scheduler<'a> {
 
     fn region(&self) -> Region {
         Region {
-            tracks_pressure: self.pressure.is_some() && self.policy.only_bottom_up,
+            tracks_pressure: self.pressure.is_some(),
             acyclic_latency_limited: self.rem.is_acyclic_latency_limited,
             disable_latency: self.policy.disable_latency,
             bias_pregs_extra: false,
@@ -227,14 +247,42 @@ impl<'a> Scheduler<'a> {
         let zone = if at_top { &self.top } else { &self.bot };
         let unit = &self.units[node];
         let mut cand = Cand::new(node, at_top, policy);
-        if !at_top && let Some(pressure) = &self.pressure {
-            cand.pressure = pressure.delta(node);
+        if let Some(pressure) = &self.pressure {
+            cand.pressure = pressure.delta(node, at_top);
         }
+        cand.phys_bias = self.bias_phys_reg(node, at_top);
         cand.stall = zone.latency_stall_cycles(unit);
+        // `isTheSameCluster(ZoneCluster, SU->ParentClusterIdx)`.
+        let zone_cluster = if at_top { self.top_cluster } else { self.bot_cluster };
+        cand.cluster_succ = zone_cluster.is_some() && zone_cluster == self.graph.parent_cluster[node];
         cand.weak_left = if at_top { self.weak_preds_left[node] } else { self.weak_succs_left[node] };
         cand.depth = unit.depth;
         cand.height = unit.height;
         cand
+    }
+
+    /// `biasPhysReg` for a copy: schedule it at once when the physical end is
+    /// already scheduled, and a copy of a physical register in (out) at the
+    /// bottom (top) at once unless it is at the region's boundary, where it
+    /// waits. `ExitSU` edges (`exit_latency`) count as successors. The
+    /// pin's `isMoveImmediate` case needs a physical def, which no node has
+    /// before allocation, and `BiasPRegsExtra` is SystemZ's.
+    fn bias_phys_reg(
+        &self,
+        node: usize,
+        at_top: bool,
+    ) -> i32 {
+        let Some((dest, source)) = self.units[node].copy_physical else { return 0 };
+        let (scheduled, unscheduled) = if at_top { (source, dest) } else { (dest, source) };
+        if scheduled {
+            return 1;
+        }
+        if !unscheduled {
+            return 0;
+        }
+        let at_boundary =
+            if at_top { self.succs_left[node] == 0 && self.graph.exit_latency[node] == 0 } else { self.preds_left[node] == 0 };
+        if at_boundary { -1 } else { 1 }
     }
 
     /// `initResourceDelta`.
@@ -277,6 +325,18 @@ impl<'a> Scheduler<'a> {
             if try_candidate(&mut best, &mut try_cand, Some(&view), &region) {
                 best = try_cand;
             }
+        }
+        if llrm_support::env_flag!("LLRM_MS_TRACE") {
+            eprintln!(
+                "MSC top={at_top} available={} pending={} best={} reason={:?} excess={:?} critical={:?} current={:?}",
+                zone.available.len(),
+                zone.pending.len(),
+                best.node,
+                best.reason,
+                best.pressure.excess,
+                best.pressure.critical_max,
+                best.pressure.current_max
+            );
         }
         best
     }
@@ -349,9 +409,17 @@ impl<'a> Scheduler<'a> {
     ) {
         self.scheduled[node] = true;
         if at_top {
+            self.top_cluster = self.graph.parent_cluster[node];
+        } else {
+            self.bot_cluster = self.graph.parent_cluster[node];
+        }
+        if at_top {
             let cycle = self.top.curr_cycle();
             self.units[node].top_ready_cycle = self.units[node].top_ready_cycle.max(cycle);
             self.top.bump_node(self.machine, &self.units[node], &mut self.rem);
+            if let Some(pressure) = &mut self.pressure {
+                pressure.place(node, true);
+            }
             for &weak in &self.graph.weak_succs[node] {
                 self.weak_preds_left[weak] -= 1;
             }
@@ -370,7 +438,7 @@ impl<'a> Scheduler<'a> {
             self.units[node].bot_ready_cycle = self.units[node].bot_ready_cycle.max(cycle);
             self.bot.bump_node(self.machine, &self.units[node], &mut self.rem);
             if let Some(pressure) = &mut self.pressure {
-                pressure.place(node);
+                pressure.place(node, false);
             }
             for &weak in &self.graph.weak_preds[node] {
                 self.weak_succs_left[weak] -= 1;
@@ -390,8 +458,9 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `ScheduleDAGMI::schedule`: the order of the region, with the reason of
-    /// each pick (`-debug-only=machine-scheduler`'s `Pick`).
-    pub fn schedule(mut self) -> (Vec<usize>, Vec<Reason>) {
+    /// each pick in the order made: the node, whether from the top, and why
+    /// (`-debug-only=machine-scheduler`'s `Pick`).
+    pub fn schedule(mut self) -> (Vec<usize>, Vec<(usize, bool, Reason)>) {
         let n = self.units.len();
         for node in 0..n {
             if self.preds_left[node] == 0 {
@@ -399,17 +468,30 @@ impl<'a> Scheduler<'a> {
             }
         }
         // Bottom roots in reverse, so the higher priority nodes appear first.
+        // The region end releases the defs that hold a latency to it
+        // (`ExitSU`), ready that many cycles into the bottom zone.
+        for node in 0..n {
+            self.units[node].bot_ready_cycle = self.graph.exit_latency[node];
+        }
         for node in (0..n).rev() {
             if self.succs_left[node] == 0 {
-                self.bot.release_node(self.machine, &self.units, node, 0, false, 0);
+                self.bot.release_node(self.machine, &self.units, node, self.graph.exit_latency[node], false, 0);
             }
         }
-        // `registerRoots`.
-        self.rem.critical_path = self.bot.available.iter().map(|&node| self.units[node].depth).max().unwrap_or(0);
+        // `registerRoots`: `ExitSU`'s depth is the deepest of what reaches it.
+        let exit_depth = (0..n).map(|node| self.units[node].depth + self.graph.exit_latency[node]).max().unwrap_or(0);
+        self.rem.critical_path = self
+            .bot
+            .available
+            .iter()
+            .map(|&node| self.units[node].depth)
+            .max()
+            .unwrap_or(0)
+            .max(exit_depth);
         let (mut top, mut bottom, mut reasons) = (Vec::new(), Vec::new(), Vec::new());
         while top.len() + bottom.len() < n {
             let (node, at_top, reason) = self.pick_node();
-            reasons.push(reason);
+            reasons.push((node, at_top, reason));
             self.sched_node(node, at_top);
             if at_top {
                 top.push(node);
@@ -476,6 +558,43 @@ mod tests {
     ) -> Vec<usize> {
         let (graph, machine, units) = diamond(buffer);
         Scheduler::new(&graph, &machine, units, policy, None).schedule().0
+    }
+
+    /// pin: a def nothing in the region reads holds `latency - 1` to the
+    /// region end (`ExitSU`), so on an in-order machine the bottom zone
+    /// leaves it pending and places the independent stores first: the def
+    /// is issued first in the region. Without the edge the three tie and
+    /// source order stands, the def last of the stores.
+    #[test]
+    fn test_a_live_out_def_with_latency_is_issued_before_independent_stores() {
+        let mut graph = Graph::from_edges(3, &[]);
+        let units = vec![unit(2, 0), unit(1, 0), unit(1, 0)];
+        let machine = machine(0);
+        let held = Scheduler::new(&graph, &machine, units.clone(), RegionPolicy::bottom_up(), None).schedule().0;
+        assert_eq!(held, vec![0, 1, 2], "source order without the exit edge");
+        graph.exit_latency[2] = 3;
+        let got = Scheduler::new(&graph, &machine, units, RegionPolicy::bottom_up(), None).schedule().0;
+        assert_eq!(got[0], 2, "the live-out def stayed behind the stores: {got:?}");
+    }
+
+    /// pin: `biasPhysReg`. A copy of a physical register in (`COPY $wzr`) is
+    /// scheduled first from the top (the physical end is scheduled) and
+    /// deferred at the bottom (the register is at the boundary), so the
+    /// bidirectional zones start it from the top. nbody O2's 22-node
+    /// preheader began with the bottom's pick of another node and the
+    /// constants it held lived through the loop.
+    #[test]
+    fn test_a_copy_of_a_physical_register_is_started_from_the_top() {
+        let graph = Graph::from_edges(3, &[]);
+        let machine = machine(0);
+        let plain = vec![unit(1, 0), unit(1, 0), unit(1, 0)];
+        let mut biased = plain.clone();
+        biased[2].copy_physical = Some((false, true));
+        let policy = RegionPolicy::bidirectional(false);
+        let without = Scheduler::new(&graph, &machine, plain, policy, None).schedule().0;
+        let with = Scheduler::new(&graph, &machine, biased, policy, None).schedule().0;
+        assert_ne!(without[0], 2, "no bias: the copy is not first ({without:?})");
+        assert_eq!(with[0], 2, "the copy of a physical register starts from the top ({with:?})");
     }
 
     /// pin: `llc -mcpu=generic` (in order) hoists the load and the divides

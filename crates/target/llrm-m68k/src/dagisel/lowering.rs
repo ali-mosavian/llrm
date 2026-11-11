@@ -123,7 +123,12 @@ pub fn target_lowering_with(
     set(&[Mul, SDiv, UDiv], &[MVT::I32], wide);
     set(&[Mul], &[MVT::I64], Action::LibCall);
     set(&[SRem, URem], &[MVT::I8, MVT::I16], Action::Legal);
-    set(&[SRem, URem], &[MVT::I32], Action::LibCall);
+    // DEVIATE M68K-REM32 (owner m68k, exit 2026-11-27): from the 68020 there
+    // is a 32-bit divide, so `x % y` is `x - (x / y) * y` (the legalizer's own
+    // `ExpandNode` for SREM/UREM) and links no `__modsi3`; gcc divides
+    // inline. The pin keeps `LibCall` on every CPU (M68kISelLowering.cpp
+    // L100).
+    set(&[SRem, URem], &[MVT::I32], if m68020 { Action::Expand } else { Action::LibCall });
     for op in [UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi] {
         set(&[op], &[MVT::I8], Action::Promote);
         set(&[op], &[MVT::I16], Action::Legal);
@@ -145,6 +150,9 @@ pub fn target_lowering_with(
     set(&[SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[AddC, AddE, SubC, SubE], &int, if carry_chain { Action::Custom } else { Action::Expand });
     set(&[BrCond], &[MVT::Other], Action::Custom);
+    // `setOperationAction(ISD::BR_JT, MVT::Other, Expand)`: a load of the
+    // table entry, then an indirect jump
+    set(&[BrJT], &[MVT::Other], Action::Expand);
     set(&[Select, SetCC, SetCCCarry], &int, Action::Custom);
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
@@ -229,7 +237,10 @@ pub fn prefers_word_multiply(cpu: Cpu) -> bool {
         Cpu::M68060 => Model::M68060,
     };
     let clocks = |text| cost_on(model, text, 2, false).map(|cost| cost.clocks);
-    matches!((clocks("mulu.w %d1, %d0"), clocks("mulu.l %d1, %d0")), (Ok(word), Ok(long)) if word <= long)
+    matches!(
+        (clocks("mulu.w %d1, %d0"), clocks("mulu.l %d1, %d0")),
+        (Ok(word), Ok(long)) if word <= long
+    )
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -313,6 +324,16 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
 }
 
 impl Hooks for M68kLowering {
+    /// `getStackPointerRegisterToSaveRestore` and the frame's stack alignment,
+    /// which the shared expansion of `DYNAMIC_STACKALLOC`, `STACKSAVE` and
+    /// `STACKRESTORE` reads: the node sequence the pin's
+    /// `LowerDYNAMIC_STACKALLOC` builds (`M68kISelLowering.cpp:3362`), with the
+    /// alignment the frames keep (`frame::SHIPPED_STACK_ALIGN`, the pin's
+    /// is 8: see there).
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        Some((crate::reg::SP, crate::frame::SHIPPED_STACK_ALIGN as u64))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -327,6 +348,7 @@ impl Hooks for M68kLowering {
             ISD::Select => Some(lower_select(dag, node, self.cpu)),
             ISD::BrCond => Some(lower_brcond(dag, node, self.cpu)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
+            ISD::JumpTable => Some(super::call::lower_jump_table(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
@@ -676,8 +698,9 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
-/// The bytes every stack argument takes, which is also the most a `va_arg` aligns its list pointer to (gcc packs each
-/// in a 4-byte slot; the pin's M68k sets neither `getMinStackArgumentAlignment` nor a cap).
+/// The bytes every stack argument takes, which is also the most a `va_arg`
+/// aligns its list pointer to (gcc packs each in a 4-byte slot; the pin's M68k
+/// sets neither `getMinStackArgumentAlignment` nor a cap).
 pub const VA_SLOT: u32 = 4;
 
 /// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`

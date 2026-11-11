@@ -82,7 +82,7 @@ impl Mssa {
         for &block in function.layout() {
             let mut insert_into_def = false;
             for inst in function.iter_block(block) {
-                let Some(access) = mssa.create_new_access(block, inst, modref) else { continue };
+                let Some(access) = mssa.create_new_access(function, block, inst, modref) else { continue };
                 let lists = mssa.per_block.get_or_insert_with(block, BlockAccesses::default);
                 lists.accesses.push(access);
                 if mssa.accesses[access as usize].kind == Kind::Def {
@@ -116,10 +116,17 @@ impl Mssa {
     /// (stage 2).
     pub(crate) fn create_new_access(
         &mut self,
+        function: &Function,
         block: BlockId,
         inst: InstId,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Option<AccessId> {
+        // Markers get no access, whatever the alias analysis says of them
+        // (the pin's switch also lists `allow.*check` and `pseudoprobe`, which
+        // MIR lacks; `assume` keeps its access here).
+        if function.is_noalias_scope_decl(inst) {
+            return None;
+        }
         let effect = modref(inst);
         // It's possible for an instruction to not modify memory at all. During
         // construction, we ignore them. The ordered check ensures

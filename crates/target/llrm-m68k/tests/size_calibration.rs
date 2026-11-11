@@ -20,13 +20,26 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::target::Machine;
 use llrm_transforms::walk::function_bytes;
 
+/// The table alone: the instruction sizes, without the residue (`function_scale` and `FUNCTION_RESIDUE_BYTES`).
+fn table_costs(cpu: Cpu) -> llrm_mir::target::OperationCosts {
+    let mut costs = M68kMachine { cpu }.size_costs();
+    (costs.function_scale, costs.function) = (100, costs.function - llrm_m68k::opcosts::FUNCTION_RESIDUE_BYTES);
+    costs
+}
+
 fn estimate_over(
     module: &llrm_mir::module::Module,
     cpu: Cpu,
 ) -> i64 {
+    estimate_with(module, &M68kMachine { cpu }.size_costs())
+}
+
+fn estimate_with(
+    module: &llrm_mir::module::Module,
+    costs: &llrm_mir::target::OperationCosts,
+) -> i64 {
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-    let costs = M68kMachine { cpu }.size_costs();
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(module, &layout, &costs, function)).sum()
+    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(module, &layout, costs, function)).sum()
 }
 
 /// The size of the `.text` section of a big-endian ELF32 object.
@@ -59,17 +72,13 @@ fn the_estimate_brackets_the_leaf_kernels_at_both_cpus_and_levels() {
                 let Ok(module) = llrm_mir::parse::module(&text) else { continue };
                 let Ok(module) = llrm_m68k::compile::mid_end_for(&module, cpu) else { continue };
                 let Ok(object) = driver::object_in(&text, driver::cpu_of(cpu_name).unwrap(), Level::parse(level).unwrap(), name, CodeModel::Small) else { continue };
-                let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
-                let costs = M68kMachine { cpu }.size_costs();
-                estimate += module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(&module, &layout, &costs, function)).sum::<i64>();
+                estimate += estimate_with(&module, &table_costs(cpu));
                 actual += text_bytes(&object) as i64;
             }
-            // The table alone: the estimate with the residue scale taken off again.
-            let scale = M68kMachine { cpu }.size_costs().function_scale as f64 / 100.0;
-            let ratio = estimate as f64 / scale / actual as f64;
+            let ratio = estimate as f64 / actual as f64;
             assert!(actual > 0, "{cpu_name} -O{level}: no kernel compiled");
             if !(0.75..=1.1).contains(&ratio) {
-                failures.push(format!("{cpu_name} -O{level}: estimate {estimate} B (scale {scale}) against objects {actual} B ({ratio:.2} unscaled)"));
+                failures.push(format!("{cpu_name} -O{level}: table {estimate} B against objects {actual} B ({ratio:.2})"));
             }
         }
     }
@@ -78,8 +87,55 @@ fn the_estimate_brackets_the_leaf_kernels_at_both_cpus_and_levels() {
 
 /// The aggregate estimate over the objects of the 22 fixtures, both levels and CPUs. Measured 2026-11-09 with the free
 /// intrinsics: 0.98 to 1.00 at the 68000, 1.11 to 1.17 at the 68020 (the 68020 backend is smaller than its table since the
-/// widening multiply, bitfield and addressing-mode rows; the corpus median still reproduces `function_scale`, 1.50).
+/// widening multiply, bitfield and addressing-mode rows). `function_scale` 1.20 and 3 B a function: `tools/m68k_size_fit.py --corpus`.
 const BAND: std::ops::RangeInclusive<f64> = 0.8..=1.25;
+
+/// One fixture's estimate and object bytes.
+struct Row {
+    name: String,
+    estimate: i64,
+    actual: i64,
+}
+
+/// The ratios an aggregate can hide. The estimate over the objects of all the rows, and of every set of all rows but one
+/// (leave-one-out): a set with one fixture over by x% and another under by x% has an aggregate near 1 and passes it, while
+/// each leave-one-out set is off by x%. Every ratio outside `band`, named.
+fn ratios_outside(
+    rows: &[Row],
+    band: &std::ops::RangeInclusive<f64>,
+) -> Vec<String> {
+    let (estimate, actual): (i64, i64) = rows.iter().fold((0, 0), |sum, row| (sum.0 + row.estimate, sum.1 + row.actual));
+    let mut outside = Vec::new();
+    let all = estimate as f64 / actual as f64;
+    if !band.contains(&all) {
+        outside.push(format!("all {} fixtures: {all:.2}", rows.len()));
+    }
+    for row in rows {
+        let without = (estimate - row.estimate) as f64 / (actual - row.actual) as f64;
+        if !band.contains(&without) {
+            outside.push(format!("without {}: {without:.2}", row.name));
+        }
+    }
+    outside
+}
+
+/// The aggregate alone let one fixture offset the rest (2026-11-09, `-Os`): fixed_point's 64-bit multiplies are 0.54 of
+/// their objects at the 68000 and everything else 1.34, so the aggregate read 1.00. A set of two, one 30% over and one
+/// 30% under, has an aggregate of 1.0 and passes it; the leave-one-out check names both.
+#[test]
+fn one_fixture_over_and_one_under_cannot_offset_each_other() {
+    let rows = [Row { name: "over".into(), estimate: 1300, actual: 1000 }, Row { name: "under".into(), estimate: 700, actual: 1000 }];
+    let (estimate, actual): (i64, i64) = rows.iter().fold((0, 0), |sum, row| (sum.0 + row.estimate, sum.1 + row.actual));
+    assert!(BAND.contains(&(estimate as f64 / actual as f64)), "the aggregate alone passes");
+    assert_eq!(ratios_outside(&rows, &BAND), ["without over: 0.70", "without under: 1.30"]);
+}
+
+/// A set that is within the band everywhere has nothing outside it.
+#[test]
+fn a_set_within_the_band_everywhere_passes() {
+    let rows = [Row { name: "a".into(), estimate: 1100, actual: 1000 }, Row { name: "b".into(), estimate: 950, actual: 1000 }, Row { name: "c".into(), estimate: 1000, actual: 1000 }];
+    assert!(ratios_outside(&rows, &BAND).is_empty());
+}
 
 #[test]
 fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
@@ -90,7 +146,7 @@ fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
     let mut failures = Vec::new();
     for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
         for level in ["2", "s"] {
-            let (mut estimate, mut actual) = (0, 0);
+            let mut rows = Vec::new();
             for path in &files {
                 let text = std::fs::read_to_string(path).unwrap();
                 let name = path.file_stem().unwrap().to_str().unwrap();
@@ -99,13 +155,12 @@ fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
                 let module = driver::lowered_for(&text, cpu, Level::parse(level).unwrap()).unwrap_or_else(|why| panic!("{name}: {why}"));
                 let object = driver::object_in(&text, driver::cpu_of(cpu_name).unwrap(), Level::parse(level).unwrap(), name, CodeModel::Small)
                     .unwrap_or_else(|why| panic!("{name}: {why}"));
-                estimate += estimate_over(&module, cpu);
-                actual += text_bytes(&object) as i64;
+                rows.push(Row { name: name.to_owned(), estimate: estimate_over(&module, cpu), actual: text_bytes(&object) as i64 });
             }
-            let ratio = estimate as f64 / actual as f64;
-            if !BAND.contains(&ratio) {
+            let outside = ratios_outside(&rows, &BAND);
+            if !outside.is_empty() {
                 failures.push(format!(
-                    "{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2}, band {BAND:?}). The backend got smaller or larger than the table: run tools/m68k_size_fit.py --corpus (its median is `function_scale`, opcosts.rs) before touching the band"
+                    "{cpu_name} -O{level}: {outside:?} against band {BAND:?}. The backend got smaller or larger than the table: run tools/m68k_size_fit.py --corpus (its median is `function_scale`, opcosts.rs) before touching the band"
                 ));
             }
         }
@@ -138,4 +193,32 @@ fn lifetime_markers_cost_nothing() {
     );
     let (plain, marked) = (llrm_mir::parse::module(&plain).unwrap(), llrm_mir::parse::module(&marked).unwrap());
     assert_eq!(estimate_over(&marked, Cpu::M68020), estimate_over(&plain, Cpu::M68020));
+}
+
+/// An `i64` product and an `i32` by `i32` into `i64` were priced as the 32-bit multiply (14 B at the 68000, 4 at the
+/// 68020); the objects are 152 and 178 B at the 68000 and 44 and 14 B at the 68020 (2026-11-09, `-Os`). The estimate of
+/// the table price of each function is within 0.75 and 1.4 of its object, and the 68000 product costs more than the 68020's.
+#[test]
+fn wide_products_are_priced_at_what_each_cpu_makes_of_them() {
+    let layout = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    let sources = [
+        ("mul64", format!("{layout}define i64 @mul64(i64 %a, i64 %b) {{\n  %r = mul i64 %a, %b\n  ret i64 %r\n}}\n")),
+        (
+            "widen",
+            format!("{layout}define i64 @widen(i32 %a, i32 %b) {{\n  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %r = mul i64 %x, %y\n  ret i64 %r\n}}\n"),
+        ),
+    ];
+    for (name, text) in &sources {
+        let mut estimates = Vec::new();
+        for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
+            let module = llrm_mir::parse::module(text).unwrap();
+            let object = driver::object_in(text, driver::cpu_of(cpu_name).unwrap(), Level::parse("s").unwrap(), name, CodeModel::Small).unwrap();
+            let (table, actual) = (estimate_with(&module, &table_costs(cpu)), text_bytes(&object) as i64);
+            // The table alone, as the leaf-kernel test: the residue is for the population, not one function.
+            let ratio = table as f64 / actual as f64;
+            assert!((0.75..=1.4).contains(&ratio), "{name} at the {cpu_name}: table {table} B, object {actual} B ({ratio:.2})");
+            estimates.push(estimate_over(&module, cpu));
+        }
+        assert!(estimates[0] > estimates[1], "{name}: the 68000 makes more of a product than the 68020 ({estimates:?})");
+    }
 }

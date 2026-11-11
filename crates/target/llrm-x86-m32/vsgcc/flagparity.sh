@@ -17,9 +17,9 @@ for o in $LEVELS; do
   LLRM_PIN_CLANG=$O/clanglog.sh $LLRM --target=x86_32-wat -mabi=sysv -mlong-double-80 -$o -march=i486 -c -o /dev/null $O/b/$P.c >/dev/null 2>&1 || true
   LINE=$(grep -e '-emit-llvm' $O/ours.clang.log | head -1)
   [ -n "$LINE" ] || { echo "$o: no front-end line logged (nothing compared)"; rc=2; continue; }
-  for c in "gcc -mpreferred-stack-boundary=2" "clang -mstack-alignment=4"; do
+  for c in gcc clang; do
     set -- $c
-    if python3 "$D/flagcheck.py" ours $o "$LINE" $F $2 -$o -mlong-double-80; then echo "$o $1: SAME"; else rc=2; fi
+    if python3 "$D/flagcheck.py" ours $o "$LINE" $F -$o -mlong-double-80; then echo "$o $1: SAME"; else rc=2; fi
   done
 done
 exit $rc
