@@ -53,7 +53,8 @@ pub const LLRM_PORT: u16 = 24586;
 /// The machine opcode `LLRM_PORT` becomes.
 pub const PORT_OPCODE: u16 = 30014;
 
-/// `X86ISD::LLRM_PUSHF` (x86-m16): `pushf` before a call of an interrupt function.
+/// `X86ISD::LLRM_PUSHF` (x86-m16): `pushf` before a call of an interrupt
+/// function.
 pub const LLRM_PUSHF: u16 = 24588;
 
 /// The machine opcode `LLRM_PUSHF` becomes.

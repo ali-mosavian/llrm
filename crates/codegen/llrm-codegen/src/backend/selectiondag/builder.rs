@@ -2863,11 +2863,13 @@ impl Builder<'_> {
         // The handler is entered as an interrupt enters it, with the flags
         // pushed for its `iret` (net stack effect none).
         if std::mem::take(&mut self.interrupt_call) && !sibling {
-            let node = self.dag.get_node_multi(
-                LoweringNodes::need(self.target.dag.nodes.push_flags, "flags push")?,
-                &[EVT::OTHER],
-                &[chain],
-            );
+            let node = self
+                .dag
+                .get_node_multi(
+                    LoweringNodes::need(self.target.dag.nodes.push_flags, "flags push")?,
+                    &[EVT::OTHER],
+                    &[chain],
+                );
             chain = SDValue { node: node.node, res: 0 };
         }
         let mut glue: Option<SDValue> = None;
