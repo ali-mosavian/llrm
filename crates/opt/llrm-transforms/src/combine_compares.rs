@@ -912,14 +912,17 @@ fn canonicalize_cmp_with_constant(
     }
     let (bits, width) = constant(c, op1)?;
     let ty = c.type_of(op1);
+    let same_sign = c.function.instruction(inst).flags.contains(Flags::SAMESIGN);
     let flipped = {
         let q = query(c, None);
-        range::get_flipped_strictness_predicate_and_constant(&q, pred, false, SelectOperand::Int { ty, bits })
+        range::get_flipped_strictness_predicate_and_constant(&q, pred, same_sign, SelectOperand::Int { ty, bits })
     }?;
-    let (new_pred, _, SelectOperand::Int { bits: new_bits, .. }) = flipped else { return None };
+    let (new_pred, new_same_sign, SelectOperand::Int { bits: new_bits, .. }) = flipped else { return None };
     let _ = width;
     let new = c.int(ty, new_bits);
-    Some(new_icmp(c, inst, new_pred, op0, new))
+    let flags = if new_same_sign { Flags::SAMESIGN } else { Flags::default() };
+    let i1 = c.context.types.int(1);
+    Some(c.replace_with_new(inst, Opcode::ICmp(new_pred), i1, vec![op0, new], flags))
 }
 
 /// The bits `a pred b` compares: `ICmpInst::compare(KnownBits, KnownBits,
@@ -1006,14 +1009,36 @@ fn fold_icmp_using_known_bits(
     if changed {
         return Some(Visit::Changed);
     }
+    // If an unsigned samesign comparison is not poison, both operands have the
+    // same sign bit. Propagate a known sign bit between the temporary KnownBits
+    // values so the existing range folds can use that constraint.
+    let sign_bit = 1u128 << (width - 1);
+    let same_sign = c.function.instruction(inst).flags.contains(Flags::SAMESIGN);
+    if same_sign && !is_signed(pred) && !matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+        let propagate = |from: &KnownBits, to: &mut KnownBits| {
+            if (to.zero | to.one) & sign_bit != 0 {
+                return;
+            }
+            if from.one & sign_bit != 0 {
+                to.one |= sign_bit;
+            } else if from.zero & sign_bit != 0 {
+                to.zero |= sign_bit;
+            }
+        };
+        let (from0, from1) = (known0.clone(), known1.clone());
+        propagate(&from0, &mut known1);
+        propagate(&from1, &mut known0);
+    }
     let is_constant = |operand: Operand| matches!(operand, Operand::Constant(_));
+    let keep = if same_sign { Flags::SAMESIGN } else { Flags::default() };
+    let i1 = c.context.types.int(1);
     if !is_constant(op0) && known0.is_constant() {
         let value = c.int(ty, known0.constant_value());
-        return Some(new_icmp(c, inst, pred, value, op1));
+        return Some(c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![value, op1], keep));
     }
     if !is_constant(op1) && known1.is_constant() {
         let value = c.int(ty, known1.constant_value());
-        return Some(new_icmp(c, inst, pred, op0, value));
+        return Some(c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![op0, value], keep));
     }
     if let Some(res) = compare_known(pred, &known0, &known1) {
         let i1 = c.context.types.int(1);
