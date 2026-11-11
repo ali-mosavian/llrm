@@ -3144,3 +3144,32 @@ b:
     let after = run(pipeline::Options::standard());
     assert!(after.contains("icmp slt i8 %b, 0") && !after.contains("sub nsw"), "{after}");
 }
+
+/// `icmp samesign uge i8 %x, 127` of the pin's
+/// `icmp-samesign-canonicalize.ll` reached the backend as an unsigned
+/// compare; -O2 makes it `icmp eq i8 %x, 127`.
+#[test]
+fn test_o2_folds_an_unsigned_samesign_compare_with_a_known_sign() {
+    let text = "define i1 @f(i8 %x) {
+b:
+  %cmp = icmp samesign uge i8 %x, 127
+  ret i1 %cmp
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("samesign uge"), "premise: with no passes the compare stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("icmp eq i8 %x, 127"), "{after}");
+}
