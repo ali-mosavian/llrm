@@ -32,7 +32,7 @@ fn main() {
         let _ = llrm_codegen::backend::memsetpattern::expanded(&mut module);
         let layout =
             module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap_or_default());
-        let target = if m16 { BuilderTarget::m16() } else { BuilderTarget::m32() };
+        let target = if m16 { BuilderTarget::for_pointer_bits(16) } else { BuilderTarget::for_pointer_bits(32) };
         let (mut functions, mut blocks, mut refused) = (0, 0, 0);
         for (id, global, function) in module.functions() {
             if function.is_declaration() {

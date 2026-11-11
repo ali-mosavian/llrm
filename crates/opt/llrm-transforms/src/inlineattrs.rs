@@ -71,7 +71,7 @@ fn set_flag(
     name: &str,
 ) {
     if !flag(attrs, name) {
-        attrs.push(Attribute::Flag(name.to_owned()));
+        attrs.push(Attribute::Flag(name.into()));
     }
 }
 
@@ -90,7 +90,7 @@ fn set_int_at_least(
 ) {
     match attrs.iter_mut().find(|one| matches!(one, Attribute::Int(found, _) if found == name)) {
         Some(Attribute::Int(_, existing)) => *existing = (*existing).max(value),
-        _ => attrs.push(Attribute::Int(name.to_owned(), value)),
+        _ => attrs.push(Attribute::Int(name.into(), value)),
     }
 }
 

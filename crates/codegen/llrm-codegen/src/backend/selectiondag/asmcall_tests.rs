@@ -35,7 +35,7 @@ fn a_nib_block_copies_its_inputs_and_reads_its_output() {
         "target datalayout = \"e-p:32:32-n8:16:32\"\ndeclare i32 @{name}(i32, i32)\n\
          define i32 @f(i32 %a, i32 %b) {{\n  %r = call i32 @{name}(i32 %a, i32 %b)\n  ret i32 %r\n}}\n"
     );
-    let dump = dump(&text, &BuilderTarget::m32(), &llrm_x86_m32::M32);
+    let dump = dump(&text, &BuilderTarget::for_pointer_bits(32), &llrm_x86_m32::M32);
     assert!(dump.contains("X86ISD::LLRM_ASM"), "{dump}");
     assert!(dump.contains(&format!("TargetExternalSymbol:i32'{name}'")), "{dump}");
     assert_eq!(dump.matches("CopyToReg").count(), 2 + 1, "two inputs and the return value:\n{dump}");

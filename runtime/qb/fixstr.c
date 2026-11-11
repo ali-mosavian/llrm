@@ -54,7 +54,7 @@ static void justify(SD *source, qb_data_ptr destination, int length, int right)
         for (to += kept; pad; pad--)
             *to++ = ' ';
     }
-    str_tmp_free(source);
+    str_free_if_tmp(source);
 }
 
 void B_LSET(SD *source, qb_data_ptr destination, int length)

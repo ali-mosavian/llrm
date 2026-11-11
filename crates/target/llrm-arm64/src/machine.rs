@@ -89,6 +89,15 @@ impl Machine for Arm64Machine {
         None
     }
 
+    /// Frames keep 16 and nothing realigns them: nothing clamps, more is refused.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(16)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(16)
+    }
+
     fn tti(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(AArch64::of_cpu(self.platform.cpu()).expect("a cpu the platform names")))
     }
@@ -180,6 +189,6 @@ impl Machine for Arm64Machine {
         &self,
         aggressive: bool,
     ) -> Option<GlobalMerge> {
-        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, mach_o: self.platform == Platform::Darwin })
+        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, optsize_counts: true, mach_o: self.platform == Platform::Darwin })
     }
 }

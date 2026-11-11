@@ -1567,7 +1567,10 @@ impl FunctionPass for LoopUnrollAndJam {
             peeled: Default::default(),
             finished: Default::default(),
             created: Vec::new(),
+            decided: Default::default(),
+            first: Default::default(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
+            cached: None,
             options: UnrollOptions {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -1575,6 +1578,7 @@ impl FunctionPass for LoopUnrollAndJam {
                 only_when_forced: false,
                 prepare_for_lto: false,
                 target_unrolling: false,
+                inliner_follows: true,
             },
         };
         let mut changed = false;

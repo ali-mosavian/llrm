@@ -31,6 +31,13 @@ static LAYOUT: std::sync::LazyLock<llrm_target::layout::Layout> = std::sync::Laz
     llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("real mode's datalayout.toml parses")
 });
 
+/// `kept_stack_align` and `max_alloca_align` of `DATALAYOUT_TOML`, in bytes.
+pub fn stack_keeps() -> (Option<u64>, Option<u64>) {
+    let table: toml::Table = DATALAYOUT_TOML.parse().expect("real mode's datalayout.toml parses");
+    let read = |key: &str| table.get(key).and_then(|one| one.as_integer()).and_then(|one| u64::try_from(one).ok());
+    (read("kept_stack_align"), read("max_alloca_align"))
+}
+
 /// `DATALAYOUT_TOML`, parsed.
 pub fn layout() -> llrm_target::layout::Layout {
     LAYOUT.clone()
@@ -45,8 +52,8 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 /// The registers the description states.
-static REGISTERS: std::sync::LazyLock<Vec<llrm_target::registers::Register>> = std::sync::LazyLock::new(|| {
-    llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses")
+static REGISTERS: std::sync::LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> = std::sync::LazyLock::new(|| {
+    llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses")
 });
 
 /// The pin's register pressure sets for the registers described above:
@@ -178,11 +185,32 @@ impl llrm_target::Target for M16 {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
     }
 
+    fn small_divide_at_o1(&self) -> bool {
+        true
+    }
+
+    fn divide_routine_small(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
+    }
+
     fn float_width(
         &self,
         _: u32,
     ) -> u32 {
         llrm_x86::X87_WIDTH
+    }
+
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 2,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
     }
 
     fn register_op_bytes(
@@ -283,6 +311,10 @@ impl llrm_target::Target for M16 {
         layout()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
     }
@@ -327,6 +359,11 @@ impl llrm_target::Target for M16 {
         CALLING.native().slot_bytes
     }
 
+    /// Real mode has no `and sp` frame the pin builds.
+    fn can_realign_stack(&self) -> bool {
+        false
+    }
+
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
     }
@@ -360,6 +397,14 @@ impl llrm_target::Target for M16 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
     }
 
     fn string_registers(&self) -> Option<llrm_target::StringRegisters> {
@@ -611,11 +656,15 @@ mod tuning_tests {
             "the compiler reads the judge's row"
         );
         assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
+        assert!(table.divide_by_bytes, "DEVIATE SD446: m16 weighs the bytes of a divide by a constant");
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
         assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
+        assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
+        assert_eq!(table.address_reference_milliweight, 3000, "DEVIATE RA-CLK: an address component weighs three references");
         assert_eq!(table.unswitch_threshold, Some(0));
+        assert_eq!(table.min_jump_table_density, Some(40), "DEVIATE M16-JT-DENSITY: a table pays from 40% at every level");
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -626,7 +675,11 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
+                divide_by_bytes: false,
                 price_pin_multiplies: false,
+                // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
+                lftr_any_stride: false,
+                imul_at_size: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,
                 unroll_threshold: None,
@@ -634,15 +687,42 @@ mod tuning_tests {
                 unroll_partial_threshold: None,
                 x87_stack_slots: None,
                 slots_loop_width_rule: false,
+                carry_slot_indexes: true,
+                address_reference_milliweight: 1000,
                 rotation_header_priced_at_size: false,
                 unswitch_threshold: None,
+                min_jump_table_density: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
                 inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
+                x87_share_negated_products: false,
+                x87_zero_fill_at_size: false,
+                unroll_promotion_fits_x87_stack: false,
                 ..table
             },
             Tuning::PIN
         );
+    }
+}
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    fn stated(key: &str) -> Option<&'static str> {
+        super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(" = \"")?.strip_suffix('"'))
+    }
+
+    /// S16 made bench/parity/qbsp -Os zero a packed 16-byte local with `rep stosb` x16 where the pin's m16 (no S in its string) raises the
+    /// local and zeroes it with `rep stosw` x8. The datalayout follows the pin: no S, and the reason is data.
+    #[test]
+    fn the_datalayout_follows_the_pin_in_naming_no_stack_alignment() {
+        llrm_target::testing::assert_unstated_stack("x86-m16", stated("datalayout").unwrap(), stated("stack_alignment_unstated"));
+    }
+
+    /// A target that is exempt for having no S in its pin string and declares one anyway is caught by name.
+    #[test]
+    #[should_panic(expected = "declares an S though its pin string has none")]
+    fn an_exempt_target_that_declares_a_stack_alignment_fails() {
+        llrm_target::testing::assert_unstated_stack("x86-m16", "e-p:16:16-S16", Some("the pin's m16 datalayout has no S"));
     }
 }

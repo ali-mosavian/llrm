@@ -63,7 +63,7 @@ use llrm_analysis::scev::expr::{Scev, Ty, Type};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
-use llrm_mir::tti::{Cost as TtiCost, LsrCost, Tti};
+use llrm_mir::tti::{Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
@@ -493,6 +493,8 @@ pub struct Rating<'a, 'b> {
     pub other_register_units: u32,
     /// The compile is for size.
     pub size: bool,
+    /// The loop calls, and the target's call takes every register (LU13).
+    pub across_call: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -507,6 +509,12 @@ pub struct Cost {
     addressed: Vec<Scev>,
     /// Rated for size (set by `rate_formula`).
     size: bool,
+    /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
+    /// that gives a byte model (`Tti::lsr_bytes`); 0 elsewhere.
+    pub bytes: u32,
+    /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
+    /// formulae need, where the target sizes by `Tti::lsr_size_order`.
+    pub size_bytes: u32,
 }
 
 impl Cost {
@@ -525,6 +533,7 @@ impl Cost {
             imm_cost: u32::MAX,
             setup_cost: u32::MAX,
             scale_cost: u32::MAX,
+            spills: u32::MAX,
         };
     }
 
@@ -559,6 +568,26 @@ impl Cost {
                 return theirs;
             }
         }
+        // DEVIATE LSR-SIZE: sized for bytes, the bytes of the displacements,
+        // adds and setup come before the cost of the recurrences, the
+        // instructions and registers staying first.
+        if (self.size || other.size) && tti.lsr_size_order() {
+            let key = |x: &Cost| {
+                let c = &x.c;
+                (
+                    c.insns,
+                    c.num_regs,
+                    x.size_bytes,
+                    c.add_rec_cost,
+                    c.num_iv_muls,
+                    c.num_base_adds,
+                    c.scale_cost,
+                    c.imm_cost,
+                    c.setup_cost,
+                )
+            };
+            return key(self) < key(other);
+        }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }
 
@@ -589,6 +618,7 @@ impl Cost {
         }
         debug_assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
         let (prev_add_rec, prev_regs, prev_base_adds) = (self.c.add_rec_cost, self.c.num_regs, self.c.num_base_adds);
+        let bytes_model = r.tti.lsr_bytes();
         for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
             if visited.contains(&reg) {
                 self.lose();
@@ -638,6 +668,43 @@ impl Cost {
             && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
         if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
+        }
+
+        if let Some(m) = bytes_model {
+            let constant = |v: i64| m.constant + leb_len(v);
+            if !absorbed && inside && f.unfolded_offset.is_non_zero() {
+                self.bytes += constant(f.unfolded_offset.0) + m.op;
+            }
+            if lu.kind == Kind::ICmpZero && !f.has_zero_end() {
+                self.bytes += constant(f.base_offset.0) + m.op;
+            }
+            if lu.kind == Kind::Address {
+                for fixup in &lu.fixups {
+                    let offset = fixup.offset.add_unsigned(f.base_offset);
+                    if offset.is_non_zero() {
+                        self.bytes += leb_len(offset.0);
+                    }
+                }
+            }
+        }
+
+        if self.size && r.tti.lsr_size_order() {
+            if lu.kind == Kind::Address {
+                for fixup in &lu.fixups {
+                    let offset = fixup.offset.add_unsigned(f.base_offset).0;
+                    self.size_bytes += if f.base_gv.is_some() {
+                        4
+                    } else if offset == 0 {
+                        0
+                    } else if i8::try_from(offset).is_ok() {
+                        1
+                    } else {
+                        4
+                    };
+                }
+            }
+            // An add or lea for each register not folded, and its immediate.
+            self.size_bytes += 3 * (self.c.num_base_adds - prev_base_adds);
         }
 
         // Scaling amounts that are not free.
@@ -712,6 +779,9 @@ impl Cost {
         // The base adds are instructions for unfolded registers.
         if lu.kind != Kind::ICmpZero {
             self.c.insns += self.c.num_base_adds - prev_base_adds;
+        }
+        if let Some(m) = bytes_model {
+            self.bytes += (self.c.num_base_adds - prev_base_adds) * (m.op + m.local_get);
         }
     }
 
@@ -793,6 +863,17 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0 && self.size && r.tti.lsr_size_order() {
+                self.size_bytes += 3;
+            }
+            if loop_cost > 0
+                && let Some(m) = r.tti.lsr_bytes()
+            {
+                // The step added each trip.
+                let step = r.se.operands(reg)[1].scev;
+                let step_bytes = r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
+                self.bytes += m.local_get + step_bytes + m.op + m.local_set;
+            }
 
             // DEVIATE LU5: a start that is a non-affine addrec of an enclosing
             // loop is expanded as an induction variable for each of its steps,
@@ -826,11 +907,26 @@ impl Cost {
             return;
         }
         self.c.num_regs += 1;
+        // DEVIATE LU13: kept across a call, a recurrence is reloaded and
+        // stored every trip, an invariant reloaded.
+        if r.across_call {
+            self.c.spills += if r.se.addrec_header(reg) == Some(r.l) { 2 } else { 1 };
+        }
 
         // Favor registers that need no setup in the preheader.
+        let prev_setup = self.c.setup_cost;
         self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
+        if self.size && r.tti.lsr_size_order() {
+            // A `mov` or `lea` of the register's start in the preheader.
+            self.size_bytes += 3 * (self.c.setup_cost - prev_setup).min(4);
+        }
+        if let Some(m) = r.tti.lsr_bytes() {
+            // A local set in the preheader, and a constant for each
+            // immediate the setup makes.
+            self.bytes += m.local_set + setup_bytes(r.se, r.cx, &m, reg, SETUP_COST_DEPTH_LIMIT);
+        }
 
         if r.se.scev_type(reg) == Type::Mul && r.se.has_computable_loop_evolution(r.cx, reg, Some(r.l)) {
             self.c.num_iv_muls += 1;
@@ -897,6 +993,32 @@ pub fn is_existing_phi(
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1397
 /// `getSetupCost`: the instructions `reg` needs in the preheader, to a depth.
+/// The length of the LEB128 of `v`.
+fn leb_len(v: i64) -> u32 {
+    let bits = 65 - (v ^ (v >> 63)).leading_zeros();
+    bits.div_ceil(7).max(1)
+}
+
+/// What the code in the preheader that makes `reg` is in bytes, as
+/// `setup_cost` walks it.
+fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u32) -> u32 {
+    match se.scev_type(reg) {
+        Type::Unknown => m.local_get,
+        Type::Constant => m.constant + leb_len(se.as_constant(reg).expect("a constant").sext_value() as i64),
+        _ if depth == 0 => 0,
+        Type::AddRec => setup_bytes(se, cx, m, se.operands(reg)[0].scev, depth - 1),
+        Type::Truncate | Type::ZeroExtend | Type::SignExtend | Type::PtrToAddr => {
+            setup_bytes(se, cx, m, se.operands(reg)[0].scev, depth - 1)
+        }
+        Type::Add | Type::Mul => {
+            let ops = se.operands(reg);
+            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>()
+                + (ops.len() as u32 - 1) * m.op
+        }
+        _ => 0,
+    }
+}
+
 pub fn setup_cost(
     se: &ScalarEvolution,
     cx: &Cx,

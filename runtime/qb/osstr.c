@@ -59,11 +59,11 @@ SD *B_FEVS(SD *name)
         if (i == name->len && (long)i < length && text[i] == '=') {
             long value = length - i - 1;
 
-            str_tmp_free(name);
+            str_free_if_tmp(name);
             copy_bytes(text, text + i + 1, value);
             return made(value);
         }
     }
-    str_tmp_free(name);
+    str_free_if_tmp(name);
     return made(0);
 }

@@ -23,6 +23,8 @@
 # @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
 # register the result is not left in comes last.
 @scratch cx dx bx ax
+# @lanes: x86's lane table (`llrm_codegen::backend::lanes`).
+@lanes x86
 #
 # @bytes: the 8-bit allocation order, GR8 of X86RegisterInfo.td: the high bytes come before bl and bh.
 @bytes al cl dl ah ch dh bl bh

@@ -39,3 +39,40 @@ for case in "LLRM_CC=$bad/none" "LLRM_CLANG_WASM=$bad/none" "LLRM_CLANG_WASM=$ba
 done
 if "$root/tools/wasm_corpus.sh" O1 > /dev/null 2>&1; then echo "FAIL: exit 0 with no program"; exit 1; fi
 echo "ok: a broken tool or an empty run exits non-zero"
+
+# jpeg_* and stft_* import `llrm_os_*`: with the layer unresolved the run had no result, its row read "n/a(no result)" with 0
+# instructions on both sides, and the run exited 0 (a corpus table with four unexecuted programs). They run now, on the
+# program's own `// data:` file, and the row compares what they write.
+corpus=${WASM_CORPUS:-$root/tools/wasm_corpus.sh}
+for program in jpeg_single stft_fixed; do
+    row=$("$corpus" O1 "$root/bench/$program/$program.c" | tail -1)
+    read -r _ _ _ llrm_instr clang_instr _ _ result <<< "$row"
+    [ "$llrm_instr" -gt 0 ] && [ "$clang_instr" -gt 0 ] && [ "$result" = same ] || { echo "FAIL: $program did not run: $row"; exit 1; }
+    echo "ok: $row"
+done
+
+# A program that did not run is not a pass: the run exits 3 and names it.
+noimport=$(mktemp -d); printf 'extern int missing(void);\nint main(void) { return missing(); }\n' > "$noimport/noimport.c"
+status=0; message=$("$corpus" O1 "$noimport/noimport.c" 2>&1 >/dev/null) || status=$?
+[ "$status" -eq 3 ] && case "$message" in *"NO RESULT for: noimport"*) true;; *) false;; esac || { echo "FAIL: exit $status, '$message'"; exit 1; }
+echo "ok: a program with no result fails the run and is named"
+
+# memcpy, memmove and memset were not in the stub: memfuncs_runtime and memcpy_runtime imported them, did not instantiate, and read "no result"
+# on every side. They run now, and both sides agree.
+for program in memfuncs_runtime memcpy_runtime; do
+    row=$("$corpus" O1 "$root/tests/run/c/$program.c" | tail -1)
+    read -r _ _ _ llrm_instr clang_instr _ _ result <<< "$row"
+    # Hundreds of millions of instructions: past the trace cap the count is "-", the result is still compared.
+    [ "$result" = same ] && [ "$llrm_instr" != 0 ] || { echo "FAIL: $program did not run: $row"; exit 1; }
+    echo "ok: $row"
+done
+
+# The failure names the import nothing satisfied: a gap in the harness reads as that, not as a program that does not run.
+case "$message" in *"unsatisfied import env.missing"*) true;; *) echo "FAIL: the message does not name the import: '$message'"; exit 1;; esac
+echo "ok: the failure names the unsatisfied import"
+
+# A program that defines its own `run` clashed with the stub's entry of that name (duplicate symbol, or a signature warning): no result.
+row=$("$corpus" O1 "$root/tests/run/c/licm_graph_callee_footprint.c" | tail -1)
+read -r _ _ _ llrm_instr clang_instr _ _ result <<< "$row"
+[ "$llrm_instr" -gt 0 ] && [ "$clang_instr" -gt 0 ] && [ "$result" = same ] || { echo "FAIL: a program with its own run did not run: $row"; exit 1; }
+echo "ok: $row"

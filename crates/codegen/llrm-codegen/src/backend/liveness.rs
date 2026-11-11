@@ -190,6 +190,16 @@ pub fn with_effect<R>(
     if *was == bits { with(answer.as_ref()) } else { with(worked_out(regs, bits, one).as_ref()) }
 }
 
+/// An x87 compare pseudo (`fcom`, `ficom`, their pops).
+pub fn is_x87_compare(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Compare
+                && what.name.as_deref().is_some_and(|name| name.starts_with("fcom") || name.starts_with("ficom")),
+        )
+}
+
 /// `one`'s effect as it decodes, else as its contract declares; None when
 /// unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(
@@ -221,7 +231,21 @@ fn worked_out(
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    let (reads, writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    // `ADJCALLSTACKDOWN`/`UP`: `implicit-def dead $eflags`. Without this the flags
+    // of the instruction before one read as live, and a two-address `add` kept its
+    // copy where the pin makes a `lea`.
+    if one.what.as_ref().is_some_and(|what| matches!(what.name.as_deref(), Some("call_frame_setup" | "call_frame_destroy"))) {
+        let mut writes = Lanes::new();
+        writes.include(_flag_lanes(0xFFFF_FFFF));
+        return Some(Effect { reads: Lanes::new(), writes, moved: Vec::new() });
+    }
+    let (reads, mut writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    // The x87 compare is a pseudo here, expanded after the stackifier into
+    // `fcom; fnstsw ax; sahf`; the pin's MIR has the flags write (`SAHF`) from
+    // instruction selection on.
+    if is_x87_compare(one) {
+        writes.include(_flag_lanes(0xFFFF_FFFF));
+    }
     Some(match _moved_lanes(regs, bits, one) {
         Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
         None => Effect { reads, writes, moved: Vec::new() },

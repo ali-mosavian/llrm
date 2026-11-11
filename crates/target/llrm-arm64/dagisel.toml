@@ -8,6 +8,8 @@ isd = "AArch64ISD::"
 llvm_dir = "AArch64"
 td = "AArch64.td"
 cpus = ["apple-m1"]
+# The scheduling models (sched.rs): `generic` is Cortex-A510's, `apple-m1` Cyclone's.
+sched_cpus = ["generic", "apple-m1"]
 hw_modes = ["i64", "i64"]
 in_dagisel = true
 # The directory of the checked-in tables, from this file.
@@ -47,6 +49,60 @@ extra_symbols = [
   "AArch64::BFMWri",
   # Selected by hand (LowerBR_JT).
   "AArch64::JumpTableDest32",
+  # Every opcode a form of `opcodes.instr` stands for: the scheduling model resolves its class by number
+  # (checked by `every_opcode_a_form_stands_for_has_a_number_in_the_table`).
+  "TargetOpcode::COPY",
+  "TargetOpcode::DBG_VALUE",
+  "AArch64::DUPv16i8gpr",
+  "AArch64::FMOVDXr",
+  "AArch64::FMOVHWr",
+  "AArch64::FMOVHXr",
+  "AArch64::FMOVSWr",
+  "AArch64::FMOVXHr",
+  "AArch64::LDPDi",
+  "AArch64::LDPDpost",
+  "AArch64::LDPDpre",
+  "AArch64::LDPQi",
+  "AArch64::LDPQpost",
+  "AArch64::LDPQpre",
+  "AArch64::LDPSWi",
+  "AArch64::LDPSWpost",
+  "AArch64::LDPSWpre",
+  "AArch64::LDPSi",
+  "AArch64::LDPSpost",
+  "AArch64::LDPSpre",
+  "AArch64::LDPWi",
+  "AArch64::LDPWpost",
+  "AArch64::LDPWpre",
+  "AArch64::LDPXpost",
+  "AArch64::LDPXpre",
+  "AArch64::MOVIv16b_ns",
+  "AArch64::MOVIv2d_ns",
+  "AArch64::MOVKWi",
+  "AArch64::MOVNWi",
+  "AArch64::MOVNXi",
+  "AArch64::MOVZWi",
+  "AArch64::ORRv16i8",
+  "AArch64::RET",
+  "AArch64::STPDi",
+  "AArch64::STPDpost",
+  "AArch64::STPDpre",
+  "AArch64::STPQi",
+  "AArch64::STPQpost",
+  "AArch64::STPQpre",
+  "AArch64::STPSi",
+  "AArch64::STPSpost",
+  "AArch64::STPSpre",
+  "AArch64::STPWi",
+  "AArch64::STPWpost",
+  "AArch64::STPWpre",
+  "AArch64::STPXpost",
+  "AArch64::STPXpre",
+  "AArch64::SUBWri",
+  "AArch64::SUBWrs",
+  "AArch64::SUBWrx",
+  "AArch64::SUBXri",
+  "AArch64::SUBXrx",
   "TargetOpcode::JUMP_TABLE_DEBUG_INFO",
 ]
 ids_includes = [

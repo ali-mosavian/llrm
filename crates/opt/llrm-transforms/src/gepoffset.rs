@@ -22,7 +22,7 @@
 //! DEVIATE LP-2 (no pin pass: LLVM gets `a[i + 8]` as a displacement from
 //! InstCombine's gep canonicalization, LSR and CodeGenPrepare's address-mode
 //! matching (row CG DEVIATE C1); exit: that matching translated, then deleted;
-//! owner w-6; review 2026-11-13).
+//! owner w10-instcombine; review 2026-11-13).
 //!
 //! # Example
 //! Before:

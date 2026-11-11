@@ -72,6 +72,7 @@ fn object() -> Object {
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     }
 }

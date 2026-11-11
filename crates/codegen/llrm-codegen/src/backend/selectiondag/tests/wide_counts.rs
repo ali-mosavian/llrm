@@ -78,3 +78,66 @@ fn an_i64_cttz_selects_between_the_halves() {
     assert_eq!(dag.opcode(other), ISD::Add);
     assert_eq!(dag.constant(dag.operand(other, 1)), Some(32));
 }
+
+/// `clz`, `ctz` and `popcount` of an `i64` marked `LibCall` were split into halves anyway (m68k `clzll_ctzll_64`
+/// -Os: 216 and 162 B inline against 114 B of shared `__clzdi2`/`__clzsi2`): the pin's `ExpandIntRes_CTPOP` takes the
+/// routine when the action says `LibCall` (DEVIATE BC1 extends that to the zero-poison clz and ctz). One call of the
+/// `i64` routine, no split; the default still splits.
+#[test]
+fn a_wide_count_marked_libcall_is_one_call_to_the_wide_routine() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len()));
+            Some(dag.get_register(ret, 90))
+        }
+    }
+    for (op, name) in [(ISD::CtPop, "__popcountdi2"), (ISD::CtLzZeroPoison, "__clzdi2"), (ISD::CtTzZeroPoison, "__ctzdi2")] {
+        for libcall in [true, false] {
+            let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+            if libcall {
+                tli.set_operation_action(op, MVT::I64, Action::LibCall);
+            }
+            let mut dag = dag();
+            let ptr = dag.get_register(EVT::I32, 7);
+            let chain = dag.entry_node();
+            let info = |slot| MemInfo {
+                mem_vt: EVT::I32,
+                align: 4,
+                volatile: false,
+                base: MemBase::Stack(slot),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let (lo, hi) = (dag.get_load(EVT::I32, chain, ptr, info(1)), dag.get_load(EVT::I32, chain, ptr, info(2)));
+            let x = dag.get_node(ISD::BuildPair, EVT::I64, &[lo, hi]);
+            let count = dag.get_node(op, EVT::I64, &[x]);
+            let low = dag.get_node(ISD::Truncate, EVT::I32, &[count]);
+            dag.set_root(low);
+            let mut calls = Calls::default();
+            TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+            if libcall {
+                assert_eq!(calls.0, vec![(name, 1)], "{op:?}");
+            } else {
+                assert!(calls.0.is_empty(), "{op:?} called {:?} by default", calls.0);
+            }
+        }
+    }
+}

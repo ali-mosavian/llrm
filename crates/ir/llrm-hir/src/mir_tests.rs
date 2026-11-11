@@ -624,6 +624,54 @@ fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
     assert!(text.contains(body), "{text}");
 }
 
+/// `1 / q` in Q9 was `sdiv i64 262144, sext q` and cost ~170 B of inline
+/// 64-bit divide at m16 -O1 (nbody_fixed 950 B against C's 459). A dividend
+/// whose bounds, shifted, stay in 32 bits (a constant, or a stated range)
+/// divides there; one whose bounds do not fit, or are unknown, keeps the
+/// 64-bit form.
+#[test]
+fn fixed_division_of_a_dividend_that_fits_is_a_32_bit_divide() {
+    use llrm_mir::facts::{Bounds, Fact};
+
+    use crate::facts::{Builder, Subject};
+
+    let mut long = Type::new(2, "long", TypeKind::Integer, 4);
+    long.signed = Some(true);
+    let mut byte = Type::new(3, "byte", TypeKind::Integer, 1);
+    byte.signed = Some(true);
+    let values = (1..=7).map(|id| Value { id, r#type: 2 }).collect();
+    let nine = Operand::constant(3, 9);
+    let divide = |id, result, dividend: Operand| {
+        Instruction::new(id, Op::FixedDiv, vec![result], vec![dividend, Operand::value_ref(1), nine.clone()])
+    };
+    let instructions = vec![
+        // 2: bounded by its stated range, 3: stated range too wide, 4: no range.
+        Instruction::new(1, Op::FixedMul, vec![2], vec![Operand::value_ref(1), Operand::value_ref(1), nine.clone()]),
+        Instruction::new(2, Op::FixedMul, vec![3], vec![Operand::value_ref(1), Operand::value_ref(1), nine.clone()]),
+        divide(3, 4, Operand::constant(2, 512)),
+        divide(4, 5, Operand::value_ref(2)),
+        divide(5, 6, Operand::value_ref(3)),
+        divide(6, 7, Operand::value_ref(1)),
+    ];
+    let block =
+        Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(7)], Vec::new()));
+    let mut function = Function::new(1, "INV", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.extend([long, byte]);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Range(Bounds { lo: 0, hi: 1000 }));
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Range(Bounds { lo: 0, hi: 1 << 30 }));
+    program.modules[0].facts = facts.finish();
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("= sdiv i32 262144, %0\n"), "a constant: {text}");
+    assert!(text.contains("= sdiv i32 %5, %0\n") || text.matches("sdiv i32").count() == 2, "a stated range: {text}");
+    assert_eq!(text.matches("sdiv i64").count(), 2, "too wide and unbounded stay wide: {text}");
+}
+
 /// HIR's frame starts zeroed, so a local read before any store is 0; MIR's
 /// allocas started uninitialized, which a pass may take as any value.
 /// Places that overlap share their bytes: one alloca holds both, zeroed by

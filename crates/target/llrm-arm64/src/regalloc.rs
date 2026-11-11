@@ -1,5 +1,7 @@
-//! Register allocation: linear scan over one live interval per register. It is
-//! the allocator the spike needs, not LLVM's greedy (`RAGreedy`): an interval
+//! Register allocation, the fallback: linear scan over one live interval per
+//! register. The default is the shared greedy (`lir_view::allocate`); this runs
+//! under `LLRM_ARM64_LINEAR` or for a function greedy refuses. It is not LLVM's
+//! greedy (`RAGreedy`): an interval
 //! has no holes, a spilled one lives in its frame object, and every use of it
 //! is reloaded into a reserved scratch register. An interval that crosses a
 //! call takes a callee-saved register or is spilled. A value that is one
@@ -17,9 +19,11 @@
 //! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not
 //! keep.
 //!
-//! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR. This
-//! allocator stands in until the core machine passes run on arm64 LIR (see
-//! docs/architecture/arm64-spike.md); it is not a translation.
+//! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR; the
+//! default here is the shared greedy on `MFunction` (`lir_view`), but the
+//! machine passes around it are arm64's own until arm64 runs on
+//! `flow::machine_with` (docs/architecture/arm64-spike.md). This scan is not a
+//! translation.
 
 use std::collections::BTreeSet;
 
@@ -307,7 +311,7 @@ fn coalesce(function: &mut MFunc) {
 /// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
 /// never takes one.
 pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
-    let mut wide: HashSet<Reg> = HashSet::default();
+    let mut wide: HashSet<Reg> = function.wide.iter().copied().collect();
     let mut copies: Vec<(Reg, Reg)> = Vec::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         match op {
@@ -496,6 +500,13 @@ fn rewrite(
     for block in &mut function.blocks {
         let mut out: Vec<(Op, Option<SrcLoc>)> = Vec::with_capacity(block.ops.len());
         for (mut op, loc) in std::mem::take(&mut block.ops) {
+            // A debug value names the register the value was given; one the
+            // allocator spilled, made again at its uses or dropped has none.
+            if let Op::DbgValue { reg, .. } = &mut op {
+                *reg = reg.and_then(|virtual_reg| assigned.get(&virtual_reg).copied());
+                out.push((op, loc));
+                continue;
+            }
             // The one definition of a value made at each use.
             if op
                 .defs_and_uses()
@@ -818,11 +829,11 @@ pub(crate) fn spill_access(
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
         Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
     };
-    Op::I(if load {
-        Inst::Load { mem, addr, mmo: MemOperand::default() }
-    } else {
-        Inst::Store { mem, addr, mmo: MemOperand::default() }
-    })
+    // The frame object itself (`getFixedStack`): a spill is disjoint from every
+    // other object, so the pair pass moves one past a global's load or a store
+    // through a pointer (`MachineInstr::mayAlias`).
+    let mmo = MemOperand { object: MemObject::Slot(slot), offset: Some(0), volatile: false };
+    Op::I(if load { Inst::Load { mem, addr, mmo } } else { Inst::Store { mem, addr, mmo } })
 }
 
 #[cfg(test)]

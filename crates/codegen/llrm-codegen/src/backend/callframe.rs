@@ -21,10 +21,12 @@
 //! The producer is the call lowering of the SelectionDAG port: `LowerCall`
 //! stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
 //! `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
-//! `call_frame_destroy` at m32 only (`AddrMode::Flat32`, DEVIATE CF4); the
-//! pass is in the flow at every x86 width. At m16 (`Real16`) and m64 `emit.rs`
-//! makes `sub sp, N` / `add sp, N - M` itself, so the pass finds no setup and
-//! changes nothing there. The m16 steps left: emit the pseudos for `Real16`
+//! `call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
+//! zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
+//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none for
+//! a call of no bytes), so the pass finds no setup and changes nothing there. A
+//! zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14 cells,
+//! jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for `Real16`
 //! (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
 //! area out in the m16 prologue, and re-check the readers of the old
 //! `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
@@ -425,7 +427,13 @@ impl CallFrameOpt {
         let name = what.name.as_deref().unwrap_or_default();
         // The stores of the frame, and the constant stores written as `and` and
         // `or`.
-        if let [Loc::Mem(_)] = what.dests.as_slice() {
+        if let [Loc::Mem(cell)] = what.dests.as_slice() {
+            // `MOV32mi`/`MOV32mr` (and the 64-bit forms): a store narrower than
+            // the slot is no push (a one-byte struct passed by value stored a
+            // byte register, which `push` cannot take).
+            if i64::from(cell.width) != self.slot {
+                return Class::Exit;
+            }
             match (what.op, name) {
                 (Operation::Binary, "and") => {
                     return if imm_of(one, 1) == Some(0) { Class::Convert } else { Class::Exit };
@@ -783,6 +791,27 @@ mod tests {
 
     fn names(body: &LirBody) -> Vec<String> {
         body.blocks[0].insns.iter().map(|one| name_of(one).unwrap().to_owned()).collect()
+    }
+
+    /// A byte store into the frame (the copy of a one-byte struct passed by
+    /// value) became `push r8`, which does not encode: `struct T { char x; }`
+    /// passed uninitialised failed in the backend at -O1/-O2 (wc_mixed).
+    #[test]
+    fn a_store_narrower_than_a_slot_stays_a_store() {
+        let cell = Mem { through: RegId::SP, offset: 0, ..Mem::new(None, 1) };
+        let byte = insn(
+            1,
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(cell)],
+            vec![Loc::Held(Held { value: 1, width: 1, offset: 0 })],
+            vec![],
+            vec![1],
+        );
+        // Two slots, as one push alone is never worth the adjustments.
+        let before = body(vec![setup(8), store(4, imm(4), vec![]), byte, call(), destroy(8)]);
+        let after = pass().run(&before);
+        assert_eq!(names(&after), ["call_frame_setup", "mov", "mov", "call", "call_frame_destroy"]);
     }
 
     /// The pinned `llc -run-pass=x86-cf-opt` on a frame of two stores, `mov

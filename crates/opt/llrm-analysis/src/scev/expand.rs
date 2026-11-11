@@ -531,7 +531,7 @@ impl Run<'_> {
             }
             Kind::AddRec(ops, header) => {
                 let mut found = Some(header);
-                for op in ops {
+                for op in ops.iter().copied() {
                     let l = self.get_relevant_loop(op.scev);
                     found = self.pick_most_relevant_loop(found, l);
                 }
@@ -545,7 +545,7 @@ impl Run<'_> {
             | Kind::SMin(ops)
             | Kind::SequentialUMin(ops) => {
                 let mut found = None;
-                for op in ops {
+                for op in ops.iter().copied() {
                     let l = self.get_relevant_loop(op.scev);
                     found = self.pick_most_relevant_loop(found, l);
                 }

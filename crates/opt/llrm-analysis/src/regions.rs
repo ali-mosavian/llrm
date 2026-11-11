@@ -969,7 +969,7 @@ b0:
     /// `*q = 1` through a `char *` between two loads of `*p` was no write of
     /// `*p`: the types differed by name, and `omnipotent char`, the parent of
     /// every scalar type, was not read as one that covers them. C lets a
-    /// char access any object (llrm-c at -O2 added `*p` to itself).
+    /// char access any object (llrm-cc at -O2 added `*p` to itself).
     #[test]
     fn a_type_covers_its_descendants_and_roots_are_not_compared() {
         let module = module(&format!(

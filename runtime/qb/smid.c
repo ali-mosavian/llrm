@@ -32,5 +32,5 @@ void B_SMID(qb_data_ptr destination, int width, SD *source, int maximum, int sta
         count = source->len;
     for (; count; count--)
         *to++ = *from++;
-    str_tmp_free(source);
+    str_free_if_tmp(source);
 }

@@ -225,6 +225,7 @@ impl State<'_> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -1247,8 +1248,7 @@ impl State<'_> {
                 return false;
             }
             // Storing to the first src_size bytes of dest must not trap.
-            let writable =
-                crate::licm::promote::is_writable_object(self.context, self.function, &self.outer, dest_object);
+            let writable = crate::licm::promote::is_writable_object(self.function, dest_object);
             if (!writable || !self.is_dereferenceable(cpy_dest, cpy_size))
                 && !llrm_mir::valuetracking::guarantee::is_guaranteed_to_transfer_execution_to_successor_range(
                     &self.query(),

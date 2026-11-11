@@ -34,6 +34,8 @@ pub const SNIPPETS: &[(&str, &str)] = &[
     ("branch", "lda rc2\n  cmp rc3\n  bne l\nl:\n"),
     ("address", "clc\n  lda rc2\n  adc #1\n  sta rc2\n  lda rc3\n  adc #0\n  sta rc3\n"),
     ("call", ".import callee\n  jsr callee\n"),
+    // a 16-bit argument (an int or a pointer) is two cells
+    ("argument", "lda #1\n  sta rc2\n  lda #0\n  sta rc3\n"),
     ("return", "rts\n"),
 ];
 
@@ -63,6 +65,7 @@ fn table(
         branch: at("branch"),
         address: at("address"),
         call: at("call"),
+        argument: at("argument"),
         return_: at("return"),
         ..OperationCosts::default()
     }

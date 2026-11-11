@@ -6,6 +6,8 @@ import sys, re, os, json, tempfile, shutil, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from flagset import CORPUS_COMMON, program_flags
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
 CORPUS = Path(os.environ.get("OURS_CORPUS", HERE.parents[1] / "tests" / "run" / "c"))
@@ -139,7 +141,7 @@ def one(job):
     (w / "d.s").write_text(driver())
     flag = {"O2": "-O2", "O1": "-O1", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", "-fsigned-char", "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", *CORPUS_COMMON, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:
@@ -173,7 +175,9 @@ def one(job):
     return name, "PASS", {"bytes": nb, "clks": cyc}
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
-    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None; BASE = base_members(WORK)
+    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
+    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]
     with ThreadPoolExecutor(4) as pool: res = list(pool.map(one, [(s, level, lib) for s in srcs]))

@@ -35,7 +35,7 @@ fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
         .datalayout
         .as_deref()
         .map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
-    let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
+    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]);
     let mut built = BTreeMap::new();
     let mut refused = Vec::new();
     for (id, global, function) in module.functions() {
@@ -204,9 +204,8 @@ fn a_call_register_mask_names_eflags() {
         .collect();
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
-    let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
-    let eflags =
-        super::super::dagisel_adapter::pin_register(super::super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
+    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]);
+    let eflags = super::super::dagisel_adapter::pin_register(super::super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
     let mut masks = 0;
     for (id, _, function) in module.functions() {
         let convention =
@@ -241,10 +240,8 @@ fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
         .collect();
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
-    let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
-    // the pin numbers `phys_reg` knows: ECX has none, so it cannot be a live
-    // physical definition either
-    let wanted: Vec<u16> = [RegId::EAX, RegId::EDX]
+    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]);
+    let wanted: Vec<u16> = [RegId::EAX, RegId::ECX, RegId::EDX]
         .into_iter()
         .map(|reg| super::super::dagisel_adapter::pin_register(reg).expect("a pin number"))
         .collect();
@@ -260,13 +257,10 @@ fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
             for node in done.dag.nodes().iter().filter(|node| node.opcode == ISD::RegisterMask) {
                 let NodeData::RegMask(at) = node.data else { panic!("a mask without its registers") };
                 let mask = &done.dag.register_masks[at as usize];
-                // a call lowered through `llrm_libcall` keeps the flags alone
-                if mask.len() > 1 {
-                    for reg in &wanted {
-                        assert!(mask.contains(reg), "{mask:?} lacks {reg}");
-                    }
-                    checked += 1;
+                for reg in &wanted {
+                    assert!(mask.contains(reg), "{mask:?} lacks {reg}");
                 }
+                checked += 1;
             }
         }
     }
@@ -291,7 +285,7 @@ fn a_watcom_call_copies_ax_dx_bx_cx_in_order() {
         &module,
         function,
         &layout,
-        &BuilderTarget::m16(),
+        &BuilderTarget::for_pointer_bits(16),
         &llrm_x86_m16::M16,
         &convention,
         &mut info,
@@ -327,7 +321,7 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
             &module,
             function,
             &layout,
-            &BuilderTarget::m16(),
+            &BuilderTarget::for_pointer_bits(16),
             &llrm_x86_m16::M16,
             &convention,
             &mut info,
@@ -359,7 +353,7 @@ fn an_i64_carried_across_blocks_is_four_i16_registers_when_only_i16_is_legal() {
     let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    let mut target = BuilderTarget::m16();
+    let mut target = BuilderTarget::for_pointer_bits(16);
     target.legal_ints = vec![8, 16];
     let entry = build_block(
         &module,
@@ -394,7 +388,7 @@ fn an_i32_returned_in_dx_ax_is_two_halves_at_m16() {
         &module,
         function,
         &layout,
-        &BuilderTarget::m16(),
+        &BuilderTarget::for_pointer_bits(16),
         &llrm_x86_m16::M16,
         &convention,
         &mut info,
@@ -456,7 +450,7 @@ fn a_target_with_no_full_description_refuses_a_call_instead_of_panicking() {
         &module,
         function,
         &layout,
-        &BuilderTarget::m32(),
+        &BuilderTarget::for_pointer_bits(32),
         &Narrow,
         &convention,
         &mut info,

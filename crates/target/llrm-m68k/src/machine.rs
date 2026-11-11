@@ -42,6 +42,30 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    /// Frames keep what the shipped targets ask for (m68k Linux, AmigaOS and
+    /// TOS: 4) and nothing realigns them (`frame.rs`): an object asking more
+    /// is clamped to it, so the optimizer never folds `ptr & 7` to 0 on a
+    /// frame that gives an address ending in 4.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::SHIPPED_STACK_ALIGN as u64)
+    }
+
+    /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
+    /// preferred one, so locals of those are accepted (and clamped to what the
+    /// frame keeps). An object aligned further is kept: the frame realigns
+    /// the stack pointer for it (`frame::Layout`).
+    fn max_alloca_align(&self) -> Option<u64> {
+        None
+    }
+
+    fn realigned_above(&self) -> Option<u64> {
+        Some(crate::frame::REALIGN_ABOVE as u64)
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::lowering::M68kLowering))
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }
@@ -85,6 +109,13 @@ pub struct M68k {
     /// The processor the code is for; the 68000 where none is given.
     pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
+    ///
+    /// DEVIATE M68K-TTI-SCALED (owner m68k, review 2026-12-20): the pin's
+    /// `isLegalAddressingMode` is the base class's, which allows `2*r` alone
+    /// and no scale of 4 or 8
+    /// ([TargetLoweringBase.cpp#L2139-L2171](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetLoweringBase.cpp#L2139-L2171));
+    /// the 68020 addresses `(d8, An, Xn*2/4/8)` in one instruction. A hardware
+    /// fact, so the exit is the pin giving M68k its own hook.
     pub scaled_index: bool,
     /// `CodeSize` in bytes of code, which the inliner counts a callee with
     /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
@@ -97,9 +128,200 @@ impl M68k {
     pub fn for_cpu(cpu: crate::dagisel::hooks::Cpu) -> M68k {
         M68k { cpu, ..M68k::default() }
     }
+
+    /// The clocks of one instruction of `bytes` bytes.
+    fn clocks(
+        &self,
+        text: &str,
+        bytes: u32,
+    ) -> Option<i32> {
+        crate::timing::cost(self.cpu, text, bytes, false).ok().map(|one| i32::try_from(one.clocks).unwrap_or(0))
+    }
+
+    /// `(clocks, bytes)` of the cheapest way to write `op` with `constant` on a
+    /// data register at `bits`, by clocks and then bytes.
+    fn op_price(
+        &self,
+        op: llrm_mir::opcode::BinaryOp,
+        bits: u32,
+        constant: Option<u64>,
+        source_dies: bool,
+    ) -> Option<(i32, i32)> {
+        use llrm_mir::opcode::BinaryOp;
+        let size = size_letter(bits)?;
+        let mnemonic = match op {
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+            BinaryOp::Xor => "eor",
+            BinaryOp::Add => "add",
+            BinaryOp::Sub => "sub",
+            BinaryOp::Shl => "lsl",
+            _ => return None,
+        };
+        let long = bits == 32;
+        let mut forms: Vec<(i32, i32)> = Vec::new();
+        let mut form = |text: String, bytes: i32| {
+            if let Some(clocks) = self.clocks(&text, bytes as u32) {
+                forms.push((clocks, bytes));
+            }
+        };
+        let register =
+            |m: &str| if m == "eor" { format!("eor.{size} %d1, %d0") } else { format!("{m}.{size} %d1, %d0") };
+        match (op, constant) {
+            (BinaryOp::Shl, Some(amount)) if (1..=8).contains(&amount) => form(format!("lsl.{size} #{amount}, %d0"), 2),
+            (BinaryOp::Shl, _) => return None,
+            (_, None) => form(register(mnemonic), 2),
+            (_, Some(value)) => {
+                let width = if long { u64::MAX >> 32 } else { (1u64 << bits) - 1 };
+                let value = value & width;
+                let small = value <= 8 || width - value < 8;
+                // The immediate forms overwrite their operand: one that lives
+                // on is copied first.
+                let (copy_clocks, copy_bytes) =
+                    if source_dies { (0, 0) } else { (self.clocks("move.l %d1, %d0", 2)?, 2) };
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub) && small {
+                    if let Some(clocks) = self.clocks(&format!("addq.{size} #4, %d0"), 2) {
+                        forms.push((clocks + copy_clocks, 2 + copy_bytes));
+                    }
+                }
+                if let Some(clocks) = self.clocks(&format!("{mnemonic}.{size} #{value}, %d0"), if long { 6 } else { 4 }) {
+                    forms.push((clocks + copy_clocks, if long { 6 } else { 4 } + copy_bytes));
+                }
+                let signed = if long { value as u32 as i32 } else { 0 };
+                if long && op != BinaryOp::Sub && (-128..=127).contains(&signed) {
+                    // moveq + register form: the operation commutes
+                    if let (Some(load), Some(clocks)) =
+                        (self.clocks("moveq #1, %d1", 2), self.clocks(&register(mnemonic), 2))
+                    {
+                        forms.push((load + clocks, 4));
+                    }
+                }
+            }
+        }
+        forms.into_iter().min()
+    }
+}
+
+/// The size letter of a native integer width.
+fn size_letter(bits: u32) -> Option<char> {
+    match bits {
+        8 => Some('b'),
+        16 => Some('w'),
+        32 => Some('l'),
+        _ => None,
+    }
 }
 
 impl Tti for M68k {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; m68k joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as gcc has it.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(crate::dagisel::lowering::VA_SLOT)
+    }
+
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
+    /// `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost`, which the pin's M68k runs:
+    /// legal 1, custom 2, expanded `SingleCallCost`, by the table the lowering itself
+    /// uses ([`llrm_codegen::backend::selectiondag::intrinsic_cost`]). An intrinsic
+    /// that translation does not reach keeps the trait's price.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        _: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        if let Some(Ty::Int(bits)) = ret {
+            let lowering = lowering_of(self.cpu);
+            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review
+            // 2026-12-20): the pin prices an expansion at 1 under
+            // `TCK_CodeSize` (one call); the loop unroller asks
+            // that kind, so a `smul.fix.sat` that expands to dozens of
+            // instructions read as one and the 3x3 loops of
+            // `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
+            // Here an expansion costs the same under every kind.
+            let _ = kind;
+            let code_size = false;
+            if let Some(cost) =
+                llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size)
+            {
+                return Cost::of(cost);
+            }
+        }
+        if llrm_mir::tti::is_free_intrinsic(name) {
+            Cost::FREE
+        } else {
+            llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID)
+        }
+    }
+
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20): crc16's `crc` lives
+    /// in a word and is carried in a long; a word `add` or `eor` is 4 clk
+    /// against 8 on the 68000.
+    fn narrows_demanded_cycles(&self) -> bool {
+        true
+    }
+
+    /// `op` at each size as the target would write it: the register form, the
+    /// immediate form, the `moveq` and register form of a long constant that
+    /// fits it, `addq` and `lsl #n`; clocks from the timing tables.
+    fn narrowing_gain(
+        &self,
+        op: llrm_mir::opcode::BinaryOp,
+        wide_bits: u32,
+        narrow_bits: u32,
+        constant: Option<u64>,
+        source_dies: bool,
+    ) -> llrm_mir::tti::Saving {
+        let gone = |bits| if bits == 0 { Some((0, 0)) } else { self.op_price(op, bits, constant, source_dies) };
+        let (Some(wide), Some(narrow)) = (gone(wide_bits), gone(narrow_bits)) else {
+            return llrm_mir::tti::Saving::default();
+        };
+        llrm_mir::tti::Saving { clocks: wide.0 - narrow.0, bytes: wide.1 - narrow.1 }
+    }
+
+    /// The `move.l` copy and `tst` of the old value that `cmpcarry` drops
+    /// when a word or byte `add` doubles it and the carry is its top bit.
+    fn shift_out_test_gain(
+        &self,
+        narrow_bits: u32,
+    ) -> llrm_mir::tti::Saving {
+        let Some(size) = size_letter(narrow_bits) else { return llrm_mir::tti::Saving::default() };
+        let (Some(copy), Some(test)) = (self.clocks("move.l %d0, %d1", 2), self.clocks(&format!("tst.{size} %d1"), 2))
+        else {
+            return llrm_mir::tti::Saving::default();
+        };
+        llrm_mir::tti::Saving { clocks: copy + test, bytes: 4 }
+    }
+
+    /// `moveq #0, %d0; move.<s> %d1, %d0`.
+    fn extension_cost(
+        &self,
+        narrow_bits: u32,
+        wide_bits: u32,
+    ) -> llrm_mir::tti::Saving {
+        let (Some(size), 32) = (size_letter(narrow_bits), wide_bits) else { return llrm_mir::tti::Saving::default() };
+        let (Some(zero), Some(copy)) =
+            (self.clocks("moveq #0, %d0", 2), self.clocks(&format!("move.{size} %d1, %d0"), 2))
+        else {
+            return llrm_mir::tti::Saving::default();
+        };
+        llrm_mir::tti::Saving { clocks: zero + copy, bytes: 4 }
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the
@@ -120,6 +342,12 @@ impl Tti for M68k {
     /// none. Exit: review 2026-11-20.
     fn inline_threshold_override(&self) -> Option<i64> {
         Some(50)
+    }
+
+    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
+    /// speculation of a branch into selects then takes the limit of targets without one (condtocond D3).
+    fn has_cmov(&self) -> bool {
+        false
     }
 
     fn name(&self) -> &'static str {
@@ -173,19 +401,50 @@ impl Tti for M68k {
         }
     }
 
-    /// The per-target override of `SCEVCheapExpansionBudget`: a limit that
-    /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
-    /// replacing a compare with in a function built for size; the guard and
-    /// the second counter cost more bytes than the compare saved.
+    /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
+    /// limit that costs a single operation (`n - 1`) is repaid by the counter
+    /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more
+    /// (`smax(n, 1)`) is not. Measured at -Os on the matrix at 0, 1 and the
+    /// pin's 4: 1 shrinks partition and memset (4 and 2 B) and changes no
+    /// other cell; 4 grows arrmax, arrsum, copy, countgt, fib and sum by 6 to
+    /// 14 B. The same value serves every level, so no `optsize` split.
+    /// DEVIATE (value; owner m68k, exit none: a per-target table value; the
+    /// pin's budget is 4).
     fn lftr_expansion_budget(
         &self,
-        optsize: bool,
+        _optsize: bool,
     ) -> u32 {
-        // DEVIATE 18 (exit 2026-11-12): from the 68020 on, a `cmp.l` with a
-        // memory limit costs little more than the `subq` of a counter, so the
-        // `smax` guard of the rewritten exit (8 B) is not repaid. The 68000
-        // keeps the pin's 4: there the compare is 10 clk per trip dearer.
-        if optsize || self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 0 } else { 4 }
+        1
+    }
+
+    /// DEVIATE M68K-LSR-FRAME (owner m68k-lsr-addressing, exit none while the
+    /// backend folds `(d8,%sp,Xn)`, `frameindexed.rs`): a stack slot is `%sp`
+    /// and a displacement, so as the base of an address it takes no register.
+    /// The pin counts every `alloca` as one (`llc -debug-only=loop-reduce`,
+    /// d1106deb: 7 regs for 4 stack arrays and 3 IVs). Its M68k has no TTI, so
+    /// the default registers-first order keeps one pointer IV per array (6
+    /// regs); its x86 shares one index (`reg(%a) + 1*reg({0,+,4})`) because
+    /// `X86TTIImpl::isLSRCostLess` ranks instructions first (4 against 7,
+    /// [X86TargetTransformInfo.cpp#L7202](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)),
+    /// not because the slot is free.
+    ///
+    /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
+    /// index-versus-pointer cost via Tti (no per-program patch):
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
+    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
+    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
+    ///   cost the same clocks.
+    /// - M68K-LSR-D2U64-BYTES (owner m68k-lsr-addressing and w12): pin-faithful.
+    ///   The pin's LSR picks the single IV with a compare for double_to_uint64's
+    ///   loops (`llc -print-after=loop-reduce`); our earlier two-IV
+    ///   end-biased form (LG3) was smaller: +10 B at 68000 O1/O2/Os, 68020 O1
+    ///   +8, O2 +26, Os +10, executed clocks equal. 68000 -Os: 304 B against
+    ///   gcc 330 and clang 386, so below the bar. Closes through the LSR size
+    ///   model (the exit compare's `moveq`+`cmp` is in `insns`, which the
+    ///   registers-first order ignores).
+    fn frame_address_is_free(&self) -> bool {
+        true
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
@@ -348,12 +607,78 @@ impl Tti for M68k {
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
         // line). Past 32 bits the m68k makes a library call of it, and the
         // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
-        // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
-        if matches!(op, ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem)
+        // `__mulsi3` calls for a loop of 16. Only the call is priced so: a
+        // multiply `ExpandIntRes_MUL` makes of 32-bit `UMUL_LOHI`s
+        // (`mulu.l`, 68020), or `visitMUL` makes of shifts and an add, is the
+        // pin's one operation. Exit: none, a target's prices.
+        if matches!(
+            op,
+            ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
+        )
             && matches!(ty, Ty::Int(bits) if bits > 32)
+            && !(op == ArithOp::Mul && self.multiply_makes_no_call(left, right))
         {
             return Cost::EXPENSIVE;
         }
         Basic.arithmetic_cost(op, ty, kind, left, right)
+    }
+}
+
+impl M68k {
+    /// Whether the lowering writes a wide multiply of `left` by `right` with no
+    /// library call: from 32-bit `UMUL_LOHI`s when the target has them
+    /// (`ExpandIntRes_MUL`), else only a power of two, its negation, or a
+    /// positive constant of shifts and an add
+    /// ([`crate::dagisel::mulprice::chain`]; any other negative one is a call).
+    fn multiply_makes_no_call(
+        &self,
+        left: OperandInfo,
+        right: OperandInfo,
+    ) -> bool {
+        use llrm_codegen::backend::selectiondag::{
+            Action,
+            isd::ISD,
+            mvt::{EVT, MVT},
+        };
+        let wide = lowering_of(self.cpu).operation_action(ISD::UMulLoHi, EVT::Simple(MVT::I32));
+        if matches!(wide, Action::Legal | Action::Custom | Action::Promote) {
+            return true;
+        }
+        [left, right].into_iter().any(|operand| {
+            operand.power_of_two
+                || operand.negated_power_of_two
+                || operand
+                    .value
+                    .and_then(|value| i32::try_from(value).ok())
+                    .is_some_and(|value| value > 0 && crate::dagisel::mulprice::chain(self.cpu, value as u32).is_some())
+        })
+    }
+}
+
+/// The CPU's SelectionDAG lowering, built once per thread.
+fn lowering_of(cpu: crate::dagisel::hooks::Cpu) -> Rc<llrm_codegen::backend::selectiondag::TargetLowering> {
+    thread_local! {
+        static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    LOWERING.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((_, one)) = cache.iter().find(|(known, _)| *known == cpu) {
+            return one.clone();
+        }
+        let made = Rc::new(crate::dagisel::lowering::target_lowering_with(cpu, true));
+        cache.push((cpu, made.clone()));
+        made
+    })
+}
+
+#[cfg(test)]
+mod lftr_tests {
+    use super::*;
+    /// DEVIATE LFTR1: following the pin's step-one rule left byte-loops of
+    /// stride 2..8 unreduced and cost bytes; the knob must stay on here.
+    #[test]
+    fn lftr_counts_any_constant_stride() {
+        assert!(M68k::default().lftr_any_stride());
     }
 }

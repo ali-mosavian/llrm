@@ -90,6 +90,7 @@ fn a_constant_section_is_read_only_and_mergeable_with_its_entry_size() {
         symbols: Vec::new(),
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     };
     let found = headers(&write::<Plain>(&object).unwrap());
@@ -121,6 +122,7 @@ fn a_relocation_to_a_constant_entry_names_the_entrys_own_symbol() {
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     };
     let bytes = write::<Plain>(&object).unwrap();
