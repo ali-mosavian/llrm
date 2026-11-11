@@ -383,6 +383,8 @@ fn a_68030_full_format_index_is_priced_by_its_base_displacement() {
 fn a_68060_compare_immediate_to_a_pc_relative_operand_is_priced_as_the_address_form() {
     assert_eq!(clocks(Cpu::M68060, "cmpi.l #5, (0,%pc)"), clocks(Cpu::M68060, "cmpi.l #5, (0,%a0)"));
     assert_eq!(clocks(Cpu::M68060, "cmpi.l #5, (0,%pc)"), 2);
+}
+
 /// binutils prints an index displacement as bare hex (`%a1@(100,%d1:w)` is 256,
 /// `%a2@(10,%d0:w)` is 16, a negative is sign-extended to 64 bits) and a
 /// suppressed base as `@(ffffffff800020a0,%d0:l)`. All-digit hex was read as
