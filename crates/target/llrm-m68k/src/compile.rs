@@ -9,7 +9,7 @@ use llrm_mir::module::Module;
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish_with};
-use crate::flags::preserve_flags;
+use crate::flags::{preserve_flags, restore_remade_flags};
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
 use crate::mfunc::{Shape, emit_with, expand_cmov};
@@ -638,6 +638,7 @@ fn items_once(
         );
     }
     preserve_flags(&mut function, &assignment)?;
+    restore_remade_flags(&mut function);
     branch_fold(&mut function, &assignment);
     if options.tail_duplicate && !wants_size {
         llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
