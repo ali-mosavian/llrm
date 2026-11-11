@@ -440,7 +440,7 @@ impl Lowering<'_, '_> {
             let array = self.unit.context.types.intern(Type::Array { element: cell, count: cells.len() as u64 });
             let members: Vec<ConstantId> = cells.iter().map(|&one| self.unit.context.int(cell, one as i128)).collect();
             let initial = self.unit.context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(members) });
-            let table = self.unit.declared.table("switch.table", array, initial, UnnamedAddr::Global);
+            let table = self.unit.declared.table("switch.table", array, initial, UnnamedAddr::Global, None);
             let base = self.unit.context.constant(Constant { ty: address, kind: ConstantKind::Global(table) });
             let place = self.put(
                 load,

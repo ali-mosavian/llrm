@@ -5169,3 +5169,28 @@ fn a_nest_whose_unroll_grows_the_code_stays_rolled_at_o1() {
     let instructions = listing.lines().filter(|line| line.starts_with("    ") && !line.trim_end().ends_with(':')).count();
     assert!(instructions < 250, "matmul unrolled to {instructions} instructions: {listing}");
 }
+
+/// x_adler -O2: `movzx esi, bl` of a counter that stays live ran 3 clocks on
+/// the i486 where gcc's `mov; and` runs 2 (47,972 clk with the mask, 50,972
+/// without; gcc 49,551). MaskByAnd (DEVIATE MA1) skipped every source with
+/// another reader; a live source is copied first and the copy is priced.
+#[test]
+fn a_byte_extension_of_a_live_counter_is_a_mask_in_a_hot_loop_at_o2() {
+    let text = include_str!("tests_data/live_byte_mask.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "sum_low_bytes").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("movzx"), "the loop extends with movzx (3 clk): {listing}");
+    assert!(listing.contains("and ") && listing.contains(", 255"), "no mask: {listing}");
+}
+
+/// x_int64_division -O2: the same mask of a live byte, wanted again past two
+/// calls, kept the masked value in a register across both and spilled one more
+/// value (+700 clk): the copy-and-mask is not made where its result outlives a
+/// call.
+#[test]
+fn a_masked_byte_wanted_past_a_call_stays_a_movzx_at_o2() {
+    let text = include_str!("tests_data/live_byte_mask_calls.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "low_bytes_across_calls").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movzx"), "the extension was made a mask: {listing}");
+}
