@@ -818,4 +818,37 @@ mod tests {
         order.sort_unstable();
         assert_eq!(order, (0..n).collect::<Vec<_>>());
     }
+
+    /// Size-mode inputs of eight corpus functions (12 to 378 blocks) and the
+    /// order the pin's own `computeExtTspLayout` (d1106deb71cc, built as
+    /// `CodeLayout.cpp` against its Support library) gives for each. Lines:
+    /// `FUNC n`, `N size count`, `E src dst count`, `ORDER ids`.
+    #[test]
+    fn test_layout_equals_the_pins_on_corpus_inputs() {
+        let (mut sizes, mut counts, mut edges) = (Vec::new(), Vec::new(), Vec::new());
+        let mut checked = 0;
+        for line in include_str!("ext_tsp_pin.txt").lines() {
+            let mut words = line.split_whitespace();
+            let number = |word: Option<&str>| word.unwrap().parse::<u64>().unwrap();
+            match words.next() {
+                Some("N") => {
+                    sizes.push(number(words.next()));
+                    counts.push(number(words.next()));
+                }
+                Some("E") => edges.push(EdgeCount {
+                    src: number(words.next()) as usize,
+                    dst: number(words.next()) as usize,
+                    count: number(words.next()),
+                }),
+                Some("ORDER") => {
+                    let pin: Vec<usize> = words.map(|word| word.parse().unwrap()).collect();
+                    assert_eq!(compute_layout(&sizes, &counts, &edges), pin, "{} blocks", sizes.len());
+                    (sizes, counts, edges) = (Vec::new(), Vec::new(), Vec::new());
+                    checked += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(checked, 8);
+    }
 }
