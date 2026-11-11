@@ -769,12 +769,22 @@ impl ProgramPass for Walk {
                                     } else {
                                         0
                                     };
-                                    (
-                                        0,
-                                        function_bytes(module, &program.layout, &costs, now)
-                                            - function_bytes(module, &program.layout, &costs, &kept)
-                                            - gone,
-                                    )
+                                    let growth = function_bytes(module, &program.layout, &costs, now)
+                                        - function_bytes(module, &program.layout, &costs, &kept)
+                                        - gone;
+                                    // Bytes that tie to the byte are decided by the clocks the copies save.
+                                    let saved = if growth == 0 && tti.opt_size_inline_trial_by_bytes() {
+                                        let run: i64 = calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_clocks(module, &program.layout, tti, body))
+                                            .sum();
+                                        kept_clocks + run - function_clocks(module, &program.layout, tti, now)
+                                    } else {
+                                        0
+                                    };
+                                    (saved, growth)
                                 };
                                 if remarks {
                                     eprintln!(
@@ -1672,7 +1682,8 @@ fn trial_accepted(
         return (credit > 0 || hot || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
     }
     if by_bytes {
-        return growth < 0;
+        // Bytes decide; clocks only where they tie exactly.
+        return growth < 0 || (growth == 0 && saved > 0);
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)

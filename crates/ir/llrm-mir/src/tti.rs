@@ -925,6 +925,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ROTATION-TRIAL (beyond the pin, owner greedy-os-causes, exit 2026-12-05): at a
+    /// size build a counted loop RS1 still rotates is also tried unrotated in a second
+    /// compile, and the smaller object is kept. Needs
+    /// [`Self::rotation_guard_must_fold_at_size`]. False: no trial.
+    fn rotation_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LICM-FRAME (size builds, target opt-in, owner w15, exit
     /// 2026-11-30): the speculative LICM does not hoist an instruction the loop
     /// might never execute into the entry block of a function when the loop

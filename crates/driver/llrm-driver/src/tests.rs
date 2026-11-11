@@ -5207,3 +5207,39 @@ fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
     let copies = listing.lines().filter(|line| line.trim() == "xor esi, 5").count();
     assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
 }
+
+/// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
+/// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
+/// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
+#[test]
+fn counted_loops_that_are_smaller_unrotated_stay_unrotated_at_os() {
+    let text = include_str!("tests_data/prefix_sums.ll");
+    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
+    let object = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "prefix_sums.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    assert!(object.len() < 310, "{} bytes: {}", object.len(), llrm_codegen::backend::masm::text(&built).unwrap());
+}
+
+/// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B
+/// longer in code (the padding between functions moved). The trial compares the bytes without
+/// padding, so the rotated loops stay.
+#[test]
+fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
+    let text = include_str!("tests_data/bubble_sort.ll");
+    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_x_bubble").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "bubble_sort.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
+}

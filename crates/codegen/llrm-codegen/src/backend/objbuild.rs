@@ -682,6 +682,36 @@ pub fn written_in(
     })
 }
 
+/// The bytes of `module` as an object holds them without alignment padding: each function's
+/// body (its symbol's size, not the padding before it) and each data section's image. The
+/// size a code-size trial compares: the padding between functions is the layout's, not the
+/// code's.
+pub fn unpadded_bytes(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<i64, Error> {
+    use llrm_object::{Definition, Role};
+    let object = built_inner(module, source, layout, format, objects)?.object;
+    let code: usize = object
+        .symbols
+        .iter()
+        .filter_map(|symbol| match symbol.definition {
+            Definition::Defined { section, .. } if object.sections[section].role == Role::Text => Some(symbol.size),
+            _ => None,
+        })
+        .sum();
+    let data: usize = object
+        .sections
+        .iter()
+        .filter(|section| matches!(section.role, Role::ROData | Role::Data))
+        .map(|section| section.image.len())
+        .sum();
+    Ok((code + data) as i64)
+}
+
 /// What `format` says of the code it holds, from the target's table.
 pub fn asm_info(
     objects: &dyn ObjectTarget,
