@@ -843,7 +843,6 @@ impl ProgramPass for Walk {
                                         !crate::trial::inlining()
                                             && growth > 0
                                             && growth * 4 <= kept_bytes
-                                            && module.global(id).function().is_some_and(|one| one.walk().count() <= crate::trial::ROTATION_TRIAL_MAX_INSTRUCTIONS)
                                     }) {
                                         crate::trial::note_refused(site);
                                     }
