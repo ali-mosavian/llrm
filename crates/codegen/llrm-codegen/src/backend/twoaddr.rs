@@ -66,9 +66,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use llrm_lir::registers::Regs;
 
+use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
@@ -124,9 +124,22 @@ pub fn untied_only(body: &LirBody) -> LirBody {
     for block in &mut done.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         for one in block.insns.iter() {
-            match _untied(body.registers, one, &mut mint) {
-                Some(fix) => insns.extend(fix),
-                None => insns.push(Arc::clone(one)),
+            // every tied pair, the way `processTiedPairs` goes through them
+            let mut pending = Some(Arc::clone(one));
+            while let Some(current) = pending.take() {
+                let Some(fix) = _untied(body.registers, &current, &mut mint) else {
+                    insns.push(current);
+                    break;
+                };
+                match fix.as_slice() {
+                    [copy, fixed] => {
+                        insns.push(Arc::clone(copy));
+                        pending = Some(Arc::clone(fixed));
+                    }
+                    // the undef rewrite: the instruction alone, tied
+                    [fixed] => pending = Some(Arc::clone(fixed)),
+                    _ => insns.extend(fix),
+                }
             }
         }
         block.insns = insns.into();
@@ -277,20 +290,31 @@ pub fn tied_with(
             }
             place += 1;
             walk.remove_clobbered_src_reg_map(&one);
-            let Some(fix) = _untied(body.registers, &one, &mut mint) else {
-                insns.push(one);
-                continue;
-            };
-            // The copy `into := mov first` and what `first`'s death at `one`
-            // makes of the maps.
-            if let [copy, fixed] = &fix[..]
-                && let (Some(&into), Some(&first)) = (copy.defines.first(), copy.uses.first())
-            {
-                let dies = facts.killed(one.id(), first) && !fixed.uses.contains(&first);
-                walk.tied_pair_processed(copy.id(), fixed.id(), into, first, dies);
+            // every tied pair, the way `processTiedPairs` goes through them
+            let mut pending = Some(one);
+            while let Some(one) = pending.take() {
+                let Some(fix) = _untied(body.registers, &one, &mut mint) else {
+                    insns.push(one);
+                    break;
+                };
+                // The copy `into := mov first` and what `first`'s death at
+                // `one` makes of the maps.
+                if let [copy, fixed] = &fix[..]
+                    && let (Some(&into), Some(&first)) = (copy.defines.first(), copy.uses.first())
+                {
+                    let dies = facts.killed(one.id(), first) && !fixed.uses.contains(&first);
+                    walk.tied_pair_processed(copy.id(), fixed.id(), into, first, dies);
+                }
+                facts.replace(at, &one, &fix);
+                match fix.as_slice() {
+                    [copy, fixed] => {
+                        insns.push(Arc::clone(copy));
+                        pending = Some(Arc::clone(fixed));
+                    }
+                    [fixed] => pending = Some(Arc::clone(fixed)),
+                    _ => insns.extend(fix),
+                }
             }
-            facts.replace(at, &one, &fix);
-            insns.extend(fix);
         }
         debug_assert!(
             insns.iter().map(|one| one.id()).eq(facts.body_like(body).blocks[at].insns.iter().map(|one| one.id())),
@@ -633,7 +657,28 @@ pub fn ties_in(
     (regs.effects)(name, what.dests.len(), what.sources.len()).first().is_some_and(|row| row.ties.contains(&(0, 0)))
 }
 
-/// The copy and the fixed instruction, or None where it is already tied.
+/// The `(source, dest)` pairs `what` ties, each one's source to be the dest's
+/// register (`processTiedPairs` goes through every tied operand): x86's single
+/// first pair by the operation, or the pairs the target's row states.
+fn tied_pairs(
+    regs: Option<Regs>,
+    what: &Semantics,
+) -> Vec<(usize, usize)> {
+    let Some(regs) = regs.filter(|regs| regs.ties_by_row) else {
+        return if ties(what) { vec![(0, 0)] } else { Vec::new() };
+    };
+    let name = what.name.as_deref().unwrap_or("");
+    let mut pairs = (regs.effects)(name, what.dests.len(), what.sources.len())
+        .first()
+        .map_or_else(Vec::new, |row| row.ties.to_vec());
+    // the first pair first: it is the one the commuter and the three-address
+    // forms know
+    pairs.sort_by_key(|&(source, dest)| (source, dest) != (0, 0));
+    pairs
+}
+
+/// The copy and the fixed instruction for the first tied pair that is not yet
+/// one value, or None where every pair is.
 fn _untied(
     regs: Option<Regs>,
     one: &Insn,
@@ -643,11 +688,22 @@ fn _untied(
     if what.dests.is_empty() || what.sources.is_empty() {
         return None;
     }
-    if !ties_in(regs, what) {
-        return None;
-    }
-    let (into, first) = (&what.dests[0], &what.sources[0]);
+    tied_pairs(regs, what).into_iter().find_map(|(source, dest)| _untied_pair(one, what, source, dest, mint))
+}
+
+/// [`_untied`] for the pair `(source, dest)`.
+fn _untied_pair(
+    one: &Insn,
+    what: &Semantics,
+    source: usize,
+    dest: usize,
+    mint: &mut dyn FnMut() -> u32,
+) -> Option<Vec<Arc<Insn>>> {
+    let (into, first) = (what.dests.get(dest)?, what.sources.get(source)?);
     if let Loc::Mem(cell) = into {
+        if (source, dest) != (0, 0) {
+            return None;
+        }
         return _through_register(one, what, cell, mint);
     }
     let Loc::Held(into) = into else {
@@ -665,15 +721,23 @@ fn _untied(
         Loc::Held(held) => Some(held.value),
         _ => None,
     };
+    // the sources but the tied one, and all of them with the tied one made the
+    // dest
+    let others: Vec<Loc> =
+        what.sources.iter().enumerate().filter(|&(at, _)| at != source).map(|(_, loc)| loc.clone()).collect();
+    let replaced = || {
+        let mut sources = what.sources.clone();
+        sources[source] = Loc::Held(*into);
+        sources
+    };
     // An undef source is dealt with at once: its operand is the destination,
     // read as undef, and no copy is made (`collectTiedOperands`: "rewrite
     // undef").
     if let Some(value) = first_value.filter(|value| one.undefs.contains(value))
-        && !what.sources[1..].iter().flat_map(ir::values).any(|held| held.value == value)
+        && !others.iter().flat_map(ir::values).any(|held| held.value == value)
     {
         let mut fixed = one.clone();
-        let mut sources = vec![Loc::Held(*into)];
-        sources.extend(what.sources[1..].iter().cloned());
+        let sources = replaced();
         fixed.what = Some(Semantics { sources, ..what.clone() });
         fixed.uses.retain(|used| *used != value);
         fixed.undefs.retain(|undef| *undef != value);
@@ -691,7 +755,7 @@ fn _untied(
         copy.uses.retain(|used| *used != value);
         copy.undefs.push(value);
     }
-    let remaining: BTreeSet<u32> = what.sources[1..].iter().flat_map(ir::values).map(|value| value.value).collect();
+    let remaining: BTreeSet<u32> = others.iter().flat_map(ir::values).map(|value| value.value).collect();
     let uses: Vec<u32> = one
         .uses
         .iter()
@@ -699,8 +763,7 @@ fn _untied(
         .filter(|value| first_value.is_none_or(|first| *value != first || remaining.contains(value)))
         .collect();
     let mut fixed = one.clone();
-    let mut sources = vec![Loc::Held(*into)];
-    sources.extend(what.sources[1..].iter().cloned());
+    let sources = replaced();
     fixed.what = Some(Semantics { sources, ..what.clone() });
     fixed.uses = std::iter::once(into.value).chain(uses).collect::<IndexSet<u32>>().into_iter().collect();
     fixed.undefs.retain(|value| first_value != Some(*value) || remaining.contains(value));
