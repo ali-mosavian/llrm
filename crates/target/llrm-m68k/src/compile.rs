@@ -25,6 +25,9 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// A jump table: the absolute address of each label, as 32-bit words
+    /// (`EK_BlockAddress`).
+    Table(Vec<String>),
     /// The source place of the instructions that follow (`.loc`): printed only
     /// for `-g`.
     Loc(crate::expand::Row),
@@ -453,6 +456,7 @@ pub fn items_bytes(items: &[Item]) -> usize {
         .map(|item| match item {
             Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
             Item::Bytes(bytes) => bytes.len(),
+            Item::Table(labels) => 4 * labels.len(),
             _ => 0,
         })
         .sum()
@@ -696,7 +700,47 @@ fn items_once(
             Line::Loc(place) => Item::Loc(place),
         });
     }
+    out.extend(jump_tables(&function, number));
     Ok((out, touched))
+}
+
+/// Each jump table the function dispatches through: its label, then the
+/// address of each block it goes to (`EK_BlockAddress`).
+///
+/// DEVIATE: the table follows the function in the code section; the pin puts
+/// it in `.rodata`. The bytes are the same and the object writers place one
+/// section. Exit: the data sections of the object writers take code labels.
+fn jump_tables(
+    function: &crate::mfunc::MFunction,
+    number: usize,
+) -> Vec<Item> {
+    let mut out = Vec::new();
+    let mut seen = llrm_support::hash::HashSet::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if inst.kind != crate::mfunc::Kind::Op("JMP32j") {
+            continue;
+        }
+        let Some(crate::mfunc::Operand::Symbol(table, _)) =
+            inst.operands.iter().find(|operand| matches!(operand, crate::mfunc::Operand::Symbol(..)))
+        else {
+            continue;
+        };
+        if !seen.insert(table.clone()) {
+            continue;
+        }
+        let labels = inst
+            .operands
+            .iter()
+            .filter_map(|operand| match operand {
+                crate::mfunc::Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+                _ => None,
+            })
+            .map(|at| format!(".LBB{number}_{at}"))
+            .collect();
+        out.push(Item::Label(table.clone()));
+        out.push(Item::Table(labels));
+    }
+    out
 }
 
 /// Whether `callee` is a function `module` defines that no other definition
@@ -783,6 +827,7 @@ pub fn printed(
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Table(labels) => labels.iter().for_each(|label| out.push_str(&format!("\t.long\t{label}\n"))),
             Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.

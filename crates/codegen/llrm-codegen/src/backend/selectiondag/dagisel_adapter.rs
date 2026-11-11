@@ -143,6 +143,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FNeg => pin::FNEG,
         FAbs => pin::FABS,
         FSqrt => pin::FSQRT,
+        PseudoFMin => pin::PSEUDO_FMIN,
+        PseudoFMax => pin::PSEUDO_FMAX,
         Freeze => pin::FREEZE,
         SCmp => pin::SCMP,
         UCmp => pin::UCMP,

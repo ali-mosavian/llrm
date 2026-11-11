@@ -6,10 +6,8 @@
 # @ties: which operand an instruction ties to its dest is said by the instruction's description (lib.rs `rows`), not x86's rule.
 @ties rows
 @scratch d0 d1 a0 a1
-# @lanes none (2026-11-10, owner llrm-target-m68k): the private pipeline reads no lanes; the x86 table stands in
-# unread (38 of these 41 registers have no lane in it). Exit: the move onto `flow::machine_with` (gap 4 of
-# m68k-onto-machine-with-gaps-2026-11-09) replaces this with `@lanes bytes` and the m68k's own table.
-@lanes none
+# @lanes: a lane per byte of each root. `none` panicked: tolir (m68k shared-prelude tests) enters the lanes.
+@lanes bytes
 d0 32 d0 0 gpr,int,index 0 -
 d1 32 d1 0 gpr,int,index 1 -
 d2 32 d2 0 gpr,int,index 2 -
