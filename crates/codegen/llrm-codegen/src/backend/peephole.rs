@@ -452,8 +452,11 @@ impl Peephole {
 /// states the frame address after each push and pop as for any other.
 ///
 /// DEVIATE PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): the same at `-Os` on
-/// a target that says so (`Tuning::push_imm_at_size`). Two clocks on the 486
-/// against the `mov`'s one: `-Os` is bytes-strict.
+/// a target that says so (`Tuning::push_imm_at_size`), in blocks that run at
+/// most once per call. `-Os` has no clocks-for-bytes rate, and the pair is
+/// 5 clocks on the 486 (`push` 1, `pop` 4) against the `mov`'s 1: in a loop
+/// it was jpeg_fixed `-Os` +1.3% clk (244k pops) for 46 B. A block of unknown
+/// frequency keeps the `mov`.
 ///
 /// [X86InstrInfo.cpp:6236]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6236
@@ -465,6 +468,11 @@ pub fn pushed_immediates(
     if body.bits != 32 || !(body.min_size || cpu.min_size || at_size) {
         return body.clone();
     }
+    // The pin's `minsize` rewrites everywhere; the `-Os` deviation only where the pair runs at most once per call.
+    let everywhere = body.min_size || cpu.min_size;
+    let once = |at: i64| {
+        everywhere || body.frequencies.as_ref().and_then(|kept| kept.0.get(&at)).is_some_and(|runs| *runs <= 1.0)
+    };
     let regs = body.regs();
     let sp = Loc::Reg(reg(regs.named(regs.stack, 4), 4));
     let imm8 = |one: &Insn| match &one.what {
@@ -493,8 +501,9 @@ pub fn pushed_immediates(
         .iter()
         .map(|block| {
             let mut insns = Vec::with_capacity(block.insns.len());
+            let once = once(block.at);
             for one in &block.insns {
-                match imm8(one) {
+                match imm8(one).filter(|_| once) {
                     Some(dest) => {
                         let source = one.what.as_ref().expect("a move").sources[0].clone();
                         let push = semantics(Operation::Push, "push", vec![], vec![source]);
