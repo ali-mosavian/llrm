@@ -1131,11 +1131,10 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
     assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
-/// A signed divide by 1024 is `idiv` at m32 -Os and -Oz (a `minsize` function too), the
-/// `sar; shr; add; sar` sequence at -O2: 4 Os cells -131 B (jpeg_fixed -45). The pin keeps the
-/// `idiv` at minsize only (`isIntDivCheap`); -Os is a DEVIATION. DEVIATE SDIV-POW2-OS.
+/// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
+/// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]
-fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
+fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_minsize_only() {
     let text = |attrs: &str| {
         format!(
             "target datalayout = \"@m32-datalayout@\"\n\
@@ -1148,7 +1147,7 @@ fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let at_os = listing(&["-mabi=sysv", "-Os"], "optsize");
-    assert!(at_os.contains("idiv"), "-Os: {at_os}");
+    assert!(!at_os.contains("idiv") && at_os.contains("sar"), "-Os: {at_os}");
     let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize");
     assert!(marked.contains("idiv"), "minsize function: {marked}");
     let at_speed = listing(&["-mabi=sysv", "-O2"], "");

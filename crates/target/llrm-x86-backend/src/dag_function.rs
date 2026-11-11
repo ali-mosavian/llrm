@@ -888,13 +888,25 @@ impl llrm_codegen::backend::selectiondag::emit_api::ConstantCells for PoolCells<
     }
 }
 
+/// The values live across a divide by a constant that make it a multiply
+/// (`Tuning::narrow_divide_live_limit`) at this level; 0: no limit.
+fn divide_live_limit(
+    cpu: &llrm_codegen::backend::cpu::Profile,
+    machine: &dyn llrm_mir::target::Machine,
+) -> u32 {
+    let Some(tti) = machine.tti() else { return 0 };
+    if cpu.bytes_strict() && (!cpu.size || tti.narrow_divide_live_at_size()) { tti.narrow_divide_live_limit() } else { 0 }
+}
+
 /// DEVIATE DIV-LIVE: for each block with a divide by a constant of a type
 /// narrower than a word, the most values live across one (a value of more
-/// than a word counts its words). O(function) once, and only when the function
+/// than a word counts its words, the target's own). O(function) once, and only when the function
 /// has such a divide.
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
+    max_bits: u32,
+    word_bits: u32,
 ) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
@@ -907,7 +919,7 @@ fn narrow_divide_live(
                 op.operands.get(1),
                 Some(llrm_mir::module::Operand::Constant(_))
             )
-            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits < 32)
+            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits <= max_bits)
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
@@ -916,7 +928,7 @@ fn narrow_divide_live(
         return live;
     }
     let weight = |value: llrm_mir::module::ValueId| {
-        module.context.types.int_bits(function.value(value).ty).map_or(0, |bits| bits.div_ceil(32) as usize)
+        module.context.types.int_bits(function.value(value).ty).map_or(0, |bits| bits.div_ceil(word_bits) as usize)
     };
     let found = llrm_analysis::liveness::live_where(function, &|value| weight(value) > 0);
     for block in blocks {
@@ -1117,10 +1129,14 @@ fn selected_in(
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size || cpu.bytes_strict() && arch.small_divide_at_o1())
         .with_sdiv_pow2_stays(
-            (cpu.size || cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize"))
-                && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size()),
+            cpu.min_size
+                || llrm_mir::memory::has(&function.attrs, "minsize")
+                || (cpu.size && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size())),
         )
-        .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
+        .with_div_live_limit(
+            divide_live_limit(cpu, &*machine),
+            machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()),
+        )
         .with_div_prices(div_prices(cpu, &*machine, bitness))
         .with_sdiv_by_magnitude(
             cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()),
@@ -1450,8 +1466,8 @@ fn selected_in(
                 );
             llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
         });
-    let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
+    let div_live = divide_live_limit(cpu, &*machine);
+    let div_live = if div_live > 0 { narrow_divide_live(module, function, machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()), arch.object().bitness.min(32)) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {

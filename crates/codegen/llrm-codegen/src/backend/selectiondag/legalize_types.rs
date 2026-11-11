@@ -2168,7 +2168,7 @@ impl<'a> TypeLegalizer<'a> {
             // moves cost more than the call (z80 lshl5: 60 B, the call 5).
             // Exit: none; a size policy the pin lacks.
             if self.tli.has_size_libcall_name(op, vt)
-                && self.tli.calls_for_size_shift(amt, u128::from(vt.size_in_bits()))
+                && self.tli.calls_for_size_shift(op, amt, u128::from(vt.size_in_bits()))
             {
                 let amount = self.dag.get_constant(amt, self.libcall_shift_amount_type(half));
                 if let Some(pair) = self.expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount]) {
@@ -2917,6 +2917,23 @@ impl<'a> TypeLegalizer<'a> {
             && let Some(pair) = widening(self, false)
         {
             return Ok(pair);
+        }
+        // DEVIATE: a target that names a routine for the product of two words
+        // (`RTLIB`-style `UMulLoHi` name) calls it for two zero-extended
+        // operands without declaring `UMUL_LOHI` legal or custom, which would
+        // also turn every division by a constant into a multiply by its
+        // reciprocal. Exit: none.
+        if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
+            && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
+            && !self.product_fits(lhs, rhs, bits)
+            && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
+        {
+            let vt = self.dag.value_type(value);
+            if let Some(hooks) = self.hooks.as_mut()
+                && let Some(result) = hooks.make_lib_call(self.dag, name, &[ll, rl], vt, false)
+            {
+                return Ok(self.split_integer(result, half));
+            }
         }
         if super::known_bits::max_significant_bits(self.dag, lhs) <= bits
             && super::known_bits::max_significant_bits(self.dag, rhs) <= bits

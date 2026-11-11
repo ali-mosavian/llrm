@@ -50,6 +50,12 @@ pub struct Tuning {
     /// `div` pins eax, edx and the divisor's register, the narrow multiply
     /// sequence none.
     pub narrow_divide_live_limit: u32,
+    /// The widest divide (in bits) `narrow_divide_live_limit` governs: 31 is
+    /// "narrower than a word" on a 32-bit target; a 16-bit target whose `div
+    /// edx:eax` pins the same registers at 32 bits sets 32.
+    pub narrow_divide_live_max_bits: u32,
+    /// Whether `narrow_divide_live_limit` also holds at -Os (false: -O1 only).
+    pub narrow_divide_live_at_size: bool,
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
     /// leaves an instruction where it is when moving it would replace its one
     /// result by more operands that die at it, across a later instruction that
@@ -170,17 +176,10 @@ pub struct Tuning {
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
-    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
-    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
-    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
-    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
-    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
-    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
-    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
-    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
-    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
-    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
-    /// it is off at `-O2` and `-O3`.
+    /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
+    /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
+    /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
+    /// 188.9M clk (+95%) and jpeg_fixed +64% against main, for -127 B and -790 B; `-Os` is strict per axis.
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
@@ -379,6 +378,11 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE PIL-OS (owner alim, exit 2026-11-27): PartiallyInlineLibCalls
+    /// leaves a call in a function tuned for size (`optsize`, `minsize`)
+    /// alone. false: the pin's, which splits it there too and grows the code
+    /// by a compare, a branch and a copy of the call.
+    pub partial_libcalls_skip_at_size: bool,
     /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
     /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
@@ -439,6 +443,8 @@ impl Tuning {
         multiply_by_clocks: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
+        narrow_divide_live_max_bits: 31,
+        narrow_divide_live_at_size: true,
         sink_spares_ranges: false,
         promote_va_list: false,
         branch_compare_trees_at_size: false,
@@ -506,6 +512,7 @@ impl Tuning {
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
+        partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
@@ -574,6 +581,16 @@ pub trait Machine {
     /// its stack. A larger one is a named refusal at pipeline entry.
     fn max_alloca_align(&self) -> Option<u64> {
         None
+    }
+
+    /// Whether a dynamic `alloca` (a variable size, or outside the entry block)
+    /// keeps the alignment it asks for: `DYNAMIC_STACKALLOC` masks the
+    /// address, so it needs neither the clamp to [`Machine::kept_stack_align`]
+    /// nor the refusal at [`Machine::max_alloca_align`], which are for the
+    /// frame's own objects. False: clamped and refused like every other
+    /// `alloca`.
+    fn honors_dynamic_alloca_align(&self) -> bool {
+        false
     }
 
     /// What each operation costs on this target, for profitability.

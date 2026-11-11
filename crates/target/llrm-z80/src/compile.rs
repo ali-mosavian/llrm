@@ -2443,6 +2443,17 @@ fn decomposed_functions(
         })
         .collect();
     let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
+    // The form with the priced shift and multiply sites (`site_price`) is taken at -O1, which allows no trade, only
+    // where the function is no worse on either axis as emitted: the price of a site leaves out the spills
+    // around its call (wide_shift_by_one +53 B and +47k T).
+    let pareto: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            level == Level::O1
+                && alternatives.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.site_priced))
+        })
+        .collect();
+    let every: HashSet<usize> = every.into_iter().filter(|at| !pareto[*at]).collect();
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2457,7 +2468,10 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] {
+                let better = if pareto[at] {
+                    let (new, old) = (own_price(&variants, &other, at), own_price(&variants, &chosen, at));
+                    new != old && new.0 <= old.0 && new.1 <= old.1
+                } else if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))

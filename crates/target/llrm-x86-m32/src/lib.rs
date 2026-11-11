@@ -142,7 +142,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         split_merged_conditions: true,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
-        sdiv_pow2_stays_at_size: true,
+        sdiv_pow2_stays_at_size: false,
         push_imm_at_size: true,
         // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): see `Tuning::merge_functions_at_size`.
         merge_functions_at_size: true,
@@ -434,6 +434,11 @@ impl llrm_target::Target for M32 {
     ) -> Option<(RegId, RegId)> {
         let (push, pop) = convention.frame_slot_scratch.as_ref()?;
         Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
+    /// `GR32_NOSP`/`GR64_NOSP`'s caller-saved registers, in the pin's order.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        vec![RegId::EAX, RegId::ECX, RegId::EDX]
     }
 
     fn frame_wrap_split_size(&self) -> bool {

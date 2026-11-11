@@ -291,6 +291,8 @@ pub struct DagConfig {
     pub int_div_cheap: bool,
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
     pub div_live_limit: u32,
+    /// The widest divide `div_live_limit` governs.
+    pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
@@ -366,6 +368,7 @@ impl Default for DagConfig {
             pointer: EVT::I32,
             int_div_cheap: false,
             div_live_limit: 0,
+            div_live_max_bits: 31,
             div_live: 0,
             div_prices: None,
             sdiv_pow2_stays: false,
