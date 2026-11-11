@@ -140,6 +140,12 @@ let Constraints = "$d = $a" in {
     def ADD16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "add hl, $b", [(set i16:$d, i8:$f, (Z80addf i16:$a, i16:$b))]>;
     def ADC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "adc hl, $b", [(set i16:$d, i8:$f, (Z80adcf i16:$a, i16:$b, i8:$c))]>;
   }
+  // x + x with the carry out, in any pair: `sla lo; rl hi` (SDCC's form for a long shifted left by one), `add hl, hl` in hl.
+  // the high word of the same doubling: hl + hl + carry
+  let AddedComplexity = 1 in
+  def ADC16Fhl : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, Flags:$c), "adc hl, hl", [(set i16:$d, i8:$f, (Z80adcf i16:$a, i16:$a, i8:$c))]>;
+  let AddedComplexity = 1 in
+  def SHL16F : Z80Inst<(outs GR16:$d, Flags:$f), (ins GR16:$a), "sla lo; rl hi", [(set i16:$d, i8:$f, (Z80addf i16:$a, i16:$a))]>;
   def SUB16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "or a; sbc hl, $b", [(set i16:$d, i8:$f, (Z80subf i16:$a, i16:$b))]>;
   def SBC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "sbc hl, $b", [(set i16:$d, i8:$f, (Z80sbcf i16:$a, i16:$b, i8:$c))]>;
 }
