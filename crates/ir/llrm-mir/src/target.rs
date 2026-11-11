@@ -1100,6 +1100,10 @@ pub struct OperationCosts {
     pub cache_line: i64,
     /// Clocks to fill one such line from memory; 0: not stated.
     pub line_fill_clocks: i64,
+    /// Block placement at -Os/-Oz is `MachineBlockPlacement`'s
+    /// `-apply-ext-tsp-for-size` (Ext-TSP over unit counts), which the pin
+    /// ships off.
+    pub ext_tsp_for_size: bool,
 }
 
 impl OperationCosts {
@@ -1270,6 +1274,7 @@ impl Default for OperationCosts {
             expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
+            ext_tsp_for_size: false,
         }
     }
 }
