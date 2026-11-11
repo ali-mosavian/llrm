@@ -67,3 +67,15 @@ fn a_size_build_keeps_the_multiply_where_the_chain_is_longer() {
     let out = compile("68020", Level::Os, 1000);
     assert!(out.contains("muls.l"), "68020 -Os x*1000: a chain longer than 4 B:\n{out}");
 }
+
+/// os_locals_between_pushes, old_style_extra_args and variadic at 68020 -O2
+/// lost their `x * 9` chain (+37 to +424 clocks) when the same function also
+/// held a synthesized chain: the whole function fell back to the multiply.
+#[test]
+fn a_synthesized_chain_beside_a_pin_shaped_one_does_not_cost_the_pin_shape() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+define i32 @f(i32 %x, i32 %y) {\n  %a = mul i32 %x, 9\n  %b = mul i32 %y, 1000\n  %r = add i32 %a, %b\n  ret i32 %r\n}\n";
+    let out = assembly(ir, cpu_of("68020").unwrap(), Level::O2).expect("compiles");
+    assert_eq!(out.matches("muls.l").count(), 1, "only x*1000 stays a multiply (straight line):\n{out}");
+    assert!(out.contains("lsl.l\t#3"), "x*9 lost its chain:\n{out}");
+}

@@ -51,6 +51,9 @@ pub enum Mode {
     Trial,
     /// The multiply stays: `muls.l`, or the library call before the 68020.
     Kept,
+    /// As [`Mode::Trial`] without the chains beyond the pin's shape (G2): the
+    /// build the trial judges them against.
+    TrialPinShapes,
 }
 
 /// Whether the combiner may decompose a multiply in this build of a function,
@@ -60,13 +63,14 @@ pub enum Mode {
 pub struct Chain {
     off: bool,
     pin: bool,
+    shapes_only: bool,
     used: Rc<Cell<bool>>,
     synthesized: Rc<Cell<bool>>,
 }
 
 impl Chain {
     pub fn of(mode: Mode) -> Chain {
-        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, used: Rc::default(), synthesized: Rc::default() }
+        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, shapes_only: mode == Mode::TrialPinShapes, used: Rc::default(), synthesized: Rc::default() }
     }
 
     /// Whether this build decomposed at least one multiply.
@@ -86,7 +90,7 @@ impl Chain {
     /// Whether a chain beyond the pin's shape may be taken: not in a build
     /// that follows the pin, nor one that keeps the multiply.
     pub(super) fn allows_beyond_pin(&self) -> bool {
-        !self.pin && !self.off
+        !self.pin && !self.off && !self.shapes_only
     }
 
     pub(super) fn allows(&self, yes: bool) -> bool {

@@ -289,9 +289,25 @@ pub fn items_with(
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
     if touched.mul_trial {
-        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
+        use crate::dagisel::mulprice::Mode;
+        let without = Options { mul: Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
-        if crate::trial::prefers_without(&kept, &plain, cpu, price, !touched.mul_synthesized) {
+        if touched.mul_synthesized {
+            // DEVIATE G2: the pin's shapes are judged as before (clocks
+            // count wherever they run); a chain beyond them only against
+            // that winner, and its clocks only inside loops
+            let shapes = Options { mul: Mode::TrialPinShapes, ..options };
+            let (pin, _) = items_once(module, name, cpu, shapes)?;
+            let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
+                (plain, without)
+            } else {
+                (pin, shapes)
+            };
+            if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+                kept = base;
+                options = base_options;
+            }
+        } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
             kept = plain;
             options = without;
         }
