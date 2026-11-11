@@ -2366,6 +2366,12 @@ impl Emitter<'_, '_> {
             let [_, by] = self.dag.node(inserted).ops[..] else { return None };
             return matches!(self.dag.node(by).data, NodeData::Const { bits: 16, .. }).then_some(inserted);
         }
+        // A selector loaded or widened as a word (`zext`/extending load of an
+        // i16, which the combiner now folds after legalization too): the low
+        // word of the dword is the selector.
+        if self.is_machine_named(inserted, "MOVZX32rm16") || self.is_machine_named(inserted, "MOVZX32rr16") {
+            return Some(inserted);
+        }
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
             return None;
         }
