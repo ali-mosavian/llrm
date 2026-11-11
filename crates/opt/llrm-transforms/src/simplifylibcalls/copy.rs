@@ -96,7 +96,7 @@ fn str_len_mem_copy(
 ) -> Option<Rewrite> {
     let pointer = unit.context.types.ptr(0);
     let call = NewCall { standard: "strlen", args: vec![dest], returns: site.size, params: vec![pointer] };
-    let measured = emit(unit, routines, call, site.call)?;
+    let measured = emit(unit, routines, call, Position::Before(site.call))?;
     let length = Operand::Value(unit.function.instruction(measured).result.expect("strlen returns a length"));
     let byte = unit.context.types.int(8);
     let made = unit
