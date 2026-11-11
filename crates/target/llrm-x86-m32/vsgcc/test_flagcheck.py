@@ -59,7 +59,7 @@ def test_every_llrm_compile_of_build_sh_shares_one_flag_set_with_the_parity_chec
     lines = _llrm_lines()
     assert len(lines) >= 5, "premise: build.sh compiles llrm at four levels, the ELF build and the probe"
     for line in lines:
-        assert re.search(r"--target=x86_32-wat \$\{LLRM_FLAGS:-\} -mabi=\$ABI \$LLRM_LD (-\$?\w+ )?-march=i486", line), line
+        assert re.search(r"--target=x86_32-wat \$\{LLRM_FLAGS:-\} (\$\(HF llrm \$?\w+\) )?-mabi=\$ABI \$LLRM_LD (-\$?\w+ )?-march=i486", line), line
     text = (Path(__file__).parent / "build.sh").read_text()
     assert "ABI=${VSGCC_ABI:-sysv}" in text and "LLRM_LD=${VSGCC_LLRM_LD--mlong-double-80}" in text
     parity = (Path(__file__).parent / "flagparity.sh").read_text()

@@ -1,6 +1,7 @@
 """objsweep and rowdiff tell a changed object and a worse row from an unchanged one, and say a compile that failed instead of counting it unchanged."""
 from __future__ import annotations
 
+import re
 import importlib.util
 import subprocess
 import sys
@@ -195,7 +196,8 @@ def test_the_pin_is_told_our_stack_alignment_and_pushes_a_one_argument_call():
 
 def compile_lines(script, compiler):
     """The lines of a shell script that run `compiler` (`gcc` or `$CLANG`) to compile (` -c `)."""
-    return [line for line in script.splitlines() if line.lstrip().startswith(compiler + " ") and " -c " in line]
+    unguarded = [re.sub(r"^\s*\[ .*? \] \|\| ", "", line) for line in script.splitlines()]  # `[ $GCC_NA = 1 ] || gcc ...`
+    return [line for line in unguarded if line.lstrip().startswith(compiler + " ") and " -c " in line]
 
 
 def test_the_pins_clang_and_gcc_keep_their_default_stack_beside_ours_at_16():
