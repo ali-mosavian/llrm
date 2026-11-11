@@ -773,3 +773,21 @@ fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
     let mean = saved as f64 / shapes.len() as f64;
     assert!(mean >= llrm_6502::hotdivision::SAVED_CLOCKS * 0.9, "the wide path saves {mean} clocks a call");
 }
+
+/// `hotmultiply::SAVED_CLOCKS`: what `__mulsi3_fast` saves a call, averaged over
+/// multipliers of one to four bytes, in sim65 clocks.
+#[test]
+fn the_fast_multiply_saves_what_hotmultiply_prices() {
+    let call = |routine: &str, b: u32| {
+        let mut setup = String::from("  lda #0\n  sta __sa+1\n  sta __sa+2\n  sta __sa+3\n  lda #100\n  sta __sa\n");
+        for at in 0..4 {
+            setup += &format!("  lda #{}\n  sta __sb+{at}\n", (b >> (8 * at)) & 0xFF);
+        }
+        common::cycles_with(&format!("mulsave-{routine}-{b}"), &format!("{setup}  jsr {routine}\n"), "")
+            - common::cycles_with(&format!("mulsave-none-{b}"), &setup, "")
+    };
+    let shapes = [25u32, 0x1234, 0x0019_660D, 0x9E37_79B9];
+    let saved: Vec<i64> = shapes.iter().map(|&b| call("__mulsi3", b) - call("__mulsi3_fast", b)).collect();
+    let mean = saved.iter().sum::<i64>() as f64 / saved.len() as f64;
+    assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
+}
