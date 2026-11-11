@@ -12,6 +12,36 @@ HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arm64")
 LLVM_BIN = os.environ.get("LLVM_BIN", os.path.expanduser("~/scratch/llvm-build-aarch64/bin"))
 
 
+class PinIr(unittest.TestCase):
+    """ptour.sh runs the pin's llc on our IR: the IR must carry nothing the pin does not know."""
+
+    def setUp(self):
+        sys.path.insert(0, HERE)
+        import ptour_ir
+
+        self.ir = ptour_ir
+
+    def test_llrm_only_attributes_are_removed_from_a_define(self):
+        text = 'define i64 @f() nounwind "no-builtins" memory(none) llrm-end-biased llrm-self-copied {\n  ret i64 0\n}\n'
+        got = self.ir.stripped(text)
+        self.assertEqual(self.ir.left_over(got), [])
+        self.assertIn("nounwind", got)
+
+    def test_ir_with_an_llrm_attribute_left_is_refused_not_passed_on(self):
+        # A declaration keeps its attribute under `stripped` (only a `define` is rewritten): the harness must
+        # stop rather than hand the pin an IR ours reads differently.
+        text = 'declare void @g() llrm-promoted-in-walk\n'
+        self.assertEqual(self.ir.left_over(self.ir.stripped(text)), ["llrm-promoted-in-walk"])
+        with tempfile.TemporaryDirectory() as out:
+            src = os.path.join(out, "a.ll")
+            open(src, "w").write(text)
+            done = subprocess.run([sys.executable, os.path.join(HERE, "ptour_ir.py"), src, os.path.join(out, "b.ll")],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("REFUSED", done.stderr)
+            self.assertFalse(os.path.exists(os.path.join(out, "b.ll")))
+
+
 class Harness(unittest.TestCase):
     def test_no_file_reads_from_a_personal_scratch_directory(self):
         # The harness lived in ~/scratch/w15-bar: a judge table whose instrument sits there cannot be re-run.

@@ -53,13 +53,31 @@ fn a_68000_keeps_its_library_calls() {
     assert!(!out.contains("divsl") && !out.contains("divul"), "{out}");
 }
 
+fn remainder_alone(signed: bool) -> String {
+    let rem = if signed { "srem" } else { "urem" };
+    format!(
+        "define i32 @f(i32 %n) {{\n  %m = and i32 %n, 7\n  %d = or i32 %m, 1\n  %r = {rem} i32 %n, %d\n  ret i32 %r\n}}\n"
+    )
+}
+
+/// M68K-REM32 (`docs/working/above-main-rows.md`): the pin keeps `x % y` a
+/// library call on every CPU (M68kISelLowering.cpp L100); from the 68020 it is
+/// one `divsl.l`/`divul.l`. Below it the call stays (`tests/rem32.rs`). This
+/// test held the pin's call at the 68020 until #8922 changed the contract.
 #[test]
-fn a_remainder_alone_stays_the_pins_library_call() {
-    let out = text(
-        "define i32 @f(i32 %n) {\n  %m = and i32 %n, 7\n  %d = or i32 %m, 1\n  %r = srem i32 %n, %d\n  ret i32 %r\n}\n",
-        "68020",
-    );
-    assert!(out.contains("__modsi3") && !out.contains("divsl"), "{out}");
+fn a_remainder_alone_is_one_divide_on_the_68020() {
+    for (signed, one, library) in [(true, "divsl.l", "__modsi3"), (false, "divul.l", "__umodsi3")] {
+        let out = text(&remainder_alone(signed), "68020");
+        assert!(out.contains(one) && !out.contains(library), "{out}");
+    }
+}
+
+/// The same remainder, run under qemu against C's `%`.
+#[test]
+fn a_remainder_alone_is_the_remainder_under_qemu() {
+    for signed in [true, false] {
+        run_against_c(signed, &remainder_alone(signed), "n % d");
+    }
 }
 
 fn binutils(tool: &str) -> Option<Command> {
@@ -110,9 +128,22 @@ fn the_pair_encodes_as_binutils_does() {
 /// division and remainder, run under qemu.
 #[test]
 fn the_quotient_and_remainder_are_the_divides_under_qemu() {
+    for signed in [true, false] {
+        run_against_c(signed, &pair(signed), "(n / d) + (n % d)");
+    }
+}
+
+/// `f` of `ir` at 68020, linked with a C `main` that compares it with `expect`
+/// (in `n` and `d = (n & 7) | 1`), run under qemu.
+fn run_against_c(
+    signed: bool,
+    ir: &str,
+    expect: &str,
+) {
     let Some(qemu) = support::qemu() else { return };
-    for (signed, kind) in [(true, "int"), (false, "unsigned")] {
-        let out = text(&pair(signed), "68020");
+    let kind = if signed { "int" } else { "unsigned" };
+    {
+        let out = text(ir, "68020");
         let (Some(mut assemble), Some(mut link)) = (binutils("as"), binutils("gcc")) else { return };
         let main = format!(
             "extern {kind} f({kind});
@@ -121,7 +152,7 @@ int main(void){{
   static const {kind} values[] = {{ 0, 1, 7, 99, 100, 1000, 12345, -1, -7, -100, -12345, 2147483647, -2147483647 }};
   for (unsigned i = 0; i < sizeof values / sizeof values[0]; i++) {{
     {kind} n = values[i], d = (n & 7) | 1;
-    if (f(n) != (n / d) + (n % d)) return 1 + i;
+    if (f(n) != ({expect})) return 1 + i;
   }}
   return 0;
 }}
