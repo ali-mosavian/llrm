@@ -162,7 +162,7 @@ pub fn target_lowering() -> TargetLowering {
     }
     // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
-        tl.set_size_libcall_name(op, MVT::I64, name);
+        tl.set_size_variable_libcall_name(op, MVT::I64, name);
     }
     tl.set_size_shift_call(8, 10);
     // the long divide has a smaller routine for a function tuned for size
@@ -191,7 +191,7 @@ pub fn target_lowering() -> TargetLowering {
     for (op, name) in
         [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divdi3", "__s_udivdi3", "__s_moddi3", "__s_umoddi3"])
     {
-        tl.set_size_libcall_name(op, MVT::I64, name);
+        tl.set_size_variable_libcall_name(op, MVT::I64, name);
     }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();

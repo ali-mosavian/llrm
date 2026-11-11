@@ -112,6 +112,9 @@ struct Maps {
     /// The routine a function tuned for size calls where it differs from
     /// `libcall_names`'.
     size_libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The `size_libcall_names` whose routine takes a variable amount only: a constant amount keeps the inline
+    /// expansion (and, below the type, the shift routine of its halves).
+    size_variable_only: HashMap<(ISD, MVT), ()>,
 }
 
 #[derive(Clone)]
@@ -294,6 +297,17 @@ impl TargetLowering {
         std::sync::Arc::make_mut(&mut self.maps).size_libcall_names.insert((op, vt), name);
     }
 
+    /// [`Self::set_size_libcall_name`] for a shift by a variable amount only.
+    pub fn set_size_variable_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.set_size_libcall_name(op, vt, name);
+        std::sync::Arc::make_mut(&mut self.maps).size_variable_only.insert((op, vt), ());
+    }
+
     /// A shift by a constant of a `bits`-wide value is a call to the shift
     /// routine in a function tuned for size where the granules still shifted
     /// times the bits beyond whole granules reach `least`.
@@ -348,6 +362,7 @@ impl TargetLowering {
         matches!(
             vt,
             EVT::Simple(vt) if self.maps.size_libcall_names.contains_key(&(op, vt))
+                && !self.maps.size_variable_only.contains_key(&(op, vt))
         )
     }
 
