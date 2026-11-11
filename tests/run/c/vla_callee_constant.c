@@ -1,4 +1,5 @@
 // flags: -O2
+// targets: !m68k !wasm32 !z80-sdcc !6502-sim65 !65c02-sim65
 /* Static functions with a variable-length array, called with constants and from a loop: inlined, the arrays are frame slots or bracketed by stacksave/stackrestore and no call is left (#8939 left the calls). */
 extern void report(long value);
 

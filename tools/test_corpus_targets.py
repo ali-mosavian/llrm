@@ -334,3 +334,12 @@ def test_a_program_that_prints_through_the_hosted_libc_is_not_run_for_macos():
     assert not ct.applies("arm64-macos", source)
     assert ct.applies("arm64-linux", source) and ct.applies("x86_64-linux", source)
     assert not ct.applies("arm64-macos", "// targets: !macos\nint x;\n") and ct.applies("arm64-linux", "// targets: !macos\nint x;\n")
+
+
+def test_a_vla_program_is_not_run_where_the_backend_has_no_dynamic_alloca():
+    """vla_callee_constant is in the sweeps for the targets that build it; m68k, 6502, z80 and wasm refuse a dynamic alloca (rc 1) and read n/a, not FAIL."""
+    source = (RUN / "vla_callee_constant.c").read_text()
+    for target in ("m68k-68000", "m68k-68020", "6502-sim65", "65c02-sim65", "z80-sdcc", "wasm32"):
+        assert not ct.applies(target, source), target
+    for target in ("arm64-linux", "x86_64-linux", "x86_32-linux", "x86_16-dos"):
+        assert ct.applies(target, source), target
