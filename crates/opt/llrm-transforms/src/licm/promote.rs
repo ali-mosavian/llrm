@@ -10,7 +10,7 @@ use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Outer};
 
 use super::{LoopCtx, LoopSafety};
@@ -385,9 +385,8 @@ pub(crate) fn is_writable_object(
         ValueDef::Argument(at) => {
             let attrs = function.parameter_attrs.get(at as usize).map(Vec::as_slice).unwrap_or_default();
             let named = |wanted: &str| {
-                attrs.iter().any(|one| match one {
-                    llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) => name == wanted,
-                    _ => false,
+                attrs.iter().any(|one| {
+                    matches!(one, Attribute::Flag(name) | Attribute::Type(name, _) if name == wanted)
                 })
             };
             named("byval") || (named("writable") && llrm_mir::facts::Fact::NoAlias.stated_by(attrs))
@@ -587,7 +586,9 @@ pub fn promote_loop_accesses_to_scalars(
     // violating the memory model.
     if store_safety == StoreSafety::Unknown {
         let object = underlying_object(unit, first_pointer);
-        if is_writable_object(&*unit.context, &outer.globals, &*unit.function, object) && is_thread_local_object(unit, outer, exposed, object) {
+        if is_writable_object(&*unit.context, &outer.globals, &*unit.function, object)
+            && is_thread_local_object(unit, outer, exposed, object)
+        {
             store_safety = StoreSafety::Safe;
         }
     }
