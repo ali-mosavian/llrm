@@ -98,8 +98,12 @@ const MAX_IV_USERS: usize = 200;
 
 /// LLVM's loop strength reduction. `size`: the compile is for size, which the
 /// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
+/// `bytes_strict`: code bytes outrank clocks (-O1, -Os), which DEVIATE LG3's
+/// keep rule reads: a base added outside the loop counts against the
+/// instructions it saves once, not once a trip.
 pub struct LoopStrengthReduce {
     pub size: bool,
+    pub bytes_strict: bool,
 }
 
 impl FunctionPass for LoopStrengthReduce {
@@ -148,6 +152,7 @@ impl FunctionPass for LoopStrengthReduce {
             &*tti,
             false,
             self.size,
+            self.bytes_strict,
             Some(held.take()),
         );
         let kept = scev.is_some();
@@ -243,6 +248,7 @@ fn plan_loop(
     shadowed: bool,
     stress_chains: bool,
     size: bool,
+    bytes_strict: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
@@ -406,16 +412,19 @@ fn plan_loop(
         // DEVIATE LG3: the `spent` against `saved` test above, over the trips
         // the loop is known to run, with the symbol bases the end-biased
         // solution adds to the pin's priced as the target's setup says
-        // (`setup_cost` counts each as one instruction).
+        // (`setup_cost` counts each as one instruction). Where bytes outrank
+        // clocks (-O1, -Os) the loop is counted once, whatever its trips: an
+        // instruction saved in it is one instruction of code, as a base is.
         let symbol_setup = tti.lsr_symbol_base_setup_insns();
         let symbols_outweigh_saving = symbol_setup != 0 && {
             let new_bases = symbol_bases(se, &lsr, &solution);
             let pin_bases = symbol_bases(se, &pin, &pin_solution);
-            let added = new_bases.iter().filter(|base| !pin_bases.contains(base)).count() as u32;
-            let trips = u64::from(se.get_small_constant_max_trip_count(&cx, header));
-            let total = |insns: u32, setup: u32| trips * u64::from(insns) + u64::from(setup);
+            // A base that replaces the pin's (`@v+256` for `@v`) costs no more.
+            let added = new_bases.len() as i64 - pin_bases.len() as i64;
+            let trips = if bytes_strict { 1 } else { u64::from(se.get_small_constant_max_trip_count(&cx, header)) };
+            let total = |insns: u32, setup: u32| (trips * u64::from(insns) + u64::from(setup)) as i64;
             trips != 0
-                && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
+                && total(cost.c.insns, cost.c.setup_cost) + added * i64::from(symbol_setup - 1)
                     > total(pin_cost.c.insns, pin_cost.c.setup_cost)
         };
         let kept = !pin_solution.is_empty()
@@ -500,7 +509,7 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
-    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, None).0
+    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, false, None).0
 }
 
 /// [`reduced_with`], continuing the expressions `held` of the passes before;
@@ -515,6 +524,7 @@ pub fn reduced_held(
     tti: &dyn Tti,
     stress_chains: bool,
     size: bool,
+    bytes_strict: bool,
     held: Option<ScalarEvolution>,
 ) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
@@ -573,6 +583,7 @@ pub fn reduced_held(
                     shadowed,
                     stress_chains,
                     size,
+                    bytes_strict,
                 ) {
                     Outcome::Planned(None) => break,
                     Outcome::Edit(edits, mut users) => {
