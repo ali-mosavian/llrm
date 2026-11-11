@@ -68,3 +68,10 @@ def test_llrm_os_exit_ends_the_program_under_qemu(tmp_path):
     assert built.returncode == 0, built.stderr
     ran = subprocess.run([QEMU, "-cpu", "m68020", str(exe)], capture_output=True, timeout=10)
     assert (ran.returncode, ran.stdout) == (0, b"1\n")
+
+
+def test_the_bench_programs_run_by_default():
+    """The sweep ran tests/run/c alone: bench/floats printed 0 at 68000 (a miscompiled `__divdf3`) and nothing in a gate saw it."""
+    default = [p.parent.parent.name + "/" + p.stem for p in sweep.sources([], False)]
+    assert "bench/floats" in default
+    assert not [p for p in sweep.sources([], True) if p.parent.parent.name == "bench"]
