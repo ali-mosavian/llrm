@@ -53,8 +53,14 @@ The O1 clocks trade is below the bar on both axes: `div_constants_long` 15493 ->
 
 1. wide_shift_by_one +100 B (O1/O2/O3): base calls `__mulsi3` (x 514), B emits the inline shift-and-add form. Seen in the
    asm; the price that flipped (`prefers`, DEVIATE z80-callinline-price) is not yet read. Card owed.
-2. rep_count +51, loop_versioning +40, recdeep +16, word_compare_branches +16, then the +1 to +14 B ripples: causes not yet
-   read; cards owed per row, grouped by cause.
+2. rep_count +51 B at O1 (289 -> 340; SDCC 273; the one cell newly above the bar): `_bench` 221 -> 277 B, the pointer sums
+   change from `ld hl,#N; add hl,de` to `ld l,e; ld h,d; ld bc,#N; add hl,bc; ld bc,#0`. Probe: with `bench` returning a short
+   (same source otherwise) base and B give the same 280 B, so the long result register is the cause. Consistent with the
+   accumulator's low word now sitting in HL, which `ld a,(hl)` and `add hl,rr` need; the first differing allocation decision is
+   not yet read. Pin analog to check: greedy copy-hint weighting by block frequency (a hint from a cold return block against
+   hot loop uses).
+3. loop_versioning +40, recdeep +16, word_compare_branches +16, then the +1 to +14 B ripples: causes not yet read; cards owed
+   per row, grouped by cause.
 
 Row Z80-LONG-ORDER-WORSE in `above-main-rows.md` owns the cards (exit 2026-11-24).
 
