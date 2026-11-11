@@ -551,6 +551,24 @@ pub trait CombineHooks {
         false
     }
 
+    /// Whether `BuildUDIV`/`BuildSDIV` put the magic factor first in the
+    /// multiply-high, so the dividend is the operand a target that reads one
+    /// operand's length (the 486's `mul` early-out) reads. The pin's order is
+    /// (dividend, magic). DEVIATE SD444 (owner w2, exit 2026-12-20; upstream
+    /// check: gcc `expand_mult_highpart` and i386 `mult_bit` at each pin bump):
+    /// off by default. Asked here, not at selection, because only here the
+    /// dividend is still a node whose known bits give its length (a `urem`
+    /// result has its leading zeros; once expanded to `x - q*c` it has none).
+    fn multiply_high_magic_first(
+        &self,
+        _dag: &SelectionDAG,
+        _signed: bool,
+        _dividend: SDValue,
+        _magic: SDValue,
+    ) -> bool {
+        false
+    }
+
     /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >=
     /// c` is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
     /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
@@ -4350,6 +4368,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
+        }
+        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits to
+        // spare (DAGCombiner.cpp#L17478): the shifted-in zeros are all sign.
+        if self.dag.opcode(n0) == ISD::Srl
+            && let Some(amount) = self.dag.constant(self.dag.operand(n0, 1))
+            && amount <= u128::from(bits - ext_bits)
+        {
+            let x = self.dag.operand(n0, 0);
+            if u128::from(bits - ext_bits) - amount < u128::from(super::known_bits::num_sign_bits(self.dag, x)) {
+                return Some(self.dag.get_node(ISD::Sra, vt, &[x, self.dag.operand(n0, 1)]));
+            }
         }
         self.sext_in_reg_of_load(node, n0, vt, ext)
     }
