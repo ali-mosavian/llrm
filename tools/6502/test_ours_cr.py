@@ -130,6 +130,18 @@ class Members(unittest.TestCase):
                 rows = open(out).read().splitlines()
             self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
 
+    def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
+        """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
+        compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        self.assertEqual((index["__mulsf3"], index["__divsf3"]), ("config/6502/sf32_6502.c",) * 2)
+        text = crlib.member(rt, CC, "config/6502/sf32_6502.c", ["-Os"])
+        for name in ("__mulsf3", "__divsf3"):
+            self.assertIn(name + ":", text)
+
     def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
         import crlib
@@ -346,3 +358,23 @@ class Runner(unittest.TestCase):
         self.assertIn("/nonexistent/mos_rt.s", done.stderr)
 
 if __name__ == "__main__": unittest.main()
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class PerTargetOut(unittest.TestCase):
+    """2026-11-11: spill_store_order (`-m32`, an LCG over 32-bit `unsigned`) read WRONG at the 6502 against its 32-bit `.out`; the answer is
+    right for a 16-bit int (llvm-mos agrees). ours_cr read only NAME.out: a NAME.6502.out / NAME.65c02.out was never looked at."""
+    def run_cpu(self, cpu):
+        import json
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "w.c").write_text("extern void report(long value);\nint main(void) { report(sizeof(int)); return 0; }\n")
+        Path(corpus, "w.out").write_text("4\n")
+        Path(corpus, f"w.{cpu}.out").write_text("2\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, OURS_CPU=cpu, OURS_PADS="0", LLRM_CC=CC)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "w"], capture_output=True, text=True, env=env, timeout=600)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        return [row[:2] for row in json.load(open(out + ".json"))]
+    def test_the_6502_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("6502"), [["w", "PASS"]])
+    def test_the_65c02_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("65c02"), [["w", "PASS"]])

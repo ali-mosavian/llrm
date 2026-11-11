@@ -49,7 +49,75 @@ extra_symbols = [
   "AArch64::BFMWri",
   # Selected by hand (LowerBR_JT).
   "AArch64::JumpTableDest32",
+  # Every opcode a form of `opcodes.instr` stands for: the scheduling model resolves its class by number
+  # (checked by `every_opcode_a_form_stands_for_has_a_number_in_the_table`).
+  "TargetOpcode::COPY",
+  "TargetOpcode::DBG_VALUE",
+  "AArch64::DUPv16i8gpr",
+  "AArch64::FMOVDXr",
+  "AArch64::FMOVHWr",
+  "AArch64::FMOVHXr",
+  "AArch64::FMOVSWr",
+  "AArch64::FMOVXHr",
+  "AArch64::LDPDi",
+  "AArch64::LDPDpost",
+  "AArch64::LDPDpre",
+  "AArch64::LDPQi",
+  "AArch64::LDPQpost",
+  "AArch64::LDPQpre",
+  "AArch64::LDPSWi",
+  "AArch64::LDPSWpost",
+  "AArch64::LDPSWpre",
+  "AArch64::LDPSi",
+  "AArch64::LDPSpost",
+  "AArch64::LDPSpre",
+  "AArch64::LDPWi",
+  "AArch64::LDPWpost",
+  "AArch64::LDPWpre",
+  "AArch64::LDPXpost",
+  "AArch64::LDPXpre",
+  "AArch64::MOVIv16b_ns",
+  "AArch64::MOVIv2d_ns",
+  "AArch64::MOVKWi",
+  "AArch64::MOVNWi",
+  "AArch64::MOVNXi",
+  "AArch64::MOVZWi",
+  "AArch64::ORRv16i8",
+  "AArch64::RET",
+  "AArch64::STPDi",
+  "AArch64::STPDpost",
+  "AArch64::STPDpre",
+  "AArch64::STPQi",
+  "AArch64::STPQpost",
+  "AArch64::STPQpre",
+  "AArch64::STPSi",
+  "AArch64::STPSpost",
+  "AArch64::STPSpre",
+  "AArch64::STPWi",
+  "AArch64::STPWpost",
+  "AArch64::STPWpre",
+  "AArch64::STPXpost",
+  "AArch64::STPXpre",
+  "AArch64::SUBWri",
+  "AArch64::SUBWrs",
+  "AArch64::SUBWrx",
+  "AArch64::SUBXri",
+  "AArch64::SUBXrx",
   "TargetOpcode::JUMP_TABLE_DEBUG_INFO",
+]
+# Opcodes the hand code selects (a bitcast, a float round) that kept a scheduling class only through patterns of vector
+# types now pruned: they keep their row in instrinfo.rs and sched.rs.
+sched_symbols = [
+  "AArch64::FABD64",
+  "AArch64::FMOVDr",
+  "AArch64::FMOVHr",
+  "AArch64::FMOVWSr",
+  "AArch64::FMOVXDr",
+  "AArch64::FRINT32XDr",
+  "AArch64::FRINT32ZDr",
+  "AArch64::FRINT64XDr",
+  "AArch64::FRINT64ZDr",
+  "AArch64::STNPSi",
 ]
 ids_includes = [
   '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
@@ -63,7 +131,6 @@ ids_includes = [
 features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", "RDM"]
 
 [atom]
-"Subtarget->isNeonAvailable()" = false
 "Subtarget->isLittleEndian()" = true
 "Subtarget->isSVEorStreamingSVEAvailable()" = false
 "Subtarget->isSVEAvailable()" = false
@@ -80,8 +147,14 @@ features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", 
 "MF->getInfo<AArch64FunctionInfo>()->branchProtectionPAuthLR()" = false
 "MF->getFunction().hasOptNone()" = false
 
+# Decided when a function is selected (the flag-gated vectors, ARM64-VEC POC): off, NEON patterns never match, as when they were pruned.
+[dynamic]
+"Subtarget->isNeonAvailable()" = "neon_available"
+
 [types]
 dead_prefixes = ["v", "nxv", "aarch64"]
+# The 128-bit integer vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated.
+live = ["v16i8", "v8i16", "v4i32", "v2i64"]
 
 [node_predicate]
 # One name per predicate number is enough (the pin groups equal bodies). Names with no Dag query answer false by name (see aarch64_predicates.rs).
@@ -100,6 +173,12 @@ extload = "ext_load"
 truncstore = "truncating_store"
 or_disjoint = "or_disjoint"
 VectorIndexS = "imm_u64_lt_4"
+VectorIndexB = "imm_u64_lt_16"
+VectorIndexH = "imm_u64_lt_8"
+VectorIndex0 = "imm_u64_eq_0"
+vecshiftR8 = "imm_u32_1_to_8"
+maski8_or_more = "imm_mask_low_8"
+maski16_or_more = "imm_mask_low_16"
 VectorIndexD = "imm_u64_lt_2"
 vecshiftR16 = "imm_u32_1_to_16"
 vecshiftR32 = "imm_u32_1_to_32"
@@ -108,6 +187,22 @@ imm0_127 = "imm_u32_lt_128"
 imm32_0_7 = "imm_u32_lt_8"
 imm0_31 = "imm_u64_lt_32"
 vecshiftL32 = "imm_u32_lt_32"
+vecshiftL8 = "imm_u32_lt_8"
+vecshiftL16 = "imm_u32_lt_16"
+vecshiftL64 = "imm_u32_lt_64"
+AArch64vashr_exact = "exact_flag"
+simdimmtype10 = "simd_imm_type10"
+fpimm32SIMDModImmType4 = "fp_imm_simd_mod_imm_type4"
+AArch64fmul_p_oneuse = "has_one_use"
+AArch64mul_p_oneuse = "has_one_use"
+AArch64setcc_z_oneuse = "has_one_use"
+any_fp_to_sint_oneuse = "has_one_use"
+any_fp_to_uint_oneuse = "has_one_use"
+anyext_oneuse = "has_one_use"
+fmul_oneuse = "has_one_use"
+fneg_oneuse = "has_one_use"
+int_aarch64_sve_cntp_oneuse = "has_one_use"
+step_vector_oneuse = "has_one_use"
 imm32_0_15 = "imm_u32_lt_16"
 imm0_255 = "imm_u32_lt_256"
 imm0_63 = "imm_u64_lt_64"

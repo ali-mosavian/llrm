@@ -66,6 +66,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
     );
     tl.init_actions();
+    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -135,6 +137,12 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_operation_action(op, MVT::I8, Action::Legal);
     }
     tl.set_operation_action(Undef, MVT::I1, Action::Expand);
+    // `va_start` stores the address of the first unnamed argument (`lower_vastart_frame_index`, as llvm-mos's
+    // `legalizeVAStart` stores `VarArgsStackIndex`); the rest of a `va_list` is a pointer the generic expansions walk
+    tl.set_operation_action(VAStart, MVT::Other, Action::Custom);
+    for op in [VAEnd, VACopy] {
+        tl.set_operation_action(op, MVT::Other, Action::Expand);
+    }
     tl.set_operation_action(Poison, MVT::I1, Action::Expand);
     // its action is read at the type it extends from, a bit among them
     tl.set_operation_action(SignExtendInReg, MVT::I1, Action::Expand);
@@ -185,6 +193,9 @@ impl Hooks for MosLowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::VAStart => {
+                llrm_codegen::backend::selectiondag::target_calling::lower_vastart_frame_index(dag, node, EVT::I16, 1)
+            }
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I16 => Some(lower_word_copy(dag, node)),

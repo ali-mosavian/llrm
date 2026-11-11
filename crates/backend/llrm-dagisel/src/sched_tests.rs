@@ -80,3 +80,21 @@ fn every_emitted_opcode_has_a_class() {
         }
     }
 }
+
+/// With the vector types live, the table gained 638 NEON rows and lost the
+/// scalar `FMOVWSr`/`FMOVXDr` (patterns of types it dropped): a scalar float
+/// bitcast and the zero-fill `movi` the hand code emits were scheduled
+/// differently with the vectors off (nbody, lru, sfm16_float: 12 objects of
+/// 188 differed). Vector-only opcodes are marked; scalar ones keep a class.
+#[test]
+fn vector_only_opcodes_are_marked_and_scalar_ones_keep_their_class() {
+    let apple = sched::model("apple-m1").unwrap();
+    for op in [opcode::MOVIv2d_ns, opcode::MOVIv16b_ns, opcode::ADDv4i32] {
+        assert!(sched::dynamic_only(op), "opcode {op}");
+        assert!(apple.class_of(op).is_some(), "opcode {op} has a class when the vectors are on");
+    }
+    for op in [opcode::FMOVWSr, opcode::FMOVXDr, opcode::FMOVDr, opcode::ADDWri, opcode::LDRQui] {
+        assert!(!sched::dynamic_only(op), "opcode {op}");
+        assert!(apple.class_of(op).is_some(), "opcode {op} has a class");
+    }
+}

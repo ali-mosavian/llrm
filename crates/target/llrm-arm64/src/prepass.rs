@@ -68,7 +68,7 @@ fn pure(op: &Op) -> bool {
                     | Inst::AddPageOffset { .. }
                     | Inst::Adr { .. }
                     | Inst::FpMoveImm { .. }
-                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_), .. }
+                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_) | Fill::Imm { .. } | Fill::Mask(_) | Fill::MaskD(_), .. }
                     | Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }
             ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
                 // Reading the stack pointer (stacksave, a dynamic alloca's
@@ -238,6 +238,7 @@ fn removable(op: &Op) -> bool {
             | Inst::FpSelect { .. }
             | Inst::FpMoveImm { .. }
             | Inst::FpToFp { .. }
+            | Inst::FpLaneToFp { .. }
             | Inst::FpInt { .. } => true,
             _ => false,
         },

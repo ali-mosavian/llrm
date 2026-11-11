@@ -1,0 +1,1521 @@
+prog	cpu	level	column	before_clk	after_clk	delta_pct	before_state	after_state
+bench_io	68020	O1	clang	13508	13790	+2.1	unpriced forms	unpriced forms
+bench_io	68020	O1	ours	9011	9293	+3.1	unpriced forms	unpriced forms
+bench_io	68020	O2	clang	11878	12160	+2.4	unpriced forms	unpriced forms
+bench_io	68020	O2	ours	9011	7375	-18.2	unpriced forms	unpriced forms
+bench_io	68020	O3	clang	11878	12160	+2.4	unpriced forms	unpriced forms
+bench_io	68020	O3	ours	9011	9293	+3.1	unpriced forms	unpriced forms
+bench_io	68020	Os	clang	11878	12160	+2.4	unpriced forms	unpriced forms
+bench_io	68020	Os	ours	9073	9355	+3.1	unpriced forms	unpriced forms
+bit_setclear	68020	O1	clang	4842	4962	+2.5	unpriced forms	priced
+bit_setclear	68020	O1	gcc	5034	5154	+2.4	unpriced forms	priced
+bit_setclear	68020	O1	ours	4847	4967	+2.5	unpriced forms	priced
+bit_setclear	68020	O2	clang	4842	4962	+2.5	unpriced forms	priced
+bit_setclear	68020	O2	gcc	4890	5010	+2.5	unpriced forms	priced
+bit_setclear	68020	O2	ours	4847	4967	+2.5	unpriced forms	priced
+bit_setclear	68020	O3	clang	4842	4962	+2.5	unpriced forms	priced
+bit_setclear	68020	O3	gcc	4890	5010	+2.5	unpriced forms	priced
+bit_setclear	68020	O3	ours	4847	4967	+2.5	unpriced forms	priced
+bit_setclear	68020	Os	clang	4842	4962	+2.5	unpriced forms	priced
+bit_setclear	68020	Os	gcc	4890	5010	+2.5	unpriced forms	priced
+bit_setclear	68020	Os	ours	4870	4990	+2.5	unpriced forms	priced
+bit_test	68020	O1	clang	4017	4137	+3.0	unpriced forms	priced
+bit_test	68020	O1	gcc	4143	4263	+2.9	unpriced forms	priced
+bit_test	68020	O1	ours	4032	4152	+3.0	unpriced forms	priced
+bit_test	68020	O2	clang	4017	4137	+3.0	unpriced forms	priced
+bit_test	68020	O2	gcc	4081	4201	+2.9	unpriced forms	priced
+bit_test	68020	O2	ours	4032	4152	+3.0	unpriced forms	priced
+bit_test	68020	O3	clang	4017	4137	+3.0	unpriced forms	priced
+bit_test	68020	O3	gcc	4081	4201	+2.9	unpriced forms	priced
+bit_test	68020	O3	ours	4032	4152	+3.0	unpriced forms	priced
+bit_test	68020	Os	clang	4017	4137	+3.0	unpriced forms	priced
+bit_test	68020	Os	gcc	4081	4201	+2.9	unpriced forms	priced
+bit_test	68020	Os	ours	4057	4177	+3.0	unpriced forms	priced
+bitcount_idioms	68020	O1	clang	37741	38541	+2.1	unpriced forms	priced
+bitcount_idioms	68020	O1	ours	34738	35538	+2.3	unpriced forms	priced
+bitcount_idioms	68020	O2	clang	37741	38541	+2.1	unpriced forms	priced
+bitcount_idioms	68020	O2	ours	34738	35538	+2.3	unpriced forms	priced
+bitcount_idioms	68020	O3	clang	37520	38320	+2.1	unpriced forms	priced
+bitcount_idioms	68020	O3	ours	34738	35538	+2.3	unpriced forms	priced
+bitcount_idioms	68020	Os	clang	37741	38541	+2.1	unpriced forms	priced
+bitcount_idioms	68020	Os	ours	34761	35561	+2.3	unpriced forms	priced
+bitcount_u32	68020	O1	clang	29574	30334	+2.6	unpriced forms	priced
+bitcount_u32	68020	O1	gcc	26421	27181	+2.9	unpriced forms	priced
+bitcount_u32	68020	O1	ours	26184	26944	+2.9	unpriced forms	priced
+bitcount_u32	68020	O2	clang	29574	30334	+2.6	unpriced forms	priced
+bitcount_u32	68020	O2	gcc	26398	27158	+2.9	unpriced forms	priced
+bitcount_u32	68020	O2	ours	26184	26944	+2.9	unpriced forms	priced
+bitcount_u32	68020	O3	clang	29403	30163	+2.6	unpriced forms	priced
+bitcount_u32	68020	O3	gcc	26398	27158	+2.9	unpriced forms	priced
+bitcount_u32	68020	O3	ours	26184	26944	+2.9	unpriced forms	priced
+bitcount_u32	68020	Os	clang	29574	30334	+2.6	unpriced forms	priced
+bitcount_u32	68020	Os	gcc	26390	27150	+2.9	unpriced forms	priced
+bitcount_u32	68020	Os	ours	26254	27014	+2.9	unpriced forms	priced
+bitcount_u64	68020	O1	clang	37884	38744	+2.3	unpriced forms	priced
+bitcount_u64	68020	O1	gcc	34055	34915	+2.5	unpriced forms	priced
+bitcount_u64	68020	O1	ours	32822	33682	+2.6	unpriced forms	priced
+bitcount_u64	68020	O2	clang	37884	38744	+2.3	unpriced forms	priced
+bitcount_u64	68020	O2	gcc	33889	34749	+2.5	unpriced forms	priced
+bitcount_u64	68020	O2	ours	32750	33610	+2.6	unpriced forms	priced
+bitcount_u64	68020	O3	clang	37666	38526	+2.3	unpriced forms	priced
+bitcount_u64	68020	O3	gcc	33889	34749	+2.5	unpriced forms	priced
+bitcount_u64	68020	O3	ours	32750	33610	+2.6	unpriced forms	priced
+bitcount_u64	68020	Os	clang	37884	38744	+2.3	unpriced forms	priced
+bitcount_u64	68020	Os	gcc	33918	34778	+2.5	unpriced forms	priced
+bitcount_u64	68020	Os	ours	33926	34786	+2.5	unpriced forms	priced
+bitfield_long_long	68020	O1	gcc	4362	4482	+2.8	unpriced forms	priced
+bitfield_long_long	68020	O1	ours	4298	4427	+3.0	unpriced forms	priced
+bitfield_long_long	68020	O2	gcc	4339	4459	+2.8	unpriced forms	priced
+bitfield_long_long	68020	O2	ours	4315	4444	+3.0	unpriced forms	priced
+bitfield_long_long	68020	O3	gcc	4339	4459	+2.8	unpriced forms	priced
+bitfield_long_long	68020	O3	ours	4315	4444	+3.0	unpriced forms	priced
+bitfield_long_long	68020	Os	gcc	4339	4459	+2.8	unpriced forms	priced
+bitfield_long_long	68020	Os	ours	4315	4461	+3.4	unpriced forms	priced
+bitfield_overhang_init	68020	O1	clang	6265	6445	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O1	gcc	6268	6448	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O1	ours	6241	6421	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O2	clang	6265	6445	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O2	gcc	6268	6448	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O2	ours	6258	6438	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O3	clang	6265	6445	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O3	gcc	6268	6448	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	O3	ours	6258	6438	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	Os	clang	6265	6445	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	Os	gcc	6268	6448	+2.9	unpriced forms	priced
+bitfield_overhang_init	68020	Os	ours	6258	6438	+2.9	unpriced forms	priced
+builtin_expect	68020	O1	clang	1859	1919	+3.2	unpriced forms	priced
+builtin_expect	68020	O1	gcc	1865	1925	+3.2	unpriced forms	priced
+builtin_expect	68020	O1	ours	1848	1908	+3.2	unpriced forms	priced
+builtin_expect	68020	O2	clang	1859	1919	+3.2	unpriced forms	priced
+builtin_expect	68020	O2	gcc	1865	1925	+3.2	unpriced forms	priced
+builtin_expect	68020	O2	ours	1848	1908	+3.2	unpriced forms	priced
+builtin_expect	68020	O3	clang	1859	1919	+3.2	unpriced forms	priced
+builtin_expect	68020	O3	gcc	1865	1925	+3.2	unpriced forms	priced
+builtin_expect	68020	O3	ours	1848	1908	+3.2	unpriced forms	priced
+builtin_expect	68020	Os	clang	1859	1919	+3.2	unpriced forms	priced
+builtin_expect	68020	Os	gcc	1865	1925	+3.2	unpriced forms	priced
+builtin_expect	68020	Os	ours	1865	1925	+3.2	unpriced forms	priced
+builtins_table	68020	O1	clang	2583	2663	+3.1	unpriced forms	priced
+builtins_table	68020	O1	gcc	2592	2672	+3.1	unpriced forms	priced
+builtins_table	68020	O1	ours	2579	2659	+3.1	unpriced forms	priced
+builtins_table	68020	O2	clang	2583	2663	+3.1	unpriced forms	priced
+builtins_table	68020	O2	gcc	2592	2672	+3.1	unpriced forms	priced
+builtins_table	68020	O2	ours	2579	2659	+3.1	unpriced forms	priced
+builtins_table	68020	O3	clang	2583	2663	+3.1	unpriced forms	priced
+builtins_table	68020	O3	gcc	2592	2672	+3.1	unpriced forms	priced
+builtins_table	68020	O3	ours	2579	2659	+3.1	unpriced forms	priced
+builtins_table	68020	Os	clang	2583	2663	+3.1	unpriced forms	priced
+builtins_table	68020	Os	gcc	2592	2672	+3.1	unpriced forms	priced
+builtins_table	68020	Os	ours	2594	2674	+3.1	unpriced forms	priced
+byte_multiply	68020	O1	clang	93592	93652	+0.1	unpriced forms	priced
+byte_multiply	68020	O1	gcc	65349	65409	+0.1	unpriced forms	priced
+byte_multiply	68020	O1	ours	86001	86061	+0.1	unpriced forms	priced
+byte_multiply	68020	O2	clang	93592	93652	+0.1	unpriced forms	priced
+byte_multiply	68020	O2	gcc	65355	65415	+0.1	unpriced forms	priced
+byte_multiply	68020	O2	ours	75505	75565	+0.1	unpriced forms	priced
+byte_multiply	68020	O3	clang	18588	18648	+0.3	unpriced forms	priced
+byte_multiply	68020	O3	gcc	65355	65415	+0.1	unpriced forms	priced
+byte_multiply	68020	O3	ours	75505	75565	+0.1	unpriced forms	priced
+byte_multiply	68020	Os	clang	93592	93652	+0.1	unpriced forms	priced
+byte_multiply	68020	Os	gcc	65447	65507	+0.1	unpriced forms	priced
+byte_multiply	68020	Os	ours	86014	86074	+0.1	unpriced forms	priced
+byval_initializes	68020	O1	clang	1421	1461	+2.8	unpriced forms	priced
+byval_initializes	68020	O1	gcc	1426	1466	+2.8	unpriced forms	priced
+byval_initializes	68020	O1	ours	1409	1449	+2.8	unpriced forms	priced
+byval_initializes	68020	O2	clang	1421	1461	+2.8	unpriced forms	priced
+byval_initializes	68020	O2	gcc	1426	1466	+2.8	unpriced forms	priced
+byval_initializes	68020	O2	ours	1409	1449	+2.8	unpriced forms	priced
+byval_initializes	68020	O3	clang	1421	1461	+2.8	unpriced forms	priced
+byval_initializes	68020	O3	gcc	1426	1466	+2.8	unpriced forms	priced
+byval_initializes	68020	O3	ours	1409	1449	+2.8	unpriced forms	priced
+byval_initializes	68020	Os	clang	1421	1461	+2.8	unpriced forms	priced
+byval_initializes	68020	Os	gcc	1426	1466	+2.8	unpriced forms	priced
+byval_initializes	68020	Os	ours	1409	1449	+2.8	unpriced forms	priced
+byval_inline	68020	O1	clang	4326	4446	+2.8	wrong-output	wrong-output
+byval_inline	68020	O1	gcc	4103	4223	+2.9	unpriced forms	priced
+byval_inline	68020	O1	ours	4084	4204	+2.9	unpriced forms	priced
+byval_inline	68020	O2	gcc	4158	4278	+2.9	unpriced forms	priced
+byval_inline	68020	O2	ours	3933	4053	+3.1	unpriced forms	priced
+byval_inline	68020	O3	gcc	3948	4068	+3.0	unpriced forms	priced
+byval_inline	68020	O3	ours	3933	4053	+3.1	unpriced forms	priced
+byval_inline	68020	Os	clang	4317	4437	+2.8	wrong-output	wrong-output
+byval_inline	68020	Os	gcc	4118	4238	+2.9	unpriced forms	priced
+byval_inline	68020	Os	ours	4101	4221	+2.9	unpriced forms	priced
+byval_struct	68020	O1	clang	4780	4840	+1.3	wrong-output	wrong-output
+byval_struct	68020	O1	gcc	3316	3367	+1.5	unpriced forms	unpriced forms
+byval_struct	68020	O1	ours	3003	3063	+2.0	unpriced forms	priced
+byval_struct	68020	O2	clang	1952	2012	+3.1	unpriced forms	priced
+byval_struct	68020	O2	gcc	3331	3382	+1.5	unpriced forms	unpriced forms
+byval_struct	68020	O2	ours	2541	2601	+2.4	unpriced forms	priced
+byval_struct	68020	O3	clang	1952	2012	+3.1	unpriced forms	priced
+byval_struct	68020	O3	gcc	2863	2923	+2.1	unpriced forms	priced
+byval_struct	68020	O3	ours	2541	2601	+2.4	unpriced forms	priced
+byval_struct	68020	Os	clang	4137	4197	+1.5	wrong-output	wrong-output
+byval_struct	68020	Os	gcc	5343	5394	+1.0	unpriced forms	unpriced forms
+byval_struct	68020	Os	ours	3020	3080	+2.0	unpriced forms	priced
+byvalue_struct_address	68020	O1	clang	859	879	+2.3	unpriced forms	priced
+byvalue_struct_address	68020	O1	gcc	1111	1131	+1.8	unpriced forms	priced
+byvalue_struct_address	68020	O1	ours	1213	1233	+1.6	unpriced forms	priced
+byvalue_struct_address	68020	O2	clang	859	879	+2.3	unpriced forms	priced
+byvalue_struct_address	68020	O2	gcc	860	880	+2.3	unpriced forms	priced
+byvalue_struct_address	68020	O2	ours	850	870	+2.4	unpriced forms	priced
+byvalue_struct_address	68020	O3	clang	859	879	+2.3	unpriced forms	priced
+byvalue_struct_address	68020	O3	gcc	850	870	+2.4	unpriced forms	priced
+byvalue_struct_address	68020	O3	ours	850	870	+2.4	unpriced forms	priced
+byvalue_struct_address	68020	Os	clang	859	879	+2.3	unpriced forms	priced
+byvalue_struct_address	68020	Os	gcc	1872	1892	+1.1	unpriced forms	priced
+byvalue_struct_address	68020	Os	ours	850	870	+2.4	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O1	clang	19437	19457	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O1	gcc	17265	17285	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O1	ours	32283	32303	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O2	clang	18653	18673	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O2	gcc	18261	18281	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O2	ours	22456	22476	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O3	clang	18653	18673	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O3	gcc	18261	18281	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	O3	ours	22456	22476	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	Os	clang	19507	19527	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	Os	gcc	33440	33460	+0.1	unpriced forms	priced
+call_cleanup_keeps_pair	68020	Os	ours	32279	32299	+0.1	unpriced forms	priced
+call_clobbers_flags	68020	O1	clang	2347	2407	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O1	gcc	2279	2339	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O1	ours	2339	2399	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O2	clang	2347	2407	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O2	gcc	2265	2325	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O2	ours	2300	2360	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O3	clang	2347	2407	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O3	gcc	2265	2325	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	O3	ours	2300	2360	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	Os	clang	2347	2407	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	Os	gcc	2293	2353	+2.6	unpriced forms	priced
+call_clobbers_flags	68020	Os	ours	2368	2428	+2.5	unpriced forms	priced
+call_keeps	68020	O1	clang	5895	5955	+1.0	unpriced forms	priced
+call_keeps	68020	O1	gcc	5527	5569	+0.8	unpriced forms	unpriced forms
+call_keeps	68020	O1	ours	6629	6689	+0.9	unpriced forms	priced
+call_keeps	68020	O2	clang	5895	5955	+1.0	unpriced forms	priced
+call_keeps	68020	O2	gcc	5619	5661	+0.7	unpriced forms	unpriced forms
+call_keeps	68020	O2	ours	5714	5774	+1.1	unpriced forms	priced
+call_keeps	68020	O3	clang	5895	5955	+1.0	unpriced forms	priced
+call_keeps	68020	O3	gcc	5619	5661	+0.7	unpriced forms	unpriced forms
+call_keeps	68020	O3	ours	5714	5774	+1.1	unpriced forms	priced
+call_keeps	68020	Os	clang	5883	5943	+1.0	unpriced forms	priced
+call_keeps	68020	Os	gcc	5619	5661	+0.7	unpriced forms	unpriced forms
+call_keeps	68020	Os	ours	6640	6700	+0.9	unpriced forms	priced
+clzll_ctzll_64	68020	O1	clang	5397	5517	+2.2	unpriced forms	priced
+clzll_ctzll_64	68020	O1	gcc	4653	4773	+2.6	unpriced forms	priced
+clzll_ctzll_64	68020	O1	ours	4466	4586	+2.7	unpriced forms	priced
+clzll_ctzll_64	68020	O2	clang	5397	5517	+2.2	unpriced forms	priced
+clzll_ctzll_64	68020	O2	gcc	4624	4744	+2.6	unpriced forms	priced
+clzll_ctzll_64	68020	O2	ours	4466	4586	+2.7	unpriced forms	priced
+clzll_ctzll_64	68020	O3	clang	5397	5517	+2.2	unpriced forms	priced
+clzll_ctzll_64	68020	O3	gcc	4624	4744	+2.6	unpriced forms	priced
+clzll_ctzll_64	68020	O3	ours	4466	4586	+2.7	unpriced forms	priced
+clzll_ctzll_64	68020	Os	clang	5397	5517	+2.2	unpriced forms	priced
+clzll_ctzll_64	68020	Os	gcc	4630	4750	+2.6	unpriced forms	priced
+clzll_ctzll_64	68020	Os	ours	4504	4624	+2.7	unpriced forms	priced
+compare_to_int64	68020	O1	clang	3852	3892	+1.0	unpriced forms	priced
+compare_to_int64	68020	O1	gcc	3083	3123	+1.3	unpriced forms	priced
+compare_to_int64	68020	O1	ours	3601	3641	+1.1	unpriced forms	priced
+compare_to_int64	68020	O2	clang	1753	1793	+2.3	unpriced forms	priced
+compare_to_int64	68020	O2	gcc	3206	3246	+1.2	unpriced forms	priced
+compare_to_int64	68020	O2	ours	2979	3019	+1.3	unpriced forms	priced
+compare_to_int64	68020	O3	clang	1753	1793	+2.3	unpriced forms	priced
+compare_to_int64	68020	O3	gcc	1762	1802	+2.3	unpriced forms	priced
+compare_to_int64	68020	O3	ours	3080	3120	+1.3	unpriced forms	priced
+compare_to_int64	68020	Os	clang	3836	3876	+1.0	unpriced forms	priced
+compare_to_int64	68020	Os	gcc	3264	3304	+1.2	unpriced forms	priced
+compare_to_int64	68020	Os	ours	3614	3654	+1.1	unpriced forms	priced
+compound_assignment_types	68020	O1	clang	1804	1824	+1.1	wrong-output	wrong-output
+compound_assignment_types	68020	O1	gcc	1576	1596	+1.3	unpriced forms	priced
+compound_assignment_types	68020	O1	ours	2069	1890	-8.7	unpriced forms	priced
+compound_assignment_types	68020	O2	clang	1650	1670	+1.2	wrong-output	wrong-output
+compound_assignment_types	68020	O2	gcc	1580	1600	+1.3	unpriced forms	priced
+compound_assignment_types	68020	O2	ours	1542	1562	+1.3	unpriced forms	priced
+compound_assignment_types	68020	O3	clang	1650	1670	+1.2	wrong-output	wrong-output
+compound_assignment_types	68020	O3	gcc	1580	1600	+1.3	unpriced forms	priced
+compound_assignment_types	68020	O3	ours	1542	1562	+1.3	unpriced forms	priced
+compound_assignment_types	68020	Os	clang	1650	1670	+1.2	wrong-output	wrong-output
+compound_assignment_types	68020	Os	gcc	1580	1600	+1.3	unpriced forms	priced
+compound_assignment_types	68020	Os	ours	1701	1721	+1.2	unpriced forms	priced
+constant_int_float_compare	68020	O1	clang	3498	3618	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O1	gcc	3504	3624	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O1	ours	3492	3612	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O2	clang	3498	3618	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O2	gcc	3504	3624	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O2	ours	3492	3612	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O3	clang	3498	3618	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O3	gcc	3504	3624	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	O3	ours	3492	3612	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	Os	clang	3498	3618	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	Os	gcc	3504	3624	+3.4	unpriced forms	priced
+constant_int_float_compare	68020	Os	ours	3509	3629	+3.4	unpriced forms	priced
+copy_runs	68020	O1	gcc	13694	18507	+35.1	unpriced forms	priced
+copy_runs	68020	O1	ours	23640	23700	+0.3	unpriced forms	priced
+copy_runs	68020	O2	gcc	13353	18166	+36.0	unpriced forms	priced
+copy_runs	68020	O2	ours	19667	19727	+0.3	unpriced forms	priced
+copy_runs	68020	O3	gcc	13454	18267	+35.8	unpriced forms	priced
+copy_runs	68020	O3	ours	19667	19727	+0.3	unpriced forms	priced
+copy_runs	68020	Os	gcc	13237	18050	+36.4	unpriced forms	unpriced forms
+copy_runs	68020	Os	ours	52669	22166	-57.9	unpriced forms	priced
+data_int64	68020	O1	clang	4863	4943	+1.6	unpriced forms	priced
+data_int64	68020	O1	gcc	4885	4965	+1.6	unpriced forms	priced
+data_int64	68020	O1	ours	4859	4939	+1.6	unpriced forms	priced
+data_int64	68020	O2	clang	4863	4943	+1.6	unpriced forms	priced
+data_int64	68020	O2	gcc	4884	4964	+1.6	unpriced forms	priced
+data_int64	68020	O2	ours	4859	4939	+1.6	unpriced forms	priced
+data_int64	68020	O3	clang	4863	4943	+1.6	unpriced forms	priced
+data_int64	68020	O3	gcc	4884	4964	+1.6	unpriced forms	priced
+data_int64	68020	O3	ours	4859	4939	+1.6	unpriced forms	priced
+data_int64	68020	Os	clang	4873	4953	+1.6	unpriced forms	priced
+data_int64	68020	Os	gcc	4894	4974	+1.6	unpriced forms	priced
+data_int64	68020	Os	ours	4886	4966	+1.6	unpriced forms	priced
+div8_os	68020	O1	clang	2116028	2116048	+0.0	wrong-output	wrong-output
+div8_os	68020	O1	gcc	985407	985427	+0.0	unpriced forms	priced
+div8_os	68020	O1	ours	1601354	1601374	+0.0	unpriced forms	priced
+div8_os	68020	O2	clang	1769349	1769369	+0.0	unpriced forms	priced
+div8_os	68020	O2	gcc	977727	977747	+0.0	unpriced forms	priced
+div8_os	68020	O2	ours	1420602	1420622	+0.0	unpriced forms	priced
+div8_os	68020	O3	gcc	676692	814696	+20.4	unpriced forms	priced
+div8_os	68020	O3	ours	1420602	1420622	+0.0	unpriced forms	priced
+div8_os	68020	Os	clang	1769349	1769369	+0.0	unpriced forms	priced
+div8_os	68020	Os	gcc	981311	981331	+0.0	unpriced forms	priced
+div8_os	68020	Os	ours	1651770	1651790	+0.0	unpriced forms	priced
+div_constants_long	68020	O1	clang	31745484	31745524	+0.0	wrong-output	wrong-output
+div_constants_long	68020	O1	gcc	11582682	12619954	+9.0	unpriced forms	priced
+div_constants_long	68020	O1	ours	26775060	14682382	-45.2	unpriced forms	priced
+div_constants_long	68020	O2	clang	31662944	31662984	+0.0	wrong-output	wrong-output
+div_constants_long	68020	O2	gcc	11505710	12542982	+9.0	unpriced forms	priced
+div_constants_long	68020	O2	ours	25397803	13305132	-47.6	unpriced forms	priced
+div_constants_long	68020	O3	clang	31511284	31511324	+0.0	unpriced forms	priced
+div_constants_long	68020	O3	gcc	11485430	12514470	+9.0	unpriced forms	priced
+div_constants_long	68020	O3	ours	25397803	13305132	-47.6	unpriced forms	priced
+div_constants_long	68020	Os	clang	33573932	33573972	+0.0	wrong-output	wrong-output
+div_constants_long	68020	Os	gcc	11595526	12632798	+8.9	unpriced forms	priced
+div_constants_long	68020	Os	ours	31751510	14328618	-54.9	unpriced forms	priced
+div_constants_short	68020	O1	clang	16065606	16065646	+0.0	wrong-output	wrong-output
+div_constants_short	68020	O1	gcc	9481592	9481632	+0.0	unpriced forms	priced
+div_constants_short	68020	O1	ours	14991163	11368926	-24.2	unpriced forms	priced
+div_constants_short	68020	O2	gcc	9238113	9238153	+0.0	unpriced forms	priced
+div_constants_short	68020	O2	ours	11263694	9273597	-17.7	unpriced forms	priced
+div_constants_short	68020	O3	clang	11965803	11965843	+0.0	wrong-output	wrong-output
+div_constants_short	68020	O3	gcc	9216122	9216162	+0.0	unpriced forms	priced
+div_constants_short	68020	O3	ours	11263694	9273597	-17.7	unpriced forms	priced
+div_constants_short	68020	Os	gcc	9316683	9316723	+0.0	unpriced forms	priced
+div_constants_short	68020	Os	ours	12293989	10331104	-16.0	unpriced forms	priced
+div_constants_ulong	68020	O1	clang	17460080	17460120	+0.0	wrong-output	wrong-output
+div_constants_ulong	68020	O1	gcc	6586489	7327409	+11.2	unpriced forms	priced
+div_constants_ulong	68020	O1	ours	16885800	8369877	-50.4	unpriced forms	priced
+div_constants_ulong	68020	O2	clang	17398281	17398321	+0.0	wrong-output	wrong-output
+div_constants_ulong	68020	O2	gcc	6545942	7286862	+11.3	unpriced forms	priced
+div_constants_ulong	68020	O2	ours	15923672	7408245	-53.5	unpriced forms	priced
+div_constants_ulong	68020	O3	clang	17483957	17483997	+0.0	unpriced forms	priced
+div_constants_ulong	68020	O3	gcc	6532086	7267126	+11.3	unpriced forms	priced
+div_constants_ulong	68020	O3	ours	15923672	7408245	-53.5	unpriced forms	priced
+div_constants_ulong	68020	Os	clang	18553880	18553920	+0.0	wrong-output	wrong-output
+div_constants_ulong	68020	Os	gcc	6575809	7316729	+11.3	unpriced forms	priced
+div_constants_ulong	68020	Os	ours	17669048	7955614	-55.0	unpriced forms	priced
+double_across_a_call_result	68020	O1	clang	5528	5586	+1.0	unpriced forms	priced
+double_across_a_call_result	68020	O1	gcc	6134	6174	+0.7	unpriced forms	priced
+double_across_a_call_result	68020	O1	ours	5473	5531	+1.1	unpriced forms	priced
+double_across_a_call_result	68020	O2	clang	5528	5586	+1.0	unpriced forms	priced
+double_across_a_call_result	68020	O2	gcc	6198	6238	+0.6	unpriced forms	priced
+double_across_a_call_result	68020	O2	ours	5473	5531	+1.1	unpriced forms	priced
+double_across_a_call_result	68020	O3	clang	5528	5586	+1.0	unpriced forms	priced
+double_across_a_call_result	68020	O3	gcc	6198	6238	+0.6	unpriced forms	priced
+double_across_a_call_result	68020	O3	ours	5473	5531	+1.1	unpriced forms	priced
+double_across_a_call_result	68020	Os	clang	5923	5981	+1.0	unpriced forms	priced
+double_across_a_call_result	68020	Os	gcc	6591	6631	+0.6	unpriced forms	priced
+double_across_a_call_result	68020	Os	ours	5864	5935	+1.2	unpriced forms	priced
+double_against_int	68020	O1	clang	3189	3289	+3.1	unpriced forms	priced
+double_against_int	68020	O1	gcc	3193	3293	+3.1	unpriced forms	priced
+double_against_int	68020	O1	ours	3176	3276	+3.1	unpriced forms	priced
+double_against_int	68020	O2	clang	3189	3289	+3.1	unpriced forms	priced
+double_against_int	68020	O2	gcc	3193	3293	+3.1	unpriced forms	priced
+double_against_int	68020	O2	ours	3176	3276	+3.1	unpriced forms	priced
+double_against_int	68020	O3	clang	3189	3289	+3.1	unpriced forms	priced
+double_against_int	68020	O3	gcc	3193	3293	+3.1	unpriced forms	priced
+double_against_int	68020	O3	ours	3176	3276	+3.1	unpriced forms	priced
+double_against_int	68020	Os	clang	3189	3289	+3.1	unpriced forms	priced
+double_against_int	68020	Os	gcc	3193	3293	+3.1	unpriced forms	priced
+double_against_int	68020	Os	ours	3193	3293	+3.1	unpriced forms	priced
+double_to_int64	68020	O1	clang	6694	6774	+1.2	unpriced forms	priced
+double_to_int64	68020	O1	gcc	6410	6490	+1.2	unpriced forms	priced
+double_to_int64	68020	O1	ours	7006	7086	+1.1	unpriced forms	priced
+double_to_int64	68020	O2	clang	3782	3862	+2.1	unpriced forms	priced
+double_to_int64	68020	O2	gcc	6433	6513	+1.2	unpriced forms	priced
+double_to_int64	68020	O2	ours	3776	3856	+2.1	unpriced forms	priced
+double_to_int64	68020	O3	clang	3782	3862	+2.1	unpriced forms	priced
+double_to_int64	68020	O3	gcc	3793	3873	+2.1	unpriced forms	priced
+double_to_int64	68020	O3	ours	3776	3856	+2.1	unpriced forms	priced
+double_to_int64	68020	Os	clang	3782	3862	+2.1	unpriced forms	priced
+double_to_int64	68020	Os	gcc	6445	6525	+1.2	unpriced forms	priced
+double_to_int64	68020	Os	ours	3793	3873	+2.1	unpriced forms	priced
+double_to_uint64	68020	O1	clang	18570	19090	+2.8	wrong-output	wrong-output
+double_to_uint64	68020	O1	ours	22473	22993	+2.3	unpriced forms	priced
+double_to_uint64	68020	O2	clang	21439	21959	+2.4	unpriced forms	priced
+double_to_uint64	68020	O2	ours	22473	22993	+2.3	unpriced forms	priced
+double_to_uint64	68020	O3	clang	21439	21959	+2.4	unpriced forms	priced
+double_to_uint64	68020	O3	ours	22473	22993	+2.3	unpriced forms	priced
+double_to_uint64	68020	Os	clang	18874	19394	+2.8	wrong-output	wrong-output
+double_to_uint64	68020	Os	ours	22820	23340	+2.3	unpriced forms	priced
+dse_merge_byte_order	68020	O1	clang	633	662	+4.6	unpriced forms	priced
+dse_merge_byte_order	68020	O1	gcc	610	630	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O1	ours	604	624	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O2	clang	615	635	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O2	gcc	602	622	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O2	ours	604	624	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O3	clang	615	635	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O3	gcc	602	622	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	O3	ours	604	624	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	Os	clang	615	635	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	Os	gcc	602	622	+3.3	unpriced forms	priced
+dse_merge_byte_order	68020	Os	ours	604	624	+3.3	unpriced forms	priced
+extension_chain_fused	68020	O1	clang	2660	2740	+3.0	unpriced forms	priced
+extension_chain_fused	68020	O1	gcc	2603	2683	+3.1	unpriced forms	priced
+extension_chain_fused	68020	O1	ours	2564	2644	+3.1	unpriced forms	priced
+extension_chain_fused	68020	O2	clang	2545	2625	+3.1	unpriced forms	priced
+extension_chain_fused	68020	O2	gcc	2611	2691	+3.1	unpriced forms	priced
+extension_chain_fused	68020	O2	ours	2504	2584	+3.2	unpriced forms	priced
+extension_chain_fused	68020	O3	clang	2545	2625	+3.1	unpriced forms	priced
+extension_chain_fused	68020	O3	gcc	2611	2691	+3.1	unpriced forms	priced
+extension_chain_fused	68020	O3	ours	2504	2584	+3.2	unpriced forms	priced
+extension_chain_fused	68020	Os	clang	2660	2740	+3.0	unpriced forms	priced
+extension_chain_fused	68020	Os	gcc	2566	2646	+3.1	unpriced forms	unpriced forms
+extension_chain_fused	68020	Os	ours	2564	2644	+3.1	unpriced forms	priced
+fcmp_all	68020	O1	gcc	304104	305064	+0.3	unpriced forms	priced
+fcmp_all	68020	O1	ours	283660	284620	+0.3	unpriced forms	priced
+fcmp_all	68020	O2	gcc	294033	294993	+0.3	unpriced forms	priced
+fcmp_all	68020	O2	ours	283673	284633	+0.3	unpriced forms	priced
+fcmp_all	68020	O3	gcc	267863	268823	+0.4	unpriced forms	priced
+fcmp_all	68020	O3	ours	283673	284633	+0.3	unpriced forms	priced
+fcmp_all	68020	Os	gcc	295766	296726	+0.3	unpriced forms	priced
+fcmp_all	68020	Os	ours	286484	287444	+0.3	unpriced forms	priced
+fill_nest	68020	O1	clang	214118	214158	+0.0	unpriced forms	priced
+fill_nest	68020	O1	gcc	139520	139560	+0.0	unpriced forms	priced
+fill_nest	68020	O1	ours	134220	133108	-0.8	unpriced forms	unpriced forms
+fill_nest	68020	O2	clang	87729	76825	-12.4	unpriced forms	unpriced forms
+fill_nest	68020	O2	gcc	139548	139588	+0.0	unpriced forms	priced
+fill_nest	68020	O2	ours	134220	133108	-0.8	unpriced forms	unpriced forms
+fill_nest	68020	O3	clang	82106	68450	-16.6	unpriced forms	unpriced forms
+fill_nest	68020	O3	gcc	63645	63685	+0.1	unpriced forms	priced
+fill_nest	68020	O3	ours	134220	133108	-0.8	unpriced forms	unpriced forms
+fill_nest	68020	Os	clang	111810	111850	+0.0	unpriced forms	priced
+fill_nest	68020	Os	gcc	160242	160282	+0.0	unpriced forms	priced
+fill_nest	68020	Os	ours	134220	133108	-0.8	unpriced forms	unpriced forms
+fixed_point	68020	O1	clang	174127	176707	+1.5	wrong-output	wrong-output
+fixed_point	68020	O1	ours	128604	131184	+2.0	unpriced forms	priced
+fixed_point	68020	O2	clang	168013	170593	+1.5	wrong-output	wrong-output
+fixed_point	68020	O2	ours	128617	131197	+2.0	unpriced forms	priced
+fixed_point	68020	O3	clang	168013	170593	+1.5	wrong-output	wrong-output
+fixed_point	68020	O3	ours	128617	131197	+2.0	unpriced forms	priced
+fixed_point	68020	Os	clang	173527	176107	+1.5	wrong-output	wrong-output
+fixed_point	68020	Os	ours	128623	131203	+2.0	unpriced forms	priced
+float_bits	68020	O1	clang	5099	5239	+2.7	unpriced forms	priced
+float_bits	68020	O1	gcc	5110	5250	+2.7	unpriced forms	priced
+float_bits	68020	O1	ours	5093	5233	+2.7	unpriced forms	priced
+float_bits	68020	O2	clang	5099	5239	+2.7	unpriced forms	priced
+float_bits	68020	O2	gcc	5110	5250	+2.7	unpriced forms	priced
+float_bits	68020	O2	ours	5093	5233	+2.7	unpriced forms	priced
+float_bits	68020	O3	clang	5099	5239	+2.7	unpriced forms	priced
+float_bits	68020	O3	gcc	5110	5250	+2.7	unpriced forms	priced
+float_bits	68020	O3	ours	5093	5233	+2.7	unpriced forms	priced
+float_bits	68020	Os	clang	5099	5239	+2.7	unpriced forms	priced
+float_bits	68020	Os	gcc	5110	5250	+2.7	unpriced forms	priced
+float_bits	68020	Os	ours	5110	5250	+2.7	unpriced forms	priced
+float_conversions_loop	68020	O1	clang	12377	12437	+0.5	unpriced forms	priced
+float_conversions_loop	68020	O1	gcc	11657	11717	+0.5	unpriced forms	priced
+float_conversions_loop	68020	O1	ours	12288	12348	+0.5	unpriced forms	priced
+float_conversions_loop	68020	O2	clang	10253	10313	+0.6	unpriced forms	priced
+float_conversions_loop	68020	O2	gcc	11673	11733	+0.5	unpriced forms	priced
+float_conversions_loop	68020	O2	ours	10249	10309	+0.6	unpriced forms	priced
+float_conversions_loop	68020	O3	clang	10253	10313	+0.6	unpriced forms	priced
+float_conversions_loop	68020	O3	gcc	10274	10334	+0.6	unpriced forms	priced
+float_conversions_loop	68020	O3	ours	10249	10309	+0.6	unpriced forms	priced
+float_conversions_loop	68020	Os	clang	9618	9678	+0.6	unpriced forms	priced
+float_conversions_loop	68020	Os	gcc	9542	9602	+0.6	unpriced forms	priced
+float_conversions_loop	68020	Os	ours	9483	9543	+0.6	unpriced forms	priced
+float_in_memory_loop	68020	O1	clang	1579891	1579911	+0.0	unpriced forms	priced
+float_in_memory_loop	68020	O1	gcc	2285	2305	+0.9	unpriced forms	priced
+float_in_memory_loop	68020	O1	ours	1571518	1571538	+0.0	unpriced forms	priced
+float_in_memory_loop	68020	O2	clang	834	854	+2.4	unpriced forms	priced
+float_in_memory_loop	68020	O2	gcc	2285	2305	+0.9	unpriced forms	priced
+float_in_memory_loop	68020	O2	ours	1581964	1581984	+0.0	unpriced forms	priced
+float_in_memory_loop	68020	O3	clang	834	854	+2.4	unpriced forms	priced
+float_in_memory_loop	68020	O3	gcc	2285	2305	+0.9	unpriced forms	priced
+float_in_memory_loop	68020	O3	ours	1581964	1581984	+0.0	unpriced forms	priced
+float_in_memory_loop	68020	Os	clang	1693691	1693711	+0.0	unpriced forms	priced
+float_in_memory_loop	68020	Os	gcc	5016	5036	+0.4	unpriced forms	priced
+float_in_memory_loop	68020	Os	ours	1693610	1693630	+0.0	unpriced forms	priced
+float_in_place_update	68020	O1	clang	18014	18034	+0.1	unpriced forms	priced
+float_in_place_update	68020	O1	gcc	676	696	+3.0	unpriced forms	priced
+float_in_place_update	68020	O1	ours	17936	17956	+0.1	unpriced forms	priced
+float_in_place_update	68020	O2	clang	687	707	+2.9	unpriced forms	priced
+float_in_place_update	68020	O2	gcc	676	696	+3.0	unpriced forms	priced
+float_in_place_update	68020	O2	ours	676	696	+3.0	unpriced forms	priced
+float_in_place_update	68020	O3	clang	687	707	+2.9	unpriced forms	priced
+float_in_place_update	68020	O3	gcc	676	696	+3.0	unpriced forms	priced
+float_in_place_update	68020	O3	ours	676	696	+3.0	unpriced forms	priced
+float_in_place_update	68020	Os	clang	17079	17099	+0.1	unpriced forms	priced
+float_in_place_update	68020	Os	gcc	676	696	+3.0	unpriced forms	priced
+float_in_place_update	68020	Os	ours	17041	17061	+0.1	unpriced forms	priced
+float_return	68020	O1	clang	1323	1363	+3.0	unpriced forms	priced
+float_return	68020	O1	gcc	1328	1368	+3.0	unpriced forms	priced
+float_return	68020	O1	ours	1311	1351	+3.1	unpriced forms	priced
+float_return	68020	O2	clang	1323	1363	+3.0	unpriced forms	priced
+float_return	68020	O2	gcc	1328	1368	+3.0	unpriced forms	priced
+float_return	68020	O2	ours	1311	1351	+3.1	unpriced forms	priced
+float_return	68020	O3	clang	1323	1363	+3.0	unpriced forms	priced
+float_return	68020	O3	gcc	1328	1368	+3.0	unpriced forms	priced
+float_return	68020	O3	ours	1311	1351	+3.1	unpriced forms	priced
+float_return	68020	Os	clang	1323	1363	+3.0	unpriced forms	priced
+float_return	68020	Os	gcc	1328	1368	+3.0	unpriced forms	priced
+float_return	68020	Os	ours	1311	1351	+3.1	unpriced forms	priced
+frame_address_stack_args	68020	O1	clang	1615	1655	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	O1	gcc	2335	2375	+1.7	unpriced forms	priced
+frame_address_stack_args	68020	O1	ours	1591	1631	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	O2	clang	1615	1655	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	O2	gcc	1953	1993	+2.0	unpriced forms	priced
+frame_address_stack_args	68020	O2	ours	1591	1631	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	O3	clang	1615	1655	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	O3	gcc	1918	1958	+2.1	unpriced forms	priced
+frame_address_stack_args	68020	O3	ours	1591	1631	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	Os	clang	1615	1655	+2.5	unpriced forms	priced
+frame_address_stack_args	68020	Os	gcc	2323	2363	+1.7	unpriced forms	priced
+frame_address_stack_args	68020	Os	ours	1591	1631	+2.5	unpriced forms	priced
+frameless	68020	O1	clang	20416	20536	+0.6	wrong-output	wrong-output
+frameless	68020	O1	gcc	17973	18093	+0.7	unpriced forms	priced
+frameless	68020	O1	ours	19154	19274	+0.6	unpriced forms	priced
+frameless	68020	O2	clang	18261	18381	+0.7	wrong-output	wrong-output
+frameless	68020	O2	gcc	16971	17091	+0.7	unpriced forms	priced
+frameless	68020	O2	ours	16969	17089	+0.7	unpriced forms	priced
+frameless	68020	O3	clang	18261	18381	+0.7	wrong-output	wrong-output
+frameless	68020	O3	gcc	15367	15415	+0.3	unpriced forms	unpriced forms
+frameless	68020	O3	ours	16969	17089	+0.7	unpriced forms	priced
+frameless	68020	Os	clang	20398	20518	+0.6	wrong-output	wrong-output
+frameless	68020	Os	gcc	17091	17211	+0.7	unpriced forms	priced
+frameless	68020	Os	ours	19170	19290	+0.6	unpriced forms	priced
+function_table	68020	O1	clang	1478	1518	+2.7	unpriced forms	priced
+function_table	68020	O1	gcc	1364	1404	+2.9	unpriced forms	priced
+function_table	68020	O1	ours	1412	1452	+2.8	unpriced forms	priced
+function_table	68020	O2	clang	1378	1418	+2.9	unpriced forms	priced
+function_table	68020	O2	gcc	1364	1404	+2.9	unpriced forms	priced
+function_table	68020	O2	ours	1366	1406	+2.9	unpriced forms	priced
+function_table	68020	O3	clang	1378	1418	+2.9	unpriced forms	priced
+function_table	68020	O3	gcc	1364	1404	+2.9	unpriced forms	priced
+function_table	68020	O3	ours	1366	1406	+2.9	unpriced forms	priced
+function_table	68020	Os	clang	1378	1418	+2.9	unpriced forms	priced
+function_table	68020	Os	gcc	1364	1404	+2.9	unpriced forms	priced
+function_table	68020	Os	ours	1423	1463	+2.8	unpriced forms	priced
+huffman_decode	68020	O1	clang	12466	12506	+0.3	wrong-output	wrong-output
+huffman_decode	68020	O1	gcc	58751	59299	+0.9	unpriced forms	unpriced forms
+huffman_decode	68020	O1	ours	66879	67859	+1.5	unpriced forms	priced
+huffman_decode	68020	O2	gcc	59793	60341	+0.9	unpriced forms	unpriced forms
+huffman_decode	68020	O2	ours	61349	62329	+1.6	unpriced forms	priced
+huffman_decode	68020	O3	gcc	57797	58345	+0.9	unpriced forms	unpriced forms
+huffman_decode	68020	O3	ours	61349	62329	+1.6	unpriced forms	priced
+huffman_decode	68020	Os	clang	12464	12504	+0.3	wrong-output	wrong-output
+huffman_decode	68020	Os	gcc	60793	59997	-1.3	unpriced forms	unpriced forms
+huffman_decode	68020	Os	ours	67240	68220	+1.5	unpriced forms	priced
+idioms	68020	O1	clang	2008052	2009612	+0.1	unpriced forms	priced
+idioms	68020	O1	gcc	1197768	1199328	+0.1	unpriced forms	unpriced forms
+idioms	68020	O1	ours	1265321	1266881	+0.1	unpriced forms	priced
+idioms	68020	O2	gcc	1055883	1057443	+0.1	unpriced forms	priced
+idioms	68020	O2	ours	1306469	1308029	+0.1	unpriced forms	priced
+idioms	68020	O3	clang	2150883	2151771	+0.0	unpriced forms	unpriced forms
+idioms	68020	O3	gcc	1040707	1042267	+0.1	unpriced forms	unpriced forms
+idioms	68020	O3	ours	1306469	1308029	+0.1	unpriced forms	priced
+idioms	68020	Os	clang	2192737	2194297	+0.1	unpriced forms	priced
+idioms	68020	Os	gcc	1026750	1028310	+0.2	unpriced forms	unpriced forms
+idioms	68020	Os	ours	1302344	1303904	+0.1	unpriced forms	priced
+idiv_loop_os	68020	O1	clang	1043727	1043747	+0.0	unpriced forms	priced
+idiv_loop_os	68020	O1	gcc	491680	491700	+0.0	unpriced forms	priced
+idiv_loop_os	68020	O1	ours	1021554	346644	-66.1	unpriced forms	priced
+idiv_loop_os	68020	O2	clang	992110	992130	+0.0	unpriced forms	priced
+idiv_loop_os	68020	O2	gcc	299412	299432	+0.0	unpriced forms	priced
+idiv_loop_os	68020	O2	ours	971887	443826	-54.3	unpriced forms	priced
+idiv_loop_os	68020	O3	clang	992110	992130	+0.0	unpriced forms	priced
+idiv_loop_os	68020	O3	gcc	298769	298789	+0.0	unpriced forms	priced
+idiv_loop_os	68020	O3	ours	971887	443826	-54.3	unpriced forms	priced
+idiv_loop_os	68020	Os	clang	992648	992668	+0.0	unpriced forms	priced
+idiv_loop_os	68020	Os	gcc	326521	326541	+0.0	unpriced forms	priced
+idiv_loop_os	68020	Os	ours	1004284	467277	-53.5	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O1	clang	738	758	+2.7	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O1	gcc	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O1	ours	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O2	clang	720	740	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O2	gcc	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O2	ours	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O3	clang	720	740	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O3	gcc	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	O3	ours	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	Os	clang	720	740	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	Os	gcc	722	742	+2.8	unpriced forms	priced
+inlined_tail_call_keeps_frame_stores	68020	Os	ours	722	742	+2.8	unpriced forms	priced
+int64_division	68020	O1	clang	336028	336108	+0.0	wrong-output	wrong-output
+int64_division	68020	O1	gcc	378682	378762	+0.0	unpriced forms	priced
+int64_division	68020	O1	ours	328918	328998	+0.0	unpriced forms	priced
+int64_division	68020	O2	clang	334753	334833	+0.0	unpriced forms	priced
+int64_division	68020	O2	gcc	378050	378130	+0.0	unpriced forms	priced
+int64_division	68020	O2	ours	317536	317616	+0.0	unpriced forms	priced
+int64_division	68020	O3	clang	4651	4731	+1.7	unpriced forms	priced
+int64_division	68020	O3	gcc	228995	229761	+0.3	unpriced forms	priced
+int64_division	68020	O3	ours	317536	317616	+0.0	unpriced forms	priced
+int64_division	68020	Os	clang	331667	331747	+0.0	wrong-output	wrong-output
+int64_division	68020	Os	gcc	376170	376250	+0.0	unpriced forms	priced
+int64_division	68020	Os	ours	326181	326261	+0.0	unpriced forms	priced
+int_compared_with_float	68020	O1	clang	8454	8594	+1.7	unpriced forms	priced
+int_compared_with_float	68020	O1	gcc	8456	8596	+1.7	unpriced forms	priced
+int_compared_with_float	68020	O1	ours	8364	8504	+1.7	unpriced forms	priced
+int_compared_with_float	68020	O2	clang	8454	8594	+1.7	unpriced forms	priced
+int_compared_with_float	68020	O2	gcc	8530	8670	+1.6	unpriced forms	priced
+int_compared_with_float	68020	O2	ours	8364	8504	+1.7	unpriced forms	priced
+int_compared_with_float	68020	O3	clang	8454	8594	+1.7	unpriced forms	priced
+int_compared_with_float	68020	O3	gcc	8530	8670	+1.6	unpriced forms	priced
+int_compared_with_float	68020	O3	ours	8364	8504	+1.7	unpriced forms	priced
+int_compared_with_float	68020	Os	clang	8467	8607	+1.7	unpriced forms	priced
+int_compared_with_float	68020	Os	gcc	8509	8649	+1.6	unpriced forms	priced
+int_compared_with_float	68020	Os	ours	8471	8611	+1.7	unpriced forms	priced
+known_loads_walks	68020	O1	clang	507926	507966	+0.0	unpriced forms	priced
+known_loads_walks	68020	O1	gcc	202632	202672	+0.0	unpriced forms	priced
+known_loads_walks	68020	O1	ours	251961	252001	+0.0	unpriced forms	priced
+known_loads_walks	68020	O2	clang	183295	183335	+0.0	unpriced forms	priced
+known_loads_walks	68020	O2	gcc	85457	85497	+0.0	unpriced forms	priced
+known_loads_walks	68020	O2	ours	119318	119358	+0.0	unpriced forms	priced
+known_loads_walks	68020	O3	clang	198642	198682	+0.0	unpriced forms	priced
+known_loads_walks	68020	O3	gcc	84584	84624	+0.0	unpriced forms	priced
+known_loads_walks	68020	O3	ours	119430	119470	+0.0	unpriced forms	priced
+known_loads_walks	68020	Os	clang	461574	461614	+0.0	unpriced forms	priced
+known_loads_walks	68020	Os	gcc	187983	188023	+0.0	unpriced forms	priced
+known_loads_walks	68020	Os	ours	241042	241082	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O1	clang	91085	91105	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O1	gcc	89538	89558	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O1	ours	140554	140574	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O2	clang	91085	91105	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O2	gcc	92563	92583	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O2	ours	79054	79074	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O3	clang	91085	91105	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O3	gcc	92563	92583	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	O3	ours	79054	79074	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	Os	clang	91085	91105	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	Os	gcc	95534	95554	+0.0	unpriced forms	priced
+licm_graph_callee_footprint	68020	Os	ours	140554	140574	+0.0	unpriced forms	priced
+local_initializers	68020	O1	clang	3862	3962	+2.6	unpriced forms	priced
+local_initializers	68020	O1	gcc	4193	4293	+2.4	unpriced forms	priced
+local_initializers	68020	O1	ours	3856	3956	+2.6	unpriced forms	priced
+local_initializers	68020	O2	clang	3862	3962	+2.6	unpriced forms	priced
+local_initializers	68020	O2	gcc	4196	4296	+2.4	unpriced forms	priced
+local_initializers	68020	O2	ours	3856	3956	+2.6	unpriced forms	priced
+local_initializers	68020	O3	clang	3862	3962	+2.6	unpriced forms	priced
+local_initializers	68020	O3	gcc	3872	3972	+2.6	unpriced forms	priced
+local_initializers	68020	O3	ours	3856	3956	+2.6	unpriced forms	priced
+local_initializers	68020	Os	clang	3862	3962	+2.6	unpriced forms	priced
+local_initializers	68020	Os	gcc	4537	4637	+2.2	unpriced forms	priced
+local_initializers	68020	Os	ours	3873	3973	+2.6	unpriced forms	priced
+logical_value	68020	O1	clang	3460	3500	+1.2	unpriced forms	priced
+logical_value	68020	O1	gcc	2240	2280	+1.8	unpriced forms	priced
+logical_value	68020	O1	ours	3025	3065	+1.3	unpriced forms	priced
+logical_value	68020	O2	clang	1443	1483	+2.8	unpriced forms	priced
+logical_value	68020	O2	gcc	1670	1686	+1.0	unpriced forms	unpriced forms
+logical_value	68020	O2	ours	1433	1473	+2.8	unpriced forms	priced
+logical_value	68020	O3	clang	1443	1483	+2.8	unpriced forms	priced
+logical_value	68020	O3	gcc	1450	1490	+2.8	unpriced forms	priced
+logical_value	68020	O3	ours	1433	1473	+2.8	unpriced forms	priced
+logical_value	68020	Os	clang	3602	3642	+1.1	unpriced forms	priced
+logical_value	68020	Os	gcc	2622	2662	+1.5	unpriced forms	priced
+logical_value	68020	Os	ours	3038	3078	+1.3	unpriced forms	priced
+long_compare_chain	68020	O1	clang	404759	407459	+0.7	wrong-output	wrong-output
+long_compare_chain	68020	O1	gcc	379865	382565	+0.7	unpriced forms	priced
+long_compare_chain	68020	O1	ours	415155	417855	+0.7	unpriced forms	priced
+long_compare_chain	68020	O2	clang	394083	396783	+0.7	unpriced forms	priced
+long_compare_chain	68020	O2	gcc	374270	376970	+0.7	unpriced forms	priced
+long_compare_chain	68020	O2	ours	417780	420480	+0.6	unpriced forms	priced
+long_compare_chain	68020	O3	clang	394083	396783	+0.7	unpriced forms	priced
+long_compare_chain	68020	O3	gcc	374270	376970	+0.7	unpriced forms	priced
+long_compare_chain	68020	O3	ours	417780	420480	+0.6	unpriced forms	priced
+long_compare_chain	68020	Os	clang	403851	406551	+0.7	wrong-output	wrong-output
+long_compare_chain	68020	Os	gcc	388322	391022	+0.7	unpriced forms	priced
+long_compare_chain	68020	Os	ours	414973	417673	+0.7	unpriced forms	priced
+long_double_arguments	68020	O1	clang	12881	12921	+0.3	unpriced forms	priced
+long_double_arguments	68020	O1	ours	12877	12917	+0.3	unpriced forms	priced
+long_double_arguments	68020	O2	clang	12881	12921	+0.3	unpriced forms	priced
+long_double_arguments	68020	O2	ours	12877	12917	+0.3	unpriced forms	priced
+long_double_arguments	68020	O3	clang	12881	12921	+0.3	unpriced forms	priced
+long_double_arguments	68020	O3	ours	12877	12917	+0.3	unpriced forms	priced
+long_double_arguments	68020	Os	clang	14286	14326	+0.3	unpriced forms	priced
+long_double_arguments	68020	Os	ours	14368	14408	+0.3	unpriced forms	priced
+long_double_constant_store	68020	O1	clang	6224	6264	+0.6	unpriced forms	priced
+long_double_constant_store	68020	O1	ours	4116	4156	+1.0	unpriced forms	priced
+long_double_constant_store	68020	O2	clang	6224	6264	+0.6	unpriced forms	priced
+long_double_constant_store	68020	O2	ours	4116	4156	+1.0	unpriced forms	priced
+long_double_constant_store	68020	O3	clang	2826	2866	+1.4	unpriced forms	priced
+long_double_constant_store	68020	O3	ours	4116	4156	+1.0	unpriced forms	priced
+long_double_constant_store	68020	Os	clang	6224	6264	+0.6	unpriced forms	priced
+long_double_constant_store	68020	Os	ours	4116	4156	+1.0	unpriced forms	priced
+long_double_decimal_literal	68020	O1	clang	1754	1794	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	O1	ours	1750	1790	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	O2	clang	1754	1794	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	O2	ours	1750	1790	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	O3	clang	1754	1794	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	O3	ours	1750	1790	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	Os	clang	1754	1794	+2.3	unpriced forms	priced
+long_double_decimal_literal	68020	Os	ours	1750	1790	+2.3	unpriced forms	priced
+long_double_layout	68020	O1	clang	9864	9984	+1.2	unpriced forms	priced
+long_double_layout	68020	O1	ours	9841	9961	+1.2	unpriced forms	priced
+long_double_layout	68020	O2	clang	9875	9995	+1.2	unpriced forms	priced
+long_double_layout	68020	O2	ours	9841	9961	+1.2	unpriced forms	priced
+long_double_layout	68020	O3	clang	9875	9995	+1.2	unpriced forms	priced
+long_double_layout	68020	O3	ours	9841	9961	+1.2	unpriced forms	priced
+long_double_layout	68020	Os	clang	10301	10421	+1.2	unpriced forms	priced
+long_double_layout	68020	Os	ours	10318	10438	+1.2	unpriced forms	priced
+long_double_stride	68020	O1	clang	2692	2772	+3.0	unpriced forms	priced
+long_double_stride	68020	O1	ours	2680	2760	+3.0	unpriced forms	priced
+long_double_stride	68020	O2	clang	2692	2772	+3.0	unpriced forms	priced
+long_double_stride	68020	O2	ours	2680	2760	+3.0	unpriced forms	priced
+long_double_stride	68020	O3	clang	2692	2772	+3.0	unpriced forms	priced
+long_double_stride	68020	O3	ours	2680	2760	+3.0	unpriced forms	priced
+long_double_stride	68020	Os	clang	2692	2772	+3.0	unpriced forms	priced
+long_double_stride	68020	Os	ours	2697	2777	+3.0	unpriced forms	priced
+long_double_variadic	68020	O1	clang	4924	4944	+0.4	wrong-output	wrong-output
+long_double_variadic	68020	O1	ours	5192	5212	+0.4	unpriced forms	priced
+long_double_variadic	68020	O2	clang	4924	4944	+0.4	wrong-output	wrong-output
+long_double_variadic	68020	O2	ours	5195	5215	+0.4	unpriced forms	priced
+long_double_variadic	68020	O3	clang	4924	4944	+0.4	wrong-output	wrong-output
+long_double_variadic	68020	O3	ours	5195	5215	+0.4	unpriced forms	priced
+long_double_variadic	68020	Os	clang	5331	5351	+0.4	wrong-output	wrong-output
+long_double_variadic	68020	Os	ours	5637	5657	+0.4	unpriced forms	priced
+long_shift_by_a_call_result	68020	O1	clang	4041	4121	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	O1	gcc	4047	4127	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	O1	ours	3955	4035	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	O2	clang	3624	3704	+2.2	unpriced forms	priced
+long_shift_by_a_call_result	68020	O2	gcc	4050	4130	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	O2	ours	3963	4043	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	O3	clang	3624	3704	+2.2	unpriced forms	priced
+long_shift_by_a_call_result	68020	O3	gcc	3892	3972	+2.1	unpriced forms	priced
+long_shift_by_a_call_result	68020	O3	ours	3963	4043	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	Os	clang	4039	4119	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	Os	gcc	4038	4118	+2.0	unpriced forms	priced
+long_shift_by_a_call_result	68020	Os	ours	4026	4106	+2.0	unpriced forms	priced
+long_step_by_one	68020	O1	clang	27325	27985	+2.4	unpriced forms	priced
+long_step_by_one	68020	O1	gcc	27090	27750	+2.4	unpriced forms	priced
+long_step_by_one	68020	O1	ours	27044	27704	+2.4	unpriced forms	priced
+long_step_by_one	68020	O2	clang	26867	27527	+2.5	unpriced forms	priced
+long_step_by_one	68020	O2	gcc	27143	27803	+2.4	unpriced forms	priced
+long_step_by_one	68020	O2	ours	27044	27704	+2.4	unpriced forms	priced
+long_step_by_one	68020	O3	clang	26867	27527	+2.5	unpriced forms	priced
+long_step_by_one	68020	O3	gcc	27143	27803	+2.4	unpriced forms	priced
+long_step_by_one	68020	O3	ours	27044	27704	+2.4	unpriced forms	priced
+long_step_by_one	68020	Os	clang	27325	27985	+2.4	unpriced forms	priced
+long_step_by_one	68020	Os	gcc	27143	27803	+2.4	unpriced forms	priced
+long_step_by_one	68020	Os	ours	27057	27717	+2.4	unpriced forms	priced
+loop_fusion	68020	O1	clang	42904	43124	+0.5	unpriced forms	priced
+loop_fusion	68020	O1	gcc	31568	31788	+0.7	unpriced forms	priced
+loop_fusion	68020	O1	ours	31407	31627	+0.7	unpriced forms	priced
+loop_fusion	68020	O2	gcc	30937	31157	+0.7	unpriced forms	unpriced forms
+loop_fusion	68020	O2	ours	28705	28925	+0.8	unpriced forms	priced
+loop_fusion	68020	O3	gcc	27231	27415	+0.7	unpriced forms	unpriced forms
+loop_fusion	68020	O3	ours	28705	28925	+0.8	unpriced forms	priced
+loop_fusion	68020	Os	clang	45335	45555	+0.5	unpriced forms	priced
+loop_fusion	68020	Os	gcc	32937	33157	+0.7	unpriced forms	unpriced forms
+loop_fusion	68020	Os	ours	31449	31669	+0.7	unpriced forms	priced
+loop_interchange	68020	O1	clang	2016561	2016621	+0.0	unpriced forms	priced
+loop_interchange	68020	O1	gcc	362506	513094	+41.5	unpriced forms	priced
+loop_interchange	68020	O1	ours	680947	672358	-1.3	unpriced forms	unpriced forms
+loop_interchange	68020	O2	clang	1994719	1983154	-0.6	unpriced forms	unpriced forms
+loop_interchange	68020	O2	gcc	367343	517931	+41.0	unpriced forms	priced
+loop_interchange	68020	O2	ours	567230	558641	-1.5	unpriced forms	unpriced forms
+loop_interchange	68020	O3	clang	2006576	2003731	-0.1	unpriced forms	unpriced forms
+loop_interchange	68020	O3	gcc	368118	518706	+40.9	unpriced forms	priced
+loop_interchange	68020	O3	ours	567230	558641	-1.5	unpriced forms	unpriced forms
+loop_interchange	68020	Os	clang	2210307	2210367	+0.0	unpriced forms	priced
+loop_interchange	68020	Os	gcc	362844	513432	+41.5	unpriced forms	unpriced forms
+loop_interchange	68020	Os	ours	2248907	595557	-73.5	unpriced forms	unpriced forms
+loop_versioning	68020	O1	clang	119340	119440	+0.1	unpriced forms	priced
+loop_versioning	68020	O1	gcc	69262	69362	+0.1	unpriced forms	priced
+loop_versioning	68020	O1	ours	71969	72069	+0.1	unpriced forms	priced
+loop_versioning	68020	O2	gcc	64560	64660	+0.2	unpriced forms	priced
+loop_versioning	68020	O2	ours	73381	73481	+0.1	unpriced forms	priced
+loop_versioning	68020	O3	gcc	59299	59399	+0.2	unpriced forms	priced
+loop_versioning	68020	O3	ours	73381	73481	+0.1	unpriced forms	priced
+loop_versioning	68020	Os	clang	112092	112192	+0.1	unpriced forms	priced
+loop_versioning	68020	Os	gcc	64096	64196	+0.2	unpriced forms	priced
+loop_versioning	68020	Os	ours	71976	72076	+0.1	unpriced forms	priced
+memcpy_libcall	68020	O1	clang	43075	43115	+0.1	unpriced forms	priced
+memcpy_libcall	68020	O1	gcc	30026	30066	+0.1	unpriced forms	priced
+memcpy_libcall	68020	O1	ours	26596	26668	+0.3	unpriced forms	priced
+memcpy_libcall	68020	O2	clang	36149	36189	+0.1	unpriced forms	priced
+memcpy_libcall	68020	O2	gcc	31769	31809	+0.1	unpriced forms	priced
+memcpy_libcall	68020	O2	ours	26596	26668	+0.3	unpriced forms	priced
+memcpy_libcall	68020	O3	gcc	31769	31809	+0.1	unpriced forms	priced
+memcpy_libcall	68020	O3	ours	26596	26668	+0.3	unpriced forms	priced
+memcpy_libcall	68020	Os	clang	36509	36549	+0.1	unpriced forms	priced
+memcpy_libcall	68020	Os	gcc	26228	26268	+0.2	unpriced forms	unpriced forms
+memcpy_libcall	68020	Os	ours	26599	26697	+0.4	unpriced forms	priced
+memcpy_runtime	68020	O1	ours	12545919	12545959	+0.0	unpriced forms	priced
+memcpy_runtime	68020	O2	ours	12545919	12545959	+0.0	unpriced forms	priced
+memcpy_runtime	68020	O3	ours	12545919	12545959	+0.0	unpriced forms	priced
+memcpy_runtime	68020	Os	ours	12545960	12546000	+0.0	unpriced forms	priced
+memfuncs_runtime	68020	Os	ours		748733963		no number	unpriced forms
+memmove_overlap	68020	O1	clang	10566	10182	-3.6	unpriced forms	unpriced forms
+memmove_overlap	68020	O1	gcc	7983	8043	+0.8	unpriced forms	priced
+memmove_overlap	68020	O1	ours	8967	9027	+0.7	unpriced forms	priced
+memmove_overlap	68020	O2	gcc	8488	8548	+0.7	unpriced forms	priced
+memmove_overlap	68020	O2	ours	6759	6819	+0.9	unpriced forms	priced
+memmove_overlap	68020	O3	gcc	7289	7349	+0.8	unpriced forms	priced
+memmove_overlap	68020	O3	ours	6759	6819	+0.9	unpriced forms	priced
+memmove_overlap	68020	Os	clang	9755	9371	-3.9	unpriced forms	unpriced forms
+memmove_overlap	68020	Os	gcc	7494	7554	+0.8	unpriced forms	unpriced forms
+memmove_overlap	68020	Os	ours	8984	9044	+0.7	unpriced forms	priced
+memory_expansion	68020	O1	ours	19275399	19275203	-0.0	unpriced forms	unpriced forms
+memory_expansion	68020	O2	ours	19275030	19274834	-0.0	unpriced forms	unpriced forms
+memory_expansion	68020	O3	ours	19275030	19274834	-0.0	unpriced forms	unpriced forms
+memory_expansion	68020	Os	ours	19356265	19356021	-0.0	unpriced forms	unpriced forms
+mul_constants	68020	O1	clang	645847	646487	+0.1	unpriced forms	priced
+mul_constants	68020	O1	gcc	571689	533929	-6.6	unpriced forms	unpriced forms
+mul_constants	68020	O1	ours	1088961	1089601	+0.1	unpriced forms	priced
+mul_constants	68020	O2	clang	645847	646487	+0.1	unpriced forms	priced
+mul_constants	68020	O2	gcc	564495	526735	-6.7	unpriced forms	unpriced forms
+mul_constants	68020	O2	ours	637750	638390	+0.1	unpriced forms	priced
+mul_constants	68020	O3	clang	645847	646487	+0.1	unpriced forms	priced
+mul_constants	68020	O3	gcc	556199	518439	-6.8	unpriced forms	unpriced forms
+mul_constants	68020	O3	ours	637750	638390	+0.1	unpriced forms	priced
+mul_constants	68020	Os	clang	645847	646487	+0.1	unpriced forms	priced
+mul_constants	68020	Os	gcc	572055	534295	-6.6	unpriced forms	unpriced forms
+mul_constants	68020	Os	ours	1088178	1088818	+0.1	unpriced forms	priced
+object_extent_loop	68020	O1	clang	1276872	1277132	+0.0	unpriced forms	priced
+object_extent_loop	68020	O1	gcc	1287454	1287714	+0.0	unpriced forms	priced
+object_extent_loop	68020	O1	ours	1261830	1262090	+0.0	unpriced forms	priced
+object_extent_loop	68020	O2	clang	1283334	1283594	+0.0	unpriced forms	priced
+object_extent_loop	68020	O2	gcc	1286836	1287096	+0.0	unpriced forms	priced
+object_extent_loop	68020	O2	ours	1261841	1262101	+0.0	unpriced forms	priced
+object_extent_loop	68020	O3	clang	1283334	1283594	+0.0	unpriced forms	priced
+object_extent_loop	68020	O3	gcc	1278127	1278387	+0.0	unpriced forms	priced
+object_extent_loop	68020	O3	ours	1261841	1262101	+0.0	unpriced forms	priced
+object_extent_loop	68020	Os	clang	1436979	1437239	+0.0	unpriced forms	priced
+object_extent_loop	68020	Os	gcc	1448656	1448916	+0.0	unpriced forms	priced
+object_extent_loop	68020	Os	ours	1423898	1424158	+0.0	unpriced forms	priced
+old_style_extra_args	68020	O1	ours	4097	4197	+2.4	unpriced forms	priced
+old_style_extra_args	68020	O2	ours	4060	4160	+2.5	unpriced forms	priced
+old_style_extra_args	68020	O3	ours	4060	4160	+2.5	unpriced forms	priced
+old_style_extra_args	68020	Os	ours	4114	4214	+2.4	unpriced forms	priced
+os_console	68020	O1	clang	231	271	+17.3	wrong-output	priced
+os_console	68020	O1	ours	186	226	+21.5	wrong-output	priced
+os_console	68020	O2	clang	231	271	+17.3	wrong-output	priced
+os_console	68020	O2	ours	186	226	+21.5	wrong-output	priced
+os_console	68020	O3	clang	231	271	+17.3	wrong-output	priced
+os_console	68020	O3	ours	186	226	+21.5	wrong-output	priced
+os_console	68020	Os	clang	231	271	+17.3	wrong-output	priced
+os_console	68020	Os	ours	186	226	+21.5	wrong-output	priced
+os_exit	68020	O1	clang	623	663	+6.4	unpriced forms	priced
+os_exit	68020	O1	ours	617	657	+6.5	unpriced forms	priced
+os_exit	68020	O2	clang	623	663	+6.4	unpriced forms	priced
+os_exit	68020	O2	ours	617	657	+6.5	unpriced forms	priced
+os_exit	68020	O3	clang	623	663	+6.4	unpriced forms	priced
+os_exit	68020	O3	ours	617	657	+6.5	unpriced forms	priced
+os_exit	68020	Os	clang	623	663	+6.4	unpriced forms	priced
+os_exit	68020	Os	ours	616	656	+6.5	unpriced forms	priced
+os_locals_between_pushes	68020	O1	clang	2582	2622	+1.5	wrong-output	wrong-output
+os_locals_between_pushes	68020	O1	gcc	3768	4592	+21.9	unpriced forms	priced
+os_locals_between_pushes	68020	O1	ours	3690	3730	+1.1	unpriced forms	priced
+os_locals_between_pushes	68020	O2	clang	3202	3242	+1.2	unpriced forms	priced
+os_locals_between_pushes	68020	O2	gcc	3206	3246	+1.2	unpriced forms	priced
+os_locals_between_pushes	68020	O2	ours	3180	3220	+1.3	unpriced forms	priced
+os_locals_between_pushes	68020	O3	clang	3202	3242	+1.2	unpriced forms	priced
+os_locals_between_pushes	68020	O3	gcc	3050	3090	+1.3	unpriced forms	priced
+os_locals_between_pushes	68020	O3	ours	3180	3220	+1.3	unpriced forms	priced
+os_locals_between_pushes	68020	Os	clang	2582	2622	+1.5	wrong-output	wrong-output
+os_locals_between_pushes	68020	Os	gcc	3288	3328	+1.2	unpriced forms	priced
+os_locals_between_pushes	68020	Os	ours	3698	3738	+1.1	unpriced forms	priced
+over_aligned_local_after_even_pushes	68020	O1	clang	116021	117501	+1.3	wrong-output	wrong-output
+over_aligned_local_after_even_pushes	68020	O1	gcc	83521	85001	+1.8	unpriced forms	unpriced forms
+over_aligned_local_after_even_pushes	68020	O1	ours	90589	92069	+1.6	unpriced forms	priced
+over_aligned_local_after_even_pushes	68020	O2	clang	109379	110859	+1.4	unpriced forms	priced
+over_aligned_local_after_even_pushes	68020	O2	gcc	83136	84616	+1.8	unpriced forms	unpriced forms
+over_aligned_local_after_even_pushes	68020	O2	ours	88859	90339	+1.7	unpriced forms	priced
+over_aligned_local_after_even_pushes	68020	O3	clang	109379	110859	+1.4	unpriced forms	priced
+over_aligned_local_after_even_pushes	68020	O3	gcc	83264	84744	+1.8	unpriced forms	unpriced forms
+over_aligned_local_after_even_pushes	68020	O3	ours	88859	90339	+1.7	unpriced forms	priced
+over_aligned_local_after_even_pushes	68020	Os	clang	113653	115133	+1.3	wrong-output	wrong-output
+over_aligned_local_after_even_pushes	68020	Os	gcc	85615	87095	+1.7	unpriced forms	unpriced forms
+over_aligned_local_after_even_pushes	68020	Os	ours	90593	92073	+1.6	unpriced forms	priced
+overflow_builtins	68020	O1	clang	267226	273706	+2.4	wrong-output	wrong-output
+overflow_builtins	68020	O1	gcc	248117	254597	+2.6	unpriced forms	priced
+overflow_builtins	68020	O1	ours	247894	254374	+2.6	unpriced forms	priced
+overflow_builtins	68020	O2	clang	267226	273706	+2.4	wrong-output	wrong-output
+overflow_builtins	68020	O2	gcc	246846	253326	+2.6	unpriced forms	priced
+overflow_builtins	68020	O2	ours	247907	254387	+2.6	unpriced forms	priced
+overflow_builtins	68020	O3	clang	267226	273706	+2.4	wrong-output	wrong-output
+overflow_builtins	68020	O3	gcc	246846	253326	+2.6	unpriced forms	priced
+overflow_builtins	68020	O3	ours	247907	254387	+2.6	unpriced forms	priced
+overflow_builtins	68020	Os	clang	267226	273706	+2.4	wrong-output	wrong-output
+overflow_builtins	68020	Os	gcc	247747	254227	+2.6	unpriced forms	priced
+overflow_builtins	68020	Os	ours	247907	254387	+2.6	unpriced forms	priced
+pair_return	68020	O1	clang	2140	2180	+1.9	unpriced forms	priced
+pair_return	68020	O1	gcc	2149	2189	+1.9	unpriced forms	priced
+pair_return	68020	O1	ours	2132	2172	+1.9	unpriced forms	priced
+pair_return	68020	O2	clang	2140	2180	+1.9	unpriced forms	priced
+pair_return	68020	O2	gcc	2149	2189	+1.9	unpriced forms	priced
+pair_return	68020	O2	ours	2132	2172	+1.9	unpriced forms	priced
+pair_return	68020	O3	clang	2140	2180	+1.9	unpriced forms	priced
+pair_return	68020	O3	gcc	2149	2189	+1.9	unpriced forms	priced
+pair_return	68020	O3	ours	2132	2172	+1.9	unpriced forms	priced
+pair_return	68020	Os	clang	2140	2180	+1.9	unpriced forms	priced
+pair_return	68020	Os	gcc	2149	2189	+1.9	unpriced forms	priced
+pair_return	68020	Os	ours	2132	2172	+1.9	unpriced forms	priced
+pattern_fill	68020	O1	clang	77967	78447	+0.6	unpriced forms	priced
+pattern_fill	68020	O1	gcc	40467	40947	+1.2	unpriced forms	priced
+pattern_fill	68020	O1	ours	42720	43200	+1.1	unpriced forms	priced
+pattern_fill	68020	O2	clang	76203	76683	+0.6	unpriced forms	priced
+pattern_fill	68020	O2	gcc	44824	45304	+1.1	unpriced forms	priced
+pattern_fill	68020	O2	ours	43592	44072	+1.1	unpriced forms	priced
+pattern_fill	68020	O3	clang	76203	76683	+0.6	unpriced forms	priced
+pattern_fill	68020	O3	gcc	38894	39374	+1.2	unpriced forms	unpriced forms
+pattern_fill	68020	O3	ours	43592	44072	+1.1	unpriced forms	priced
+pattern_fill	68020	Os	clang	77967	78447	+0.6	unpriced forms	priced
+pattern_fill	68020	Os	gcc	47098	47578	+1.0	unpriced forms	priced
+pattern_fill	68020	Os	ours	43302	43782	+1.1	unpriced forms	priced
+phi_slot_unknown_arm	68020	O1	clang	380510	380530	+0.0	unpriced forms	priced
+phi_slot_unknown_arm	68020	O1	gcc	318433	319053	+0.2	unpriced forms	priced
+phi_slot_unknown_arm	68020	O1	ours	404862	397682	-1.8	unpriced forms	priced
+phi_slot_unknown_arm	68020	O2	clang	276883	276903	+0.0	unpriced forms	priced
+phi_slot_unknown_arm	68020	O2	gcc	255251	255869	+0.2	unpriced forms	priced
+phi_slot_unknown_arm	68020	O2	ours	248109	248129	+0.0	unpriced forms	priced
+phi_slot_unknown_arm	68020	O3	clang	276883	276903	+0.0	unpriced forms	priced
+phi_slot_unknown_arm	68020	O3	gcc	229186	229804	+0.3	unpriced forms	priced
+phi_slot_unknown_arm	68020	O3	ours	248109	248129	+0.0	unpriced forms	priced
+phi_slot_unknown_arm	68020	Os	clang	272243	272263	+0.0	unpriced forms	priced
+phi_slot_unknown_arm	68020	Os	gcc	312906	313526	+0.2	unpriced forms	priced
+phi_slot_unknown_arm	68020	Os	ours	362513	362533	+0.0	unpriced forms	priced
+predefined_macros	68020	O1	clang	2919	3019	+3.4	unpriced forms	priced
+predefined_macros	68020	O1	gcc	2923	3023	+3.4	unpriced forms	priced
+predefined_macros	68020	O1	ours	2906	3006	+3.4	unpriced forms	priced
+predefined_macros	68020	O2	clang	2919	3019	+3.4	unpriced forms	priced
+predefined_macros	68020	O2	gcc	2923	3023	+3.4	unpriced forms	priced
+predefined_macros	68020	O2	ours	2906	3006	+3.4	unpriced forms	priced
+predefined_macros	68020	O3	clang	2919	3019	+3.4	unpriced forms	priced
+predefined_macros	68020	O3	gcc	2923	3023	+3.4	unpriced forms	priced
+predefined_macros	68020	O3	ours	2906	3006	+3.4	unpriced forms	priced
+predefined_macros	68020	Os	clang	2919	3019	+3.4	unpriced forms	priced
+predefined_macros	68020	Os	gcc	2923	3023	+3.4	unpriced forms	priced
+predefined_macros	68020	Os	ours	2923	3023	+3.4	unpriced forms	priced
+recdeep	68020	O1	clang	1656603	1656623	+0.0	unpriced forms	priced
+recdeep	68020	O1	gcc	395421	615941	+55.8	unpriced forms	priced
+recdeep	68020	O1	ours	642971	642991	+0.0	unpriced forms	priced
+recdeep	68020	O2	clang	1737538	1737558	+0.0	unpriced forms	priced
+recdeep	68020	O2	gcc	171868	392388	+128.3	unpriced forms	priced
+recdeep	68020	O2	ours	440373	440393	+0.0	unpriced forms	priced
+recdeep	68020	O3	clang	1737538	1737558	+0.0	unpriced forms	priced
+recdeep	68020	O3	gcc	171868	392388	+128.3	unpriced forms	priced
+recdeep	68020	O3	ours	440373	440393	+0.0	unpriced forms	priced
+recdeep	68020	Os	clang	1737572	1737592	+0.0	unpriced forms	priced
+recdeep	68020	Os	gcc	189871	410391	+116.1	unpriced forms	priced
+recdeep	68020	Os	ours	1599574	477888	-70.1	unpriced forms	priced
+recmany_o1	68020	O1	clang	1656603	1656623	+0.0	unpriced forms	priced
+recmany_o1	68020	O1	gcc	395445	615965	+55.8	unpriced forms	priced
+recmany_o1	68020	O1	ours	642971	642991	+0.0	unpriced forms	priced
+recmany_o1	68020	O2	clang	1737538	1737558	+0.0	unpriced forms	priced
+recmany_o1	68020	O2	gcc	171900	392420	+128.3	unpriced forms	priced
+recmany_o1	68020	O2	ours	440373	440393	+0.0	unpriced forms	priced
+recmany_o1	68020	O3	clang	1737538	1737558	+0.0	unpriced forms	priced
+recmany_o1	68020	O3	gcc	171868	392388	+128.3	unpriced forms	priced
+recmany_o1	68020	O3	ours	440373	440393	+0.0	unpriced forms	priced
+recmany_o1	68020	Os	clang	1737572	1737592	+0.0	unpriced forms	priced
+recmany_o1	68020	Os	gcc	210890	431410	+104.6	unpriced forms	priced
+recmany_o1	68020	Os	ours	1596613	492929	-69.1	unpriced forms	priced
+register_args_truncate	68020	O1	clang	740	760	+2.7	unpriced forms	priced
+register_args_truncate	68020	O1	gcc	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	O1	ours	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	O2	clang	740	760	+2.7	unpriced forms	priced
+register_args_truncate	68020	O2	gcc	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	O2	ours	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	O3	clang	740	760	+2.7	unpriced forms	priced
+register_args_truncate	68020	O3	gcc	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	O3	ours	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	Os	clang	740	760	+2.7	unpriced forms	priced
+register_args_truncate	68020	Os	gcc	731	751	+2.7	unpriced forms	priced
+register_args_truncate	68020	Os	ours	731	751	+2.7	unpriced forms	priced
+register_upper_half	68020	O1	clang	4289	4369	+1.9	unpriced forms	priced
+register_upper_half	68020	O1	gcc	4153	4233	+1.9	unpriced forms	priced
+register_upper_half	68020	O1	ours	4451	4531	+1.8	unpriced forms	priced
+register_upper_half	68020	O2	clang	4289	4369	+1.9	unpriced forms	priced
+register_upper_half	68020	O2	gcc	3843	3923	+2.1	unpriced forms	priced
+register_upper_half	68020	O2	ours	3863	3943	+2.1	unpriced forms	priced
+register_upper_half	68020	O3	clang	4289	4369	+1.9	unpriced forms	priced
+register_upper_half	68020	O3	gcc	2945	3013	+2.3	unpriced forms	unpriced forms
+register_upper_half	68020	O3	ours	3863	3943	+2.1	unpriced forms	priced
+register_upper_half	68020	Os	clang	4249	4329	+1.9	unpriced forms	priced
+register_upper_half	68020	Os	gcc	4135	4215	+1.9	unpriced forms	priced
+register_upper_half	68020	Os	ours	4468	4548	+1.8	unpriced forms	priced
+rep_count	68020	O1	clang	62800	62820	+0.0	unpriced forms	priced
+rep_count	68020	O1	gcc	38439	38459	+0.1	unpriced forms	priced
+rep_count	68020	O1	ours	38547	38567	+0.1	unpriced forms	priced
+rep_count	68020	O2	clang	55660	55194	-0.8	unpriced forms	unpriced forms
+rep_count	68020	O2	gcc	38704	38724	+0.1	unpriced forms	priced
+rep_count	68020	O2	ours	38547	38567	+0.1	unpriced forms	priced
+rep_count	68020	O3	clang	39704	37132	-6.5	unpriced forms	unpriced forms
+rep_count	68020	O3	gcc	24343	24315	-0.1	unpriced forms	unpriced forms
+rep_count	68020	O3	ours	38547	38567	+0.1	unpriced forms	priced
+rep_count	68020	Os	clang	59373	59393	+0.0	unpriced forms	priced
+rep_count	68020	Os	gcc	46429	30577	-34.1	unpriced forms	unpriced forms
+rep_count	68020	Os	ours	38547	38567	+0.1	unpriced forms	priced
+rotate_small	68020	O1	clang	17949	18069	+0.7	unpriced forms	priced
+rotate_small	68020	O1	gcc	11275	11395	+1.1	unpriced forms	priced
+rotate_small	68020	O1	ours	20918	21038	+0.6	unpriced forms	priced
+rotate_small	68020	O2	clang	12758	12878	+0.9	unpriced forms	priced
+rotate_small	68020	O2	gcc	11275	11395	+1.1	unpriced forms	priced
+rotate_small	68020	O2	ours	13785	13905	+0.9	unpriced forms	priced
+rotate_small	68020	O3	clang	9806	9926	+1.2	unpriced forms	priced
+rotate_small	68020	O3	gcc	9103	9223	+1.3	unpriced forms	priced
+rotate_small	68020	O3	ours	13785	13905	+0.9	unpriced forms	priced
+rotate_small	68020	Os	clang	19155	19275	+0.6	unpriced forms	priced
+rotate_small	68020	Os	gcc	11736	11856	+1.0	unpriced forms	priced
+rotate_small	68020	Os	ours	20931	21051	+0.6	unpriced forms	priced
+sat_builtins	68020	O1	clang	128522	131402	+2.2	unpriced forms	priced
+sat_builtins	68020	O1	ours	127240	130120	+2.3	unpriced forms	priced
+sat_builtins	68020	O2	clang	128522	131402	+2.2	unpriced forms	priced
+sat_builtins	68020	O2	ours	127253	130133	+2.3	unpriced forms	priced
+sat_builtins	68020	O3	clang	126480	129360	+2.3	unpriced forms	priced
+sat_builtins	68020	O3	ours	127253	130133	+2.3	unpriced forms	priced
+sat_builtins	68020	Os	clang	128442	131322	+2.2	unpriced forms	priced
+sat_builtins	68020	Os	ours	127253	130133	+2.3	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	O1	clang	13260	13580	+2.4	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	O1	ours	12627	12947	+2.5	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	O2	clang	11523	11843	+2.8	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	O2	ours	12627	12947	+2.5	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	O3	clang	11523	11843	+2.8	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	O3	ours	12627	12947	+2.5	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	Os	clang	13260	13580	+2.4	unpriced forms	priced
+sat_sub_u64_shared_compare	68020	Os	ours	12627	12947	+2.5	unpriced forms	priced
+sbb_wide_sub	68020	O1	clang	3781	3901	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	O1	gcc	3836	3956	+3.1	unpriced forms	priced
+sbb_wide_sub	68020	O1	ours	3758	3878	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	O2	clang	3781	3901	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	O2	gcc	3836	3956	+3.1	unpriced forms	priced
+sbb_wide_sub	68020	O2	ours	3758	3878	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	O3	clang	3781	3901	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	O3	gcc	3836	3956	+3.1	unpriced forms	priced
+sbb_wide_sub	68020	O3	ours	3758	3878	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	Os	clang	3781	3901	+3.2	unpriced forms	priced
+sbb_wide_sub	68020	Os	gcc	3836	3956	+3.1	unpriced forms	priced
+sbb_wide_sub	68020	Os	ours	3775	3895	+3.2	unpriced forms	priced
+select_of_constants	68020	O1	clang	975231	975331	+0.0	wrong-output	wrong-output
+select_of_constants	68020	O1	gcc	727985	728085	+0.0	unpriced forms	priced
+select_of_constants	68020	O1	ours	1177826	1177926	+0.0	unpriced forms	priced
+select_of_constants	68020	O2	clang	975231	975331	+0.0	wrong-output	wrong-output
+select_of_constants	68020	O2	gcc	712831	712931	+0.0	unpriced forms	priced
+select_of_constants	68020	O2	ours	795736	795836	+0.0	unpriced forms	priced
+select_of_constants	68020	O3	clang	975231	975331	+0.0	wrong-output	wrong-output
+select_of_constants	68020	O3	gcc	712831	712931	+0.0	unpriced forms	priced
+select_of_constants	68020	O3	ours	795736	795836	+0.0	unpriced forms	priced
+select_of_constants	68020	Os	clang	977331	977431	+0.0	wrong-output	wrong-output
+select_of_constants	68020	Os	gcc	709118	709218	+0.0	unpriced forms	priced
+select_of_constants	68020	Os	ours	1187066	1187166	+0.0	unpriced forms	priced
+shift_int32_variable	68020	O1	clang	261394	267154	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O1	gcc	264363	270123	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O1	ours	264955	270715	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O2	clang	257914	263674	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O2	gcc	263493	269253	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O2	ours	264955	270715	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O3	clang	257914	263674	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O3	gcc	263493	269253	+2.2	unpriced forms	priced
+shift_int32_variable	68020	O3	ours	264955	270715	+2.2	unpriced forms	priced
+shift_int32_variable	68020	Os	clang	258772	264532	+2.2	unpriced forms	priced
+shift_int32_variable	68020	Os	gcc	266989	272749	+2.2	unpriced forms	priced
+shift_int32_variable	68020	Os	ours	264968	270728	+2.2	unpriced forms	priced
+shift_int64_masked_amount	68020	O1	clang	106281	106341	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O1	gcc	64485	64545	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O1	ours	150170	150230	+0.0	unpriced forms	priced
+shift_int64_masked_amount	68020	O2	clang	42390	42450	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O2	gcc	62947	63007	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O2	ours	81043	81103	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O3	clang	42390	42450	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O3	gcc	62947	63007	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	O3	ours	81043	81103	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	Os	clang	106281	106341	+0.1	unpriced forms	priced
+shift_int64_masked_amount	68020	Os	gcc	144599	144659	+0.0	unpriced forms	priced
+shift_int64_masked_amount	68020	Os	ours	150183	150243	+0.0	unpriced forms	priced
+shift_int64_variable	68020	O1	clang	121366	121446	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O1	gcc	57045	57125	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O1	ours	133688	133768	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O2	clang	62061	62141	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O2	gcc	54459	54539	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O2	ours	76094	76174	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O3	clang	62061	62141	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O3	gcc	53729	53809	+0.1	unpriced forms	priced
+shift_int64_variable	68020	O3	ours	76094	76174	+0.1	unpriced forms	priced
+shift_int64_variable	68020	Os	clang	121080	121160	+0.1	unpriced forms	priced
+shift_int64_variable	68020	Os	gcc	137337	137417	+0.1	unpriced forms	priced
+shift_int64_variable	68020	Os	ours	133701	133781	+0.1	unpriced forms	priced
+shift_until_idioms	68020	O1	clang	132868	135368	+1.9	unpriced forms	priced
+shift_until_idioms	68020	O1	gcc	119423	121923	+2.1	unpriced forms	priced
+shift_until_idioms	68020	O1	ours	123261	125761	+2.0	unpriced forms	priced
+shift_until_idioms	68020	O2	clang	127603	130103	+2.0	unpriced forms	priced
+shift_until_idioms	68020	O2	gcc	119389	121889	+2.1	unpriced forms	priced
+shift_until_idioms	68020	O2	ours	123895	126395	+2.0	unpriced forms	priced
+shift_until_idioms	68020	O3	clang	127603	130103	+2.0	unpriced forms	priced
+shift_until_idioms	68020	O3	gcc	117858	120358	+2.1	unpriced forms	priced
+shift_until_idioms	68020	O3	ours	123895	126395	+2.0	unpriced forms	priced
+shift_until_idioms	68020	Os	clang	132623	135123	+1.9	unpriced forms	priced
+shift_until_idioms	68020	Os	gcc	128049	130549	+2.0	unpriced forms	priced
+shift_until_idioms	68020	Os	ours	124691	127191	+2.0	unpriced forms	priced
+shl_long_by_one	68020	O1	clang	24929	25529	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O1	gcc	25339	25939	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O1	ours	25183	25783	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O2	clang	24929	25529	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O2	gcc	25162	25762	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O2	ours	25183	25783	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O3	clang	24696	25296	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O3	gcc	25162	25762	+2.4	unpriced forms	priced
+shl_long_by_one	68020	O3	ours	25183	25783	+2.4	unpriced forms	priced
+shl_long_by_one	68020	Os	clang	24929	25529	+2.4	unpriced forms	priced
+shl_long_by_one	68020	Os	gcc	25150	25750	+2.4	unpriced forms	priced
+shl_long_by_one	68020	Os	ours	25196	25796	+2.4	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O1	gcc	681	701	+2.9	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O1	ours	660	680	+3.0	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O2	gcc	681	701	+2.9	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O2	ours	660	680	+3.0	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O3	gcc	681	701	+2.9	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	O3	ours	660	680	+3.0	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	Os	gcc	681	701	+2.9	unpriced forms	priced
+shl_of_a_narrow_load_keeps_the_top_byte	68020	Os	ours	660	680	+3.0	unpriced forms	priced
+shrink_wrapped_frame	68020	O1	clang	5806	5866	+1.0	wrong-output	wrong-output
+shrink_wrapped_frame	68020	O1	gcc	4599	4659	+1.3	unpriced forms	priced
+shrink_wrapped_frame	68020	O1	ours	4534	4594	+1.3	unpriced forms	priced
+shrink_wrapped_frame	68020	O2	clang	2115	2175	+2.8	unpriced forms	priced
+shrink_wrapped_frame	68020	O2	gcc	4319	4379	+1.4	unpriced forms	priced
+shrink_wrapped_frame	68020	O2	ours	4247	4307	+1.4	unpriced forms	priced
+shrink_wrapped_frame	68020	O3	clang	2115	2175	+2.8	unpriced forms	priced
+shrink_wrapped_frame	68020	O3	gcc	2121	2181	+2.8	unpriced forms	priced
+shrink_wrapped_frame	68020	O3	ours	4247	4307	+1.4	unpriced forms	priced
+shrink_wrapped_frame	68020	Os	clang	5743	5803	+1.0	wrong-output	wrong-output
+shrink_wrapped_frame	68020	Os	gcc	4605	4665	+1.3	unpriced forms	priced
+shrink_wrapped_frame	68020	Os	ours	4482	4542	+1.3	unpriced forms	priced
+shrink_wrapped_saves	68020	O1	clang	3286	3346	+1.8	unpriced forms	priced
+shrink_wrapped_saves	68020	O1	gcc	3690	3732	+1.1	unpriced forms	unpriced forms
+shrink_wrapped_saves	68020	O1	ours	3845	3905	+1.6	unpriced forms	priced
+shrink_wrapped_saves	68020	O2	clang	2344	2404	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	O2	gcc	2350	2410	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	O2	ours	2333	2393	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	O3	clang	2344	2404	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	O3	gcc	2350	2410	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	O3	ours	2333	2393	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	Os	clang	2344	2404	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	Os	gcc	2350	2410	+2.6	unpriced forms	priced
+shrink_wrapped_saves	68020	Os	ours	2350	2410	+2.6	unpriced forms	priced
+shuttle_value	68020	O1	clang	7179	7339	+2.2	unpriced forms	priced
+shuttle_value	68020	O1	gcc	7193	7353	+2.2	unpriced forms	priced
+shuttle_value	68020	O1	ours	7173	7333	+2.2	unpriced forms	priced
+shuttle_value	68020	O2	clang	7179	7339	+2.2	unpriced forms	priced
+shuttle_value	68020	O2	gcc	7193	7353	+2.2	unpriced forms	priced
+shuttle_value	68020	O2	ours	7173	7333	+2.2	unpriced forms	priced
+shuttle_value	68020	O3	clang	7179	7339	+2.2	unpriced forms	priced
+shuttle_value	68020	O3	gcc	7193	7353	+2.2	unpriced forms	priced
+shuttle_value	68020	O3	ours	7173	7333	+2.2	unpriced forms	priced
+shuttle_value	68020	Os	clang	7179	7339	+2.2	unpriced forms	priced
+shuttle_value	68020	Os	gcc	7193	7353	+2.2	unpriced forms	priced
+shuttle_value	68020	Os	ours	7190	7350	+2.2	unpriced forms	priced
+sibling_call_callees	68020	O1	clang	1401	1441	+2.9	unpriced forms	priced
+sibling_call_callees	68020	O1	gcc	1392	1432	+2.9	unpriced forms	priced
+sibling_call_callees	68020	O1	ours	1347	1387	+3.0	unpriced forms	priced
+sibling_call_callees	68020	O2	clang	1401	1441	+2.9	unpriced forms	priced
+sibling_call_callees	68020	O2	gcc	1352	1392	+3.0	unpriced forms	priced
+sibling_call_callees	68020	O2	ours	1347	1387	+3.0	unpriced forms	priced
+sibling_call_callees	68020	O3	clang	1401	1441	+2.9	unpriced forms	priced
+sibling_call_callees	68020	O3	gcc	1352	1392	+3.0	unpriced forms	priced
+sibling_call_callees	68020	O3	ours	1347	1387	+3.0	unpriced forms	priced
+sibling_call_callees	68020	Os	clang	1407	1447	+2.8	unpriced forms	priced
+sibling_call_callees	68020	Os	gcc	1354	1394	+3.0	unpriced forms	priced
+sibling_call_callees	68020	Os	ours	1347	1387	+3.0	unpriced forms	priced
+signbit_idioms	68020	O1	clang	133662	135822	+1.6	unpriced forms	priced
+signbit_idioms	68020	O1	gcc	141958	144118	+1.5	unpriced forms	priced
+signbit_idioms	68020	O1	ours	136890	139050	+1.6	unpriced forms	priced
+signbit_idioms	68020	O2	clang	131786	133946	+1.6	unpriced forms	priced
+signbit_idioms	68020	O2	gcc	140735	142895	+1.5	unpriced forms	priced
+signbit_idioms	68020	O2	ours	136890	139050	+1.6	unpriced forms	priced
+signbit_idioms	68020	O3	clang	131786	133946	+1.6	unpriced forms	priced
+signbit_idioms	68020	O3	gcc	140735	142895	+1.5	unpriced forms	priced
+signbit_idioms	68020	O3	ours	136890	139050	+1.6	unpriced forms	priced
+signbit_idioms	68020	Os	clang	133662	135822	+1.6	unpriced forms	priced
+signbit_idioms	68020	Os	gcc	146856	149016	+1.5	unpriced forms	priced
+signbit_idioms	68020	Os	ours	136903	139063	+1.6	unpriced forms	priced
+spill_store_order	68020	O1	clang	406033	406133	+0.0	wrong-output	wrong-output
+spill_store_order	68020	O1	gcc	230607	263292	+14.2	unpriced forms	priced
+spill_store_order	68020	O1	ours	408026	408126	+0.0	unpriced forms	priced
+spill_store_order	68020	O2	clang	367128	367228	+0.0	wrong-output	wrong-output
+spill_store_order	68020	O2	gcc	181318	214003	+18.0	unpriced forms	priced
+spill_store_order	68020	O2	ours	270160	270260	+0.0	unpriced forms	priced
+spill_store_order	68020	O3	clang	316369	316469	+0.0	wrong-output	wrong-output
+spill_store_order	68020	O3	gcc	140797	173482	+23.2	unpriced forms	priced
+spill_store_order	68020	O3	ours	242777	242877	+0.0	unpriced forms	priced
+spill_store_order	68020	Os	clang	374154	374254	+0.0	wrong-output	wrong-output
+spill_store_order	68020	Os	gcc	294044	326729	+11.1	unpriced forms	priced
+spill_store_order	68020	Os	ours	396684	396784	+0.0	unpriced forms	priced
+split_loops	68020	O1	clang	18141	18341	+1.1	unpriced forms	priced
+split_loops	68020	O1	gcc	17779	17979	+1.1	unpriced forms	priced
+split_loops	68020	O1	ours	21064	21264	+0.9	unpriced forms	priced
+split_loops	68020	O2	clang	18395	18595	+1.1	unpriced forms	priced
+split_loops	68020	O2	gcc	14847	15047	+1.3	unpriced forms	priced
+split_loops	68020	O2	ours	17668	17868	+1.1	unpriced forms	priced
+split_loops	68020	O3	gcc	13177	13377	+1.5	unpriced forms	priced
+split_loops	68020	O3	ours	17668	17868	+1.1	unpriced forms	priced
+split_loops	68020	Os	clang	19129	19329	+1.0	unpriced forms	priced
+split_loops	68020	Os	gcc	20673	20873	+1.0	unpriced forms	priced
+split_loops	68020	Os	ours	17668	17868	+1.1	unpriced forms	priced
+ssub_sat_i64_loop	68020	O1	clang	5185	5305	+2.3	unpriced forms	priced
+ssub_sat_i64_loop	68020	O1	ours	5104	5224	+2.4	unpriced forms	priced
+ssub_sat_i64_loop	68020	O2	clang	5091	5211	+2.4	unpriced forms	priced
+ssub_sat_i64_loop	68020	O2	ours	5104	5224	+2.4	unpriced forms	priced
+ssub_sat_i64_loop	68020	O3	clang	5091	5211	+2.4	unpriced forms	priced
+ssub_sat_i64_loop	68020	O3	ours	5104	5224	+2.4	unpriced forms	priced
+ssub_sat_i64_loop	68020	Os	clang	5169	5289	+2.3	unpriced forms	priced
+ssub_sat_i64_loop	68020	Os	ours	5117	5237	+2.3	unpriced forms	priced
+stack_arrays_copy	68020	O1	clang	6259	6279	+0.3	wrong-output	wrong-output
+stack_arrays_copy	68020	O1	gcc	4149	4169	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O1	ours	3860	3880	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O2	clang	3655	3675	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O2	gcc	4095	4115	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O2	ours	3678	3698	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O3	clang	3655	3675	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O3	gcc	3938	3958	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	O3	ours	3678	3698	+0.5	unpriced forms	priced
+stack_arrays_copy	68020	Os	clang	6259	6279	+0.3	wrong-output	wrong-output
+stack_arrays_copy	68020	Os	gcc	5301	5321	+0.4	unpriced forms	priced
+stack_arrays_copy	68020	Os	ours	3860	3880	+0.5	unpriced forms	priced
+static_inline	68020	O1	clang	2230	2290	+2.7	unpriced forms	priced
+static_inline	68020	O1	gcc	2396	2456	+2.5	unpriced forms	priced
+static_inline	68020	O1	ours	2221	2281	+2.7	unpriced forms	priced
+static_inline	68020	O2	clang	2230	2290	+2.7	unpriced forms	priced
+static_inline	68020	O2	gcc	2400	2460	+2.5	unpriced forms	priced
+static_inline	68020	O2	ours	2221	2281	+2.7	unpriced forms	priced
+static_inline	68020	O3	clang	2230	2290	+2.7	unpriced forms	priced
+static_inline	68020	O3	gcc	2268	2328	+2.6	unpriced forms	priced
+static_inline	68020	O3	ours	2221	2281	+2.7	unpriced forms	priced
+static_inline	68020	Os	clang	2230	2290	+2.7	unpriced forms	priced
+static_inline	68020	Os	gcc	2399	2459	+2.5	unpriced forms	priced
+static_inline	68020	Os	ours	2238	2298	+2.7	unpriced forms	priced
+static_pointers	68020	O1	clang	9966	10246	+2.8	unpriced forms	priced
+static_pointers	68020	O1	gcc	9532	9812	+2.9	unpriced forms	priced
+static_pointers	68020	O1	ours	9765	10045	+2.9	unpriced forms	priced
+static_pointers	68020	O2	clang	9527	9807	+2.9	unpriced forms	priced
+static_pointers	68020	O2	gcc	9534	9814	+2.9	unpriced forms	priced
+static_pointers	68020	O2	ours	9720	10000	+2.9	unpriced forms	priced
+static_pointers	68020	O3	clang	9527	9807	+2.9	unpriced forms	priced
+static_pointers	68020	O3	gcc	9616	9896	+2.9	unpriced forms	priced
+static_pointers	68020	O3	ours	9720	10000	+2.9	unpriced forms	priced
+static_pointers	68020	Os	clang	9998	10278	+2.8	unpriced forms	priced
+static_pointers	68020	Os	gcc	9534	9814	+2.9	unpriced forms	priced
+static_pointers	68020	Os	ours	9824	10104	+2.9	unpriced forms	priced
+strlen_idiom	68020	O1	clang	2427	2507	+3.3	unpriced forms	priced
+strlen_idiom	68020	O1	gcc	2995	3075	+2.7	unpriced forms	priced
+strlen_idiom	68020	O1	ours	2417	2497	+3.3	unpriced forms	priced
+strlen_idiom	68020	O2	clang	2427	2507	+3.3	unpriced forms	priced
+strlen_idiom	68020	O2	gcc	2433	2513	+3.3	unpriced forms	priced
+strlen_idiom	68020	O2	ours	2417	2497	+3.3	unpriced forms	priced
+strlen_idiom	68020	O3	clang	2427	2507	+3.3	unpriced forms	priced
+strlen_idiom	68020	O3	gcc	2433	2513	+3.3	unpriced forms	priced
+strlen_idiom	68020	O3	ours	2417	2497	+3.3	unpriced forms	priced
+strlen_idiom	68020	Os	clang	2427	2507	+3.3	unpriced forms	priced
+strlen_idiom	68020	Os	gcc	2754	2834	+2.9	unpriced forms	priced
+strlen_idiom	68020	Os	ours	2433	2513	+3.3	unpriced forms	priced
+struct_odd_sizes	68020	O1	clang	1479	1519	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O1	gcc	1484	1524	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O1	ours	1467	1507	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O2	clang	1479	1519	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O2	gcc	1484	1524	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O2	ours	1467	1507	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O3	clang	1479	1519	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O3	gcc	1484	1524	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	O3	ours	1467	1507	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	Os	clang	1479	1519	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	Os	gcc	1484	1524	+2.7	unpriced forms	priced
+struct_odd_sizes	68020	Os	ours	1467	1507	+2.7	unpriced forms	priced
+struct_with_i64	68020	O1	clang	2848	2928	+2.8	unpriced forms	priced
+struct_with_i64	68020	O1	gcc	2857	2937	+2.8	unpriced forms	priced
+struct_with_i64	68020	O1	ours	2840	2920	+2.8	unpriced forms	priced
+struct_with_i64	68020	O2	clang	2848	2928	+2.8	unpriced forms	priced
+struct_with_i64	68020	O2	gcc	2857	2937	+2.8	unpriced forms	priced
+struct_with_i64	68020	O2	ours	2840	2920	+2.8	unpriced forms	priced
+struct_with_i64	68020	O3	clang	2848	2928	+2.8	unpriced forms	priced
+struct_with_i64	68020	O3	gcc	2857	2937	+2.8	unpriced forms	priced
+struct_with_i64	68020	O3	ours	2840	2920	+2.8	unpriced forms	priced
+struct_with_i64	68020	Os	clang	2848	2928	+2.8	unpriced forms	priced
+struct_with_i64	68020	Os	gcc	2857	2937	+2.8	unpriced forms	priced
+struct_with_i64	68020	Os	ours	2857	2937	+2.8	unpriced forms	priced
+switch_empty_cases	68020	O1	clang	1165	1185	+1.7	unpriced forms	priced
+switch_empty_cases	68020	O1	gcc	889	909	+2.2	unpriced forms	priced
+switch_empty_cases	68020	O1	ours	1242	1262	+1.6	unpriced forms	priced
+switch_empty_cases	68020	O2	clang	827	847	+2.4	unpriced forms	priced
+switch_empty_cases	68020	O2	gcc	889	909	+2.2	unpriced forms	priced
+switch_empty_cases	68020	O2	ours	818	838	+2.4	unpriced forms	priced
+switch_empty_cases	68020	O3	clang	827	847	+2.4	unpriced forms	priced
+switch_empty_cases	68020	O3	gcc	804	824	+2.5	unpriced forms	priced
+switch_empty_cases	68020	O3	ours	818	838	+2.4	unpriced forms	priced
+switch_empty_cases	68020	Os	clang	1165	1185	+1.7	unpriced forms	priced
+switch_empty_cases	68020	Os	gcc	889	909	+2.2	unpriced forms	priced
+switch_empty_cases	68020	Os	ours	1218	1238	+1.6	unpriced forms	priced
+switch_header_marker_loop	68020	O1	clang	1671	1711	+2.4	unpriced forms	priced
+switch_header_marker_loop	68020	O1	gcc	1494	1534	+2.7	unpriced forms	unpriced forms
+switch_header_marker_loop	68020	O1	ours	1510	1550	+2.6	unpriced forms	priced
+switch_header_marker_loop	68020	O2	clang	1597	1637	+2.5	unpriced forms	priced
+switch_header_marker_loop	68020	O2	gcc	1484	1524	+2.7	unpriced forms	unpriced forms
+switch_header_marker_loop	68020	O2	ours	1510	1550	+2.6	unpriced forms	priced
+switch_header_marker_loop	68020	O3	clang	1597	1637	+2.5	unpriced forms	priced
+switch_header_marker_loop	68020	O3	gcc	1484	1524	+2.7	unpriced forms	unpriced forms
+switch_header_marker_loop	68020	O3	ours	1510	1550	+2.6	unpriced forms	priced
+switch_header_marker_loop	68020	Os	clang	1591	1631	+2.5	unpriced forms	priced
+switch_header_marker_loop	68020	Os	gcc	1504	1544	+2.7	unpriced forms	unpriced forms
+switch_header_marker_loop	68020	Os	ours	1514	1554	+2.6	unpriced forms	priced
+switch_i64	68020	O1	clang	4307	4447	+3.3	unpriced forms	priced
+switch_i64	68020	O1	gcc	4309	4449	+3.2	unpriced forms	priced
+switch_i64	68020	O1	ours	4301	4441	+3.3	unpriced forms	priced
+switch_i64	68020	O2	clang	4307	4447	+3.3	unpriced forms	priced
+switch_i64	68020	O2	gcc	4309	4449	+3.2	unpriced forms	priced
+switch_i64	68020	O2	ours	4292	4432	+3.3	unpriced forms	priced
+switch_i64	68020	O3	clang	4307	4447	+3.3	unpriced forms	priced
+switch_i64	68020	O3	gcc	4309	4449	+3.2	unpriced forms	priced
+switch_i64	68020	O3	ours	4292	4432	+3.3	unpriced forms	priced
+switch_i64	68020	Os	clang	4307	4447	+3.3	unpriced forms	priced
+switch_i64	68020	Os	gcc	4309	4449	+3.2	unpriced forms	priced
+switch_i64	68020	Os	ours	4309	4449	+3.2	unpriced forms	priced
+switch_jump_table	68020	O1	clang	22327	22867	+2.4	unpriced forms	priced
+switch_jump_table	68020	O1	gcc	21267	21856	+2.8	unpriced forms	priced
+switch_jump_table	68020	O1	ours	22386	22926	+2.4	unpriced forms	priced
+switch_jump_table	68020	O2	clang	22327	22867	+2.4	unpriced forms	priced
+switch_jump_table	68020	O2	gcc	20952	21541	+2.8	unpriced forms	unpriced forms
+switch_jump_table	68020	O2	ours	22386	22926	+2.4	unpriced forms	priced
+switch_jump_table	68020	O3	clang	21576	22116	+2.5	unpriced forms	priced
+switch_jump_table	68020	O3	gcc	20952	21541	+2.8	unpriced forms	unpriced forms
+switch_jump_table	68020	O3	ours	22386	22926	+2.4	unpriced forms	priced
+switch_jump_table	68020	Os	clang	22303	22843	+2.4	unpriced forms	priced
+switch_jump_table	68020	Os	gcc	21398	21987	+2.8	unpriced forms	unpriced forms
+switch_jump_table	68020	Os	ours	22422	22962	+2.4	unpriced forms	priced
+switch_peeled_table	68020	O1	clang	63329	63889	+0.9	unpriced forms	priced
+switch_peeled_table	68020	O1	gcc	43999	44559	+1.3	unpriced forms	unpriced forms
+switch_peeled_table	68020	O1	ours	54967	55527	+1.0	unpriced forms	priced
+switch_peeled_table	68020	O2	clang	63329	63889	+0.9	unpriced forms	priced
+switch_peeled_table	68020	O2	gcc	30720	31280	+1.8	unpriced forms	priced
+switch_peeled_table	68020	O2	ours	54967	55527	+1.0	unpriced forms	priced
+switch_peeled_table	68020	O3	clang	63329	63889	+0.9	unpriced forms	priced
+switch_peeled_table	68020	O3	gcc	31959	32519	+1.8	unpriced forms	unpriced forms
+switch_peeled_table	68020	O3	ours	54967	55527	+1.0	unpriced forms	priced
+switch_peeled_table	68020	Os	clang	66854	67414	+0.8	unpriced forms	priced
+switch_peeled_table	68020	Os	gcc	51923	52483	+1.1	unpriced forms	priced
+switch_peeled_table	68020	Os	ours	56359	56919	+1.0	unpriced forms	priced
+switch_table_holes	68020	O1	clang	16993	17013	+0.1	unpriced forms	priced
+switch_table_holes	68020	O1	gcc	10462	10482	+0.2	unpriced forms	priced
+switch_table_holes	68020	O1	ours	20987	21007	+0.1	unpriced forms	priced
+switch_table_holes	68020	O2	clang	16993	17013	+0.1	unpriced forms	priced
+switch_table_holes	68020	O2	gcc	10305	10325	+0.2	unpriced forms	priced
+switch_table_holes	68020	O2	ours	10069	10089	+0.2	unpriced forms	priced
+switch_table_holes	68020	O3	gcc	10305	10325	+0.2	unpriced forms	priced
+switch_table_holes	68020	O3	ours	10069	10089	+0.2	unpriced forms	priced
+switch_table_holes	68020	Os	clang	17085	17105	+0.1	unpriced forms	priced
+switch_table_holes	68020	Os	gcc	10338	10358	+0.2	unpriced forms	unpriced forms
+switch_table_holes	68020	Os	ours	21050	21070	+0.1	unpriced forms	priced
+sysv_abi	68020	O1	clang	5018	5158	+2.8	unpriced forms	priced
+sysv_abi	68020	O1	gcc	5022	5162	+2.8	unpriced forms	priced
+sysv_abi	68020	O1	ours	5012	5152	+2.8	unpriced forms	priced
+sysv_abi	68020	O2	clang	5018	5158	+2.8	unpriced forms	priced
+sysv_abi	68020	O2	gcc	5022	5162	+2.8	unpriced forms	priced
+sysv_abi	68020	O2	ours	5012	5152	+2.8	unpriced forms	priced
+sysv_abi	68020	O3	clang	5018	5158	+2.8	unpriced forms	priced
+sysv_abi	68020	O3	gcc	5022	5162	+2.8	unpriced forms	priced
+sysv_abi	68020	O3	ours	5012	5152	+2.8	unpriced forms	priced
+sysv_abi	68020	Os	clang	5018	5158	+2.8	unpriced forms	priced
+sysv_abi	68020	Os	gcc	5022	5162	+2.8	unpriced forms	priced
+sysv_abi	68020	Os	ours	5022	5162	+2.8	unpriced forms	priced
+tail_call_long_argument	68020	O1	clang	1742	1782	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	O1	gcc	1661	1701	+2.4	unpriced forms	priced
+tail_call_long_argument	68020	O1	ours	1714	1754	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	O2	clang	1742	1782	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	O2	gcc	1635	1675	+2.4	unpriced forms	priced
+tail_call_long_argument	68020	O2	ours	1714	1754	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	O3	clang	1742	1782	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	O3	gcc	1635	1675	+2.4	unpriced forms	priced
+tail_call_long_argument	68020	O3	ours	1714	1754	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	Os	clang	1742	1782	+2.3	unpriced forms	priced
+tail_call_long_argument	68020	Os	gcc	1635	1675	+2.4	unpriced forms	priced
+tail_call_long_argument	68020	Os	ours	1714	1754	+2.3	unpriced forms	priced
+tail_calls	68020	O1	clang	14982	15162	+1.2	unpriced forms	priced
+tail_calls	68020	O1	gcc	14753	14933	+1.2	unpriced forms	priced
+tail_calls	68020	O1	ours	14047	14227	+1.3	unpriced forms	priced
+tail_calls	68020	O2	clang	14940	15120	+1.2	unpriced forms	priced
+tail_calls	68020	O2	gcc	11814	11994	+1.5	unpriced forms	priced
+tail_calls	68020	O2	ours	12887	13067	+1.4	unpriced forms	priced
+tail_calls	68020	O3	clang	14940	15120	+1.2	unpriced forms	priced
+tail_calls	68020	O3	gcc	11675	11855	+1.5	unpriced forms	priced
+tail_calls	68020	O3	ours	12887	13067	+1.4	unpriced forms	priced
+tail_calls	68020	Os	clang	15367	15547	+1.2	unpriced forms	priced
+tail_calls	68020	Os	gcc	11780	11960	+1.5	unpriced forms	priced
+tail_calls	68020	Os	ours	14357	14537	+1.3	unpriced forms	priced
+u64_shift_select_arms	68020	O1	clang	3553	3633	+2.3	unpriced forms	priced
+u64_shift_select_arms	68020	O1	gcc	4262	4342	+1.9	unpriced forms	priced
+u64_shift_select_arms	68020	O1	ours	3906	3986	+2.0	unpriced forms	priced
+u64_shift_select_arms	68020	O2	clang	3553	3633	+2.3	unpriced forms	priced
+u64_shift_select_arms	68020	O2	gcc	4091	4171	+2.0	unpriced forms	priced
+u64_shift_select_arms	68020	O2	ours	3611	3691	+2.2	unpriced forms	priced
+u64_shift_select_arms	68020	O3	clang	3553	3633	+2.3	unpriced forms	priced
+u64_shift_select_arms	68020	O3	gcc	4091	4171	+2.0	unpriced forms	priced
+u64_shift_select_arms	68020	O3	ours	3611	3691	+2.2	unpriced forms	priced
+u64_shift_select_arms	68020	Os	clang	3553	3633	+2.3	unpriced forms	priced
+u64_shift_select_arms	68020	Os	gcc	4256	4336	+1.9	unpriced forms	priced
+u64_shift_select_arms	68020	Os	ours	3923	4003	+2.0	unpriced forms	priced
+uint64_to_float	68020	O1	clang	3697	3777	+2.2	unpriced forms	priced
+uint64_to_float	68020	O1	gcc	20274	20354	+0.4	unpriced forms	priced
+uint64_to_float	68020	O1	ours	20380	20460	+0.4	unpriced forms	priced
+uint64_to_float	68020	O2	clang	3697	3777	+2.2	unpriced forms	priced
+uint64_to_float	68020	O2	gcc	3732	3812	+2.1	unpriced forms	priced
+uint64_to_float	68020	O2	ours	3691	3771	+2.2	unpriced forms	priced
+uint64_to_float	68020	O3	clang	3697	3777	+2.2	unpriced forms	priced
+uint64_to_float	68020	O3	gcc	3732	3812	+2.1	unpriced forms	priced
+uint64_to_float	68020	O3	ours	3691	3771	+2.2	unpriced forms	priced
+uint64_to_float	68020	Os	clang	3697	3777	+2.2	unpriced forms	priced
+uint64_to_float	68020	Os	gcc	20537	20617	+0.4	unpriced forms	priced
+uint64_to_float	68020	Os	ours	3708	3788	+2.2	unpriced forms	priced
+urem_eq	68020	O1	clang	2675053	2675113	+0.0	unpriced forms	priced
+urem_eq	68020	O1	gcc	2003060	3155267	+57.5	unpriced forms	unpriced forms
+urem_eq	68020	O1	ours	2831063	2831123	+0.0	unpriced forms	priced
+urem_eq	68020	O2	clang	2807060	2807120	+0.0	unpriced forms	priced
+urem_eq	68020	O2	gcc	1835011	2987218	+62.8	unpriced forms	unpriced forms
+urem_eq	68020	O2	ours	2667063	2667123	+0.0	unpriced forms	priced
+urem_eq	68020	O3	clang	2807060	2807120	+0.0	unpriced forms	priced
+urem_eq	68020	O3	gcc	1835011	2987218	+62.8	unpriced forms	unpriced forms
+urem_eq	68020	O3	ours	2667063	2667123	+0.0	unpriced forms	priced
+urem_eq	68020	Os	clang	2807060	2807120	+0.0	unpriced forms	priced
+urem_eq	68020	Os	gcc	2002996	3155203	+57.5	unpriced forms	unpriced forms
+urem_eq	68020	Os	ours	30465456	4111267	-86.5	unpriced forms	priced
+value_of_valueless	68020	O1	clang	674	694	+3.0	unpriced forms	priced
+value_of_valueless	68020	O1	gcc	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	O1	ours	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	O2	clang	674	694	+3.0	unpriced forms	priced
+value_of_valueless	68020	O2	gcc	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	O2	ours	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	O3	clang	674	694	+3.0	unpriced forms	priced
+value_of_valueless	68020	O3	gcc	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	O3	ours	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	Os	clang	674	694	+3.0	unpriced forms	priced
+value_of_valueless	68020	Os	gcc	663	683	+3.0	unpriced forms	priced
+value_of_valueless	68020	Os	ours	663	683	+3.0	unpriced forms	priced
+variadic	68020	O1	clang	3734	3814	+2.1	unpriced forms	priced
+variadic	68020	O1	ours	3236	3316	+2.5	unpriced forms	priced
+variadic	68020	O2	clang	3502	3582	+2.3	unpriced forms	priced
+variadic	68020	O2	ours	3117	3197	+2.6	unpriced forms	priced
+variadic	68020	O3	clang	3502	3582	+2.3	unpriced forms	priced
+variadic	68020	O3	ours	3117	3197	+2.6	unpriced forms	priced
+variadic	68020	Os	clang	3734	3814	+2.1	unpriced forms	priced
+variadic	68020	Os	ours	3261	3341	+2.5	unpriced forms	priced
+volatile_bitfield	68020	O1	clang	3734	3834	+2.7	unpriced forms	priced
+volatile_bitfield	68020	O1	gcc	3865	3965	+2.6	unpriced forms	priced
+volatile_bitfield	68020	O1	ours	3694	3794	+2.7	unpriced forms	priced
+volatile_bitfield	68020	O2	clang	3734	3834	+2.7	unpriced forms	priced
+volatile_bitfield	68020	O2	gcc	3867	3967	+2.6	unpriced forms	priced
+volatile_bitfield	68020	O2	ours	3694	3794	+2.7	unpriced forms	priced
+volatile_bitfield	68020	O3	clang	3734	3834	+2.7	unpriced forms	priced
+volatile_bitfield	68020	O3	gcc	3867	3967	+2.6	unpriced forms	priced
+volatile_bitfield	68020	O3	ours	3694	3794	+2.7	unpriced forms	priced
+volatile_bitfield	68020	Os	clang	3734	3834	+2.7	unpriced forms	priced
+volatile_bitfield	68020	Os	gcc	3867	3967	+2.6	unpriced forms	priced
+volatile_bitfield	68020	Os	ours	3719	3819	+2.7	unpriced forms	priced
+wide_shift_by_one	68020	O1	clang	54667	54947	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	O1	gcc	56954	57234	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	O1	ours	97170	97450	+0.3	unpriced forms	priced
+wide_shift_by_one	68020	O2	clang	54667	54947	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	O2	gcc	55825	56105	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	O2	ours	44614	44894	+0.6	unpriced forms	priced
+wide_shift_by_one	68020	O3	clang	54667	54947	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	O3	gcc	55825	56105	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	O3	ours	44614	44894	+0.6	unpriced forms	priced
+wide_shift_by_one	68020	Os	clang	54667	54947	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	Os	gcc	60925	61205	+0.5	unpriced forms	priced
+wide_shift_by_one	68020	Os	ours	97170	97450	+0.3	unpriced forms	priced
+widening_multiply	68020	O1	clang	89997	90070	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	O1	ours	86205	86278	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	O2	clang	89997	90070	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	O2	ours	86205	86278	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	O3	clang	82302	82375	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	O3	ours	86205	86278	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	Os	clang	89997	90070	+0.1	unpriced forms	unpriced forms
+widening_multiply	68020	Os	ours	87776	87849	+0.1	unpriced forms	unpriced forms
+word_compare_branches	68020	O1	clang	82475	82755	+0.3	unpriced forms	priced
+word_compare_branches	68020	O1	gcc	51900	52180	+0.5	unpriced forms	priced
+word_compare_branches	68020	O1	ours	72136	72416	+0.4	unpriced forms	priced
+word_compare_branches	68020	O2	clang	82475	82755	+0.3	unpriced forms	priced
+word_compare_branches	68020	O2	gcc	46170	46450	+0.6	unpriced forms	priced
+word_compare_branches	68020	O2	ours	63708	63988	+0.4	unpriced forms	priced
+word_compare_branches	68020	O3	clang	82475	82755	+0.3	unpriced forms	priced
+word_compare_branches	68020	O3	gcc	41696	41976	+0.7	unpriced forms	priced
+word_compare_branches	68020	O3	ours	63708	63988	+0.4	unpriced forms	priced
+word_compare_branches	68020	Os	clang	82083	82363	+0.3	unpriced forms	priced
+word_compare_branches	68020	Os	gcc	47899	48179	+0.6	unpriced forms	priced
+word_compare_branches	68020	Os	ours	72406	72686	+0.4	unpriced forms	priced
+word_compares	68020	O1	clang	71269	71549	+0.4	unpriced forms	priced
+word_compares	68020	O1	gcc	48889	49169	+0.6	unpriced forms	priced
+word_compares	68020	O1	ours	58709	58989	+0.5	unpriced forms	priced
+word_compares	68020	O2	clang	77554	77834	+0.4	unpriced forms	priced
+word_compares	68020	O2	gcc	37646	37926	+0.7	unpriced forms	priced
+word_compares	68020	O2	ours	48930	49210	+0.6	unpriced forms	priced
+word_compares	68020	O3	clang	89369	89649	+0.3	unpriced forms	priced
+word_compares	68020	O3	gcc	35549	35829	+0.8	unpriced forms	priced
+word_compares	68020	O3	ours	48930	49210	+0.6	unpriced forms	priced
+word_compares	68020	Os	clang	76988	77268	+0.4	unpriced forms	priced
+word_compares	68020	Os	gcc	38828	39108	+0.7	unpriced forms	priced
+word_compares	68020	Os	ours	59497	59777	+0.5	unpriced forms	priced
+wrapv_overflow_check	68020	O1	clang	2972	3072	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O1	gcc	2949	3049	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O1	ours	2950	3050	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O2	clang	2972	3072	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O2	gcc	2949	3049	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O2	ours	2950	3050	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O3	clang	2972	3072	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O3	gcc	2949	3049	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	O3	ours	2950	3050	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	Os	clang	2972	3072	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	Os	gcc	2949	3049	+3.4	unpriced forms	priced
+wrapv_overflow_check	68020	Os	ours	2962	3062	+3.4	unpriced forms	priced
+write_through_parameter	68020	O1	clang	3088	3168	+2.6	wrong-output	wrong-output
+write_through_parameter	68020	O1	gcc	2957	3037	+2.7	unpriced forms	priced
+write_through_parameter	68020	O1	ours	2956	3036	+2.7	unpriced forms	priced
+write_through_parameter	68020	O2	clang	2723	2803	+2.9	unpriced forms	priced
+write_through_parameter	68020	O2	gcc	2966	3046	+2.7	unpriced forms	priced
+write_through_parameter	68020	O2	ours	2711	2791	+3.0	unpriced forms	priced
+write_through_parameter	68020	O3	clang	2723	2803	+2.9	unpriced forms	priced
+write_through_parameter	68020	O3	gcc	2728	2808	+2.9	unpriced forms	priced
+write_through_parameter	68020	O3	ours	2711	2791	+3.0	unpriced forms	priced
+write_through_parameter	68020	Os	clang	3088	3168	+2.6	wrong-output	wrong-output
+write_through_parameter	68020	Os	gcc	2966	3046	+2.7	unpriced forms	priced
+write_through_parameter	68020	Os	ours	2934	3014	+2.7	unpriced forms	priced
+x87_arguments	68020	O1	clang	96847	96907	+0.1	unpriced forms	priced
+x87_arguments	68020	O1	gcc	98685	98745	+0.1	unpriced forms	priced
+x87_arguments	68020	O1	ours	96833	96893	+0.1	unpriced forms	priced
+x87_arguments	68020	O2	clang	96590	96650	+0.1	unpriced forms	priced
+x87_arguments	68020	O2	gcc	96633	96693	+0.1	unpriced forms	priced
+x87_arguments	68020	O2	ours	96300	96360	+0.1	unpriced forms	priced
+x87_arguments	68020	O3	clang	96590	96650	+0.1	unpriced forms	priced
+x87_arguments	68020	O3	gcc	96633	96693	+0.1	unpriced forms	priced
+x87_arguments	68020	O3	ours	96300	96360	+0.1	unpriced forms	priced
+x87_arguments	68020	Os	clang	106030	106090	+0.1	unpriced forms	priced
+x87_arguments	68020	Os	gcc	106462	106522	+0.1	unpriced forms	priced
+x87_arguments	68020	Os	ours	106487	106547	+0.1	unpriced forms	priced
+x87rotate	68020	O1	clang	20739	20759	+0.1	unpriced forms	priced
+x87rotate	68020	O1	gcc	25829	25849	+0.1	unpriced forms	priced
+x87rotate	68020	O1	ours	26101	26121	+0.1	unpriced forms	priced
+x87rotate	68020	O2	clang	20739	20759	+0.1	unpriced forms	priced
+x87rotate	68020	O2	gcc	25758	25778	+0.1	unpriced forms	priced
+x87rotate	68020	O2	ours	21135	21155	+0.1	unpriced forms	priced
+x87rotate	68020	O3	clang	20739	20759	+0.1	unpriced forms	priced
+x87rotate	68020	O3	gcc	25758	25778	+0.1	unpriced forms	priced
+x87rotate	68020	O3	ours	21135	21155	+0.1	unpriced forms	priced
+x87rotate	68020	Os	clang	20948	20968	+0.1	unpriced forms	priced
+x87rotate	68020	Os	gcc	26114	26134	+0.1	unpriced forms	priced
+x87rotate	68020	Os	ours	26387	26407	+0.1	unpriced forms	priced
+zz_f	68020	O1	clang	2340	2420	+3.4	unpriced forms	priced
+zz_f	68020	O1	gcc	2348	2428	+3.4	unpriced forms	priced
+zz_f	68020	O1	ours	2334	2414	+3.4	unpriced forms	priced
+zz_f	68020	O2	clang	2340	2420	+3.4	unpriced forms	priced
+zz_f	68020	O2	gcc	2348	2428	+3.4	unpriced forms	priced
+zz_f	68020	O2	ours	2334	2414	+3.4	unpriced forms	priced
+zz_f	68020	O3	clang	2340	2420	+3.4	unpriced forms	priced
+zz_f	68020	O3	gcc	2348	2428	+3.4	unpriced forms	priced
+zz_f	68020	O3	ours	2334	2414	+3.4	unpriced forms	priced
+zz_f	68020	Os	clang	2340	2420	+3.4	unpriced forms	priced
+zz_f	68020	Os	gcc	2348	2428	+3.4	unpriced forms	priced
+zz_f	68020	Os	ours	2351	2431	+3.4	unpriced forms	priced

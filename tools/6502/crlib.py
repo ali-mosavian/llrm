@@ -10,6 +10,9 @@ GROUPS = ["int64", "f32", "f32_64", "f64", "clz"]
 # Hand-written members that config/6502/config.h tells the link to include: f64 mul and div call __mul32x32 (SF_MUL32X32_6502) at every level
 # but -O2 folds away, and no group above defines it (float_in_place_update at -O1: Unresolved external '__mul32x32', 2026-11-10).
 ASM_MEMBERS = ["config/6502/mul32x32.s"]
+# Members that replace a generic file's routines at 6502: config.h defines SF_EXT_MULDIV, so lib/fp/f32/{mul,div}.c compile to nothing and
+# this file defines __mulsf3 and __divsf3 (the host-built index below sees the generic files' symbols, so these are indexed over them).
+CONFIG_MEMBERS = ["config/6502/sf32_6502.c"]
 _LOCK = threading.Lock()
 _INDEX = {}
 _MEMBERS = {}
@@ -25,6 +28,12 @@ def index(rt):
             for line in out.stdout.splitlines():
                 symbol, file, _ = (line.split("\t") + ["", ""])[:3]
                 _INDEX[rt].setdefault(symbol, file)
+            for file in CONFIG_MEMBERS:
+                built = subprocess.run(["sh", "-c", 'T=$(mktemp -d); trap "rm -r $T" EXIT; cd "$1" && cc -c -O2 -fno-builtin -Iinclude -DSF_INTABI -DSF_EXT_MULDIV=1 "$2" -o $T/m.o && nm --defined-only -g $T/m.o', "sh", str(rt), file], capture_output=True, text=True)
+                if built.returncode:
+                    raise RuntimeError(f"{file}: " + built.stderr[-300:])
+                for line in built.stdout.splitlines():
+                    _INDEX[rt][line.split()[-1]] = file
             for file in ASM_MEMBERS:
                 for line in (rt / file).read_text().splitlines():
                     if line.startswith(".export"):

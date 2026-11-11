@@ -103,6 +103,23 @@ impl Machine for M68kMachine {
     }
 }
 
+/// Whether `(d8,An,Xn)` is dearer than `(An)` on `cpu`, read from the timing
+/// tables: clocks first, then the extension word's bytes at the CPU's price
+/// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
+pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
+    use crate::dagisel::hooks::Cpu;
+    static DEARER: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let price = |text: &str, bytes: u32| {
+                let clocks = crate::timing::cost(cpu, text, bytes, false).expect("a priced move").clocks;
+                crate::timing::order(cpu, false, clocks, bytes)
+            };
+            price("move.l (0,%a1,%d1), %d0", 4) > price("move.l (%a1), %d0", 2)
+        })
+    });
+    DEARER[cpu as usize]
+}
+
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct M68k {
@@ -241,27 +258,19 @@ impl Tti for M68k {
         kind: CostKind,
     ) -> Cost {
         if let Some(Ty::Int(bits)) = ret {
-            thread_local! {
-                static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
-                    const { std::cell::RefCell::new(Vec::new()) };
-            }
-            let lowering = LOWERING.with(|cache| {
-                let mut cache = cache.borrow_mut();
-                if let Some((_, one)) = cache.iter().find(|(cpu, _)| *cpu == self.cpu) {
-                    return one.clone();
-                }
-                let made = Rc::new(crate::dagisel::lowering::target_lowering_with(self.cpu, true));
-                cache.push((self.cpu, made.clone()));
-                made
-            });
-            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review 2026-12-20): the pin
-            // prices an expansion at 1 under `TCK_CodeSize` (one call); the loop unroller asks
-            // that kind, so a `smul.fix.sat` that expands to dozens of instructions read as
-            // one and the 3x3 loops of `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
+            let lowering = lowering_of(self.cpu);
+            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review
+            // 2026-12-20): the pin prices an expansion at 1 under
+            // `TCK_CodeSize` (one call); the loop unroller asks
+            // that kind, so a `smul.fix.sat` that expands to dozens of
+            // instructions read as one and the 3x3 loops of
+            // `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
             // Here an expansion costs the same under every kind.
             let _ = kind;
             let code_size = false;
-            if let Some(cost) = llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size) {
+            if let Some(cost) =
+                llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size)
+            {
                 return Cost::of(cost);
             }
         }
@@ -342,14 +351,23 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// `InlineParams::DefaultThreshold`, 50 where the pin's is 225: a call is
-    /// about 20 B (arguments, `jsr`, `addq`, `rts`) and 50 clk, so a copy of a
-    /// body pays for itself only up to a dozen instructions; a 30-operation
-    /// body at six sites was inlined six times. 300 seeds -O2 68020: 516950
-    /// -> 472526 B, the 24 programs unchanged. DEVIATE: the pin's target sets
-    /// none. Exit: review 2026-11-20.
-    fn inline_threshold_override(&self) -> Option<i64> {
-        Some(50)
+    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
+    /// speed caller (-O2, -O3) that grows the code is refused when its bytes at
+    /// the CPU's `timings.times` rate cost more clocks than the call saves at
+    /// the site's frequency; the rate is the one the O2/O3 verdicts are judged
+    /// at (0.5 B per clk on the 68000, 1.33 on the 68020, 3.2 from the 68030).
+    /// The pin inlines to its threshold (225) alone; the flat 50 this replaces
+    /// kept a loop's call to a 100-instruction callee (a call per trip).
+    /// No exemption for a callee loop with a constant bound: it admitted
+    /// growth with no gain (`switch`, `sieve` 68020).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        crate::timing::byte_milliclocks(self.cpu)
+    }
+
+    /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
+    /// speculation of a branch into selects then takes the limit of targets without one (condtocond D3).
+    fn has_cmov(&self) -> bool {
+        false
     }
 
     fn name(&self) -> &'static str {
@@ -378,6 +396,16 @@ impl Tti for M68k {
         true
     }
 
+    /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
+    /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
+    /// range check, the dispatch and a word a case.
+    fn switch_code_size(&self, clusters: u64, table: u64) -> i64 {
+        if !self.code_size_bytes {
+            return 0;
+        }
+        if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
+    }
+
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
@@ -400,6 +428,29 @@ impl Tti for M68k {
             2 if !self.scaled_index => !(has_base_reg || base_offset != 0),
             2 | 4 | 8 => self.scaled_index,
             _ => false,
+        }
+    }
+
+    /// `getScalingFactorCost`: a second register in the address is one where
+    /// the tables say it is dearer than a plain address
+    /// ([`index_is_dearer_than_plain`]), else nothing; an illegal mode is
+    /// invalid. The pin's M68k has no override (the base class prices every
+    /// legal mode 0); x86 and arm64 state the rule
+    /// ([X86TargetTransformInfo.cpp#L8045](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8045)).
+    /// DEVIATE M68K-LSR-INDEX (owner m68k-lsr-addressing, exit none: the
+    /// table is the cause): LSR keeps a pointer where an index needs as many
+    /// registers. Closes M68K-LSR-IDX-CLOCKS.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::of(i64::from(scale != 0 && index_is_dearer_than_plain(self.cpu)))
+        } else {
+            Cost::INVALID
         }
     }
 
@@ -489,7 +540,16 @@ impl Tti for M68k {
         if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::cmp_sel(op, ty);
         }
-        Basic.cmp_sel_cost(op, ty, kind)
+        // `BasicTTIImplBase::getCmpSelInstrCost`: a legal operation costs 1
+        // times the type-legalization overhead, `LT.first`: the registers the
+        // type splits into (an `i64` or a `double` two, an `i128` four).
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1454
+        let registers = match ty {
+            Ty::Int(bits) => bits.div_ceil(32).max(1),
+            Ty::Double => 2,
+            Ty::Float | Ty::X87 | Ty::Pointer => 1,
+        };
+        Basic.cmp_sel_cost(op, ty, kind) * i64::from(registers)
     }
 
     fn memory_op_cost(
@@ -609,17 +669,69 @@ impl Tti for M68k {
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
         // line). Past 32 bits the m68k makes a library call of it, and the
         // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
-        // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
+        // `__mulsi3` calls for a loop of 16. Only the call is priced so: a
+        // multiply `ExpandIntRes_MUL` makes of 32-bit `UMUL_LOHI`s
+        // (`mulu.l`, 68020), or `visitMUL` makes of shifts and an add, is the
+        // pin's one operation. Exit: none, a target's prices.
         if matches!(
             op,
             ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
         )
             && matches!(ty, Ty::Int(bits) if bits > 32)
+            && !(op == ArithOp::Mul && self.multiply_makes_no_call(left, right))
         {
             return Cost::EXPENSIVE;
         }
         Basic.arithmetic_cost(op, ty, kind, left, right)
     }
+}
+
+impl M68k {
+    /// Whether the lowering writes a wide multiply of `left` by `right` with no
+    /// library call: from 32-bit `UMUL_LOHI`s when the target has them
+    /// (`ExpandIntRes_MUL`), else only a power of two, its negation, or a
+    /// positive constant of shifts and an add
+    /// ([`crate::dagisel::mulprice::chain`]; any other negative one is a call).
+    fn multiply_makes_no_call(
+        &self,
+        left: OperandInfo,
+        right: OperandInfo,
+    ) -> bool {
+        use llrm_codegen::backend::selectiondag::{
+            Action,
+            isd::ISD,
+            mvt::{EVT, MVT},
+        };
+        let wide = lowering_of(self.cpu).operation_action(ISD::UMulLoHi, EVT::Simple(MVT::I32));
+        if matches!(wide, Action::Legal | Action::Custom | Action::Promote) {
+            return true;
+        }
+        [left, right].into_iter().any(|operand| {
+            operand.power_of_two
+                || operand.negated_power_of_two
+                || operand
+                    .value
+                    .and_then(|value| i32::try_from(value).ok())
+                    .is_some_and(|value| value > 0 && crate::dagisel::mulprice::chain(self.cpu, value as u32).is_some())
+        })
+    }
+}
+
+/// The CPU's SelectionDAG lowering, built once per thread.
+fn lowering_of(cpu: crate::dagisel::hooks::Cpu) -> Rc<llrm_codegen::backend::selectiondag::TargetLowering> {
+    thread_local! {
+        static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    LOWERING.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((_, one)) = cache.iter().find(|(known, _)| *known == cpu) {
+            return one.clone();
+        }
+        let made = Rc::new(crate::dagisel::lowering::target_lowering_with(cpu, true));
+        cache.push((cpu, made.clone()));
+        made
+    })
 }
 
 #[cfg(test)]
