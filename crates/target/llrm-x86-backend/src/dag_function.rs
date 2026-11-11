@@ -1040,7 +1040,7 @@ fn selected_in(
         // open, exit 2026-11-20 (kept by measurement 2026-11-06). m16 -Os was
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
-        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_int_div_cheap(cpu.size || cpu.min_size || cpu.bytes_strict() && arch.small_divide_at_o1())
         .with_sdiv_pow2_stays(
             (cpu.size || cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize"))
                 && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size()),
