@@ -150,6 +150,9 @@ pub fn target_lowering_with(
     set(&[SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[AddC, AddE, SubC, SubE], &int, if carry_chain { Action::Custom } else { Action::Expand });
     set(&[BrCond], &[MVT::Other], Action::Custom);
+    // `setOperationAction(ISD::BR_JT, MVT::Other, Expand)`: a load of the
+    // table entry, then an indirect jump
+    set(&[BrJT], &[MVT::Other], Action::Expand);
     set(&[Select, SetCC, SetCCCarry], &int, Action::Custom);
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
@@ -234,7 +237,10 @@ pub fn prefers_word_multiply(cpu: Cpu) -> bool {
         Cpu::M68060 => Model::M68060,
     };
     let clocks = |text| cost_on(model, text, 2, false).map(|cost| cost.clocks);
-    matches!((clocks("mulu.w %d1, %d0"), clocks("mulu.l %d1, %d0")), (Ok(word), Ok(long)) if word <= long)
+    matches!(
+        (clocks("mulu.w %d1, %d0"), clocks("mulu.l %d1, %d0")),
+        (Ok(word), Ok(long)) if word <= long
+    )
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -342,6 +348,7 @@ impl Hooks for M68kLowering {
             ISD::Select => Some(lower_select(dag, node, self.cpu)),
             ISD::BrCond => Some(lower_brcond(dag, node, self.cpu)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
+            ISD::JumpTable => Some(super::call::lower_jump_table(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
@@ -373,10 +380,11 @@ impl Hooks for M68kLowering {
         signed: bool,
     ) -> Option<Vec<SDValue>> {
         use super::call::{Ext, In, Out};
-        // DEVIATE: a result wider than a long (`RetCC_M68k_C` has i32 in D0, D1:
+        // DEVIATE: a result wider than a long (`RetCC_M68k_C` has i32 in D0,
+        // D1:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kCallingConv.td#L26-L32)
-        // is not modeled, so the caller expands the operation inline. Exit:
-        // a two-register result in `lower_call`, by 2026-11-14.
+        // is not modeled, so the caller expands the operation inline. Exit: a
+        // two-register result in `lower_call`, by 2026-11-14.
         if rets.iter().any(|ret| ret.size_in_bits() > 32) {
             return None;
         }
@@ -698,8 +706,9 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
-/// The bytes every stack argument takes, which is also the most a `va_arg` aligns its list pointer to (gcc packs each
-/// in a 4-byte slot; the pin's M68k sets neither `getMinStackArgumentAlignment` nor a cap).
+/// The bytes every stack argument takes, which is also the most a `va_arg`
+/// aligns its list pointer to (gcc packs each in a 4-byte slot; the pin's M68k
+/// sets neither `getMinStackArgumentAlignment` nor a cap).
 pub const VA_SLOT: u32 = 4;
 
 /// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`
