@@ -6,7 +6,7 @@ mod common;
 
 use llrm_6502::driver::{Level, Request, assembly};
 
-const LOW_BIT: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+const LOW_BIT: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"
 
 define i8 @low(ptr %p) {
 entry:

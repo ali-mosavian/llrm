@@ -53,6 +53,10 @@ pub struct Layout {
     reserved_call_frame: bool,
 }
 
+/// The alignment the soft stack keeps, in bytes: frames are any size. The
+/// datalayout's `S` is this (`tests/stack_facts.rs`).
+pub const STACK_ALIGN: i64 = 1;
+
 pub fn layout(function: &Function) -> Layout {
     let mut objects = function.objects.clone();
     let first_save = objects.len();
@@ -63,7 +67,7 @@ pub fn layout(function: &Function) -> Layout {
     let frame = Frame {
         local_area: 0,
         max_align: 1,
-        stack_align: 1,
+        stack_align: STACK_ALIGN,
         transient_align: 1,
         adjusts_stack: function.adjusts_stack,
         has_var_sized: function.has_var_sized,
@@ -74,6 +78,11 @@ pub fn layout(function: &Function) -> Layout {
     let stack_size = calculate_frame_object_offsets(&mut objects, function.fixed, frame);
     Layout { stack_size, objects, saved: function.saved.clone(), first_save, reserved_call_frame }
 }
+
+/// The largest `alloca` alignment accepted: what clang's msp430 layout (the front end this target runs) gives an `int`
+/// or a `long`. One past [`STACK_ALIGN`]: such an object is clamped to what the frame keeps, a larger one is refused
+/// by name (`Machine::max_alloca_align`).
+pub const MAX_ALLOCA_ALIGN: u64 = 2;
 
 fn adjust(bytes: i64) -> MInst {
     MInst::new(op::ADJSP, vec![Operand::Imm(bytes)])
@@ -160,5 +169,18 @@ impl Layout {
         operands[at] = Operand::reg("rs0");
         operands[at + 1] = Operand::Imm(offset);
         Ok(MInst::new(inst.opcode, operands))
+    }
+}
+
+#[cfg(test)]
+mod stack_facts {
+    /// The datalayout named no stack alignment, so a pass raising a local to its type's preferred alignment had no bound.
+    #[test]
+    fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
+        let layout = crate::LAYOUT
+            .lines()
+            .find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"'))
+            .expect("a datalayout line");
+        llrm_target::testing::assert_stack_facts("6502", layout, super::STACK_ALIGN as u64, None);
     }
 }
