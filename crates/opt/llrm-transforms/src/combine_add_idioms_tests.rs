@@ -259,3 +259,49 @@ fn an_odd_xor_of_an_even_mask_is_a_negated_or() {
         "  %0 = or i32 %z, -15\n  %1 = sub i32 %r0, %0\n  ret i32 %1\n",
     );
 }
+
+/// The pin's `divceil.ll` idiom body: `udiv`/`urem` of `ty`, added in `wide`.
+fn div_ceil_body(
+    ty: &str,
+    wide: &str,
+    commuted: bool,
+) -> String {
+    let (q, add) = if ty == wide {
+        ("%q".to_string(), String::new())
+    } else {
+        ("%e".to_string(), format!("  %e = zext {ty} %q to {wide}\n"))
+    };
+    let (a, b) = if commuted { ("%round", q.as_str()) } else { (q.as_str(), "%round") };
+    format!(
+        "  %q = udiv {ty} %x, %y\n  %r = urem {ty} %x, %y\n  %cond = icmp ne {ty} %r, 0\n{add}  %round = zext i1 %cond to {wide}\n  %result = add {wide} {a}, {b}\n  ret {wide} %result\n"
+    )
+}
+
+const RANGED_I8: &str = "i8 range(i8 0, 101) %x, i8 range(i8 1, 11) %y";
+
+/// `divceil.ll`: with `X` in [0,100] and `Y` in [1,10] the idiom was left as
+/// three instructions and a `zext` instead of `udiv (add nuw X, Y-1), Y`.
+#[test]
+fn the_div_ceil_idiom_is_one_udiv_of_a_nuw_add() {
+    let after = "  %0 = add i8 %y, -1\n  %1 = add nuw i8 %x, %0\n  %2 = udiv i8 %1, %y\n  ret i8 %2\n";
+    check("i8", RANGED_I8, &div_ceil_body("i8", "i8", false), after);
+    check("i8", RANGED_I8, &div_ceil_body("i8", "i8", true), after);
+}
+
+/// `divceil.ll`, zext form: `udiv`/`urem` in i8, the add in i16.
+#[test]
+fn the_div_ceil_idiom_through_a_zext_is_a_zext_of_the_udiv() {
+    let after = "  %0 = add i8 %y, -1\n  %1 = add nuw i8 %x, %0\n  %2 = udiv i8 %1, %y\n  %3 = zext i8 %2 to i16\n  ret i16 %3\n";
+    check("i16", RANGED_I8, &div_ceil_body("i8", "i16", false), after);
+    check("i16", RANGED_I8, &div_ceil_body("i8", "i16", true), after);
+}
+
+/// `divceil.ll` negatives: an unbounded `Y` (max 255) or `X` makes
+/// `X + (Y-1)` able to wrap, so the idiom stays.
+#[test]
+fn the_div_ceil_idiom_stays_where_the_add_can_wrap() {
+    for params in ["i8 range(i8 0, 101) %x, i8 %y", "i8 %x, i8 range(i8 1, 11) %y"] {
+        let body = div_ceil_body("i8", "i8", false);
+        check("i8", params, &body, &body);
+    }
+}
