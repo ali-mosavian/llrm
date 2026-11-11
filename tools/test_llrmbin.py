@@ -17,6 +17,17 @@ class ResolverTests(unittest.TestCase):
             self.assertEqual(llrmbin.bin_dir({"CARGO_TARGET_DIR": built, "LLRM_BIN": "/x"}, Path(repo)), Path("/x"))
             self.assertEqual(llrmbin.bin_dir({}, Path(repo)), Path(repo) / "target" / "release")
 
+    def test_cc_environment_names_the_cache_dir_without_home(self):
+        """tools/bench test_widths scrubs HOME: llrm-cc then had no way to the Open Watcom tree and both tests failed."""
+        saved = {name: os.environ.pop(name, None) for name in ("HOME", "XDG_CACHE_HOME")}
+        try:
+            expected = str(llrmbin.ow_tree().parent.parent)
+            self.assertEqual(llrmbin.cc_environment().get("XDG_CACHE_HOME"), expected)
+        finally:
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
+
     def test_an_open_watcom_tree_is_present_only_once_it_is_complete(self):
         """toolchain/cache.sh writes `.complete` last: a directory without it is an interrupted fetch, and the compile then
         failed on a missing library instead of naming tools/ow-fetch.sh."""
