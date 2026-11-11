@@ -1359,6 +1359,13 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE IPACP-O3: whether a function is copied for the constants its
+    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        false
+    }
+
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
     /// constants fold enough of it to pay the copy at the speed rate.
     fn peels_folded_entry(&self) -> bool {

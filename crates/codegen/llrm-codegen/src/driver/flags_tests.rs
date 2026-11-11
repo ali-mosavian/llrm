@@ -91,7 +91,8 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676); the pin's default<O3> has no
-    // IPA-CP cloning, so -O3 leaves it off (recchop 1380 lines).
+    // IPA-CP cloning, so -O3 leaves it to the target
+    // (`Tti::ipa_cp_clones_at_speed`).
     assert_eq!(
         (
             pipeline(&["-O2"]).inline.cp_clone,
@@ -99,7 +100,7 @@ fn each_level_selects_gcc_s_passes() {
             pipeline(&["-O3", "-fno-ipa-cp-clone"]).inline.cp_clone,
             pipeline(&["-O2", "-fipa-cp-clone"]).inline.cp_clone
         ),
-        (false, false, false, true)
+        (None, None, Some(false), Some(true))
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
@@ -107,7 +108,7 @@ fn each_level_selects_gcc_s_passes() {
     );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
-    assert_eq!((max.inline, max.unroll), (Threshold { cp_clone: true, ..Threshold::new(250) }, true));
+    assert_eq!((max.inline, max.unroll), (Threshold { cp_clone: Some(true), ..Threshold::new(250) }, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.inline, os.unroll), (Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
