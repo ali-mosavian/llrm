@@ -2677,6 +2677,38 @@ impl ModuleAnalyses {
         }
     }
 
+    /// A copy that goes on as `self` does from here, for a second run of the
+    /// passes to come. The results are shared handles (they are read-only), the
+    /// held ones as stale as `self` holds them: the pipeline keeps some on
+    /// purpose (`GlobalsAA` between its `compute` and `recompute`, the frozen
+    /// `Summaries`), and a fork that made them afresh would see facts the run it
+    /// copies does not. The functions' managers and the memos are not copied:
+    /// they hold what a pass brings up to date from its last run and are
+    /// worked out afresh, as `LLRM_CHECK_MODULES` runs them.
+    pub fn fork(&self) -> Self {
+        Self {
+            program: Rc::clone(&self.program),
+            required: self.required.clone(),
+            stateless: self.stateless.clone(),
+            results: self.results.iter().map(|(id, (kind, result))| (*id, (*kind, Rc::clone(result)))).collect(),
+            dropped: self.dropped.clone(),
+            taken: self.taken.clone(),
+            outer: None,
+            functions: HashMap::default(),
+            edited: self.edited.clone(),
+            edit_log: self.edit_log.clone(),
+            log_epoch: self.log_epoch,
+            declarations_open: self.declarations_open,
+            listing: self.listing,
+            declaration_moves: self.declaration_moves.clone(),
+            unknown_until: self.unknown_until,
+            resets: self.resets,
+            metadata_open: self.metadata_open,
+            memos: HashMap::default(),
+            scratch: self.scratch,
+        }
+    }
+
     /// What `self` leaves for the analyses made next over this module.
     pub fn carried(self) -> Carried {
         let mut dropped = self.dropped;
@@ -3360,10 +3392,53 @@ pub struct PassManager {
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
     pub(crate) runs: usize,
+    /// The index of the pass a run may be resumed at (`hold`, `resume`): the
+    /// first of the tail a trial compile runs again.
+    pub resume_at: Option<usize>,
+    /// Whether `run` keeps the state at `resume_at` in `held`.
+    pub hold: bool,
+    pub held: Option<Held>,
+}
+
+/// A run stopped at pass `at` of group `group`, as `PassManager::hold` keeps it:
+/// the program, its analyses and the module analyses, forked
+/// (`ModuleAnalyses::fork`), for `PassManager::resume` to run the passes from
+/// `at` over again.
+pub struct Held {
+    program: Program,
+    analyses: ProgramAnalyses,
+    modules: ModuleAnalyses,
+    frozen: Vec<Kind>,
+    /// Whether the passes before `at` changed the module or its interface.
+    changed: bool,
+    group: usize,
+    at: usize,
+    runs: usize,
+}
+
+impl Held {
+    /// The held program.
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+}
+
+/// What `managed` is given to carry on a held run.
+struct Resumed {
+    modules: ModuleAnalyses,
+    frozen: Vec<Kind>,
+    changed: bool,
+    group: usize,
+    at: usize,
 }
 
 impl PassManager {
     /// `pass`, already boxed.
+    /// How many passes are added so far.
+    pub fn pass_count(&self) -> usize {
+        self.passes.len()
+    }
+
     pub fn add_boxed(
         &mut self,
         pass: Box<dyn FunctionPass>,
@@ -3445,7 +3520,19 @@ impl PassManager {
         &mut self,
         program: &mut Program,
     ) -> Result<Vec<Stage>, String> {
-        self.managed(program, &mut ProgramAnalyses::default())
+        self.managed(program, &mut ProgramAnalyses::default(), None)
+    }
+
+    /// The program the run `hold` kept, run from `resume_at` on by this manager,
+    /// which `recorded` built the way the held run's was.
+    pub fn resume(
+        &mut self,
+        held: Held,
+    ) -> Result<(Program, Vec<Stage>), String> {
+        let Held { mut program, mut analyses, modules, frozen, changed, group, at, runs } = held;
+        self.runs = runs;
+        let stages = self.managed(&mut program, &mut analyses, Some(Resumed { modules, frozen, changed, group, at }))?;
+        Ok((program, stages))
     }
 
     /// `run` over `module` as a program of its own, for `target`.
@@ -3465,9 +3552,12 @@ impl PassManager {
         &mut self,
         program: &mut Program,
         analyses: &mut ProgramAnalyses,
+        mut resumed: Option<Resumed>,
     ) -> Result<Vec<Stage>, String> {
         let mut stages = Vec::new();
-        self.runs = 0;
+        if resumed.is_none() {
+            self.runs = 0;
+        }
         let count = program.modules.len();
         let dumps: Vec<_> = (0..count)
             .map(|at| {
@@ -3475,7 +3565,7 @@ impl PassManager {
             })
             .collect();
         // A module a frontend made wrong is its maker's, not the first pass's.
-        for module in &program.modules {
+        for module in program.modules.iter().filter(|_| resumed.is_none()) {
             if self.verify_each {
                 let problems = spanned("verify", || crate::verify::verify(module));
                 if !problems.is_empty() {
@@ -3483,7 +3573,7 @@ impl PassManager {
                 }
             }
         }
-        let mut start = 0;
+        let mut start = resumed.as_ref().map_or(0, |one| one.group);
         while start < self.passes.len() {
             if let Pass::Program(pass) = &mut self.passes[start] {
                 let name = pass.name();
@@ -3524,21 +3614,56 @@ impl PassManager {
                 .find(|&one| matches!(self.passes[one], Pass::Program(_)))
                 .unwrap_or(self.passes.len());
             for at in 0..program.modules.len() {
-                for require in &self.program_required {
-                    require(program, analyses);
-                }
-                let before = interface(&program.modules[at]);
-                let mut modules = ModuleAnalyses {
-                    required: self.required.clone(),
-                    stateless: self.stateless.clone(),
-                    ..ModuleAnalyses::new(analyses.proxy(program, at))
+                let (mut modules, range, mut frozen, mut changed) = match resumed.take() {
+                    Some(one) => (one.modules, one.at..end, one.frozen, one.changed),
+                    None => {
+                        for require in &self.program_required {
+                            require(program, analyses);
+                        }
+                        let mut modules = ModuleAnalyses {
+                            required: self.required.clone(),
+                            stateless: self.stateless.clone(),
+                            ..ModuleAnalyses::new(analyses.proxy(program, at))
+                        };
+                        if let Some(before) = analyses.uncarry(at) {
+                            modules = modules.carrying(before);
+                        }
+                        (modules, start..end, Vec::new(), false)
+                    }
                 };
-                if let Some(before) = analyses.uncarry(at) {
-                    modules = modules.carrying(before);
-                }
-                let made = self.over(at, &mut program.modules[at], &mut modules, start..end, &dumps[at])?;
+                let before = interface(&program.modules[at]);
+                let mut made = Vec::new();
+                // A single module only: the held state is one module's.
+                let split = self.resume_at.filter(|&split| {
+                    self.hold && program.modules.len() == 1 && range.start <= split && split < range.end
+                });
+                let tail = match split {
+                    Some(split) => {
+                        made = self.over(at, &mut program.modules[at], &mut modules, &mut frozen, range.start..split, &dumps[at])?;
+                        changed |= made.iter().any(|one| !one.changes.is_empty())
+                            || spanned("interface", || interface(&program.modules[at])) != before;
+                        self.held = Some(Held {
+                            program: program.forked(),
+                            analyses: analyses.forked(),
+                            modules: modules.fork(),
+                            frozen: frozen.clone(),
+                            changed,
+                            group: start,
+                            at: split,
+                            runs: self.runs,
+                        });
+                        if std::env::var_os("S1_DIAG").is_some() {
+                            modules = modules.fork();
+                        }
+                        split..range.end
+                    }
+                    None => range,
+                };
+                let after = self.over(at, &mut program.modules[at], &mut modules, &mut frozen, tail, &dumps[at])?;
+                made.extend(after);
                 analyses.carry(at, modules.carried());
-                if made.iter().any(|one| !one.changes.is_empty())
+                if changed
+                    || made.iter().any(|one| !one.changes.is_empty())
                     || spanned("interface", || interface(&program.modules[at])) != before
                 {
                     analyses.invalidate();
@@ -3555,6 +3680,7 @@ impl PassManager {
         index: usize,
         module: &mut Module,
         analyses: &mut ModuleAnalyses,
+        frozen: &mut Vec<Kind>,
         passes: std::ops::Range<usize>,
         dump: &Option<std::path::PathBuf>,
     ) -> Result<Vec<Stage>, String> {
@@ -3570,7 +3696,6 @@ impl PassManager {
             running
         };
         let inputs = self.dump_inputs;
-        let mut frozen: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
@@ -3609,7 +3734,7 @@ impl PassManager {
                         }
                         analyses.invalidate(&preserved);
                         if !pass.adds_memory_operations() {
-                            checked_stale(module, analyses, &frozen, name);
+                            checked_stale(module, analyses, frozen, name);
                         }
                     }
                     for id in changed {
@@ -3800,7 +3925,7 @@ impl ProgramPass for PassManager {
         program: &mut Program,
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
-        self.managed(program, analyses).map(|_| ())
+        self.managed(program, analyses, None).map(|_| ())
     }
 }
 

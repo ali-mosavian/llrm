@@ -1575,16 +1575,68 @@ pub fn recorded(
     refuse_vectors(program)?;
     constrain_allocas(program)?;
     timed();
+    if applied.options.optimize && applied.options.prefers_size() {
+        mark_for_size(program, applied.options.has_min_size);
+    }
+    let mut manager = manager_for(program, applied);
+    let done = manager.run(program);
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
+        for module in &program.modules {
+            llrm_analysis::capturecheck::check_module(module, &program.layout);
+        }
+    }
+    done
+}
+
+/// `recorded`, keeping the state at the last list of function passes
+/// (`Phase::Late`) for `resumed`: a compile that runs that tail again with one
+/// decision of a pass reversed (a trial) does not run the head again. None where
+/// the pipeline has no such point (no optimization, one module only).
+pub fn held(
+    program: &mut Program,
+    applied: &Applied,
+) -> Result<Option<llrm_mir::passes::Held>, String> {
+    refuse_vectors(program)?;
+    constrain_allocas(program)?;
+    timed();
+    if applied.options.optimize && applied.options.prefers_size() {
+        mark_for_size(program, applied.options.has_min_size);
+    }
+    let mut manager = manager_for(program, applied);
+    manager.hold = true;
+    manager.run(program)?;
+    Ok(manager.held.take())
+}
+
+/// The program `held` kept, through the tail of the pipeline again. `applied` is
+/// the one the held run had but for what the tail reads, and the program the
+/// held run's own: the manager is built the way that run's was.
+pub fn resumed(
+    held: llrm_mir::passes::Held,
+    applied: &Applied,
+) -> Result<Program, String> {
+    let mut manager = manager_for(held.program(), applied);
+    let (program, _) = manager.resume(held)?;
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
+        for module in &program.modules {
+            llrm_analysis::capturecheck::check_module(module, &program.layout);
+        }
+    }
+    Ok(program)
+}
+
+/// The passes of the pipeline for `program`, in order.
+fn manager_for(
+    program: &Program,
+    applied: &Applied,
+) -> PassManager {
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
-    if applied.options.optimize && applied.options.prefers_size() {
-        mark_for_size(program, applied.options.has_min_size);
-    }
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
-        return manager.run(program);
+        return manager;
     }
     // The clones of the step before the walk and of the one after it share a bound.
     let cloning = crate::ipacp::Shared::default();
@@ -1760,6 +1812,7 @@ pub fn recorded(
     // after the interprocedural passes: a body that took the late unroll is
     // not run through the simplification pipeline again.
     if let Some(stage) = late_stage {
+        manager.resume_at = Some(manager.pass_count());
         manager.add(stage);
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
@@ -1876,13 +1929,7 @@ pub fn recorded(
     if applied.options.stored_homes {
         manager.add_module(crate::homes::Homes);
     }
-    let done = manager.run(program);
-    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
-        for module in &program.modules {
-            llrm_analysis::capturecheck::check_module(module, &program.layout);
-        }
-    }
-    done
+    manager
 }
 
 /// What clang does at -Os and -Oz: every defined function carries `optsize`,

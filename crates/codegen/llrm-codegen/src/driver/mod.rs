@@ -367,6 +367,15 @@ pub fn optimized_program(
     module: Module,
     options: &Options,
 ) -> Result<Program, String> {
+    optimized_program_holding(module, options, false).map(|(program, _)| program)
+}
+
+/// `optimized_program`, and with `hold` the state `optimized_holding` keeps.
+pub fn optimized_program_holding(
+    module: Module,
+    options: &Options,
+    hold: bool,
+) -> Result<(Program, Option<llrm_mir::passes::Held>), String> {
     let description = options.arch.layout();
     let layout = description.datalayout;
     match module.datalayout.as_deref() {
@@ -381,8 +390,8 @@ pub fn optimized_program(
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
-    optimized(&mut program, options)?;
-    Ok(program)
+    let held = optimized_holding(&mut program, options, hold)?;
+    Ok((program, held))
 }
 
 /// The backend over a program the mid-end finished: its module as masm.
@@ -546,6 +555,26 @@ pub fn optimized(
     program: &mut Program,
     options: &Options,
 ) -> Result<(), String> {
+    optimized_holding(program, options, false).map(drop)
+}
+
+/// The pipeline `options` ask for.
+fn pipeline_applied(options: &Options) -> llrm_transforms::pipeline::Applied {
+    let mut pipeline = options.pipeline.clone();
+    // The DAG builder lowers the switches that remain, as the pin's
+    // SelectionDAGBuilder does; the shadow run keeps the old selector's
+    // lowering for the functions the DAG path refuses.
+    pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
+    llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() }
+}
+
+/// `optimized`, and with `hold` the state at the pipeline's last list of
+/// function passes, for `optimized_resumed`.
+pub fn optimized_holding(
+    program: &mut Program,
+    options: &Options,
+    hold: bool,
+) -> Result<Option<llrm_mir::passes::Held>, String> {
     no_inlined(program, &options.no_inline)?;
     if options.stack_check {
         stack_checked(program);
@@ -553,12 +582,7 @@ pub fn optimized(
     if !options.pipeline.jump_tables {
         without_jump_tables(program);
     }
-    let mut pipeline = options.pipeline.clone();
-    // The DAG builder lowers the switches that remain, as the pin's
-    // SelectionDAGBuilder does; the shadow run keeps the old selector's
-    // lowering for the functions the DAG path refuses.
-    pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
-    if pipeline.optimize {
+    if options.pipeline.optimize {
         // clang's `-fexperimental-assignment-tracking` runs this first.
         timed("mir track assignments", || {
             program
@@ -567,11 +591,37 @@ pub fn optimized(
                 .try_for_each(|module| crate::backend::assignment_tracking::tracked(module).map(drop))
         })?;
     }
-    let applied =
-        llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
+    let applied = pipeline_applied(options);
     // The pipeline sees an atomic access as a call it cannot move.
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
-    timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    let held = timed("mir pipeline", || {
+        if hold {
+            llrm_transforms::pipeline::held(program, &applied)
+        } else {
+            llrm_transforms::pipeline::applied(program, &applied).map(|()| None)
+        }
+    })?;
+    finished(program, options)?;
+    Ok(held)
+}
+
+/// What `held` kept, through the rest of the pipeline and `finished`.
+pub fn optimized_resumed(
+    held: llrm_mir::passes::Held,
+    options: &Options,
+) -> Result<Program, String> {
+    let applied = pipeline_applied(options);
+    let mut program = timed("mir pipeline", || llrm_transforms::pipeline::resumed(held, &applied))?;
+    finished(&mut program, options)?;
+    Ok(program)
+}
+
+/// What follows the pipeline: the steps that lower what the backend does not
+/// take, each module verified after.
+fn finished(
+    program: &mut Program,
+    options: &Options,
+) -> Result<(), String> {
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");

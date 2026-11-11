@@ -176,6 +176,18 @@ impl Program {
         Ok(result)
     }
 
+    /// A copy to go on from, its modules cloned and the target shared.
+    pub fn forked(&self) -> Self {
+        Self {
+            modules: self.modules.clone(),
+            layout: self.layout.clone(),
+            target: Rc::clone(&self.target),
+            segments: self.segments.clone(),
+            exports: self.exports.clone(),
+            runtime: Rc::clone(&self.runtime),
+        }
+    }
+
     /// The global `name` resolves to: the module defining it, else the
     /// first declaring it.
     pub fn resolve(
@@ -385,6 +397,13 @@ impl ProgramAnalyses {
 
     pub fn cached<P: ProgramAnalysis>(&self) -> Option<Rc<P::Result>> {
         self.cache.get(&TypeId::of::<P>()).map(|one| Rc::clone(one).downcast::<P::Result>().expect("keyed by its type"))
+    }
+
+    /// A copy holding the same results, for a second run to go on from. What
+    /// modules left for their next analyses is not copied: a held run has
+    /// taken it.
+    pub fn forked(&self) -> Self {
+        Self { cache: self.cache.clone(), carried: HashMap::default() }
     }
 
     /// What the analyses over module `at` leave for the next ones.

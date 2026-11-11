@@ -28,7 +28,10 @@ use llrm_mir::module::{GlobalKind, Module};
 use llrm_mir::program::Program;
 use llrm_transforms::trial;
 
-use super::{Options, assembled, assembled_module, compiled_module, optimized_program, stage_files};
+use super::{
+    Options, assembled, assembled_module, compiled_module, optimized_program, optimized_program_holding,
+    optimized_resumed, stage_files,
+};
 use crate::backend::{executed, masm};
 
 /// Which decision the second compile reverses.
@@ -164,13 +167,33 @@ pub fn compiled_module_trying(
 ) -> Result<masm::Module, String> {
     let Some(kind) = Trial::of(options) else { return compiled_module(module, name, options) };
     kind.clear();
-    let kept = optimized_program(module.clone(), options)?;
-    if !kind.noted() {
-        return assembled(&kept, name, options);
-    }
     let mut again = options.clone();
     again.dump = None;
-    let other = kind.compile(|| optimized_program(module, &again))?;
+    // The unroll is decided by the last list of function passes, so its trial
+    // runs the pipeline's tail again from the state held there (S1 of
+    // docs/working/snapshot-resume-trials.md); the rotation is decided inside
+    // the inline walk, so its trial runs the mid-end again whole.
+    let (kept, other) = if matches!(kind, Trial::Unroll(_)) {
+        let (kept, held) = optimized_program_holding(module, options, true)?;
+        if std::env::var_os("S1_REPLAY").is_some() {
+            if let Some(held) = held {
+                let replay = optimized_resumed(held, &again)?;
+                eprintln!("REPLAY differing: {:?}", differing(&kept.modules[0], &replay.modules[0]));
+            }
+            return assembled(&kept, name, options);
+        }
+        if !kind.noted() {
+            return assembled(&kept, name, options);
+        }
+        let held = held.ok_or("the pipeline held no state for the trial")?;
+        (kept, kind.compile(|| optimized_resumed(held, &again))?)
+    } else {
+        let kept = optimized_program(module.clone(), options)?;
+        if !kind.noted() {
+            return assembled(&kept, name, options);
+        }
+        (kept, kind.compile(|| optimized_program(module, &again))?)
+    };
     if matches!(kind, Trial::Rotation) {
         let (one, two) = (&kept.modules[0], &other.modules[0]);
         let cut = differing(one, two);
