@@ -471,13 +471,18 @@ pub fn relax_copy_only_classes(function: &mut MFunction) {
         if inst.kind == Kind::Copy {
             // a copy to or from a byte or word view reads that view of the
             // value, and an address register has none
-            let partial = inst.operands.iter().any(|operand| match operand {
-                Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => {
-                    matches!(function.classes[*v as usize], Class::Dr8 | Class::Dr16)
-                }
-                Operand::Def(Reg::Phys(p)) | Operand::Use(Reg::Phys(p)) => REGISTER_INFO.root(*p) != *p,
-                _ => false,
-            });
+            let partial = inst
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => {
+                            matches!(function.classes[*v as usize], Class::Dr8 | Class::Dr16)
+                        }
+                        Operand::Def(Reg::Phys(p)) | Operand::Use(Reg::Phys(p)) => REGISTER_INFO.root(*p) != *p,
+                        _ => false,
+                    },
+                );
             if partial {
                 for operand in &inst.operands {
                     if let Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) = operand {
