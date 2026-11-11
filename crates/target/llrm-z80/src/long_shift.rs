@@ -1,4 +1,5 @@
-//! A long doubled in a loop: one instruction, and sunk to the edge that reads it.
+//! A long doubled in a loop: one instruction, and sunk to the edge that reads
+//! it.
 //!
 //! # How it works
 //! `x << 1` on a long is `sla lo; rl hi; adc hl, hl` in the flags: selection
@@ -28,7 +29,8 @@ fn root(
     'walk: loop {
         for block in &function.blocks {
             for inst in &block.insts {
-                if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(u))]) = (inst.kind, &inst.operands[..])
+                if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(u))]) =
+                    (inst.kind, &inst.operands[..])
                     && *d == v
                 {
                     v = *u;
@@ -40,7 +42,8 @@ fn root(
     }
 }
 
-/// The virtual register copied into the physical `reg` by the nearest copy before `at`.
+/// The virtual register copied into the physical `reg` by the nearest copy
+/// before `at`.
 fn copied_into(
     insts: &[Inst],
     at: usize,
@@ -53,15 +56,17 @@ fn copied_into(
     }
 }
 
-/// `ADD16F x, x` and the `ADC16F y, y` after it (a long added to itself) as one `SHL32 [lo', hl', f, x, hl]`: the
-/// copies in and out of hl around each stay, those of the low word go with the instruction.
+/// `ADD16F x, x` and the `ADC16F y, y` after it (a long added to itself) as one
+/// `SHL32 [lo', hl', f, x, hl]`: the copies in and out of hl around each stay,
+/// those of the low word go with the instruction.
 fn fuse_block(
     function: &mut MFunction,
     b: usize,
 ) -> bool {
     let insts = &function.blocks[b].insts;
     for add in 0..insts.len() {
-        let [Operand::Def(hl), Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(x))] = insts[add].operands[..] else {
+        let [Operand::Def(hl), Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(x))] = insts[add].operands[..]
+        else {
             continue;
         };
         if insts[add].kind != Kind::Op("ADD16F") {
@@ -71,9 +76,13 @@ fn fuse_block(
         if root(function, held) != root(function, x) {
             continue;
         }
-        // the low word's copy out of hl, then the high word's copy in and its ADC16F
+        // the low word's copy out of hl, then the high word's copy in and its
+        // ADC16F
         let Some(out) = (add + 1..insts.len()).find(|&k| {
-            matches!(&insts[k].operands[..], [Operand::Def(Reg::Virt(_)), Operand::Use(r)] if *r == hl && insts[k].kind == Kind::Copy)
+            matches!(
+                &insts[k].operands[..],
+                [Operand::Def(Reg::Virt(_)), Operand::Use(r)] if *r == hl && insts[k].kind == Kind::Copy
+            )
         }) else {
             continue;
         };
@@ -93,7 +102,13 @@ fn fuse_block(
         }
         let mut fused = Inst::new(
             Kind::Op("SHL32"),
-            vec![Operand::Def(low), Operand::Def(hl), Operand::Def(flags), Operand::Use(Reg::Virt(x)), Operand::Use(hl)],
+            vec![
+                Operand::Def(low),
+                Operand::Def(hl),
+                Operand::Def(flags),
+                Operand::Use(Reg::Virt(x)),
+                Operand::Use(hl),
+            ],
         );
         fused.ties = vec![(0, 3), (1, 4)];
         fused.sets_flags = true;
@@ -133,10 +148,12 @@ fn reads(
     inst.operands.iter().any(|operand| matches!(operand, Operand::Use(Reg::Virt(u)) if *u == v))
 }
 
-/// A long doubled in a block that branches: fused, and moved with the copies that carry its results into the
-/// successor whose only predecessor is the block, where everything that reads them is, so the exit path no longer
-/// computes it. A block where that does not happen keeps the two instructions: fused, a doubling in straight code
-/// pays for the forced registers (rotate_small -O1 +347 B).
+/// A long doubled in a block that branches: fused, and moved with the copies
+/// that carry its results into the successor whose only predecessor is the
+/// block, where everything that reads them is, so the exit path no longer
+/// computes it. A block where that does not happen keeps the two instructions:
+/// fused, a doubling in straight code pays for the forced registers
+/// (rotate_small -O1 +347 B).
 pub fn double_and_sink(function: &mut MFunction) {
     if std::env::var("LLRM_NO_Z80_SHL32").is_ok() {
         return;
@@ -161,9 +178,8 @@ fn sink_block(
         return false;
     };
     // the target: a successor that only this block enters
-    let predecessors = |id: u32| {
-        (0..function.blocks.len()).filter(|&p| successors(function, p).contains(&id)).collect::<Vec<_>>()
-    };
+    let predecessors =
+        |id: u32| (0..function.blocks.len()).filter(|&p| successors(function, p).contains(&id)).collect::<Vec<_>>();
     let candidates: Vec<usize> = successors_of_b
         .iter()
         .copied()
@@ -173,7 +189,8 @@ fn sink_block(
     candidates.into_iter().any(|target| sink_into(function, b, target, shift))
 }
 
-/// One attempt: the unit of the `SHL32` at `shift` of block `b` into block `target`.
+/// One attempt: the unit of the `SHL32` at `shift` of block `b` into block
+/// `target`.
 fn sink_into(
     function: &mut MFunction,
     b: usize,
@@ -185,21 +202,30 @@ fn sink_into(
             return false;
         }
         let insts = &function.blocks[b].insts;
-        // the copy into hl just ahead of the shift, and the copy out of hl just after
+        // the copy into hl just ahead of the shift, and the copy out of hl just
+        // after
         let mut unit = vec![shift];
         let Operand::Use(hl) = insts[shift].operands[4] else { return false };
         let Some(copy_in) = (0..shift).rev().find(|&k| {
-            matches!(&insts[k].operands[..], [Operand::Def(d), Operand::Use(_)] if *d == hl && insts[k].kind == Kind::Copy)
+            matches!(
+                &insts[k].operands[..],
+                [Operand::Def(d), Operand::Use(_)] if *d == hl && insts[k].kind == Kind::Copy
+            )
         }) else {
             return false;
         };
-        if insts[copy_in + 1..shift].iter().any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == hl)))
+        if insts[copy_in + 1..shift]
+            .iter()
+            .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == hl)))
         {
             return false;
         }
         unit.push(copy_in);
         let Some(copy_out) = (shift + 1..insts.len()).find(|&k| {
-            matches!(&insts[k].operands[..], [Operand::Def(_), Operand::Use(s)] if *s == hl && insts[k].kind == Kind::Copy)
+            matches!(
+                &insts[k].operands[..],
+                [Operand::Def(_), Operand::Use(s)] if *s == hl && insts[k].kind == Kind::Copy
+            )
         }) else {
             return false;
         };
@@ -215,12 +241,12 @@ fn sink_into(
         }
         let target_id = function.blocks[target].id;
         let used_in_the_target = |v: u32| {
-            // every reader of `v` outside `members` must be in the target or a phi fed from it
+            // every reader of `v` outside `members` must be in the target or a
+            // phi fed from it
             function.blocks.iter().enumerate().all(|(k, block)| {
-                let phis_ok = block
-                    .phis
-                    .iter()
-                    .all(|phi| phi.incoming.iter().all(|(pred, r)| *r != Reg::Virt(v) || function.blocks[*pred].id == target_id));
+                let phis_ok = block.phis.iter().all(|phi| {
+                    phi.incoming.iter().all(|(pred, r)| *r != Reg::Virt(v) || function.blocks[*pred].id == target_id)
+                });
                 let insts_ok = k == target || k == b || !block.insts.iter().any(|inst| reads(inst, v));
                 phis_ok && insts_ok
             })
@@ -243,16 +269,22 @@ fn sink_into(
                 }
             }
         }
-        // what the unit leaves for others: every virtual result is read only past the block's branch
+        // what the unit leaves for others: every virtual result is read only
+        // past the block's branch
         let in_unit = |k: usize| unit.contains(&k);
-        let leaks = defined.iter().any(|&v| {
-            let inside = insts.iter().enumerate().any(|(k, inst)| !in_unit(k) && reads(inst, v));
-            inside || !used_in_the_target(v)
-        });
+        let leaks = defined
+            .iter()
+            .any(
+                |&v| {
+                    let inside = insts.iter().enumerate().any(|(k, inst)| !in_unit(k) && reads(inst, v));
+                    inside || !used_in_the_target(v)
+                },
+            );
         if leaks {
             return false;
         }
-        // the registers the unit writes and reads must not be touched, before a write, by what it passes
+        // the registers the unit writes and reads must not be touched, before a
+        // write, by what it passes
         let first = *unit.iter().min().unwrap();
         let phys: Vec<Reg> = unit
             .iter()
@@ -268,11 +300,16 @@ fn sink_into(
                 if in_unit(k) {
                     continue;
                 }
-                let touches = inst.operands.iter().find_map(|o| match o {
-                    Operand::Def(x) if *x == r => Some(true),
-                    Operand::Use(x) if *x == r => Some(false),
-                    _ => None,
-                });
+                let touches = inst
+                    .operands
+                    .iter()
+                    .find_map(
+                        |o| match o {
+                            Operand::Def(x) if *x == r => Some(true),
+                            Operand::Use(x) if *x == r => Some(false),
+                            _ => None,
+                        },
+                    );
                 match touches {
                     Some(true) => break,
                     Some(false) => blocked = true,
@@ -283,7 +320,8 @@ fn sink_into(
                 }
             }
         }
-        // a stray use of a virtual register the unit reads is fine (it is still defined); a def of one is not
+        // a stray use of a virtual register the unit reads is fine (it is still
+        // defined); a def of one is not
         let reads_virtual: Vec<u32> = unit
             .iter()
             .flat_map(|&k| insts[k].operands.iter())
