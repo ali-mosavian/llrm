@@ -108,6 +108,28 @@ def test_a_multiply_costs_what_its_multiplier_is():
     assert harness.multiply_clocks(0xFFFFFFFF, True) == 15      # -1: n = 5 for a negative multiplier
 
 
+def test_a_two_operand_imul_is_priced_under_each_multiplier_model_and_the_models_disagree():
+    """The data sheet names the multiplier only for one-operand MUL/IMUL; `IMUL r, r/m` was priced by its source alone, and
+    matmul -O1 against gcc flipped with that choice (+674 source, -376 destination). `imul eax, ebx` with eax = 3, ebx = 0x7FFF:
+    source 10+15 = 25, destination 13, min 13; the three-operand form reads the immediate (source) or the r/m (dest)."""
+    from types import SimpleNamespace
+
+    from iced_x86 import Decoder
+
+    regs = {harness.UC_X86_REG_EAX: 3, harness.UC_X86_REG_EBX: 0x7FFF}
+    uc = SimpleNamespace(reg_read=lambda reg: regs[reg])
+    two = Decoder(32, bytes.fromhex("0fafc3"), ip=0).decode()          # imul eax, ebx
+    assert harness.multiplier_of(uc, two, "source") == 0x7FFF
+    assert harness.multiplier_of(uc, two, "dest") == 3
+    assert harness.multiplier_of(uc, two, "min") == 3
+    three = Decoder(32, bytes.fromhex("6bc30a"), ip=0).decode()        # imul eax, ebx, 10
+    assert harness.multiplier_of(uc, three, "source") == 10
+    assert harness.multiplier_of(uc, three, "dest") == 0x7FFF
+    assert harness.multiplier_of(uc, three, "min") == 10
+    one = Decoder(32, bytes.fromhex("f7eb"), ip=0).decode()            # imul ebx
+    assert {harness.multiplier_of(uc, one, m) for m in harness.IMUL_MODELS} == {0x7FFF}
+
+
 def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_the_stack(built):
     """The table put llrm's watcom register arguments beside gcc's stack ones: part of every ratio was the ABI. build.sh passes
     -mabi=sysv and records it; the harness reads `report`'s value where that convention puts it."""
