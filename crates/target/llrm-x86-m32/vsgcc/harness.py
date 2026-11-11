@@ -191,15 +191,25 @@ def multiply_clocks(m, signed):
     return 10 + max(abs(m).bit_length(), 5 if m < 0 else 3)
 
 
-def multiplier_of(uc, ins):
-    """The operand the 486's early-out reads: the immediate of the three-operand form, else the source (`MUL r/m`,
-    `IMUL r, r/m`). The data sheet names it 'Multiplier' beside the register or memory operand, not the accumulator."""
-    last = ins.op_count - 1
-    kind = ins.op_kind(last)
+IMUL_MODELS = ("source", "dest", "min")
+
+
+def imul_model():
+    """Which operand of `IMUL r, r/m` / `IMUL r, r/m, imm` is the 'Multiplier' of Table 10.1 note 3: the data sheet states it
+    only for the one-operand form (r/m). `source` (the default) is the last operand, `dest` the other factor, `min` the cheaper of
+    the two. VSGCC_IMUL_MODEL picks the one `clocks` is priced with; `clocks_by_imul` always carries all three."""
+    model = os.environ.get("VSGCC_IMUL_MODEL", "source")
+    if model not in IMUL_MODELS:
+        raise SystemExit(f"harness: VSGCC_IMUL_MODEL={model!r}, not one of {IMUL_MODELS}")
+    return model
+
+
+def _operand_value(uc, ins, index):
+    kind = ins.op_kind(index)
     if kind in (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32, OpKind.IMMEDIATE32, OpKind.IMMEDIATE16, OpKind.IMMEDIATE8TO16):
-        return ins.immediate(last) & 0xFFFFFFFF
+        return ins.immediate(index) & 0xFFFFFFFF
     if kind == OpKind.REGISTER:
-        reg = ins.op_register(last)
+        reg = ins.op_register(index)
         value = uc.reg_read(UNICORN[RegisterExt.full_register32(reg)])
         return value & (0xFFFFFFFF if RegisterExt.is_gpr32(reg) else 0xFFFF if RegisterExt.is_gpr16(reg) else 0xFF)
     if kind in MEMORY:
@@ -211,6 +221,22 @@ def multiplier_of(uc, ins):
             address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
         return int.from_bytes(bytes(uc.mem_read(address & 0xFFFFFFFF, 4)), "little")
     return 0
+
+
+def multiplier_of(uc, ins, model="source"):
+    """The operand the 486's early-out reads. One-operand `MUL`/`IMUL r/m`: that operand (the data sheet's 'Multiplier'). Two- and
+    three-operand `IMUL`, which the data sheet leaves open: per `imul_model` the last operand (`source`: the immediate, else the
+    r/m), the other factor (`dest`: the register, else the r/m of the three-operand form) or the cheaper (`min`)."""
+    last = ins.op_count - 1
+    if ins.op_count == 1:
+        return _operand_value(uc, ins, 0)
+    source = _operand_value(uc, ins, last)
+    other = _operand_value(uc, ins, last - 1)
+    if model == "dest":
+        return other
+    if model == "min":
+        return min(source, other, key=lambda m: multiply_clocks(m, True))
+    return source
 
 
 def memory_address(uc, ins, operand):
@@ -460,6 +486,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
     in_eax = variant.startswith("llrm") and built_abi() == "watcom"
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
     total = Counter()   # instructions, mem, clocks
+    model = imul_model()
+    mul_clocks = Counter()   # the MUL/IMUL clocks under each IMUL_MODELS entry
     by_op = {}          # mnemonic name -> [executions, clocks]: --hist
     hits = Counter()
     edges = Counter()   # (from, to) taken edges in region
@@ -528,7 +556,12 @@ def run(prog, variant, hot=False, limit=300_000_000):
         hits[address] += 1
         st["prev"] = address
         # Read before it runs: the 486's multiply costs what its multiplier is.
-        st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
+        if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL):
+            st["multiplier"] = multiplier_of(uc, ins, model)
+            for other in IMUL_MODELS:
+                mul_clocks[other] += multiply_clocks(multiplier_of(uc, ins, other), ins.mnemonic == Mnemonic.IMUL)
+        else:
+            st["multiplier"] = None
         if ret and uc.reg_read(UC_X86_REG_ESP) == st["sp"]:
             clk = cost(ins, True, True, mem)
             total["clocks"] += clk
@@ -541,6 +574,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
     return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"], clocks=total["clocks"], reports=reports,
+                clocks_by_imul={m: total["clocks"] - mul_clocks[model] + mul_clocks[m] for m in IMUL_MODELS},
                 hits=hits, edges=edges, by_op=by_op, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
 
 
@@ -636,7 +670,7 @@ def main():
         for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
             print(f"HIST {name:8} {count:8} {clk:9}", file=sys.stderr)
     expect = [int(x) for x in expected_file(prog).read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], clocks_by_imul=r["clocks_by_imul"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":

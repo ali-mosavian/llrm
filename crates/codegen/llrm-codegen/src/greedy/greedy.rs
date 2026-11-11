@@ -383,6 +383,17 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> Vec<(u32, RegId)> {
         Vec::new()
     }
+    /// `TII.getInstrCost(COPY, {to, from})` (llvm-mos `MOSInstrCost`): what
+    /// the copy of `from` into `to` costs, in one unit for every pair; all 0
+    /// is the pin's order (no copy scores a register).
+    fn copy_register_cost(
+        &self,
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
     /// `RegCosts[phys]` (`TargetRegisterInfo::getRegisterCosts`, the
     /// registers' `CostPerUse`): X86 sets none (D133902 dropped R8-R15's).
     fn reg_cost(
@@ -1025,8 +1036,61 @@ impl<'a> RAGreedy<'a> {
                 }
             }
         }
+        self.score_copy_hints(virt, &mut wanted);
         wanted.sort_by(|a, b| b.1.total_cmp(&a.1));
         wanted.into_iter().map(|(reg, _)| reg).collect()
+    }
+
+    /// `getRegAllocationHints`, the `COPY` case of llvm-mos
+    /// (MOSRegisterInfo.cpp#L753, Apache-2.0 WITH LLVM-exception): for each
+    /// copy that names `virt` and whose other side holds a register, every
+    /// register of the order that makes the copy cheaper than its worst one
+    /// scores the saving. DEVIATE: the saving is weighted by the copy's block
+    /// frequency, as the other target hints are (llvm-mos sums it plain).
+    fn score_copy_hints(
+        &self,
+        virt: u32,
+        wanted: &mut Vec<(RegId, f32)>,
+    ) {
+        let order = self.env.allocation_order(self.class_reg(virt));
+        // `MOSInstrCost::getModeFor(MF)`: the cost in bytes when the function
+        // is sized
+        let size = OPT_SIZE.with(std::cell::Cell::get);
+        let mut seen = Vec::new();
+        for operand in self.lis.operands(virt) {
+            if seen.contains(&operand.instr) {
+                continue;
+            }
+            seen.push(operand.instr);
+            let one = self.lis.instr(operand.instr);
+            let Some((into, out_of)) = one.copy_of() else { continue };
+            let (is_def, other) = if into == virt { (true, out_of) } else { (false, into) };
+            if other == virt || !self.matrix.vrm.has_phys(other) {
+                continue;
+            }
+            let other = self.matrix.vrm.get_phys(other).expect("assigned");
+            let cost = |reg: RegId| {
+                if is_def {
+                    self.env.copy_register_cost(reg, other, size)
+                } else {
+                    self.env.copy_register_cost(other, reg, size)
+                }
+            };
+            let worst = order.iter().map(|reg| cost(*reg)).max().unwrap_or(0);
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
+            for reg in &order {
+                let price = cost(*reg);
+                if price >= worst {
+                    continue;
+                }
+                let gain = freq * (worst - price) as f32;
+                match wanted.iter_mut().find(|(one, _)| one == reg) {
+                    Some((_, weight)) => *weight += gain,
+                    None => wanted.push((*reg, gain)),
+                }
+            }
+        }
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.

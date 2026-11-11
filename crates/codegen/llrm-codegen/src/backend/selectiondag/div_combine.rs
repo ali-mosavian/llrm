@@ -76,6 +76,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         y: SDValue,
     ) -> Option<SDValue> {
         let (high, lohi) = if signed { (ISD::MulHS, ISD::SMulLoHi) } else { (ISD::MulHU, ISD::UMulLoHi) };
+        let (x, y) = if self.hooks.multiply_high_magic_first(&*self.dag, signed, x, y) { (y, x) } else { (x, y) };
         if self.can_do(high, vt) {
             return Some(self.dag.get_node(high, vt, &[x, y]));
         }
