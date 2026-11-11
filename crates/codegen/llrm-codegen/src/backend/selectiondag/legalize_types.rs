@@ -2182,8 +2182,8 @@ impl<'a> TypeLegalizer<'a> {
     /// target that sets `libcall_for_small_variable_shift` (z80, 6502) keeps
     /// the call for the all-clear case until its owner prices an inline
     /// policy; the base did the same for every target without a funnel
-    /// shift. Exit: z80 and 6502 price it. Owner sdag-b (z80, 6502
-    /// consume it). Review 2026-12-10.
+    /// shift. Exit: 2026-11-24 (proposed), z80 and 6502 price it. Owner
+    /// sdag-b (z80, 6502 consume it). Review 2026-11-24.
     ///
     /// the bits of the amount from `log2(half)` up decide whether it is below
     /// `half`. Any of them set: one half-width shift of the other half. All of
