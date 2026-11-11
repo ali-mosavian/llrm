@@ -53,6 +53,7 @@ __umoddi3,4,__moddi3
 __umodhi3,5,__udivhi3
 __umodqi3,18,
 __umodsi3,4,__udivmodsi4
+__umulhisi3,22,
 absal,15,
 abshlde,15,
 negde,7,
