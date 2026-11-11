@@ -1111,6 +1111,11 @@ pub trait Tti {
         31
     }
 
+    /// `Tuning::narrow_divide_live_at_size`.
+    fn narrow_divide_live_at_size(&self) -> bool {
+        true
+    }
+
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
         false

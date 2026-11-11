@@ -312,6 +312,9 @@ impl Machine for Dos {
             // with the divide kept (2026-11-11).
             narrow_divide_live_limit: 3,
             narrow_divide_live_max_bits: 32,
+            // -Os keeps every divide by measurement (2026-11-11, limits 3..6: frames +11 B,
+            // matmul~init +8 B, huge +13% clk over the kept divide).
+            narrow_divide_live_at_size: false,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
