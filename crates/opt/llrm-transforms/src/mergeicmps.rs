@@ -66,7 +66,7 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::{self, Query, Sizes};
 
-use crate::simplifylibcalls::{NewCall, emit, library_info};
+use crate::simplifylibcalls::{NewCall, emit, target_library_info};
 
 /// `BCEAtom`: an integer load at a constant offset from a base.
 #[derive(Clone, Copy, Debug)]
@@ -805,7 +805,7 @@ impl FunctionPass for MergeICmps {
             return PreservedAnalyses::all();
         }
         let size_bits = unit.layout.pointer(0).index_bits;
-        let int = unit.context.types.int(library_info(&outer, size_bits).int_bits());
+        let int = unit.context.types.int(target_library_info(&outer, size_bits).int_bits());
         let size = unit.context.types.int(size_bits);
         let emitter = Emit { routines: &self.routines, int, size };
         let mut changed = false;

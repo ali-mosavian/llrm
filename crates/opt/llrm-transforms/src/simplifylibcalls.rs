@@ -491,22 +491,6 @@ fn puts(
     Some(put_char(site, Operand::Constant(unit.context.int(site.int, i128::from(b'\n')))))
 }
 
-/// One table per module: the target's library, else the pin's defaults for
-/// the pointer's width.
-pub(crate) fn library_info(
-    outer: &llrm_mir::passes::Outer,
-    size_bits: u32,
-) -> std::rc::Rc<TargetLibraryInfo> {
-    outer.memo::<TargetLibraryInfo>(0, || {
-        let library = outer
-            .program()
-            .target
-            .library()
-            .unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
-        TargetLibraryInfo::new(&*library)
-    })
-}
-
 impl FunctionPass for SimplifyLibCalls {
     fn adds_memory_operations(&self) -> bool {
         false
