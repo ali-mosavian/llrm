@@ -433,7 +433,7 @@ impl<'a> VirtRegAuxInfo<'a> {
         }
         // If all of the definitions of the interval are re-materializable,
         // it is a preferred candidate for spilling.
-        if self.is_rematerializable(li, lis) {
+        if self.is_rematerializable(li, lis) && !llrm_support::env_flag!("LLRM_NO_REMAT_HALF") {
             total_weight *= 0.5;
         }
         // Finally, we scale the weight by the scale factor of register class.

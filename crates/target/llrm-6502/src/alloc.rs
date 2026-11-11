@@ -347,6 +347,10 @@ impl<const STACK: bool> Target for Mos<STACK> {
         [reg::A, reg::X, reg::Y].contains(&to)
     }
 
+    fn remats_symbol_addresses() -> bool {
+        true
+    }
+
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
     fn reads_flags_set_just_before(inst: &Inst) -> bool {
         inst.reads_flags && inst.terminator
