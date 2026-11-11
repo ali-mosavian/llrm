@@ -80,3 +80,40 @@ fn every_instruction_of_the_dispatch_is_priced() {
         }
     }
 }
+
+/// A four-case switch over a range of 28 (density 14%) became a 28-entry
+/// table: +90..140 B and no faster than four compares on the jpeg_* cells. The
+/// limit is the pin's default (10%), not m68k's own price of a table slot
+/// against a compare.
+#[test]
+fn a_sparse_switch_stays_a_compare_chain_at_every_level() {
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define i32 @f(i32 %x) {{
+entry:
+  switch i32 %x, label %d [
+    i32 -64, label %a
+    i32 -62, label %b
+    i32 -60, label %c
+    i32 -37, label %e
+  ]
+a:
+  ret i32 11
+b:
+  ret i32 22
+c:
+  ret i32 33
+e:
+  ret i32 44
+d:
+  ret i32 -1
+}}"
+    ))
+    .expect("parses");
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        for (level, options) in [("O2", Options::default()), ("Os", Options { size: true, ..Options::default() })] {
+            let out = text_with(&module, "f", cpu, options).expect("compiles");
+            assert!(!out.contains("jmp\t(%a0)") && !out.contains(".long"), "{cpu:?} {level}: a table:\n{out}");
+        }
+    }
+}
