@@ -943,7 +943,7 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
     let cloned = |clone: bool| {
         let mut module = parsed(TWO_CONTEXTS);
-        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(clone), ..Threshold::none() });
         assert_eq!(results(&module, inputs), results(&parsed(TWO_CONTEXTS), inputs), "{}", printed(&module));
         (module.named("g.constprop.1").is_some(), module.named("g.constprop.2").is_some())
     };
@@ -1099,7 +1099,7 @@ fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
 fn test_an_available_externally_function_is_not_cloned_for_a_constant() {
     let text = TWO_CONTEXTS.replacen("define i16 @g", "define available_externally i16 @g", 1);
     let mut module = parsed(&text);
-    stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
     assert!(module.named("g.constprop.1").is_none(), "{}", printed(&module));
 }
 
@@ -1275,7 +1275,7 @@ b0:
 fn test_a_constant_index_into_a_global_is_priced_as_a_saving() {
     let cloned = |clone: bool| {
         let mut module = parsed(CONSTANT_ROW);
-        stepped(&mut module, &["f"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(clone), ..Threshold::none() });
         module.named("fill.constprop.1").is_some()
     };
     assert!(!cloned(false));
@@ -1397,7 +1397,7 @@ b0:
 #[test]
 fn test_a_clone_is_credited_with_the_clones_its_recursion_makes() {
     let mut module = parsed(DOWN);
-    stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
     assert!(module.named("down.constprop.1").is_some(), "{}", printed(&module));
 }
 
@@ -1441,6 +1441,6 @@ b0:
 #[test]
 fn test_a_recursion_that_halves_a_range_makes_no_chain_of_contexts() {
     let mut module = parsed(HALVING);
-    stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
     assert!(module.named("down.constprop.1").is_none(), "{}", printed(&module));
 }

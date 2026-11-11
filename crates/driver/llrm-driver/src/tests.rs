@@ -5358,3 +5358,52 @@ fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
     assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
     assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
 }
+
+/// x86-m32 queens -O3: `place(q, 0, n)` was never cloned for its first row (ipa-cp clones were off at
+/// -O3, as the pin has none; gcc's `-fipa-cp-clone` is on there), so `safe` stayed a rolled loop over a
+/// symbolic row: 160,324 clk against gcc's 94,851. With the clones the rows are constants: 79,692 clk.
+#[test]
+fn a_recursion_called_with_a_constant_row_is_cloned_for_it_at_o3() {
+    let text = include_str!("tests_data/queens_place.ll");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "queens").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert!(default > 2 * without, "-O3 made no clones: {default} lines against {without} without clones");
+}
+
+/// x86-m32 recchop -O3: `chop(0, 64)` halves its range, so neither `lo = 0` nor `hi = 64` alone makes
+/// the loop's trip count known (gcc: "loops with known iterations: 0", evaluation 47.6 against 500, no
+/// clone, 1204 B). Pricing both together as one context cloned `chop` eight times: 4,948 B and 6,452 clk
+/// against 1,269 B and 5,144.
+#[test]
+fn a_halving_recursion_called_with_constant_bounds_is_not_cloned_at_o3() {
+    let text = include_str!("tests_data/recchop_halving.ll");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "recchop").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned chop: {default} lines against {without} without clones");
+}
+
+/// x86-m32 x_hanoi2 -O3: `mv(n-1, via, to, from)` hands each parameter to another, which gcc takes for a
+/// variable lattice (evaluation 137 against 500, no clone). Following those contexts as a chain priced
+/// `mv(n, 0, 2, 1)` at 5,951 and cloned it: 169,494 clk against 160,540 without.
+#[test]
+fn a_recursion_permuting_its_parameters_is_not_cloned_at_o3() {
+    let text = include_str!("tests_data/hanoi_permuting.ll");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "hanoi").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned mv: {default} lines against {without} without clones");
+}

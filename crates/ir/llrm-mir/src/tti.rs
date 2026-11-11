@@ -1139,6 +1139,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_dying_credit_at_os` (D13).
+    fn inline_dying_credit_at_os(&self) -> bool {
+        true
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
@@ -1357,6 +1362,13 @@ pub trait Tti {
     /// asks for gcc's).
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         None
+    }
+
+    /// DEVIATE IPACP-O3: whether a function is copied for the constants its
+    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        false
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
