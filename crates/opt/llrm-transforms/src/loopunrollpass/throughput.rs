@@ -13,6 +13,12 @@
 //!
 //! The pin's `shouldFullUnroll` counts instructions and prices nothing (UP1 is the deviation that prices);
 //! the table is the target's, in thousandths of a clock (`Machine::throughput`).
+//!
+//! The model leaves the pin's choice only on a priced net gain: it declines a pin unroll when the clocks it saves
+//! do not pay its bytes at the target's rate, and takes one the threshold refuses when they do. Where the copies
+//! make the loop's stores into a local array immediates for a reader that folds (UP1-REG), the array holds no
+//! register, so the pin's unroll stands. Exit 2026-12-20: vector MIR, which folds what this model cannot
+//! (`dot` -O3 m64: 817 B here, clang 26 B).
 
 use std::collections::HashMap;
 
