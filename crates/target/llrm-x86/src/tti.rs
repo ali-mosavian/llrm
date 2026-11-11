@@ -737,6 +737,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_nests_only
     }
 
+    fn inline_dying_credit_at_os(&self) -> bool {
+        self.tuning.inline_dying_credit_at_os
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
@@ -1034,6 +1038,10 @@ impl Tti for X86 {
 
     fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
         self.tuning.recursive_inlining_depth
+    }
+
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        self.tuning.ipa_cp_clones_at_speed
     }
 
     fn recursive_tre_first(&self) -> (bool, bool) {

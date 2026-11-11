@@ -7,7 +7,13 @@
 extern void far arm(void);
 extern void far verify(const char *what);
 #define ARM() arm()
+#ifdef ARMED_NO_SIDI
+/* llrm's caller may use SI and DI itself between arm() and verify(): they are not checked there. */
+extern void far verify_nosidi(const char *what);
+#define VERIFY(what) verify_nosidi(what)
+#else
 #define VERIFY(what) verify(what)
+#endif
 #else
 #define ARM()
 #define VERIFY(what)

@@ -259,6 +259,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // against 228901 with the loop first), and -O3 with the loop first and depth 8 lost
         // to -O2 on fib, frames and rectwo. Owner x86-m32, exit 2026-11-20.
         recursive_tre_first: (false, false),
+        // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): queens -O3
+        // 160324 -> 79692 clk (gcc 94851, which has `-fipa-cp-clone` on
+        // at -O3).
+        ipa_cp_clones_at_speed: true,
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
