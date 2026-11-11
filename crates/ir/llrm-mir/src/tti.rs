@@ -602,6 +602,19 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER: whether reducing a multiply of the outer loop's
+    /// counter (by `multiplier`, none: not a constant) to a counter stepped by
+    /// it pays: the clocks of the cheaper of the multiply and its shift-and-add
+    /// chain against what a counter held across the inner loop costs each trip.
+    /// false: the pin's, which leaves a loop with a subloop alone.
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let _ = multiplier;
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
