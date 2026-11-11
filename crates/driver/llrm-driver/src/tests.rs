@@ -3444,13 +3444,22 @@ fn no_function_sections_is_the_default_object() {
 
 /// Every function's COMDAT is allocated in the module's code segment
 /// (`<MODULE>_TEXT`), the segment the one-segment layout names: function
-/// sections change the grouping, not the segment. (`-mcode-segment=` is not
-/// read on this path, with or without the flag.)
+/// sections change the grouping, not the segment.
 #[test]
 fn function_sections_allocate_in_the_modules_code_segment() {
     let has = |object: &[u8]| object.windows(8).any(|window| window == b"TWO_TEXT");
     assert!(has(&omf_of(&["-ffunction-sections"])));
     assert!(has(&omf_of(&[])));
+}
+
+/// `-mcode-segment=` was read only on the Nib/QB path: a C module from llrm-cc
+/// always went to `<MODULE>_TEXT`, so a BCC caller's near call into it left the
+/// segment and the harness cell CNBL crashed.
+#[test]
+fn mcode_segment_names_the_segment_of_an_llvm_ir_module() {
+    let has = |object: &[u8], name: &[u8]| object.windows(name.len()).any(|window| window == name);
+    let object = omf_of(&["-mcode-segment=HOT_TEXT"]);
+    assert!(has(&object, b"HOT_TEXT") && !has(&object, b"TWO_TEXT"));
 }
 
 /// `llrm-llc` on a module stated for Windows or macOS x86-64 answered `no
