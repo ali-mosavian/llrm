@@ -43,7 +43,8 @@ class Manifest(unittest.TestCase):
         rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
         index = crlib.index(rt)
         for name, file in {"__addsf3": "sf32_abi.s", "__subsf3": "sf32_abi.s", "__mulsf3": "sf32_abi.s", "__divsf3": "sf32_abi.s",
-                           "__floatsisf": "sf32_conv.s", "__fixsfsi": "sf32_conv.s", "__mul32x32": "mul32x32.s"}.items():
+                           "__floatsisf": "sf32_conv.s", "__fixsfsi": "sf32_conv.s", "__mul32x32": "mul32x32.s",
+                           "__divdi3": "di64.s", "__udivdi3": "di64.s", "__moddi3": "umod64.s", "__umoddi3": "umod64.s"}.items():
             self.assertEqual(index[name], "config/6502/" + file, name)
 
 
