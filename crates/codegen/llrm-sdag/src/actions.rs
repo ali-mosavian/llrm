@@ -773,6 +773,9 @@ impl TargetLowering {
         self.set_operation_action(Trap, MVT::Other, Action::Expand);
         self.set_operation_action(DebugTrap, MVT::Other, Action::Expand);
         self.set_ops(&[ConstantFP], &FLOATS, Action::Expand);
+        // TargetLoweringBase.cpp#L864: a target without minss/maxss has no pseudo min/max node,
+        // so `combineSelectToPseudoMinMax` (legal-or-custom only) leaves the select alone.
+        self.set_ops(&[PseudoFMin, PseudoFMax], &FLOATS, Action::Expand);
     }
 
     /// m32 for i486/P5 with the x87 and no SSE: `initActions`, then the
