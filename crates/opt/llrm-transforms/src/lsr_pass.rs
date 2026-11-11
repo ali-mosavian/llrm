@@ -419,12 +419,11 @@ fn plan_loop(
         let symbols_outweigh_saving = symbol_setup != 0 && {
             let new_bases = symbol_bases(se, &lsr, &solution);
             let pin_bases = symbol_bases(se, &pin, &pin_solution);
-            // A base that replaces the pin's (`@v+256` for `@v`) costs no more.
-            let added = new_bases.len() as i64 - pin_bases.len() as i64;
+            let added = new_bases.iter().filter(|base| !pin_bases.contains(base)).count() as u32;
             let trips = if bytes_strict { 1 } else { u64::from(se.get_small_constant_max_trip_count(&cx, header)) };
-            let total = |insns: u32, setup: u32| (trips * u64::from(insns) + u64::from(setup)) as i64;
+            let total = |insns: u32, setup: u32| trips * u64::from(insns) + u64::from(setup);
             trips != 0
-                && total(cost.c.insns, cost.c.setup_cost) + added * i64::from(symbol_setup - 1)
+                && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
                     > total(pin_cost.c.insns, pin_cost.c.setup_cost)
         };
         let kept = !pin_solution.is_empty()
