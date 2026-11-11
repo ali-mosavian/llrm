@@ -278,7 +278,7 @@ b0:
 fn test_a_body_cloned_for_a_constant_does_not_rerun_the_list() {
     let o3 = crate::pipeline::Applied {
         options: crate::pipeline::Options {
-            inline: crate::inline::Threshold { cp_clone: true, ..crate::inline::Threshold::new(250) },
+            inline: crate::inline::Threshold { cp_clone: Some(true), ..crate::inline::Threshold::new(250) },
             ..Default::default()
         },
         ..Default::default()

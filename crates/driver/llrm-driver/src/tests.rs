@@ -1860,6 +1860,43 @@ fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
     assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
 }
 
+const SMALL_STRUCT_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out) addrspace(1) {\n  store i8 7, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// clang returns `struct { char x; }` through an `sret` pointer; Borland's
+/// cdecl returns it in AL. The call pushed the address of a temporary and the
+/// callee wrote through it, so a BCC callee (which returns AL) left the
+/// caller's copy unwritten: cfaggee's `r_s1` read 2F, not 11 (callconv CFLB).
+#[test]
+fn a_one_byte_struct_result_comes_back_in_al_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), SMALL_STRUCT_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov al, 7"), "the callee returns the byte in AL\n{listing}");
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
+/// The call through a function pointer carries its convention, so a call that
+/// passed the `sret` address to a callee returning AL left the result unwritten
+/// with no diagnostic.
+#[test]
+fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { i8 }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
 /// `-fno-inline=sum5` named the function as the source does, but the module
 /// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
 /// looked up: "the program defines no function of that name", so
@@ -5338,4 +5375,53 @@ fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
     let given = listing(&["--no-midend"]);
     assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
     assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
+}
+
+/// x86-m32 queens -O3: `place(q, 0, n)` was never cloned for its first row (ipa-cp clones were off at
+/// -O3, as the pin has none; gcc's `-fipa-cp-clone` is on there), so `safe` stayed a rolled loop over a
+/// symbolic row: 160,324 clk against gcc's 94,851. With the clones the rows are constants: 79,692 clk.
+#[test]
+fn a_recursion_called_with_a_constant_row_is_cloned_for_it_at_o3() {
+    let text = include_str!("tests_data/queens_place.ll");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "queens").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert!(default > 2 * without, "-O3 made no clones: {default} lines against {without} without clones");
+}
+
+/// x86-m32 recchop -O3: `chop(0, 64)` halves its range, so neither `lo = 0` nor `hi = 64` alone makes
+/// the loop's trip count known (gcc: "loops with known iterations: 0", evaluation 47.6 against 500, no
+/// clone, 1204 B). Pricing both together as one context cloned `chop` eight times: 4,948 B and 6,452 clk
+/// against 1,269 B and 5,144.
+#[test]
+fn a_halving_recursion_called_with_constant_bounds_is_not_cloned_at_o3() {
+    let text = include_str!("tests_data/recchop_halving.ll");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "recchop").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned chop: {default} lines against {without} without clones");
+}
+
+/// x86-m32 x_hanoi2 -O3: `mv(n-1, via, to, from)` hands each parameter to another, which gcc takes for a
+/// variable lattice (evaluation 137 against 500, no clone). Following those contexts as a chain priced
+/// `mv(n, 0, 2, 1)` at 5,951 and cloned it: 169,494 clk against 160,540 without.
+#[test]
+fn a_recursion_permuting_its_parameters_is_not_cloned_at_o3() {
+    let text = include_str!("tests_data/hanoi_permuting.ll");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O3", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "hanoi").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned mv: {default} lines against {without} without clones");
 }

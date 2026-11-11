@@ -1139,6 +1139,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_dying_credit_at_os` (D13).
+    fn inline_dying_credit_at_os(&self) -> bool {
+        true
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
@@ -1357,6 +1362,13 @@ pub trait Tti {
     /// asks for gcc's).
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         None
+    }
+
+    /// DEVIATE IPACP-O3: whether a function is copied for the constants its
+    /// callers pass at -O3, as gcc's `-fipa-cp-clone` (on at -O3) does and the
+    /// pin's pipeline does not; `-f[no-]ipa-cp-clone` decides when given.
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        false
     }
 
     /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
@@ -2080,6 +2092,16 @@ pub trait Tti {
     /// register serves.
     fn address_registers(&self) -> u32 {
         self.number_of_gpr_registers()
+    }
+
+    /// DEVIATE LG3: instructions one base register that names a global's address
+    /// costs in the preheader (arm64: `adrp` + `add`, and a symbol plus a
+    /// constant is a new pair, not the pair the pin's bases already hold). LSR
+    /// keeps the pin's solution over the end-biased one when those new bases
+    /// outweigh the loop instructions the latter saves over the trips the loop
+    /// is known to run. 0: bases are not priced (the pin's rule).
+    fn lsr_symbol_base_setup_insns(&self) -> u32 {
+        0
     }
 
     /// Whether a one-register formula of the first use makes its register a
