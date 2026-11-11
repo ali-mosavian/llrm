@@ -99,6 +99,37 @@ impl Tails<'_> {
     }
 }
 
+/// `WebAssemblyInstrInfo::analyzeBranch`: `BR_IF`, `BR_UNLESS` and `BR`;
+/// any other terminator (`BR_TABLE`) is not understood.
+pub(crate) fn analyze_branch(block: &[Inst]) -> Option<Exits<usize, Inst>> {
+    let mut exits = Exits { taken: None, other: None, cond: None };
+    let target = |inst: &Inst| match inst.operands[..] {
+        [Operand::Block(to), ..] => Some(to as usize),
+        _ => None,
+    };
+    for inst in block.iter().skip_while(|inst| !inst.is_terminator()) {
+        if !inst.is_terminator() {
+            return None;
+        }
+        match inst.opcode {
+            op::BR_IF | op::BR_UNLESS => {
+                if exits.cond.is_some() {
+                    return None;
+                }
+                exits.taken = target(inst);
+                exits.cond = Some(inst.clone());
+            }
+            op::BR if exits.cond.is_none() => exits.taken = target(inst),
+            op::BR => exits.other = target(inst),
+            _ => return None,
+        }
+        if inst.is_barrier() {
+            break;
+        }
+    }
+    Some(exits)
+}
+
 impl TailMergeFunction for Tails<'_> {
     type Block = usize;
     type Inst = Inst;
@@ -244,38 +275,11 @@ impl TailMergeFunction for Tails<'_> {
         self.for_size
     }
 
-    /// `WebAssemblyInstrInfo::analyzeBranch`: `BR_IF`, `BR_UNLESS` and `BR`;
-    /// any other terminator is not understood.
     fn analyze_branch(
         &self,
         block: usize,
     ) -> Option<Exits<usize, Inst>> {
-        let mut exits = Exits { taken: None, other: None, cond: None };
-        let target = |inst: &Inst| match inst.operands[..] {
-            [Operand::Block(to), ..] => Some(to as usize),
-            _ => None,
-        };
-        for inst in self.f.blocks[block].iter().skip_while(|inst| !inst.is_terminator()) {
-            if !inst.is_terminator() {
-                return None;
-            }
-            match inst.opcode {
-                op::BR_IF | op::BR_UNLESS => {
-                    if exits.cond.is_some() {
-                        return None;
-                    }
-                    exits.taken = target(inst);
-                    exits.cond = Some(inst.clone());
-                }
-                op::BR if exits.cond.is_none() => exits.taken = target(inst),
-                op::BR => exits.other = target(inst),
-                _ => return None,
-            }
-            if inst.is_barrier() {
-                break;
-            }
-        }
-        Some(exits)
+        analyze_branch(&self.f.blocks[block])
     }
 
     fn reverse_branch_condition(

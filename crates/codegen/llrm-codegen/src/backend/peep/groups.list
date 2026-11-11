@@ -13,6 +13,7 @@ commuted body
 transferred body
 shuttles body
 restored_copies body
+swapped_registers body
 forwarded_reloads body
 forwarded_float_reloads body
 forwarded_copies body

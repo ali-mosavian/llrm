@@ -451,23 +451,40 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
 
+/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do (6502-UNROLL-O1): float_in_place_update
+/// kept a two-trip float loop at -O1, 9441 B against 19 B at -Os. Other levels are as before, and
+/// a command line that names either spelling is obeyed.
+#[test]
+fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let clang = |row: &str, line: &str| clang_flags(&table[row], &built(line));
+    for row in ["6502-sim65", "65c02-sim65", "6502-cc65", "65c02-cc65"] {
+        assert!(clang(row, "-O1 -S x.c").iter().any(|f| f == "-funroll-loops"), "{row}");
+        for line in ["-O2 -S x.c", "-Os -S x.c", "-O1 -fno-unroll-loops -S x.c"] {
+            assert!(!clang(row, line).iter().any(|f| f == "-funroll-loops"), "{row} {line}");
+        }
+    }
+}
+
 /// The pin's -O1 pipeline has no JumpThreadingPass (JUMPTHREAD-O1), so clang's
 /// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
-/// clk against gcc's 614). The m68k rows give their backend `-fthread-jumps`
-/// at -O1, unless the command line states either spelling; no other row, and
-/// no other level, does.
+/// clk against gcc's 614; shift_int32_variable m32 -O1: 8942 clk against gcc's
+/// 7784). The m68k and m32 rows give their backend `-fthread-jumps` at -O1,
+/// unless the command line states either spelling; no other row, and no other
+/// level, does.
 #[test]
-fn m68k_rows_thread_jumps_at_o1_unless_told_otherwise() {
+fn m68k_and_m32_rows_thread_jumps_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
-    for row in table.keys().filter(|row| row.starts_with("m68k-")) {
+    let threads = |row: &str| row.starts_with("m68k-") || row.starts_with("x86_32-");
+    for row in table.keys().filter(|row| threads(row)) {
         assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
         for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
             assert!(!has(&llc(row, line)), "{row} {line}");
         }
     }
-    for row in table.keys().filter(|row| !row.starts_with("m68k-")) {
+    for row in table.keys().filter(|row| !threads(row)) {
         assert!(!has(&llc(row, "-O1 -c x.c")), "{row} as before");
     }
 }

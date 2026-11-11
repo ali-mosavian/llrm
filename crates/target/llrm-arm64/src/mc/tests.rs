@@ -430,7 +430,22 @@ fn floating_point() {
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: None });
         }
         all.push(Inst::FpSelect { size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3), cond: Cond::Mi });
-        for fill in [Fill::Zero, Fill::Byte(0x5A), Fill::Byte(0xFF), Fill::Gpr(Gpr(3))] {
+        for fill in [
+            Fill::Zero,
+            Fill::Byte(0x5A),
+            Fill::Byte(0xFF),
+            Fill::Dup(Arrangement::B16, Gpr(3)),
+            Fill::Dup(Arrangement::H8, Gpr(3)),
+            Fill::Dup(Arrangement::S4, Gpr(3)),
+            Fill::Dup(Arrangement::D2, Gpr(3)),
+            Fill::Imm { invert: false, shape: ImmShape::H8(0), imm8: 1 },
+            Fill::Imm { invert: false, shape: ImmShape::S4(24), imm8: 0xff },
+            Fill::Imm { invert: false, shape: ImmShape::S2(24), imm8: 0x7f },
+            Fill::Imm { invert: true, shape: ImmShape::S4(0), imm8: 1 },
+            Fill::Imm { invert: false, shape: ImmShape::S4Msl(16), imm8: 0x80 },
+            Fill::Mask(0xA5),
+            Fill::MaskD(0xA5),
+        ] {
             all.push(Inst::VectorFill { rd: Vreg(1), fill });
         }
         for imm8 in [0x00, 0x70, 0x80, 0xFF, 0x2A] {
@@ -463,6 +478,10 @@ fn floating_point() {
             gpr: Gpr(1),
             fpr: Vreg(2),
         });
+    }
+    for signed in [false, true] {
+        all.push(Inst::FpLaneToFp { signed, size: FpSize::S, rd: Vreg(1), rn: Vreg(2) });
+        all.push(Inst::FpLaneToFp { signed, size: FpSize::D, rd: Vreg(1), rn: Vreg(2) });
     }
     all.push(Inst::FpToFp { to: FpSize::D, from: FpSize::S, rd: Vreg(1), rn: Vreg(2) });
     all.push(Inst::FpToFp { to: FpSize::S, from: FpSize::D, rd: Vreg(1), rn: Vreg(2) });

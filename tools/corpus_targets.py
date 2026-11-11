@@ -19,14 +19,14 @@ DOS = re.compile(r"^x86_(16|32)-(dos|wat)")
 FAMILY = re.compile(r"^x86_(16|32|64)-")
 M68K = re.compile(r"^m68k-")
 LP64 = re.compile(r"^(x86_64|arm64)-")
-SMALL = re.compile(r"^(x86_16|z80|6502)-")  # 16-bit pointers and int
-EIGHT_BIT = re.compile(r"^(z80|6502)(-|$)")  # a 16-bit int and no x86 mode to give `-m32` a meaning
-FREESTANDING = re.compile(r"^(wasm32|z80|6502)(-|$)")
+SMALL = re.compile(r"^(x86_16|z80|6502|65c02)-")  # 16-bit pointers and int
+EIGHT_BIT = re.compile(r"^(z80|6502|65c02)(-|$)")  # a 16-bit int and no x86 mode to give `-m32` a meaning
+FREESTANDING = re.compile(r"^(wasm32|z80|6502|65c02)(-|$)")
 BYTE_STACK = re.compile(r"^z80(-|$)")  # `Machine::kept_stack_align` 1: llrm-z80
 
 
 DOS_DIRECTORIES = ("tests/fixtures/callconv/", "runtime/qb/dos/", "tests/cc/models/")  # Watcom/DOS sources: far/huge, regparm, QB far heap
-DOS_MARKERS = re.compile(r"\b__asm\s*\{|\bQB_FAR\b|\b__(far|huge|near|segment)\b|\b__emit__\b|#\s*include\s*<(dos|i86|conio|bios)\.h>")
+DOS_MARKERS = re.compile(r"\b__asm\s*\{|\bQB_FAR\b|\b__(far|huge|near|segment)\b|\bfar\s*\*|\b__emit__\b|#\s*include\s*<(dos|i86|conio|bios)\.h>")
 
 
 def default_tags(source: str, path: Path | None) -> list[str] | None:
@@ -80,7 +80,7 @@ def applies(target: str, source: str, path: Path | None = None) -> bool:
     names = {target, f"x86-m{family.group(1)}" if family else target}
 
     def matches(token: str) -> bool:
-        return token in names or (token == "dos" and bool(DOS.match(target))) or (token == "m68k" and bool(M68K.match(target))) or (token == "lp64" and bool(LP64.match(target))) or (token in ("ptr16", "int16") and bool(SMALL.match(target))) or (token == "freestanding" and bool(FREESTANDING.match(target))) or (token == "byte-stack" and bool(BYTE_STACK.match(target))) or (token == "linux" and target.endswith("-linux"))
+        return token in names or (token == "dos" and bool(DOS.match(target))) or (token == "m68k" and bool(M68K.match(target))) or (token == "lp64" and bool(LP64.match(target))) or (token in ("ptr16", "int16") and bool(SMALL.match(target))) or (token == "freestanding" and bool(FREESTANDING.match(target))) or (token == "byte-stack" and bool(BYTE_STACK.match(target))) or (token == "linux" and target.endswith("-linux")) or (token == "macos" and target.endswith("-macos"))
 
     positive = [t for t in listed if not t.startswith("!")]
     return not any(matches(t[1:]) for t in listed if t.startswith("!")) and (not positive or any(matches(t) for t in positive))
@@ -92,11 +92,31 @@ def reason(source: str, path: Path | None = None) -> str:
 
 
 def expected_output(source: Path, target: str) -> Path:
-    """The file a program's output is compared with on TARGET: `NAME.FAMILY.out` (FAMILY: the target's first dash-field, `m68k`
-    for `m68k-68020`) where the target's ABI differs from the one `NAME.out` was written for, else `NAME.out`. Each override has a
-    one-line `NAME.FAMILY.why` saying which ABI fact differs; a byte-order difference is fixed in the source, not here."""
-    own = source.with_suffix(f".{target.split('-')[0]}.out")
-    return own if own.exists() else source.with_suffix(".out")
+    """The file a program's output is compared with on TARGET, the first that exists of: `NAME.FAMILY.out` (FAMILY: the target's first
+    dash-field, `m68k` for `m68k-68020`) where that target's ABI differs from the one `NAME.out` was written for; `NAME.lp64.out` on an LP64
+    target (a 64-bit `long`; `NAME.out` is the 32-bit-long text); else `NAME.out`. Each override has a one-line `NAME.KEY.why` saying which
+    ABI fact differs; a byte-order difference is fixed in the source, not here."""
+    keys = [target.split("-")[0]] + (["lp64"] if LP64.match(target) else [])
+    for key in keys:
+        own = source.with_suffix(f".{key}.out")
+        if own.exists():
+            return own
+    return source.with_suffix(".out")
+
+
+def output_lines(text: str) -> list[str]:
+    """A program's output as the comparisons read it: line ends and trailing blanks do not count (a console writes CRLF where the .out has LF)."""
+    return [line.rstrip() for line in text.splitlines()]
+
+
+def oracle_verdict(want: str, base: str, head: str) -> str:
+    """PASS where HEAD prints WANT, FAIL where only HEAD departs from it, STALE-ORACLE where neither BASE nor HEAD prints it: two
+    compilers that disagree with the file say the file, or the harness (no input fed, CRLF kept), is wrong, not either compiler.
+    Line ends and trailing blanks do not count: a DOS console writes CRLF where the .out has LF."""
+
+    if output_lines(head) == output_lines(want):
+        return "PASS"
+    return "FAIL" if output_lines(base) == output_lines(want) else "STALE-ORACLE"
 
 
 def main(argv: list[str]) -> int:

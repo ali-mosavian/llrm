@@ -36,7 +36,7 @@ pub struct Tuning {
     /// pin's, which forms the memset whenever the stores allow.
     pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
-    /// CPU's table gives, with no byte term (gcc's `synth_mult` at
+    /// CPU's table gives, with no byte term (the search at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
@@ -71,6 +71,11 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
+    /// counts a callee in bytes of encoded code by instruction kind
+    /// (`Tti::inline_size_view`), not in the pin's units of one per
+    /// instruction. false: the pin's units.
+    pub inline_size_bytes: bool,
     /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
@@ -165,17 +170,10 @@ pub struct Tuning {
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
-    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
-    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
-    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
-    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
-    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
-    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
-    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
-    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
-    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
-    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
-    /// it is off at `-O2` and `-O3`.
+    /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
+    /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
+    /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
+    /// 188.9M clk (+95%) and jpeg_fixed +64% against main, for -127 B and -790 B; `-Os` is strict per axis.
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
@@ -184,6 +182,10 @@ pub struct Tuning {
     /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
     /// against the `mov`'s one; the level is bytes-strict.
     pub push_imm_at_size: bool,
+    /// Functions with the same body become one at `-Os` (`MergeFunctions`, `llrm_transforms::mergefunc`): a local copy is
+    /// dropped, an exported one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): the pin's
+    /// default pipeline does not run the pass (`-enable-merge-functions` is off), gcc folds them at `-Os` (`-fipa-icf`).
+    pub merge_functions_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -257,8 +259,11 @@ pub struct Tuning {
     /// 183/11556, sfm16_float_cmp 1993/44039 -> 1994/45240, shellsort
     /// 172/11672 -> 176/11993, stft_single 842/49421 -> 844/49421;
     /// trades 2: grep 497/49952 -> 523/49865, quicksort 252/319777 ->
-    /// 261/303228. Open Os row M16-OS-MATMUL-DIVISOR (owner x86-m16, exit
-    /// 2026-11-20): matmul -Os 289 B/23807 clk against 284/23679 at 1000.
+    /// 261/303228. Closed Os row M16-OS-MATMUL-DIVISOR: matmul -Os 289 B/23807
+    /// clk against 284/23679 at 1000 is this weight's price, not a defect.
+    /// The heavier address component evicts v91 from ECX, adding 3 stack
+    /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
+    /// 16601539e87f.
     pub address_reference_milliweight: u32,
     /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
     /// latency exceeds its issue-bound time is not unrolled at run time
@@ -271,9 +276,19 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
+    /// pin's 10 (40 when tuned for size).
+    pub min_jump_table_density: Option<u64>,
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): at size an
+    /// `add`/`sub`/`and`/`or`/`xor` whose immediate has several users keeps
+    /// the table's immediate form, where the pin's `X86DAGToDAGISel::Select`
+    /// loads the constant once and takes the register form. The pin's form is
+    /// larger where the immediate encodes short (m64 `-Os`: `and r64, imm`
+    /// of a 32-bit mask, `movzx` masks). false: the pin's.
+    pub immediate_forms_at_size: bool,
     /// The inliner's D11 bound holds a caller optimized for size on this target
     /// (the real-mode description's `inline_size_guard` is the same bound
     /// at m16): a callee that stays is copied only if it does not grow the
@@ -423,6 +438,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
+        inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
@@ -444,6 +460,7 @@ impl Tuning {
         rep_movs_at_size: false,
         sdiv_pow2_stays_at_size: false,
         push_imm_at_size: false,
+        merge_functions_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -460,7 +477,9 @@ impl Tuning {
         unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
+        min_jump_table_density: None,
         split_merged_conditions: false,
+        immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
@@ -534,6 +553,13 @@ pub trait Machine {
     /// clamped to it at pipeline entry, so the optimizer never assumes an
     /// alignment the frame does not give.
     fn kept_stack_align(&self) -> Option<u64> {
+        None
+    }
+
+    /// An `alloca` aligned beyond this is kept at its alignment, the frame
+    /// realigning the stack pointer for it, instead of clamped to
+    /// [`Machine::kept_stack_align`]; none: every excess is clamped.
+    fn realigned_above(&self) -> Option<u64> {
         None
     }
 
@@ -823,6 +849,12 @@ pub struct OperationCosts {
     /// equal to `multiply`/`divide` elsewhere.
     pub multiply_long: i64,
     pub divide_long: i64,
+    /// An integer product wider than the target's word (an `i64` on a 32-bit CPU), where the CPU's own multiply is
+    /// narrower: the CPU's whole sequence. 0: priced as `multiply_long`.
+    pub multiply_wide: i64,
+    /// The product of two values extended from the word (`i32` by `i32` into `i64`), the form a fixed-point multiply
+    /// expands to. 0: priced as `multiply_wide`.
+    pub multiply_widening: i64,
     /// Percent by which a constant divide's multiply-high sequence must cost
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
@@ -955,6 +987,9 @@ pub struct OperationCosts {
     /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
     /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
     pub free_intrinsics: bool,
+    /// Whether a fixed-point or saturating intrinsic (`llvm.{s,u}mul.fix[.sat]`, `llvm.{s,u}shl.sat`) is priced as the
+    /// operations it expands to, on this target's table, in a function's estimate. False: priced as a call.
+    pub expanded_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -963,6 +998,16 @@ pub struct OperationCosts {
 }
 
 impl OperationCosts {
+    /// An integer product wider than the word: `multiply_wide`, else `multiply_long`.
+    pub fn wide_product(&self) -> i64 {
+        if self.multiply_wide > 0 { self.multiply_wide } else { self.multiply_long }
+    }
+
+    /// The product of two word-wide values in a double-wide result: `multiply_widening`, else [`Self::wide_product`].
+    pub fn widening_product(&self) -> i64 {
+        if self.multiply_widening > 0 { self.multiply_widening } else { self.wide_product() }
+    }
+
     /// The ratio under which a constant memset of `zero` bytes, or of any other
     /// byte, is stores; 0 where none is stated. `size`: tuned for size.
     pub fn pieces(
@@ -1057,6 +1102,8 @@ impl Default for OperationCosts {
             divide: 1,
             multiply_long: 1,
             divide_long: 1,
+            multiply_wide: 0,
+            multiply_widening: 0,
             divide_margin: 0,
             multiply_high: 1,
             shift: 1,
@@ -1110,6 +1157,7 @@ impl Default for OperationCosts {
             function: 0,
             function_scale: 100,
             free_intrinsics: false,
+            expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }

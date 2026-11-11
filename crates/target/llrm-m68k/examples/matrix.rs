@@ -26,6 +26,7 @@ use llrm_m68k::object::{assemble, executable, write_executable};
 #[allow(dead_code)]
 #[path = "cycles.rs"]
 mod cycles;
+mod tempdir;
 
 /// The sections of an `objdump -h` listing that hold data a kernel could load
 /// (`.rodata*`, `.data*`, `.bss*`, literal pools) with a size above zero.
@@ -277,8 +278,7 @@ fn main() {
     let llc = PathBuf::from(std::env::var("LLVM_M68K").expect("LLVM_M68K: the pin's m68k build, its bin directory"))
         .join("llc");
     let objdump = gcc_root.join("usr/bin/m68k-linux-gnu-objdump");
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-matrix-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempdir::Scratch::new("matrix");
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
     let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench").join(&set);
     let (rows, block): (Vec<(&str, Vec<Arg>, i32, bool)>, Vec<u8>) = if set == "library" {
@@ -355,12 +355,15 @@ fn main() {
                         if status != Some(*expected) {
                             return (None, None, format!("wrong result: {status:?}, want {expected}"));
                         }
-                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        let total = cycles::price(&gcc_root, &exe, &[model], false, &["k".to_owned()]);
+                        if total.truncated {
+                            return (None, None, "trace cut short: raise CYCLES_TIMEOUT".to_owned());
+                        }
                         if total.insns == 0 {
                             return (None, None, "priced no instruction".to_owned());
                         }
-                        if total.unknown > 0 {
-                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        if total.unknown_of(0) > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown_of(0));
                         } else if total.partial && notes.is_empty() {
                             notes = "data-dependent term at its bound".to_owned();
                         }
@@ -427,7 +430,6 @@ fn main() {
             }
         }
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// The levels a matrix measures: `O1` is strict (bytes and clocks), `O2` and

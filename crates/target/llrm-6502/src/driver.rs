@@ -201,7 +201,8 @@ fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
@@ -379,7 +380,7 @@ fn trial_unrolled(
         return Ok(tail(built, request, false)?.text);
     };
     let (eligible, units) = trial::take();
-    if !matches!(request.level, Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
+    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
         return Ok(tail(built, request, false)?.text);
     }
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
@@ -437,7 +438,12 @@ pub fn trial_pays(
     if added > TRIAL_GROWTH_LIMIT {
         return false;
     }
-    if level == Level::Os { added < 0 || (added == 0 && saved >= 0) } else { saved * 1000 >= added * rate }
+    match level {
+        Level::Os => added < 0 || (added == 0 && saved >= 0),
+        // strict: no more bytes and no more clocks (6502-UNROLL-O1)
+        Level::O1 => added <= 0 && saved >= 0,
+        _ => saved * 1000 >= added * rate,
+    }
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
@@ -459,7 +465,14 @@ fn cheaper(
         let text = crate::select::function_text(module, name, selection).ok()?;
         let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
         let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
-        let priced = crate::timing::estimate_calling(request.cpu, &text, &routines, Some(&depth_of)).ok()?;
+        // loop depth guesses ten trips a level; a branch with weights (the
+        // page walk's wrap) says how often a block runs against its loop
+        let function = module.global(module.named(name)?).function()?;
+        let mut weights: Vec<u64> =
+            (0..function.block_capacity() as u32).map(|block| 10u64.pow(depth_of(block).min(3))).collect();
+        crate::weights::by_branch_weights(module, function, &mut weights);
+        let weight_of = |block: u32| weights.get(block as usize).copied().unwrap_or(1);
+        let priced = crate::timing::estimate_weighted(request.cpu, &text, &routines, Some(&weight_of)).ok()?;
         Some(priced.cycles + byte * u64::from(priced.bytes))
     };
     Ok(matches!(
@@ -484,6 +497,18 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
+    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the soft stack is not realigned and the
+    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is clamped to it at pipeline entry, so
+    /// `ptr & 1` is no longer folded to 0 for an object on an odd frame. The pin states what a frame keeps the same
+    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and argument areas, then 2.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::STACK_ALIGN as u64)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::frame::MAX_ALLOCA_ALIGN)
+    }
+
     /// `lda (zp),y`: the index is `y`.
     fn index_register_bits(&self) -> Option<u32> {
         Some(8)
@@ -536,6 +561,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Mos6502::new()))
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::ir_lowering::MosIrLowering))
     }
 }
 

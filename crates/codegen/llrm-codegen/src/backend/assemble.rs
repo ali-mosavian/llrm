@@ -398,7 +398,10 @@ pub fn assembled_by(
                     // A global of this module is called by the name it is
                     // defined or declared as.
                     let linked = match module.named(callee) {
-                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        Some(id) => names
+                            .get(&(globals::space(module, id), i64::from(id.0)))
+                            .cloned()
+                            .ok_or_else(|| format!("{callee}: a call to an intrinsic this target does not lower"))?,
                         None => abi.linked(callee),
                     };
                     referenced.insert(linked.clone(), far.contains(at));
@@ -618,6 +621,18 @@ pub fn assembled_by(
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
     let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
+    // `shouldAssumeDSOLocal`: shared-library code binds no default-visibility
+    // definition itself, and no code binds a weak one.
+    let preemptible: BTreeSet<String> = weak
+        .iter()
+        .cloned()
+        .chain(
+            procedures
+                .iter()
+                .filter(|one| one.public && module.preempts_default_visibility() && !visibility.contains_key(&one.name))
+                .map(|one| one.name.clone()),
+        )
+        .collect();
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
@@ -625,6 +640,7 @@ pub fn assembled_by(
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
         visibility,
+        preemptible,
         aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
@@ -890,7 +906,7 @@ fn machined_once(
     // spill slots can end on a word, so a 4-aligned frame needs it too: the
     // backend run again aligns the allocas and the frame moved by the hole
     // did not (reserve 286 against 288).
-    let align = frame.align.max(frame.alloca_align);
+    let align = frame.object_cap().max(frame.alloca_align);
     let spilled = if align > 1 { (spilled + align - 1).div_euclid(align) * align } else { spilled };
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(best(first));
@@ -1276,7 +1292,11 @@ fn staged(
         saved: pushed,
         vector_saved,
         red_zone: entry.map_or(base.red_zone, |one| one.frame_red_zone),
-        slot_scratch: entry.and_then(|one| target.arch.frame_slot_scratch_of(one)).or(base.slot_scratch),
+        slot_scratch: entry
+            .and_then(|one| target.arch.frame_slot_scratch_of(one))
+            .or(base.slot_scratch)
+            .filter(|_| target.cpu.pops_frame_slot())
+            .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
         ..base
     };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for
@@ -1287,6 +1307,7 @@ fn staged(
         registers.vector_saved.clear();
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
+    registers.object_align = target.facts.object_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
     // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
@@ -1371,6 +1392,7 @@ fn staged(
         timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.align = registers.align.max(registers.slot).max(frame.align);
+    frame.object_align = Some(registers.object_align.max(registers.slot));
     frame.hole = hole;
     frame.alloca_align = alloca_align;
     frame.extents = extents;
@@ -1499,7 +1521,7 @@ fn phased(
         .capacities
         .values()
         .filter(|&&size| size > 0)
-        .map(|&size| (1i64 << size.ilog2()).min(frame.align))
+        .map(|&size| (1i64 << size.ilog2()).min(frame.object_cap()))
         .chain([frame.alloca_align])
         .max()
         .unwrap_or(1)
@@ -1597,4 +1619,14 @@ fn select_in_pool(
         Some(hooks) => hooks.select_function(module, name, arch, cpu, libcalls, contracts, pool),
         None => Err(Unselected("no backend installed (llrm_x86_backend::install)".to_owned())),
     }
+}
+
+/// Whether `convention` keeps `register` for its caller: a one-slot frame's `pop` into it would hand the caller back the pushed value
+/// (`findDeadCallerSavedReg` picks only caller-saved registers; x86 has no register convention keeping ecx, watcall32 does).
+fn keeps(
+    arch: &dyn llrm_target::Target,
+    convention: &llrm_target::calling::Convention,
+    register: RegId,
+) -> bool {
+    convention.preserved.iter().any(|kept| arch.register_named(&kept.full) == register)
 }

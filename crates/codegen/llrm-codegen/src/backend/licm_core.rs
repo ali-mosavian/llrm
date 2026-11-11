@@ -449,19 +449,15 @@ fn named_values<I: Inst>(
         .collect()
 }
 
-/// `HasLoopPHIUse`: the values a copy in the loop reads, a phi of the loop
-/// (or of an exit block) takes, and what feeds a copy of those.
+/// `HasLoopPHIUse`: the values a phi of the loop (or of an exit block) takes,
+/// and what feeds a copy of those. A copy that no phi takes is not one: the
+/// pin looks past copies only for a phi (MachineLICM.cpp#L1166).
 fn phi_values<I: Inst>(
     blocks: &[Block<I>],
     place: &HashMap<i64, usize>,
     inside: &BTreeSet<i64>,
 ) -> HashSet<u32> {
-    let mut taken: HashSet<u32> = inside
-        .iter()
-        .flat_map(|at| blocks[place[at]].insns.iter())
-        .filter(|one| one.is_copy())
-        .flat_map(|one| one.uses().iter().copied())
-        .collect();
+    let mut taken: HashSet<u32> = HashSet::default();
     let exits = inside
         .iter()
         .flat_map(|at| blocks[place[at]].succ.iter().copied())

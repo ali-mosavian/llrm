@@ -25,8 +25,11 @@ pub mod instr;
 pub mod interp;
 pub mod matcher;
 pub mod predicates;
+pub mod sched;
 
 #[cfg(test)]
 mod aarch64_tests;
+#[cfg(test)]
+mod sched_tests;
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;

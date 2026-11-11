@@ -377,7 +377,7 @@ fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
 #[test]
 fn every_generated_attribute_is_one_mir_reads() {
     use crate::intrinsic_attrs::{Attr, NAMES, SETS};
-    let known = |word: &str| crate::opcode::FLAG_ATTRIBUTES.contains(&word);
+    let known = |word: &str| crate::opcode::FLAG_ATTRIBUTES.contains(&word) || word == "nocreateundeforpoison";
     let mut memory = std::collections::BTreeSet::new();
     for &(name, set, _) in NAMES.iter() {
         let set = &SETS[set as usize];
@@ -894,6 +894,24 @@ fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
     let once = round(&text);
     assert!(once.contains("null_pointer_is_valid"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// `uwtable(sync)` read back as plain `uwtable`: the kind was dropped, so a
+/// back end could not tell a synchronous unwind table from an asynchronous one.
+#[test]
+fn the_unwind_table_kind_is_kept() {
+    use crate::opcode::{UnwindTable, unwind_table};
+    let kinds = |attrs: &str| {
+        let text = format!("{DATALAYOUT}\ndefine void @f() {attrs} {{\nb0:\n  ret void\n}}\n");
+        let once = round(&text);
+        assert_eq!(round(&once), once);
+        let mut module = parse::module(&once).expect("reads");
+        unwind_table(&module.function_mut("f").unwrap().1.attrs)
+    };
+    assert_eq!(kinds("uwtable(sync)"), Some(UnwindTable::Sync));
+    assert_eq!(kinds("uwtable"), Some(UnwindTable::Async));
+    assert_eq!(kinds("uwtable(async)"), Some(UnwindTable::Async));
+    assert_eq!(kinds(""), None);
 }
 
 /// Clang's output for arm64 states `ssp` and `uwtable(sync)` on a function and

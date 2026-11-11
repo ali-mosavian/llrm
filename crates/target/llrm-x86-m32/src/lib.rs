@@ -71,7 +71,7 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
 /// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
 /// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
-/// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
+/// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
 /// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-10
@@ -134,10 +134,18 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
         lftr_any_stride: true,
+        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24, as m16): at the 486 and P5 rates a
+        // merged `a && b` is two `setcc`, a logic op, a `test` and a `jcc`, and byte registers
+        // are scarce; split, the second compare runs only if the first holds and the branch
+        // costs 1 clk not taken. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb; and;
+        // cmp 1; jne`.
+        split_merged_conditions: true,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
-        sdiv_pow2_stays_at_size: true,
+        sdiv_pow2_stays_at_size: false,
         push_imm_at_size: true,
+        // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): see `Tuning::merge_functions_at_size`.
+        merge_functions_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
@@ -155,7 +163,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50 packed ops) is vector-shaped: vector-deferred list.
         unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
-        inline_o1_unit_bytes_milli: 3500,
+        // DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner counts a callee in
+        // bytes of encoded code by instruction kind (`sizes`), not one unit an instruction scaled by
+        // a fitted 3.5. x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an estimated 82 B:
+        // +1533 B and +0.5 M clk.
+        inline_size_bytes: true,
+        inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: per_byte,
         sdiv_by_magnitude: true,
         call_sequence_fixed_clocks: costs.call + costs.return_,
@@ -240,7 +253,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it
         // is `rep movsd` inline, as gcc's `rep_prefix_4_byte`. x_mergesort -O3:
         // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
-        // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
+        // (gcc 60026: row MEM-1-R1). -O1 and size keep the call (`bytes_strict`:
+        // no byte rate pays for the ~17 B; x_jpeg_single -O1 inlined it twice).
+        // Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
         // see `Tuning::ipsccp_widen_keeps_sign`.

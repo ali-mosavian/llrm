@@ -413,9 +413,19 @@ fn a_pair_copy_moves_only_the_halves_that_are_read() {
 /// spilled both to the frame: 77 B against SDCC's 59. Spill-free needs no
 /// frame access. Waits for greedy's eviction order (greedy-anyisa, 11-08).
 #[test]
-#[ignore = "greedy evicts the long-lived pair for a short byte that has a free register"]
+#[ignore = "Z80-SLOT-READ-PEEK until 2026-11-30: the loop pointer is a push/pop slot read by peek each trip"]
 fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
     let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::Oz))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+}
+
+/// The same function once the inner loop is unrolled (-O2): LSR sees the outer loop as innermost, reduces `data[i]`
+/// to a pointer and the code has no frame access. At -Os/-Oz the pin's LSR skips the nested outer loop (row
+/// Z80-SLOT-READ-PEEK).
+#[test]
+fn crc16_with_its_inner_loop_unrolled_makes_no_frame_access() {
+    let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("(ix)"), "{out}");
 }
@@ -423,7 +433,7 @@ fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
 /// bsearch8: the base pointer and a bound spill (`ld l, -2(ix)`, `ld -3(ix),
 /// d`) in a loop with registers to spare: 68 B / 790 T against SDCC's 56 / 702.
 #[test]
-#[ignore = "greedy spills pair values in a loop with registers to spare"]
+#[ignore = "Z80-SLOT-READ-PEEK until 2026-11-30: the base pointer is a push/pop slot read by peek each trip"]
 fn a_search_loop_keeps_its_base_pointer_in_a_register() {
     let out = text(include_str!("kernels/ir/bsearch8.ll"), "bsearch8", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
@@ -1014,8 +1024,8 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let ir = include_str!("kernels/ir/carry32.ll");
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     // the carry fusion has since turned the compare and its byte into `adc hl,
-    // rr`
-    assert!(out.contains("adc hl, ") && !out.contains("SETCC8"), "{out}");
+    // rr`, or `jr nc` over `inc rr` for a word that adds nothing else
+    assert!((out.contains("adc hl, ") || out.contains("jr nc")) && !out.contains("SETCC8"), "{out}");
 }
 
 /// A call with more arguments than registers was refused: "stack arguments are
@@ -1827,6 +1837,21 @@ fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
     }
 }
 
+/// The pair a divide routine leaves (quotient in `de`, remainder in `hl`) is the registers of a long result, so
+/// its low word, the first part, is the one in `hl`. The lowering took the quotient as the first part: with a long
+/// result low in `hl`, div_constants_short returned 17761 where 0 was expected.
+#[test]
+fn a_word_divide_and_remainder_call_hands_back_the_quotient_from_de() {
+    for (op, rem, call) in [("udiv", "urem", "call __udivhi3"), ("sdiv", "srem", "call __divremhi4")] {
+        let ir = format!(
+            "@g = global i16 0\ndefine i16 @f(i16 %a, i16 %b) {{\n  %q = {op} i16 %a, %b\n  %r = {rem} i16 %a, %b\n  store i16 %r, ptr @g\n  ret i16 %q\n}}"
+        );
+        let out = compiled(&ir, "f");
+        let after = out.split(call).nth(1).unwrap_or_else(|| panic!("{call}: {out}"));
+        assert!(!after.contains("ex de, hl") && !after.contains("ld e, l"), "{op}: the quotient moved out of de: {out}");
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
@@ -1967,6 +1992,21 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
         !lines[push..call].iter().any(|l| l.starts_with("ld -") && l.contains("(ix)")),
         "stored into the slot\n{out}"
     );
+}
+
+/// The product of two zero-extended words was a full `__mulsi3` at -Os (15 B,
+/// 32 steps). In a function tuned for size it is one call of `__umulhisi3`,
+/// the 16 x 16 -> 32 routine; at -O2 the partial products stay.
+#[test]
+fn the_product_of_two_extended_words_is_one_widening_multiply() {
+    let ir = "define i32 @product(i16 %a, i16 %b) {\n  %x = zext i16 %a to i32\n  %y = zext i16 %b to i32\n  %r = mul i32 %x, %y\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    for level in [Level::Os, Level::Oz] {
+        let out = text(&ir, "product", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+        assert!(out.contains("__umulhisi3") && !out.contains("__mulsi3") && !out.contains("__mulhi3"), "{out}");
+        assert!(instructions <= 8, "{instructions}\n{out}");
+    }
 }
 
 /// The shift routines of the z80 (`__ashlsi3` and the others) read their count
@@ -2353,6 +2393,7 @@ fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
     let ir = include_str!("kernels/ir/long_compare_folded_borrow.ll");
     for level in [Level::O1, Level::O2, Level::Os] {
         let out = text(ir, "sign_branch", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(out.contains("bit 7, d"), "{level:?}: {out}");
+        // the register is the convention's business (the high word of `a` is on the stack, loaded into bc)
+        assert!(out.contains("bit 7, ") && !out.contains("sbc"), "{level:?}: {out}");
     }
 }

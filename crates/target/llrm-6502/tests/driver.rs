@@ -1429,6 +1429,24 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
+/// `side = a < b ? 1 : 2` reaches the DAG as `add (sext c), 2`. The pin turns it into `sub 2, (zext c)`, which the 6502
+/// builds as a borrow chain: `phi_slot_unknown_arm` O1 read 5 bytes longer and 0.9% slower with it. The add stays.
+#[test]
+fn an_add_of_a_sign_extended_compare_stays_an_add() {
+    let ir = module("define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i8\n  %r = add i8 %s, 2\n  ret i8 %r\n}");
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap();
+    assert!(text.contains("adc #2") && !text.contains("sbc"), "the add of a sign-extended compare:\n{text}");
+}
+
+/// Wider than 16 bits the add of a sign-extended compare read its sign bytes from a cell (`adc rc22`, 3 clk each); the
+/// pin's `sub x, (zext c)` ends in `sbc #0` (2 clk). `compare_to_int64` O1 read 48 clocks slower with the add.
+#[test]
+fn a_wide_add_of_a_sign_extended_compare_takes_the_pins_subtract() {
+    let ir = module("define i64 @f(i64 %x, i8 %a, i8 %b) {\n  %c = icmp ult i8 %a, %b\n  %s = sext i1 %c to i64\n  %r = add i64 %s, %x\n  ret i64 %r\n}");
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap();
+    assert!(text.contains("sbc #0"), "the wide add of a sign-extended compare:\n{text}");
+}
+
 /// A softened `double` bitcast to `i64` takes the halves of its softened
 /// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
 /// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.
@@ -2956,5 +2974,20 @@ fn volatile_arguments_are_read_in_source_order_at_every_level() {
                 "i{width} at {level:?}: accesses of g1, g2, g3 are {accesses:?}:\n{body}"
             );
         }
+    }
+}
+
+/// A word pattern over 64 cells was a loop that scaled and added its index on every trip (`asl`/`rol` of the
+/// index, `clc`/`adc` of the base: 17 instructions where a pointer step is 3). `fill_nest` at -O1 ran 429,137
+/// clocks against gcc's 333,596; 70% of them were that loop (2026-11-10).
+#[test]
+fn a_pattern_fill_steps_a_pointer() {
+    let ir = module(
+        "declare void @llvm.experimental.memset.pattern.p0.i16.i16(ptr, i16, i16, i1)\n\
+         define void @fill(ptr %p) {\n  call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 64, i1 false)\n  ret void\n}",
+    );
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(!text.contains("asl") && !text.contains("rol"), "{level:?} scales an index per trip:\n{text}");
     }
 }

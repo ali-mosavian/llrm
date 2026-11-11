@@ -20,6 +20,7 @@ fn unrolled(module: &mut Module) -> bool {
         only_when_forced: false,
         prepare_for_lto: false,
         target_unrolling: false,
+        inliner_follows: true,
     };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }

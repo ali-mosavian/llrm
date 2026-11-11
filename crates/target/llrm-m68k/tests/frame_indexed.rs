@@ -225,6 +225,73 @@ fn the_folded_displacement_stays_in_eight_bits_at_every_frame_size() {
     assert!(folded > 0 && kept > 0, "the sweep crossed no boundary: folded {folded}, kept {kept}");
 }
 
+/// `calls` calls in one block, each passing two words read from two stack
+/// arrays of `words` words at an index: the arguments are pushed straight from
+/// the indexed slots and the cleanups of the earlier calls are left owed.
+fn deferred(
+    calls: usize,
+    words: usize,
+) -> String {
+    let mut ir = format!(
+        r#"target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16"
+declare i32 @two(i32, i32)
+define i32 @f(i32 %k) {{
+  %a = alloca [{words} x i32], align 4
+  %b = alloca [{words} x i32], align 4
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %0 ], [ %next, %loop ]
+  %m7 = mul nuw nsw i32 %i, 7
+  %pa = getelementptr inbounds nuw [4 x i8], ptr %a, i32 %i
+  store i32 %m7, ptr %pa, align 4
+  %m5 = mul nuw nsw i32 %i, 5
+  %pb = getelementptr inbounds nuw [4 x i8], ptr %b, i32 %i
+  store i32 %m5, ptr %pb, align 4
+  %next = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+"#
+    );
+    for j in 0..calls {
+        ir += &format!(
+            "  %i{j} = add i32 %k, {j}\n  %p{j} = getelementptr inbounds [4 x i8], ptr %a, i32 %i{j}\n  %q{j} = getelementptr inbounds [4 x i8], ptr %b, i32 %i{j}\n  %v{j} = load i32, ptr %p{j}, align 4\n  %w{j} = load i32, ptr %q{j}, align 4\n  %c{j} = call i32 @two(i32 %v{j}, i32 %w{j})\n"
+        );
+    }
+    ir + &format!("  ret i32 %c{}\n}}\n", calls - 1)
+}
+
+/// nbody at 68000 -O1 and -Os printed `move.l (260,%sp,%a5), -(%sp)`, which
+/// gas refuses ("byte displacement out of range"): the fold bounded the stack
+/// pointer's depth by two calls' arguments, but the cleanups of a block's calls
+/// are left owed until the block ends, so the depth grows by every call.
+/// Six such calls took the displacement to 128, twelve to 168. A short block
+/// still folds and a long one keeps its `lea`.
+#[test]
+fn owed_cleanups_of_a_blocks_calls_stay_inside_the_eight_bit_displacement() {
+    let (mut folded, mut kept) = (0, 0);
+    for cpu in ["68000", "68020"] {
+        for level in [Level::O1, Level::O2, Level::Os] {
+            for calls in 1..=14 {
+                for words in [8, 16, 24] {
+                    let out = assembly(&deferred(calls, words), cpu_of(cpu).unwrap(), level).expect("compiles");
+                    let displacements = sp_indexed(&out);
+                    assert!(
+                        displacements.iter().all(|d| (-128..=127).contains(d)),
+                        "{cpu} {level:?} {calls} calls {words} words: {displacements:?}\n{out}"
+                    );
+                    folded += usize::from(!displacements.is_empty());
+                    kept += usize::from(!slot_leas(&out).is_empty());
+                }
+            }
+        }
+    }
+    assert!(folded > 0 && kept > 0, "the sweep crossed no boundary: folded {folded}, kept {kept}");
+    // a block whose owed cleanups still fit keeps its fold
+    let short = assembly(&deferred(2, 8), cpu_of("68000").unwrap(), Level::O2).expect("compiles");
+    assert!(!sp_indexed(&short).is_empty(), "two calls lost the fold:\n{short}");
+}
+
 /// The largest frame that still folds, run: the pushed argument and the
 /// displacement at the edge of the range read the right words.
 #[test]

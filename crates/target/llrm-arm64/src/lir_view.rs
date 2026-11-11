@@ -216,9 +216,12 @@ fn view_with(
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
     let wide = crate::regalloc::wide_registers(function);
+    let wide_list: Vec<Reg> = wide.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
+    // The names the memory operands of this function refer to, by index.
+    let mut symbols: Vec<String> = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
         let first_halves: Vec<usize> = pairs[at].values().copied().collect();
@@ -309,6 +312,21 @@ fn view_with(
                     }
                 }
             });
+            // Register 31 is the zero register and the stack pointer by slot;
+            // a write of the stack pointer is named so, for the scheduler's
+            // boundary (`modifiesRegister(SP)`).
+            if let Op::I(inst) = &op
+                && crate::ldst_update::writes_sp(inst)
+            {
+                for operand in &mut operands {
+                    if matches!(
+                        operand,
+                        Operand::Def(LirReg::Phys(register)) if *register == crate::reg::XZR
+                    ) {
+                        *operand = Operand::Def(LirReg::Phys(crate::reg::SP));
+                    }
+                }
+            }
             if let Op::I(inst) = &op
                 && let Some(target) = label_of(inst).and_then(|label| labels.get(label))
             {
@@ -322,6 +340,10 @@ fn view_with(
                 operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
             let mut inst = LirInst::new(kind, operands);
+            if !fused && !zero && matches!(op, Op::I(_) | Op::Copy { .. } | Op::Imm { .. }) {
+                inst.form = crate::lir_body::form_of(function, &mut symbols, &wide_list, &op).map(std::sync::Arc::new);
+                inst.form_operands = inst.operands.clone();
+            }
             inst.ties = ties;
             inst.origin = origin;
             inst.terminator = terminator;
@@ -350,6 +372,10 @@ fn view_with(
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
+            if let Op::I(access @ (Inst::Load { mem, mmo, .. } | Inst::Store { mem, mmo, .. })) = &op {
+                inst.memory =
+                    Some(crate::lir_body::memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
+            }
             inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
@@ -793,6 +819,17 @@ impl AllocTarget for Arm64 {
         true
     }
 
+    /// `-mcpu=generic` on Linux: the Cortex-A510 model. DEVIATE SB8: Darwin
+    /// (`apple-m1`) keeps the generic model until the Apple A14 model's data
+    /// (S1) lands.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        if darwin() {
+            std::rc::Rc::new(crate::schedmodel::DarwinModel)
+        } else {
+            std::rc::Rc::new(crate::schedmodel::Arm64Model::generic())
+        }
+    }
+
     /// The coalescer makes a definition again for a copy only if it is
     /// `isAsCheapAsAMove`; `MOVaddr` is not (the pair is two instructions),
     /// so a copy of an address stays a `mov`. The spiller takes it still.
@@ -1067,6 +1104,35 @@ mod tests {
         let ops = &back.blocks[0].ops;
         assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
         assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
+    }
+
+    /// `sub sp, sp, #16` defined register 31, the zero register, so the
+    /// scheduler saw no stack-pointer write and moved the stores below it
+    /// (`vla_call` printed 918, not 1213).
+    #[test]
+    fn a_write_of_the_stack_pointer_defines_sp_not_the_zero_register() {
+        let (sp, minus) = (Gpr(31), AddSub { subtract: true, set_flags: false });
+        let mut function = sample();
+        function.blocks[0].ops = OpList::from(vec![
+            Op::I(Inst::AddSubImm { op: minus, width: Width::X, rd: sp, rn: sp, imm12: 16, shift12: false }),
+            Op::I(Inst::AddSubImm { op: minus, width: Width::X, rd: Gpr(9), rn: sp, imm12: 16, shift12: false }),
+            Op::Return { uses: vec![], tail: None },
+        ]);
+        let lir = view(&function);
+        let defined = |at: usize| {
+            lir.blocks[0]
+                .insts[at]
+                .operands
+                .iter()
+                .find_map(
+                    |o| match o {
+                        Operand::Def(LirReg::Phys(register)) => Some(*register),
+                        _ => None,
+                    },
+                )
+        };
+        assert_eq!(defined(0), Some(crate::reg::SP), "{:?}", lir.blocks[0].insts[0]);
+        assert_ne!(defined(1), Some(crate::reg::SP), "a read of sp defines nothing");
     }
 
     /// The registers greedy chose go back into the original operations, a

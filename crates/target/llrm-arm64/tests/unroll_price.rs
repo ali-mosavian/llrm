@@ -19,11 +19,14 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 /// lru -O2: the estimate priced each copy's constant stores one by one
 /// (+28 B), vetoed both init loops, and ran 88 instructions / 364 B against the
 /// pin's 80 / 332. Adjacent constant stores merge into stp; with the credit
-/// the init loops unroll: 93 instructions (without it 98). Counted in
+/// the init loops unroll: fewer than the 98 instructions without it. Counted in
 /// instructions: a sunk constant's edge block adds a label, not an instruction.
+/// The exact count follows block order (93 before the pin's placement of phi
+/// edge blocks, 94 after; the pin's `opt -O2 | llc -O2` on the same IR: 103).
 #[test]
 fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
-    assert_eq!(instructions(include_str!("data/bench_lru.ll"), Level::O2), 93);
+    let insns = instructions(include_str!("data/bench_lru.ll"), Level::O2);
+    assert!(insns < 98, "{insns} instructions");
 }
 
 /// crc -O2: the 8-trip bit loop inside the 9-trip byte loop saves 207 clocks
@@ -62,12 +65,17 @@ fn loops_carried_between_slots_are_priced_at_o3() {
 /// still rolled loops made by an earlier slot of the loop pass manager
 /// (#8054 runs the pass once for each loop). They were taken for readers that
 /// stay rolled, the array for one that stays in memory, and the update loop
-/// kept rolled: 472 B (128 instructions in the module). Decided with their nest: 424 B (116).
-/// Fewer than 120 instructions.
+/// kept rolled: a `sub sp, sp, #80` frame for the array. Decided with their
+/// nest, the array is in registers and no local frame is made.
+///
+/// Not counted in instructions: the scheduler's pressure moves the count
+/// (116 to 135 with #8961, which spills as the pin does: the pin's llc on the
+/// same IR makes 136, ours 135) while the unroll decision stays (10 labels,
+/// 72 FP operations in every state).
 #[test]
 fn loops_an_earlier_slot_unrolled_around_are_decided_with_their_nest() {
-    let insns = instructions(include_str!("data/bench_nbody.ll"), Level::O2);
-    assert!(insns < 120, "{insns} instructions");
+    let asm = driver::assembly(include_str!("data/bench_nbody.ll"), Platform::Linux, Level::O2).expect("lowers");
+    assert!(!asm.lines().any(|line| line.starts_with("\tsub sp, sp")), "the array stays in memory:\n{asm}");
 }
 
 /// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced

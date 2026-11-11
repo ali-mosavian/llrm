@@ -291,7 +291,7 @@ fn order_plan(
     if frame.native.is_some() || frame.hole != 0 {
         return None;
     }
-    let reach = frame.align.max(1);
+    let reach = frame.object_cap().max(1);
     let align_of = |home: i64| {
         let mut align = 1;
         while align * 2 <= reach && home.rem_euclid(align * 2) == 0 {
@@ -429,6 +429,7 @@ fn replayed(
 ) -> Option<(Frame, IndexMap<i64, i64>)> {
     let mut again = Frame::new(frame.floor - hole);
     again.align = frame.align;
+    again.object_align = frame.object_align;
     again.hole = hole;
     again.extents = frame.extents.iter().map(|(start, size)| (start - hole, *size)).collect();
     let mut homes: IndexMap<i64, i64> = IndexMap::default();
@@ -928,6 +929,7 @@ mod tests {
                 saved: Vec::new(),
                 slot: 2,
                 align: 2,
+                object_align: 2,
                 optional: false,
                 enter: false,
                 wrap_split_size: false,

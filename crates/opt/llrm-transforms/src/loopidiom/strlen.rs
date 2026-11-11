@@ -27,9 +27,6 @@
 //!   library facts (`getWCharSize`). Exit with D11.
 //! - Calls count as side effects in the body scan, where LLVM lets a call that
 //!   does not write, always returns and does not unwind through.
-//! - `runOnNoncountableLoop`'s other idioms (`recognizePopcount`,
-//!   `recognizeAndInsertFFS`, `recognizeShiftUntilBitTest`,
-//!   `recognizeShiftUntilZero`, `recognizeShiftUntilLessThan`) are owed.
 //!
 //! # Example
 //! ```text
@@ -48,37 +45,12 @@ use llrm_analysis::scev::expr::Use;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, CallInfo, Flags, Opcode};
 use llrm_mir::types::Type;
 
 use super::LoopIdiomRecognize;
+use super::common::match_condition;
 use super::process::{Run, cx};
-
-/// `matchCondition`: the value the loop's branch tests against zero, when the
-/// branch stays in the loop on a non-zero value.
-fn match_condition(
-    run: &Run,
-    terminator: InstId,
-    loop_entry: llrm_mir::module::BlockId,
-) -> Option<Operand> {
-    let branch = run.function.instruction(terminator);
-    let [condition, Operand::Block(true_successor), Operand::Block(false_successor)] = branch.operands[..] else {
-        return None;
-    };
-    let Operand::Value(condition) = condition else { return None };
-    let llrm_mir::module::ValueDef::Instruction(compare) = run.function.value(condition).def else { return None };
-    let Opcode::ICmp(predicate) = run.function.instruction(compare).opcode else { return None };
-    let [tested, Operand::Constant(zero)] = run.function.instruction(compare).operands[..] else { return None };
-    if !matches!(
-        run.context.get(zero).kind,
-        ConstantKind::Int(0) | ConstantKind::Zero
-    ) {
-        return None;
-    }
-    ((predicate == IntPredicate::Ne && true_successor == loop_entry)
-        || (predicate == IntPredicate::Eq && false_successor == loop_entry))
-        .then_some(tested)
-}
 
 impl LoopIdiomRecognize {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L2052
@@ -87,10 +59,18 @@ impl LoopIdiomRecognize {
         &mut self,
         run: &mut Run,
     ) -> bool {
-        // OWED: recognizePopcount, recognizeAndInsertFFS,
-        // recognizeShiftUntilBitTest, recognizeShiftUntilZero and
-        // recognizeShiftUntilLessThan, in this order, before the string length.
-        self.recognize_and_insert_str_len(run)
+        // DEVIATE 18 (2026-11-10, review 2026-11-24, owner: each target's
+        // session; exit: its `Tti` prices `ctlz`/`cttz` and says
+        // `shift_loop_counts`): the pin forms the count idioms on every
+        // target; here a target opts in, since one whose backend expands them
+        // (z80: +89 lines) or that weighs bytes (x86_16 `-Os`) would grow.
+        let counts = run.tti.is_some_and(|tti| tti.shift_loop_counts());
+        self.recognize_popcount(run)
+            || (counts && self.recognize_and_insert_ffs(run))
+            || (counts && self.recognize_shift_until_bit_test(run))
+            || (counts && self.recognize_shift_until_zero(run))
+            || (counts && self.recognize_shift_until_less_than(run))
+            || self.recognize_and_insert_str_len(run)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L2219
@@ -254,7 +234,9 @@ impl LoopIdiomRecognize {
         {
             return None;
         }
-        let Operand::Value(loop_cond) = match_condition(run, loop_term, loop_body)? else { return None };
+        let Operand::Value(loop_cond) = match_condition(run.context, run.function, loop_term, loop_body, false)? else {
+            return None;
+        };
         let llrm_mir::module::ValueDef::Instruction(load) = run.function.value(loop_cond).def else { return None };
         let Opcode::Load { .. } = run.function.instruction(load).opcode else { return None };
         let pointer = run.function.instruction(load).operands[0];

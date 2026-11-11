@@ -86,6 +86,14 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
 
 
+def test_long_double_stride_is_not_for_the_6502_or_z80():
+    """long_double_stride's 16 is Watcom's 4-byte long double alignment (4 + 8 + 2 padded); the 6502 aligns to 1 and printed 11, read as
+    a miscompile in the 11-11 float sweep (8, 16, 11 vs 8, 16, 16); z80-sdcc packs structs (-fpack-struct=1) and gave 11 too (llrm-target-z80, compile only)."""
+    source = (RUN / "long_double_stride.c").read_text()
+    only_tags = "// targets: " + " ".join(ct.tags(source)) + "\n"  # ours_cr.py reads the tags alone: the -m32 flags do not exclude the 6502 there
+    assert not ct.applies("6502-sim65", only_tags) and not ct.applies("z80-sdcc", only_tags) and ct.applies("x86_32-dos", only_tags)
+
+
 def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
     """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
     and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
@@ -258,3 +266,88 @@ def test_an_explicit_targets_line_beats_the_directory_default():
 
 def test_a_plain_untagged_program_outside_those_directories_still_applies_everywhere():
     assert all(ct.applies(t, "int f(void){return 0;}\n", Path("tests/run/c/plain.c")) for t in NON_X86)
+
+
+def test_an_lp64_target_reads_the_lp64_expected_output(tmp_path):
+    """A `long` of 64 bits printed 3421780262 where the 32-bit-long .out wanted -873187034: 108 cells of wasm-b's x86_64 run read as
+    differences, in 36 programs where llrm matched host clang -m64. The shared .out stays the ILP32 truth; LP64 targets read NAME.lp64.out."""
+    source = tmp_path / "p.c"
+    for name in ("p.out", "p.lp64.out"):
+        (tmp_path / name).write_text("x\n")
+    for target in ("x86_64-linux", "arm64-linux", "arm64-macos"):
+        assert ct.expected_output(source, target).name == "p.lp64.out", target
+    for target in ("x86_32-linux", "m68k-68020", "wasm32", "z80", "x86_16-dos"):
+        assert ct.expected_output(source, target).name == "p.out", target
+    (tmp_path / "p.x86_64.out").write_text("y\n")
+    assert ct.expected_output(source, "x86_64-linux").name == "p.x86_64.out", "a family file is more specific than the width file"
+    assert ct.expected_output(tmp_path / "q.c", "x86_64-linux").name == "q.out"
+
+
+def test_a_cell_that_differs_from_the_oracle_on_base_and_head_is_a_stale_oracle():
+    """wasm-b's identity run printed 108 cells as differences from .out where base and head agreed with each other: the oracle was stale (or
+    the harness fed no input, or kept CRLF), not the compiler. An agreement of base and head is not a pass or a fail against it."""
+    assert ct.oracle_verdict("1\n", base="1\n", head="1\n") == "PASS"
+    assert ct.oracle_verdict("1\n", base="1\n", head="2\n") == "FAIL"
+    assert ct.oracle_verdict("1\n", base="2\n", head="2\n") == "STALE-ORACLE"
+    assert ct.oracle_verdict("1\n", base="2\n", head="3\n") == "STALE-ORACLE"
+    assert ct.oracle_verdict("1\n", base="2\n", head="1\n") == "PASS", "a fix of the base is a pass"
+    assert ct.oracle_verdict("ab\ncd\n", base="ab\r\ncd\r\n", head="ab\r\ncd\r\n") == "PASS", "a DOS console's CRLF is the same text"
+
+
+def test_an_lp64_override_names_the_abi_fact_it_rests_on():
+    """An LP64 expected output with no reason, or equal to the shared file, hides a difference or nothing."""
+    overrides = sorted(HERE.parent.glob("**/*.lp64.out"))
+    assert overrides, "the lp64 overrides are gone"
+    for out in overrides:
+        why = out.with_suffix(".why")
+        assert why.exists() and len(why.read_text().strip().splitlines()) == 1, f"{out.name}: one line of why"
+        assert why.read_text().startswith("ABI: "), f"{out.name}: an override is for an ABI difference; fix the program otherwise"
+        shared = out.with_name(out.name.replace(".lp64.out", ".out"))
+        assert shared.exists() and shared.read_bytes() != out.read_bytes(), f"{out.name}: stale, equal to {shared.name}"
+
+
+def test_programs_that_pun_a_32_bit_word_do_not_type_it_long():
+    """sfm16_float* typed their 32-bit words `long` and punned them through `union { unsigned long u; float f; }`, and fixed_point read a
+    32-bit _Accum through `unsigned long`: on LP64 the upper four bytes of the union are uninitialised, so gcc -O2 printed 54'305'724'024'370'529
+    where clang printed 954'867'168'609 for the same sfm16_float_add source, and fixed_point printed stack addresses at -O0."""
+    for source in sorted((HERE.parent / "bench").glob("sfm16_float*/*.c")):
+        text = source.read_text()
+        assert "typedef long sfi32" not in text and "unsigned long u; float f" not in text, source.name
+    text = (RUN / "fixed_point.c").read_text()
+    assert "unsigned long," not in text and "report((long)u.i)" not in text
+
+
+def test_a_65c02_row_is_as_not_applicable_as_a_6502_row():
+    """The width and freestanding regexes spelled `6502` and missed `65c02`: bitfield_overhang_init, memcpy_runtime, memfuncs_runtime and
+    widening_multiply (`!int16`, `!ptr16`, `!freestanding`) were run and refused on 65c02, 12 rows."""
+    for name in ("bitfield_overhang_init", "memcpy_runtime", "memfuncs_runtime", "widening_multiply"):
+        source = (RUN / f"{name}.c").read_text()
+        for target in ("6502-sim65", "65c02-sim65"):
+            assert not ct.applies(target, source), (name, target)
+    assert not ct.applies("65c02-sim65", "// flags: -O2 -m32\nint x;\n"), "a 32-bit-x86-only program is no 65c02 program either"
+
+
+def test_a_program_with_a_far_pointer_is_dos_only_without_a_tag():
+    """sum_three declares `short far *data` with no `// targets: dos`: 30 rows were refused by a clang front-end error on every other target."""
+    source = (HERE.parent / "bench/parity/sum_three/sum_three.c").read_text()
+    for target in ("x86_64-linux", "arm64-linux", "m68k-68020", "z80", "6502-sim65", "wasm32", "x86_32-linux"):
+        assert not ct.applies(target, source), target
+    assert ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
+    assert ct.applies("x86_64-linux", "/* as far as we know */\nint x; int far_away;\n"), "prose and names are not a far pointer"
+
+
+def test_a_program_that_prints_through_the_hosted_libc_is_not_run_for_macos():
+    """widening_multiply includes <stdio.h>; the arm64-macos row has no macOS sysroot, so it parsed the host's /usr/include/stdio.h and died."""
+    source = (RUN / "widening_multiply.c").read_text()
+    assert not ct.applies("arm64-macos", source)
+    assert ct.applies("arm64-linux", source) and ct.applies("x86_64-linux", source)
+    assert not ct.applies("arm64-macos", "// targets: !macos\nint x;\n") and ct.applies("arm64-linux", "// targets: !macos\nint x;\n")
+
+
+def test_a_vla_program_is_not_run_where_the_backend_has_no_dynamic_alloca():
+    """vla_callee_constant is in the sweeps for the targets that build it; m68k, 6502, z80 and wasm refuse a dynamic alloca (rc 1) and read n/a, not FAIL."""
+    source = (RUN / "vla_callee_constant.c").read_text()
+    for target in ("m68k-68000", "m68k-68020", "6502-sim65", "65c02-sim65", "z80-sdcc", "wasm32"):
+        assert not ct.applies(target, source), target
+    for target in ("arm64-linux", "x86_64-linux", "x86_32-linux", "x86_16-dos"):
+        assert ct.applies(target, source), target

@@ -18,6 +18,7 @@ for c in 68000 68020; do
   done
   if [ $c = 68020 ]; then LLRM_CC=$D/llrm-cc tools/m68k_div64_members.sh 68020 $T/m$c; objs="$objs $T/m$c/udivdi3.o $T/m$c/umoddi3.o $T/m$c/divdi3.o $T/m$c/moddi3.o"; fi # what libsf.a ships
   ds=; [ $c = 68020 ] && ds="--defsym M68020=1"; $B-as -m$c $ds -o $T/sf64_$c.o config/m68k/sf64.s; objs="$objs $T/sf64_$c.o"
+  $B-as -m$c $ds -o $T/mulsi3_$c.o config/m68k/mulsi3.s; objs="$objs $T/mulsi3_$c.o" # __mulsi3 is the asm member
   gobjs=; for o in $G/${c}_double.o $G/${c}_floatex.o $G/${c}_fpg_$opt.o; do [ -f $o ] && gobjs="$gobjs $o"; done
   for m in ltdf2 cmpdf2; do $B-gcc -msoft-float -m$c -DL_$m -I$LS/config/m68k -I$LS -c $LS/config/m68k/lb1sf68.S -o $T/g_${m}_$c.o 2> /dev/null && gobjs="$gobjs $T/g_${m}_$c.o"; done
   ints=; [ $c = 68000 ] && ints="$G/${c}_divsi3.o $G/${c}_modsi3.o $G/${c}_udivsi3.o $G/${c}_umodsi3.o $G/${c}_mulsi3.o"

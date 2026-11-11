@@ -6,6 +6,8 @@ import sys, re, os, json, tempfile, shutil, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from flagset import CORPUS_COMMON, program_flags
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
 CORPUS = Path(os.environ.get("OURS_CORPUS", HERE.parents[1] / "tests" / "run" / "c"))
@@ -24,6 +26,11 @@ if not os.environ.get("OURS_RT"):
 if not os.path.isfile(os.environ["OURS_RT"]):
     sys.exit(f"ours: OURS_RT={os.environ['OURS_RT']} is not a file")
 RT = open(os.environ["OURS_RT"]).read()
+# OURS_CPU=65c02 measures the CMOS target (llrm-cc --target=65c02-sim65, linked as cl65 -t sim65c02).
+CPU = os.environ.get("OURS_CPU", "6502")
+if CPU not in ("6502", "65c02"):
+    sys.exit(f"ours: OURS_CPU={CPU!r} is neither 6502 nor 65c02")
+CLT = "sim" + CPU
 def reachable_runtime(text):
     """Port of tests/common/pipeline.rs reachable_runtime: routines are the top-level labels of mos_rt.s; one is reached when another's text names it."""
     blocks = []; bss = ""; in_bss = False; pending = ""; macros = ""; in_macro = False
@@ -129,8 +136,8 @@ def bytes_of(mapfile):
     return tot
 def base_members(work):
     w = Path(tempfile.mkdtemp(prefix="base-", dir=work)); (w / "d.s").write_text(driver()); (w / "f.s").write_text(".export main\nmain: rts\nrc0=$80\nrc1=$81\nrc2=$82\nrc3=$83\nrc4=$84\nrc5=$85\n")
-    k = sh(["cl65", "-t", "sim6502", "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
-    return set(re.findall(r"sim6502\.lib\((\w+)\.o\)", (w / "x.map").read_text()))
+    k = sh(["cl65", "-t", CLT, "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
+    return set(re.findall(rf"{CLT}\.lib\((\w+)\.o\)", (w / "x.map").read_text()))
 def split_output(stdout):
     """sim65 prints "<n> cycles" straight after the program's output; the driver ends its dump with a newline so a last byte that is an ASCII digit is not read as part of n."""
     m = re.search(rb"\n(\d+) cycles\n$", stdout)
@@ -142,7 +149,7 @@ def one(job):
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", "-fsigned-char", "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, f"--target={CPU}-sim65", flag, "-S", "-w", *CORPUS_COMMON, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:
@@ -152,11 +159,11 @@ def one(job):
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm + reachable_runtime(asm))
     out = []
     for dump in (True, False):
-        k = sh(["cl65", "-t", "sim6502", *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
+        k = sh(["cl65", "-t", CLT, *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
         if k.returncode:
             und = sorted(set(re.findall(r"Unresolved external '(\w+)'", k.stderr)))
             return name, "LINK", (" ".join(und) or k.stderr[-100:])[:140]
-        alien = set(re.findall(r"sim6502\.lib\((\w+)\.o\)", (w / "x.map").read_text())) - BASE
+        alien = set(re.findall(rf"{CLT}\.lib\((\w+)\.o\)", (w / "x.map").read_text())) - BASE
         if alien:
             return name, "ALIEN", "links the cc65 library: " + ",".join(sorted(alien))
         try:
@@ -175,14 +182,14 @@ def one(job):
     # is not the program's clocks. Mean over the other paddings of code.
     for pad in PADS[1:]:
         (w / "f.s").write_text(".autoimport +\n" + f'.segment "CODE"\n.res {pad}\n' + asm + reachable_runtime(asm))
-        k = sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
+        k = sh(["cl65", "-t", CLT, "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
         if k.returncode:
             return name, "LINK", k.stderr[-100:]
         r = sh(["sim65", "-c", "-x", "4000000000", "x.bin"], w, timeout=120, text=False)
         cycles.append(int(re.search(rb"(\d+) cycles", r.stdout).group(1)))
     # executed instructions and bytes of the first layout (the padding is not the program's bytes)
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + reachable_runtime(asm))
-    sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
+    sh(["cl65", "-t", CLT, "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
     nb = bytes_of(w / "x.map")
     ins = sh([INSNS, "-c", "-x", "4000000000", "x.bin"], w, timeout=300, text=False)
     m = re.search(rb"(\d+) instructions", ins.stdout + ins.stderr)
@@ -206,7 +213,9 @@ def one_honoring(args):
     return name, verdict, data
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
-    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None; BASE = base_members(WORK)
+    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
+    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]
     with ThreadPoolExecutor(4) as pool: res = list(pool.map(one_honoring if os.environ.get("OURS_FLAGS") == "honor" else one, [(s, level, lib) for s in srcs]))

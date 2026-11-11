@@ -721,7 +721,9 @@ impl<'a, 'b> Checker<'a, 'b> {
         let function = self.function();
         // Reductions of the inner loop are found with no SCEV, as the pin's
         // `isReductionPHI(PHI, L, RD)` does.
-        let Some(rd) = ivdescriptors::is_reduction_phi(self.cx, None, phi, l) else { return false };
+        let Some(rd) = ivdescriptors::is_reduction_phi(self.cx, None, phi, l, &ivdescriptors::Analyses::NONE) else {
+            return false;
+        };
         // A floating point reduction only where it can be reordered.
         if rd.exact_fp_math_inst().is_some() {
             return false;

@@ -53,6 +53,11 @@ pub struct Inst {
     pub barrier: bool,
     /// It sets the status flags a later instruction may read.
     pub sets_flags: bool,
+    /// It was made again by the spiller and its original sets the flags, but
+    /// `sets_flags` is clear so the reader after the original keeps the
+    /// original's ([`Target::remade_sets_no_flags`]). The target restores the
+    /// truth once it has placed the flag readers.
+    pub remade_sets_flags: bool,
     /// It reads the status flags.
     pub reads_flags: bool,
     /// `mayLoad`, `mayStore`, `hasUnmodeledSideEffects`, `isAsCheapAsAMove`.
@@ -63,6 +68,9 @@ pub struct Inst {
     /// A load of memory nothing writes (`isDereferenceableInvariantLoad`):
     /// loop-invariant when its address is.
     pub invariant_load: bool,
+    /// What its load or store reaches (`MachineMemOperand`), where the target
+    /// knows; none: it may reach anything.
+    pub memory: Option<llrm_codegen::model::memref::MemRef>,
     /// The spiller may run it again at each use instead of keeping its result
     /// (`isTriviallyReMaterializable`).
     pub rematerializable: bool,
@@ -76,6 +84,14 @@ pub struct Inst {
     /// allocator adds has none. A target that lists its source places in
     /// [`MFunction::places`] numbers them from 1.
     pub origin: u32,
+    /// The instruction as the target's selector names it (the pin's opcode and
+    /// its operands), for the pre-RA scheduler's model; none where the target
+    /// does not say. The allocator reads `kind` and `operands` only.
+    pub form: Option<std::sync::Arc<llrm_lir::Semantics>>,
+    /// `operands` as they were when `form` was made: later passes rewrite
+    /// registers (a hoisted constant replaces a use), and the form still
+    /// names the old ones.
+    pub form_operands: Vec<Operand>,
 }
 
 impl Inst {
@@ -92,16 +108,20 @@ impl Inst {
             terminator: false,
             barrier: false,
             sets_flags: false,
+            remade_sets_flags: false,
             reads_flags: false,
             may_load: false,
             may_store: false,
             side_effects: false,
             cheap_as_move: false,
             invariant_load: false,
+            memory: None,
             rematerializable: false,
             early_clobber: false,
             commutable: false,
             origin: 0,
+            form: None,
+            form_operands: Vec::new(),
         }
     }
 

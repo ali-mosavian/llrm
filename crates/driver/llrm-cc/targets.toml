@@ -39,6 +39,7 @@ link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{o
 # How a program runs on the host: a command taking the executable last.
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/targets/arm64-link.sh).
 [arm64-linux]
@@ -141,6 +142,7 @@ object = "omf"
 link = ["python3", "-I", "{root}/tools/wat_link.py", "m32", "{ow}", "{output}", "{objects}"]
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # arm64 Linux on glibc, for qemu-aarch64: LLRM_ARM64_SYSROOT is the unpacked *-arm64-cross packages.
 [arm64-glibc]
@@ -180,6 +182,7 @@ object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
 unroll_at_o1 = true
+thread_jumps_at_o1 = true
 
 # 6502 on sim65: clang's msp430 is only the C front end (16-bit int and pointers, as cc65; unsigned char, packed structs),
 # its datalayout replaced by the 6502's. Stops at -S: ca65 text, which the tests assemble and link with cl65.
@@ -193,6 +196,7 @@ llc = ["--platform=sim65", "--cpu=6502"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+unroll_at_o1 = true
 
 # The same for a 65C02.
 [65c02-sim65]
@@ -205,6 +209,7 @@ llc = ["--platform=sim65", "--cpu=65c02"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+unroll_at_o1 = true
 
 # The 6502 rows for a program linked with cc65's sim6502 libraries and the runtime archive (tools/targets/6502-link.sh): every C symbol takes cc65's `_` (`sp` is `_sp`, `main` is the `_main`
 # crt0 calls), so none meets a library symbol. The rows above keep bare names, which the runtime tests' hand glue names.
@@ -218,6 +223,7 @@ llc = ["--platform=sim65-cc65", "--cpu=6502"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["{root}/tools/targets/6502-link.sh", "6502", "{output}", "{objects}"]
+unroll_at_o1 = true
 
 [65c02-cc65]
 description = "6502"
@@ -229,6 +235,7 @@ llc = ["--platform=sim65-cc65", "--cpu=65c02"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["{root}/tools/targets/6502-link.sh", "65c02", "{output}", "{objects}"]
+unroll_at_o1 = true
 
 # m68k Linux: -S is gas text, -c an ELF32 relocatable with .text and the data sections; no link line yet.
 # The pin's clang gives the target a 64-bit long double (`[c]` of the description).

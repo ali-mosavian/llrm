@@ -405,6 +405,36 @@ pub fn rows_source<'a>(
     code
 }
 
+/// `pub fn llvm_names(name)`: the LLVM opcodes each form name stands for (one,
+/// or the alternatives `[A|B]` lists), for a scheduling model keyed by the
+/// pin's opcode.
+pub fn llvm_names_source(opcodes: &[Opcode]) -> String {
+    let mut by_name: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for one in opcodes {
+        let names = by_name.entry(one.name.as_str()).or_default();
+        for llvm in &one.llvm {
+            if !names.contains(&llvm.as_str()) {
+                names.push(llvm);
+            }
+        }
+    }
+    let mut code = String::from("pub fn llvm_names(name: &str) -> &'static [&'static str] {\n    match name {\n");
+    for (name, llvm) in &by_name {
+        let list: Vec<String> = llvm.iter().map(|one| format!("{one:?}")).collect();
+        code.push_str(&format!("        {name:?} => &[{}],\n", list.join(", ")));
+    }
+    code.push_str("        _ => &[],\n    }\n}\n");
+    let mut every: Vec<&str> = by_name.values().flatten().copied().collect();
+    every.sort_unstable();
+    every.dedup();
+    code.push_str("\n/// Every LLVM opcode a form name stands for.\n#[allow(dead_code)]\npub const LLVM_OPCODES: &[&str] = &[\n");
+    for name in every {
+        code.push_str(&format!("    {name:?},\n"));
+    }
+    code.push_str("];\n");
+    code
+}
+
 /// A form of an opcode file: the name the selector uses, the LLVM opcodes it
 /// stands for (one, or the alternatives `[A|B]` lists), and the form.
 #[derive(Clone, Debug, Eq, PartialEq)]

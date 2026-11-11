@@ -7,7 +7,8 @@
 //! register `Loc::Reg`; the instruction's name is LLVM's opcode (`ADDXri`), its
 //! width the letter before the form. A symbol is an `Addr` of `Space::External`
 //! (a label of `Space::Segment`) whose `index` is its place in
-//! [`Lowered::symbols`]; a block is its position in the function.
+//! [`LirBody::symbols`]; a block is its position in the function. A load or
+//! store carries what it reaches as [`Insn::memory`] (its `MachineMemOperand`).
 //! The class of a `COPY`'s registers is in its name (`COPY`, `COPY_FPR`) until
 //! `LirBody::class_like` carries it. A location's width is in bytes, as the
 //! shared phases read it (the verifier compares it with the register's bytes);
@@ -27,14 +28,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use llrm_codegen::backend::lanes::{Lanes, enter};
+use llrm_analysis::placealias::Object;
 use llrm_codegen::model::lir::{Insn, LirBlock, LirBody};
+use llrm_codegen::model::memref::MemRef;
 use llrm_codegen::support::hash::IndexMap;
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Addr as LirAddr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg as LirRegLoc, Semantics, Space};
 use llrm_spike_mf::mfunc::Reg as MfReg;
 
 use crate::lir_view::{from_lir as machine_register, to_lir as lir_register};
-use crate::mc::inst::{Gpr, Inst, MemOperand, Shift, Target, Vreg, Width};
+use crate::mc::inst::{Gpr, Inst, MemObject, MemOperand, Memory, Shift, Target, Vreg, Width};
 use crate::mc::visit::{Reg, RegList};
 use crate::mfunc::{MBlock, MFunc, Op, successors_of};
 
@@ -226,17 +229,7 @@ impl To<'_> {
         &mut self,
         name: &str,
     ) -> i64 {
-        let at = self
-            .symbols
-            .iter()
-            .position(|each| each == name)
-            .unwrap_or_else(
-                || {
-                    self.symbols.push(name.to_owned());
-                    self.symbols.len() - 1
-                },
-            );
-        at as i64
+        intern(self.symbols, name)
     }
 
     /// The place a symbol or label names, as an address: the symbol's number is
@@ -254,6 +247,50 @@ impl To<'_> {
         at.index = self.symbol(name);
         Ok(AddressRef::new(Some(at)))
     }
+}
+
+/// The number of `name` in `symbols`, added if it has none.
+pub(crate) fn intern(
+    symbols: &mut Vec<String>,
+    name: &str,
+) -> i64 {
+    let at = symbols.iter().position(|each| each == name).unwrap_or_else(|| {
+        symbols.push(name.to_owned());
+        symbols.len() - 1
+    });
+    at as i64
+}
+
+/// What a load or store reaches, as the body carries it (`Insn::memory`).
+pub(crate) fn memref_of(
+    mem: &Memory,
+    mmo: &MemOperand,
+    store: bool,
+    symbols: &mut Vec<String>,
+) -> MemRef {
+    let object = match &mmo.object {
+        MemObject::Unknown => None,
+        MemObject::Global(name) => Some(Object::Global(intern(symbols, name) as u32)),
+        MemObject::Slot(slot) => Some(Object::Frame { id: i64::from(*slot), fixed: false }),
+        MemObject::ConstantPool => Some(Object::Pool),
+    };
+    let (Memory::Int { bytes, .. } | Memory::Fp { bytes, .. }) = mem;
+    MemRef { object, offset: mmo.offset, bytes: Some(u64::from(*bytes)), store }
+}
+
+/// The operand a load or store was made from, back from what the body carries.
+fn mmo_of(
+    insn: &Insn,
+    symbols: &[String],
+) -> Option<MemOperand> {
+    let memory = insn.memory.as_ref()?;
+    let object = match memory.object {
+        None => MemObject::Unknown,
+        Some(Object::Global(at)) => MemObject::Global(symbols[at as usize].clone()),
+        Some(Object::Frame { id, .. }) => MemObject::Slot(id as u32),
+        Some(Object::Pool) => MemObject::ConstantPool,
+    };
+    Some(MemOperand { object, offset: memory.offset, volatile: insn.volatile })
 }
 
 /// What the way back needs: the function the body came from, its symbols and
@@ -293,6 +330,17 @@ impl Back<'_> {
             other => panic!("a symbol address, found {other:?}"),
         }
     }
+}
+
+/// The selected form of `op`, as the shared scheduler reads an instruction
+/// (`one`): none for an operation with no mapping yet.
+pub(crate) fn form_of(
+    function: &MFunc,
+    symbols: &mut Vec<String>,
+    wide: &[Reg],
+    op: &Op,
+) -> Option<Semantics> {
+    one(&mut To { function, symbols, wide }, op).ok()
 }
 
 fn one(
@@ -385,13 +433,10 @@ fn common_back(
     })
 }
 
-/// The body and what it does not carry yet: each load and store's
-/// `MachineMemOperand`, the symbols its addresses name and each debug note's
-/// variable, all by instruction (`at`).
+/// The body and what it does not carry yet: each debug note's variable, by
+/// instruction (`at`).
 pub struct Lowered {
     pub body: LirBody,
-    pub memory_operands: HashMap<i64, MemOperand>,
-    pub symbols: Vec<String>,
     pub debug_values: HashMap<i64, (llrm_mir::MetadataId, Option<Reg>)>,
     /// A writeback's new base value, by number, and the register it is the
     /// updated value of (`$wback = LDRXpost %base`): the way back puts it back.
@@ -526,7 +571,6 @@ fn effects(
 
 /// The function's operations as a body: block `n` is `at` = `n`.
 pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
-    let mut memory_operands = HashMap::new();
     let mut debug_values = HashMap::new();
     let mut symbols = Vec::new();
     let labels: rustc_hash::FxHashMap<&str, usize> =
@@ -614,10 +658,10 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
             }
             insn.declared = Some(effects(op, &facts));
             match op {
-                Op::I(Inst::Load { mmo, .. } | Inst::Store { mmo, .. }) => {
+                Op::I(access @ (Inst::Load { mem, mmo, .. } | Inst::Store { mem, mmo, .. })) => {
                     insn.volatile |= mmo.volatile;
-                    insn.invariant = mmo.object == crate::mc::inst::MemObject::ConstantPool;
-                    memory_operands.insert(at, mmo.clone());
+                    insn.invariant = mmo.object == MemObject::ConstantPool;
+                    insn.memory = Some(memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
                 }
                 Op::DbgValue { variable, reg } => {
                     debug_values.insert(at, (*variable, *reg));
@@ -635,8 +679,13 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     }
     let mut body = LirBody::new(function.name.clone(), 0, blocks, IndexMap::default(), IndexMap::default());
     body.registers = Some(Regs(&crate::REGISTER_INFO));
+    body.symbols = Arc::new(symbols);
+    // The edge odds, by block position (`at`); the body keeps the numerator over 2^31.
+    for (&(from, to), &(probability, _)) in function.alloc_odds.iter().flatten() {
+        body.odds.taken.insert((i64::from(from), i64::from(to)), probability.get_numerator());
+    }
     let tied = ties.iter().map(|(&old, &new)| (new, old)).collect();
-    Ok(Lowered { body, memory_operands, symbols, debug_values, tied })
+    Ok(Lowered { body, debug_values, tied })
 }
 
 fn show(
@@ -677,7 +726,7 @@ pub fn text(lowered: &Lowered) -> String {
         for insn in block.insns.iter() {
             let Some(what) = insn.what.as_ref() else { continue };
             let list = |places: &[Loc]| {
-                places.iter().map(|place| show(place, &lowered.symbols)).collect::<Vec<_>>().join(", ")
+                places.iter().map(|place| show(place, &lowered.body.symbols)).collect::<Vec<_>>().join(", ")
             };
             let target = what.target.map(|at| format!(" -> bb{at}")).unwrap_or_default();
             out.push_str(&format!(
@@ -708,7 +757,8 @@ pub fn from_lir(
                 rebuilt.ops.push_at(Op::DbgValue { variable, reg }, insn.line);
                 continue;
             }
-            let cx = Back { template, symbols: &lowered.symbols, mmo: lowered.memory_operands.get(&insn.at) };
+            let mmo = mmo_of(insn, &lowered.body.symbols);
+            let cx = Back { template, symbols: &lowered.body.symbols, mmo: mmo.as_ref() };
             let mut again;
             let what = if lowered.tied.is_empty() {
                 what

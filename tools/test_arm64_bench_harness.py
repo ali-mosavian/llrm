@@ -12,6 +12,36 @@ HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arm64")
 LLVM_BIN = os.environ.get("LLVM_BIN", os.path.expanduser("~/scratch/llvm-build-aarch64/bin"))
 
 
+class PinIr(unittest.TestCase):
+    """ptour.sh runs the pin's llc on our IR: the IR must carry nothing the pin does not know."""
+
+    def setUp(self):
+        sys.path.insert(0, HERE)
+        import ptour_ir
+
+        self.ir = ptour_ir
+
+    def test_llrm_only_attributes_are_removed_from_a_define(self):
+        text = 'define i64 @f() nounwind "no-builtins" memory(none) llrm-end-biased llrm-self-copied {\n  ret i64 0\n}\n'
+        got = self.ir.stripped(text)
+        self.assertEqual(self.ir.left_over(got), [])
+        self.assertIn("nounwind", got)
+
+    def test_ir_with_an_llrm_attribute_left_is_refused_not_passed_on(self):
+        # A declaration keeps its attribute under `stripped` (only a `define` is rewritten): the harness must
+        # stop rather than hand the pin an IR ours reads differently.
+        text = 'declare void @g() llrm-promoted-in-walk\n'
+        self.assertEqual(self.ir.left_over(self.ir.stripped(text)), ["llrm-promoted-in-walk"])
+        with tempfile.TemporaryDirectory() as out:
+            src = os.path.join(out, "a.ll")
+            open(src, "w").write(text)
+            done = subprocess.run([sys.executable, os.path.join(HERE, "ptour_ir.py"), src, os.path.join(out, "b.ll")],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("REFUSED", done.stderr)
+            self.assertFalse(os.path.exists(os.path.join(out, "b.ll")))
+
+
 class Harness(unittest.TestCase):
     def test_no_file_reads_from_a_personal_scratch_directory(self):
         # The harness lived in ~/scratch/w15-bar: a judge table whose instrument sits there cannot be re-run.
@@ -36,6 +66,26 @@ class Harness(unittest.TestCase):
 
             self.assertGreater(matrix_kb.kernel_bytes(os.path.join(out, "fib.2.clang.o")), 0)
             self.assertTrue(os.path.exists(os.path.join(out, "fib.2.clang.elf")))
+
+    def test_kernel_bytes_counts_a_helper_that_has_no_symbol(self):
+        # Release main's objects carry no symbol for a static helper (queens: bench_queens 44 B, the 220 B helper
+        # after it uncovered): the table read main at 44 B and 8 Os cells as +36..+172 B worse on a smaller build.
+        if not shutil.which("aarch64-linux-gnu-as") or not shutil.which("aarch64-linux-gnu-nm"):
+            self.skipTest("aarch64 binutils missing")
+        asm = (
+            ".text\n.globl bench_x\n.type bench_x,%function\nbench_x:\n  mov x0, #1\n  ret\n.size bench_x, .-bench_x\n"
+            "  mov x1, #2\n  mov x2, #3\n  ret\n"  # the helper: code after the symbol's size, no symbol of its own
+            "  nop\n  nop\n"  # padding
+            ".globl main\n.type main,%function\nmain:\n  mov w0, #0\n  ret\n.size main, .-main\n"
+        )
+        with tempfile.TemporaryDirectory() as out:
+            src, obj = os.path.join(out, "k.s"), os.path.join(out, "k.o")
+            open(src, "w").write(asm)
+            subprocess.run(["aarch64-linux-gnu-as", src, "-o", obj], check=True)
+            sys.path.insert(0, HERE)
+            import matrix_kb
+
+            self.assertEqual(matrix_kb.kernel_bytes(obj), 8 + 12)
 
     def test_a_source_reads_bench_io_h_from_the_repo_not_from_a_shared_copy(self):
         # Parallel A/B jobs rewrote one copy of bench_io.h beside the output while others compiled: 2 builds
@@ -161,7 +211,7 @@ class FlagSet(unittest.TestCase):
         sys.path.insert(0, os.path.dirname(HERE))
         import external_flags
 
-        neutral = " ".join(external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15))
+        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15))
         self.assertEqual(self.check_gcc(neutral).returncode, 0)
         self.assertEqual(self.check_gcc(neutral + " -fno-tree-vectorize").returncode, 0)
 
@@ -169,7 +219,10 @@ class FlagSet(unittest.TestCase):
         sys.path.insert(0, os.path.dirname(HERE))
         import external_flags
 
-        neutral = " ".join(external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15))
+        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15))
+        done = self.check_gcc(neutral.replace("-fPIE", "-fno-pic -fno-pie"))
+        self.assertNotEqual(done.returncode, 0)  # ours emits PIE unflagged: a static bar moved textfill O2 by 4 B
+        self.assertIn("missing ['-fPIE']", done.stderr)
         done = self.check_gcc(neutral + " -fno-inline")
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("extra ['-fno-inline']", done.stderr)

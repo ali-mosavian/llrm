@@ -439,6 +439,9 @@ impl llrm_target::Target for M64 {
                             // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
                             // exit 2026-11-20.
                             recursive_inlining_growth: Some((450, 150)),
+                            // DEVIATE REC-7 (owner m64-clocks, exit 2026-11-30), as m32: copies
+                            // are 2 deep at -O2 and -O3, not gcc's 8.
+                            recursive_inlining_depth: Some((2, 2)),
                             // DEVIATE REC-2-LOSERS (owner m64, exit 2026-11-21): the copies cost
                             // net (clk + 0.312 B) against none on recchop -O3 +1020 (2194 B),
                             // bintree -O3 +134 (1160 B, 0 clk), recpow -O2 +4002 (peeled). Their
@@ -468,6 +471,8 @@ impl llrm_target::Target for M64 {
                             // dword and a byte 3 + 3, a word 4 + 4); the call is `mov edx, n` 5 and the
                             // jump 5, 14 with the setup of a frame object's pointers.
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+                            // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
+                            immediate_forms_at_size: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
@@ -510,6 +515,30 @@ mod tests {
         };
         let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
         assert!(!tti.carries_slot_indexes());
+    }
+
+    /// REC-7 at m64: recursion copies went 8 deep (gcc's default), so rectwo -O2
+    /// ran 719563 instructions in 2120 B where depth 2 runs 161513 in 392 B.
+    #[test]
+    fn test_m64_copies_a_recursion_two_deep_at_o2_and_o3() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert_eq!(tti.recursive_inlining_depth(), Some((2, 2)));
     }
 
     /// The m64 sheet had a cache line and no line fill, so no byte rate was

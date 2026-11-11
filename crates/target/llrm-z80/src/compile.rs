@@ -218,6 +218,10 @@ fn machine_function_with(
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
     let selection = selection.as_ref().map_err(Clone::clone)?;
+    let selection = match &selection.generic {
+        Some(generic) if crate::dagisel::pipeline::GENERIC_FORM.with(std::cell::Cell::get) => generic,
+        _ => selection,
+    };
     let mut function = emit(name, selection)?;
     function.returns_twice = selection.returns_twice;
     expand_cmov(&mut function)?;
@@ -300,26 +304,42 @@ fn allocated_with(
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
+    merge_lone_constant_stores(&mut function);
     let mut hoisted = function.clone();
-    if !hoist_constants(&mut hoisted) {
-        return allocate(function, name, request.level);
-    }
-    // the allocator does not see that a byte of a pair is read in place, so a
-    // constant kept across a loop can cost more than making it there, or less:
-    // the hoisted loop stays unless the plain one is cheaper by the loop's
-    // weighted cost. The other choices are explored on both: lz4c -O2 wants
-    // the plain one's (exploring only the better first allocation made it 442
-    // B against 427).
-    let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
-    match (plain, with) {
-        (Ok(plain), Ok(with)) => {
-            match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
-                (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
-                _ => Ok(with),
+    // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
+    let mut split = function.clone();
+    let splits = split_loop_constant_stores(&mut split) && hoist_constants(&mut split);
+    let base = if hoist_constants(&mut hoisted) {
+        // the allocator does not see that a byte of a pair is read in place, so a
+        // constant kept across a loop can cost more than making it there, or less:
+        // the hoisted loop stays unless the plain one is cheaper by the loop's
+        // weighted cost. The other choices are explored on both: lz4c -O2 wants
+        // the plain one's (exploring only the better first allocation made it 442
+        // B against 427).
+        match (allocate(function.clone(), name, request.level), allocate(hoisted, name, request.level)) {
+            (Ok(plain), Ok(with)) => {
+                match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
+                    (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
+                    _ => Ok(with),
+                }
             }
+            (_, Ok(with)) => Ok(with),
+            (plain, Err(_)) => plain,
         }
-        (_, Ok(with)) => Ok(with),
-        (plain, Err(_)) => plain,
+    } else {
+        allocate(function, name, request.level)
+    };
+    if !splits {
+        return base;
+    }
+    // stays only where it is cheaper than the best of the two
+    match (base, allocate(split, name, request.level)) {
+        (Ok(base), Ok(split)) => match (priced_in_loops(&base, request.level), priced_in_loops(&split, request.level)) {
+            (Some(one), Some(other)) if cheaper(request.level, other, one) => Ok(split),
+            _ => Ok(base),
+        },
+        (_, Ok(split)) => Ok(split),
+        (base, Err(_)) => base,
     }
 }
 
@@ -335,13 +355,13 @@ fn priced_in_loops(
     lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
 }
 
-/// Whether a variant is priced before the printer's peepholes. At the speed
-/// levels the price is weighted clocks, good to a few tenths of a percent, and
-/// a peephole moved a near-tie to the worse variant (copy_runs -O2: 2 B and
-/// 600 T). At the size levels the price is bytes, exact, and a peephole's
-/// bytes are real: without them pattern_fill -Os chose a variant 1 B bigger.
+/// Whether a variant is priced before the printer's peepholes. Only at -O2 and up, where the price is weighted
+/// clocks, good to a few tenths of a percent, and a peephole moved a near-tie to the worse variant (copy_runs -O2:
+/// 2 B and 600 T). Where the price is bytes (-Os, -Oz) or both axes are strict (-O1) the peephole's bytes and
+/// clocks are real: priced before them, clear -O1 chose the allocation that is larger and slower once emitted
+/// (96 B / 577 T against 95 B / 550 T at -Os).
 fn priced_before_peepholes(level: Level) -> bool {
-    !matches!(level, Level::Os | Level::Oz)
+    matches!(level, Level::O2 | Level::O3)
 }
 
 /// Whether the price `one` beats `other`: bytes first at the size levels;
@@ -402,6 +422,8 @@ mod tests {
     fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
         assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
         assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+        // -O1 prices what is emitted (`clear` -O1: 96 B / 577 T priced before them, 548 T after)
+        assert!(!priced_before_peepholes(Level::O1));
     }
 
     /// The push and pop form is smaller and dearer in weighted clocks: kept at
@@ -416,6 +438,10 @@ mod tests {
         assert!(keeps_stacked(Level::O2, framed, cheaper_stack));
         assert!(!keeps_stacked(Level::Os, framed, framed) && !keeps_stacked(Level::O2, framed, framed));
         assert!(keeps_stacked(Level::O2, None, stacked));
+        // loop_fusion -O1 `same`: 13 B (10%) smaller for 4% more weighted clocks, so the strict level keeps it
+        let (framed, stacked) = (Some((124, 6472)), Some((111, 6746)));
+        assert!(keeps_stacked(Level::O1, framed, stacked) && !keeps_stacked(Level::O2, framed, stacked));
+        assert!(!keeps_stacked(Level::O1, stacked, framed));
     }
 
     #[test]
@@ -635,6 +661,9 @@ fn allocate_once(
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
+    if std::env::var("LLRM_NO_Z80_UPDATE").is_err() {
+        crate::post_update::fold(&mut function, &assignment);
+    }
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
     // the function with every slot in the frame, to keep if the push and pop
@@ -728,15 +757,16 @@ fn drop_repeated_slot_accesses(
 }
 
 /// Whether the push and pop form of a function stays: where it prices lower
-/// by the rule that picks the other variants (bytes first at the size levels,
-/// weighted clocks plus 3 a byte otherwise), or where either price is missing.
+/// by the rule that picks the other variants (`prefers`: bytes first at the
+/// size levels, the smaller relative regret at -O1, weighted clocks plus 3 a
+/// byte otherwise), or where either price is missing.
 fn keeps_stacked(
     level: Level,
     framed: Option<(u32, u64)>,
     stacked: Option<(u32, u64)>,
 ) -> bool {
     match (framed, stacked) {
-        (Some(was), Some(now)) => cheaper(level, now, was),
+        (Some(was), Some(now)) => prefers(level, now, was),
         _ => true,
     }
 }
@@ -913,6 +943,16 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
+/// Which part of its pair `register` is: 0 the whole pair, 1 the low half, 2 the high half. A `pop` puts each
+/// half back where it was pushed from, so a slot's spills and reloads must name the same part.
+fn pair_lane(register: llrm_lir::registers::RegId) -> u8 {
+    match (stack_pair(register), register) {
+        (Some(pair), one) if pair == one => 0,
+        (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
+        _ => 2,
+    }
+}
+
 /// For each instruction of each block, whether it lies inside the stack arguments of a call: after an
 /// `ADJCALLSTACKDOWN` of bytes and before the matching `ADJCALLSTACKUP`.
 fn call_areas(function: &MFunction) -> Vec<Vec<bool>> {
@@ -972,10 +1012,17 @@ pub fn frameless_slots_are_a_stack(
         _ => None,
     };
     let mut any = false;
+    let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         if inst.operands.iter().any(|one| matches!(one, Operand::Frame(_))) {
             match spill(inst) {
-                Some((_, _, register)) if stack_pair(register).is_some() => any = true,
+                Some((_, slot, register)) if stack_pair(register).is_some() => {
+                    // a byte saved from `e` and reloaded into `d` came back as it was in `d`
+                    if *lane_of.entry(slot).or_insert(pair_lane(register)) != pair_lane(register) {
+                        return false;
+                    }
+                    any = true;
+                }
                 _ => return false,
             }
         }
@@ -1169,12 +1216,7 @@ pub fn stack_slot_report_by(
                 } else {
                     counts.1 += 1;
                 }
-                // 0: a whole pair, 1: the low half, 2: the high half
-                let lane = match (stack_pair(register), register) {
-                    (Some(pair), one) if pair == one => 0,
-                    (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
-                    _ => 2,
-                };
+                let lane = pair_lane(register);
                 if *lane_of.entry(slot).or_insert(lane) != lane {
                     barred.entry(slot).or_insert(StackRefusal::DifferentLane);
                 }
@@ -1401,6 +1443,96 @@ pub fn spills_first(
             first += 1;
         }
     }
+}
+
+/// A constant word stored from an immediate in a loop (`LD16mi`, `LD16fi`) is the constant and a store from a
+/// register again, so [`hoist_constants`] can hold it across the loop: 6 T a trip cheaper, a byte or two more
+/// (3 B once and 2 B a store against 4 B). The variant stays only where `priced_in_loops` says it is cheaper.
+/// The selector chose the immediate form without a loop depth to see, as the pin's x86 does (`imm_su` counts
+/// users only); this is the frequency-aware half, beyond the pin (row Z80-IMM-LOOP). Linear in the instructions.
+/// Whether anything was split.
+fn split_loop_constant_stores(function: &mut MFunction) -> bool {
+    let mut changed = false;
+    let cfg = Cfg::new(function);
+    let in_loop: Vec<bool> = (0..function.blocks.len()).map(|b| cfg.loops().iter().any(|(_, body)| body[b])).collect();
+    for (b, _) in in_loop.iter().enumerate().filter(|(_, in_loop)| **in_loop) {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            let inst = &mut function.blocks[b].insts[at];
+            let (store, Some(Operand::Imm(value))) = (
+                match inst.kind {
+                    Kind::Op("LD16mi") => "LD16mr",
+                    Kind::Op("LD16fi") => "LD16fr",
+                    _ => {
+                        at += 1;
+                        continue;
+                    }
+                },
+                inst.operands.first().cloned(),
+            ) else {
+                at += 1;
+                continue;
+            };
+            let constant = function.classes.len() as u32;
+            function.classes.push(crate::mfunc::Class::Gr16);
+            inst.kind = Kind::Op(store);
+            inst.operands[0] = Operand::Use(Reg::Virt(constant));
+            let mut made = Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(constant)), Operand::Imm(value)]);
+            made.rematerializable = true;
+            made.cheap_as_move = true;
+            function.blocks[b].insts.insert(at, made);
+            changed = true;
+            at += 2;
+        }
+    }
+    changed
+}
+
+/// A constant word made in a block and stored there from a pair, with no other reader, is stored as immediates
+/// (4 B and 38 T against 9 B and 48 T in the frame): the one case the choice needs no pricing. The selector took the
+/// pair because the DAG's constant had a second user that became something else (an `adc` of zero, a counter), so
+/// the pair serves one store. Nearest pin step `InlineSpiller::reMaterializeFor`; DEVIATE Z80-IMM-USES (owner
+/// llrm-target-z80, exit 2026-11-30). Whether anything changed. Linear in the instructions.
+pub fn merge_lone_constant_stores(function: &mut MFunction) -> bool {
+    let mut users: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    let mut defs: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            match operand {
+                Operand::Use(Reg::Virt(v)) => *users.entry(*v).or_default() += 1,
+                Operand::Def(Reg::Virt(v)) => *defs.entry(*v).or_default() += 1,
+                _ => {}
+            }
+        }
+    }
+    let mut changed = false;
+    for block in &mut function.blocks {
+        let mut made: llrm_support::hash::HashMap<u32, i64> = llrm_support::hash::HashMap::default();
+        let mut gone: Vec<u32> = Vec::new();
+        for inst in &mut block.insts {
+            if let (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(value)]) = (inst.kind, &inst.operands[..]) {
+                if users.get(v) == Some(&1) && defs.get(v) == Some(&1) {
+                    made.insert(*v, *value as i64);
+                }
+                continue;
+            }
+            let immediate = match inst.kind {
+                Kind::Op("LD16mr") => "LD16mi",
+                Kind::Op("LD16fr") => "LD16fi",
+                _ => continue,
+            };
+            let Some(Operand::Use(Reg::Virt(v))) = inst.operands.first().cloned() else { continue };
+            let Some(value) = made.remove(&v) else { continue };
+            inst.kind = Kind::Op(immediate);
+            inst.operands[0] = Operand::Imm(value as _);
+            gone.push(v);
+            changed = true;
+        }
+        block.insts.retain(|inst| {
+            !matches!((inst.kind, &inst.operands[..]), (Kind::Op("LD16ri"), [Operand::Def(Reg::Virt(v)), Operand::Imm(_)]) if gone.contains(v))
+        });
+    }
+    changed
 }
 
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting
@@ -2311,6 +2443,17 @@ fn decomposed_functions(
         })
         .collect();
     let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
+    // The form with the priced shift and multiply sites (`site_price`) is taken at -O1, which allows no trade, only
+    // where the function is no worse on either axis as emitted: the price of a site leaves out the spills
+    // around its call (wide_shift_by_one +53 B and +47k T).
+    let pareto: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            level == Level::O1
+                && alternatives.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.site_priced))
+        })
+        .collect();
+    let every: HashSet<usize> = every.into_iter().filter(|at| !pareto[*at]).collect();
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2325,7 +2468,10 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] {
+                let better = if pareto[at] {
+                    let (new, old) = (own_price(&variants, &other, at), own_price(&variants, &chosen, at));
+                    new != old && new.0 <= old.0 && new.1 <= old.1
+                } else if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))
@@ -2384,7 +2530,43 @@ fn prefers(
     }
 }
 
+/// The function `name` allocated, in the cheaper of its two carry forms where it has both (`Selection::generic`,
+/// DEVIATE Z80-CARRY-PRICE): the levels strict on both axes (O1, Os, Oz) take the generic add only where it is no
+/// worse on either, the others the cheaper at 1 B = 3 T.
 fn lines_of(
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    let carry = lines_of_form(selected, name, number, request);
+    let has_generic = selected.iter().any(|(one, source, scheduled)| {
+        one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.generic.is_some()))
+    });
+    if !has_generic {
+        return carry;
+    }
+    crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(true));
+    let generic = lines_of_form(selected, name, number, request);
+    crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(false));
+    match (carry, generic) {
+        (Ok(carry), Ok(generic)) => {
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
+            let (with, without) = (price(&carry), price(&generic));
+            let strict = matches!(request.level, Level::O1 | Level::Os | Level::Oz);
+            let take = if strict {
+                without != with && without.0 <= with.0 && without.1 <= with.1
+            } else {
+                cheaper(request.level, without, with)
+            };
+            Ok(if take { generic } else { carry })
+        }
+        (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+        (Err(why), Err(_)) => Err(why),
+    }
+}
+
+fn lines_of_form(
     selected: &Selections,
     name: &str,
     number: usize,
@@ -2781,7 +2963,7 @@ const TAIL_DUPLICATION_SIZE: usize = 4;
 /// bytes) and the phi copy ahead of it become a `ret`. A predecessor that
 /// branches to it conditionally keeps the original, with that edge's phi
 /// inputs.
-fn tail_duplicate_returns(function: &mut MFunction) {
+pub fn tail_duplicate_returns(function: &mut MFunction) {
     let mut j = 1;
     while j < function.blocks.len() {
         let block = &function.blocks[j];
@@ -2824,7 +3006,8 @@ fn tail_duplicate_returns(function: &mut MFunction) {
             continue;
         }
         let tail = function.blocks[j].insts.clone();
-        for &p in &copy_into {
+        // highest first: a split below a predecessor moves only the blocks after it
+        for &p in copy_into.iter().rev() {
             // the phi inputs for this edge, as copies
             let mut moves = Vec::new();
             for phi in &mut function.blocks[j].phis {
@@ -2837,6 +3020,26 @@ fn tail_duplicate_returns(function: &mut MFunction) {
             if insts.last().is_some_and(|inst| inst.barrier) {
                 insts.pop();
             }
+            // a conditional branch elsewhere ahead of the copy ends the block (the pin's `analyzeBranch` reads
+            // only the terminators at its end): the copy is the block it falls into
+            let split = insts.iter().any(|inst| inst.terminator);
+            if split {
+                let id = function.blocks.iter().map(|block| block.id).max().map_or(0, |id| id + 1);
+                function.blocks.insert(p + 1, Block { id, insts: Vec::new(), phis: Vec::new() });
+                for block in &mut function.blocks {
+                    for phi in &mut block.phis {
+                        for (pred, _) in &mut phi.incoming {
+                            if *pred > p {
+                                *pred += 1;
+                            }
+                        }
+                    }
+                }
+                if j > p {
+                    j += 1;
+                }
+            }
+            let insts = &mut function.blocks[if split { p + 1 } else { p }].insts;
             insts.extend(moves);
             insts.extend(tail.iter().cloned());
         }

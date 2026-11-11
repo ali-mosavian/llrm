@@ -66,7 +66,7 @@ fn a_frame_pointer_frame_is_link_and_unlk() {
     let frame = layout(&function);
 
     assert_eq!(frame.stack_size, 52);
-    // numbered as `Function::objects`, as expand.rs passes them: the frame pointer's slot is not counted
+    // numbered as `Function::objects` is: the saved `%a6` slot is not counted
     assert_eq!(frame.address(0), (Base::Fp, -40));
     assert_eq!(frame.prologue(), [FrameOp::Link { bytes: 48 }]);
     assert_eq!(frame.epilogue(), [FrameOp::Unlink]);
