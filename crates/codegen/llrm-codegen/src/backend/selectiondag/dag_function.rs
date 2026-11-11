@@ -1106,7 +1106,24 @@ fn selected_in(
         .map(|r| regs.root(*r))
         .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
         .collect();
+    let x87_prices = (!arch.scalar_sse())
+        .then(|| {
+            let cost = |name: &str| cpu.cost(name).ok();
+            Some(super::emit::X87Prices {
+                load: cost("x87_load")?,
+                add: cost("x87_add")?,
+                add_m: cost("x87_add_m")?,
+                mul: cost("x87_mul")?,
+                mul_m: cost("x87_mul_m")?,
+                div: cost("x87_div")?,
+                div_m: cost("x87_div_m")?,
+                milliclocks_per_byte: cpu.speed_milliclocks_per_byte(),
+                memory_bytes: if matches!(address_mode, AddrMode::Real16) { 4 } else { 6 },
+            })
+        })
+        .flatten();
     let ctx = EmitContext {
+        x87_prices,
         tables: &tables_of_function,
         caller_saved: &caller_saved,
         conventions: &CallConventions { module, arch, contracts, general: &cpu.general },

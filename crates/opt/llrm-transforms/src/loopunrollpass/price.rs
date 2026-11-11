@@ -98,10 +98,17 @@ pub(super) fn full_unroll_pays(
     // registers only while they fit: more than the file holds, and they are
     // stack slots again (fpbench -O2 m64: four 6-element float arrays, 24
     // values for 16 registers, were priced at 0 bytes and grew 815).
-    if run.tti.unroll_promotion_fits_registers() {
+    // POC (LLRM_UP1X87): the same for floats on the x87 stack.
+    let x87 = run.tti.x87_stack_slots().filter(|_| std::env::var_os("LLRM_UP1X87").is_some());
+    if run.tti.unroll_promotion_fits_registers() || x87.is_some() {
         let machine = run.outer.target();
-        let float_room = if machine.float_registers() > 0 { machine.float_registers() } else { machine.registers() };
-        if ints as i64 * i64::from(trips) > machine.registers() || floats as i64 * i64::from(trips) > float_room {
+        let float_room = match x87 {
+            Some(slots) => i64::from(slots),
+            None if machine.float_registers() > 0 => machine.float_registers(),
+            None => machine.registers(),
+        };
+        let ints_over = run.tti.unroll_promotion_fits_registers() && ints as i64 * i64::from(trips) > machine.registers();
+        if ints_over || floats as i64 * i64::from(trips) > float_room {
             promoted = 0;
             promoted_runs = 0;
         }

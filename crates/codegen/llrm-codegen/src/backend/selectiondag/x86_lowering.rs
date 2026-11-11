@@ -370,6 +370,7 @@ impl CombineHooks for X86Lowering<'_> {
         op: ISD,
     ) -> bool {
         op == ISD::Mul
+            || (share_products() && (op == ISD::FAdd || op == ISD::FSub))
             || op == ISD::SetCC
             || op == ISD::Add
             || op == ISD::Sub
@@ -394,6 +395,7 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
+            ISD::FAdd | ISD::FSub if share_products() && !self.sse2 => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
@@ -2820,6 +2822,52 @@ fn lower_ctpop(
         let top = i8_amount(dag, 28);
         op = dag.get_node(ISD::Srl, EVT::I32, &[op, top]);
         return Some(dag.get_zext_or_trunc(op, vt));
+    }
+    None
+}
+
+/// POC (UP2-SPILL-J): `LLRM_X87_SHARE=1`.
+fn share_products() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_X87_SHARE").is_some())
+}
+
+/// `a + v*(-C)` is `a - v*C` and `a - v*(-C)` is `a + v*C`: where the product
+/// with the positive constant already exists, the negative one is not made, so
+/// `c*v` and `(-c)*v` are one multiply.
+fn combine_shared_product(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let sign: u128 = match vt {
+        EVT::Simple(MVT::F32) => 1 << 31,
+        EVT::Simple(MVT::F64) => 1 << 63,
+        _ => return None,
+    };
+    let add = dag.opcode(node) == ISD::FAdd;
+    let candidates: &[usize] = if add { &[0, 1] } else { &[1] };
+    for &at in candidates {
+        let product = dag.operand(node, at);
+        if dag.opcode(product) != ISD::FMul {
+            continue;
+        }
+        let ops = [dag.operand(product, 0), dag.operand(product, 1)];
+        for k in 0..2 {
+            let NodeData::ConstFp { bits } = dag.node(ops[k]).data else { continue };
+            if bits & sign == 0 || dag.opcode(ops[k]) != ISD::ConstantFP {
+                continue;
+            }
+            let mut flipped = ops;
+            flipped[k] = dag.get_constant_fp(bits ^ sign, vt);
+            let Some(twin) = dag.find_node(ISD::FMul, vt, &flipped) else { continue };
+            if twin.node == product.node || !dag.has_users(twin) {
+                continue;
+            }
+            let other = dag.operand(node, 1 - at);
+            let opposite = if add { ISD::FSub } else { ISD::FAdd };
+            return Some(dag.get_node(opposite, vt, &[other, twin]));
+        }
     }
     None
 }

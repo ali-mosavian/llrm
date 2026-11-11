@@ -1119,6 +1119,17 @@ impl SelectionDAG {
         self.value_type(value).size_in_bits()
     }
 
+    /// `FindNodeOrInsertPos` without the insertion: the node with these
+    /// operands and no data, if the DAG has one.
+    pub(super) fn find_node(
+        &self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        self.cse_find(opcode, &[vt], ops, &NodeData::None).map(|node| SDValue { node, res: 0 })
+    }
+
     /// `lookupNode` then `newSDNode`: one node per (opcode, types, operands,
     /// data); glue is never shared.
     pub(super) fn intern(
