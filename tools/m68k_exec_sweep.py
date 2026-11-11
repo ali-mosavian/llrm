@@ -8,7 +8,7 @@ llrm_os layer over raw syscalls) and the compiler-rt archive built by llrm-cc, r
   ok        exit 0 and stdout equals the reference (`NAME.out`, or `NAME.m68k.out`)
   noref     exit 0 but the program has no reference: it ran, nothing was compared. Never counted as ok.
   output    exit 0, stdout differs        run   signal, timeout or exit != 0        link   undefined or relocation error
-  compile   llrm-cc failed
+  compile   llrm-cc failed        input  the program's `// data:` input is not available (--bench; UNMEASURED, not a failure of the compiler)
 A program `// targets:` excludes from m68k is n/a: not a cell. Flags are the first `// flags:` configuration's (o0_sweep.flags_of: x87-only
 options such as -mlong-double-80 are dropped) plus `// flags-m68k:`.
 Exit 1 unless every cell is ok or noref. Environment: LLRM_BIN (llrm-cc), GCC_M68K (unpacked m68k binutils+gcc), LLRM_PIN_CLANG,
@@ -31,6 +31,7 @@ import corpus_targets as ct  # noqa: E402
 import llrmbin  # noqa: E402
 import m68k_runtime_guard as guard  # noqa: E402
 import o0_sweep  # noqa: E402
+import benchlist  # noqa: E402
 
 TIMEOUT = 180
 RUN_TIMEOUT = 30
@@ -49,6 +50,24 @@ def verdict(returncode: int, stdout: bytes, want: bytes | None) -> tuple[str, st
     if stdout.replace(b"\r\n", b"\n") != want:
         return "output", "stdout differs from the reference"
     return "ok", ""
+
+
+def inputs_of(source: Path) -> tuple[dict[str, bytes], bytes | None]:
+    """What a program opens, from its `// data:` line: the files to put in its working directory (named as the program opens them, upper case) and
+    the bytes for its standard input (`@dickens`, read by `input_read`). `@signal` is generated (tools/dosbatch/signal_gen), `@dickens` comes from
+    the pinned corpus cache (dosbatch/corpus: SHA-256 checked, never another file in its place; raises corpus.Unavailable), a path is relative to the source."""
+    found = re.search(r"^//\s*data:\s*(\S+)", source.read_text(), re.M)
+    if not found:
+        return {}, None
+    what = found[1]
+    sys.path.insert(0, str(HERE / "dosbatch"))
+    import corpus  # noqa: E402
+    if what == "@signal":
+        return {"SIGNAL": corpus.path("signal").read_bytes()}, None
+    if what == "@dickens":
+        return {}, corpus.path("dickens").read_bytes()
+    target = (source.parent / what).resolve()
+    return {target.name.upper(): target.read_bytes()}, None
 
 
 def tool_env(root: str) -> dict[str, str]:
@@ -139,7 +158,16 @@ def cell(cc: str, root: str, qemu: str, cpu: str, level: str, path: Path, work: 
     if link.returncode != 0:
         return "link", first_error(link.stderr)
     try:
-        ran = subprocess.run([qemu, "-cpu", f"m{cpu}", str(exe)], capture_output=True, timeout=RUN_TIMEOUT, cwd=work)
+        files, stdin = inputs_of(path)
+    except Exception as error:  # a corpus that is missing or fails its hash: the cell has no input, so it is not run
+        exe.unlink(missing_ok=True)
+        return "input", f"{type(error).__name__}: {error}"[:200]
+    cwd = work / f"{name}.{cpu}.dir"
+    cwd.mkdir(exist_ok=True)
+    for file, data in files.items():
+        (cwd / file).write_bytes(data)
+    try:
+        ran = subprocess.run([qemu, "-cpu", f"m{cpu}", str(exe)], capture_output=True, timeout=RUN_TIMEOUT, cwd=cwd, input=stdin if stdin is not None else b"")
     except subprocess.TimeoutExpired:
         return "run", f"timeout {RUN_TIMEOUT}s"
     finally:
@@ -153,6 +181,7 @@ def main() -> int:
     parser.add_argument("--cpu", default="68020")
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
+    parser.add_argument("--bench", action="store_true", help="also the bench/*/NAME.c programs, with the input their `// data:` line names")
     parser.add_argument("--tsv")
     parser.add_argument("names", nargs="*")
     args = parser.parse_args()
@@ -163,7 +192,8 @@ def main() -> int:
         return 2
     cc = o0_sweep.compiler()
     target = f"m68k-{args.cpu}"
-    chosen = [p for p in sorted((ROOT / "tests/run/c").glob("*.c")) if not args.names or p.stem in args.names]
+    sources = sorted((ROOT / "tests/run/c").glob("*.c")) + (benchlist.sources(".c") if args.bench else [])
+    chosen = [p for p in sources if not args.names or p.stem in args.names]
     programs = [p for p in chosen if ct.applies(target, p.read_text(), p)]
     support = build_support(cc, root, args.cpu, cache_dir(cc), args.jobs)
     levels = args.levels.split(",")
