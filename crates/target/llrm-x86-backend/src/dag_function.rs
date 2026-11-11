@@ -1117,8 +1117,9 @@ fn selected_in(
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size || cpu.bytes_strict() && arch.small_divide_at_o1())
         .with_sdiv_pow2_stays(
-            (cpu.size || cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize"))
-                && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size()),
+            cpu.min_size
+                || llrm_mir::memory::has(&function.attrs, "minsize")
+                || (cpu.size && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size())),
         )
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
