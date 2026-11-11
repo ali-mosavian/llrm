@@ -435,6 +435,35 @@ pub struct CallShape {
     pub caller_frame_bytes: u64,
 }
 
+/// A change in cost on both axes a target prices: positive is cheaper.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Saving {
+    pub clocks: i32,
+    pub bytes: i32,
+}
+
+impl std::ops::Add for Saving {
+    type Output = Saving;
+
+    fn add(
+        self,
+        other: Saving,
+    ) -> Saving {
+        Saving { clocks: self.clocks + other.clocks, bytes: self.bytes + other.bytes }
+    }
+}
+
+impl std::ops::Sub for Saving {
+    type Output = Saving;
+
+    fn sub(
+        self,
+        other: Saving,
+    ) -> Saving {
+        Saving { clocks: self.clocks - other.clocks, bytes: self.bytes - other.bytes }
+    }
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -473,6 +502,13 @@ pub trait Tti {
     /// register, 0 where the target has none (and the SLP vectorizer is off).
     fn vector_register_bits(&self) -> u32 {
         0
+    }
+
+    /// Two compares joined by `and`/`or` stay two branches at every level, as
+    /// the pin does at optsize (the target's `split_merged_conditions`);
+    /// false: the pin's cost rule decides.
+    fn splits_merged_conditions(&self) -> bool {
+        false
     }
 
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
@@ -565,8 +601,9 @@ pub trait Tti {
     }
 
     /// Whether a speed caller's inline that gives a loop of the callee a constant
-    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
-    /// the copy unrolls and folds, which the call's latency does not show).
+    /// trip count is exempt from the byte rate: the copy unrolls and folds, which
+    /// the call's latency does not show. No pin counterpart (the pin's InlineCost
+    /// only adds `LoopPenalty` per loop).
     fn inline_hints_known_loop_bound(&self) -> bool {
         false
     }
@@ -979,6 +1016,11 @@ pub trait Tti {
 
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::merge_functions_at_size`.
+    fn merge_functions_at_size(&self) -> bool {
         false
     }
 
@@ -1682,6 +1724,58 @@ pub trait Tti {
     /// measured a win. DEVIATE IV-NARROW (owner z80-b, review 2026-12-20).
     fn narrows_counters(&self) -> bool {
         false
+    }
+
+    /// Beyond the pin: whether a cycle through a phi whose values only matter
+    /// at a narrower native width (read through `and` masks, `trunc`s and
+    /// values known zero above it) is carried at that width (`narrowcycle`),
+    /// when [`Tti::narrowing_gain`] prices every operation of it no dearer, the
+    /// whole cheaper and no axis dearer, the extensions at its uses counted.
+    /// `TruncInstCombine` starts from a `trunc` and wants every value of its
+    /// graph unused outside it; a phi cycle read by a mask and a compare of
+    /// masked bits has neither. Off by default.
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20).
+    fn narrows_demanded_cycles(&self) -> bool {
+        false
+    }
+
+    /// What `op` at `narrow_bits` saves against `wide_bits` (negative: dearer);
+    /// `constant` is its constant operand, `source_dies` whether the other
+    /// operand has no use after it (a two-address target copies it
+    /// otherwise); `narrow_bits` 0 is the operation gone. Zero where the
+    /// target does not price it apart.
+    fn narrowing_gain(
+        &self,
+        _op: crate::opcode::BinaryOp,
+        _wide_bits: u32,
+        _narrow_bits: u32,
+        _constant: Option<u64>,
+        _source_dies: bool,
+    ) -> Saving {
+        Saving::default()
+    }
+
+    /// What a cycle at `narrow_bits` saves per iteration when it doubles a
+    /// value (`shl x, 1`) and tests that value's top bit (`and x, 1 <<
+    /// (narrow_bits - 1)`): the shift leaves the bit in the carry at that
+    /// width only, so the target reads it there and drops the copy and the
+    /// test (m68k `cmpcarry`). Zero where the target has no such flag.
+    /// DEVIATE NARROW-CYCLE (owner m68k, exit 2026-11-20).
+    fn shift_out_test_gain(
+        &self,
+        _narrow_bits: u32,
+    ) -> Saving {
+        Saving::default()
+    }
+
+    /// What reading a value of `narrow_bits` where `wide_bits` is wanted costs
+    /// (the zero extension), as a positive saving lost.
+    fn extension_cost(
+        &self,
+        _narrow_bits: u32,
+        _wide_bits: u32,
+    ) -> Saving {
+        Saving::default()
     }
 
     /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it

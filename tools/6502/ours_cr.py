@@ -180,7 +180,7 @@ def one(job):
     if listed is not None and not corpus_targets.applies("6502-sim65", "// targets: " + " ".join(listed) + "\n"):
         return name, "N/A", "n/a, targets: " + " ".join(listed)
     w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
-    want = expected(path.with_suffix(".out"))
+    want = expected(corpus_targets.expected_output(path, f"{CPU}-sim65"))  # NAME.6502.out / NAME.65c02.out where the 16-bit int changes the answer
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:
@@ -242,7 +242,9 @@ def one(job):
     return name, "PASS", {"bytes": nb, "clks": round(sum(cycles) / len(cycles)), "insns": int(m.group(1)) if m else None, "layouts": cycles}
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
-    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None; BASE = base_members(WORK)
+    WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
+    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]
     with ThreadPoolExecutor(4) as pool: res = list(pool.map(one, [(s, level, lib) for s in srcs]))

@@ -1413,6 +1413,21 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                     let realigned = realigned_above.is_some_and(|above| wanted > above);
                     if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
+                        // An access that states more than its object keeps claims an alignment nothing has, and
+                        // `isSafeToSpeculateLoad` refuses it (`isDereferenceableAndAlignedPointer`): the second load of
+                        // `c >= '0' && c <= '9'` stayed behind its branch and the range check never formed.
+                        let Some(result) = function.instruction(inst).result else { continue };
+                        for user in function.users(result).into_iter().copied().collect::<Vec<_>>() {
+                            let access = function.instruction(user.user);
+                            let pointer = match access.opcode {
+                                llrm_mir::opcode::Opcode::Load { align, .. } => (user.index == 0).then_some(align),
+                                llrm_mir::opcode::Opcode::Store { align, .. } => (user.index == 1).then_some(align),
+                                _ => None,
+                            };
+                            if pointer.is_some_and(|stated| stated.is_none_or(|stated| stated > kept)) {
+                                function.set_access_align(user.user, kept);
+                            }
+                        }
                     }
                 }
             }
@@ -1440,6 +1455,8 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
+    // The clones of the step before the walk and of the one after it share a bound.
+    let cloning = crate::ipacp::Shared::default();
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
     // `RecomputeGlobalsAAPass` alone, read cached in between.
     manager.require_cached::<GlobalsAA>();
@@ -1497,7 +1514,7 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 {
-            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
+            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline, cloning: cloning.clone() });
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
@@ -1532,6 +1549,7 @@ pub fn recorded(
     });
     manager.add_program(Interprocedural {
         late,
+        cloning,
         pipeline: Box::new(move |module, analyses, id, stage| {
             // The pin runs nothing over a body `DeadArgumentEliminationPass`
             // changed: the late function pipeline, which every body goes
@@ -1700,6 +1718,13 @@ pub fn recorded(
     }
     // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
     // body is final.
+    // `MergeFunctions`: off in the pin's pipeline; a target that wants it at -Os says so (DEVIATE MERGEFUNC-OS).
+    if applied.options.optimize
+        && applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_functions_at_size())
+    {
+        manager.add_program(crate::mergefunc::MergeFunctions);
+    }
     if applied.options.optimize {
         manager.add_program(constmerge::ConstantMerge);
     }

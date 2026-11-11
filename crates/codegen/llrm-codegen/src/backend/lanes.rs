@@ -289,6 +289,14 @@ impl Lanes {
         Self::flags(llrm_lir::flag::Flag::READ.bits())
     }
 
+    /// Whether `register` has lanes at all: the stack pointer and the like
+    /// have none.
+    pub fn exists(register: RegId) -> bool {
+        let table = active();
+        let slot = register.index();
+        slot < REGISTERS && table.bytes[slot] > 0
+    }
+
     /// Bytes `start..start + len` of a register: the lanes `(register, byte)`
     /// for each, without a table lookup per byte.
     pub fn span(

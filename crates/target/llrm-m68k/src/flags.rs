@@ -125,3 +125,17 @@ pub fn preserve_flags(
     }
     Ok(())
 }
+
+/// Gives back the codes a made-again load sets in hardware, once
+/// [`preserve_flags`] has placed every reader: the passes after it (branch
+/// folding hoists code above a branch) must see the `move` as the flag setter
+/// it is. `MOVE` has `Defs = [CCR]` in the pin's description; only the
+/// allocator's marking had cleared it.
+pub fn restore_remade_flags(function: &mut MFunction) {
+    for inst in function.blocks.iter_mut().flat_map(|block| block.insts.iter_mut()) {
+        if inst.remade_sets_flags {
+            inst.sets_flags = true;
+            inst.remade_sets_flags = false;
+        }
+    }
+}

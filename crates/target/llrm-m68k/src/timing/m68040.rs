@@ -189,6 +189,8 @@ fn mode_label(mode: Mode) -> &'static str {
         Mode::Imm => "#<xxx>",
         Mode::Index => "(d8,An,Xn)",
         Mode::PcIndex => "(d8,PC,Xn)",
+        // full-format forms are not transcribed for the 68040: no row matches
+        Mode::IndexW | Mode::IndexL | Mode::IndexB => "(full-format index)",
     }
 }
 

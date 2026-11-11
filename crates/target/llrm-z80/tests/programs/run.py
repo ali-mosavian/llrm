@@ -96,6 +96,14 @@ def libc_library(work):
     return str(lib)
 
 
+def link_detail(undefined, extra):
+    """The LINK line: the undefined names, and the unset `Z80_LIBC_EXTRA` (the soft-float library, runtime/compiler-rt/tests/z80_lib.sh) when it may be the cause."""
+    names = " ".join(undefined)
+    if undefined and not extra:
+        return f"undefined {names[:90]} and Z80_LIBC_EXTRA unset"
+    return names[:140]
+
+
 def expected(path):
     lines = path.read_text().split()
     return [int(x) for x in lines] if all(re.fullmatch(r"-?\d+", x) for x in lines) else None
@@ -159,7 +167,7 @@ def one(job):
     k = sh(["sdldz80", "-i", "-m", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
     if k.returncode or "?ASlink-W-Undefined" in k.stdout + k.stderr:
         undefined = sorted(set(re.findall(r"Undefined Global (\S+)", k.stdout + k.stderr)))
-        return name, "LINK", " ".join(undefined)[:140] or (k.stdout + k.stderr)[-100:]
+        return name, "LINK", link_detail(undefined, os.environ.get("Z80_LIBC_EXTRA", "")) or (k.stdout + k.stderr)[-100:]
     try:
         r = sh(["ucsim_z80", "-t", "Z80", "-q", "-w", "x.ihx", "-c", "-"], w,
                f"sp_limit=0\n{zero_areas((w / 'x.map').read_text())}run\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)

@@ -4,7 +4,7 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, re, subprocess, sys, tempfile, unittest
+import os, re, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -129,6 +129,18 @@ class Members(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr[-300:])
                 rows = open(out).read().splitlines()
             self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
+
+    def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
+        """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
+        compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        self.assertEqual((index["__mulsf3"], index["__divsf3"]), ("config/6502/sf32_6502.c",) * 2)
+        text = crlib.member(rt, CC, "config/6502/sf32_6502.c", ["-Os"])
+        for name in ("__mulsf3", "__divsf3"):
+            self.assertIn(name + ":", text)
 
     def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
@@ -273,6 +285,19 @@ class NoOut(unittest.TestCase):
         self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["helper", "NO-OUT"]])
         self.assertIn("NO-OUT", done.stdout)
 
+class WorkDir(unittest.TestCase):
+    """2026-11-10: every run left its /tmp/o6progs-* directory (516 of them, one per run of every session) and /tmp ran out of inodes."""
+    def test_a_run_leaves_no_work_directory_behind(self):
+        tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, tmp, True)
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, out, True)
+        Path(corpus, "helper.c").write_text("int f(void) { return 1; }\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, TMPDIR=tmp)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", os.path.join(out, "o.tsv"), "helper"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([name for name in os.listdir(tmp) if name.startswith("o6progs-")], [])
+
 class NotForThisTarget(unittest.TestCase):
     """2026-11-10: long_double_union_pun (`// targets: x86-m16 x86-m32 x86-m64`, its `.out` the x87 80-bit layout) read WRONG on the 6502 at O1/O2/Os
     (got the shorts of a 64-bit double, which is right for this target) and went to the coordinator as a miscompile. A program whose targets line
@@ -333,3 +358,23 @@ class Runner(unittest.TestCase):
         self.assertIn("/nonexistent/mos_rt.s", done.stderr)
 
 if __name__ == "__main__": unittest.main()
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class PerTargetOut(unittest.TestCase):
+    """2026-11-11: spill_store_order (`-m32`, an LCG over 32-bit `unsigned`) read WRONG at the 6502 against its 32-bit `.out`; the answer is
+    right for a 16-bit int (llvm-mos agrees). ours_cr read only NAME.out: a NAME.6502.out / NAME.65c02.out was never looked at."""
+    def run_cpu(self, cpu):
+        import json
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "w.c").write_text("extern void report(long value);\nint main(void) { report(sizeof(int)); return 0; }\n")
+        Path(corpus, "w.out").write_text("4\n")
+        Path(corpus, f"w.{cpu}.out").write_text("2\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, OURS_CPU=cpu, OURS_PADS="0", LLRM_CC=CC)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "w"], capture_output=True, text=True, env=env, timeout=600)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        return [row[:2] for row in json.load(open(out + ".json"))]
+    def test_the_6502_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("6502"), [["w", "PASS"]])
+    def test_the_65c02_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("65c02"), [["w", "PASS"]])

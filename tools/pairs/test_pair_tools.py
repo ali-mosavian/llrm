@@ -1,6 +1,7 @@
 """objsweep and rowdiff tell a changed object and a worse row from an unchanged one, and say a compile that failed instead of counting it unchanged."""
 from __future__ import annotations
 
+import re
 import importlib.util
 import subprocess
 import sys
@@ -195,22 +196,23 @@ def test_the_pin_is_told_our_stack_alignment_and_pushes_a_one_argument_call():
 
 def compile_lines(script, compiler):
     """The lines of a shell script that run `compiler` (`gcc` or `$CLANG`) to compile (` -c `)."""
-    return [line for line in script.splitlines() if line.lstrip().startswith(compiler + " ") and " -c " in line]
+    unguarded = [re.sub(r"^\s*\[ .*? \] \|\| ", "", line) for line in script.splitlines()]  # `[ $GCC_NA = 1 ] || gcc ...`
+    return [line for line in unguarded if line.lstrip().startswith(compiler + " ") and " -c " in line]
 
 
-def test_the_pins_clang_and_gcc_are_built_at_our_stack_alignment():
-    """The reference objects of the rows (build.sh) and pinclocks.sh took the Linux 16-byte stack: a reserved call frame where our m32 target (S32) pushes.
-    Every compile line of each external carries the flag, wherever it sits among the others: the check was a substring of one spelling (`$CLANG $F -mstack-alignment=4`)
-    and went red on release/next when #8718 put `$NV_CLANG` before the flag, though both compilers were still built at 4."""
+def test_the_pins_clang_and_gcc_keep_their_default_stack_beside_ours_at_16():
+    """`-mabi=sysv` code keeps the stack 16-aligned at a call (calling.toml, DEVIATE CF6 rewritten 2026-11-10); the reference objects of the rows
+    (build.sh) and pinclocks.sh were still told 4 (`-mstack-alignment=4`, `-mpreferred-stack-boundary=2`), so a call ours padded the pin pushed
+    bare and the row read the pad as ours to remove. No compile line of either external carries a stack override, wherever it sits among the others."""
+    override = ("-mstack-alignment", "-mpreferred-stack-boundary")
     build = (HERE.parents[1] / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
     clang, gcc = compile_lines(build, "$CLANG"), compile_lines(build, "gcc")
     assert len(clang) >= 2 and len(gcc) >= 2, (clang, gcc)
-    assert all("-mstack-alignment=4" in line for line in clang), clang
-    assert all("-mpreferred-stack-boundary=2" in line for line in gcc), gcc
     pinclocks = compile_lines((HERE / "pinclocks.sh").read_text(), "$CLANG")
-    assert pinclocks and all("-mstack-alignment=4" in line for line in pinclocks), pinclocks
-    dropped = build.replace("$NV_CLANG -mstack-alignment=4", "$NV_CLANG", 1)  # the check must see a compile line without it
-    assert not all("-mstack-alignment=4" in line for line in compile_lines(dropped, "$CLANG"))
+    assert pinclocks, pinclocks
+    assert not [line for line in clang + gcc + pinclocks if any(flag in line for flag in override)]
+    told = build.replace("$NV_CLANG", "$NV_CLANG -mstack-alignment=4", 1)  # the check must see a compile line with one
+    assert [line for line in compile_lines(told, "$CLANG") if any(flag in line for flag in override)]
 
 
 def test_pair_builds_the_binaries_its_rows_and_sizes_steps_run():
@@ -298,3 +300,42 @@ def test_a_table_moved_from_data_to_bss_is_not_worse_but_extra_bss_is(tmp_path):
     assert (initialised.data, initialised.bss, zeroed.data, zeroed.bss) == (40, 0, 0, 40)
     assert cells.worse(zeroed, initialised) == []
     assert cells.worse(larger, initialised) == ["static 60 vs 40"]
+
+
+def test_an_m32_cell_is_built_with_the_programs_flags_the_external_flag_set_and_only_where_it_applies():
+    """m32cells built ours and the pin with no program flags (mul_constants' `-fno-inline-functions`, int_compared_with_float's
+    `-fexcess-precision=standard` were not in the cell), the pin with its own flag list instead of tools/external_flags.py, and every program in the
+    tree, DOS-only ones included (rep_tails +739 B read worse at x86_32-linux)."""
+    cells = load("m32cells")
+    sys.path.insert(0, str(HERE.parent))
+    import external_flags
+
+    header = "// flags: -O2 -fno-inline-functions -fexcess-precision=standard -march=pentium -mabi=sysv -m32 | -Os\nint f(void);\n"
+    assert cells.program_flags(header) == ["-fno-inline-functions", "-fexcess-precision=standard"]
+    assert cells.program_flags("int f(void);\n") == []
+    ours, matched, linux = cells.columns()
+    wanted = list(external_flags.flags("x86", ("-fno-pic",)))
+    for column in (matched, linux):
+        taken = cells.pin_flags(column)
+        assert all(token in taken for token in wanted), (column, taken)
+    stems = {s.stem for s in cells.sources([])}
+    assert "rep_tails" not in stems and "mul_constants" in stems, "a DOS-only program is no cell"
+    assert [s.stem for s in cells.sources(["mul_constants"])] == ["mul_constants"]
+
+
+def test_m32cells_passes_the_programs_flags_to_ours_and_to_the_pin(monkeypatch, tmp_path):
+    """The flags were read but not given to either compile: the commands `one` runs are what the cell measures."""
+    cells = load("m32cells")
+    ran = []
+
+    def fake(command, **kwargs):
+        ran.append([str(part) for part in command])
+        return subprocess.CompletedProcess(command, 0, stdout="/pin/clang\n", stderr="")
+
+    monkeypatch.setattr(cells.subprocess, "run", fake)
+    monkeypatch.setattr(cells, "footprint", lambda obj: cells.object_bytes.Footprint(1, 0, 0))
+    source = cells.ROOT / "tests/run/c/mul_constants.c"
+    name, sizes, why = cells.one(source, tmp_path, "O2", cells.columns())
+    compiles = [c for c in ran if "-c" in c]
+    assert len(compiles) == 3 and sizes is not None, (compiles, why)
+    assert all("-fno-inline-functions" in c for c in compiles), compiles
