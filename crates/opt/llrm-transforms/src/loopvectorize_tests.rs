@@ -8,7 +8,7 @@ use crate::testing::parsed;
 fn run(source: &str) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true });
+    manager.add(LoopVectorize { always: true, only_when_forced: false });
     manager
         .run_module(
             &mut module,
@@ -37,6 +37,43 @@ fn a_copy_loop_is_widened_by_the_pins_factors() {
     assert_eq!(count(&text, "load i16"), 0, "{text}");
     // The loop the pin marks as vectorized: one loop, no remainder.
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
+}
+
+/// Where the pin allows no epilogue it does not interleave (`selectInterleaveCount`
+/// L3705 returns 1): a trip count under 16 widened i64 copy twice (IC 2, four
+/// lanes a step) where the pin takes VF 2, IC 1 (`opt -passes=loop-vectorize`,
+/// `icmp eq i64 %index.next, 8` after `add nuw i64 %index, 2`).
+#[test]
+fn a_tiny_trip_count_is_not_interleaved() {
+    let text = run(&COPY.replace("i16", "i64").replace("align 2", "align 8").replace("1920", "8"));
+    assert_eq!(count(&text, "load <2 x i64>"), 1, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 2"), "{text}");
+}
+
+/// `-O1` runs the pass with `VectorizeOnlyWhenForced`: the pin (and clang) widen
+/// nothing there, and the scroll fill was widened at O1.
+#[test]
+fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
+    let mut module = crate::testing::parsed(COPY);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopVectorize { always: true, only_when_forced: true });
+    manager
+        .run_module(
+            &mut module,
+            std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+        )
+        .unwrap();
+    assert_eq!(count(&crate::testing::printed(&module), "load <"), 0);
+}
+
+/// Two pointers that may overlap need the pin's `vector.memcheck` (LoopVectorize
+/// L1637), which is not built: `b[i] = a[i]` over plain pointers was widened
+/// with no overlap test, so `b = a + 1` read stale lanes. It stays scalar.
+#[test]
+fn a_copy_between_pointers_that_may_overlap_stays_scalar() {
+    let text = run(&COPY.replace("noalias ", ""));
+    assert_eq!(count(&text, "load <8 x i16>"), 0, "{text}");
+    assert_eq!(count(&text, "load i16"), 1, "{text}");
 }
 
 /// A trip count VF x IC does not divide (1921) was left scalar ("A scalar

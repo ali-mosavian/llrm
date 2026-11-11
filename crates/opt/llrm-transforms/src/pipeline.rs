@@ -987,7 +987,11 @@ pub(crate) fn llvm_order(
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
             // LoopVectorizePass (l.1354): a no-op where the target takes no vector values.
-            slot("loop-vectorize@1354", Box::new(crate::loopvectorize::LoopVectorize::default())),
+            slot("loop-vectorize@1354", Box::new(crate::loopvectorize::LoopVectorize {
+                // clang vectorizes loops at -O2 and up (`PTO.LoopVectorization`).
+                only_when_forced: !applied.options.pre,
+                ..Default::default()
+            })),
             // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
             slot(
                 "drop-unnecessary-assumes@1360",

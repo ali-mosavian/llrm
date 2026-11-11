@@ -79,3 +79,11 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 - Correct: 9 kernels (non-divisible constant counts, run-time counts 0..80 from starts 0..5, an exit phi) checksum equal to the O0 reference under qemu at O1/O2/O3 (`b5658efffc9fc7cc`).
 - Cells, flag on vs off, final binaries (llc md5 380924e90fdfa810f786a537d6ae8fdd, cc b948e11e18e97a81e197aa690fbea514), ok in all: scroll O2 +20 B, -727,103 instrs (positive control, unchanged); jpeg_fixed O2 +120 B, -128,882; O3 +120 B, -988; jpeg_single O2 +124 B, -143,759; O3 +136 B, +2,677. The remainder lets the row-padding fill (`for (k = w*3; k < stride; ++k) line[k] = 0`, at most 3 trips) vectorize, as the pin's does (VF 16, IC 2, both); it pays the check and gains nothing, as in the pin. Bar (pin clang, default vectorizer): jpeg_single O2 7,698,445 / O3 7,089,434 instrs, jpeg_fixed 11,123,095 / 10,623,344: the gap is the reductions and the widened arithmetic, next.
 - Census (flag on, 47 programs x O2/O3, 261 verdicts): "scalar epilogue would remain" 2 (bintree), "trip count not a known constant" 6 (sieve, jpeg), now planned. The remainder is the prerequisite for the bench loops that follow (binary operations 24 loops, reductions 42), not a mover itself.
+
+## Review fixes (2026-11-11, w15-arm64)
+
+- LV-M1: a loop LAA can only separate at run time (`RuntimePointerChecking::need`) stays scalar; the pin builds `vector.memcheck` (L1637). `b[i] = a[i]` over plain pointers was widened with no overlap test. Exit 2026-11-24.
+- LV-F1: no loop is widened at -O1 (`VectorizeOnlyWhenForced`); the earlier O1 scroll rows no longer apply. Exit 2026-11-24.
+- IC is 1 wherever no epilogue is allowed (tiny trip count too), as `selectInterleaveCount` L3705.
+- `LLRM_ARM64_VECTORS=0` is off.
+- VP5/VP6/VP8 (planner header) state the register-pressure, low-trip and control-price deviations.

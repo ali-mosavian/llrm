@@ -41,7 +41,15 @@
 //! - VP6 `-Os`/`-Oz` and a constant trip count under 16
 //!   (`TinyTripCountVectorThreshold`): no epilogue is allowed there, so only a
 //!   trip count VF x IC divides is planned (`CM_EpilogueNotAllowedOptSize`,
-//!   `CM_EpilogueNotAllowedLowTripLoop`); at `-Os` IC stays 1.
+//!   `CM_EpilogueNotAllowedLowTripLoop`); IC stays 1 there (L3705). The pin's
+//!   other low-trip branches (`MaxVFForTC`, trip = a power of two + 1) and the
+//!   divisibility test against the largest VF before any smaller one are not
+//!   translated: the divisibility is tested on the chosen VF x IC. Exit: VEC3
+//!   (LV-X3, 2026-11-20).
+//! - VP8 the loop-control prices (`CONTROL_COST_PER_ITERATION`,
+//!   `SCALAR_CONTROL_COST`) are the count of the loop's phi/add/compare/branch,
+//!   not quantities of the pin's cost model; they feed the small-loop rule.
+//!   Exit: the VPlan cost model (VP1).
 //! - VP7 no hints (LV-D7 of the legality translation), no scalable VFs (NEON
 //!   only). No tail folding: `preferTailFoldingOverEpilogue` is false without
 //!   SVE ([L7378](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7378)),
@@ -277,10 +285,10 @@ fn select_interleave_count(
     vf: u32,
     loop_cost: i64,
 ) -> u32 {
-    // Do not interleave where no epilogue is allowed (VP6), where the distance
+    // Do not interleave where no epilogue is allowed (optsize or a tiny trip count, VP6), where the distance
     // already bounded the VF ("We used the distance for the interleave
     // count"), and a loop that is free needs none.
-    if facts.opt_size || !facts.safe_for_any_vector_width || loop_cost == 0 {
+    if !epilogue_allowed(facts) || !facts.safe_for_any_vector_width || loop_cost == 0 {
         return 1;
     }
     let registers = tti.number_of_registers(if vf == 1 { RegisterClass::Scalar } else { RegisterClass::Vector });

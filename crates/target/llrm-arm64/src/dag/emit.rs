@@ -1040,11 +1040,11 @@ impl Emitter<'_> {
         let to = self.dag.value_type(SDValue { node: id, res: 0 });
         let bits = to.size_in_bits();
         let (width, size) = if bits == 64 { (Width::X, FpSize::D) } else { (Width::W, FpSize::S) };
-        // The class says it where the type cannot: an `i64` in `FPR64` is a
-        // double's register (`FPR8` 6, `FPR16` 7, `FPR32` 29, `FPR64` 43,
-        // `FPR128` 77).
+        // The class says it where the type cannot: a vector has no float type
+        // (`FPR8` 6, `FPR16` 7, `FPR32` 29, `FPR64` 43, `FPR128` 77). Scalars
+        // keep the type, so no scalar compile can change.
         let to_float = match operands.get(1) {
-            Some(Operand::Imm(class)) => matches!(class, 6 | 7 | 29 | 43 | 77),
+            Some(Operand::Imm(class)) if to.is_vector() => matches!(class, 6 | 7 | 29 | 43 | 77),
             _ => to.is_floating_point(),
         };
         match (operands.first(), to_float) {

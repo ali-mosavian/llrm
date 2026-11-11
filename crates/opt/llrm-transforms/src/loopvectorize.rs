@@ -72,6 +72,12 @@ use crate::loopvectorizeskeleton::{self as skeleton, Shape};
 pub struct LoopVectorize {
     /// Vectorize whatever the target says of vector values (the unit tests').
     pub always: bool,
+    /// `LoopVectorizeOptions::VectorizeOnlyWhenForced` (`!PTO.LoopVectorization`,
+    /// clang's -O1). The pin still widens a loop that carries
+    /// `llvm.loop.vectorize.enable`; DEVIATE LV-F1: no frontend of llrm emits
+    /// that hint, so a forced loop is not looked for. Owner arm64-vec, exit
+    /// 2026-11-24.
+    pub only_when_forced: bool,
 }
 
 /// One load or store of the loop, by the instruction it widens.
@@ -494,6 +500,9 @@ impl FunctionPass for LoopVectorize {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        if self.only_when_forced {
+            return PreservedAnalyses::all();
+        }
         let outer = std::rc::Rc::clone(analyses.outer());
         let target = outer.target();
         if !self.always && !target.has_vector_mir() {
