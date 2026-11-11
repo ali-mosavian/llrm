@@ -75,6 +75,11 @@ use crate::support::hash::HashMap;
 pub struct Tables {
     pub orders: RefCell<HashMap<u32, Vec<RegId>>>,
     pub widths: RefCell<HashMap<u32, u32>>,
+    /// The widest each value is read by an instruction that is not a copy: the
+    /// register class its instructions give it. A copy asks no class of its
+    /// operand (`COPY` has none), so its width, which the lowering widens for
+    /// encoding (`xor esi, esi` for a 16-bit zero), says nothing of the value.
+    pub natural: RefCell<HashMap<u32, u32>>,
     /// The bytes of each x87 value's float type: its spill cell's width.
     pub float_bytes: RefCell<HashMap<u32, u32>>,
     /// The registers whose one definition can be made again where they are
@@ -106,6 +111,10 @@ impl Tables {
         from: u32,
     ) {
         self.parents.borrow_mut().insert(new, from);
+        let natural = self.natural.borrow().get(&from).copied();
+        if let Some(natural) = natural {
+            self.natural.borrow_mut().insert(new, natural);
+        }
         let root = self.family.borrow().get(&from).copied();
         if let Some(root) = root {
             self.family.borrow_mut().insert(new, root);
