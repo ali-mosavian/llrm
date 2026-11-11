@@ -28,9 +28,7 @@
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
 //! simple, non-extending load, before and after operations are legal (legal
 //! extending load only, as the pin), with the table given by `with_tli` (no
-//! table: only a load nothing else reads); every integer truncate is taken as
-//! free (`isTruncateFree`). Exit: the target's truncate query. Owner sdag-b.
-//! Review 2026-11-27.
+//! table: only a load nothing else reads). Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
@@ -2290,6 +2288,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         compares: &mut Vec<u32>,
     ) -> bool {
         let mut copy_to_reg = false;
+        let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(node), self.dag.value_type(load));
         for &user in others {
             let user_value = SDValue { node: user, res: 0 };
             if op != ISD::AnyExtend && self.dag.opcode(user_value) == ISD::SetCC {
@@ -2316,7 +2315,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
                 continue;
             }
-            // Every integer truncate between these widths is free on x86.
+            // `ExtendUsesToFormExtLoad`: "if truncates aren't free and there
+            // are users we can't extend, it isn't worthwhile."
+            if !truncate_free {
+                return false;
+            }
             if self.dag.opcode(user_value) == ISD::CopyToReg {
                 copy_to_reg = true;
             }
