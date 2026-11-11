@@ -81,6 +81,8 @@ thread_local! {
     /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
     /// prices the two with the routine linked once (`compile::decomposed_functions`).
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function is selected at a level that allows no trade between bytes and clocks (-O1, -Os, -Oz).
+    pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected with the words of its long adds and subtracts left to the generic
     /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
     /// two forms (`compile::lines_of`).
