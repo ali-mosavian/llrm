@@ -291,6 +291,9 @@ pub fn decide(
     let exposed = promote::Exposed::default();
     let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
+        if !crate::loopfilter::allows(cfg::block(one.header)) {
+            continue;
+        }
         memo.clear();
         let ctx = LoopCtx {
             function: unit.function,
