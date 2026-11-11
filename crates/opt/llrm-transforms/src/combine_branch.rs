@@ -13,10 +13,11 @@
 //! visited before it and no others.
 //!
 //! DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
-//! no logical `select` pattern here yet), the `fcmp` predicate canonical form
-//! (`isCanonicalPredicate`), and the constant condition at visit time (the
-//! driver folds a branch on a number, and `combine::prepare` kills the edges
-//! of an undef or poison one, `combine.rs`).
+//! no logical `select` pattern here yet) and the `fcmp` predicate canonical
+//! form (`isCanonicalPredicate`).
+//!
+//! MIRROR: a condition that is a number (or undef) cuts the edges it never
+//! takes (`handlePotentiallyDeadSuccessors`, `combine_unreachable`).
 //!
 //! MIRROR: every use of the condition that an edge dominates becomes `true`
 //! (the first edge) or `false` (the second): a second branch on the same
@@ -39,7 +40,9 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern;
 use llrm_mir::valuetracking::range::edge_dominates_use;
 
-use crate::combine::{Combiner, Visit};
+use llrm_mir::context::ConstantKind;
+
+use crate::combine::{Combiner, Visit, number};
 use crate::combine_shared::{query, replace_operand};
 
 impl Combiner<'_> {
@@ -50,7 +53,21 @@ impl Combiner<'_> {
     ) -> Visit {
         let branch = self.function.instruction(inst);
         let [cond, Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else { return Visit::None };
-        if branch.opcode != Opcode::Br || matches!(cond, Operand::Constant(_)) {
+        if branch.opcode != Opcode::Br {
+            return Visit::None;
+        }
+        // A condition that is a number, or undef, leaves a successor dead
+        // (`handlePotentiallyDeadSuccessors`).
+        if let Operand::Constant(id) = cond {
+            let block = self.function.parent(inst).expect("a placed branch");
+            match self.context.get(id).kind {
+                ConstantKind::Undef | ConstantKind::Poison => self.handle_potentially_dead_successors(block, None),
+                _ => {
+                    if let Some(bits) = number(self.context, id) {
+                        self.handle_potentially_dead_successors(block, Some(if bits & 1 == 1 { taken } else { other }));
+                    }
+                }
+            }
             return Visit::None;
         }
         // Change br (not X), label True, label False to: br X, label False,

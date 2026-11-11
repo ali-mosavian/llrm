@@ -149,13 +149,13 @@ fn prepare(
     context: &mut Context,
     function: &mut Function,
     worklist: &mut InstWorklist,
+    dead_edges: &mut std::collections::BTreeSet<(BlockId, BlockId)>,
 ) -> bool {
     let mut changed = false;
     let Some(entry) = function.entry() else { return false };
     let tree = env.analyses.dominator_tree();
     let graph = llrm_analysis::cfg::graph(function);
     let order = llrm_support::graph::reverse_postorder(&graph, llrm_analysis::cfg::id(entry));
-    let mut dead_edges = std::collections::BTreeSet::<(BlockId, BlockId)>::new();
     let mut live = std::collections::BTreeSet::<BlockId>::new();
     let mut seeded: Vec<InstId> = Vec::new();
     for at in order {
@@ -170,7 +170,7 @@ fn prepare(
             let predecessors = function.predecessors(block);
             if predecessors.iter().all(|&pred| dead_edges.contains(&(pred, block)) || tree.dominates(block, pred)) {
                 for succ in function.successors(block) {
-                    handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, None, succ);
+                    handle_only_live_successor(context, function, dead_edges, &mut changed, block, None, succ);
                 }
                 continue;
             }
@@ -209,7 +209,7 @@ fn prepare(
             )
         {
             for succ in function.successors(block) {
-                handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, None, succ);
+                handle_only_live_successor(context, function, dead_edges, &mut changed, block, None, succ);
             }
             continue;
         }
@@ -221,7 +221,7 @@ fn prepare(
             && let Some(bits) = number(context, condition)
         {
             let (live, dead) = if bits & 1 == 1 { (taken, other) } else { (other, taken) };
-            handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, Some(live), dead);
+            handle_only_live_successor(context, function, dead_edges, &mut changed, block, Some(live), dead);
         }
     }
     // Remove instructions inside unreachable blocks
@@ -267,7 +267,7 @@ fn prepare(
 }
 
 /// A constant integer condition's value.
-fn number(
+pub(crate) fn number(
     context: &Context,
     id: llrm_mir::context::ConstantId,
 ) -> Option<u128> {
@@ -293,7 +293,19 @@ fn handle_only_live_successor(
     if Some(dead) == live || !dead_edges.insert((block, dead)) {
         return;
     }
-    for phi in function.iter_block(dead).collect::<Vec<_>>() {
+    *changed |= !poison_phi_inputs(context, function, block, dead).is_empty();
+}
+
+/// The inputs of `to`'s phis that come over the edge from `from` become
+/// poison. The phis that changed.
+pub(crate) fn poison_phi_inputs(
+    context: &mut Context,
+    function: &mut Function,
+    from: BlockId,
+    to: BlockId,
+) -> Vec<InstId> {
+    let mut phis = Vec::new();
+    for phi in function.iter_block(to).collect::<Vec<_>>() {
         if function.instruction(phi).opcode != Opcode::Phi {
             break;
         }
@@ -303,18 +315,21 @@ fn handle_only_live_successor(
         );
         let arms: Vec<Operand> = function.instruction(phi).operands.to_vec();
         for (at, pair) in arms.chunks(2).enumerate() {
-            if let [value, Operand::Block(from)] = *pair
-                && from == block
+            if let [value, Operand::Block(arm)] = *pair
+                && arm == from
                 && !matches!(
                     value,
                     Operand::Constant(id) if context.get(id).kind == llrm_mir::context::ConstantKind::Poison
                 )
             {
                 function.set_operand(phi, at * 2, poison);
-                *changed = true;
+                if phis.last() != Some(&phi) {
+                    phis.push(phi);
+                }
             }
         }
     }
+    phis
 }
 
 /// What `visit` returns, as LLVM's `Instruction *`: null, the instruction
@@ -374,6 +389,12 @@ pub struct Combiner<'a> {
     /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
     /// dominating conditions while set (`foldICmpUsingKnownBits`).
     pub without_dom_conditions: bool,
+    /// `DeadEdges`: the edges known never to be taken, from `prepare` and
+    /// from the branches and switches on a number visited since.
+    pub dead_edges: std::collections::BTreeSet<(BlockId, BlockId)>,
+    /// `MadeIRChange` for the edits that a visit makes without returning the
+    /// instruction (`handlePotentiallyDeadSuccessors`).
+    pub made_ir_change: bool,
     /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
     /// `Query::pending_intrinsics`).
     pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
@@ -750,10 +771,12 @@ pub(crate) fn combine_for(
         declared,
         without_dom_conditions: false,
         pending_intrinsics: Vec::new(),
+        dead_edges: Default::default(),
+        made_ir_change: false,
     };
-    let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
+    let mut changed = prepare(&env, c.context, c.function, &mut c.worklist, &mut c.dead_edges);
     changed |= drain(&mut c, visit);
-    changed
+    changed | c.made_ir_change
 }
 
 #[cfg(test)]

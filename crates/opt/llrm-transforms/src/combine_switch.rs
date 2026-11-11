@@ -27,11 +27,12 @@
 //! # Used by
 //! `combine` (its dispatch on `Opcode::Switch`).
 
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::context::ConstantKind;
+use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::valuetracking::{known, pattern};
 
-use crate::combine::{Combiner, Visit};
+use crate::combine::{Combiner, Visit, number};
 use crate::combine_shared::{query, replace_operand, should_change_type};
 
 fn mask(bits: u32) -> u128 {
@@ -48,12 +49,43 @@ fn signed(
 }
 
 impl Combiner<'_> {
+    /// `SI.findCaseValue(CI)->getCaseSuccessor()`: where `switch` goes for the
+    /// number `bits`.
+    fn case_successor(
+        &self,
+        switch: InstId,
+        bits: u128,
+    ) -> BlockId {
+        let operands = &self.function.instruction(switch).operands;
+        let Operand::Block(default) = operands[1] else { unreachable!("a switch names its default") };
+        operands[2..]
+            .chunks(2)
+            .find_map(|pair| match *pair {
+                [Operand::Constant(case), Operand::Block(to)] if number(self.context, case) == Some(bits) => Some(to),
+                _ => None,
+            })
+            .unwrap_or(default)
+    }
+
     /// `visitSwitchInst`.
     pub(crate) fn visit_switch(
         &mut self,
         switch: InstId,
     ) -> Visit {
         let cond = self.function.instruction(switch).operands[0];
+        // A condition that is a number, or undef, leaves the other successors
+        // dead (`handlePotentiallyDeadSuccessors`).
+        if let Operand::Constant(id) = cond {
+            let live = match self.context.get(id).kind {
+                ConstantKind::Undef | ConstantKind::Poison => Some(None),
+                _ => number(self.context, id).map(|bits| Some(self.case_successor(switch, bits))),
+            };
+            if let Some(live) = live {
+                let block = self.function.parent(switch).expect("a placed switch");
+                self.handle_potentially_dead_successors(block, live);
+                return Visit::None;
+            }
+        }
         let ty = self.type_of(cond);
         let Some(width) = self.context.types.int_bits(ty).filter(|&width| width <= 128) else { return Visit::None };
         let q = query(self, Some(switch));
