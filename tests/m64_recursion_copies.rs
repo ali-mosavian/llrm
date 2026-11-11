@@ -16,7 +16,7 @@ fn at_o2_a_two_call_recursion_is_copied_two_deep() {
     .unwrap();
     let output = common::cc::llrm_c()
         .current_dir(directory)
-        .args(["--target=x86_64-linux", "-O2", "-S", "-o", "a.s", "a.c"])
+        .args(["-m64", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
