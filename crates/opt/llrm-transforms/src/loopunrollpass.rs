@@ -1435,7 +1435,7 @@ pub(crate) fn compute_unroll_count(
 
     // 6th priority is partial unrolling, when the trip count is known.
     if let Some(factor) = should_partial_unroll(loop_size, trip_count, uce, up) {
-        return factor;
+        return priced_partial(run, se, analyzed, lp, pinfo, up, factor, trip_count);
     }
     debug_assert!(trip_count == 0, "All cases when the trip count is constant should be covered here.");
 
@@ -1474,7 +1474,30 @@ pub(crate) fn compute_unroll_count(
     if max_trip_count != 0 && count > max_trip_count {
         count = max_trip_count;
     }
-    if count < 2 { 0 } else { count }
+    if count < 2 { 0 } else { priced_partial(run, se, analyzed, lp, pinfo, up, count, 0) }
+}
+
+/// `count`, or 0 where the target's throughput model says the partial or runtime unroll by `count` does not pay
+/// its bytes (`price::partial_unroll_pays`); a requested unroll (a pragma, a forced count) is not priced.
+fn priced_partial(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    pinfo: &UnrollPragmaInfo,
+    up: &UnrollingPreferences,
+    count: u32,
+    trip_count: u32,
+) -> u32 {
+    if count < 2 || count >= trip_count.max(2) && trip_count != 0 || up.force || pinfo.explicit_unroll {
+        return count;
+    }
+    if price::partial_unroll_pays(run, se, analyzed, lp, count, trip_count) {
+        count
+    } else {
+        why(run, lp, "partial unroll: the copies do not pay their bytes (PART-UNROLL-M64)");
+        0
+    }
 }
 
 /// `Function::hasOneLiveUse` of `callee`, by scanning the module for its uses

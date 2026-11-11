@@ -1633,3 +1633,46 @@ declare void @late(ptr)
     };
     super::unroll_function_hiding(&mut module, "f", &tti, options, None, 1).expect("unrolls without a panic");
 }
+
+/// A 64-trip loop of an issue-bound body (a load, five independent operations and a store a trip) that the pin
+/// unrolls partially: whether the copies were made, on a core with or without the SandyBridge throughput model, at
+/// 4000 milliclocks a byte (the test's knob).
+fn issue_bound_loop_partially_unrolled(throughput: bool) -> bool {
+    let mut module = parsed(
+        "define void @f(ptr %a, ptr %b) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %p = getelementptr i32, ptr %a, i64 %i
+  %v = load i32, ptr %p
+  %m = mul i32 %v, 7
+  %w = add i32 %m, 11
+  %q = xor i32 %w, %v
+  %r = shl i32 %q, 2
+  %s = add i32 %r, %w
+  %o = getelementptr i32, ptr %b, i64 %i
+  store i32 %s, ptr %o
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 64
+  br i1 %more, label %loop, label %done
+
+done:
+  ret void
+}
+",
+    );
+    unroll_on_core(&mut module, throughput, true, 2, 0, 4000);
+    printed(&module).matches("load i32").count() > 1
+}
+
+/// dot -O2 m64 (and quicksort -O2): the pin unrolls a constant-trip loop by 4 and prices nothing; the copies
+/// remove the counter, the exit test and a back edge in two, 0.75 clocks of four-wide issue a trip (24 clocks in
+/// 64 trips), against the 9 B of the second copy. Priced by the core's resources the unroll costs more than it
+/// saves at 4000 milliclocks a byte.
+#[test]
+fn test_a_partial_unroll_is_priced_by_the_cores_resources() {
+    assert!(issue_bound_loop_partially_unrolled(false), "premise: the pin's rule unrolls this loop");
+    assert!(!issue_bound_loop_partially_unrolled(true), "24 clk saved by the control, 9 B of copies at 4000 milliclocks");
+}
