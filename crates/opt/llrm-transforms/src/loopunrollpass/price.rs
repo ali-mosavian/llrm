@@ -803,7 +803,7 @@ fn promoted_accesses(
                         if loaded.contains(&root) && written.contains(&root) {
                             rmw.insert(root);
                         }
-                    } else {
+                    } else if !immediate_store(one, known) {
                         ints.insert(root);
                     }
                 }
@@ -811,6 +811,21 @@ fn promoted_accesses(
         }
     }
     (found, runs, ints.len(), floats.len(), rmw)
+}
+
+/// A store of an integer that is a constant in each copy (a constant, or a value of the counters alone): the
+/// reader takes it as an immediate, so the element holds no register. UP1-REG counts the elements that do: a
+/// float is loaded from the constant pool, an element the loop also loads is a live value.
+fn immediate_store(
+    inst: &llrm_mir::module::Instruction,
+    known: &IdSet<ValueId>,
+) -> bool {
+    matches!(inst.opcode, Opcode::Store { .. })
+        && match inst.operands[0] {
+            Operand::Constant(_) => true,
+            Operand::Value(value) => known.contains(&value),
+            Operand::Block(_) => false,
+        }
 }
 
 /// Whether a local array keeps its memory after the full unroll of `lp`: some

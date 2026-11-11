@@ -1466,20 +1466,20 @@ done:
 }}
 "
     ));
-    unroll_on_core(&mut module, throughput, !call);
+    unroll_on_core(&mut module, throughput, !call, 2);
     !printed(&module).contains("%i = phi")
 }
 
 /// The unroll pass on `@f` of `module` for x86-64 at 600 milliclocks a byte (the test's knob), with or without
 /// the SandyBridge throughput model.
-fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool) {
+fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool, opt_level: u32) {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
-    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, ..llrm_mir::target::Tuning::PIN };
+    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, unroll_promotion_fits_registers: true, ..llrm_mir::target::Tuning::PIN };
     let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
     let options = Options {
-        opt_level: 2,
+        opt_level,
         opt_size: false,
         min_size: false,
         only_when_forced: false,
@@ -1526,6 +1526,55 @@ fn test_a_fill_of_folded_constants_is_unrolled_only_where_the_core_is_priced_ser
 fn test_a_loop_calling_a_function_the_inliner_takes_is_priced_serially_on_a_core_with_resources() {
     assert!(fill_unrolled(false, true), "premise: priced serially, the unroll pays");
     assert!(fill_unrolled(true, true), "the callee folds on the copies' constants: not a trip the resources show");
+}
+
+/// A local array filled by one loop from its counter and read by the next: the fill loop (`%i`) after the unroll
+/// pass, with or without the SandyBridge throughput model. The reader multiplies by a loop-invariant argument.
+fn array_fill_unrolled(throughput: bool) -> bool {
+    let mut module = parsed(
+        "define i32 @f(i32 %k) {
+entry:
+  %b = alloca [48 x i32]
+  br label %i.loop
+
+i.loop:
+  %i = phi i32 [ 0, %entry ], [ %in, %i.loop ]
+  %v = mul i32 %i, 7
+  %w = sub i32 100, %v
+  %p = getelementptr [48 x i32], ptr %b, i32 0, i32 %i
+  store i32 %w, ptr %p
+  %in = add i32 %i, 1
+  %c = icmp ne i32 %in, 48
+  br i1 %c, label %i.loop, label %j.loop
+
+j.loop:
+  %j = phi i32 [ 0, %i.loop ], [ %jn, %j.loop ]
+  %s = phi i32 [ 0, %i.loop ], [ %sn, %j.loop ]
+  %q = getelementptr [48 x i32], ptr %b, i32 0, i32 %j
+  %x = load i32, ptr %q
+  %m = mul i32 %x, %k
+  %sn = add i32 %s, %m
+  %jn = add i32 %j, 1
+  %d = icmp ne i32 %jn, 48
+  br i1 %d, label %j.loop, label %done
+
+done:
+  ret i32 %sn
+}
+",
+    );
+    unroll_on_core(&mut module, throughput, true, 3);
+    !printed(&module).contains("%i = phi")
+}
+
+/// dot -O3 m64: `b[i] = 70 - 2 * i` over 48 trips, read by the 40-trip loop that follows, was priced "saves 24 clk,
+/// adds 330 B" and kept rolled: the 48 constants were counted as 48 live values for 16 registers, though a stored
+/// constant is an immediate of the reader, not a register. The array stayed in memory, the reader's loop stayed
+/// rolled, and the function grew 817 -> 1123 B (87 -> 170 clk).
+#[test]
+fn test_a_local_array_filled_with_constants_is_unrolled_for_the_reader_that_folds_it() {
+    assert!(array_fill_unrolled(false), "premise: priced serially, the fill is unrolled");
+    assert!(array_fill_unrolled(true), "constants stored to a local array are immediates in the reader, not registers");
 }
 
 /// memfuncs_runtime arm64 -O2/-O3: a call in a loop named a callee the pipeline had declared after the pass's snapshot
