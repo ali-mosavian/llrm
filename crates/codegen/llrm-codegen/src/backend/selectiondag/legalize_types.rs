@@ -2176,7 +2176,15 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandShiftWithKnownAmountBit`
-    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3409>):
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3409>),
+    /// which the pin runs before the parts node and the library call
+    /// (`ExpandIntRes_Shift`, :5063) with no target hook. DEVIATE SD241: a
+    /// target that sets `libcall_for_small_variable_shift` (z80, 6502) keeps
+    /// the call for the all-clear case until its owner prices an inline
+    /// policy; the base did the same for every target without a funnel
+    /// shift. Exit: z80 and 6502 price it. Owner sdag-b (z80, 6502
+    /// consume it). Review 2026-12-10.
+    ///
     /// the bits of the amount from `log2(half)` up decide whether it is below
     /// `half`. Any of them set: one half-width shift of the other half. All of
     /// them clear: no select is needed, the bits that cross the halves come
@@ -2207,7 +2215,7 @@ impl<'a> TypeLegalizer<'a> {
                 }
             });
         }
-        if known.zero & high_mask != high_mask {
+        if known.zero & high_mask != high_mask || self.tli.libcall_for_small_variable_shift() {
             return None;
         }
         // 31-x rather than 32-x, which would shift by the width at x = 0; xor

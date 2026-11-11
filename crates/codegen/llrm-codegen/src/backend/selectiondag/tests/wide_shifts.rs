@@ -198,6 +198,55 @@ fn a_shift_by_an_amount_known_below_the_half_width_has_no_select_and_no_funnel()
     }
 }
 
+/// z80 and 6502 called `__ashldi3` for an `i64` shifted by `n & 31` before the pin's inline expansion was
+/// translated; the inline one grew call_cleanup_keeps_pair by 1146 B (6502 -O2) and 192 B (z80 -O2). A target
+/// that sets `libcall_for_small_variable_shift` keeps the call, one that does not shifts inline.
+#[test]
+fn a_target_keeping_the_shift_routine_calls_it_for_an_amount_known_small() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<&'static str>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            _args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push(name);
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    for keeps in [true, false] {
+        let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        tli.set_operation_action(ISD::ShlParts, MVT::I32, Action::Expand);
+        if keeps {
+            tli.set_libcall_for_small_variable_shift();
+        }
+        let mut dag = dag();
+        let x = dag.get_constant_with(5, EVT::I64, false, true);
+        let register = dag.get_register(EVT::I8, 9);
+        let mask = dag.get_constant(31, EVT::I8);
+        let amount = dag.get_node(ISD::And, EVT::I8, &[register, mask]);
+        let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
+        let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
+        dag.set_root(low);
+        let mut calls = Calls::default();
+        TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+        assert_eq!(calls.0, if keeps { vec!["__ashldi3"] } else { vec![] }, "keeps the routine: {keeps}");
+    }
+}
+
 /// A shift with an amount and no `shl_parts` (the table empty) is refused.
 #[test]
 fn a_variable_shift_without_the_parts_node_is_refused() {
