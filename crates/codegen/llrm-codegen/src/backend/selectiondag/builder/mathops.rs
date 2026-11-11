@@ -9,7 +9,7 @@ use llrm_mir::opcode::BinaryOp;
 
 use super::super::dag::SDValue;
 use super::super::isd::ISD;
-use super::super::mvt::EVT;
+use super::super::mvt::{EVT, MVT};
 use super::{Builder, Refused, flags_of};
 
 impl Builder<'_> {
@@ -48,7 +48,9 @@ impl Builder<'_> {
             Intrinsic::FMulAdd => {
                 let second = self.get_value(instruction.operands[1])?;
                 let third = self.get_value(instruction.operands[2])?;
-                if self.dag.config().fma_faster {
+                // AArch64's `isFMAFasterThanFMulAndFAdd` is true for f16, f32
+                // and f64 only: an fp128 `fmuladd` is a multiply and an add.
+                if self.dag.config().fma_faster && dest != EVT::Simple(MVT::F128) {
                     self.dag.get_node_flags(ISD::FMA, dest, &[first, second, third], flags)
                 } else {
                     let product = self.dag.get_node_flags(ISD::FMul, dest, &[first, second], flags);
@@ -80,7 +82,11 @@ impl Builder<'_> {
                 self.dag.get_node(code, dest, &[first, second, scale])
             }
             Intrinsic::ShiftSat { signed } => {
-                let second = self.get_value(instruction.operands[1])?;
+                // The amount in the target's shift type, as the pin coerces
+                // it (SelectionDAGBuilder.cpp#L7608).
+                let amount = self.get_value(instruction.operands[1])?;
+                let second =
+                    self.dag.get_zext_or_trunc(amount, self.target.shift_amount_for(self.dag.value_type(first)));
                 self.dag.get_node(if *signed { ISD::SShlSat } else { ISD::UShlSat }, dest, &[first, second])
             }
             Intrinsic::Saturating { op, signed } => {

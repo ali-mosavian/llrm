@@ -35,7 +35,7 @@ fn a_variadic_function_names_its_first_variadic_argument() {
         &module,
         function,
         &layout,
-        &BuilderTarget::m32(),
+        &BuilderTarget::for_pointer_bits(32),
         &llrm_x86_m32::M32,
         &convention,
         &mut info,

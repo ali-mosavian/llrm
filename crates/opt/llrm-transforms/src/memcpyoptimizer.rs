@@ -313,7 +313,7 @@ fn create_memset(
         calling_convention: 0,
         return_attrs: Vec::new(),
         argument_attrs: vec![
-            align.map(|bytes| llrm_mir::opcode::Attribute::Int("align".to_owned(), bytes)).into_iter().collect(),
+            align.map(|bytes| llrm_mir::opcode::Attribute::Int("align".into(), bytes)).into_iter().collect(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

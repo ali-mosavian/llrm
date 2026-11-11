@@ -74,17 +74,49 @@ int h(int n, int *p, int (*fp)(double *, int))
     let pushes = lines.iter().take_while(|line| line.starts_with("push ")).count() as i64;
     let sub: i64 = lines.iter().find_map(|line| line.strip_prefix("sub esp, ")).expect("locals").parse().unwrap();
     assert_eq!((4 + 4 * pushes + sub) % 8, 0, "{text}");
-    let array = lines.iter().find_map(|line| line.split_once(", [esp+")).expect("the array's address").1;
-    let distance: i64 = array.trim_end_matches(']').parse().unwrap();
+    let distance = address_taken_from_esp(&lines).expect("the array's address");
     assert_eq!(distance % 8, 0, "{text}");
 }
 
-/// A wrapped frame (set up where it is first used, not at the entry) pushed
-/// its registers after `sub esp`, the old order, because the wrap kept the
-/// frame's own sequence apart from them: the Save block now has the pin's
-/// order and the early return builds none.
+/// The distance of the first `[esp+K]` address from the esp the `sub esp` left:
+/// K less what the pushes since then took (`push edi` ahead of the `lea` made
+/// the array's address read 20 and a misaligned array, 4 mod 8, though it lay
+/// at 16: this test was red on a correct frame).
+fn address_taken_from_esp(lines: &[String]) -> Option<i64> {
+    let mut pushed = 0i64;
+    let mut reserved = false;
+    for line in lines {
+        if line.starts_with("sub esp,") {
+            reserved = true;
+        } else if reserved && line.starts_with("push ") {
+            pushed += 4;
+        } else if reserved && line.starts_with("pop ") {
+            pushed -= 4;
+        } else if let Some(count) = line.strip_prefix("add esp, ").filter(|_| reserved) {
+            pushed -= count.parse::<i64>().ok()?;
+        } else if reserved && let Some((_, rest)) = line.split_once(", [esp+") {
+            return Some(rest.trim_end_matches(']').parse::<i64>().ok()? - pushed);
+        }
+    }
+    None
+}
+
+/// An address read after a push counts the push: `[esp+20]` after `push edi` is
+/// 16 from the esp the frame left, and the same text before it is 20.
 #[test]
-fn test_a_shrink_wrapped_frame_pushes_its_registers_before_it_reserves() {
+fn test_an_address_after_a_push_is_counted_from_the_frames_esp() {
+    let text = |lines: &[&str]| lines.iter().map(|one| one.to_string()).collect::<Vec<_>>();
+    assert_eq!(address_taken_from_esp(&text(&["sub esp, 44", "push edi", "lea ebp, [esp+20]"])), Some(16));
+    assert_eq!(address_taken_from_esp(&text(&["sub esp, 44", "lea ebp, [esp+20]"])), Some(20));
+    assert_eq!(address_taken_from_esp(&text(&["sub esp, 44", "push edi", "pop edi", "lea ebp, [esp+16]"])), Some(16));
+}
+
+/// The frame pushes its registers before it reserves (`sub esp`), the pin's
+/// order; the old order pushed after the reserve. The pin's `llc` does not wrap
+/// this source (it pushes, then tests `n`), and since #8191 neither do we: the
+/// early return builds the frame too.
+#[test]
+fn test_a_frame_pushes_its_registers_before_it_reserves() {
     let source = r#"extern int g(int *);
 int h(int n, int *p)
 {
@@ -99,7 +131,6 @@ int h(int n, int *p)
     let lines = instructions(&text);
     let first_push = lines.iter().position(|line| line.starts_with("push ")).expect("a push");
     let sub = lines.iter().position(|line| line.starts_with("sub esp,")).expect("locals");
-    assert!(lines[..first_push].iter().any(|line| line.starts_with('j')), "the early return comes first: {lines:?}");
     assert!(
         lines[first_push..sub].iter().all(|line| line.starts_with("push ") || line.ends_with(':')),
         "registers pushed before sub esp: {lines:?}"

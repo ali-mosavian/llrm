@@ -18,7 +18,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use super::{Arg, BUF, Kernel, LZ, Row, kernel_source, run_sim, work};
+use super::{Arg, BUF, Kernel, LZ, Row, kernel_source, pad_bytes, run_sim, work};
 
 /// `sdcc` and `sim65` versions, for the table's footer.
 pub fn versions() -> String {
@@ -227,7 +227,15 @@ pub fn row(
         tool(&dir, &[target, "-c", &format!("{name}.c"), "-o", &format!("{name}-d.rel")])?;
         let ihx = format!("{name}.ihx");
         let function = if which == "k" { kernel_object.clone() } else { format!("{tag}-{which}.rel") };
-        tool(&dir, &[target, &format!("{name}-d.rel"), &function, "-o", &ihx])?;
+        let pad = pad_bytes();
+        if pad == 0 {
+            tool(&dir, &[target, &format!("{name}-d.rel"), &function, "-o", &ihx])?;
+        } else {
+            // code bytes before the function, as the other columns get
+            std::fs::write(dir.join("pad.c"), format!("void pad(void) {{ __asm .ds {pad} __endasm; }}\n")).unwrap();
+            tool(&dir, &[target, "-c", "pad.c", "-o", "pad.rel"])?;
+            tool(&dir, &[target, &format!("{name}-d.rel"), "pad.rel", &function, "-o", &ihx])?;
+        }
         Ok(dir.join(ihx))
     };
     // the kernel must answer right, once and 101 times

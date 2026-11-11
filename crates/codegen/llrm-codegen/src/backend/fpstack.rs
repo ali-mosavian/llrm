@@ -58,6 +58,15 @@
 //! form above them, not `fxch` and `fadd [m]` (`unfold_memory_form`). The pin
 //! keeps the memory form and exchanges.
 //!
+//! DEVIATE 10 (owner x87, exit 2026-11-20): a memory-form operation (`fsub
+//! [m]`) whose other operand stays live is `fld [m]` and the register form
+//! reading that operand (`fsubr st, st(i)`) where the target prices the copy
+//! (`fld st(i)`) and the memory form above the load and the register form
+//! (`unfold_copy_form`). The pin copies the operand and keeps the memory form
+//! (`handleOneArgFPRW`'s `duplicateToTop` branch,
+//! <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
+//! on a 486 `fld st(i)` is 4 clocks and `fld m` 3 (nbody -O2 m16, 1,200 trips).
+//!
 //! DEVIATE 4: an unreachable block with live floating values has no predecessor
 //! to fix its entry; its live values are taken in ascending order (LLVM
 //! asserts).
@@ -86,6 +95,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::Profile;
@@ -97,7 +107,7 @@ use crate::backend::floatassign;
 use crate::backend::floatregions::{Raised, clears_stack};
 use crate::backend::liverows::live_among;
 use crate::backend::spillplacement;
-use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
+use crate::model::ir::{Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::support::hash::{HashMap, HashSet, IndexMap};
 
@@ -177,6 +187,9 @@ struct LiveBundle {
 
 struct Fps<'a> {
     floating: &'a HashSet<u32>,
+    /// The pool cells `fldz` and `fld1` stand for: a memory operand read from
+    /// one that has to be loaded is loaded by the constant's own instruction.
+    constants: &'a HashMap<i64, &'static str>,
     /// `Stack[]`, top first: `values[i]` is in `st(i)`.
     values: Vec<u32>,
     depth: usize,
@@ -197,6 +210,9 @@ struct Fps<'a> {
     /// DEVIATE 9: per operation (add, mul, div), whether the target prices
     /// `fxch` and the memory form above `fld` and the register form.
     unfold: [bool; 3],
+    /// DEVIATE 10: per operation, whether the target prices the copy (`fld
+    /// st(i)`) and the memory form above `fld` and the register form.
+    unfold_copy: [bool; 3],
     /// The order (`st(0)` first) the block's exit bundle is already fixed to.
     exit_order: Option<Vec<u32>>,
 }
@@ -553,7 +569,9 @@ impl Fps<'_> {
             && !results.is_empty()
         {
             let Loc::Held(kept) = what.sources[0] else { unreachable!("checked above") };
-            if self.unfold_memory_form(step, kept.value, &what, results[0])? {
+            if self.unfold_memory_form(step, kept.value, &what, results[0])?
+                || self.unfold_copy_form(step, kept.value, &what, results[0])?
+            {
                 return Ok(());
             }
             let sources = std::iter::once(st(0)).chain(what.sources[1..].iter().cloned()).collect();
@@ -676,6 +694,32 @@ impl Fps<'_> {
         Ok(())
     }
 
+    /// `fld [m]` for the cell of a memory operand made a load again; `fldz` or
+    /// `fld1` where the cell is a pool constant (FF2 put it there: 4 clocks
+    /// and 2 bytes against a load's 5 and 6).
+    fn load_cell(
+        &mut self,
+        cell: &Loc,
+        memory: &Mem,
+        what: &Semantics,
+    ) {
+        let constant = memory
+            .addr
+            .filter(|addr| addr.space == Space::Segment && memory.base.is_none() && memory.index.is_none())
+            .and_then(|addr| self.constants.get(&addr.index));
+        let (name, sources) = match constant {
+            Some(name) => (*name, Vec::new()),
+            None => ("fld", vec![cell.clone()]),
+        };
+        self.emit(Semantics {
+            op: Operation::FloatLoad,
+            name: Some(name.into()),
+            dests: vec![st(0)],
+            sources,
+            ..what.clone()
+        });
+    }
+
     /// DEVIATE 9 (exit 2026-11-20): `fadd [m]` reads and writes `st(0)`, so a
     /// dying operand below the top costs an `fxch` to bring it up, and often a
     /// second to put the next value back (`t += (float)v` in a loop with two
@@ -708,13 +752,7 @@ impl Fps<'_> {
             return Ok(false);
         }
         let scratch = self.take_fresh();
-        self.emit(Semantics {
-            op: Operation::FloatLoad,
-            name: Some("fld".into()),
-            dests: vec![st(0)],
-            sources: vec![cell.clone()],
-            ..what.clone()
-        });
+        self.load_cell(cell, memory, what);
         self.push(scratch)?;
         // The operand is one slot lower now; the result replaces it.
         let other = slot + 1;
@@ -722,6 +760,43 @@ impl Fps<'_> {
         self.insert(semantics(Operation::FloatArith, &name, vec![st(other)], vec![st(other), st(0)]));
         self.pop_stack_after();
         self.values[slot] = result;
+        Ok(true)
+    }
+
+    /// DEVIATE 10: the memory form on a copy of an operand that stays is `fld
+    /// [m]` and the register form reading the operand where it lies: `fsub
+    /// [m]` (operand - cell) is `fld [m]; fsubr st, st(i)`. True when it
+    /// emitted the instruction.
+    fn unfold_copy_form(
+        &mut self,
+        step: &Step,
+        kept: u32,
+        what: &Semantics,
+        result: u32,
+    ) -> Result<bool, Raised> {
+        let [_, cell @ Loc::Mem(memory)] = what.sources.as_slice() else { return Ok(false) };
+        let (class, name) = match what.name.as_deref() {
+            Some("fadd") => (0, "fadd"),
+            Some("fsub") => (0, "fsubr"),
+            Some("fsubr") => (0, "fsub"),
+            Some("fmul") => (1, "fmul"),
+            Some("fdiv") => (2, "fdivr"),
+            Some("fdivr") => (2, "fdiv"),
+            _ => return Ok(false),
+        };
+        if !self.unfold_copy[class]
+            || !matches!(memory.width, 4 | 8)
+            || step.kills(kept)
+            || self.values.len() >= self.depth
+        {
+            return Ok(false);
+        }
+        let slot = self.slot(kept)?;
+        self.load_cell(cell, memory, what);
+        self.push(result)?;
+        // The operand is one slot lower now; the cell is on top, the result's
+        // place.
+        self.insert(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(slot + 1)]));
         Ok(true)
     }
 
@@ -1224,13 +1299,209 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
 }
 
 /// The whole function in stack form.
+///
+/// DEVIATE 11 (owner x87, exit 2026-11-27): the order of the independent float
+/// chains of a loop block is the instruction selector's, and the stack pays
+/// for it: `acc += x; x = x * 0.5 + 1` is `fadd st(1), st(0); fmul; fld1;
+/// faddp`, while the chains the other way round copy `x` and exchange twice
+/// (recfloat -O2 m32: 9 instructions a trip against 8, 2 `fxch` against 1;
+/// gcc orders them the first way). Each loop block of two or three chains is
+/// converted in every order of its chains and kept in the order that emits
+/// fewest instructions, weighted by loop depth. Chains are the instructions
+/// that share a value one of them writes; a block that writes memory, calls,
+/// or has a float instruction with an address or integer operand is left as
+/// it is.
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
     cpu: Option<&Profile>,
 ) -> Result<LirBody, Raised> {
+    converted_with(body, classes, cpu, &HashMap::default())
+}
+
+/// [`converted`], knowing which pool cells hold +0.0 and +1.0.
+pub(super) fn converted_with(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    cpu: Option<&Profile>,
+    constants: &HashMap<i64, &'static str>,
+) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
+    let mut best = converted_valued(body, classes, cpu, constants)?;
+    let floating = floatassign::_floating_values(body);
+    if floating.is_empty() {
+        return Ok(best);
+    }
+    let weight = loop_weights(body);
+    let mut current = body.clone();
+    let mut score = weighted_len(&best, &weight);
+    let mut tried = 0;
+    for (index, block) in body.blocks.iter().enumerate() {
+        if weight.get(&block.at).is_none_or(|&w| w < 8) {
+            continue;
+        }
+        for insns in chain_orders(block, &floating, body.regs()) {
+            tried += 1;
+            if tried > MAX_CHAIN_TRIALS {
+                return Ok(best);
+            }
+            let mut blocks: Vec<Block> = current.blocks.iter().cloned().collect();
+            blocks[index] = block.with_insns(insns);
+            let candidate = current.with_blocks(blocks);
+            let Ok(done) = converted_valued(&candidate, classes, cpu, constants) else { continue };
+            let length = weighted_len(&done, &weight);
+            if length < score {
+                score = length;
+                best = done;
+                current = candidate;
+            }
+        }
+    }
+    Ok(best)
+}
+
+/// Most orders `converted` converts a function in.
+const MAX_CHAIN_TRIALS: usize = 12;
+
+/// How many times each block runs relative to the function: 8 for every loop
+/// around it.
+fn loop_weights(body: &LirBody) -> HashMap<i64, i64> {
+    let mut weight = HashMap::<i64, i64>::default();
+    for one in crate::analysis::loops::loops(&body.blocks, Some(body.entry)) {
+        for at in &one.body {
+            *weight.entry(*at).or_insert(1) *= 8;
+        }
+    }
+    weight
+}
+
+fn weighted_len(
+    body: &LirBody,
+    weight: &HashMap<i64, i64>,
+) -> i64 {
+    body.blocks.iter().map(|block| block.insns.len() as i64 * weight.get(&block.at).copied().unwrap_or(1)).sum()
+}
+
+/// The instructions of `block` with its float chains in each other order (the
+/// order they have not included). Empty where the block is not one this may
+/// reorder.
+fn chain_orders(
+    block: &Block,
+    floating: &HashSet<u32>,
+    regs: Regs,
+) -> Vec<Vec<Arc<Insn>>> {
+    let cut = floatalloc::_terminators(block);
+    // The copies at the end are the phi moves; they read the chains' results.
+    let mut tail = cut;
+    while tail > 0 && floatalloc::_float_copy(&block.insns[tail - 1]).is_some() {
+        tail -= 1;
+    }
+    let mut positions: Vec<usize> = Vec::new();
+    for at in 0..tail {
+        let one = &block.insns[at];
+        let Some(what) = &one.what else { return Vec::new() };
+        if one.volatile
+            || one.call.is_some()
+            || one.group.is_some()
+            || clears_stack(regs, one)
+            || what.dests.iter().any(|arg| matches!(arg, Loc::Mem(_)))
+        {
+            return Vec::new();
+        }
+        let float =
+            what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Held(held) if held.width == 10));
+        if !float {
+            continue;
+        }
+        let operands_ok =
+            what.sources.iter().chain(&what.dests).all(|arg| {
+                matches!(arg, Loc::Held(held) if held.width == 10) || matches!(arg, Loc::Mem(_) | Loc::Imm(_))
+            });
+        if !operands_ok || one.uses.iter().chain(&one.defines).any(|value| !floating.contains(value)) {
+            return Vec::new();
+        }
+        positions.push(at);
+    }
+    // Instructions that share a value one of them writes are one chain.
+    let mut parent: Vec<usize> = (0..positions.len()).collect();
+    fn root(
+        parent: &mut [usize],
+        mut at: usize,
+    ) -> usize {
+        while parent[at] != at {
+            parent[at] = parent[parent[at]];
+            at = parent[at];
+        }
+        at
+    }
+    let written: HashSet<u32> = positions.iter().flat_map(|&at| block.insns[at].defines.iter().copied()).collect();
+    let mut first_touch: HashMap<u32, usize> = HashMap::default();
+    for (index, &at) in positions.iter().enumerate() {
+        let one = &block.insns[at];
+        for value in one.uses.iter().chain(&one.defines).filter(|value| written.contains(*value)) {
+            match first_touch.get(value) {
+                Some(&other) => {
+                    let (a, b) = (root(&mut parent, index), root(&mut parent, other));
+                    parent[a.max(b)] = a.min(b);
+                }
+                None => {
+                    first_touch.insert(*value, index);
+                }
+            }
+        }
+    }
+    let mut chains: Vec<Vec<usize>> = Vec::new();
+    let mut of_root: HashMap<usize, usize> = HashMap::default();
+    for index in 0..positions.len() {
+        let at = root(&mut parent, index);
+        let chain = *of_root
+            .entry(at)
+            .or_insert_with(
+                || {
+                    chains.push(Vec::new());
+                    chains.len() - 1
+                },
+            );
+        chains[chain].push(positions[index]);
+    }
+    if !(2..=3).contains(&chains.len()) {
+        return Vec::new();
+    }
+    let mut orders: Vec<Vec<usize>> = vec![Vec::new()];
+    for _ in 0..chains.len() {
+        let mut longer = Vec::new();
+        for order in &orders {
+            for chain in 0..chains.len() {
+                if !order.contains(&chain) {
+                    let mut next = order.clone();
+                    next.push(chain);
+                    longer.push(next);
+                }
+            }
+        }
+        orders = longer;
+    }
+    orders
+        .into_iter()
+        .filter(|order| order.iter().enumerate().any(|(slot, &chain)| slot != chain))
+        .map(|order| {
+            let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
+            let moved = order.iter().flat_map(|&chain| chains[chain].iter().copied());
+            for (slot, from) in positions.iter().zip(moved) {
+                insns[*slot] = Arc::clone(&block.insns[from]);
+            }
+            insns
+        })
+        .collect()
+}
+
+fn converted_valued(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    cpu: Option<&Profile>,
+    constants: &HashMap<i64, &'static str>,
+) -> Result<LirBody, Raised> {
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
@@ -1297,6 +1568,7 @@ pub(super) fn converted(
             .map_or(0, |most| most + 1);
     let mut fps = Fps {
         floating: &floating,
+        constants,
         values: Vec::new(),
         depth: body.float_stack,
         out: Vec::new(),
@@ -1307,6 +1579,18 @@ pub(super) fn converted(
         next: None,
         swallowed: BTreeSet::new(),
         exit_order: None,
+        unfold_copy: ["add", "mul", "div"].map(|class| {
+            let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
+            match (
+                price("x87_copy".into()),
+                price("x87_load".into()),
+                price(format!("x87_{class}")),
+                price(format!("x87_{class}_m")),
+            ) {
+                (Some(copy), Some(load), Some(register), Some(memory)) => copy + memory > load + register,
+                _ => false,
+            }
+        }),
         unfold: ["add", "mul", "div"].map(|class| {
             let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
             match (

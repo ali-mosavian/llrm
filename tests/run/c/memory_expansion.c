@@ -1,3 +1,4 @@
+// flags-m68k: -mcmodel=medium
 /* The builtins, not the library names: the SDK header turns those into `__memcpy_chk` calls, which the
    selector never sees as an intrinsic.
 

@@ -262,7 +262,8 @@ fn only_loaded(
 ) -> bool {
     let context = &module.context;
     match op.opcode {
-        Opcode::Load { .. } => index == 0,
+        // A volatile load is `analyzeGlobal`'s give-up (GlobalStatus.cpp#L95).
+        Opcode::Load { volatile, .. } => index == 0 && !volatile,
         Opcode::Call(_) => {
             use llrm_mir::intrinsics::Intrinsic;
             let volatile = match op.operands.get(3) {

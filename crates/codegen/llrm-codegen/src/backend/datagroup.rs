@@ -68,7 +68,7 @@ pub fn names_data_segment(
     body: &LirBody,
     segments: &Segments,
 ) -> bool {
-    let data = segments.data;
+    let Some(data) = segments.data else { return false };
     body.blocks
         .iter()
         .flat_map(|block| &block.insns)
@@ -92,7 +92,9 @@ pub fn restored(
     segments: &Segments,
 ) -> LirBody {
     let regs = body.regs();
-    let data = segments.data;
+    let Some(data) = segments.data else {
+        return body.clone();
+    };
     let Some(through) = segments.through else {
         return body.clone();
     };

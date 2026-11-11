@@ -258,7 +258,8 @@ fn the_x86_addressing_modes_are_those_of_the_lowering() {
 #[test]
 fn a_symbol_in_long_mode_takes_neither_a_displacement_nor_an_index() {
     let x64 = X86::of_cpu("x86-64").unwrap();
-    assert!(x64.is_legal_addressing_mode(true, 0, false, 0) && x64.is_legal_addressing_mode(true, 0, false, 1));
+    // DEVIATE PIE64: `@sym + reg` is refused, where the pin accepts a scale of 1.
+    assert!(x64.is_legal_addressing_mode(true, 0, false, 0) && !x64.is_legal_addressing_mode(true, 0, false, 1));
     assert!(!x64.is_legal_addressing_mode(true, 8, false, 1) && !x64.is_legal_addressing_mode(true, 0, false, 4));
     assert!(x64.is_legal_addressing_mode(false, 8, true, 4));
     assert_eq!(x64.number_of_gpr_registers(), 16);
@@ -341,6 +342,30 @@ fn real_mode_drops_an_lsr_solution_the_model_rates_worse_and_flat_code_keeps_it(
     assert!(!X86::of_cpu("i486").unwrap().should_drop_lsr_solution_if_less_profitable());
 }
 
+/// rcflip's RAMP loop kept the `2 * x` address and a `lea` (4 instructions
+/// per trip) where the other order of `Solve` finds 2: real mode searches both
+/// orders, flat code keeps the pin's one (DEVIATE LU14).
+#[test]
+fn real_mode_solves_lsr_in_both_use_orders_and_flat_code_in_one() {
+    let real = crate::tti::RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real.clone()).lsr_solves_both_use_orders());
+    assert!(!X86::of_cpu("i486").unwrap().lsr_solves_both_use_orders());
+    // CIV1: the narrowest integer phi, in real mode only
+    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).congruent_ivs_truncate_to_narrowest_integer());
+    assert!(!X86::of_cpu("i486").unwrap().congruent_ivs_truncate_to_narrowest_integer());
+}
+
 #[test]
 fn a_triple_picks_the_baseline_cpu_of_its_architecture() {
     assert!(X86::of_triple("x86_64-unknown-linux-gnu").unwrap().native() == 64);
@@ -357,8 +382,32 @@ fn the_tti_states_a_divide_remainder_op_on_every_register_type() {
     for bits in [8, 16, 32] {
         assert!(tti.has_div_rem_op(bits, true) && tti.has_div_rem_op(bits, false), "i{bits}");
     }
-    assert!(!tti.has_div_rem_op(64, true), "no i64 register on a 32-bit target");
+    assert!(tti.has_div_rem_op(64, true), "DR1: the inline i64 routine returns both");
     assert!(!tti.has_div_rem_op(24, false));
+}
+
+/// DIVREM-HELPER is the flat 32-bit mode's alone: 16-bit code states no `i64`
+/// divide-remainder op (the pin's x86 has none), so `DivRemPairs` writes its
+/// remainders as `x - x / y * y` as before; long mode already had one (a
+/// register type).
+#[test]
+fn only_flat_32_bit_code_has_an_i64_divide_remainder_op() {
+    let flat = X86::of_cpu("i486").unwrap();
+    let real = crate::tti::RealMode {
+        scale_costs: vec![(1, 0)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    assert!(flat.has_div_rem_op(64, false) && flat.has_div_rem_op(64, true));
+    assert!(!flat.in_real_mode(real).has_div_rem_op(64, false), "16-bit code");
+    assert!(X86::of_cpu("x86-64").unwrap().has_div_rem_op(64, false), "long mode: i64 is a register type, as before");
 }
 
 /// The loop unroll counts float values against the x87 stack only where the
@@ -418,4 +467,33 @@ fn test_partial_and_runtime_unrolling_follow_the_cpu_models_loop_buffer() {
         X86::of_cpu(cpu).unwrap().get_unrolling_preferences(false, &mut up);
         assert!(!up.partial && !up.runtime && !up.upper_bound, "{cpu}");
     }
+}
+
+/// crc -O1 m64: ConstantHoisting rebased the mask 0xedb88320 against 0xffffffff
+/// (`lea r, [rcx-0x12477cdf]`) because the pin prices a 64-bit constant of 32
+/// leading zeros at 2 (`isInt<32>` only) though `mov r32, imm32` zero-extends:
+/// 147 B became 162 (gcc 118). With zext_imm_is_basic it costs one.
+#[test]
+fn a_zero_extended_32_bit_constant_costs_one_instruction_where_the_target_says_so() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    let pin = X86::of_cpu("i486").unwrap();
+    assert_eq!(pin.int_imm_cost(0xedb8_8320, 64), Cost::of(2));
+    tuning.zext_imm_is_basic = true;
+    let zimm = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    assert_eq!(zimm.int_imm_cost(0xedb8_8320, 64), Cost::of(1));
+    assert_eq!(zimm.int_imm_cost(0x1_0000_0000, 64), Cost::of(2));
+    assert_eq!(zimm.int_imm_cost(0xedb8_8320, 32), Cost::of(1));
+}
+
+/// ZIMM priced a constant hoisted at `-Os` as one instruction, so
+/// ConstantHoisting kept 21 copies of `mov eax, 0x9E3779B9` (5 B each) where
+/// one register held it (3 B copies): `mul_constants` -Os +30 B.
+#[test]
+fn a_function_built_for_size_keeps_the_pins_cost_for_a_zero_extended_constant() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.zext_imm_is_basic = true;
+    let zimm = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    let cost = |for_size| zimm.int_imm_cost_inst_for_size(ImmUser::Other, 0, 0x9e37_79b9, 64, for_size);
+    assert_eq!(cost(false), Cost::of(1));
+    assert_eq!(cost(true), Cost::of(2));
 }

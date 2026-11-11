@@ -1340,7 +1340,13 @@ impl Run<'_> {
             });
             phis = keys.into_iter().map(|(phi, _)| phi).collect();
         }
-        let Some(&narrowest) = phis.last() else { return 0 };
+        // DEVIATE CIV1 (`Tti::congruent_ivs_truncate_to_narrowest_integer`):
+        // the pin takes the last phi, a pointer phi when the loop steps
+        // one.
+        let narrowest_integer = tti.is_some_and(|tti| tti.congruent_ivs_truncate_to_narrowest_integer());
+        let last =
+            if narrowest_integer { phis.iter().rev().find(|&&phi| width_of(self, phi).is_some()) } else { phis.last() };
+        let Some(&narrowest) = last else { return 0 };
         let narrowest_ty = self.function.value(self.result_phi(narrowest)).ty;
 
         let mut num_elim = 0;

@@ -17,8 +17,11 @@
 //! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers,
 //! or 4/8 bytes of stack.
 //!
-//! DEVIATE SD526: not translated are `f16`/`fp128` and vectors, HFAs, `byval`,
-//! a tail call that needs stack arguments or an
+//! An `f128` takes `q0`..`q7` (`CCIfType<[f128], CCAssignToReg<[Q0..Q7]>>`) or
+//! 16 bytes of stack aligned to 16.
+//!
+//! DEVIATE SD526: not translated are `f16` and vectors, HFAs, a `byval`
+//! argument too large to copy in line, a tail call that needs stack arguments or an
 //! argument area of a different size, and a callee reached through the GOT;
 //! `accepts` refuses what it can see. Exit: B3.
 //!
@@ -29,13 +32,19 @@
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::target_calling::{
-    Ext, FixedObject, In, LiveIn, Out, Site, StackObject, TargetCalling, VaWord, VariadicArea,
+    ByVal, Ext, FixedObject, In, LiveIn, Out, Site, StackObject, TargetCalling, VaWord, VariadicArea,
 };
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_lir::registers::RegId;
 use llrm_sdag::actions::LoadExt;
 
 use crate::reg;
+
+/// The registers a call clobbers that the scheduler's live-register check reads
+/// (`CheckForLiveRegDefMasked`): the condition flags. The AAPCS caller-saved
+/// registers are not listed: nothing but a glued argument copy holds one across
+/// a call. DEVIATE: the pin's mask lists them; owner arm64, exit 2026-11-30.
+const CALL_CLOBBERS: [u16; 1] = [llrm_dagisel::generated::aarch64::ids::reg::NZCV];
 
 /// `AArch64ISD::RET_GLUE`, the pin's number.
 pub const RET_GLUE: u16 = llrm_dagisel::generated::aarch64::ids::isd::RET_GLUE;
@@ -51,6 +60,8 @@ const W: [RegId; 8] = [reg::W0, reg::W1, reg::W2, reg::W3, reg::W4, reg::W5, reg
 
 const S: [RegId; 8] = [reg::S0, reg::S1, reg::S2, reg::S3, reg::S4, reg::S5, reg::S6, reg::S7];
 const D: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
+// the 128-bit root of each `q`
+const Q: [RegId; 8] = [reg::V0, reg::V1, reg::V2, reg::V3, reg::V4, reg::V5, reg::V6, reg::V7];
 
 /// The register part `at` of type `vt` is in.
 fn register(
@@ -61,6 +72,7 @@ fn register(
         EVT::I32 => W[at],
         EVT::Simple(MVT::F32) => S[at],
         EVT::Simple(MVT::F64) => D[at],
+        EVT::Simple(MVT::F128) => Q[at],
         _ => X[at],
     }
 }
@@ -79,8 +91,8 @@ enum Location {
 /// A part to place: its register type, the type of the whole value, whether the
 /// value was split, whether it is a variadic argument and whether it is the
 /// `sret` pointer (`x8`) (`CC_AArch64_DarwinPCS_VarArg`: everything on the
-/// stack, in 8-byte slots).
-type Part = (EVT, EVT, bool, bool, bool);
+/// stack, in 8-byte slots), and the bytes of a `byval` one.
+type Part = (EVT, EVT, bool, bool, bool, Option<ByVal>);
 
 /// The location of each part, and the bytes of stack they take.
 ///
@@ -94,11 +106,20 @@ fn place(
     let (mut next, mut next_float, mut stack) = (0, 0, 0u64);
     let locations = parts
         .iter()
-        .map(|&(vt, arg_vt, split, variadic, sret)| {
+        .map(|&(vt, arg_vt, split, variadic, sret, byval)| {
             let variadic = variadic && !linux;
             // `CCIfSRet<CCAssignToReg<[X8]>>`: no argument register is taken.
             if sret {
                 return Location::Register(reg::X8);
+            }
+            // `CCIfByVal<CCPassByVal<8, 8>>`, `CCState::HandleByVal`: the bytes are in the stack area, at least 8 of
+            // them, aligned to at least 8.
+            if let Some(byval) = byval {
+                let align = u64::from(byval.align).max(8);
+                let bytes = u64::from(byval.size).max(8).next_multiple_of(8);
+                let offset = stack.next_multiple_of(align);
+                stack = offset + bytes;
+                return Location::Stack { offset: offset as i64, bytes: bytes as u32 };
             }
             if variadic {
                 let align = if split { 16 } else { 8 };
@@ -113,8 +134,11 @@ fn place(
                 }
                 let bytes = vt.size_in_bits() / 8;
                 if linux {
-                    let offset = stack.next_multiple_of(8);
-                    stack = offset + 8;
+                    // an `f128` is 16 bytes aligned to 16 (`CCIfType<[f128],
+                    // CCAssignToStack<16, 16>>`)
+                    let (align, slot) = if bytes == 16 { (16, 16) } else { (8, 8) };
+                    let offset = stack.next_multiple_of(align);
+                    stack = offset + slot;
                     return Location::Stack { offset: offset as i64, bytes };
                 }
                 let offset = stack.next_multiple_of(u64::from(bytes));
@@ -200,7 +224,7 @@ impl Aarch64Calling {
         size: SDValue,
     ) -> Option<SDValue> {
         let total = u64::try_from(dag.constant(size)?).ok()?;
-        if total == 0 || crate::isel::memops::pieces(total).len() > crate::isel::memops::COPY_OPS {
+        if total == 0 || crate::dag::memops::pieces(total).len() > crate::dag::memops::COPY_OPS {
             return None;
         }
         // A target constant stays a constant through selection.
@@ -233,7 +257,7 @@ impl TargetCalling for Aarch64Calling {
         stack: StackObject,
         live_in: LiveIn,
     ) -> Option<VariadicArea> {
-        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
+        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret, i.byval)).collect();
         let (locations, named) = place(&parts, self.linux);
         let first = fixed(8, named.next_multiple_of(8) as i64, true);
         let stack_word = VaWord::Frame { index: first, offset: 0 };
@@ -244,7 +268,7 @@ impl TargetCalling for Aarch64Calling {
             locations.iter().filter(|l| matches!(l, Location::Register(r) if registers.contains(r))).count() as u32
         };
         let gprs = used(&X) + used(&W);
-        let fprs = used(&S) + used(&D);
+        let fprs = used(&S) + used(&D) + used(&Q);
         let (gr_size, vr_size) = (8 * (8 - gprs), 16 * (8 - fprs));
         let mut chain = chain;
         let mut gr_top = VaWord::Constant(0);
@@ -328,11 +352,11 @@ impl TargetCalling for Aarch64Calling {
             if total < 16 {
                 return None;
             }
-            crate::isel::memops::wide_pieces(total)
+            crate::dag::memops::wide_pieces(total)
         } else {
-            crate::isel::memops::pieces(total)
+            crate::dag::memops::pieces(total)
         };
-        if total == 0 || ops.len() > crate::isel::memops::FILL_OPS {
+        if total == 0 || ops.len() > crate::dag::memops::FILL_OPS {
             return None;
         }
         let value = match constant {
@@ -344,12 +368,23 @@ impl TargetCalling for Aarch64Calling {
     }
 
     /// An `sret` pointer is an ordinary pointer to the builder; `x8` carries
-    /// it.
+    /// it. A `byval` one is the address of the bytes the hook copies into the argument area.
     fn passes_in_place(
         &self,
         attribute: &str,
     ) -> bool {
-        attribute == "sret"
+        attribute == "sret" || attribute == "byval"
+    }
+
+    fn byval_in_area(&self) -> bool {
+        true
+    }
+
+    /// `isEligibleForTailCallOptimization`: a caller's `byval` parameter is a pointer into the area a tail call would
+    /// reuse.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L10175>
+    fn byval_parameter_blocks_tail_call(&self) -> bool {
+        true
     }
 
     fn accepts(
@@ -359,19 +394,32 @@ impl TargetCalling for Aarch64Calling {
         outs: &[Out],
         ins: &[In],
     ) -> Result<(), &'static str> {
-        let integer = |vt: EVT| matches!(vt, EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64));
+        let integer = |vt: EVT| matches!(
+            vt,
+            EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64 | MVT::F128)
+        );
         let known = |arg_vt: EVT, split: bool| {
             if split {
                 arg_vt == EVT::integer(128)
             } else {
-                arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point())
+                (arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point()))
+                    || arg_vt == EVT::Simple(MVT::F128)
             }
         };
         let outs: Vec<Part> =
-            outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic, o.sret)).collect();
-        let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
+            outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic, o.sret, o.byval)).collect();
+        let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret, i.byval)).collect();
         if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split, ..)| integer(vt) && known(arg_vt, split)) {
             return Err("an arm64 argument or result that is no integer or float");
+        }
+        // `getMemcpy` of a `byval` argument expands in line only up to a bound; a larger one is a libcall in the call
+        // sequence, which the hook does not make (DEVIATE SD526).
+        if outs.iter().any(|&(.., byval)| {
+            byval.is_some_and(|byval| {
+                byval.size == 0 || crate::dag::memops::pieces(u64::from(byval.size)).len() > crate::dag::memops::COPY_OPS
+            })
+        }) {
+            return Err("an arm64 byval argument too large to copy in line");
         }
         // A result is in registers.
         let (outs_in_registers, ins_in_registers) =
@@ -398,7 +446,7 @@ impl TargetCalling for Aarch64Calling {
         let parts: Vec<Part> = outs
             .iter()
             .zip(&values)
-            .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret))
+            .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret, o.byval))
             .collect();
         let (locations, _) = place(&parts, self.linux);
         let mut chain = chain;
@@ -429,7 +477,7 @@ impl TargetCalling for Aarch64Calling {
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
         }
-        operands.push(dag.get_register_mask());
+        operands.push(dag.get_register_mask_clobbering(&CALL_CLOBBERS));
         operands.extend(glue);
         Some(dag.get_node_multi(ISD::Target(TC_RETURN), &[EVT::OTHER, EVT::GLUE], &operands))
     }
@@ -454,13 +502,13 @@ impl TargetCalling for Aarch64Calling {
         let parts: Vec<Part> = outs
             .iter()
             .zip(&values)
-            .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret))
+            .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret, o.byval))
             .collect();
         let (locations, stack) = place(&parts, self.linux);
         let bytes = stack.next_multiple_of(16);
         let mut chain = dag.get_callseq_start(chain, bytes);
         let (mut stores, mut registers, mut stack_pointer) = (Vec::new(), Vec::new(), None);
-        for (value, location) in values.iter().copied().zip(&locations) {
+        for (index, (value, location)) in values.iter().copied().zip(&locations).enumerate() {
             match *location {
                 Location::Register(register) => registers.push((register, value)),
                 Location::Stack { offset, bytes } => {
@@ -469,6 +517,14 @@ impl TargetCalling for Aarch64Calling {
                         .get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, reg::SP, EVT::I64));
                     let at = dag.get_constant(offset as u128, EVT::I64);
                     let address = dag.get_node(ISD::Add, EVT::I64, &[sp, at]);
+                    // a `byval` argument: its bytes are copied there (`getMemcpy`)
+                    if let Some(byval) = outs[index].byval {
+                        let size = dag.get_constant(u128::from(byval.size), EVT::I64);
+                        let copy = Self::block_copy(dag, MEMCPY_Q, chain, address, value, size)
+                            .expect("`accepts` kept the copies that expand in line");
+                        stores.push(copy);
+                        continue;
+                    }
                     let info = MemInfo {
                         mem_vt: if dag.value_type(value).is_floating_point() {
                             dag.value_type(value)
@@ -514,7 +570,7 @@ impl TargetCalling for Aarch64Calling {
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
         }
-        operands.push(dag.get_register_mask());
+        operands.push(dag.get_register_mask_clobbering(&CALL_CLOBBERS));
         operands.extend(glue);
         let call = dag.get_node_multi(ISD::Target(CALL), &[EVT::OTHER, EVT::GLUE], &operands);
         let end =
@@ -543,7 +599,7 @@ impl TargetCalling for Aarch64Calling {
         fixed: FixedObject,
         live_in: LiveIn,
     ) -> Vec<SDValue> {
-        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
+        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret, i.byval)).collect();
         let (locations, _) = place(&parts, self.linux);
         ins.iter()
             .zip(locations)
@@ -551,6 +607,12 @@ impl TargetCalling for Aarch64Calling {
                 Location::Register(register) => {
                     let vreg = live_in(register);
                     dag.get_copy_from_reg(chain, vreg, part.vt)
+                }
+                Location::Stack { offset, bytes } if part.byval.is_some() => {
+                    // `LowerFormalArguments`: a `byval` parameter is the address of its fixed object, written to
+                    // (not immutable)
+                    let index = fixed(bytes, offset, false);
+                    dag.get_frame_index(EVT::I64, index)
                 }
                 Location::Stack { offset, bytes } => {
                     // `LowerFormalArguments`: a load from the fixed object,

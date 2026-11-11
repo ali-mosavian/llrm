@@ -106,7 +106,7 @@ fn _flat(body: &LirBody) -> Vec<String> {
             let Some(what) = &one.what else { continue };
             for place in what.dests.iter().chain(&what.sources) {
                 let named = match place {
-                    Loc::Reg(reg) if llrm_x86::registers::SEGMENTS.contains(&reg.register) => {
+                    Loc::Reg(reg) if body.registers.is_some_and(|regs| regs.is_segment(reg.register)) => {
                         Some(format!("the segment register {:?}", reg.register))
                     }
                     Loc::Mem(cell) if cell.selector.is_some() => Some("a cell with a selector".to_owned()),

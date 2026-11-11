@@ -28,7 +28,6 @@ entry_convention = "cdecl32"
 # What the front end records of a function it passes in its default registers (its own list, which differs by tree).
 default_registers = "[f0000ff:0]"
 # The header it includes first, from the repository root.
-header = "crates/frontends/llrm-c/src/flat.h"
 
 # Per ABI (calling.toml's `[abi.*]`): the switches Open Watcom's front end is asked with, the convention a function it records as
 # cdecl has, and one it records in its default registers. `-ecc` makes every function cdecl, as gcc's i386 default is.

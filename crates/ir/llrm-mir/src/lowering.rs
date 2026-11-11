@@ -96,8 +96,31 @@ pub fn simple_int(bits: u32) -> bool {
     matches!(bits, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
 }
 
+/// A step of CodeGenPrepare that asks the target's `TargetLowering`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CgpStep {
+    Branches,
+    SwitchType,
+    OverflowMath,
+    Compares,
+    MaskSinking,
+    CastSinking,
+    ExtPromotion,
+    SplitStores,
+}
+
 /// `TargetLowering`'s hooks. Each default is the base class's.
 pub trait Lowering {
+    /// Whether `step` runs on this target. The pin runs every step; a target
+    /// that answers no is a staged enablement (a DEVIATE at its `impl`).
+    fn runs_cgp_step(
+        &self,
+        step: CgpStep,
+    ) -> bool {
+        let _ = step;
+        true
+    }
+
     /// `isTypeLegal(EVT(iN))`: a register type of the target. The base class
     /// has none.
     fn is_type_legal(

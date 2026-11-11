@@ -6,7 +6,10 @@ Env: BLOCKS=1 profiles per label instead of per function; ANNOTATE=name prints t
 Prints per op the top functions by exclusive cycles per record, and the opcode-class histogram."""
 import glob, os, re, subprocess, sys
 import profile6502 as P
-LIBS = [os.path.basename(os.path.dirname(x)) + '_' + os.path.basename(x)[:-2] for x in sorted(glob.glob('lib/fp/f64/*.c')) + ['lib/int/int64.c']]
+here = os.path.dirname(os.path.abspath(__file__))
+# The bench's member list and link order (fp_sources.sh); only the members the operation reaches are in d/r (sim65_reach.py prunes the rest).
+_srcs = subprocess.check_output([f'{here}/../fp_sources.sh', 'f64'], text=True).split() + subprocess.check_output([f'{here}/../fp_sources.sh', 'int64'], text=True).split()
+LIBS = [os.path.basename(os.path.dirname(x)) + '_' + os.path.basename(x)[:-2] for x in _srcs] + ['int_clzsi2']
 
 DIR = sys.argv[1] if len(sys.argv) > 1 else '.'; N = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 OPS = sys.argv[3].split() if len(sys.argv) > 3 else ['add', 'sub', 'mul', 'div']
@@ -21,8 +24,14 @@ def sh(*a):
 def relink_with_debug(d):
     """The bench's link again with ca65 -g and --dbgfile (names of the unexported labels); the image must not change."""
     objs = []
-    for src in [f'{d}/full.s'] + [f'{d}/r/{OPT}_{f}.s' for f in LIBS] + [f'{DIR}/mos.s']:
+    libs = [f'{d}/r/{OPT}_{f}.s' for f in LIBS if os.path.exists(f'{d}/r/{OPT}_{f}.s')]
+    for src in [f'{d}/full.s'] + libs:
         o = f'{d}/g_{os.path.basename(src)[:-2]}.o'; sh('ca65', '-g', '-t', 'sim6502', '-U', src, '-o', o); objs.append(o)
+    libtext = ''.join(open(x).read() for x in libs)
+    for a in os.environ.get('SF_ASM', f'{here}/../../config/6502/mul32x32.s').split():  # the bench's extra hand-written sources, linked only if the library calls them
+        if not any(re.search(r'\b%s\b' % re.escape(n), libtext) for n in re.findall(r'^\s*\.(?:export|globl)\s+(\w+)', open(a).read(), re.M)): continue
+        o = f'{d}/g_{os.path.basename(a)}.o'; sh('ca65', '-g', '-t', 'sim6502', '-I', f'{here}/../../config/6502', a, '-o', o); objs.append(o)
+    o = f'{d}/g_mos.o'; sh('ca65', '-g', '-t', 'sim6502', '-U', f'{DIR}/mos.s', '-o', o); objs.append(o)
     sh('cl65', '-t', 'sim6502', '-o', f'{d}/g.bin', '-Ln', f'{d}/g.lbl', '-Wl', f'--dbgfile,{d}/g.dbg', *objs)
     assert open(f'{d}/g.bin', 'rb').read() == open(f'{d}/r.bin', 'rb').read(), 'the -g link differs from the bench image'
 

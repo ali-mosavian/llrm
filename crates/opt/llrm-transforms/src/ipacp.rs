@@ -111,6 +111,7 @@ use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, consts};
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::Function;
 use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, Module, Operand};
@@ -155,6 +156,10 @@ pub struct Cloning {
     contexts: BTreeMap<Key, GlobalId>,
     grown: i64,
 }
+
+/// The clones made so far, shared by the cloning before the walk and the one
+/// after it: a function gets at most `MAX_CLONES` between them.
+pub type Shared = std::rc::Rc<std::cell::RefCell<Cloning>>;
 
 /// One kind of call: a callee and the constants it is called with.
 type Key = (GlobalId, Vec<Option<ConstantId>>);
@@ -242,7 +247,14 @@ pub fn cloned(
             continue;
         }
         let origin = state.origin.get(&name).copied().unwrap_or(name);
-        if let Some(&existing) = state.contexts.get(&(origin, known.clone())) {
+        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a call sent
+        // there never returns, and the context gets a new clone.
+        let existing = state
+            .contexts
+            .get(&(origin, known.clone()))
+            .copied()
+            .filter(|&clone| module.global(clone).function().is_some_and(|body| !body.is_deleted()));
+        if let Some(existing) = existing {
             if existing == name {
                 // A call of the clone, which still passes the constants it was
                 // made for.
@@ -431,14 +443,14 @@ fn time_saved(
     // block's branch can go there; a phi is the meet of its reached edges. A
     // loop whose first test is decided never runs.
     let mut folded = BTreeSet::new();
-    let mut reached = BTreeSet::new();
+    let mut reached = IdSet::new();
     let mut edges: BTreeSet<(llrm_mir::module::BlockId, llrm_mir::module::BlockId)> = BTreeSet::new();
-    let mut varying: BTreeSet<llrm_mir::module::ValueId> = BTreeSet::new();
+    let mut varying: IdSet<llrm_mir::module::ValueId> = IdSet::new();
     reached.extend(body.entry());
     // Whether `operand` is a value of the body no block has made yet.
     let unseen = |operand: &Operand,
                   values: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
-                  varying: &BTreeSet<llrm_mir::module::ValueId>| {
+                  varying: &IdSet<llrm_mir::module::ValueId>| {
         matches!(
             operand,
             Operand::Value(v) if !values.contains_key(v) && !varying.contains(v) && matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(made) if consts::_defined(&unit, made) == Some(*v))
@@ -599,10 +611,10 @@ fn time_saved(
 fn constant_addresses(
     body: &Function,
     known: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
-    reached: &BTreeSet<llrm_mir::module::BlockId>,
-) -> BTreeSet<InstId> {
-    let mut found = BTreeSet::new();
-    let mut values = BTreeSet::new();
+    reached: &IdSet<llrm_mir::module::BlockId>,
+) -> IdSet<InstId> {
+    let mut found = IdSet::new();
+    let mut values = IdSet::new();
     loop {
         let before = found.len();
         for &block in body.layout() {

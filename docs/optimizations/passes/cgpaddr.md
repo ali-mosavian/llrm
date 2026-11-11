@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpaddr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:a96d4b8499e52f83b9b191fa6f30a173d07be99dce396f2bd8f963598313ce52 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:5d09df6c6b24a717f89f294d35213ce86abd00a68764666d492bc50c3fd703ad -->
 
 # cgpaddr
 
@@ -40,6 +40,9 @@ reads it; this is how a closing phi left by `lcssa` goes. Each phi is
 visited once, and the phis that read it are queued again.
 
 A phi whose arms differ in kind stays.
+
+(C1 is not what left leas in m64 quicksort -O3: that was the missing
+base-as-register retry in `matched_over`.)
 
 DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 rebuilds an address expression in the block that uses it, and by the select

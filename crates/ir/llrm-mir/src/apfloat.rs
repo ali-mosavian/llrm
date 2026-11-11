@@ -287,6 +287,60 @@ fn shift_right(
     lost
 }
 
+/// `a * b` as (high, low) halves: a quad significand is 113 bits, its product
+/// 226.
+fn wide_product(
+    a: u128,
+    b: u128,
+) -> (u128, u128) {
+    const HALF: u32 = 64;
+    let mask = u128::from(u64::MAX);
+    let (a_low, a_high, b_low, b_high) = (a & mask, a >> HALF, b & mask, b >> HALF);
+    let low_low = a_low * b_low;
+    let cross_one = a_low * b_high;
+    let cross_two = a_high * b_low;
+    let high_high = a_high * b_high;
+    // Each partial product is below 2^128; the middle column carries at most
+    // three of their 64-bit pieces.
+    let middle = (low_low >> HALF) + (cross_one & mask) + (cross_two & mask);
+    let low = (low_low & mask) | (middle << HALF);
+    let high = high_high + (cross_one >> HALF) + (cross_two >> HALF) + (middle >> HALF);
+    (high, low)
+}
+
+/// The shift of `wide_product`'s result right by `bits`, which leaves a value
+/// that fits a `u128`, and the fraction lost
+/// (`lost_fraction_through_truncation` over 256 bits).
+fn wide_shift_right(
+    (high, low): (u128, u128),
+    bits: u32,
+) -> (u128, LostFraction) {
+    let lsb = if low != 0 {
+        low.trailing_zeros()
+    } else if high != 0 {
+        128 + high.trailing_zeros()
+    } else {
+        u32::MAX
+    };
+    let bit = |at: u32| -> bool { if at < 128 { (low >> at) & 1 == 1 } else { (high >> (at - 128)) & 1 == 1 } };
+    let lost = if bits <= lsb {
+        LostFraction::ExactlyZero
+    } else if bits == lsb + 1 {
+        LostFraction::ExactlyHalf
+    } else if bits <= 256 && bit(bits - 1) {
+        LostFraction::MoreThanHalf
+    } else {
+        LostFraction::LessThanHalf
+    };
+    let value = match bits {
+        0 => low,
+        1..=127 => (low >> bits) | (high << (128 - bits)),
+        128 => high,
+        _ => high >> (bits - 128),
+    };
+    (value, lost)
+}
+
 /// Combine the effect of two lost fractions.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/APFloat.cpp#L701>
 fn combine_lost_fractions(
@@ -1419,10 +1473,10 @@ impl ApFloat {
     ) -> LostFraction {
         let precision = self.sem.precision;
         // Twice as many bits as the original significand.
-        let mut full_significand = self.sig * rhs.sig;
+        let (high, low) = wide_product(self.sig, rhs.sig);
         let mut lost_fraction = LostFraction::ExactlyZero;
         // One, not zero, based MSB.
-        let omsb = msb1(full_significand);
+        let omsb = if high != 0 { 128 + msb1(high) } else { msb1(low) };
         self.exponent += rhs.exponent;
         // The result is c(2p) c(2p-1) . c(2p-2) ... c0 * 2^(e1+e2): move the
         // radix point toward left by two bits, and adjust the exponent.
@@ -1434,9 +1488,11 @@ impl ApFloat {
         // mantissa right by some amount to make sure the MSB reside right
         // before the radix point. The result is not normalized when
         // "omsb < precision"; the caller calls normalize().
+        let mut full_significand = low;
         if omsb > precision {
             let bits = omsb - precision;
-            let lf = shift_right(&mut full_significand, bits);
+            let (value, lf) = wide_shift_right((high, low), bits);
+            full_significand = value;
             lost_fraction = combine_lost_fractions(lf, lost_fraction);
             self.exponent += bits as i32;
         }

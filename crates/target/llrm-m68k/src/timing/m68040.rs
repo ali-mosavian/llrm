@@ -189,6 +189,8 @@ fn mode_label(mode: Mode) -> &'static str {
         Mode::Imm => "#<xxx>",
         Mode::Index => "(d8,An,Xn)",
         Mode::PcIndex => "(d8,PC,Xn)",
+        // full-format forms are not transcribed for the 68040: no row matches
+        Mode::IndexW | Mode::IndexL | Mode::IndexB => "(full-format index)",
     }
 }
 
@@ -252,7 +254,11 @@ fn move_clocks(
 /// The operand whose addressing mode picks the row: the memory one of two, else
 /// the first.
 fn effective(operands: &[Operand]) -> Option<Mode> {
-    let modes: Vec<Mode> = operands.iter().filter_map(mode).collect();
+    // a bare number or symbol is an absolute address in an <ea> position
+    let modes: Vec<Mode> = operands
+        .iter()
+        .filter_map(|operand| if *operand == Operand::Target { Some(Mode::AbsL) } else { mode(operand) })
+        .collect();
     modes
         .iter()
         .copied()

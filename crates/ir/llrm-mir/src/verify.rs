@@ -453,6 +453,36 @@ impl Checker<'_> {
             Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => {
                 self.fail(format!("{at} is ill-typed"))
             }
+            // llvm/lib/IR/Instructions.cpp#L1728 `ExtractElementInst::isValidOperands`
+            Opcode::ExtractElement
+                if !matches!(self.ty(ty(0)), Type::Vector { element, .. } if *element == result)
+                    || !matches!(self.ty(ty(1)), Type::Int(_)) =>
+            {
+                self.fail(format!("{at} is ill-typed"))
+            }
+            // Instructions.cpp#L1750 `InsertElementInst::isValidOperands`
+            Opcode::InsertElement
+                if !matches!(self.ty(ty(0)), Type::Vector { element, .. } if *element == ty(1))
+                    || ty(0) != result
+                    || !matches!(self.ty(ty(2)), Type::Int(_)) =>
+            {
+                self.fail(format!("{at} is ill-typed"))
+            }
+            // Instructions.cpp#L1834 `ShuffleVectorInst::isValidOperands`: both
+            // inputs one vector type, every mask lane poison or below twice the
+            // input's lanes; the result has the mask's lanes.
+            Opcode::ShuffleVector(mask)
+                if !matches!(
+                    (self.ty(ty(0)), self.ty(result)),
+                    (Type::Vector { element: a, count }, Type::Vector { element: b, count: lanes })
+                        if a == b
+                            && ty(0) == ty(1)
+                            && *lanes as usize == mask.len()
+                            && mask.iter().all(|&lane| lane < 0 || (lane as u32) < count * 2)
+                ) =>
+            {
+                self.fail(format!("{at} is ill-typed"))
+            }
             Opcode::Cast(op) => {
                 if let Err(why) = self.cast(*op, ty(0), result) {
                     self.fail(format!("{at}: {why}"));

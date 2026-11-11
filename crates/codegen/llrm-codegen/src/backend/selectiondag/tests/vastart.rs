@@ -8,6 +8,9 @@ fn legalize(dag: &mut SelectionDAG) {
         dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
+            imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
@@ -15,6 +18,7 @@ fn legalize(dag: &mut SelectionDAG) {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )

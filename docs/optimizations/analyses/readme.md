@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 74 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 75 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -74,9 +74,10 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 74 documented, 0 undoc
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
 | runtimecheck | `RuntimePointerChecking`: the bounds a loop's pointers walk, grouped so a few comparisons prove that the writes do not overlap the other accesses. | Named by `accessanalysis`, `laa_testing`, `loopaccessinfo`, `looploadelim`, `loopversioning`, `memdepchecker`, `runtimechecks`. | [runtimecheck](runtimecheck.md) |
 | saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. | Named by `shrinkwrap`. | [saverestore](saverestore.md) |
+| scopednoaliasaa | `ScopedNoAliasAA.cpp` at d1106deb71cc: two accesses are apart when, in some scope domain, every scope one is in is named `!noalias` by the other. | `ScopedNoAliasAA`, `may_alias_in_scopes`. | [scopednoaliasaa](scopednoaliasaa.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | slotstores | The stores that reach a load of a frame slot nothing else can write. | `reaching`: for each load asked, its stores, or none where its source is | [slotstores](slotstores.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |
-| ssaupdater | `SSAUpdater`: a value defined in several blocks, rewritten so each use reads the definition that reaches it, with a phi placed where definitions meet. | Named by `jumpthreading`, `lcssa_form`, `loads`, `loadstorepromoter`, `looprotate`, `sroa`, `ssaupdater_walk_allocates_per_walk_not_per_block`, `ssaupdaterbulk`. | [ssaupdater](ssaupdater.md) |
+| ssaupdater | `SSAUpdater`: a value defined in several blocks, rewritten so each use reads the definition that reaches it, with a phi placed where definitions meet. | Named by `jumpthreading`, `lcssa`, `lcssa_form`, `loads`, `loadstorepromoter`, `looprotate`, `sroa`, `ssaupdater_walk_allocates_per_walk_not_per_block`, `ssaupdaterbulk`. | [ssaupdater](ssaupdater.md) |
 | ssaupdaterbulk | `SSAUpdaterBulk`: values defined in several blocks, rewritten for all their uses at once, with a phi where definitions meet. | Named by `transform`. | [ssaupdaterbulk](ssaupdaterbulk.md) |
 | typebasedaa | `TypeBasedAliasAnalysis.cpp` at d1106deb71cc: two accesses whose `!tbaa` types are unrelated cannot alias. | `TypeBasedAA`, `aliases`. | [typebasedaa](typebasedaa.md) |

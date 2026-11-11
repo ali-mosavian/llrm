@@ -219,6 +219,7 @@ impl State<'_, '_> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -2232,7 +2233,7 @@ impl State<'_, '_> {
             _ => true,
         };
         let at = attrs.iter().position(after).unwrap_or(attrs.len());
-        attrs.insert(at, Attribute::Flag("nonnull".to_owned()));
+        attrs.insert(at, Attribute::Flag("nonnull".into()));
         self.unit.function.set_call_attributes(call, info.attrs, info.return_attrs, arguments);
     }
 

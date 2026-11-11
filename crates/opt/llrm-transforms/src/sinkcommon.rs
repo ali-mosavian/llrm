@@ -111,6 +111,14 @@ fn replacing_operand_is_cheap(
         {
             false
         }
+        Opcode::Binary(_)
+            if matches!(function.instruction(inst).operands[index], Operand::Constant(_))
+                && !spec.tti.constant_arith_phi_is_cheap(function.attrs.iter().any(
+                    |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
+                )) =>
+        {
+            false
+        }
         _ => !calls_intrinsic(context, spec, function, inst),
     }
 }

@@ -54,13 +54,38 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options = Options {
+    code_model: llrm_m68k::compile::CodeModel::Small,
     mid_end: true,
     size: false,
+    size_libcalls: llrm_m68k::libcalls::Mode::Auto,
+    libcalls: None,
+    strict: false,
     source_order: true,
     indexed: false,
     push_frame: false,
     push_arguments: false,
     short: false,
+    hoist_flag_setters: false,
+    reuse_shift_flags: false,
+    reuse_shift_out_flags: false,
+    post_inc_across_blocks: false,
+    shared_cse: false,
+    direct_copies: false,
+    shared_licm: false,
+    shared_prelude: false,
+    tail_duplicate: false,
+    rematerialize_arguments: false,
+    loop_top_by_jumps: false,
+    call_targets: false,
+    pc_calls: false,
+    sext_adds: false,
+    return_dup: false,
+    class_split: false,
+    compare_destinations: false,
+    carry_chain: true,
+    global_copies: true,
+    mul: llrm_m68k::dagisel::mulprice::Mode::Pin,
+    loop_carried_first: false,
     debug: false,
 };
 
@@ -317,8 +342,12 @@ fn after_pinned_mid_end(ir: &str) -> String {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let tti = llrm_m68k::machine::M68k::default();
-    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine::default())))
-        .expect("the mid-end runs");
+    let done = llrm_m68k::compile::mid_end_described_by(
+        &module,
+        &tti,
+        Some(Rc::new(llrm_m68k::machine::M68kMachine::default())),
+    )
+    .expect("the mid-end runs");
     llrm_mir::print::module(&done)
 }
 
@@ -398,6 +427,10 @@ done:
   ret i32 %s1
 }";
     let ours = compiled(ir, Options::default());
+    assert!(
+        ours.contains("move.b\t(%a") && ours.contains("add.l\t#-1, %d"),
+        "the byte load and the separate step are not there, nothing was tested:\n{ours}"
+    );
     assert!(!ours.contains("-(%a"), "{ours}");
 }
 
@@ -748,7 +781,7 @@ define i16 @f() {
 /// CMP past a copy"); the pin saves the codes as `copyPhysReg` does. Seeds 23,
 /// 30, 41, 181 of the differential driver.
 #[test]
-fn the_codes_of_a_compare_are_pushed_round_a_copy_that_cannot_move_or_be_repeated() {
+fn a_compare_whose_branch_follows_a_phi_copy_compiles_and_returns_55() {
     let ir = r#"@zero = external constant i8, align 1
 @buf = external constant [16 x i8], align 1
 define i16 @f() {
@@ -793,8 +826,11 @@ define i16 @f() {
   ret i16 %38
 }
 "#;
-    let text = compiled(ir, SOURCE_ORDER);
-    assert!(text.contains("move.w\t%sr, -(%sp)") && text.contains("move.w\t(%sp)+, %ccr"), "{text}");
+    // Since #7968 (the coalescer joins a low part inside its wide value) no
+    // copy sits between the compare and the branch here, so the codes are
+    // not pushed (`move.w %sr, -(%sp)`): this input no longer reaches the
+    // fallback. It must still compile and run; the fallback needs a new input.
+    compiled(ir, SOURCE_ORDER);
     // the same function built for x86 by the pin's clang returns 55
     if let Some(got) = run_reading_zero(ir) {
         assert_eq!(got, 55);

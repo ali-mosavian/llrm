@@ -105,6 +105,16 @@ pub struct State {
     /// Those of `gone` that were sunk, not erased: a clone of each stands in an
     /// exit block, so what it reads has a user outside the loop.
     pub sunk: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
+    /// `hoistMulAddAssociation` replaces the product it reassociates by its
+    /// variant: the product's result, and what now stands for it.
+    pub forwarded: std::cell::RefCell<IdMap<llrm_mir::module::ValueId, Operand>>,
+    /// The products it put a factor into, and the operand slot of that factor:
+    /// a later product of the loop reads them as invariant-factor products.
+    pub factored: std::cell::RefCell<IdMap<InstId, usize>>,
+    /// `hoistBOAssociation` edits `bo` in place to `lv op (c1 op c2)`: the
+    /// instruction it replaced, and the `lv` and wrap flags of what took its
+    /// place, which the next link of an add chain reassociates again.
+    pub chained: std::cell::RefCell<IdMap<InstId, (Operand, llrm_mir::opcode::Flags)>>,
 }
 
 /// One loop, as `hoistRegion` sees it: its blocks, the loops in it, and where
@@ -221,6 +231,9 @@ pub struct Decisions {
     pub rebuilds: usize,
     pub max_rebuilds: usize,
     pub rebuilt_instructions: usize,
+    /// How many times a loop's safety info was worked out (the scan of its
+    /// blocks for one that may throw): the pin does it once per `runOnLoop`.
+    pub safety_scans: usize,
     /// The updater-kept graph was put back in the manager.
     pub graph_kept: bool,
 }
@@ -273,7 +286,9 @@ pub fn decide(
     let innermost = innermost_loops(&shape);
     let state = State::default();
     let exposed = promote::Exposed::default();
+    let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
+        memo.clear();
         let ctx = LoopCtx {
             function: unit.function,
             shape: &shape,
@@ -284,14 +299,14 @@ pub fn decide(
             allow_speculation: true,
         };
         let header = cfg::block(one.header);
-        let (sunk, hoisted, reassociated) = sink_and_hoist(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
+        let (sunk, hoisted, reassociated) = sink_and_hoist(unit, &outer, &ctx, &mut mssa, &aa, &accesses, &memo);
         record_edits(unit, &mut decisions, header, &sunk, &hoisted, &reassociated);
         // Promoting one set of accesses may make the pointers for another set
         // loop invariant, so run this in a loop.
         let mut room = None;
         loop {
             let (candidates, promoted) =
-                promotion_round(unit, &outer, &ctx, &mssa, &aa, &accesses, &exposed, &mut room);
+                promotion_round(unit, &outer, &ctx, &mssa, &aa, &accesses, &memo, &exposed, &mut room);
             decisions.promotion_candidates += candidates;
             let more = !promoted.is_empty();
             for one in promoted {
@@ -312,6 +327,7 @@ pub fn decide(
             }
         }
     }
+    decisions.safety_scans = memo.scans.get();
     decisions
 }
 
@@ -466,6 +482,7 @@ pub fn run(
             $body
         }};
     }
+    let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
         let header = cfg::block(one.header);
         // No instruction to start from: nothing is asked of the graph.
@@ -476,8 +493,10 @@ pub fn run(
             use llrm_analysis::cfg::Around;
             one.preheader(unit.function).map(cfg::block)
         };
+        // Worked out once per loop, as the pin's `ICFLoopSafetyInfo`: cleared at each loop and after each edit.
+        memo.clear();
         let (sunk, hoisted, reassociated) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
-            let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses);
+            let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses, &memo);
             record_edits(view, &mut decisions, header, &found.0, &found.1, &found.2);
             found
         });
@@ -503,6 +522,9 @@ pub fn run(
                 &reassociated,
             )
             .unwrap_or_else(|why| panic!("licm: {why}"));
+            if !(sunk.is_empty() && hoisted.is_empty() && reassociated.is_empty()) {
+                memo.clear();
+            }
         }
         check_graph(unit, graph.as_ref().expect("a graph"), &|| {
             format!(
@@ -545,7 +567,7 @@ pub fn run(
         let mut room = None;
         loop {
             let (candidates, promoted) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
-                promotion_round(view, &outer, &ctx, mssa, &aa, accesses, &exposed, &mut room)
+                promotion_round(view, &outer, &ctx, mssa, &aa, accesses, &memo, &exposed, &mut room)
             });
             decisions.promotion_candidates += candidates;
             if promoted.is_empty() {
@@ -566,6 +588,7 @@ pub fn run(
                 apply::promote(&mut *unit.function, &mut *unit.context, &mut kept, &site, found)
                     .unwrap_or_else(|why| panic!("licm: {why}"));
                 last_store = kept.last_store;
+                memo.clear();
                 check_graph(unit, graph.as_ref().expect("a graph"), &|| {
                     format!("promoting {:?} out of the loop at {header:?}", found.pointers)
                 });
@@ -597,6 +620,7 @@ pub fn run(
         );
         decisions.graph_kept = true;
     }
+    decisions.safety_scans = memo.scans.get();
     decisions
 }
 
@@ -660,6 +684,7 @@ fn sink_and_hoist(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
+    memo: &safety::SafetyMemo,
 ) -> (Vec<(InstId, sink::Sinking)>, Vec<hoist::Hoist>, Vec<(usize, hoist::Reassociation)>) {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
@@ -670,7 +695,7 @@ fn sink_and_hoist(
         ctx.loop_.body.iter().map(|&at| cfg::block(at)),
         mssa,
     );
-    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape, memo)
         .allowing_speculation(ctx.allow_speculation);
     let sunk = if has_dedicated_exits(ctx) {
         sink::sink_region(unit, outer, ctx, mssa, aa, accesses, &mut flags, &safety)
@@ -695,6 +720,7 @@ fn promotion_round(
     mssa: &Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
+    memo: &safety::SafetyMemo,
     exposed: &promote::Exposed,
     room: &mut Option<Option<usize>>,
 ) -> (usize, Vec<promote::Promotion>) {
@@ -712,7 +738,7 @@ fn promotion_round(
     if !has_dedicated_exits(ctx) || flags.too_many_memory_accesses() {
         return (0, Vec::new());
     }
-    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape, memo)
         .allowing_speculation(ctx.allow_speculation);
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
@@ -740,7 +766,10 @@ fn promotion_round(
             &candidate.pointers,
             candidate.has_reads_outside_set,
         ) {
+            // A location the loop only stores to is held by no phi: its value
+            // is live to the exit from the store, not across the back edge.
             if let Some(room) = room.as_mut()
+                && found.found_load_to_promote
                 && pressure::counts_type(unit, found.access_ty)
             {
                 if !promote::frees_addresses(unit, ctx, &candidate.pointers) {
@@ -837,6 +866,7 @@ impl FunctionPass for Licm {
             all.moved_calls += found.moved_calls;
             all.rebuilds += found.rebuilds;
             all.rebuilt_instructions += found.rebuilt_instructions;
+            all.safety_scans += found.safety_scans;
             all.max_rebuilds = all.max_rebuilds.max(found.rebuilds);
         });
         if self.apply && changed {

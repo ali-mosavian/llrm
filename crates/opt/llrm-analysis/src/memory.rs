@@ -1699,12 +1699,7 @@ pub fn object_of(
     match root {
         Operand::Value(value) => {
             let (_, instruction) = unit.defining(root)?;
-            let Opcode::Alloca { allocated, .. } = instruction.opcode else { return None };
-            let size = unit.layout.alloc_size(&unit.context.types, allocated) as i64;
-            let count = match instruction.operands.first() {
-                None => Some(1),
-                Some(&count) => unit.int_constant(count).map(|bits| bits as i64),
-            };
+            let extent = alloca_extent(unit, instruction)?;
             // Only a reference naming an alloca reaches it until its address
             // is exposed.
             let exposed = match unit.exposed {
@@ -1713,7 +1708,7 @@ pub fn object_of(
             };
             Some(ObjectInterner::of(unit.context).intern(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
-                extent: count.map(|count| size * count),
+                extent,
                 addressed: exposed,
                 captured: exposed,
                 ..MemoryObject::new(MemoryKind::Frame)
@@ -1725,6 +1720,23 @@ pub fn object_of(
         }
         Operand::Block(_) => None,
     }
+}
+
+/// The bytes an `alloca` allocates: its type's size times its count, where the
+/// count is a constant (`ObjectSizeOffsetVisitor::visitAllocaInst`). Outer
+/// `None`: not an alloca; `Some(None)`: an alloca whose variable count leaves
+/// the extent unknown.
+fn alloca_extent(
+    unit: &Unit,
+    instruction: &llrm_mir::module::Instruction,
+) -> Option<Option<i64>> {
+    let Opcode::Alloca { allocated, .. } = instruction.opcode else { return None };
+    let size = unit.layout.alloc_size(&unit.context.types, allocated) as i64;
+    let count = match instruction.operands.first() {
+        None => Some(1),
+        Some(&count) => unit.int_constant(count).map(|bits| bits as i64),
+    };
+    Some(count.map(|count| size * count))
 }
 
 /// Whether `root` is an object's own address: `object_of(unit, root).is_some()`
@@ -2240,6 +2252,12 @@ pub fn extent_of(
         // The size alone: making the object (its capture state, interning)
         // for it was 47 M Ir of fjoins' 991 M, asked 63,024 times.
         return Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64);
+    }
+    // An alloca's size alone, as a global's above: its exposure and interning
+    // are for the object, and cost 887 Ir per BasicAA query.
+    if let Operand::Value(_) = root {
+        let (_, instruction) = unit.defining(root)?;
+        return alloca_extent(unit, instruction)?;
     }
     object_of(unit, root)?.extent
 }

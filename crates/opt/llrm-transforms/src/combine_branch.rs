@@ -22,7 +22,7 @@
 //! (the first edge) or `false` (the second): a second branch on the same
 //! compare, further down, reads a number.
 //!
-//! DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
+//! MIRROR: the weights swap with the successors (`swapSuccessors`).
 //!
 //! # Example
 //! ```text
@@ -58,8 +58,7 @@ impl Combiner<'_> {
         if let Some(x) = pattern::not(&query(self, Some(inst)), cond)
             && !matches!(x, Operand::Constant(_))
         {
-            self.function.set_operand(inst, 1, Operand::Block(other));
-            self.function.set_operand(inst, 2, Operand::Block(taken));
+            crate::profswap::swap_arms(self.context, self.env.metadata, self.declared, self.function, inst);
             replace_operand(self, inst, 0, x);
             return Visit::Changed;
         }
