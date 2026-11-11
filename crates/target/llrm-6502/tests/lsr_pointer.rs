@@ -115,3 +115,22 @@ fn an_outer_loops_row_address_steps_by_the_row_size_and_calls_no_multiply() {
         assert!(!body.contains("mulhi"), "{level:?}: {body}");
     }
 }
+
+/// word_compares at -O2: with a narrowed `i8` counter the loop kept
+/// `gep v, zext(j)` and paid `zext; asl; rol; adc` per trip where a pointer
+/// phi steps by 4 (LSR rated the rebuilt address as a free recurrence, 2026-11-12).
+const NARROW_INDEX: &str = "@v = global [16 x i32] zeroinitializer\n\
+    define i32 @f() {\nentry:\n  br label %l\n\
+    l:\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %j = phi i8 [0, %entry], [%j1, %l]\n  \
+    %w = zext i8 %j to i16\n  %p = getelementptr inbounds nuw [4 x i8], ptr @v, i16 %w\n  \
+    %x = load volatile i32, ptr %p\n  %s1 = add i32 %s, %x\n  %j1 = add nuw nsw i8 %j, 1\n  \
+    %c = icmp ult i8 %j1, 14\n  br i1 %c, label %l, label %out\n\
+    out:\n  ret i32 %s1\n}\n";
+
+#[test]
+fn an_address_rebuilt_from_a_narrow_counter_becomes_a_pointer() {
+    let ir = format!("target datalayout = \"{}\"\n{NARROW_INDEX}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    assert!(!body.contains("asl"), "{body}");
+}

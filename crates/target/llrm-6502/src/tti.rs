@@ -323,6 +323,16 @@ impl Tti for Mos6502 {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
     }
 
+    /// DEVIATE LU21: rebuilding a written address from a narrower counter is
+    /// a base add each trip (`zext; asl; adc`), which the pin rates as a free
+    /// recurrence.
+    fn lsr_written_derivation_adds(
+        &self,
+        _bits: u32,
+    ) -> u32 {
+        1
+    }
+
     /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
     fn lsr_written_exit_bound_is_live(&self) -> bool {
         true
