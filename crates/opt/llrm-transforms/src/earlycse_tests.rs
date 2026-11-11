@@ -474,3 +474,40 @@ b0:
     assert_eq!(after.matches("call i16 @llvm.umax").count(), 1, "{after}");
     assert_eq!(after.matches("call i16 @llvm.usub.sat").count(), 2, "{after}");
 }
+
+/// `combineIRFlags` keeps the flags of the value reused when poison from it is
+/// already UB. The first `getelementptr inbounds` feeds a load, so it stays
+/// `inbounds` when a flagless twin is merged into it. Intersecting always
+/// left `a[i+1] = a[i]` with bare GEPs, so `nuw` was never inferred and wasm32
+/// idioms.c grew about 36 B.
+#[test]
+fn test_a_reused_address_keeps_its_flags_when_poison_from_it_is_ub() {
+    let after = run("@a = internal global [160 x i16] zeroinitializer
+
+define void @f(i32 %i) {
+b0:
+  %p = getelementptr inbounds [2 x i8], ptr @a, i32 %i
+  %v = load i16, ptr %p
+  %q = getelementptr [2 x i8], ptr @a, i32 %i
+  store i16 %v, ptr %q
+  ret void
+}
+");
+    assert_eq!(after.matches("getelementptr").count(), 1, "premise: the twins merge:\n{after}");
+    assert!(after.contains("getelementptr inbounds"), "{after}");
+}
+
+/// Poison that is not UB when it is the only use: the flags are intersected.
+#[test]
+fn test_a_reused_value_loses_flags_the_other_lacks_when_poison_is_not_ub() {
+    let after = run("define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = add nsw i32 %x, %y
+  %b = add i32 %x, %y
+  %c = mul i32 %a, %b
+  ret i32 %c
+}
+");
+    assert_eq!(after.matches("add").count(), 1, "premise: the adds merge:\n{after}");
+    assert!(!after.contains("add nsw"), "{after}");
+}
