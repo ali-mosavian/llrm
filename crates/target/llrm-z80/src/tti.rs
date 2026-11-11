@@ -131,6 +131,16 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *` and every stack
+    /// argument takes a 2-byte slot, so the list lives in a register, not a stack slot nothing reads back.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(2)
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
     fn lftr_any_stride(&self) -> bool {
