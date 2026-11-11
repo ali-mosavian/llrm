@@ -121,6 +121,8 @@ fn labels(mode: Mode) -> &'static [&'static str] {
         Mode::Index => &["(d8,An,Xn)"],
         Mode::AbsL => &["(xxx).L"],
         Mode::Imm => &["#<data>"],
+        // the full format starts with the 68020: no row to find
+        Mode::IndexW | Mode::IndexL | Mode::IndexB => &[],
     }
 }
 

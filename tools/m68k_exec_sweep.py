@@ -45,7 +45,8 @@ def verdict(returncode: int, stdout: bytes, want: bytes | None) -> tuple[str, st
         return "run", f"exit {returncode}" + (" (signal)" if returncode < 0 else "")
     if want is None:
         return "noref", "no reference output"
-    if stdout != want:
+    # a CRLF console write is a line end; nothing else is forgiven (a missing final newline or an extra blank is a difference)
+    if stdout.replace(b"\r\n", b"\n") != want:
         return "output", "stdout differs from the reference"
     return "ok", ""
 
