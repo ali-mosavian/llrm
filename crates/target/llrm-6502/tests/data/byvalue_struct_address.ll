@@ -1,6 +1,6 @@
 ; ModuleID = '/home/alim/scratch/wt-rtsym/tests/run/c/byvalue_struct_address.c'
 source_filename = "/home/alim/scratch/wt-rtsym/tests/run/c/byvalue_struct_address.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 
 %struct.baz = type { i16, i16, i16, i16, i16 }
 

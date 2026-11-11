@@ -10,9 +10,11 @@
 //! <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2301>
 //!
 //! Not translated: the intrinsics the switch prices by a formula of other
-//! costs when the operation is not legal (`smin`, `abs`, `fshl`, `sadd.sat`,
+//! costs when the operation is not legal (`smin`, `abs`, `sadd.sat`,
 //! `smul.fix`, `ucmp`, `smulh` and the like). They have no answer here when
 //! the target expands them; legal or custom, they are priced like the rest.
+//! `fshl` and `fshr` are priced from the call's operands by
+//! `llrm_mir::instructioncost`, where the answer here is none.
 
 use super::actions::{Action, TargetLowering};
 use super::isd::ISD;

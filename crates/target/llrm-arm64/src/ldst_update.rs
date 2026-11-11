@@ -156,6 +156,22 @@ fn touches_sp(inst: &Inst) -> bool {
     }
 }
 
+/// Whether `inst` writes `sp`: register 31 as the destination of a
+/// non-flag-setting `add`/`sub`/`and`/`orr`, or as the base of a writeback
+/// access.
+pub(crate) fn writes_sp(inst: &Inst) -> bool {
+    let sp = |register: &Gpr| *register == Gpr::R31;
+    match inst {
+        Inst::AddSubImm { op, rd, .. } | Inst::AddSubExtended { op, rd, .. } => !op.set_flags && sp(rd),
+        Inst::AddPageOffset { rd, .. } | Inst::LogicImm { rd, .. } => sp(rd),
+        Inst::Load { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. }
+        | Inst::Store { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. }
+        | Inst::LoadPair { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. }
+        | Inst::StorePair { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. } => sp(base),
+        _ => false,
+    }
+}
+
 /// Whether `inst` reads or writes `register`.
 fn touches(
     inst: &Inst,

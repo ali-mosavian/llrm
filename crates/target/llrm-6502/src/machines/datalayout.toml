@@ -4,7 +4,14 @@ mode = 8
 llvm_triple = "mos-unknown-none"
 llvm_cpu = "mos6502"
 
-datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+# DEVIATE 6502-DL-S (owner 6502, exit 2026-12-15): the pin (LLVM d1106deb71) has no MOS target, so no string to equal. `S8` is
+# the 1-byte alignment the soft stack keeps (`frame::STACK_ALIGN`); the nearest reference, llvm-mos's string, carries no `S`.
+# No pass can raise a local past 1 here (every type prefers alignment 1), so objects do not change with it.
+# Evidence (2026-11-09, stamped dists, rt 13780f855f): 176 corpus programs at -O2 and -Os, with and without `S8`: 128 compiled, identical bytes; 48 refused identically.
+# Evidence (2026-11-09, stamped dists, rt 13780f855f): 176 corpus programs at -O2 and -Os, with and without `S8`: 128 compiled, identical bytes; 48 refused identically.
+# INFO 6502-DL-MOS (owner 6502, exit 2026-11-20): llvm-mos's string is "e-m:e-p:16:8-p1:8:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-Fi8-n8".
+# Ours lacks `m:e`, `p1:8:8` (a zero-page address space; this description models none) and `Fi8`: adopt or state why not.
+datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 
 # No multiply, divide, shift by a variable or bit count instruction: the compiler expands them (to libcalls
 # where a loop is too big).

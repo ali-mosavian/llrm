@@ -86,6 +86,14 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
 
 
+def test_long_double_stride_is_not_for_the_6502_or_z80():
+    """long_double_stride's 16 is Watcom's 4-byte long double alignment (4 + 8 + 2 padded); the 6502 aligns to 1 and printed 11, read as
+    a miscompile in the 11-11 float sweep (8, 16, 11 vs 8, 16, 16); z80-sdcc packs structs (-fpack-struct=1) and gave 11 too (llrm-target-z80, compile only)."""
+    source = (RUN / "long_double_stride.c").read_text()
+    only_tags = "// targets: " + " ".join(ct.tags(source)) + "\n"  # ours_cr.py reads the tags alone: the -m32 flags do not exclude the 6502 there
+    assert not ct.applies("6502-sim65", only_tags) and not ct.applies("z80-sdcc", only_tags) and ct.applies("x86_32-dos", only_tags)
+
+
 def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
     """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
     and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
@@ -334,3 +342,12 @@ def test_a_program_that_prints_through_the_hosted_libc_is_not_run_for_macos():
     assert not ct.applies("arm64-macos", source)
     assert ct.applies("arm64-linux", source) and ct.applies("x86_64-linux", source)
     assert not ct.applies("arm64-macos", "// targets: !macos\nint x;\n") and ct.applies("arm64-linux", "// targets: !macos\nint x;\n")
+
+
+def test_a_vla_program_is_not_run_where_the_backend_has_no_dynamic_alloca():
+    """vla_callee_constant is in the sweeps for the targets that build it; m68k, 6502, z80 and wasm refuse a dynamic alloca (rc 1) and read n/a, not FAIL."""
+    source = (RUN / "vla_callee_constant.c").read_text()
+    for target in ("m68k-68000", "m68k-68020", "6502-sim65", "65c02-sim65", "z80-sdcc", "wasm32"):
+        assert not ct.applies(target, source), target
+    for target in ("arm64-linux", "x86_64-linux", "x86_32-linux", "x86_16-dos"):
+        assert ct.applies(target, source), target
