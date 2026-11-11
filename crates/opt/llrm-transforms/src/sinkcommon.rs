@@ -44,8 +44,7 @@
 //!   attribute; the intrinsic cases for variadic parameters, `gcroot` and
 //!   `threadlocal_address` are not in the MIR.
 //! - D4. No `llvm.experimental.deoptimize`.
-//! - D5. DEVIATE M16-KEEPDISP-1 (owner llrm-target-x86-m16, exit 2026-11-24):
-//!   on a target whose accesses fold a constant offset
+//! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
 //!   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
 //!   (`displacement_sink_pays`), not sunk always as the pin does.
 

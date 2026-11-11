@@ -1289,6 +1289,44 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// The function returns `ty`: its type follows and the return attributes
+    /// go. The caller gives each `ret` its value (`set_operands`) and each
+    /// call its result (`give_call_result`); the inverse of
+    /// `drop_return_value`.
+    pub fn set_return_type(
+        &mut self,
+        context: &mut crate::context::Context,
+        ty: TypeId,
+    ) {
+        let Type::Function { parameters, variadic, .. } = context.types.get(self.ty).clone() else {
+            panic!("a function type")
+        };
+        self.ty = context.types.intern(Type::Function { returns: ty, parameters, variadic });
+        self.return_attrs.clear();
+        self.log(Change::Parameters);
+    }
+
+    /// The call `inst`, which returns nothing, returns `ty` under
+    /// `function_type`; the inverse of `drop_call_result`.
+    pub fn give_call_result(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+        function_type: TypeId,
+    ) -> ValueId {
+        assert!(self.instructions[inst.0 as usize].result.is_none(), "a call with no result");
+        let value = ValueId(self.values.len() as u32);
+        self.values.push(ValueData { ty, name: None, def: ValueDef::Instruction(inst) });
+        self.uses.push_value();
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.result = Some(value);
+        instruction.ty = ty;
+        let Opcode::Call(info) = &mut instruction.opcode else { panic!("a call") };
+        info.function_type = function_type;
+        self.log(Change::Rewritten(inst));
+        value
+    }
+
     /// From the first change of the parameters on, each one's origin is kept.
     fn track_parameters(&mut self) {
         if self.parameter_origins.is_empty() {
