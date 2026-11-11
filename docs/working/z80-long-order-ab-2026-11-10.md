@@ -45,7 +45,7 @@ axis, O2/O3 = clocks + 3 x bytes. Script `ab/bar.py` (base = tip 0db87355f6, B =
 | Oz | 74 | 14 -> 13 | 4 -> 4 | none | 1 |
 | O3 | 76 | 3 -> 3 | 2 -> 2 | none | 0 |
 
-The O1 clocks trade is below the bar on both axes: `div_constants_long` 15633 -> 14173 B (bar 15095) and 478.7M -> 479.7M T (bar
+The O1 clocks trade is below the bar on both axes: `div_constants_long` 15493 -> 14173 B (bar 15095) and 478.7M -> 479.7M T (bar
 991M); `div_constants_ulong` 10353 -> 9634 B (bar 10022), 290.8M -> 301.9M T (bar 656M). Both were above the bar on bytes.
 `wide_shift_by_one` +100 B stays under its bar (1110 -> 1210 vs 1567 B).
 
