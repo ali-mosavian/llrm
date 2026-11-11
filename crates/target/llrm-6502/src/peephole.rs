@@ -193,6 +193,7 @@ fn run_passes(
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
     zero_cells_with_stz(asm);
+    place_store_where_a_is_dead(asm);
     merge_saves_of_a(asm);
     if known_loads {
         drop_known_loads(asm);
@@ -1541,6 +1542,94 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
         }
     }
     asm.lines = out;
+}
+
+/// `pha; lda src; sta dst; pla` (a cell made from a literal or another cell
+/// while `a` is live) with `a` dead earlier in the same straight-line run: the
+/// load and the store move there, and the bracket (6 B, 12 clocks) is 4 B and
+/// 5 clocks. `a` is dead before an instruction that writes it without reading
+/// it ([`dead_from`]); the run between holds no label, branch, call or stack
+/// operation and nothing that touches `dst` or writes `src`. The bracket's
+/// `pla` set N and Z from the value it restored, which nothing reads after.
+pub fn place_store_where_a_is_dead(asm: &mut Asm) {
+    loop {
+        let exits = Exits::of(asm);
+        let lines = &asm.lines;
+        let found = (0..lines.len().saturating_sub(3)).find_map(|at| {
+            let [Some(Line::Inst(push)), Some(Line::Inst(load)), Some(Line::Inst(store)), Some(Line::Inst(pull))] =
+                [0, 1, 2, 3].map(|n| lines.get(at + n))
+            else {
+                return None;
+            };
+            if (push.op, load.op, store.op, pull.op) != (Op::Pha, Op::Lda, Op::Sta, Op::Pla) {
+                return None;
+            }
+            let Operand::Direct(dst) = &store.operand else { return None };
+            if !store.operand.is_cell() || !matches!(load.operand, Operand::Imm(_)) && !load.operand.is_cell() {
+                return None;
+            }
+            if !nz_dead_from(lines, at + 4, &mut HashSet::default()) {
+                return None;
+            }
+            for k in (0..at).rev() {
+                let Some(Line::Inst(between)) = lines.get(k) else { return None };
+                if blocks_a_store(between, &load.operand, dst) {
+                    return None;
+                }
+                if dead_from(lines, k, Registers::A, &mut HashSet::default(), exits) {
+                    return Some((at, k));
+                }
+            }
+            None
+        });
+        let Some((at, to)) = found else { return };
+        let moved: Vec<Line> = asm.lines.drain(at..at + 4).skip(1).take(2).collect();
+        for line in moved.into_iter().rev() {
+            asm.lines.insert(to, line);
+        }
+    }
+}
+
+/// Whether `inst` stops a load of `src` and a store to the cell `dst` from
+/// moving above it.
+fn blocks_a_store(
+    inst: &Inst,
+    src: &Operand,
+    dst: &str,
+) -> bool {
+    if matches!(
+        inst.op,
+        Op::Jsr | Op::Jmp | Op::Rts | Op::Pha | Op::Pla | Op::Php | Op::Plp | Op::Phx | Op::Phy | Op::Plx | Op::Ply | Op::Tsx | Op::Txs
+    ) || inst.op.is_branch()
+    {
+        return true;
+    }
+    // the cell after a pointer's low byte is its high byte
+    let covers = |name: &str, cell: &str| {
+        name == cell
+            || name
+                .strip_prefix("rc")
+                .zip(cell.strip_prefix("rc"))
+                .is_some_and(|(a, b)| matches!((a.parse::<u32>(), b.parse::<u32>()), (Ok(a), Ok(b)) if a + 1 == b))
+    };
+    let named = match &inst.operand {
+        Operand::Direct(name) | Operand::Indexed(name, _) => Some((name, false)),
+        Operand::IndirectY(name) | Operand::IndirectX(name) | Operand::Indirect(name) => Some((name, true)),
+        _ => None,
+    };
+    if let Some((name, pointer)) = named
+        && (name == dst || pointer && covers(name, dst))
+    {
+        return true;
+    }
+    let writes = matches!(
+        inst.op,
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror
+    ) && !matches!(inst.operand, Operand::Acc | Operand::None);
+    match (writes, src) {
+        (true, Operand::Direct(from)) => !matches!(&inst.operand, Operand::Direct(name) if name != from),
+        _ => false,
+    }
 }
 
 /// `pha; X; pla; pha; Y; pla` where `Y` is straight-line code that starts
