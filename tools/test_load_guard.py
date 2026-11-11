@@ -388,24 +388,6 @@ class TermInsideTheQueue(Env, unittest.TestCase):
         return True
 
 
-class ScanLines(unittest.TestCase):
-    def awk(self, text):
-        """Runs the awk program of `scan_holders` over find's `%l %p` lines."""
-        source = open(GUARD).read()
-        program = re.search(r"awk '(NF == 2 \{.*?\})'", source) or re.search(r"awk '(\{ split.*?\})'", source)
-        return subprocess.run(["awk", program.group(1)], input=text, capture_output=True, text=True).stdout
-
-    def test_a_link_that_vanished_before_find_printed_it_gives_no_line(self):
-        """An empty %l left `/proc/5/fd/3` as $1 and no $2: awk printed one space, `read` gave an empty slot and bash printed `slot_pids: bad array subscript` twice."""
-        self.assertEqual(self.awk(" /proc/5/fd/3\n"), "")
-
-    def test_a_slot_file_without_a_number_gives_no_line(self):
-        self.assertEqual(self.awk("/x/slots/slot. /proc/5/fd/3\n"), "")
-
-    def test_a_held_slot_gives_its_number_and_the_holder(self):
-        self.assertEqual(self.awk("/x/slots/slot.3 /proc/5/fd/3\n"), "3 5\n")
-
-
 class Cancel(Env, unittest.TestCase):
     """--cancel JOBID kills exactly the recorded process group. Pattern kills (pgrep -f / pkill -f) took out three sessions' builds on 2026-11-10."""
 
@@ -457,7 +439,7 @@ class Cancel(Env, unittest.TestCase):
             bystander.kill(); holder.kill(); bystander.wait(); holder.wait()
 
 
-HOLDER = "import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\nfcntl.flock(fd, fcntl.LOCK_EX)\nif len(sys.argv) > 2:\n    fd2 = os.open(sys.argv[2], os.O_RDWR | os.O_CREAT)\n    fcntl.flock(fd2, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(300)\n"
+HOLDER = "import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\nfcntl.flock(fd, fcntl.LOCK_EX)\nos.write(fd, (str(os.getpid()) + chr(10)).encode())\nif len(sys.argv) > 2:\n    fd2 = os.open(sys.argv[2], os.O_RDWR | os.O_CREAT)\n    fcntl.flock(fd2, fcntl.LOCK_EX)\n    os.write(fd2, (str(os.getpid()) + chr(10)).encode())\nprint('held', flush=True)\ntime.sleep(300)\n"
 
 
 class ActiveHolders(Env, unittest.TestCase):
@@ -521,20 +503,56 @@ class ActiveHolders(Env, unittest.TestCase):
         second = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_NO_WAIT="1", LG_SETTLE="0", LG_SCAN_EVERY="0")
         self.assertEqual(second.wait(timeout=10), 75, "a job in the window between admission and spawn did not count")
 
-    def test_a_guard_process_holding_a_slot_file_without_a_job_is_a_probe_and_does_not_count(self):
-        """The 1-in-4 flake of the suite: twelve LG_NO_WAIT starters arriving together saw each other's probe lock (no prio line for them) as running jobs and all refused (0 of 12 admitted)."""
-        os.makedirs(self.slots, exist_ok=True)
-        probe = HOLDER.replace("if len(sys.argv) > 2:", "if False:")  # argv[2] is only a name: the cmdline says load_guard.sh
-        proc = subprocess.Popen(["python3", "-c", probe, os.path.join(self.slots, "slot.1"), "load_guard.sh"], stdout=subprocess.PIPE, text=True)
-        self.addCleanup(lambda: (proc.kill(), proc.wait()))
-        self.assertEqual(proc.stdout.readline().strip(), "held")
-        self.assertTrue(self.admitted(1), "a probing guard counted as a running job")
+    def test_twelve_starters_arriving_together_are_all_admitted_under_a_cap_of_twelve(self):
+        """The 1-in-4 flake of an earlier scan: starters read each other's probe lock as running jobs and all refused (0 of 12 admitted). Probes now run under admit.lock."""
+        env = {"LG_SLOTS": "12", "LG_SLOTS_HIGH": "12", "LG_SLOTS_MAX": "12", "LG_SLOTS_WIDEST": "12", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
+        jobs = [self.start("sleep", "30", **env) for _ in range(12)]
+        self.decided(jobs)
+        self.assertEqual(sum(1 for job in jobs if job.poll() is None), 12)
 
-    def test_a_waiter_probing_a_free_slot_is_not_a_holder(self):
-        probe = self.holder(1)
+
+class NoProcWalk(Env, unittest.TestCase):
+    """The holder scan was `find /proc -maxdepth 3 ...` on every poll of every waiter: about 106% of a core at load 70, so the guard was part of the load it limits.
+    The holder's pid is now written into its slot file, so no process table is walked."""
+
+    def shim(self):
+        """A `find` and a `ps` that log their use; PATH puts them first."""
+        bindir = os.path.join(self.dir.name, "bin")
+        os.makedirs(bindir)
+        self.calls = os.path.join(self.dir.name, "calls")
+        for tool in ("find",):
+            real = subprocess.check_output(["which", tool], text=True).strip()
+            path = os.path.join(bindir, tool)
+            open(path, "w").write(f'#!/bin/sh\necho "{tool} $*" >> {self.calls}\nexec {real} "$@"\n')
+            os.chmod(path, 0o755)
+        return {"PATH": bindir + os.pathsep + os.environ["PATH"]}
+
+    def test_admission_and_waiting_never_run_find(self):
+        env = self.shim()
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0", **env)
+        self.decided([first])
+        waiter = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0", LG_WAIT_LOG="0.2", **env)
+        self.queued(waiter)
+        time.sleep(1.5)
+        self.assertFalse(os.path.exists(self.calls) and open(self.calls).read(), "the guard walked /proc with find")
+
+    def test_the_script_has_no_proc_fd_walk(self):
+        self.assertNotIn("-path '/proc/", open(GUARD).read())
+
+    def test_one_more_starter_than_slots_is_refused_and_a_dead_holder_is_reclaimed(self):
+        env = {"LG_SLOTS": "2", "LG_SLOTS_HIGH": "2", "LG_SLOTS_MAX": "2", "LG_SETTLE": "0", "LG_NO_WAIT": "1"}
+        jobs = [self.start("sleep", "30", **env) for _ in range(2)]
+        self.decided(jobs)
+        self.assertEqual(self.start("true", **env).wait(timeout=10), 75, "a third job was admitted under a cap of 2")
+        jobs[0].kill()
+        jobs[0].wait()
+        self.assertTrue(until(lambda: self.start("true", **env).wait(timeout=10) == 0, 15), "a killed holder's slot was never reclaimed")
+
+    def test_a_slot_file_naming_a_dead_pid_is_free_when_unlocked(self):
         os.makedirs(self.slots, exist_ok=True)
-        open(os.path.join(self.slots, "prio"), "w").write(f"4 {time.time()} {probe.pid} 25\n")
-        self.assertTrue(self.admitted(1), "a polling waiter's probe counted as a job")
+        open(os.path.join(self.slots, "slot.1"), "w").write("999999\n")
+        env = {"LG_SLOTS": "1", "LG_SLOTS_HIGH": "1", "LG_SLOTS_MAX": "1", "LG_SETTLE": "0", "LG_NO_WAIT": "1"}
+        self.assertEqual(self.start("true", **env).wait(timeout=10), 0)
 
 
 class Defaults(unittest.TestCase):

@@ -65,6 +65,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
 
     type Class = Class;
 
+    fn schedules_before_allocation() -> bool {
+        llrm_support::env_flag!("LLRM_M68K_PRESCHED")
+    }
+
     fn meet(
         one: Class,
         other: Class,
