@@ -74,8 +74,9 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
-/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-10
-/// evening; oversight 2026-11-08: a Pareto chain search, equal clocks and
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-24, re-dated
+/// 2026-11-11 from 2026-11-10; the O1 rule is strict per axis, so the exit is a priced choice that
+/// keeps the chain only where its clocks and bytes are both no worse; oversight 2026-11-08: a Pareto chain search, equal clocks and
 /// fewer bytes, replaces the fewest-clocks chain; per-site pricing stays
 /// unshipped, it moves no row). Open vs the byte bar: bintree +32, recpow +29,
 /// x_spill_store_order +54 B (also tail_calls_edges +32, stft_fixed +32,

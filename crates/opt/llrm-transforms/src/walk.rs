@@ -822,10 +822,30 @@ impl ProgramPass for Walk {
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.trial_costs(), &kept);
-                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                // DEVIATE OS-INLINE-TRIAL (`trial::Site`): a copy the byte model refuses within its
+                                // error is the backend's to decide; the second compile inlines it.
+                                let by_bytes = tti.opt_size_inline_trial_by_bytes() && !priced;
+                                let site = by_bytes.then(|| crate::trial::Site {
+                                    caller: module.global(id).name.as_deref().unwrap_or_default().to_owned(),
+                                    callees: calls
+                                        .iter()
+                                        .filter_map(|one| trials[one].callee)
+                                        .filter_map(|callee| module.global(callee).name.as_deref().map(str::to_owned))
+                                        .collect(),
+                                });
+                                let ruled = trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes);
+                                let forced = !ruled && site.as_ref().is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
+                                if ruled || forced {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
+                                    if let Some(site) = site.filter(|_| {
+                                        !crate::trial::inlining()
+                                            && growth > 0
+                                            && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)
+                                    }) {
+                                        crate::trial::note_refused(site);
+                                    }
                                     for callee in calls.iter().filter_map(|one| trials[one].callee) {
                                         let tried = rejected.entry(callee).or_insert(credit);
                                         *tried = (*tried).max(credit);
