@@ -223,7 +223,7 @@ fn pressure(
     cand: &mut Cand,
     reason: Reason,
 ) -> bool {
-    match try_pressure(try_p, cand_p) {
+    match try_pressure(try_p, cand_p, try_cand.at_top == cand.at_top) {
         Pick::Try => {
             try_cand.reason = reason;
             true

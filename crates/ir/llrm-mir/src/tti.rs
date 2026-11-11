@@ -504,6 +504,13 @@ pub trait Tti {
         0
     }
 
+    /// Two compares joined by `and`/`or` stay two branches at every level, as
+    /// the pin does at optsize (the target's `split_merged_conditions`);
+    /// false: the pin's cost rule decides.
+    fn splits_merged_conditions(&self) -> bool {
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
