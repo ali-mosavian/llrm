@@ -1063,6 +1063,11 @@ fn fold_entry_allocas(
             (copy, alloca, Some(block) == entry)
         })
         .collect();
+    // Asked before the fold: it is what makes the count constant, and an alloca
+    // that was dynamic is the one to move to the caller's entry.
+    let was_dynamic = copies
+        .iter()
+        .any(|&(copy, alloca, in_entry)| in_entry && alloca && !is_static_alloca(context, function, copy));
     for &(copy, alloca, _) in &copies {
         if alloca || function.instruction(copy).opcode == Opcode::Phi {
             continue;
@@ -1074,7 +1079,7 @@ fn fold_entry_allocas(
     }
     let copies: Vec<(InstId, bool)> =
         copies.into_iter().filter(|&(_, _, in_entry)| in_entry).map(|(copy, alloca, _)| (copy, alloca)).collect();
-    if !copies.iter().any(|&(copy, alloca)| alloca && !is_static_alloca(context, function, copy)) {
+    if !was_dynamic {
         return;
     }
     let first = anchor
