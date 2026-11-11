@@ -121,7 +121,7 @@ fn ties(
     let (mut checked, mut open) = (0, 0);
     for block in &body.blocks {
         for insn in block.insns.iter() {
-            let Some(&(b, i)) = converted.origin.get((insn.at / 2) as usize) else { continue };
+            let Some(&(b, i)) = converted.origin.get(llrm_spike_mf::tolir::ordinal_of(insn)) else { continue };
             let inst = &function.blocks[b].insts[i];
             let (Kind::Op(name), Some(what)) = (inst.kind, &insn.what) else { continue };
             if what.name.as_deref() != Some(name) {
@@ -227,7 +227,7 @@ fn split_pairs(
     for block in &body.blocks {
         let mut setter: Option<bool> = None; // Some(copy seen since)
         for insn in block.insns.iter() {
-            let Some(&(b, i)) = converted.origin.get((insn.at / 2) as usize) else { continue };
+            let Some(&(b, i)) = converted.origin.get(llrm_spike_mf::tolir::ordinal_of(insn)) else { continue };
             let inst = &function.blocks[b].insts[i];
             let is_copy = insn.what.as_ref().and_then(|w| w.name.as_deref()) == Some("COPY");
             if is_copy {
@@ -270,8 +270,8 @@ fn the_shared_phi_elimination_can_put_a_copy_between_a_flag_setter_and_its_reade
     assert!(after >= before, "PhiElimination removed copies between setters and readers");
 }
 
-/// Instructions of `body` whose `at` names another MIR instruction than the one
-/// they are: `Converted::origin` is read by `at`.
+/// Instructions of `body` whose origin, read as `from_ssa` and `from_lir` read it
+/// (`tolir::ordinal_of`), is another MIR instruction than the one they are.
 fn misattached(
     function: &MFunction,
     converted: &llrm_spike_mf::tolir::Converted<M68kRegisters>,
@@ -279,32 +279,37 @@ fn misattached(
 ) -> usize {
     let mut open = 0;
     for insn in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-        let Some(&(b, i)) = converted.origin.get((insn.at / 2) as usize) else { continue };
+        // one the converter did not number (the `jmp` on an edge MachineSink splits) has no origin
+        if insn.numbered.is_none() {
+            continue;
+        }
+        let Some(&(b, i)) = converted.origin.get(llrm_spike_mf::tolir::ordinal_of(insn)) else { continue };
         let (Kind::Op(name), Some(what)) = (function.blocks[b].insts[i].kind, &insn.what) else { continue };
         let own = what.name.as_deref();
-        if own != Some(name) && !matches!(own, Some("mov" | "COPY")) {
+        // "" is a branch to the next block, which the sink empties in place
+        if own != Some(name) && !matches!(own, Some("mov" | "COPY" | "")) {
             open += 1;
         }
     }
     open
 }
 
-/// MachineSink sets a sunk instruction's `at` to the first of the block it
-/// goes to (`machinesink.rs`, "stay in order by their `at`"), so `at` no longer
-/// names the MIR instruction it came from, and `from_ssa` / `from_lir`, which
-/// read `Converted::origin` by `at`, would give the sunk `OR8dd` of pack_ref the
-/// operands and opcode of the `MOVZXd32d8` it landed beside. Not reached today
-/// (the prelude runs no MachineSink); step 3 (MachineSink) has to carry the
-/// origin by identity first. The test states the count: 0 before, more after.
+/// MachineSink sets a sunk instruction's `at` to the first of the block it goes
+/// to, so `at / 2` named the MIR instruction it landed beside: the sunk `OR8dd`
+/// of pack_ref got the operands and opcode of the `MOVZXd32d8` next to it
+/// (30 mis-attached over the fixture functions, 11-11). The origin now rides on
+/// the instruction (`Insn::numbered`).
 #[test]
-fn machine_sink_breaks_the_origin_by_at() {
-    let (mut before, mut after) = (0, 0);
+fn machine_sink_keeps_every_instruction_attached_to_its_origin() {
+    let (mut before, mut sunk, mut after) = (0, 0, 0);
     for (_, function) in functions() {
         let (converted, stages) = through(&function, "MachineSink");
         before += misattached(&function, &converted, &converted.body);
-        after += misattached(&function, &converted, &stages.last().expect("ran").1);
+        let last = stages.len() - 1;
+        sunk += misattached(&function, &converted, &stages[last - 1].1);
+        after += misattached(&function, &converted, &stages[last].1);
     }
-    println!("mis-attached: before {before}, after MachineSink {after}");
+    println!("mis-attached: converted {before}, before MachineSink {sunk}, after {after}");
     assert_eq!(before, 0, "the converted body already mis-attaches: the check is wrong");
-    assert!(after > 0, "MachineSink keeps every `at` in place: the origin by `at` is safe, drop this test");
+    assert_eq!(after, sunk, "MachineSink moved instructions onto another instruction's origin");
 }

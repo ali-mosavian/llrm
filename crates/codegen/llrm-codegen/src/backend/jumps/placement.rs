@@ -97,8 +97,9 @@ struct Placer {
     dup_size: usize,
     /// DEVIATE TAILDUP-HOT: blocks above `dup_size` copied where it pays.
     hot: Option<HotTailDup>,
-    /// The blocks that jump back to a loop header: copying one into its
-    /// predecessors would give the loop several back edges.
+    /// The blocks that jump back to a loop header. The pin's bound copies them
+    /// like any other; a copy past it prices the taken branch back that the
+    /// copy ends in (`HotTailDup::back_edge_clocks`).
     latch: Vec<bool>,
     postdom: postdom::PostDom,
     /// Edges rerouted by copies, for the odds: (from, its successors before,
@@ -118,14 +119,19 @@ fn succ_seen(
 }
 
 /// DEVIATE TAILDUP-HOT (owner x86-m32, exit 2026-12-05): a block of up to
-/// `size` instructions above the pin's bound is copied into a predecessor when
-/// the jump the copy saves, on half the block's executions, is worth more
-/// than the copy's bytes at the speed rate.
+/// `size` instructions above the pin's bound (`TailDupSize`, 2 at -O2, 4 at
+/// -O3) is copied into the predecessors that jump to it when the jumps the
+/// copies save, at those predecessors' own run counts, are worth more than the
+/// copies' bytes at the speed rate. A loop latch is priced like any block,
+/// less the taken branch back its copy ends in (x_cordic -O2, x_collatz -O2).
 #[derive(Clone, Copy, Debug)]
 pub struct HotTailDup {
     pub size: usize,
     /// Clocks of the unconditional jump the copy removes.
     pub jump_clocks: f64,
+    /// Clocks a taken branch costs over a not-taken one: the copy of a loop
+    /// latch branches back to the header, which its original fell into.
+    pub back_edge_clocks: f64,
     /// Clocks a byte of code is worth at speed.
     pub clocks_per_byte: f64,
 }
@@ -135,15 +141,21 @@ pub struct HotTailDup {
 const AVERAGE_INSN_BYTES: f64 = 3.0;
 
 impl HotTailDup {
-    /// Whether a block of `count` instructions run `frequency` times per call
-    /// is worth copying.
+    /// Whether a block of `count` instructions is worth copying into the
+    /// `copies` predecessors that reach it by a jump, which run `jumped` times
+    /// per call in all: each copy saves its jump, and costs the block's bytes
+    /// (the original goes when every predecessor takes a copy, `all`).
     pub(super) fn pays(
         &self,
         count: usize,
-        frequency: f64,
+        jumped: f64,
+        copies: usize,
+        all: bool,
+        latch: bool,
     ) -> bool {
-        count <= self.size
-            && frequency * self.jump_clocks / 2.0 >= count as f64 * AVERAGE_INSN_BYTES * self.clocks_per_byte
+        let added = (copies as i64 - i64::from(all)).max(0) as f64 * count as f64 * AVERAGE_INSN_BYTES;
+        let saved = self.jump_clocks - if latch { self.back_edge_clocks } else { 0.0 };
+        count <= self.size && copies > 0 && saved > 0.0 && jumped * saved >= added * self.clocks_per_byte
     }
 }
 
