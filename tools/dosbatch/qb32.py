@@ -123,6 +123,11 @@ def symbols(path: Path) -> tuple[set[str], set[str]]:
     return defined, needed
 
 
+def runtime_sources(portable: list[Path], own: list[Path]) -> list[Path]:
+    """The sources one build compiles: the target's own, and the portable C that none of them replaces (`qbruntime.portable_not_replaced`)."""
+    return sorted([*qbruntime.portable_not_replaced(portable, own), *own])
+
+
 def build(work: Path) -> dict[str, Path]:
     """The runtime's objects, by source name: the portable C, the target's own, and the OS layer's."""
     work.mkdir(parents=True, exist_ok=True)
@@ -130,7 +135,7 @@ def build(work: Path) -> dict[str, Path]:
     made: dict[str, Path] = {}
     failures = []
     tree, tools = _tree(), _stamp(dosbatch.c_frontend(), "jwasm", "jwlink") + "|" + dosbatch.clang_identity()
-    for source in sorted([*RUNTIME.glob("*.c"), *qbruntime.platform_sources_of(PLATFORM)]):
+    for source in runtime_sources(list(RUNTIME.glob("*.c")), qbruntime.platform_sources_of(PLATFORM)):
         if source.name == "start.asm":
             continue
         obj = work / f"{source.stem}.obj"

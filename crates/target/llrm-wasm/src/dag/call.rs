@@ -74,6 +74,16 @@ impl TargetCalling for WasmCalling {
         Some(TargetIntrinsic { id: id as u32, chained: EH_INTRINSICS[id].1 })
     }
 
+    /// `WebAssemblyTargetLowering::CanLowerReturn`: more than one result part
+    /// needs the multivalue ABI, which the pin does not default to; the
+    /// result then goes through an `sret` pointer.
+    fn can_lower_return(
+        &self,
+        parts: &[EVT],
+    ) -> bool {
+        parts.len() <= 1
+    }
+
     fn accepts(
         &self,
         dag: &SelectionDAG,

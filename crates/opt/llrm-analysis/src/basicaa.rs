@@ -8,10 +8,10 @@
 //! the underlying objects, identified objects, arguments against function-local
 //! objects, an escape source against a non-captured local object, an access
 //! larger than the whole object), `DecomposeGEPExpression` (constant offsets,
-//! variable indices by value and scale), `subtractDecomposedGEPs` and
-//! `aliasGEP` as far as it needs no value ranges: the inbounds and
-//! constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
-//! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
+//! variable indices by value and scale, through `GetLinearExpression`),
+//! `subtractDecomposedGEPs` and `aliasGEP` as far as it needs no value ranges:
+//! the inbounds and constant-difference rules, nuw, and the GCD test. Not yet
+//! (deviations in the plan page): `analyzeVariableOffsets`'
 //! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
 //! other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
 //! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
@@ -32,7 +32,7 @@
 
 use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
-use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
 use crate::capturetracking::CaptureComponents;
@@ -48,6 +48,9 @@ thread_local! {
     pub static ARGUMENT_FACTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// The nesting of queries `aliasCheck` allows (`AAQI.Depth >= 512`).
+const MAX_QUERY_DEPTH: u32 = 512;
+
 /// `MaxLookupSearchDepth`.
 const MAX_LOOKUP: usize = 6;
 
@@ -57,10 +60,138 @@ const MAX_LOOKUP: usize = 6;
 pub(crate) struct Decomposed {
     base: Operand,
     offset: i128,
-    /// `(index value, scale)`, a scale never zero.
-    vars: Vec<(Operand, i128)>,
+    vars: Vec<VarIndex>,
     inbounds: bool,
     nuw: bool,
+}
+
+/// `VariableGEPIndex`: an index value, cast as `CastedValue` says, times a
+/// scale, never zero.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VarIndex {
+    value: Operand,
+    scale: i128,
+    /// The GEP that contributed it (`CxtI`).
+    cxt: Option<llrm_mir::module::InstId>,
+    /// `IsNSW`: the GEP is `nusw`.
+    nsw: bool,
+    negated: bool,
+    zext_bits: u32,
+    sext_bits: u32,
+    trunc_bits: u32,
+    /// `IsNonNegative`: the truncated value is non-negative.
+    nneg: bool,
+    /// The width of `value`'s type (`V->getType()`).
+    bits: u32,
+}
+
+impl VarIndex {
+    /// `CastedValue::hasSameCastsAs`.
+    fn same_casts_as(
+        &self,
+        other: &VarIndex,
+    ) -> bool {
+        casts_match(self.bits, self.casts(), other.bits, other.casts())
+    }
+
+    fn casts(&self) -> Casts {
+        Casts { zext_bits: self.zext_bits, sext_bits: self.sext_bits, trunc_bits: self.trunc_bits, nneg: self.nneg }
+    }
+
+    /// `VariableGEPIndex::hasNegatedScaleOf`.
+    fn has_negated_scale_of(
+        &self,
+        other: &VarIndex,
+    ) -> bool {
+        if self.negated == other.negated { self.scale == -other.scale } else { self.scale == other.scale }
+    }
+}
+
+/// The casts of `CastedValue`: zext(sext(trunc(V))).
+#[derive(Clone, Copy, Debug, Default)]
+struct Casts {
+    zext_bits: u32,
+    sext_bits: u32,
+    trunc_bits: u32,
+    /// Whether trunc(V) is non-negative.
+    nneg: bool,
+}
+
+/// `CastedValue::hasSameCastsAs` of two values of types `bits` and `other_bits`
+/// wide.
+fn casts_match(
+    bits: u32,
+    casts: Casts,
+    other_bits: u32,
+    other: Casts,
+) -> bool {
+    if bits != other_bits {
+        return false;
+    }
+    if casts.zext_bits == other.zext_bits && casts.sext_bits == other.sext_bits && casts.trunc_bits == other.trunc_bits
+    {
+        return true;
+    }
+    // A non-negative value takes its sign or zero extension alike.
+    if casts.nneg || other.nneg {
+        return casts.zext_bits + casts.sext_bits == other.zext_bits + other.sext_bits
+            && casts.trunc_bits == other.trunc_bits;
+    }
+    false
+}
+
+/// `CastedValue`: `value` cast as `casts` say.
+#[derive(Clone, Copy, Debug)]
+struct Casted {
+    value: Operand,
+    casts: Casts,
+}
+
+/// `LinearExpression`: zext(sext(trunc(V))) * scale + offset, the scale and
+/// offset signed in the index width.
+#[derive(Clone, Copy, Debug)]
+struct Linear {
+    val: Casted,
+    scale: i128,
+    offset: i128,
+    /// All operations are NUW.
+    nuw: bool,
+    /// All operations are NSW.
+    nsw: bool,
+}
+
+/// `x` as a signed `bits`-wide integer.
+fn wrap_signed(
+    x: i128,
+    bits: u32,
+) -> i128 {
+    if bits >= 128 {
+        return x;
+    }
+    let low = (x as u128) & llrm_mir::context::mask(bits);
+    if low >> (bits - 1) & 1 == 0 { low as i128 } else { (low | (!0u128 << bits)) as i128 }
+}
+
+impl Linear {
+    fn of(val: Casted) -> Linear {
+        Linear { val, scale: 1, offset: 0, nuw: true, nsw: true }
+    }
+
+    /// `LinearExpression::mul`.
+    fn mul(
+        mut self,
+        other: i128,
+        mul_nuw: bool,
+        mul_nsw: bool,
+        bits: u32,
+    ) -> Linear {
+        // (X +nsw Y) *nsw Z does not imply (X *nsw Z) +nsw (Y *nsw Z).
+        self.nsw = self.nsw && (other == 1 || (mul_nsw && self.offset == 0));
+        self.nuw = self.nuw && (other == 1 || mul_nuw);
+        self.scale = wrap_signed(self.scale.wrapping_mul(other), bits);
+        self.offset = wrap_signed(self.offset.wrapping_mul(other), bits);
+        self
+    }
 }
 
 /// A load or store's place as `DecomposeGEPExpression` finds it: the object its
@@ -337,6 +468,148 @@ impl<'a> BasicAA<'a> {
         found
     }
 
+    /// `CastedValue::evaluateWith(APInt)`: the constant `bits` of `val`'s
+    /// value, cast, as a signed `index_bits` integer.
+    fn evaluate(
+        &self,
+        val: &Casted,
+        bits: u128,
+        index_bits: u32,
+    ) -> i128 {
+        let original = self.unit.int_bits(val.value).unwrap_or(index_bits);
+        let mut width = original;
+        let mut value = bits & llrm_mir::context::mask(width);
+        if val.casts.trunc_bits != 0 {
+            width = width.saturating_sub(val.casts.trunc_bits);
+            value &= llrm_mir::context::mask(width);
+        }
+        if val.casts.sext_bits != 0 {
+            let extended = wrap_signed(value as i128, width) as u128;
+            width += val.casts.sext_bits;
+            value = extended & llrm_mir::context::mask(width);
+        }
+        width += val.casts.zext_bits;
+        wrap_signed(value as i128, width)
+    }
+
+    /// `GetLinearExpression`
+    /// ([BasicAliasAnalysis.cpp:434](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L434)):
+    /// `val` as `A * V + B` for constants `A` and `B`.
+    fn linear(
+        &self,
+        val: Casted,
+        depth: u32,
+        index_bits: u32,
+    ) -> Linear {
+        // Limit our recursion depth.
+        if depth == 6 {
+            return Linear::of(val);
+        }
+        if let Some(bits) = self.unit.int_constant(val.value) {
+            return Linear { val, scale: 0, offset: self.evaluate(&val, bits, index_bits), nuw: true, nsw: true };
+        }
+        let Some(one) = self.defining(val.value) else { return Linear::of(val) };
+        let type_bits = |operand: Operand| self.unit.int_bits(operand).unwrap_or(index_bits);
+        match &one.opcode {
+            Opcode::Binary(op) => {
+                let Some(rhs_bits) = one.operands.get(1).and_then(|&rhs| self.unit.int_constant(rhs)) else {
+                    return Linear::of(val);
+                };
+                let rhs = self.evaluate(&val, rhs_bits, index_bits);
+                // The only non-overflowing operator is a disjoint or.
+                let (mut nuw, mut nsw) = (true, true);
+                if matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl
+                ) {
+                    nuw &= one.flags.contains(Flags::NUW);
+                    nsw &= one.flags.contains(Flags::NSW);
+                }
+                // zext(x op<nuw> y) == zext(x) op<nuw> zext(y), sext likewise
+                // with nsw.
+                if !((val.casts.zext_bits == 0 || nuw) && (val.casts.sext_bits == 0 || nsw)) {
+                    return Linear::of(val);
+                }
+                // The no-wrap flags are not kept through a trunc.
+                if val.casts.trunc_bits != 0 {
+                    nuw = false;
+                    nsw = false;
+                }
+                let inner = |preserve: bool| Casted {
+                    value: one.operands[0],
+                    casts: Casts { nneg: val.casts.nneg && preserve, ..val.casts },
+                };
+                let mut e;
+                match op {
+                    BinaryOp::Or | BinaryOp::Add => {
+                        // X|C == X+C if it is disjoint.
+                        if matches!(op, BinaryOp::Or) && !one.flags.contains(Flags::DISJOINT) {
+                            return Linear::of(val);
+                        }
+                        e = self.linear(inner(false), depth + 1, index_bits);
+                        e.offset = wrap_signed(e.offset.wrapping_add(rhs), index_bits);
+                        e.nuw &= nuw;
+                        e.nsw &= nsw;
+                    }
+                    BinaryOp::Sub => {
+                        e = self.linear(inner(false), depth + 1, index_bits);
+                        e.offset = wrap_signed(e.offset.wrapping_sub(rhs), index_bits);
+                        // sub nuw x, y is not add nuw x, -y.
+                        e.nuw = false;
+                        e.nsw &= nsw;
+                    }
+                    BinaryOp::Mul => {
+                        e = self.linear(inner(false), depth + 1, index_bits).mul(rhs, nuw, nsw, index_bits);
+                    }
+                    BinaryOp::Shl => {
+                        // A shift count over the width makes poison.
+                        let count = (rhs as u128) & llrm_mir::context::mask(index_bits);
+                        if count > u128::from(index_bits) {
+                            return Linear::of(val);
+                        }
+                        e = self.linear(inner(nsw), depth + 1, index_bits);
+                        e.offset = wrap_signed(e.offset << count, index_bits);
+                        e.scale = wrap_signed(e.scale << count, index_bits);
+                        e.nuw &= nuw;
+                        e.nsw &= nsw;
+                    }
+                    _ => return Linear::of(val),
+                }
+                e
+            }
+            Opcode::Cast(CastOp::ZExt) => {
+                // `withZExtOfValue`.
+                let new = one.operands[0];
+                let mut extend_by = type_bits(val.value).saturating_sub(type_bits(new));
+                let casts = if extend_by <= val.casts.trunc_bits {
+                    Casts { trunc_bits: val.casts.trunc_bits - extend_by, ..val.casts }
+                } else {
+                    extend_by -= val.casts.trunc_bits;
+                    Casts {
+                        zext_bits: val.casts.zext_bits + val.casts.sext_bits + extend_by,
+                        sext_bits: 0,
+                        trunc_bits: 0,
+                        nneg: one.flags.contains(Flags::NNEG),
+                    }
+                };
+                self.linear(Casted { value: new, casts }, depth + 1, index_bits)
+            }
+            Opcode::Cast(CastOp::SExt) => {
+                // `withSExtOfValue`.
+                let new = one.operands[0];
+                let mut extend_by = type_bits(val.value).saturating_sub(type_bits(new));
+                let casts = if extend_by <= val.casts.trunc_bits {
+                    Casts { trunc_bits: val.casts.trunc_bits - extend_by, ..val.casts }
+                } else {
+                    extend_by -= val.casts.trunc_bits;
+                    Casts { sext_bits: val.casts.sext_bits + extend_by, trunc_bits: 0, ..val.casts }
+                };
+                self.linear(Casted { value: new, casts }, depth + 1, index_bits)
+            }
+            _ => Linear::of(val),
+        }
+    }
+
     fn decomposed(
         &self,
         mut operand: Operand,
@@ -374,7 +647,7 @@ impl<'a> BasicAA<'a> {
                 found.base = operand;
                 continue;
             }
-            let Some(one) = self.defining(operand) else { break };
+            let Some((inst_id, one)) = self.unit.defining(operand) else { break };
             match &one.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
                     operand = one.operands[0]
@@ -391,17 +664,55 @@ impl<'a> BasicAA<'a> {
                     let (constant, variable) =
                         self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
                     found.offset += constant;
-                    for (at, scale) in variable {
-                        let (index, scale) = (one.operands[1 + at], scale as i128);
-                        match found.vars.iter().position(|(had, _)| *had == index) {
-                            Some(have) => {
-                                found.vars[have].1 += scale;
-                                if found.vars[have].1 == 0 {
-                                    found.vars.remove(have);
-                                }
-                            }
-                            None if scale != 0 => found.vars.push((index, scale)),
-                            None => {}
+                    let nusw = one.flags.contains(Flags::NUSW) || one.flags.contains(Flags::INBOUNDS);
+                    let nuw = one.flags.contains(Flags::NUW);
+                    let index_bits = self.unit.layout.pointer(0).index_bits;
+                    for (at, element) in variable {
+                        let index = one.operands[1 + at];
+                        // An index narrower than the index width is sign
+                        // extended, a wider one truncated.
+                        let bits = self.unit.int_bits(index).unwrap_or(index_bits);
+                        let casts = Casts {
+                            zext_bits: 0,
+                            sext_bits: index_bits.saturating_sub(bits),
+                            trunc_bits: bits.saturating_sub(index_bits),
+                            nneg: nusw && nuw,
+                        };
+                        let mut le = self.linear(Casted { value: index, casts }, 0, index_bits);
+                        // Scale by the type size.
+                        le = le.mul(element as i128, nuw, nusw, index_bits);
+                        found.offset += le.offset;
+                        if !le.nuw {
+                            found.nuw = false;
+                        }
+                        let mut scale = le.scale;
+                        let value_bits = self.unit.int_bits(le.val.value).unwrap_or(index_bits);
+                        // The same value and casts add their scales.
+                        if let Some(have) = found.vars.iter().position(|had| {
+                            had.value == le.val.value && casts_match(had.bits, had.casts(), value_bits, le.val.casts)
+                        }) {
+                            scale += found.vars.remove(have).scale;
+                            // No-wrap cannot be guaranteed for the merge.
+                            le.nsw = false;
+                            le.nuw = false;
+                        }
+                        if scale != 0 {
+                            found
+                                .vars
+                                .push(
+                                    VarIndex {
+                                        value: le.val.value,
+                                        scale,
+                                        cxt: Some(inst_id),
+                                        nsw: le.nsw,
+                                        negated: false,
+                                        zext_bits: le.val.casts.zext_bits,
+                                        sext_bits: le.val.casts.sext_bits,
+                                        trunc_bits: le.val.casts.trunc_bits,
+                                        nneg: le.val.casts.nneg,
+                                        bits: value_bits,
+                                    },
+                                );
                         }
                     }
                     operand = one.operands[0];
@@ -776,11 +1087,21 @@ impl<'a> BasicAA<'a> {
             (a.size, b.size)
         };
         let (l1, l2) = (MemoryLocation { ptr: v1, size: s1, ..*a }, MemoryLocation { ptr: v2, size: s2, ..*b });
+        // The pin's limit on nested queries ([L1687][depth]), reached by a long
+        // chain of phis and selects.
+        //
+        // [depth]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1687
+        if aaqi.depth >= MAX_QUERY_DEPTH {
+            return AliasResult::MayAlias;
+        }
         let mark = match aaqi.enter(&l1, &l2) {
             crate::aa::Entered::Known(found) => return found,
             crate::aa::Entered::Fresh(mark) => mark,
         };
+        aaqi.depth += 1;
         let result = self.alias_recursive(&l1, &l2, o1, o2, aaqi);
+        aaqi.depth -= 1;
         aaqi.exit(mark, result)
     }
 
@@ -1039,18 +1360,27 @@ impl<'a> BasicAA<'a> {
         // d1 - d2.
         d1.nuw &= d1.offset >= d2.offset;
         d1.offset -= d2.offset;
-        for (value, scale) in d2.vars.iter().copied() {
-            match d1.vars.iter().position(|(had, _)| *had == value) {
-                Some(have) => {
-                    if d1.vars[have].1 != scale {
-                        d1.nuw &= d1.vars[have].1 >= scale;
-                        d1.vars[have].1 -= scale;
+        for src in d2.vars.iter().copied() {
+            let found = d1.vars.iter().position(|dest| dest.value == src.value && dest.same_casts_as(&src));
+            match found {
+                Some(at) => {
+                    let dest = &mut d1.vars[at];
+                    // Normalise `negated` if the nsw flag goes anyway.
+                    if dest.negated {
+                        dest.scale = -dest.scale;
+                        dest.negated = false;
+                        dest.nsw = false;
+                    }
+                    if dest.scale != src.scale {
+                        d1.nuw &= dest.scale >= src.scale;
+                        dest.scale -= src.scale;
+                        dest.nsw = false;
                     } else {
-                        d1.vars.remove(have);
+                        d1.vars.remove(at);
                     }
                 }
                 None => {
-                    d1.vars.push((value, -scale));
+                    d1.vars.push(VarIndex { negated: true, ..src });
                     d1.nuw = false;
                 }
             }
@@ -1119,10 +1449,19 @@ impl<'a> BasicAA<'a> {
         let (Some(bytes1), Some(bytes2)) = (size1.value(), size2.value()) else { return AliasResult::MayAlias };
         // The variable part is a multiple of the GCD of the scales (a scale
         // without nsw is known only down to its lowest set bit).
-        let gcd = d1.vars.iter().map(|(_, scale)| 1i128 << scale.unsigned_abs().trailing_zeros().min(100)).fold(0, gcd);
+        let gcd = d1.vars.iter().map(|var| 1i128 << var.scale.unsigned_abs().trailing_zeros().min(100)).fold(0, gcd);
         if gcd > 0 {
             let modulus = d1.offset.rem_euclid(gcd);
             if modulus >= i128::from(bytes2) && gcd - modulus >= i128::from(bytes1) {
+                return AliasResult::NoAlias;
+            }
+        }
+        // If a minimum absolute variable offset can be established, it proves
+        // the two accesses far enough apart.
+        if let Some(min_abs) = self.compute_min_abs_var_offset(&d1, aaqi) {
+            // The constant offset has added at least +/-min_abs to it.
+            let (low, high) = (d1.offset - min_abs, d1.offset + min_abs);
+            if low < 0 && -low >= i128::from(bytes1) && high >= 0 && high >= i128::from(bytes2) {
                 return AliasResult::NoAlias;
             }
         }
@@ -1220,7 +1559,27 @@ impl BasicAA<'_> {
                     verdict = self.alias_check(&place, loc, aaqi);
                 }
                 if verdict != AliasResult::NoAlias {
-                    narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
+                    let touched = arg.intersect(self.get_arg_mod_ref_info(call, at));
+                    // The bytes the callee's body touches through the parameter
+                    // (DEVIATE I3, see `initializes::accessed`; the pin's loop
+                    // here has no ranges).
+                    let stated = |key| {
+                        callee
+                            .and_then(|one| one.parameter_attrs.get(at as usize))
+                            .and_then(|attrs| llrm_mir::memory::access_ranges(attrs, key))
+                    };
+                    let mut kept = ModRefInfo::NoModRef;
+                    for (key, kind) in
+                        [(llrm_mir::memory::READS, ModRefInfo::Ref), (llrm_mir::memory::WRITES, ModRefInfo::Mod)]
+                    {
+                        let apart = stated(key)
+                            .is_some_and(|ranges| self.apart_from(op.operands[at as usize], loc, &ranges, aaqi));
+                        if !apart {
+                            kept = kept.union(touched.intersect(kind));
+                        }
+                    }
+                    let touched = kept;
+                    narrowed = narrowed.union(touched);
                 }
                 if narrowed == arg {
                     break;
@@ -1245,6 +1604,121 @@ impl BasicAA<'_> {
             .and_then(|one| self.unit.globals.get(one.0 as usize)?.name.as_deref())
             .is_some_and(|name| name.starts_with("llvm.invariant.start"));
         if invariant_start { ModRefInfo::Ref } else { ModRefInfo::ModRef }
+    }
+}
+
+impl BasicAA<'_> {
+    /// Whether `loc` lies in the object `argument` points into, outside every
+    /// byte range `[low, high)` counted from `argument`: a constant offset of
+    /// both from one base, and a precise size of `loc`.
+    fn apart_from(
+        &self,
+        argument: Operand,
+        loc: &MemoryLocation,
+        ranges: &[(i64, i64)],
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        let Some(size) = loc.size.value().filter(|_| matches!(loc.size, LocationSize::Precise(_))) else {
+            return false;
+        };
+        let (one, other) = (self.decompose(argument, aaqi), self.decompose(loc.ptr, aaqi));
+        if one.base != other.base || !one.vars.is_empty() || !other.vars.is_empty() {
+            return false;
+        }
+        let (start, end) = (other.offset, other.offset + i128::from(size));
+        ranges.iter().all(|&(low, high)| end <= one.offset + i128::from(low) || one.offset + i128::from(high) <= start)
+    }
+}
+
+impl BasicAA<'_> {
+    /// `computeMinAbsVarOffset`
+    /// ([:1996](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1996)):
+    /// the least absolute value the variable part of the offset can have, if
+    /// one is established.
+    fn compute_min_abs_var_offset(
+        &self,
+        gep: &Decomposed,
+        aaqi: &AAQueryInfo,
+    ) -> Option<i128> {
+        use llrm_mir::knownbits::KnownBits;
+        use llrm_mir::valuetracking::Query;
+        let index_bits = self.unit.layout.pointer(0).index_bits;
+        let query = |cxt| {
+            Query { globals: self.unit.globals, ..Query::bare(self.unit.context, self.unit.function, self.unit.layout) }
+                .with_cxt(cxt)
+        };
+        // `abs(V * Scale) >= abs(Scale)` holds in the presence of potentially
+        // wrapping math.
+        let multiply_by_scale_no_wrap = |var: &VarIndex| {
+            if var.nsw {
+                return true;
+            }
+            let original = self.unit.int_bits(var.value).unwrap_or(index_bits);
+            // `Scale` below `2^(width - original)` cannot wrap.
+            let room = i64::from(index_bits) - i64::from(original);
+            room > 0 && var.scale >= 0 && var.scale < 1i128 << room.min(100)
+        };
+        match &gep.vars[..] {
+            [var] => {
+                if var.trunc_bits == 0
+                    && llrm_mir::valuetracking::nonzero::is_known_non_zero(&query(var.cxt), var.value, 0)
+                    && multiply_by_scale_no_wrap(var)
+                {
+                    // If V != 0 then abs(VarIndex) >= abs(Scale).
+                    return Some(var.scale.abs());
+                }
+                None
+            }
+            [var0, var1] => {
+                // VarIndex = Scale*V0 + (-Scale)*V1; V0 != V1 then
+                // abs(VarIndex) >= abs(Scale). Values across loop iterations
+                // are not compared.
+                if var0.trunc_bits != 0
+                    || !var0.same_casts_as(var1)
+                    || aaqi.may_be_cross_iteration
+                    || !multiply_by_scale_no_wrap(var0)
+                    || !multiply_by_scale_no_wrap(var1)
+                {
+                    return None;
+                }
+                if var0.has_negated_scale_of(var1) {
+                    let cxt = var0.cxt.or(var1.cxt);
+                    return llrm_mir::valuetracking::nonzero::is_known_non_equal(
+                        &query(cxt),
+                        var0.value,
+                        var1.value,
+                        0,
+                    )
+                    .then(|| var0.scale.abs());
+                }
+                // The generalisation to different scales: with
+                // ScaleGCD = gcd(|S0|, |S1|), C0*V0 != C1*V1 gives
+                // abs(VarIndex) >= ScaleGCD. Scales must differ in sign once
+                // negated.
+                let effective_negative = |var: &VarIndex| var.negated ^ (var.scale < 0);
+                if effective_negative(var0) == effective_negative(var1) {
+                    return None;
+                }
+                let (abs0, abs1) = (var0.scale.abs(), var1.scale.abs());
+                let scale_gcd = gcd(abs0, abs1);
+                let (c0, c1) = (abs0 / scale_gcd, abs1 / scale_gcd);
+                // One is provably even and the other odd, in the known bits.
+                let known = |var: &VarIndex, c: i128| {
+                    let bits = self.unit.int_bits(var.value)?;
+                    let value = llrm_mir::valuetracking::known::compute_known_bits(&query(var.cxt), var.value, 0);
+                    let wide = if var.sext_bits > 0 { value.sext(bits + var.sext_bits) } else { value };
+                    let wide = if var.zext_bits > 0 { wide.zext(wide.width + var.zext_bits) } else { wide };
+                    let constant = KnownBits::constant(wide.width, (c as u128) & llrm_mir::context::mask(wide.width));
+                    Some(KnownBits::mul(&wide, &constant, false))
+                };
+                let (known0, known1) = (known(var0, c0)?, known(var1, c1)?);
+                if known0.width == known1.width && KnownBits::ne(&known0, &known1) == Some(true) {
+                    return Some(scale_gcd);
+                }
+                None
+            }
+            _ => None,
+        }
     }
 }
 
@@ -2216,6 +2690,34 @@ b0:
         }
     }
 
+    /// A chain of thirty thousand selects asks the pin's nesting limit
+    /// (512 open queries) to end it: the walk down the true arms overflowed a
+    /// 16 MiB stack.
+    #[test]
+    fn a_long_chain_of_selects_is_asked_no_deeper_than_the_limit() {
+        let mut text = String::from(
+            "define void @f(ptr %a, i1 %c) {\nb0:\n  %s = alloca i16\n  %s0 = select i1 %c, ptr %a, ptr %a\n",
+        );
+        for at in 1..30_000 {
+            text += &format!("  %s{at} = select i1 %c, ptr %s{}, ptr %a\n", at - 1);
+        }
+        text += "  ret void\n}\n";
+        let answer = std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(move || {
+                let module = parsed(&text);
+                let layout = layout(&module);
+                let f = function(&module, "f");
+                let unit = Unit::of(&module, &layout, f);
+                let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(2));
+                BasicAA::new(&unit).alias(&at("s29999"), &at("s"), &mut AAQueryInfo::default(), None)
+            })
+            .expect("a thread")
+            .join()
+            .expect("the walk ends");
+        assert_eq!(answer, AliasResult::MayAlias);
+    }
+
     /// Two pointers that step through the loop that holds them (each a phi
     /// with itself as an incoming value, through a `getelementptr`) ask each
     /// other: the pair is assumed apart while it is asked, and the answer is
@@ -2290,5 +2792,21 @@ b2:
         assert_eq!(aa.alias(&at("p"), &at("p"), &mut AAQueryInfo::default(), None), AliasResult::MustAlias);
         assert_eq!(aa.alias(&at("p"), &at("p"), &mut crossing, None), AliasResult::MayAlias);
         assert_eq!(aa.alias(&at("a"), &at("a"), &mut crossing, None), AliasResult::MustAlias);
+    }
+
+    /// `gep inbounds [4 x i8], @g, %j` with `%j` known non-zero is at least
+    /// four bytes from `@g` (`computeMinAbsVarOffset`, one variable index):
+    /// the pin says NoAlias for four-byte accesses; with `%j` unknown the two
+    /// may overlap. LICM kept `@a[0]` in memory across a loop over `@a[%i]`
+    /// for `nbody_single` (+38 B) and `fpbench` (+53 B) for want of it.
+    #[test]
+    fn an_index_known_non_zero_puts_a_gep_a_whole_scale_from_its_base() {
+        let body = |index: &str| {
+            format!(
+                "@g = internal global [64 x i32] zeroinitializer\ndefine i32 @f(i32 %x) {{\nentry:\n  %j = {index}\n  %a = getelementptr inbounds [4 x i8], ptr @g, i32 %j\n  %b = getelementptr inbounds i8, ptr @g, i32 0\n  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body("or i32 %x, 1"), "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body("add i32 %x, 0"), "a", "b", 4), AliasResult::MayAlias);
     }
 }

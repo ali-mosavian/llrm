@@ -1035,7 +1035,7 @@ fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
 }
 
 /// A `switch` with two cases to one block is two edges: a phi there has two
-/// inputs from it, and the exit phis of lcssa, lcssamerges and LSR gave one.
+/// inputs from it, and the exit phis of lcssa and LSR gave one.
 #[test]
 fn a_switch_with_two_cases_to_a_block_is_two_edge_predecessors() {
     let text = "define i16 @f(i16 %x) {\nentry:\n  switch i16 %x, label %d [\n    i16 1, label %t\n    i16 2, label %t\n  ]\n\nt:\n  ret i16 1\n\nd:\n  ret i16 2\n}\n";
@@ -1140,4 +1140,25 @@ fn an_assignment_record_follows_its_value_and_address_and_keeps_its_id() {
     assert_eq!(assign(f).1, Some(Operand::Value(pointer)));
     assert_eq!(assign(f).2, id);
     let _ = x;
+}
+
+/// `erase_block` tested every entry of the layout against a set of the blocks
+/// to erase: 16 k Ir for each of the 1,550 `empty_block_removed` calls of a
+/// memory_expansion -O2 compile. One block is found and taken out; the order
+/// of the rest stands.
+#[test]
+fn erasing_one_block_tests_no_layout_entry_and_keeps_the_order() {
+    let mut module = module("define void @f() {\nentry:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let made: Vec<_> = (0..50).map(|k| f.create_block(Some(&format!("b{k}")))).collect();
+    for &block in &made {
+        f.insert_block(block, None).expect("placed");
+    }
+    let before = crate::edit::layout_tested();
+    f.erase_block(made[20]).expect("empty and unnamed");
+    assert_eq!(crate::edit::layout_tested(), before, "no entry was tested against a set");
+    let mut expected = vec![f.entry().unwrap()];
+    expected.extend(made.iter().copied().filter(|&one| one != made[20]));
+    assert_eq!(f.layout(), &expected[..]);
+    assert!(!f.is_placed(made[20]));
 }

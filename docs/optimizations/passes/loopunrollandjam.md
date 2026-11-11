@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollandjam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollandjam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:c73f033bf8573b08257004ec928cf770df6fcb0b5e072748dbea8b8bc62bd581 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:cd3bca7a353a7929209b90eccb0f502d07989306617fb11b597c70c44162adeb -->
 
 # loopunrollandjam
 
@@ -47,6 +47,12 @@ load that does not move with the outer one, or the user asked.
   pragma asks (`enable-unroll-and-jam` is false) and the targets leave
   `UP.Partial` and `UP.Runtime` off; the `particle` row at -O3 is the
   reason. The pragma and `-allow-unroll-and-jam` ask as they do at the pin.
+- D8: a function that was jammed runs `IndVarSimplify`, `GVN` and `DSE` once
+  after the jam. The pin has no pass after the jam that merges the copies'
+  counters (`movePHIs` leaves one phi per copy), so each copy keeps its own
+  load and store of a cell the others touch; gcc folds them. The pin never
+  forms the shape (`-O3` leaves the jam off), so no pin output shows it.
+  Exit: none.
 - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or

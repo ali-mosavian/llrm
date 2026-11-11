@@ -541,6 +541,23 @@ fn fold_and_difference(
     None
 }
 
+/// `X - (X & Y)` is `X & ~Y` when the `and` has no other user or `Y` is a
+/// constant (:2848): the runtime-unrolled trip count `n - (n & 1)` is `n & -2`.
+fn fold_sub_of_and(
+    c: &mut Combiner,
+    inst: InstId,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let y = {
+        let q = query(c, Some(inst));
+        let (_, y) = commutative(&q, op1, BinaryOp::And, |x| x == op0)?;
+        (has_one_use(c, op1) || pattern::apint(&q, y).is_some()).then_some(y)
+    };
+    let not = c.create_not(inst, y?);
+    Some(c.replace_with_binop(inst, BinaryOp::And, op0, not, Flags::default()))
+}
+
 /// `(sub (xor X, (sext C)), (sext C))` is `select C, (neg X), X` (:2845).
 fn fold_xor_of_sext_bool(
     c: &mut Combiner,
@@ -717,13 +734,14 @@ pub fn visit_sub(
         return found;
     }
     // DEVIATE 2: isFreeToInvert (~X - ~Y); DEVIATE 1: vector_reduce_add.
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 8] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
         fold_constant_minuend,
         fold_constant_mask_minuend,
         fold_negated_remainder,
         fold_bitwise_difference,
         fold_and_difference,
         fold_xor_of_sext_bool,
+        fold_sub_of_and,
         fold_pointer_difference,
         fold_saturating_difference,
     ];

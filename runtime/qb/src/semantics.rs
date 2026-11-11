@@ -129,6 +129,10 @@ fn meaning(
         },
         _ => return Err("states one of result, view and copy".to_owned()),
     };
+    let result_bits = match row.get("result_bits") {
+        None => None,
+        Some(bits) => Some(bits.as_integer().and_then(|one| u32::try_from(one).ok()).ok_or("result_bits is not a width")?),
+    };
     let releases = row
         .get("releases")
         .and_then(toml::Value::as_array)
@@ -145,7 +149,7 @@ fn meaning(
         Some("always") => true,
         other => return Err(format!("inline is {other:?}, not \"always\"")),
     };
-    Ok(Meaning { routine: name.to_owned(), parameters, result, releases, always_inline, check })
+    Ok(Meaning { routine: name.to_owned(), parameters, result, result_bits, releases, always_inline, check })
 }
 
 /// `text` as an expression: `or` over `==` and `<` over `+` and `-` over

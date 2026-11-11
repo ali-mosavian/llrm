@@ -59,6 +59,16 @@ def width(rows):
     return widths.pop()
 
 
+def compilers(rows):
+    """The one compiler stamp (build.sh: md5 of llrm-cc + llrm-llc) of every row: a file of two, or of an unstamped row, says nothing of what was measured."""
+    if any('cc' not in r for r in rows):
+        raise ValueError("rows with no compiler stamp: rebuild with build.sh")
+    stamps = {r['cc'] for r in rows}
+    if len(stamps) != 1:
+        raise ValueError(f"rows of compilers {sorted(stamps)} in one table")
+    return stamps.pop()
+
+
 if __name__ == '__main__':
     WORK=Path(os.environ.get('VSGCC_WORK', Path.home()/'scratch/vsgcc-work'))
     rows=[json.loads(l) for l in open(WORK/'results.jsonl') if l.startswith('{')]
@@ -66,9 +76,9 @@ if __name__ == '__main__':
     P={}
     for r in rows: P.setdefault(r['prog'],{})[r['variant']]=r
     complete(P)
-    print(f"long double: {width(rows)} bit on both sides")
+    print(f"long double: {width(rows)} bit on both sides; llrm compiler {compilers(rows)}")
     assert all(r['ok'] for r in rows), [(r['prog'], r['variant']) for r in rows if not r['ok']]
-    print("| program | compiler | instr | mem ops | misaligned | 486 clk | nops | text+data B | llrm/gcc clk | llrm/gcc ins | llrm/clang clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+    print("| program | compiler | instr | mem ops | misaligned | 486 clk | nops | text+data B | .eh_frame B | llrm/gcc clk | llrm/gcc ins | llrm/clang clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
     for p,d in P.items():
         for lvl in LEVELS:
             L, G, C = llrm(lvl), 'gcc'+lvl, 'clang'+lvl
@@ -77,5 +87,5 @@ if __name__ == '__main__':
                 cells = ['', '', '']
                 if v == L:
                     cells = [f"{r['clocks'] / max(1, d[G]['clocks']):.2f}", f"{r['ins'] / max(1, d[G]['ins']):.2f}", f"{r['clocks'] / max(1, d[C]['clocks']):.2f}"]
-                print(f"| {p} | {v[:-2] if v[-2:] == lvl else v} -{lvl} | {r['ins']} | {r['mem']} | {r.get('misaligned', 0)} | {r['clocks']} | {r['nops']} | {r['code']} | " + " | ".join(cells) + " |")
+                print(f"| {p} | {v[:-2] if v[-2:] == lvl else v} -{lvl} | {r['ins']} | {r['mem']} | {r.get('misaligned', 0)} | {r['clocks']} | {r['nops']} | {r['code']} | {'' if r.get('eh_frame') is None else r['eh_frame']} | " + " | ".join(cells) + " |")
     print(*grouped(P), sep='\n')

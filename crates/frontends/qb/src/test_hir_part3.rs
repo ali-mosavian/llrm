@@ -280,27 +280,38 @@ fn test_string_fre_emits_the_measured_vbdos_runtime_call() {
 /// values have no definition".
 #[test]
 fn test_a_masked_far_subscript_compiles() {
+    let body = masked_far_loop("(x + f) AND 511");
+    assert!(is_masked_16_bit(&body), "{body}");
+}
+
+/// Without the `AND 511` the loop has no 1022 cut: the shape check above
+/// does not pass on anything that merely compiles.
+#[test]
+fn test_an_unmasked_far_subscript_has_no_cut() {
+    let body = masked_far_loop("(x + f) MOD 512");
+    assert!(!is_masked_16_bit(&body), "{body}");
+}
+
+/// The `T` procedure of a loop reading `s(<index>)` of a far array.
+fn masked_far_loop(index: &str) -> String {
     let directory = tempfile::TempDir::new().unwrap();
-    let basic = written(
-        &directory,
-        "MASKED.BAS",
-        b"DEFINT A-Z\r\nDECLARE SUB t (f)\r\nt 3\r\nSUB t (f)\r\nDIM s(511), u(319)\r\nFOR x = 0 TO 319\r\nu(x) = s((x + f) AND 511)\r\nNEXT\r\nEND SUB\r\n",
+    let source = format!(
+        "DEFINT A-Z\r\nDECLARE SUB t (f)\r\nt 3\r\nSUB t (f)\r\nDIM s(511), u(319)\r\nFOR x = 0 TO 319\r\nu(x) = s({index})\r\nNEXT\r\nEND SUB\r\n"
     );
+    let basic = written(&directory, "MASKED.BAS", source.as_bytes());
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
-    // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
-    // `u(x)` addresses through a doubled 32-bit index whose upper half is
-    // zeroed once before the loop. DEVIATE LU2 (#3646): the lea that doubles
-    // the index (`lea bx, [eax+eax]`) carries the store's offset, so the loop
-    // counter runs to zero and no `movzx` widens it.
     let text = listing(&program);
-    let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
+    text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")].to_string()
+}
+
+/// The masked `s(i)` is a 16-bit offset cut to the array's 1022 and read
+/// through that same register, with no `shl` and no 32-bit index to widen.
+/// The unmasked `u(x)` addressing is left to the allocator (LU2 doubled the
+/// index with a `lea`; LU14 (#8350) strides a pointer instead).
+fn is_masked_16_bit(body: &str) -> bool {
     let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
-    let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
-    let index = regex::Regex::new(r"lea \w+, \[(e\w\w)\+(e\w\w)\]").unwrap();
-    let doubled = index.captures_iter(body).any(|one| one[1] == one[2]);
-    assert!(masked && doubled && !body.contains("shl"), "{body}");
+    mask.captures(body).is_some_and(|one| one[1] == one[2]) && !body.contains("shl")
 }
 
 /// The main body of `source`'s listing.
@@ -695,12 +706,14 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
-    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
-    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). It is
+    // read as emitted: with ERROR 53 the only raise, the optimizer folds `erl`
+    // to 100 and the table and its compare go (the executed case,
+    // conformance pds71 pds-local-error, prints PASS).
+    let emitted = emitted_mir(&source);
+    let table = emitted.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
     let entries = table.matches("i16 ").count();
     assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
-    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))
@@ -2103,7 +2116,8 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
     // is no longer than the pin's i486 loop (8 instructions). The pin's
     // loop-reduce keeps one counter and addresses by `2 * x`; the 16-bit
     // address has no scale, so ours steps the byte offset (`cmp bx, 674`)
-    // beside the counter, for the same length (DEVIATE LU1).
+    // beside the counter, for the same length (DEVIATE LU1); counting the
+    // offset up to zero (`add bx, 2; jne`, one instruction fewer) is as good.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -2120,7 +2134,11 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
         .expect("the multiplying loop");
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
     assert!(
-        (body.contains("cmp ax, 357") || body.contains(", 674")) && !body.contains("or ax, ax") && instructions <= 8,
+        (body.contains("cmp ax, 357")
+            || body.contains(", 674")
+            || regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(&body))
+            && !body.contains("or ax, ax")
+            && instructions <= 8,
         "{body}"
     );
 }
@@ -2386,8 +2404,12 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
         .find(|one| one.matches(", 1022").count() == 4)
         .unwrap_or_else(|| panic!("{procedure}"));
     // The pin's loop-reduce leaves this loop five counters too (steps 2, 6, 8,
-    // 18 and 22, ending at 642), on a machine of six: one of them is parked,
-    // in one slot, a store and the reloads that use it.
+    // 18 and 22, ending at 642), on a machine of six. "One of them is parked,
+    // in one slot" is an expectation, not a pin measurement: pin llc at code16
+    // parks two counters on this function and four on a loop of this shape
+    // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
+    // from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");
@@ -2732,7 +2754,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .expect("END")
         .1
         .attrs
-        .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
+        .push(llrm_mir::Attribute::Flag("nounwind".into()));
     llrm_codegen::backend::ehprepare::prepared(&mut emitted.module, &llrm_x86_m16::layout()).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
@@ -3686,6 +3708,27 @@ fn test_clear_calls_the_runtime_clear() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCLR").expect("the call");
     assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
+}
+
+/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the
+/// table of module variables its C body reads as the third argument:
+/// `table->main_module` came from a stray register and the program stopped with
+/// "Illegal function call" (clear_variables.bas). The call carries the table's
+/// near address, as the C body takes it.
+#[test]
+fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "CLEARM16.BAS", b"x% = 5\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let frontend = qb_driver::Frontend::new("qb45", "llrm");
+    let text = listing(&qb_driver::parsed(&source, &frontend, None).expect("parses"));
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    let before = &main[..call];
+    assert!(
+        before.trim_end().ends_with("push offset CLEARM16$D3"),
+        "the table's near address is the third argument: {main}"
+    );
+    assert!(!before.contains("pushw DGROUP"), "and not a far pointer on the stack: {main}");
 }
 
 /// A variable set before CLEAR and printed after it was folded to its old

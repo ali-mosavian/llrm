@@ -80,6 +80,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [combine-fsub-rows.md](combine-fsub-rows.md) | QCport growers of `fsub x, C` -> `fadd x, -C` (#5642) |
 | [simplifycfg-resimplify-rows.md](simplifycfg-resimplify-rows.md) | QCport growers of SimplifyCFG's repeated block visit (#5662) |
 | [icmp-mul-constant-rows.md](icmp-mul-constant-rows.md) | QCport growers of `foldICmpMulConstant` (#5670) |
+| [icmp-div-constant-rows.md](icmp-div-constant-rows.md) | Worse cells of `foldICmpDivConstant` and the indexed-global table fold (#8438) |
 | [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
@@ -173,7 +174,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
-| [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |
+| [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner anyisa, due 2026-11-20 |
 | [shared-se](shared-se.md) | One ScalarEvolution across the loop passes — w-3, plan note 2026-10-28 |
 | [simplifycfg-jt-cvp-cost](simplifycfg-jt-cvp-cost.md) | SimplifyCFG + JumpThreading + CVP compile cost: ranked callees |
 | [struct-copy-rows](struct-copy-rows.md) | Struct-copy rows R2 and R3 (#3621): cause |

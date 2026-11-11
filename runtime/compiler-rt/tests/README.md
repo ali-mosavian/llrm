@@ -3,12 +3,14 @@
 Host oracle (run from `runtime/compiler-rt`, each prints `fails=0` or its totals):
 - `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/f32/*.c -lm && ./a.out`
 - `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/f64/*.c && ./a.out`
-- `cc -O2 -fno-builtin -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_int.c lib/int/int32.c lib/int/int64.c && ./a.out`
+- `cc -O2 -fno-builtin -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_int.c lib/int/int32.c $(tests/fp_sources.sh int64) && ./a.out`
 - `cc -O2 -Iinclude tests/host_fast32.c lib/fast/fast32.c -lm`; `tests/host_mathf.c` and `tests/host_fp8.c`: the build line is in their header
 - `tests/host_div_newton.sh` (SF_DIV_NEWTON, two multiplies); `tests/host_add_far.c` (far-exponent add/sub; build line in its header)
 - `cc -O2 -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_clz.c lib/int/clzsi2.c lib/int/clzdi2.c && ./a.out`
+- `cc -O2 -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_bitcount.c lib/int/clz{hi,si,di}2.c lib/int/ctz{hi,si,di}2.c lib/int/popcount{hi,si,di}2.c && ./a.out`: clz/ctz/popcount at 16, 32 and 64 bits against `__builtin_*`
 - `python3 tests/cells_worse.py A.json B.json` (bench.py --json files): lists cells worse on bytes, clocks or instructions; `sh tests/cells_worse_test.sh` is its test
 - `sh tests/int16_lint.sh` (16-bit int compile of every source)
+- `LLRM_CC=llrm-cc sh tests/udivmod_w_size_test.sh`: the 64-bit divide worker links no 32-bit shift libcall at -Os
 
 Targets:
 - m68k (qemu): `LLRM_CC_DIR=dir tests/run_m68k.sh CPU OPT [n]`, `tests/m68k_cmp_unordered.c`, `tests/m68k_wrapper_size.sh`, `tests/m68k_no_self_call.sh`, `tests/size_m68k.sh [CPU] [OPT]`

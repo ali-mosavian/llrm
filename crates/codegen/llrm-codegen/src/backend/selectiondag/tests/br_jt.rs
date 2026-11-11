@@ -19,7 +19,20 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            multiply_early_out: None,
+            imul_if_smaller: false,
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            branch_constant_selects: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
@@ -55,7 +68,20 @@ fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            multiply_early_out: None,
+            imul_if_smaller: false,
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            branch_constant_selects: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();

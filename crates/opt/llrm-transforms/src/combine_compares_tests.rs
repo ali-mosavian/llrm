@@ -344,17 +344,17 @@ fn a_xor_compared_with_its_operand_is_decided_by_the_other_operand() {
         "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %r = icmp sle i32 %x, %a\n  ret i1 %r\n",
         "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %0 = icmp sgt i32 %a, %x\n  ret i1 %0\n",
     );
-    // The pin goes on to `icmp slt i32 %x, 0` (`foldICmpBinOpWithConstant`,
-    // OWED).
+    // The sign-bit compare demands only the sign bit, which the xor leaves:
+    // `icmp slt i32 %x, 0`, as the pin (`SimplifyDemandedBits`).
     check(
         "i32 %x",
         "  %a = xor i32 %x, -8\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
-        "  %a = xor i32 %x, -8\n  %0 = icmp sgt i32 %a, -1\n  ret i1 %0\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
     );
     check(
         "i32 %x",
         "  %a = xor i32 %x, -8\n  %r = icmp sgt i32 %x, %a\n  ret i1 %r\n",
-        "  %a = xor i32 %x, -8\n  %0 = icmp slt i32 %a, 0\n  ret i1 %0\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
     );
 }
 
@@ -679,8 +679,10 @@ fn test_an_offset_and_mask_overflow_check_is_a_zero_test() {
         &format!("{m}  %r = icmp ule i16 %b, %m\n  ret i1 %r\n"),
         &format!("  %0 = icmp eq i16 %b, 0\n  ret i1 %0\n"),
     );
+    // Not a zero test; the mask shrinks the add's constant (`opt`: `add i16 %b,
+    // 1`).
     let other = "  %s = add i16 %b, 5\n  %m = and i16 %s, 3\n  %r = icmp ult i16 %m, %b\n  ret i1 %r\n";
-    check("i16 %b", other, other);
+    check("i16 %b", other, &other.replace("%b, 5", "%b, 1"));
 }
 
 /// `foldICmpMulConstant`; every shape pinned by `opt -passes=instcombine`
@@ -754,6 +756,26 @@ b0:
 ",
     );
     assert!(after.contains("icmp sgt i64 %x, 32") && !after.contains("getelementptr"), "{after}");
+}
+
+/// `foldGEPICmp` takes `GEPOperator`s, so a constant-expression GEP is a GEP:
+/// `p + %z` against `@cells + 3` compares `%z` with 3 Ours saw instruction
+/// GEPs only and kept the pointer compare (`frame_address_stack_args` -Os);
+/// the pin gives `icmp eq i32 %x, 3`.
+#[test]
+fn test_a_constant_expression_gep_compares_its_offset() {
+    let after = combined(
+        "@cells = global [16 x i8] zeroinitializer
+define i1 @f(i32 %x) {
+b0:
+  %z = zext nneg i32 %x to i64
+  %p = getelementptr inbounds nuw i8, ptr @cells, i64 %z
+  %c = icmp eq ptr %p, getelementptr inbounds nuw (i8, ptr @cells, i64 3)
+  ret i1 %c
+}
+",
+    );
+    assert!(after.contains("icmp eq i32 %x, 3") && !after.contains("icmp eq ptr"), "{after}");
 }
 
 /// Two GEPs of one base that differ in one index compare that index.
@@ -931,4 +953,81 @@ fn test_a_compare_of_a_narrower_inttoptr_is_kept() {
         "define i1 @f(i32 %x) {\nb0:\n  %p = inttoptr i32 %x to ptr\n  %r = icmp eq ptr %p, null\n  ret i1 %r\n}\n",
     );
     assert!(out.contains("icmp eq ptr"), "{out}");
+}
+
+/// `icmp-subadd.ll`: `sub`/`add` of the same operands under `pred`, as in
+/// the pin's cases, left as the compare of `y` alone.
+fn sub_add(
+    sub: &str,
+    add: &str,
+    pred: &str,
+    swapped: bool,
+    after: &str,
+) {
+    let (l, r) = if swapped { ("%add", "%sub") } else { ("%sub", "%add") };
+    let body = format!(
+        "  %sub = sub {sub} i8 %a, %b\n  %add = add {add} i8 %a, %b\n  %cmp = icmp {pred} i8 {l}, {r}\n  ret i1 %cmp\n"
+    );
+    check("i8 %a, i8 %b", &body, after);
+}
+
+/// `icmp sgt (sub nsw a, b), (add nsw a, b)` stayed three instructions
+/// instead of `icmp slt b, 0`; `slt`, `sle`, the commuted order and
+/// equality with `nsw` or `nuw` on each side follow.
+#[test]
+fn a_sub_and_an_add_of_the_same_operands_compare_as_b_against_zero() {
+    sub_add("nsw", "nsw", "sgt", false, "  %0 = icmp slt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "slt", false, "  %0 = icmp sgt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "sle", false, "  %0 = icmp sgt i8 %b, -1\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "sgt", true, "  %0 = icmp sgt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nuw", "eq", false, "  %0 = icmp eq i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "eq", false, "  %0 = icmp eq i8 %b, 0\n  ret i1 %0\n");
+}
+
+/// A signed compare of `nuw` operands (and the reverse) is not the fold's.
+#[test]
+fn a_sub_and_an_add_without_the_flag_of_the_predicate_stay() {
+    let kept =
+        "  %sub = sub nuw i8 %a, %b\n  %add = add nuw i8 %a, %b\n  %cmp = icmp sge i8 %add, %sub\n  ret i1 %cmp\n";
+    sub_add("nuw", "nuw", "sge", true, kept);
+}
+
+/// `icmp-samesign-canonicalize.ll`, scalar cases: `x` against `c` under a
+/// `samesign` predicate.
+fn samesign(
+    pred: &str,
+    c: i32,
+    after: &str,
+) {
+    let body = format!("  %cmp = icmp samesign {pred} i8 %x, {c}\n  ret i1 %cmp\n");
+    check("i8 %x", &body, after);
+}
+
+/// `samesign uge x, 42` lost the flag (`icmp ugt x, 41`); the pin keeps it.
+#[test]
+fn canonicalizing_a_samesign_compare_keeps_samesign() {
+    samesign("uge", 42, "  %0 = icmp samesign ugt i8 %x, 41\n  ret i1 %0\n");
+    samesign("sge", 42, "  %0 = icmp samesign sgt i8 %x, 41\n  ret i1 %0\n");
+}
+
+/// A constant whose step crosses the sign boundary keeps its predicate:
+/// `samesign sge x, 0` was `sgt x, -1`.
+#[test]
+fn a_samesign_compare_is_not_canonicalized_across_the_sign_boundary() {
+    let kept = |pred: &str, c: i32| {
+        let body = format!("  %cmp = icmp samesign {pred} i8 %x, {c}\n  ret i1 %cmp\n");
+        check("i8 %x", &body, &body);
+    };
+    kept("sge", 0);
+    kept("sle", -1);
+}
+
+/// Both sides of an unsigned `samesign` compare share a sign: `ule x, 127`
+/// is true, `uge x, 127` is `x == 127`, `uge x, -128` is true. All three
+/// stayed compares.
+#[test]
+fn an_unsigned_samesign_compare_shares_the_known_sign_between_its_sides() {
+    samesign("ule", 127, "  ret i1 true\n");
+    samesign("uge", 127, "  %0 = icmp eq i8 %x, 127\n  ret i1 %0\n");
+    samesign("uge", -128, "  ret i1 true\n");
 }

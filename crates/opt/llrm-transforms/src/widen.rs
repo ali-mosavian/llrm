@@ -44,7 +44,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::types::TypeId;
 
@@ -132,6 +132,10 @@ pub struct WidenIv {
     /// context.
     post_inc_range_infos: IdMap<InstId, Vec<(InstId, ConstantRange)>>,
     narrow_iv_users: Vec<NarrowIvDefUse>,
+    /// NNEG-1: the `zext nneg` users of the original counter that cannot be
+    /// poison in a defined program, found before the first rewrite (widening
+    /// leaves them dead).
+    nneg_zexts: Vec<InstId>,
 }
 
 pub(crate) fn result_of(
@@ -404,6 +408,7 @@ impl WidenIv {
             extend_kind_map,
             post_inc_range_infos: IdMap::default(),
             narrow_iv_users: Vec::new(),
+            nneg_zexts: Vec::new(),
         }
     }
 
@@ -1257,7 +1262,10 @@ impl WidenIv {
             }
 
             let mut non_negative_use = false;
-            if !non_negative_def {
+            if !non_negative_def && self.non_negative_by_nneg_use(e, narrow_def, narrow_user) {
+                non_negative_use = true;
+            }
+            if !non_negative_def && !non_negative_use {
                 // We might have a control-dependent range information for this
                 // context.
                 if let Some(range) = self.post_inc_range(narrow_def, narrow_user) {
@@ -1272,6 +1280,77 @@ impl WidenIv {
                 never_negative: non_negative_def || non_negative_use,
             });
         }
+    }
+
+    /// DEVIATE NNEG-1 (owner m64-clocks, docs/working/above-main-rows.md): the
+    /// pin's `NeverNegative` proof (SCEV `isKnownPredicate`, post-inc ranges)
+    /// ignores a `zext nneg` of the counter. A `zext nneg` of the counter in
+    /// the loop whose result cannot be poison in a defined program
+    /// (`programUndefinedIfPoison`) means the counter is non-negative whenever
+    /// that `zext` ran. Collected before the first rewrite, which leaves them
+    /// dead. Not at `optsize`/`minsize`: strict bytes (quicksort -Os +2 B).
+    fn collect_nneg_zexts(
+        &mut self,
+        e: &Edit,
+    ) {
+        let for_size = e
+            .function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            );
+        if for_size {
+            return;
+        }
+        let result = result_of(e.function, self.orig_phi);
+        let cx = cx!(e);
+        let Some(our_loop) = cx.loops.get_loop_for(self.l) else { return };
+        let q = cx.query(None);
+        self.nneg_zexts = e
+            .function
+            .users(result)
+            .iter()
+            .filter_map(|used| {
+                let user = e.function.instruction(used.user);
+                if !matches!(user.opcode, Opcode::Cast(CastOp::ZExt)) || !user.flags.contains(Flags::NNEG) {
+                    return None;
+                }
+                let user_loop = cx.loops.get_loop_for(cx.function.parent(used.user)?)?;
+                let zext_result = user.result?;
+                (our_loop.contains_loop(Some(user_loop))
+                    && llrm_mir::valuetracking::guarantee::program_undefined_if_poison(&q, Operand::Value(zext_result)))
+                .then_some(used.user)
+            })
+            .collect();
+    }
+
+    /// NNEG-1: `narrow_def` (the counter, or `add nsw counter, c` with
+    /// `c >= 0`) is non-negative at `narrow_use` when one of the collected
+    /// `zext nneg` dominates it, so it ran in the same iteration.
+    fn non_negative_by_nneg_use(
+        &self,
+        e: &Edit,
+        narrow_def: InstId,
+        narrow_use: InstId,
+    ) -> bool {
+        if self.nneg_zexts.is_empty() {
+            return false;
+        }
+        let def = e.function.instruction(narrow_def);
+        let on_counter = narrow_def == self.orig_phi
+            || match (&def.opcode, def.operands.as_slice()) {
+                (Opcode::Binary(BinaryOp::Add), [x, c]) if def.flags.contains(Flags::NSW) => {
+                    int_constant(e, *c).is_some_and(|(bits, value)| value >> (bits - 1) == 0)
+                        && defining(e.function, *x) == Some(self.orig_phi)
+                }
+                _ => false,
+            };
+        let cx = cx!(e);
+        on_counter && self.nneg_zexts.iter().any(|&zext| cx.tree.instruction_dominates(cx.function, zext, narrow_use))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyIndVar.cpp#L2053
@@ -1307,6 +1386,7 @@ impl WidenIv {
             return None;
         }
         let add_rec = wide_iv_expr;
+        self.collect_nneg_zexts(e);
 
         // Iterate over IV uses (including transitive ones) looking for IV
         // increments of the form 'add nsw %iv, <const>'. For each increment and
@@ -1521,7 +1601,7 @@ impl WidenIv {
 
             let cx = cx!(e);
             let rhs_scev = e.se.get_scev(&cx, cmp_rhs);
-            let cmp_rhs_range = e.se.get_signed_range(&cx, rhs_scev);
+            let cmp_rhs_range = e.se.get_signed_range(&cx, rhs_scev).to_word::<u128>();
             let constrained = ConstantRange::make_allowed_icmp_region(pred, &cmp_rhs_range);
             let narrow_def_range = constrained.add_with_no_wrap(
                 &ConstantRange::single(width, rhs),

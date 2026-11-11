@@ -22,6 +22,7 @@ pub mod fix_br_table_defaults;
 pub mod fix_function_bitcasts;
 pub mod fix_irreducible;
 pub mod frame;
+pub mod ir_lowering;
 pub mod late_eh_prepare;
 pub mod liveness;
 pub mod lower_br_unless;

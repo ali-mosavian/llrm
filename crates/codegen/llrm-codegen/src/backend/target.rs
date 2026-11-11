@@ -251,8 +251,9 @@ pub struct Segments {
     /// group, the data segment register is free between the points that need
     /// it (`needs_data_group`), so it comes last.
     pub selectors: Vec<RegId>,
-    /// The one every access without a prefix reads.
-    pub data: RegId,
+    /// The one every access without a prefix reads; none where the register
+    /// file names no data segment (a flat target without segment registers).
+    pub data: Option<RegId>,
     /// The one that reaches the data group while `data` holds something
     /// else: the stack's, where the stack lives in the data group.
     pub through: Option<RegId>,
@@ -289,7 +290,7 @@ impl Segments {
         let Some(segments) = machine.segments.as_ref() else {
             return Self {
                 selectors: Vec::new(),
-                data: registers.data(),
+                data: registers.data_segment,
                 through: None,
                 huge_shift: None,
                 offset_bytes,
@@ -312,7 +313,7 @@ impl Segments {
                 .into_iter()
                 .filter(|one| !reserved.iter().any(|name| named(one, name)))
                 .collect(),
-            data: register(&segments.data),
+            data: Some(register(&segments.data)),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
             huge_shift: machine.huge_shift(),
             offset_bytes,
@@ -567,7 +568,7 @@ mod tests {
     /// source's as an fs override), the single one has no count.
     #[test]
     fn test_a_string_move_names_its_registers() {
-        let held = |value: u32| Loc::Held(ir::Held { value, width: 2 });
+        let held = |value: u32| Loc::Held(ir::Held { value, width: 2, offset: 0 });
         let repeated = semantics(
             Operation::Copy,
             "movsw",
@@ -670,7 +671,7 @@ mod tests {
             "premise: a cell with no address, `[si]`, is read through DS and cannot be prefixed"
         );
         assert!(!needs(global.clone()), "a data cell is spelled ss: where DS holds a selector");
-        let far = ir::Mem { selector: Some(llrm_lir::Held { value: 1, width: 2 }), ..global.clone() };
+        let far = ir::Mem { selector: Some(llrm_lir::Held { value: 1, width: 2, offset: 0 }), ..global.clone() };
         assert!(!needs(far), "a cell through a far pointer's selector names its segment");
         let prefixed = ir::Mem::new(Some(Addr { segment: RegId::ES.iced(), ..Addr::new(Space::Segment, 8) }), 4);
         assert!(!needs(prefixed), "and so does an es: prefix");
@@ -715,7 +716,7 @@ mod tests {
     fn test_segment_registers_follow_the_machine() {
         let regs = crate::backend::registerinfo::test_regs();
         assert_eq!(BUILT_IN.selectors, [RegId::ES, RegId::FS, RegId::GS]);
-        assert_eq!((BUILT_IN.data, BUILT_IN.through), (RegId::DS, None));
+        assert_eq!((BUILT_IN.data, BUILT_IN.through), (Some(RegId::DS), None));
         let joined = crate::abi::machine::Machine {
             segments: llrm_x86_m16::machine::BUILT_IN
                 .segments
@@ -725,7 +726,7 @@ mod tests {
         };
         let joined = Segments::of(&joined, regs, 2);
         assert_eq!(joined.selectors, [RegId::ES, RegId::FS, RegId::GS, RegId::DS]);
-        assert_eq!((joined.data, joined.through), (RegId::DS, Some(RegId::SS)));
+        assert_eq!((joined.data, joined.through), (Some(RegId::DS), Some(RegId::SS)));
     }
 
     #[test]
@@ -752,8 +753,11 @@ mod tests {
         let what = semantics(
             Operation::Move,
             "les",
-            vec![Loc::Held(ir::Held { value: 1, width: 2 }), Loc::Held(ir::Held { value: 2, width: 2 })],
-            vec![Loc::Mem(ir::Mem { base: Some(ir::Held { value: 3, width: 2 }), ..ir::Mem::new(None, 4) })],
+            vec![
+                Loc::Held(ir::Held { value: 1, width: 2, offset: 0 }),
+                Loc::Held(ir::Held { value: 2, width: 2, offset: 0 }),
+            ],
+            vec![Loc::Mem(ir::Mem { base: Some(ir::Held { value: 3, width: 2, offset: 0 }), ..ir::Mem::new(None, 4) })],
         );
         let load = Insn::new(0x10, Some((0x10, 0x13)), Some(what.clone()), vec![1, 2], vec![3]);
         let body = LirBody::new(
@@ -786,7 +790,7 @@ mod tests {
 
         use crate::model::lir::{Insn, LirBlock, LirBody};
 
-        let held = |value| Loc::Held(ir::Held { value, width: 2 });
+        let held = |value| Loc::Held(ir::Held { value, width: 2, offset: 0 });
         let copy = semantics(
             Operation::Copy,
             "movsd",
@@ -882,7 +886,7 @@ mod tests {
     }
 
     fn held(value: u32) -> Loc {
-        Loc::Held(ir::Held { value, width: 2 })
+        Loc::Held(ir::Held { value, width: 2, offset: 0 })
     }
 
     /// `les`, `lds`, `lfs` and `lgs` take the same operands and differ in the

@@ -229,7 +229,14 @@ impl FunctionPass for JumpThreading {
         let outer = Rc::clone(analyses.outer());
         let globals = Rc::clone(&outer.globals);
         let tti = crate::looprotate::target_tti(outer.target());
-        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&globals),
+        );
+        let guard_declared = unit.declared.guard_declared(&globals);
         let mut pass = State {
             unit,
             globals,
@@ -237,6 +244,7 @@ impl FunctionPass for JumpThreading {
             tti: &*tti,
             outer: Rc::clone(&outer),
             assumptions,
+            guard_declared,
             lvi: LazyValueInfo::new(),
             loop_headers: IdSet::new(),
             unreachable: IdSet::new(),
@@ -287,6 +295,8 @@ struct State<'a, 'u> {
     tti: &'a dyn Tti,
     outer: Rc<Outer>,
     assumptions: AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`.
+    guard_declared: bool,
     lvi: LazyValueInfo,
     loop_headers: IdSet<BlockId>,
     unreachable: IdSet<BlockId>,
@@ -313,6 +323,7 @@ impl State<'_, '_> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -462,7 +473,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant_on_edge(&mut env, value, from, to, cxt)?;
         self.known_from_lattice(found)
     }
@@ -480,7 +492,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant(&mut env, value, at)?;
         self.known_from_lattice(found)
     }
@@ -502,7 +515,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let known = self.lvi.get_predicate_on_edge(&mut env, pred, value, constant, from, to, cxt)?;
         Some(self.bool_constant(known))
     }
@@ -522,7 +536,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let known = self.lvi.get_predicate_at(&mut env, pred, value, constant, at, false)?;
         Some(self.bool_constant(known))
     }
@@ -542,7 +557,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_constant_range_on_edge(&mut env, value, from, to, cxt)
     }
 
@@ -560,7 +576,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.thread_edge(&env, pred, old, new);
     }
 
@@ -3092,47 +3109,12 @@ impl State<'_, '_> {
         cond == value && self.ty_of(cond) == self.unit.context.types.int(1) && !is_and_or
     }
 
-    /// `SplitBlockAndInsertIfThen(Cond, SplitBefore, false)`
-    /// ([BasicBlockUtils.cpp:1788](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1788)):
-    /// the block of `split_before` ends in a branch on `cond` to a new block
-    /// that jumps to the rest, from `split_before` on. The new block and the
-    /// rest.
+    /// `edges::split_block_and_insert_if_then` on this unit's function.
     fn split_block_and_insert_if_then(
         &mut self,
         cond: Operand,
         split_before: InstId,
     ) -> (BlockId, BlockId) {
-        let head = self.function().parent(split_before).expect("a placed instruction");
-        let run: Vec<InstId> = self.function().iter_from(split_before).collect();
-        let void = self.function().instruction(*run.last().expect("a terminator")).ty;
-        let tail = self.unit.function.create_block(None);
-        self.unit.function.insert_block(tail, Some(head)).expect("a new block");
-        self.unit.function.splice(&run, Position::End(tail)).expect("a placed run");
-        for succ in self.function().successors(tail).into_iter().collect::<Vec<_>>() {
-            for phi in crate::edges::phis(self.function(), succ) {
-                let incoming: Vec<_> = arms(self.function(), phi)
-                    .into_iter()
-                    .map(|(value, from)| (value, if from == head { tail } else { from }))
-                    .collect();
-                self.unit.function.set_operands(phi, from_arms(&incoming));
-            }
-        }
-        let then_bb = self.unit.function.create_block(None);
-        self.unit.function.insert_block(then_bb, Some(head)).expect("a new block");
-        let jump =
-            self.unit.function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
-        self.unit.function.insert(jump, Position::End(then_bb)).expect("a placed block");
-        let branch = self
-            .unit
-            .function
-            .create_instruction(
-                Opcode::Br,
-                void,
-                vec![cond, Operand::Block(then_bb), Operand::Block(tail)],
-                Flags::default(),
-                None,
-            );
-        self.unit.function.insert(branch, Position::End(head)).expect("a placed block");
-        (then_bb, tail)
+        crate::edges::split_block_and_insert_if_then(self.unit.function, cond, split_before)
     }
 }

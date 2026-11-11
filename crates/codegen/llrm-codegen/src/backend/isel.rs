@@ -185,11 +185,13 @@ use crate::support::hash::IndexMap;
 mod combined;
 /// The abstract values an operand list names, `ir.values` deciding.
 fn _named_values(where_: &[Loc]) -> Vec<u32> {
-    where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)).collect()
+    let mut out = Vec::with_capacity(where_.iter().map(|operand| ir::values(operand).len()).sum());
+    out.extend(where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
+    out
 }
 
 /// The values an instruction writes: a destination that *is* a value.
-pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
+pub fn _written(dests: &[Loc]) -> Vec<u32> {
     dests
         .iter()
         .filter_map(|one| match one {
@@ -200,14 +202,13 @@ pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction reads: its sources, and the addresses its
-/// destinations are reached by.
-pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
-    let mut out = _named_values(&what.sources);
-    for where_ in &what.dests {
-        if !matches!(where_, Loc::Held(_)) {
-            out.extend(ir::values(where_).into_iter().map(|one| one.value));
-        }
-    }
+/// destinations are reached by. Sized for what it holds: a list grown a push
+/// at a time was reallocated twice (107,000 growths in memory_expansion).
+pub fn _read(what: &ir::Semantics) -> Vec<u32> {
+    let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
+    let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
+    let mut out = Vec::with_capacity(count);
+    out.extend(what.sources.iter().chain(addressed()).flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
     out
 }
 
@@ -230,7 +231,7 @@ pub use matcher::Compiled;
 /// Each loop of `shape` with a trip count `induction` proves, as (the LIR
 /// address of its header, the trips): what the executed-work estimate scales
 /// the loop by. `header_at` names the LIR block a MIR block became.
-pub(crate) fn proven_trips(
+pub fn proven_trips(
     unit: &Unit,
     shape: &llrm_analysis::cfg::Shape,
     facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
@@ -388,8 +389,10 @@ fn passing(
                 return refuse(format!("calling convention {convention}"));
             };
             // `fastcc` is C's callee-pop twin unless the description states a
-            // `fastcc` of its own.
-            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            // `fastcc` of its own, or says C has no such twin (x86-64).
+            let twin = convention == llrm_mir::opcode::FAST
+                && found.cc.as_deref() != Some("fast")
+                && arch.calling().callee_pop(0) == Some(llrm_mir::opcode::FAST);
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
@@ -495,7 +498,10 @@ pub fn convention(
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
-        _ if interrupt => crate::backend::masm::interrupt_parameters(),
+        _ if interrupt => crate::backend::masm::interrupt_parameters(&crate::backend::masm::Interrupt::of(
+            arch,
+            crate::model::ir::Addr::new(crate::model::ir::Space::Group, 0),
+        )),
         _ => arch.first_argument_offset(far(global)?),
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
@@ -594,6 +600,46 @@ pub fn convention_for_abi(
     }
     if interrupt && widths.iter().any(|&one| one != 2) {
         return refuse("an interrupt handler's parameter that is not a register");
+    }
+    // Row W64-1 (owner x86-m64, exit 2026-11-14): Win64's by-value structs and
+    // vectors are passed by the ABI's own rules (a pointer to a caller copy,
+    // XMM0, ...), not probed: refused, not guessed. A 128-bit integer is two
+    // i64 words (CC_X86_Win64_C has no rule for it): refused only where the
+    // pair would straddle the fourth register, which the pin splits between
+    // R9 and the stack. Row W64-2 (owner object-refactor, exit when vectors
+    // open): clang hands `__int128` over as `ptr align 16` arguments and a
+    // `<2 x i64>` result in XMM0, which the vector refusal below still stops.
+    if registers.is_some_and(|entry| entry.positional) {
+        let wide = |ty: TypeId| matches!(types.get(ty), Type::Int(128));
+        let unprobed = |ty: TypeId| match types.get(ty) {
+            Type::Int(bits) => *bits > 128,
+            Type::Vector { .. } => true,
+            _ => false,
+        };
+        let shape = |index: usize| byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)).is_some();
+        if param_types.iter().enumerate().any(|(index, &ty)| unprobed(ty) || shape(index)) || unprobed(result) {
+            return refuse("a Win64 by-value struct, vector or integer wider than 128 bits (row W64-1)");
+        }
+        let registers_len = registers.map_or(0, |entry| entry.argument_registers.len());
+        let mut position = usize::from(
+            param_types
+                .iter()
+                .enumerate()
+                .any(|(index, _)| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)),
+        );
+        for (index, &ty) in param_types.iter().enumerate() {
+            if class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                continue;
+            }
+            if wide(ty) {
+                if position + 1 == registers_len {
+                    return refuse("a Win64 128-bit integer split between R9 and the stack (row W64-1)");
+                }
+                position += 2;
+            } else {
+                position += 1;
+            }
+        }
     }
     let mut parameters = Vec::new();
     let mut cursor = first;
@@ -970,7 +1016,7 @@ pub(super) fn width_of(
 
 /// The alignment the hardware wants of an object of `ty`: its widest scalar's
 /// size, up to 8, whatever the data layout promises (it gives a double 1).
-pub(crate) fn natural_align(
+pub fn natural_align(
     types: &llrm_mir::types::Types,
     layout: &DataLayout,
     ty: TypeId,
@@ -1071,6 +1117,8 @@ pub(super) fn size_of(
         (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
+        // Two eightbytes where the datalayout has a legal i64.
+        (_, Type::Int(128)) if layout.largest_legal_integer() >= 64 => Ok(16),
         _ => width_of(module, layout, ty),
     }
 }
@@ -1362,12 +1410,10 @@ pub fn selected_with<'c>(
     })
 }
 
-/// The alignment the frame keeps a local to without realigning the stack.
-pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
-pub(crate) fn parameters(
+pub fn parameters(
     module: &Module,
     function: &Function,
     name: &str,
@@ -1461,6 +1507,7 @@ fn float_bytes(
             FloatKind::Float => 4,
             FloatKind::Double => 8,
             FloatKind::X86Fp80 => 10,
+            FloatKind::F128 => 16,
         };
         let widest = bytes.entry(number).or_insert(0);
         *widest = size.max(*widest);
@@ -1651,7 +1698,7 @@ pub(crate) fn expression_note(
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-pub(crate) fn noted(
+pub fn noted(
     module: &Module,
     function: &Function,
     name: &str,
@@ -2223,7 +2270,7 @@ impl Selector<'_, '_, '_> {
         // or where the function keeps the stack, which is wider: a local
         // `double[4]` at 4 mod 8 costs a 486 3 clocks an access (nbody -O2:
         // 18,404), and so does a `long[8]` at 2 mod 4.
-        let kept = self.callee_facts.stack_alignment(self.arch, name);
+        let kept = self.callee_facts.object_alignment(self.arch, name);
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
@@ -2234,10 +2281,10 @@ impl Selector<'_, '_, '_> {
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
-                    // More than the frame keeps the stack aligned to: the frame
-                    // realigns the stack pointer for it.
-                    let wanted = wanted.map_or(0, |one| one as i64);
-                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
+                    // The declared alignment wins over the natural one; above
+                    // what the frame keeps the stack aligned to, the frame
+                    // realigns the stack pointer.
+                    let align = align.max(wanted.map_or(0, |one| one as i64));
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
@@ -2270,7 +2317,17 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
-            if align > OVER_ALIGNED {
+            // The pin realigns where `MaxAlignment > StackAlignment`
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641),
+            // DEVIATE OA-1 (owner w2, exit: x86-m32's sysv32 stack_alignment
+            // = 16 lands, then the pin's threshold is this value): the
+            // threshold is the target's stack alignment, at least two slots.
+            // The m32 native alignment is 4, and the pin's rule would realign
+            // every 8-aligned double or i64 local the frame lays on its own
+            // alignment (the 486 clocks): +775 B in fcmp_all -O0.
+            if self.arch.can_realign_stack()
+                && align > self.arch.stack_alignment().max(2 * i64::from(self.arch.stack_slot_bytes()))
+            {
                 self.over_aligned.push((disp, align));
             }
             homes.insert(group, disp);
@@ -2381,7 +2438,7 @@ impl Selector<'_, '_, '_> {
                     let mut halves = Vec::new();
                     for &register in registers {
                         let own = if registers.len() == 1 {
-                            Held { value: self.value(parameter), width }
+                            Held { value: self.value(parameter), width, offset: 0 }
                         } else {
                             self.fresh_held(width)
                         };
@@ -2413,7 +2470,7 @@ impl Selector<'_, '_, '_> {
                         } else if self.is_far(ty) {
                             self.fars.insert(parameter, (Some(low), high));
                         } else {
-                            let into = Held { value: self.value(parameter), width: 4 };
+                            let into = Held { value: self.value(parameter), width: 4, offset: 0 };
                             self.joined(into, low, high, block_at[&entry], &mut prologue);
                         }
                     }
@@ -2428,7 +2485,7 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             if self.is_float(ty) {
-                let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
+                let (held, size) = (Held { value: self.value(parameter), width: FLOAT, offset: 0 }, self.size(ty)?);
                 self.float_loaded(
                     held,
                     "fld",
@@ -2463,7 +2520,7 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             let width = self.width(function.value(parameter).ty)?;
-            let held = Held { value: self.value(parameter), width };
+            let held = Held { value: self.value(parameter), width, offset: 0 };
             let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
             prologue.push(insn(block_at[&entry], what));
         }
@@ -3727,7 +3784,7 @@ impl Selector<'_, '_, '_> {
         &mut self,
         width: u32,
     ) -> Held {
-        Held { value: self.fresh(), width }
+        Held { value: self.fresh(), width, offset: 0 }
     }
 
     fn types(&self) -> &llrm_mir::Types {
@@ -3864,14 +3921,14 @@ impl Selector<'_, '_, '_> {
                 ConstantKind::Poison | ConstantKind::Undef
             )
         {
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             let what =
                 semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
             out.push(insn(at, what));
             return Ok(held);
         }
         if let Some(value) = self.constant(operand, width) {
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             // A narrow zero is written whole where the target runs narrow
             // operations on the whole register: `xor r32,r32` has no operand-
             // size prefix, and the half above is what no reader of the word
@@ -3906,7 +3963,7 @@ impl Selector<'_, '_, '_> {
                 return Ok(offset);
             }
             if width == 4 {
-                let joined = Held { value: self.fresh(), width };
+                let joined = Held { value: self.fresh(), width, offset: 0 };
                 self.joined(joined, offset, selector, at, out);
                 return Ok(joined);
             }
@@ -3928,14 +3985,14 @@ impl Selector<'_, '_, '_> {
             } else {
                 (Space::Group, crate::backend::globals::segment_of(global))
             };
-            let word = Held { value: self.fresh(), width: 2 };
+            let word = Held { value: self.fresh(), width: 2, offset: 0 };
             let symbol = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) });
             out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(word)], vec![symbol])));
             if width == 2 {
                 return Ok(word);
             }
             // The integer is wider than the segment word: zero-extended.
-            let wide = Held { value: self.fresh(), width };
+            let wide = Held { value: self.fresh(), width, offset: 0 };
             out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(word)])));
             return Ok(wide);
         }
@@ -3947,12 +4004,12 @@ impl Selector<'_, '_, '_> {
         match pointer {
             None => {
                 let Operand::Value(value) = operand else { unreachable!("a constant is folded") };
-                Ok(Held { value: self.value(value), width })
+                Ok(Held { value: self.value(value), width, offset: 0 })
             }
             // No offset from a register: that register.
             Some(Pointer::Based { base, index: None, offset: 0, .. }) if base.width == width => Ok(base),
             Some(pointer) => {
-                let held = Held { value: self.fresh(), width };
+                let held = Held { value: self.fresh(), width, offset: 0 };
                 out.push(insn(at, self.address(pointer, held)));
                 Ok(held)
             }
@@ -4002,7 +4059,7 @@ impl Selector<'_, '_, '_> {
         };
         self.unsealed = true;
         let width = self.va_list_bytes();
-        let held = Held { value: self.fresh(), width };
+        let held = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
         let list = self.pointer(arguments[0])?;
         out.push(insn(
@@ -4026,7 +4083,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(), Unselected> {
         let width = self.address_bytes();
         let value = self.function.instruction(inst).result.expect("a saved stack pointer");
-        let saved = Held { value: self.value(value), width };
+        let saved = Held { value: self.value(value), width, offset: 0 };
         let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
         Ok(())
@@ -4062,7 +4119,7 @@ impl Selector<'_, '_, '_> {
         let (to, from) = (self.pointer(arguments[0])?, self.pointer(arguments[1])?);
         for slot in 0..slots {
             let by = i64::from(width) * slot;
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             let load = semantics(
                 Operation::Move,
                 "mov",
@@ -4103,7 +4160,7 @@ impl Selector<'_, '_, '_> {
         }
         let width = self.layout.pointer(self.spaces.data).bits / 8;
         for (by, disp) in [(8, va.overflow), (16, va.save)] {
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
             stored(self, by, width, Loc::Held(held), out);
         }
@@ -4189,7 +4246,7 @@ impl Selector<'_, '_, '_> {
         {
             return held;
         }
-        let held = Held { value: self.fresh(), width };
+        let held = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(at, self.address(pointer, held)));
         self.symbol_registers.insert(key, (self.current, held));
         held
@@ -4215,7 +4272,13 @@ impl Selector<'_, '_, '_> {
             _ => return refuse(format!("an access through a {}", self.types().display(ty))),
         };
         let width = self.width(ty)?;
-        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, scale: 1, offset: 0, segment })
+        Ok(Pointer::Based {
+            base: Held { value: self.value(value), width, offset: 0 },
+            index: None,
+            scale: 1,
+            offset: 0,
+            segment,
+        })
     }
 
     /// Where `value` points, if it is an address an access folds: an
@@ -4481,7 +4544,7 @@ impl Selector<'_, '_, '_> {
             && let Pointer::Based { index: Some(_), segment: None, .. } = valued
         {
             let cell = Self::memory(regs, valued, 4);
-            let held = Held { value: self.value(address), width: 4 };
+            let held = Held { value: self.value(address), width: 4, offset: 0 };
             out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
             if let Some((Operand::Value(product), _)) = one
                 && matches!(function.value(product).def, ValueDef::Instruction(_))
@@ -4555,12 +4618,12 @@ impl Selector<'_, '_, '_> {
             if held.width > width {
                 held.width = width;
             } else if held.width < width {
-                let wide = Held { value: self.fresh(), width };
+                let wide = Held { value: self.fresh(), width, offset: 0 };
                 out.push(insn(at, semantics(Operation::Extend, "movsx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
                 held = wide;
             }
             if scale != 1 {
-                let mut scaled = Held { value: self.fresh(), width };
+                let mut scaled = Held { value: self.fresh(), width, offset: 0 };
                 if absorbs && matches!(scale, 2 | 4 | 8) {
                     // The address's own scale: no instruction.
                     tail = scale;
@@ -4618,7 +4681,7 @@ impl Selector<'_, '_, '_> {
             sum = Some(match sum {
                 None => held,
                 Some(before) => {
-                    let added = Held { value: self.fresh(), width };
+                    let added = Held { value: self.fresh(), width, offset: 0 };
                     out.push(insn(
                         at,
                         semantics(
@@ -4652,7 +4715,7 @@ impl Selector<'_, '_, '_> {
             if self.only_addressed(address) || self.indexed_by_bytes(address) {
                 self.pointers.insert(address, indexed);
             } else {
-                let held = Held { value: self.value(address), width };
+                let held = Held { value: self.value(address), width, offset: 0 };
                 out.push(insn(at, self.address(indexed, held)));
             }
             return Ok(());
@@ -4664,7 +4727,7 @@ impl Selector<'_, '_, '_> {
             if self.only_addressed(address) {
                 self.pointers.insert(address, indexed);
             } else {
-                let held = Held { value: self.value(address), width };
+                let held = Held { value: self.value(address), width, offset: 0 };
                 out.push(insn(at, self.address(indexed, held)));
             }
             return Ok(());
@@ -4705,7 +4768,7 @@ impl Selector<'_, '_, '_> {
         if self.only_addressed(address)
             && let Pointer::Based { base, index: Some(index), scale: 1, offset: start, segment } = pointer
         {
-            let both = Held { value: self.fresh(), width };
+            let both = Held { value: self.fresh(), width, offset: 0 };
             out.push(insn(
                 at,
                 semantics(Operation::Binary, "add", vec![Loc::Held(both)], vec![Loc::Held(base), Loc::Held(index)]),
@@ -4731,7 +4794,7 @@ impl Selector<'_, '_, '_> {
                 return Ok(());
             }
             let start = self.symbol_register(pointer.moved(offset as i64), width, at, out);
-            let result = Held { value: self.value(address), width };
+            let result = Held { value: self.value(address), width, offset: 0 };
             let scaled = Loc::Held(sum);
             out.push(insn(
                 at,
@@ -4749,7 +4812,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { base: None, index: None, offset: 0, .. } if offset == 0 => None,
             pointer => {
                 let moved = pointer.moved(offset as i64);
-                let start = Held { value: self.fresh(), width };
+                let start = Held { value: self.fresh(), width, offset: 0 };
                 out.push(insn(at, self.address(moved, start)));
                 Some(start)
             }
@@ -4765,7 +4828,7 @@ impl Selector<'_, '_, '_> {
                 self.fars.insert(address, (Some(offset), selector));
                 offset
             }
-            _ => Held { value: self.value(address), width },
+            _ => Held { value: self.value(address), width, offset: 0 },
         };
         let start = start.expect("a near pointer's register");
         out.push(insn(
@@ -5108,7 +5171,7 @@ impl Selector<'_, '_, '_> {
             Operand::Value(root) => Some(root),
             _ => None,
         };
-        let wide = Held { value: self.value(index), width: 4 };
+        let wide = Held { value: self.value(index), width: 4, offset: 0 };
         let (scaled, base) = match pointer {
             Pointer::Frame { disp, index: None, home, .. } => {
                 (Pointer::Frame { disp, index: Some(wide), scale, home }, None)
@@ -5399,8 +5462,10 @@ impl Selector<'_, '_, '_> {
             Some(&partner) => self.value(partner),
             None => self.fresh(),
         };
-        let (result, other) =
-            (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: other, width });
+        let (result, other) = (
+            Held { value: self.value(instruction.result.expect("a result")), width, offset: 0 },
+            Held { value: other, width, offset: 0 },
+        );
         let (quotient, remainder) =
             if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
         // A signed division by a constant is a multiply by its reciprocal
@@ -5435,7 +5500,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         let divisor = self.held(instruction.operands[1], ty, at, out)?;
-        let high = Held { value: self.fresh(), width };
+        let high = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(
             at,
             if signed {
@@ -5513,7 +5578,7 @@ impl Selector<'_, '_, '_> {
                 let quotient_of = matches!(op, BinaryOp::UDiv);
                 let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
                     let low = Held { width: 1, ..from };
-                    let into = Held { value, width: 1 };
+                    let into = Held { value, width: 1, offset: 0 };
                     out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
                 };
                 keep(
@@ -5560,7 +5625,7 @@ impl Selector<'_, '_, '_> {
         let quotient_of = matches!(op, BinaryOp::SDiv | BinaryOp::UDiv);
         let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
             let low = Held { width: 1, ..from };
-            let into = Held { value, width: 1 };
+            let into = Held { value, width: 1, offset: 0 };
             out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
         };
         keep(own, if quotient_of { quotient } else { remainder }, out);
@@ -5903,20 +5968,20 @@ impl Selector<'_, '_, '_> {
         let (offset, selector) = self.far(operand, at, out)?;
         match (op, self.types().get(to).clone()) {
             (CastOp::AddrSpaceCast, Type::Pointer(space)) if self.spaces.is_segment(Some(space)) => {
-                out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector)))
+                out.push(mov(Held { value: self.value(result), width: 2, offset: 0 }, Loc::Held(selector)))
             }
             (CastOp::AddrSpaceCast, Type::Pointer(space))
                 if space == self.spaces.near || space == self.spaces.stack =>
             {
-                out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset)))
+                out.push(mov(Held { value: self.value(result), width: 2, offset: 0 }, Loc::Held(offset)))
             }
             (CastOp::PtrToInt, Type::Int(32)) => {
-                let joined = Held { value: self.value(result), width: 4 };
+                let joined = Held { value: self.value(result), width: 4, offset: 0 };
                 self.joined(joined, offset, selector, at, out);
             }
             // Truncated, as LLVM's is: segment:offset's low word.
             (CastOp::PtrToInt, Type::Int(16)) => {
-                out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset)))
+                out.push(mov(Held { value: self.value(result), width: 2, offset: 0 }, Loc::Held(offset)))
             }
             _ => return refuse(format!("{op:?} of a far pointer")),
         }
@@ -5965,7 +6030,7 @@ impl Selector<'_, '_, '_> {
                 let size = self.size(to)? as u32;
                 let held = self.float(operand, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
-                let into = Held { value: self.value(result), width: FLOAT };
+                let into = Held { value: self.value(result), width: FLOAT, offset: 0 };
                 self.float_loaded(into, "fld", cell, size, false, at, out);
             }
             CastOp::SIToFP => {
@@ -6048,7 +6113,7 @@ impl Selector<'_, '_, '_> {
                 let size = self.size(from)? as u32;
                 let held = self.float(operand, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
-                let into = Held { value: self.value(result), width: self.width(to)? };
+                let into = Held { value: self.value(result), width: self.width(to)?, offset: 0 };
                 out.push(insn(
                     at,
                     semantics(
@@ -6072,7 +6137,7 @@ impl Selector<'_, '_, '_> {
                         vec![Loc::Held(held)],
                     ),
                 ));
-                let into = Held { value: self.value(result), width: FLOAT };
+                let into = Held { value: self.value(result), width: FLOAT, offset: 0 };
                 self.float_loaded(into, "fld", cell, size, false, at, out);
             }
             _ => return refuse(format!("{op:?} of a float")),
@@ -6097,7 +6162,7 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
         let size = self.size(to)?;
-        let into = Held { value: self.value(result), width: FLOAT };
+        let into = Held { value: self.value(result), width: FLOAT, offset: 0 };
         let mantissa = match size {
             4 => 24,
             8 => 53,
@@ -6131,7 +6196,7 @@ impl Selector<'_, '_, '_> {
         let width = self.width(to)?;
         let held = self.float(operand, at, out)?;
         let cell = self.float_stored(held, name, (if unsigned { 2 * width } else { width }).max(2), at, out);
-        let into = Held { value: self.value(result), width };
+        let into = Held { value: self.value(result), width, offset: 0 };
         out.push(insn(
             at,
             semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(regs, cell, width))]),
@@ -6208,7 +6273,7 @@ impl Selector<'_, '_, '_> {
                         _ => unreachable!("only a one-condition compare is fused"),
                     },
                     None => {
-                        let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
+                        let tested = Loc::Held(Held { value: self.value(condition), width: 1, offset: 0 });
                         let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
                         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![tested, zero])));
                         "jne"
@@ -6332,7 +6397,7 @@ impl Selector<'_, '_, '_> {
                 }
                 // Else its low word, and its high word shifted down.
                 [low, high] if held.width == 4 => {
-                    let top = Held { value: self.fresh(), width: 4 };
+                    let top = Held { value: self.fresh(), width: 4, offset: 0 };
                     let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
                     out.push(insn(
                         at,
@@ -6355,7 +6420,7 @@ impl Selector<'_, '_, '_> {
         effects: llrm_mir::memory::Effects,
         disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs, block: false })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
@@ -6405,7 +6470,8 @@ impl Selector<'_, '_, '_> {
                         return refuse(format!("{function:?}"));
                     };
                     let a = self.float(arguments[0], at, out)?;
-                    let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
+                    let result =
+                        Held { value: self.value(instruction.result.expect("a result")), width: FLOAT, offset: 0 };
                     let mut one = insn_of(
                         at,
                         semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)]),
@@ -6526,7 +6592,7 @@ impl Selector<'_, '_, '_> {
         let offset_bits =
             self.offset_bits(self.function.operand_type(&self.module.context, arguments[0]).expect("a typed operand"));
         let high = binary(self, "shl", None, vec![Loc::Held(strides), byte(offset_bits)], out);
-        let into = Held { value: self.value(result), width: 4 };
+        let into = Held { value: self.value(result), width: 4, offset: 0 };
         binary(self, "add", Some(into), vec![Loc::Held(within), Loc::Held(high)], out);
         Ok(())
     }
@@ -6604,7 +6670,7 @@ impl Selector<'_, '_, '_> {
         if let Some(&(low, high)) = self.joins.get(&held.value).filter(|_| held.width == 4) {
             return (low, high);
         }
-        let top = Held { value: self.fresh(), width: 4 };
+        let top = Held { value: self.fresh(), width: 4, offset: 0 };
         let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
         out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
         (Held { width: 2, ..held }, Held { width: 2, ..top })
@@ -6639,7 +6705,7 @@ impl Selector<'_, '_, '_> {
         if held.width >= width {
             return held;
         }
-        let word = Held { value: self.fresh(), width };
+        let word = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(
             at,
             semantics(
@@ -6909,7 +6975,7 @@ impl Selector<'_, '_, '_> {
                     &instruction.opcode,
                     Opcode::Call(info) if info.argument_attrs.get(index).is_some_and(|attrs| llrm_mir::memory::has(attrs, "signext"))
                 );
-                let word = Held { value: self.fresh(), width: self.arch.stack_slot_bytes() as u32 };
+                let word = Held { value: self.fresh(), width: self.arch.stack_slot_bytes() as u32, offset: 0 };
                 out.push(insn(
                     at,
                     semantics(
@@ -7059,7 +7125,7 @@ impl Selector<'_, '_, '_> {
             registers.results.len() == 1 && !matches!(self.types().get(instruction.ty), Type::Struct { .. })
         }) {
             // One register answers a scalar.
-            let held = Held { value: self.value(value), width: self.width(instruction.ty)? };
+            let held = Held { value: self.value(value), width: self.width(instruction.ty)?, offset: 0 };
             delivers = vec![(held, registers.results[0])];
         } else if let Some(value) = instruction.result.filter(|_| !registers.results.is_empty()) {
             // Each field of the answer in the register the ABI names.
@@ -7081,7 +7147,7 @@ impl Selector<'_, '_, '_> {
             }
             self.fields.insert(value, held);
         } else if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
-            float = Some(Held { value: self.value(value), width: FLOAT });
+            float = Some(Held { value: self.value(value), width: FLOAT, offset: 0 });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
             let (low, high) = (self.fresh_held(4), self.fresh_held(4));
             let [low_register, high_register] = results(self.arch, self::entry(self.arch, convention, variadic), 8)[..]
@@ -7126,7 +7192,7 @@ impl Selector<'_, '_, '_> {
             self.fields.insert(value, held);
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
-            let held = Held { value: self.value(value), width };
+            let held = Held { value: self.value(value), width, offset: 0 };
             match results(self.arch, self::entry(self.arch, convention, variadic), width)[..] {
                 // dx:ax, joined into the dword register the value lives in.
                 // Delivered as dwords: `shrd` reads each whole register, and
@@ -8194,8 +8260,8 @@ impl Selector<'_, '_, '_> {
         // The old value lands where the new one was read: the instruction is
         // tied, as an `add` is.
         let old = match function.instruction(inst).result {
-            Some(result) => Held { value: self.value(result), width },
-            None => Held { value: self.fresh(), width },
+            Some(result) => Held { value: self.value(result), width, offset: 0 },
+            None => Held { value: self.fresh(), width, offset: 0 },
         };
         let what = semantics(
             Operation::Exchange,
@@ -8230,6 +8296,7 @@ impl Selector<'_, '_, '_> {
             let result = Held {
                 value: self.value(instruction.result.expect("a port's value")),
                 width: self.width(instruction.ty)?,
+                offset: 0,
             };
             semantics(Operation::Barrier, "in", vec![Loc::Held(result)], vec![port])
         } else {
@@ -8279,7 +8346,7 @@ impl Selector<'_, '_, '_> {
         let id = match operand {
             Operand::Value(value) => {
                 let bytes = self.size(self.type_of(operand))?;
-                return Ok(Held { value: self.value(value), width: self.arch.float_width(bytes) });
+                return Ok(Held { value: self.value(value), width: self.arch.float_width(bytes), offset: 0 });
             }
             Operand::Constant(id) => id,
             Operand::Block(_) => unreachable!("a float is no block"),
@@ -8418,7 +8485,7 @@ fn frame(
     Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
 }
 
-pub(crate) fn semantics(
+pub fn semantics(
     op: Operation,
     name: &str,
     dests: Vec<Loc>,
@@ -8439,7 +8506,7 @@ fn insn_of(
     Insn::new(at, Some((at, at)), Some(what), defines, uses)
 }
 
-pub(crate) fn insn(
+pub fn insn(
     at: i64,
     what: Semantics,
 ) -> Arc<Insn> {
@@ -8592,5 +8659,25 @@ mod anchoring_tests {
         let before: IndexMap<i64, Vec<u32>> = [(4, vec![0])].into_iter().collect();
         let stands = after_definers(&insns, &before, &notes);
         assert_eq!(stands.get(&2), Some(&vec![0]), "{stands:?}");
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+
+    /// The list of values an instruction reads was grown by pushes: five
+    /// values took a capacity of eight, and every selected instruction paid
+    /// the reallocations (107,000 growths in memory_expansion). It is sized
+    /// for the values it holds.
+    #[test]
+    fn test_the_values_an_instruction_reads_are_listed_in_one_allocation() {
+        let held = |value: u32| Loc::Held(Held { value, width: 4, offset: 0 });
+        let mut what = Semantics::new(Operation::Binary);
+        what.dests = vec![held(9)];
+        what.sources = (1..=5).map(held).collect();
+        let read = _read(&what);
+        assert_eq!(read, vec![1, 2, 3, 4, 5]);
+        assert_eq!(read.capacity(), read.len());
     }
 }

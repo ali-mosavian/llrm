@@ -68,7 +68,7 @@
 //! keeps the virtual definition the dropped copies stood for.
 //!
 //! From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
-//! compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
+//! compiled with `llrm-cc -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
 //!
 //! # Runs
 //! After `regalloc`, before `prologue` and the peephole, once per body, at
@@ -1030,7 +1030,7 @@ mod tests {
     /// defined"). The definition goes and the readers read it as undef.
     #[test]
     fn test_an_implicit_def_is_gone_after_allocation_and_its_readers_read_undef() {
-        let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4 });
+        let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4, offset: 0 });
         let undef = Insn::new(
             0,
             Some((0, 0)),

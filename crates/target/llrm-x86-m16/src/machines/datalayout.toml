@@ -11,11 +11,22 @@ tti = "X86"
 
 datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
+# No `S` on purpose: the pin's m16 datalayout (the clang fork's, `llrm-cc/targets.toml` x86_16-*) names none, so the pin's alloca raise to a type's
+# preferred alignment is unbounded at m16 and ours follows it (bench/parity/qbsp -Os: the packed 16-byte local is raised to 4 and zeroed by
+# `rep stosw` x8; S16 made it `rep stosb` x16). tools/test_datalayout_stack.py and assert_stack_facts read this key: a target with it must not declare an S.
+stack_alignment_unstated = "the pin's m16 datalayout has no S"
+
+# What a real-mode frame keeps, in bytes: SP stays even and nothing realigns it (an over-aligned local is clamped to this at pipeline entry,
+# so the optimizer assumes no more), and the largest `alloca` alignment accepted (a larger one is a named refusal). Machine::kept_stack_align,
+# Machine::max_alloca_align; w15's values, 2026-11-09.
+kept_stack_align = 2
+max_alloca_align = 32
+
 # The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer
-# (fistp stores signed qwords), a conditional move (none before the Pentium Pro), the bit counts (no popcnt, and bsr and bsf
-# are not selected yet), `bswap` and the three-way compares `scmp` and `ucmp` (none is selected yet), and `abs`, `fshl` and
+# (fistp stores signed qwords), a conditional move (none before the Pentium Pro), `ctpop` (no popcnt; `ctlz` and `cttz` are `bsr` and
+# `bsf`, as at m32), `bswap` and the three-way compares `scmp` and `ucmp` (none is selected yet), and `abs`, `fshl` and
 # `fshr` (no cmov, and SHLD/SHRD are not selected yet).
-expand = ["abs", "bitreverse", "bswap", "ctlz", "ctpop", "cttz", "fptoui.i64", "fshl", "fshr", "scmp", "select", "ucmp"]
+expand = ["abs", "bitreverse", "bswap", "ctpop", "fptoui.i64", "fshl", "fshr", "scmp", "select", "ucmp"]
 
 # What a frontend's addresses are, by address space number.
 [spaces]

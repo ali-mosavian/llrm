@@ -87,7 +87,7 @@ def main() -> int:
         objs = work.with_name(work.name + "-obj")
         objs.mkdir(parents=True, exist_ok=True)
         stems = {case["name"]: f"C{at:03d}" for at, case in enumerate(cases)}
-        with ThreadPoolExecutor() as pool:
+        with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
             failed = list(pool.map(lambda c: compile_one(directory, manifest, c, objs / f"{stems[c['name']]}.obj"), cases))
         jobs = [Job(stems[c["name"]], "obj", objs / f"{stems[c['name']]}.obj", libs=tuple(rf"V:\LIB\{one}" for one in c.get("link_libraries", [])),
                     args=" ".join(c.get("arguments", [])),

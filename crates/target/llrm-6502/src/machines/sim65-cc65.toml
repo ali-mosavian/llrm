@@ -1,0 +1,9 @@
+# sim65 with cc65's sim6502 libraries linked: the same memory as `sim65`, and cc65's `_` before every C symbol, so a C
+# global named like a library symbol (`sp`, `ptr1`, `tmp1`) does not meet it at link time and `main` is the `_main` crt0 calls.
+[platform]
+name = "sim65-cc65"
+load_address = 0x0200
+imag_base = 0x80
+zero_page = 26
+soft_stack = 0x8000
+c_symbol_prefix = "_"

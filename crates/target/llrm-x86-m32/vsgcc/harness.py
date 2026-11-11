@@ -1,6 +1,6 @@
 """One emulator for every compiler's m32 object: link, run main, count the kernel's work.
 
-    harness.py PROG VARIANT      VARIANT: llrm (-O2) llrmO1 llrmO3 llrmOs llrmElfO2 llrmElfOs, and gcc and clang each at O1 O2 O3 Os
+    harness.py PROG VARIANT [--hist]      --hist: stderr gets the 16 costliest mnemonics, executions and clocks.  VARIANT: llrm (-O2) llrmO1 llrmO3 llrmOs llrmElfO2 llrmElfOs, and gcc and clang each at O1 O2 O3 Os
 
 llrm's OMF is linked here (segments by class, fixups resolved); ELF, llrm's (llrmElf*) and gcc/clang's, is linked by ld.
 Both resolve report/memset/memcpy to stub.elf, loaded at STUB. The region counted is bench_PROG
@@ -17,20 +17,30 @@ from pathlib import Path
 
 from iced_x86 import Code, CpuidFeature, Decoder, MemorySize, MemorySizeExt, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
+from unicorn.x86_const import UC_X86_REG_FPCW, UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
+RUN_C = REPO / "tests/run/c"
 KERNELS = Path(__file__).resolve().parent / "kernels"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clocks  # noqa: E402
+import ioenv  # noqa: E402
 
 
 def source_dir(prog):
     """`bench/PROG`, or `kernels/PROG` for the x_ kernels written for this comparison."""
     return KERNELS / prog if (KERNELS / prog).is_dir() else BENCH / prog
+
+
+def expected_file(prog):
+    """The `.out` a run must report: tests/run/c/NAME.out for the cell `run_NAME`, else the program's own."""
+    if prog.startswith("run_"):
+        return RUN_C / f"{prog[4:]}.out"
+    return source_dir(prog) / ioenv.answer_name(prog, source_dir(prog))
 sys.path.insert(0, str(REPO / "tools"))
+import corpus_targets  # noqa: E402
 import llrmbin  # noqa: E402
 import sizes  # noqa: E402
 
@@ -50,6 +60,8 @@ STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 # main is entered as after a call from code that keeps the System V stack boundary: esp + 4, the caller's, a multiple of 16.
 ENTRY_ESP = STACK_TOP - 4
 BASE = 0x10000
+# The x87 control word a process starts with (extended precision, round to nearest, exceptions masked); a fresh unicorn CPU holds 0.
+FPU_CONTROL_WORD = 0x37F
 OMF_VARIANTS = ("llrmO1", "llrm", "llrmO3", "llrmOs")   # "llrm" is -O2
 X87 = {CpuidFeature.FPU, CpuidFeature.FPU287, CpuidFeature.FPU287XL_ONLY, CpuidFeature.FPU387, CpuidFeature.FPU387SL_ONLY}
 # The rest of the 486's x87 table (Intel 240440-002, least of each range): no compiler is favoured by a price it lacks.
@@ -184,15 +196,25 @@ def multiply_clocks(m, signed):
     return 10 + max(abs(m).bit_length(), 5 if m < 0 else 3)
 
 
-def multiplier_of(uc, ins):
-    """The operand the 486's early-out reads: the immediate of the three-operand form, else the source (`MUL r/m`,
-    `IMUL r, r/m`). The data sheet names it 'Multiplier' beside the register or memory operand, not the accumulator."""
-    last = ins.op_count - 1
-    kind = ins.op_kind(last)
+IMUL_MODELS = ("source", "dest", "min")
+
+
+def imul_model():
+    """Which operand of `IMUL r, r/m` / `IMUL r, r/m, imm` is the 'Multiplier' of Table 10.1 note 3: the data sheet states it
+    only for the one-operand form (r/m). `source` (the default) is the last operand, `dest` the other factor, `min` the cheaper of
+    the two. VSGCC_IMUL_MODEL picks the one `clocks` is priced with; `clocks_by_imul` always carries all three."""
+    model = os.environ.get("VSGCC_IMUL_MODEL", "source")
+    if model not in IMUL_MODELS:
+        raise SystemExit(f"harness: VSGCC_IMUL_MODEL={model!r}, not one of {IMUL_MODELS}")
+    return model
+
+
+def _operand_value(uc, ins, index):
+    kind = ins.op_kind(index)
     if kind in (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32, OpKind.IMMEDIATE32, OpKind.IMMEDIATE16, OpKind.IMMEDIATE8TO16):
-        return ins.immediate(last) & 0xFFFFFFFF
+        return ins.immediate(index) & 0xFFFFFFFF
     if kind == OpKind.REGISTER:
-        reg = ins.op_register(last)
+        reg = ins.op_register(index)
         value = uc.reg_read(UNICORN[RegisterExt.full_register32(reg)])
         return value & (0xFFFFFFFF if RegisterExt.is_gpr32(reg) else 0xFFFF if RegisterExt.is_gpr16(reg) else 0xFF)
     if kind in MEMORY:
@@ -204,6 +226,22 @@ def multiplier_of(uc, ins):
             address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
         return int.from_bytes(bytes(uc.mem_read(address & 0xFFFFFFFF, 4)), "little")
     return 0
+
+
+def multiplier_of(uc, ins, model="source"):
+    """The operand the 486's early-out reads. One-operand `MUL`/`IMUL r/m`: that operand (the data sheet's 'Multiplier'). Two- and
+    three-operand `IMUL`, which the data sheet leaves open: per `imul_model` the last operand (`source`: the immediate, else the
+    r/m), the other factor (`dest`: the register, else the r/m of the three-operand form) or the cheaper (`min`)."""
+    last = ins.op_count - 1
+    if ins.op_count == 1:
+        return _operand_value(uc, ins, 0)
+    source = _operand_value(uc, ins, last)
+    other = _operand_value(uc, ins, last - 1)
+    if model == "dest":
+        return other
+    if model == "min":
+        return min(source, other, key=lambda m: multiply_clocks(m, True))
+    return source
 
 
 def memory_address(uc, ins, operand):
@@ -401,6 +439,12 @@ def built_ld():
     return int(record.read_text()) if record.exists() else 64
 
 
+def built_cc(prog):
+    """The compiler stamp build.sh recorded beside PROG's objects: md5 of llrm-cc + llrm-llc. A dist that carried only llrm-cc measured the old backend."""
+    record = OUT / "o" / f"{prog}.cc"
+    return record.read_text() if record.exists() else None
+
+
 def stub_digest():
     """What stub.s says now: a stub is current when the one it was built from said the same."""
     import hashlib
@@ -437,6 +481,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     for va, blob, msz in segs + elf_segments(OUT / "stub.elf"):
         uc.mem_write(va, blob)
     uc.mem_write(SENT, b"\xf4")
+    uc.reg_write(UC_X86_REG_FPCW, FPU_CONTROL_WORD)
     esp = ENTRY_ESP
     uc.mem_write(esp, struct.pack("<III", SENT, 0, 0))
     uc.reg_write(UC_X86_REG_ESP, esp)
@@ -447,16 +492,29 @@ def run(prog, variant, hot=False, limit=300_000_000):
     in_eax = variant.startswith("llrm") and built_abi() == "watcom"
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
     total = Counter()   # instructions, mem, clocks
+    model = imul_model()
+    mul_clocks = Counter()   # the MUL/IMUL clocks under each IMUL_MODELS entry
+    by_op = {}          # mnemonic name -> [executions, clocks]: --hist
     hits = Counter()
     edges = Counter()   # (from, to) taken edges in region
     cache = {}
     reports = []
     calls = Counter()
     shadow = []
+    source = source_dir(prog) / f"{prog}.c"
+    files = ioenv.Files(*ioenv.inputs(source)) if source.is_file() and ioenv.uses_files(source) else None
+    # the file API's entry points (stub.s): emulated here, then the stub's own `ret` runs
+    io_at = {stub[f"{name}{suffix}"]: name for name in ioenv.CALLS for suffix in ("", "_") if f"{name}{suffix}" in stub} if files else {}
+    if files and in_eax:
+        raise SystemExit(f"harness: {prog} {variant}: the file API is emulated for the stack convention only (-mabi=sysv)")
 
     def hook(uc, address, size, _):
         if address == SENT:
             uc.emu_stop(); return
+        if address in io_at:
+            sp = uc.reg_read(UC_X86_REG_ESP)
+            args = list(struct.unpack("<4I", uc.mem_read(sp + 4, 16)))
+            uc.reg_write(UC_X86_REG_EAX, files.call(uc, io_at[address], args))
         if address in report_at:
             if in_eax:
                 reports.append(struct.unpack("<i", struct.pack("<I", uc.reg_read(UC_X86_REG_EAX)))[0])
@@ -495,10 +553,13 @@ def run(prog, variant, hot=False, limit=300_000_000):
             taken = False
         # clocks of the previous instruction need to know taken; charge it now
         if prev is not None and pins[0].mnemonic != Mnemonic.NOP:
-            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"), pins[4])
+            clk = cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"), pins[4])
+            total["clocks"] += clk
+            tally(by_op, pins[0], clk)
         st["firstrep"] = not (rep and prev == address)
-        if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
+        if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): not work, but the 486 spends its clock on it
             total["nops"] += 1
+            total["clocks"] += clocks.clocks("nop")
             st["prev"] = address
             hits[address] += 1
             return
@@ -511,18 +572,41 @@ def run(prog, variant, hot=False, limit=300_000_000):
         hits[address] += 1
         st["prev"] = address
         # Read before it runs: the 486's multiply costs what its multiplier is.
-        st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
+        if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL):
+            st["multiplier"] = multiplier_of(uc, ins, model)
+            for other in IMUL_MODELS:
+                mul_clocks[other] += multiply_clocks(multiplier_of(uc, ins, other), ins.mnemonic == Mnemonic.IMUL)
+        else:
+            st["multiplier"] = None
         if ret and uc.reg_read(UC_X86_REG_ESP) == st["sp"]:
-            total["clocks"] += cost(ins, True, True, mem)
+            clk = cost(ins, True, True, mem)
+            total["clocks"] += clk
+            tally(by_op, ins, clk)
             st["active"] = False
 
     uc.hook_add(UC_HOOK_CODE, hook)
     uc.emu_start(main, SENT, count=limit)
+    assert uc.reg_read(UC_X86_REG_EIP) == SENT, f"{prog} {variant}: stopped at the {limit}-instruction cap, not at the end of main"
     assert total["ins"], f"{prog} {variant}: the kernel was never entered"
+    if files and os.environ.get("VSGCC_IO_DUMP"):   # the files the program wrote, to diff against a native run
+        for name, data in files.written.items():
+            (Path(os.environ["VSGCC_IO_DUMP"]) / f"{prog}.{variant}.{name}").write_bytes(bytes(data))
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
     return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"], clocks=total["clocks"], reports=reports,
-                hits=hits, edges=edges, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
+                clocks_by_imul={m: total["clocks"] - mul_clocks[model] + mul_clocks[m] for m in IMUL_MODELS},
+                hits=hits, edges=edges, by_op=by_op, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms,
+                io=files.summary() if files else None)
+
+
+_MNEMONIC_NAMES = {int(v): k for k, v in vars(Mnemonic).items() if k.isupper() and isinstance(v, int)}
+
+
+def tally(by_op, ins, clk):
+    """Adds one execution of `ins` and its clocks to `by_op`, keyed by mnemonic name."""
+    row = by_op.setdefault(_MNEMONIC_NAMES.get(int(ins.mnemonic), str(int(ins.mnemonic))), [0, 0])
+    row[0] += 1
+    row[1] += clk
 
 
 def omf_segments(prog, variant):
@@ -549,6 +633,16 @@ def data_bytes(prog, variant):
         return sum(s for s, c in omf_segments(prog, variant) if c.endswith("DATA"))
     out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
     return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
+
+
+def eh_frame_bytes(prog, variant):
+    """The `.eh_frame` of the kernel's object, reported and never priced or added to the code bytes: llrm's own ELF object, and for gcc
+    and clang the object built with unwind tables (build.sh `.eh.o`; their code objects have none). None for OMF, which has no such section."""
+    if variant in OMF_VARIANTS:
+        return None
+    name = f"{prog}.{variant}.o" if variant.startswith("llrm") else f"{prog}.{variant}.eh.o"
+    out = subprocess.run(["size", "-A", str(OUT / "b" / name)], capture_output=True, text=True).stdout
+    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".eh_frame"))
 
 
 def code_size(prog, variant):
@@ -579,11 +673,25 @@ def archive_code(prog, variant):
     return total
 
 
+def check_applies(prog):
+    """A `run_NAME` cell is for m32 only where the program's `// targets:` says so: run_mulconst_i64 (lp64) was built and run at
+    m32 with a 32-bit `long`, its output never matched the 64-bit `.out`, and every compiler's cell read ok=False."""
+    if prog.startswith("run_"):
+        source = (RUN_C / f"{prog[4:]}.c").read_text()
+        if not corpus_targets.applies("x86_32-linux", source):
+            raise SystemExit(f"harness: {prog} is {corpus_targets.reason(source)} at x86_32-linux: not a cell")
+
+
 def main():
-    prog, variant = sys.argv[1], sys.argv[2]
+    args = [a for a in sys.argv[1:] if a != "--hist"]
+    prog, variant = args[0], args[1]
+    check_applies(prog)
     r = run(prog, variant)
-    expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    if "--hist" in sys.argv:   # to stderr, so the JSON line stays the one thing on stdout
+        for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
+            print(f"HIST {name:8} {count:8} {clk:9}", file=sys.stderr)
+    expect = [int(x) for x in expected_file(prog).read_text().split()]
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], clocks_by_imul=r["clocks_by_imul"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect and not (r["io"] and r["io"]["failed_opens"]), got=r["reports"][:4], io=r["io"])))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,147 @@
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "81b83faf5efcbe70017db907ba6eece9"
+
+[ow.O1]
+instructions = 75554
+memory_operands = 21876
+clocks = 214550
+code_bytes = 262
+helper_bytes = 24
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0092
+
+[ow.O2]
+instructions = 70044
+memory_operands = 21914
+clocks = 212107
+code_bytes = 276
+helper_bytes = 24
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9357
+
+[ow.Os]
+instructions = 75554
+memory_operands = 21876
+clocks = 214550
+code_bytes = 262
+helper_bytes = 24
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0092
+
+[bcc.O1]
+instructions = 31451
+memory_operands = 9954
+clocks = 92753
+code_bytes = 228
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.4209
+
+[bcc.O2]
+instructions = 19535
+memory_operands = 8234
+clocks = 73816
+code_bytes = 223
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2619
+
+[bcc.Os]
+instructions = 31451
+memory_operands = 9954
+clocks = 92753
+code_bytes = 228
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.4209
+
+[tc.O1]
+instructions = 72619
+memory_operands = 22370
+clocks = 240129
+code_bytes = 281
+helper_bytes = 25
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.97
+
+[tc.O2]
+instructions = 69101
+memory_operands = 18610
+clocks = 232478
+code_bytes = 291
+helper_bytes = 25
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9231
+
+[tc.Os]
+instructions = 72619
+memory_operands = 22370
+clocks = 240129
+code_bytes = 281
+helper_bytes = 25
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.97
+
+[tcpp.O1]
+instructions = 77703
+memory_operands = 14036
+clocks = 241560
+code_bytes = 267
+helper_bytes = 23
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0378
+
+[tcpp.O2]
+instructions = 72129
+memory_operands = 12156
+clocks = 234813
+code_bytes = 272
+helper_bytes = 23
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9634
+
+[tcpp.Os]
+instructions = 77703
+memory_operands = 14036
+clocks = 241560
+code_bytes = 267
+helper_bytes = 23
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0378
+
+[bc.O2]
+instructions = 98786
+memory_operands = 43349
+code_bytes = 514
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 1.3367
+
+[pds71.O2]
+instructions = 101313
+memory_operands = 43512
+code_bytes = 510
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 1.3662
+
+[vbdos.O2]
+instructions = 102372
+memory_operands = 43879
+code_bytes = 516
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 1.3769

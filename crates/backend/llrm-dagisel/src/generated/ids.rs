@@ -20,7 +20,10 @@ pub mod isd {
     pub const ATOMIC_LOAD_ADD: u16 = 361;
     pub const ATOMIC_STORE: u16 = 357;
     pub const ATOMIC_SWAP: u16 = 360;
+    pub const AVGCEILS: u16 = 183;
     pub const AVGCEILU: u16 = 184;
+    pub const AVGFLOORS: u16 = 181;
+    pub const AVGFLOORU: u16 = 182;
     pub const AssertAlign: u16 = 5;
     pub const AssertNoFPClass: u16 = 6;
     pub const AssertSext: u16 = 3;
@@ -409,11 +412,15 @@ pub mod x86isd {
     pub const LLRM_ASM: u16 = 24578;
     pub const LLRM_CALL_FLAGS: u16 = 24585;
     pub const LLRM_CODE: u16 = 24582;
+    pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_MOVE128: u16 = 24594;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
+    pub const LLRM_UDIV64BY32: u16 = 24593;
     pub const LLRM_WINDOW: u16 = 24581;
+    pub const LLRM_ZERO128: u16 = 24591;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -722,21 +729,42 @@ pub mod x86 {
     pub const ADC8mr: u16 = 544;
     pub const ADD16mi: u16 = 573;
     pub const ADD16mr: u16 = 583;
+    pub const ADD16rm: u16 = 598;
+    pub const ADD16rr: u16 = 603;
     pub const ADD32mi: u16 = 614;
     pub const ADD32mr: u16 = 624;
+    pub const ADD32rm: u16 = 639;
+    pub const ADD32rr: u16 = 644;
+    pub const ADD64rm: u16 = 680;
+    pub const ADD64rr: u16 = 685;
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
+    pub const ADD8rm: u16 = 713;
+    pub const ADD8rr: u16 = 718;
     pub const AH: u16 = 1;
     pub const AL: u16 = 2;
     pub const AND16mi: u16 = 804;
     pub const AND16mr: u16 = 814;
+    pub const AND16rm: u16 = 829;
+    pub const AND16rr: u16 = 834;
     pub const AND32mi: u16 = 845;
     pub const AND32mr: u16 = 855;
+    pub const AND32rm: u16 = 870;
+    pub const AND32rr: u16 = 875;
+    pub const AND64rm: u16 = 911;
+    pub const AND64rr: u16 = 916;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const AND8rm: u16 = 944;
+    pub const AND8rr: u16 = 949;
     pub const ANDPSrm: u16 = 977;
     pub const AX: u16 = 3;
+    pub const BH: u16 = 4;
+    pub const BL: u16 = 5;
+    pub const BP: u16 = 6;
+    pub const BX: u16 = 9;
     pub const CDQ: u16 = 1202;
+    pub const CH: u16 = 10;
     pub const CL: u16 = 11;
     pub const CQO: u16 = 1396;
     pub const CS: u16 = 12;
@@ -745,6 +773,8 @@ pub mod x86 {
     pub const DEC16m: u16 = 1511;
     pub const DEC32m: u16 = 1522;
     pub const DEC8m: u16 = 1543;
+    pub const DH: u16 = 15;
+    pub const DI: u16 = 16;
     pub const DIV16m: u16 = 1553;
     pub const DIV16r: u16 = 1556;
     pub const DIV32m: u16 = 1559;
@@ -753,12 +783,19 @@ pub mod x86 {
     pub const DIV64r: u16 = 1568;
     pub const DIV8m: u16 = 1571;
     pub const DIV8r: u16 = 1574;
+    pub const DL: u16 = 19;
     pub const DS: u16 = 20;
     pub const DX: u16 = 21;
     pub const EAX: u16 = 22;
+    pub const EBP: u16 = 23;
+    pub const EBX: u16 = 24;
+    pub const ECX: u16 = 25;
+    pub const EDI: u16 = 26;
     pub const EDX: u16 = 27;
     pub const EFLAGS: u16 = 28;
     pub const ES: u16 = 31;
+    pub const ESI: u16 = 32;
+    pub const ESP: u16 = 33;
     pub const FNSTSW16r: u16 = 1706;
     pub const FS: u16 = 36;
     pub const GS: u16 = 38;
@@ -779,10 +816,22 @@ pub mod x86 {
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
+    pub const MOV16mr: u16 = 2561;
+    pub const MOV16rm: u16 = 2568;
+    pub const MOV32mr: u16 = 2580;
     pub const MOV32r0: u16 = 386;
+    pub const MOV32rm: u16 = 2588;
+    pub const MOV64mr: u16 = 2598;
+    pub const MOV64rm: u16 = 2605;
+    pub const MOV8mr: u16 = 2617;
+    pub const MOV8rm: u16 = 2624;
+    pub const MOVAPSmr: u16 = 2633;
+    pub const MOVAPSrm: u16 = 2634;
     pub const MOVSX16rm8: u16 = 2735;
     pub const MOVSX16rr8: u16 = 2738;
     pub const MOVSX32rr8_NOREX: u16 = 2746;
+    pub const MOVUPSmr: u16 = 2757;
+    pub const MOVUPSrm: u16 = 2758;
     pub const MOVZX16rm8: u16 = 2763;
     pub const MOVZX16rr8: u16 = 2765;
     pub const MOVZX32rr8_NOREX: u16 = 2771;
@@ -802,14 +851,44 @@ pub mod x86 {
     pub const NEG8r: u16 = 2884;
     pub const OR16mi: u16 = 2921;
     pub const OR16mr: u16 = 2931;
+    pub const OR16rm: u16 = 2946;
+    pub const OR16rr: u16 = 2951;
     pub const OR32mi: u16 = 2962;
     pub const OR32mr: u16 = 2973;
+    pub const OR32rm: u16 = 2988;
+    pub const OR32rr: u16 = 2993;
+    pub const OR64rm: u16 = 3029;
+    pub const OR64rr: u16 = 3034;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const OR8rm: u16 = 3062;
+    pub const OR8rr: u16 = 3067;
     pub const ORPSrm: u16 = 3079;
+    pub const R10: u16 = 121;
+    pub const R10D: u16 = 169;
+    pub const R11: u16 = 122;
+    pub const R11D: u16 = 170;
+    pub const R12: u16 = 123;
+    pub const R12D: u16 = 171;
+    pub const R13: u16 = 124;
+    pub const R13D: u16 = 172;
+    pub const R14: u16 = 125;
+    pub const R14D: u16 = 173;
+    pub const R15: u16 = 126;
+    pub const R15D: u16 = 174;
+    pub const R8: u16 = 119;
+    pub const R8D: u16 = 167;
+    pub const R9: u16 = 120;
+    pub const R9D: u16 = 168;
     pub const RAX: u16 = 51;
+    pub const RBP: u16 = 52;
+    pub const RBX: u16 = 53;
+    pub const RCX: u16 = 54;
+    pub const RDI: u16 = 55;
     pub const RDX: u16 = 56;
     pub const RIP: u16 = 58;
+    pub const RSI: u16 = 60;
+    pub const RSP: u16 = 61;
     pub const SAHF: u16 = 4033;
     pub const SBB16mi: u16 = 4165;
     pub const SBB16mr: u16 = 4171;
@@ -818,28 +897,59 @@ pub mod x86 {
     pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
+    pub const SHL32ri: u16 = 4351;
+    pub const SHL64ri: u16 = 4381;
+    pub const SHR32ri: u16 = 4539;
+    pub const SHR64ri: u16 = 4569;
+    pub const SI: u16 = 62;
+    pub const SP: u16 = 65;
     pub const SS: u16 = 68;
     pub const SUB16mi: u16 = 4744;
     pub const SUB16mr: u16 = 4754;
+    pub const SUB16rm: u16 = 4769;
+    pub const SUB16rr: u16 = 4774;
     pub const SUB32mi: u16 = 4785;
     pub const SUB32mr: u16 = 4795;
+    pub const SUB32rm: u16 = 4810;
+    pub const SUB32rr: u16 = 4815;
+    pub const SUB64rm: u16 = 4851;
+    pub const SUB64rr: u16 = 4856;
     pub const SUB8mi: u16 = 4867;
     pub const SUB8mr: u16 = 4873;
+    pub const SUB8rm: u16 = 4884;
+    pub const SUB8rr: u16 = 4889;
     pub const TEST16mi: u16 = 5007;
+    pub const TEST16mr: u16 = 5008;
     pub const TEST16ri: u16 = 5009;
+    pub const TEST16rr: u16 = 5010;
     pub const TEST32mi: u16 = 5012;
+    pub const TEST32mr: u16 = 5013;
     pub const TEST32ri: u16 = 5014;
+    pub const TEST32rr: u16 = 5015;
+    pub const TEST64mr: u16 = 5018;
+    pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
+    pub const TEST8mr: u16 = 5023;
     pub const TEST8ri: u16 = 5024;
+    pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
     pub const UCOM_Fpr64: u16 = 5097;
     pub const UCOM_Fpr80: u16 = 5098;
+    pub const V_SET0: u16 = 441;
     pub const XOR16mi: u16 = 22586;
     pub const XOR16mr: u16 = 22596;
+    pub const XOR16rm: u16 = 22611;
+    pub const XOR16rr: u16 = 22616;
     pub const XOR32mi: u16 = 22627;
     pub const XOR32mr: u16 = 22637;
+    pub const XOR32rm: u16 = 22652;
+    pub const XOR32rr: u16 = 22657;
+    pub const XOR64rm: u16 = 22693;
+    pub const XOR64rr: u16 = 22698;
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
+    pub const XOR8rm: u16 = 22726;
+    pub const XOR8rr: u16 = 22731;
     pub const XORPSrm: u16 = 22744;
     pub const sub_16bit: u16 = 4;
     pub const sub_32bit: u16 = 6;
@@ -848,6 +958,7 @@ pub mod x86 {
     /// The extras that are instructions, by number.
     pub const NAMES: &[(u16, &str)] = &[
         (386, "MOV32r0"),
+        (441, "V_SET0"),
         (465, "ADC16mi"),
         (471, "ADC16mr"),
         (490, "ADC32mi"),
@@ -856,16 +967,32 @@ pub mod x86 {
         (544, "ADC8mr"),
         (573, "ADD16mi"),
         (583, "ADD16mr"),
+        (598, "ADD16rm"),
+        (603, "ADD16rr"),
         (614, "ADD32mi"),
         (624, "ADD32mr"),
+        (639, "ADD32rm"),
+        (644, "ADD32rr"),
+        (680, "ADD64rm"),
+        (685, "ADD64rr"),
         (696, "ADD8mi"),
         (702, "ADD8mr"),
+        (713, "ADD8rm"),
+        (718, "ADD8rr"),
         (804, "AND16mi"),
         (814, "AND16mr"),
+        (829, "AND16rm"),
+        (834, "AND16rr"),
         (845, "AND32mi"),
         (855, "AND32mr"),
+        (870, "AND32rm"),
+        (875, "AND32rr"),
+        (911, "AND64rm"),
+        (916, "AND64rr"),
         (927, "AND8mi"),
         (933, "AND8mr"),
+        (944, "AND8rm"),
+        (949, "AND8rr"),
         (977, "ANDPSrm"),
         (1202, "CDQ"),
         (1396, "CQO"),
@@ -899,9 +1026,21 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2561, "MOV16mr"),
+        (2568, "MOV16rm"),
+        (2580, "MOV32mr"),
+        (2588, "MOV32rm"),
+        (2598, "MOV64mr"),
+        (2605, "MOV64rm"),
+        (2617, "MOV8mr"),
+        (2624, "MOV8rm"),
+        (2633, "MOVAPSmr"),
+        (2634, "MOVAPSrm"),
         (2735, "MOVSX16rm8"),
         (2738, "MOVSX16rr8"),
         (2746, "MOVSX32rr8_NOREX"),
+        (2757, "MOVUPSmr"),
+        (2758, "MOVUPSrm"),
         (2763, "MOVZX16rm8"),
         (2765, "MOVZX16rr8"),
         (2771, "MOVZX32rr8_NOREX"),
@@ -921,10 +1060,18 @@ pub mod x86 {
         (2884, "NEG8r"),
         (2921, "OR16mi"),
         (2931, "OR16mr"),
+        (2946, "OR16rm"),
+        (2951, "OR16rr"),
         (2962, "OR32mi"),
         (2973, "OR32mr"),
+        (2988, "OR32rm"),
+        (2993, "OR32rr"),
+        (3029, "OR64rm"),
+        (3034, "OR64rr"),
         (3045, "OR8mi"),
         (3051, "OR8mr"),
+        (3062, "OR8rm"),
+        (3067, "OR8rr"),
         (3079, "ORPSrm"),
         (4033, "SAHF"),
         (4165, "SBB16mi"),
@@ -934,27 +1081,55 @@ pub mod x86 {
         (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
+        (4351, "SHL32ri"),
+        (4381, "SHL64ri"),
+        (4539, "SHR32ri"),
+        (4569, "SHR64ri"),
         (4744, "SUB16mi"),
         (4754, "SUB16mr"),
+        (4769, "SUB16rm"),
+        (4774, "SUB16rr"),
         (4785, "SUB32mi"),
         (4795, "SUB32mr"),
+        (4810, "SUB32rm"),
+        (4815, "SUB32rr"),
+        (4851, "SUB64rm"),
+        (4856, "SUB64rr"),
         (4867, "SUB8mi"),
         (4873, "SUB8mr"),
+        (4884, "SUB8rm"),
+        (4889, "SUB8rr"),
         (5007, "TEST16mi"),
+        (5008, "TEST16mr"),
         (5009, "TEST16ri"),
+        (5010, "TEST16rr"),
         (5012, "TEST32mi"),
+        (5013, "TEST32mr"),
         (5014, "TEST32ri"),
+        (5015, "TEST32rr"),
+        (5018, "TEST64mr"),
+        (5020, "TEST64rr"),
         (5022, "TEST8mi"),
+        (5023, "TEST8mr"),
         (5024, "TEST8ri"),
+        (5025, "TEST8rr"),
         (5096, "UCOM_Fpr32"),
         (5097, "UCOM_Fpr64"),
         (5098, "UCOM_Fpr80"),
         (22586, "XOR16mi"),
         (22596, "XOR16mr"),
+        (22611, "XOR16rm"),
+        (22616, "XOR16rr"),
         (22627, "XOR32mi"),
         (22637, "XOR32mr"),
+        (22652, "XOR32rm"),
+        (22657, "XOR32rr"),
+        (22693, "XOR64rm"),
+        (22698, "XOR64rr"),
         (22709, "XOR8mi"),
         (22715, "XOR8mr"),
+        (22726, "XOR8rm"),
+        (22731, "XOR8rr"),
         (22744, "XORPSrm"),
     ];
 }
@@ -1206,11 +1381,15 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_ASM" => 24578,
         "LLRM_CALL_FLAGS" => 24585,
         "LLRM_CODE" => 24582,
+        "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
+        "LLRM_MOVE128" => 24594,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,
+        "LLRM_UDIV64BY32" => 24593,
         "LLRM_WINDOW" => 24581,
+        "LLRM_ZERO128" => 24591,
         "LOR" => 662,
         "LSUB" => 663,
         "LWPINS" => 664,

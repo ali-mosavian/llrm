@@ -79,3 +79,12 @@ def test_a_table_of_two_long_double_widths_is_refused():
     assert table.width([{'ld': 80}, {'ld': 80}]) == 80
     with pytest.raises(ValueError, match=r"\[64, 80\]"):
         table.width([{'ld': 80}, {'ld': 64}])
+
+
+def test_a_table_of_two_compilers_or_none_is_refused():
+    """A dist with a stale llrm-llc measured the old backend: every cell of an A/B came out identical, and nothing in the file said which compiler a row used."""
+    assert table.compilers([{'cc': 'aa+bb'}, {'cc': 'aa+bb'}]) == 'aa+bb'
+    with pytest.raises(ValueError, match=r"aa\+bb.*cc\+bb"):
+        table.compilers([{'cc': 'aa+bb'}, {'cc': 'cc+bb'}])
+    with pytest.raises(ValueError, match="no compiler stamp"):
+        table.compilers([{'cc': 'aa+bb'}, {}])

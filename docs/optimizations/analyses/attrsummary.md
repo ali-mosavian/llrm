@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/attrsummary.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/attrsummary.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/attrsummary.rs sha256:a2767a0c730e211eee8a4ea55f0efe9152589f4e22eefaf224114d7a0d124050 -->
+<!-- src: crates/opt/llrm-analysis/src/attrsummary.rs sha256:b87683b63385fb8b9da3a2d7f9699cbe0ad8e03c6e7e724548774e685208c345 -->
 
 # attrsummary
 
@@ -13,6 +13,10 @@ what `FunctionAttrs` states (`memory(...)`, `readonly`, `writeonly`,
   `readnone`, `readonly` and `writeonly` do not rule out.
 - Any other location (`other`, `inaccessiblemem`, `errnomem`) is an unknown
   read or write.
+- A parameter whose every use in the body is a constant-offset load, store
+  or constant-length memory intrinsic is accessed at those bytes only
+  (`llrm.reads`/`llrm.writes`, stated by `initializes::add_access_ranges`,
+  DEVIATE I3).
 - A pointer parameter without `nocapture` is captured.
 
 ## Example

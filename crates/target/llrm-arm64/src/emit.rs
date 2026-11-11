@@ -19,6 +19,14 @@ pub(crate) fn words(block: &Lowered) -> usize {
     block.insts.iter().filter(|inst| !inst.is_directive()).count()
 }
 
+/// The unwind directive an instruction states, if it is one.
+fn directive(inst: &Inst) -> Option<llrm_object::assembler::Cfi> {
+    match inst {
+        Inst::Cfi(cfi) => Some(*cfi),
+        _ => None,
+    }
+}
+
 /// One lowered function.
 pub struct Function {
     pub symbol: String,
@@ -31,6 +39,8 @@ pub struct Function {
     pub pool: Vec<crate::mfunc::PoolEntry>,
     /// The jump tables its jumps read.
     pub tables: Vec<crate::jumptable::Table>,
+    /// Whether it has an entry in the unwind tables.
+    pub unwind: bool,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -225,6 +235,24 @@ pub fn object(
             symbols.defined(&one.name, one.binding, 1 + offset_of_section, *offset, one.bytes.len());
         }
     }
+    // An alias is a second name at its aliasee's place (`globals::exports`).
+    for alias in &module.aliases {
+        let target = data::symbol_name(platform, &module.global(alias.aliasee).name.owned().unwrap_or_default());
+        let Some(&found) = symbols.index.get(&target) else {
+            return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
+        };
+        let Definition::Defined { section, offset } = symbols.list[found].definition else {
+            return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
+        };
+        let size = symbols.list[found].size;
+        symbols.defined(
+            &data::symbol_name(platform, &alias.name),
+            data::binding_of(alias.linkage),
+            section,
+            offset,
+            size,
+        );
+    }
     // The code.
     let mut text = Vec::with_capacity(text_size);
     let mut text_relocs = Vec::new();
@@ -301,12 +329,13 @@ pub fn object(
     let frames = functions
         .iter()
         .zip(&text_offsets)
+        .filter(|(function, _)| function.unwind)
         .map(|(function, &offset)| llrm_object::Frame {
             section: text_index,
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
             rows: crate::cfi::rows(&function.blocks),
-            cfi: Vec::new(),
+            cfi: function.blocks.iter().flat_map(|block| &block.insts).filter_map(directive).collect(),
             seh: Vec::new(),
         })
         .collect();
@@ -333,6 +362,7 @@ pub fn object(
         symbols: symbols.list,
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames,
     })
 }

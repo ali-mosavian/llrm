@@ -34,7 +34,7 @@ fn symbols(bytes: &[u8]) -> Vec<(String, u64, u8)> {
 fn an_alias_is_a_symbol_at_its_targets_address_and_hidden_is_hidden() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("object_symbols_{}.o", std::process::id()));
-    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-c", "-m64", "-O2", "-fobject-format=elf"])

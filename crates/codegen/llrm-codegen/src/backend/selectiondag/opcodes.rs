@@ -53,7 +53,7 @@ pub enum Unmapped {
 
 /// `x86.instr`'s forms, by mnemonic.
 pub struct OpcodeMap {
-    forms: Vec<Form>,
+    forms: std::sync::Arc<Vec<Form>>,
     /// [`Self::scalar_sse`], asked per operand width: found once.
     scalar_sse: bool,
     /// The answer for each name asked: every machine node of a function asks,
@@ -65,6 +65,11 @@ pub struct OpcodeMap {
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
+        OpcodeMap::shared(std::sync::Arc::new(forms))
+    }
+
+    /// The map of forms read once (`llrm_target::instr::shared`).
+    pub fn shared(forms: std::sync::Arc<Vec<Form>>) -> OpcodeMap {
         let scalar_sse = forms.iter().any(|form| form.name == "addsd");
         OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
     }
@@ -219,11 +224,12 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 22] = [
+    const ARITHMETIC: [&str; 24] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
-        "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS",
+        "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
+        "CMPSD",
     ];
-    const MOVES: [&str; 1] = ["MOVAPS"];
+    const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
         ("CVTSS2SD", "cvtss2sd", None),
         ("CVTSD2SS", "cvtsd2ss", None),
@@ -243,12 +249,12 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
         ("CVTTSS2SI", "cvttss2si", 32),
     ];
     let letters_of = |tail: &str| -> Option<Vec<char>> {
-        (!tail.is_empty() && tail.chars().all(|c| c == 'r' || c == 'm')).then(|| tail.chars().collect())
+        (!tail.is_empty() && tail.chars().all(|c| matches!(c, 'r' | 'm' | 'i'))).then(|| tail.chars().collect())
     };
     let mut found = None;
     for prefix in ARITHMETIC.iter().chain(&MOVES) {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
-            let mnemonic = if *prefix == "MOVSD" { "movsd_x".to_owned() } else { prefix.to_ascii_lowercase() };
+            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") { format!("{}_x", prefix.to_ascii_lowercase()) } else { prefix.to_ascii_lowercase() };
             // The longest prefix wins (`ANDNPS` is not `ANDPS`).
             if found
                 .as_ref()

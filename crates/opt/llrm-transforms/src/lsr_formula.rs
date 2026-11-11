@@ -449,7 +449,7 @@ impl Formula {
             self.scaled_reg = Some(self.base_regs[at]);
             self.base_regs[at] = scaled;
         }
-        assert!(self.is_canonical(se, l), "Failed to canonicalize?");
+        debug_assert!(self.is_canonical(se, l), "Failed to canonicalize?");
     }
 
     /// `Formula::unscale`: `reg1 + 1*reg2` into `reg1 + reg2`. The formula may

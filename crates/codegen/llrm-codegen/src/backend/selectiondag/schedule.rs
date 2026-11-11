@@ -37,10 +37,18 @@
 //! that the units of one call sequence stay together: without them two calls'
 //! stack arguments interleave.
 //!
-//! DEVIATE SD406: the register pressure per class is not kept. Reason: the
-//! pressure functions compare it with `getRegPressureLimit`, 0 for M68k, the
-//! only target on the ILP queue. Exit: a target with a limit asks for
-//! [`Preference::Ilp`]. Owner: m68k-spike.
+//! DEVIATE SD406: the register-pressure bookkeeping skips the subregister
+//! and `REG_SEQUENCE` special cases of `unscheduledNode`. Reason: those
+//! opcodes are target machine nodes here (SD30). Exit: with SD30. The
+//! classes, costs and limits come from the target
+//! ([`SchedInfo::rep_reg_class`], [`SchedInfo::rep_reg_class_cost`],
+//! [`SchedInfo::reg_pressure_limit`]); the defaults are the pin's
+//! (`getRegPressureLimit` 0), where every class is always at its limit.
+//!
+//! DEVIATE SD407: none in the scheduler; the row records that the M68k ILP
+//! queue is the pin's and that its call-hoisting with a decomposed multiply
+//! (select_of_constants -Os, 19672 B against 16916 without the multiply hook)
+//! is the pin's own choice. Owner: m68k. Exit 2026-11-23.
 //!
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
@@ -57,19 +65,14 @@
 //! without the virtual-register cycle, `calcMaxScratches`, `closestSucc`) is
 //! the pin's.
 //!
-//! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
-//! break in `BURRSort` never fires. Reason: SD10 drops `SDLoc` and IR order.
-//! Exit: with the emitter, if line information needs them. Owner: sdag-d.
-//! Review 2026-12-03.
-//!
 //! # See also
 //! `ScheduleDAGRRList.cpp`
 //! ([createBURRListDAGScheduler
-//! L3082](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3082),
+//! L3113](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L3113),
 //! [ListScheduleBottomUp
-//! L1548](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L1548),
+//! L1572](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L1572),
 //! [BURRSort
-//! L2504](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L2504)),
+//! L2509](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L2509)),
 //! `ScheduleDAGSDNodes::BuildSchedGraph`
 //! ([L536](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGSDNodes.cpp#L536)),
 //! `ScheduleDAG.cpp` (`SUnit::addPred`, `ScheduleDAGTopologicalSort`).
@@ -141,6 +144,52 @@ pub trait SchedInfo {
     /// instructions) and under `-pre-RA-sched=source` (42); with this, 31.
     /// None: copies clobber nothing.
     fn copy_clobbers(&self) -> Option<u16> {
+        None
+    }
+    /// `TLI->getRepRegClassFor(VT)->getID()`: the class a value of `vt` is
+    /// counted in. One class by default.
+    fn rep_reg_class(
+        &self,
+        _vt: EVT,
+    ) -> u16 {
+        0
+    }
+    /// `TLI->getRepRegClassCostFor(VT)`.
+    fn rep_reg_class_cost(
+        &self,
+        _vt: EVT,
+    ) -> u32 {
+        1
+    }
+    /// `TRI->getRegPressureLimit(RC, MF)`: 0 as the pin's default, which keeps
+    /// every class at its limit.
+    fn reg_pressure_limit(
+        &self,
+        _class: u16,
+    ) -> u32 {
+        0
+    }
+    /// The physical register an explicit result of `opcode` is, when its
+    /// register class holds only that one (the Z80's `outs Flags:$f`). The pin
+    /// writes such a result as an implicit def (`Defs = [EFLAGS]`), which
+    /// `CheckForPhysRegDependency` follows; an explicit one is a value, and a
+    /// flag writer scheduled between the compare and its branch went
+    /// unnoticed. None: every explicit result is a virtual register.
+    fn fixed_register_def(
+        &self,
+        _opcode: u32,
+        _result: usize,
+    ) -> Option<u16> {
+        None
+    }
+    /// `TII->unfoldMemoryOperand`: the load and the node on registers a node
+    /// with a folded load is made of, built in `dag`; None where the node has
+    /// no such form.
+    fn unfold_memory_operand(
+        &self,
+        _dag: &mut SelectionDAG,
+        _node: u32,
+    ) -> Option<[u32; 2]> {
         None
     }
     /// `TRI->regsOverlap`.
@@ -301,7 +350,7 @@ fn is_passive(opcode: ISD) -> bool {
 /// The units of `dag` reachable from `root` in schedule order, the pin's
 /// `ScheduleDAGSDNodes::Run` with the BURR queue.
 pub fn schedule(
-    dag: &SelectionDAG,
+    dag: &mut SelectionDAG,
     root: SDValue,
     info: &dyn SchedInfo,
 ) -> Vec<Unit> {
@@ -315,7 +364,9 @@ pub fn schedule(
 }
 
 struct Graph<'a> {
-    dag: &'a SelectionDAG,
+    dag: &'a mut SelectionDAG,
+    /// The root the units are reachable from.
+    root: SDValue,
     info: &'a dyn SchedInfo,
     sus: Vec<SUnit>,
     /// `SDNode::getNodeId`: the unit a node is in; -1 for none.
@@ -337,6 +388,8 @@ struct Graph<'a> {
     interferences: Vec<(usize, Vec<u16>)>,
     /// `Sequence`: the units scheduled so far, bottom first.
     sequence: Vec<usize>,
+    /// `RegPressure`: the live values per class (`RegReductionPQBase`).
+    reg_pressure: HashMap<u16, u32>,
     /// The work stack of the depth and height walks, kept between calls.
     walk: Vec<usize>,
 }
@@ -439,16 +492,18 @@ impl<'a> Graph<'a> {
 
     /// `BuildSchedGraph`.
     fn build(
-        dag: &'a SelectionDAG,
+        dag: &'a mut SelectionDAG,
         root: SDValue,
         info: &'a dyn SchedInfo,
     ) -> Graph<'a> {
         let (user_start, user_list) = Self::live_users(dag, root);
+        let node_id = vec![-1; dag.node_count()];
         let mut graph = Graph {
             dag,
+            root,
             info,
             sus: Vec::new(),
-            node_id: vec![-1; dag.node_count()],
+            node_id,
             user_start,
             user_list,
             cur_cycle: 0,
@@ -457,6 +512,7 @@ impl<'a> Graph<'a> {
             call_seq_end_for_start: HashMap::default(),
             interferences: Vec::new(),
             sequence: Vec::new(),
+            reg_pressure: HashMap::default(),
             walk: Vec::new(),
         };
         graph.build_sched_units(root);
@@ -474,7 +530,7 @@ impl<'a> Graph<'a> {
         visited[root.node as usize] = true;
         let mut calls = Vec::new();
         while let Some(ni) = work.pop() {
-            let dag = self.dag;
+            let dag = &*self.dag;
             for op in &dag.node(SDValue { node: ni, res: 0 }).ops {
                 if !std::mem::replace(&mut visited[op.node as usize], true) {
                     work.push(op.node);
@@ -538,22 +594,35 @@ impl<'a> Graph<'a> {
         }
     }
 
-    /// `InitNumRegDefsLeft`: the values `RegDefIter` visits in a unit's nodes,
-    /// the bottom node first: the results a machine node defines (the first
-    /// `getNumDefs`) and a `CopyFromReg`'s, that have a user.
-    fn count_reg_defs(
+    /// `RegDefIter` over `nodes`, the bottom node first: the values a
+    /// machine node defines (the first `getNumDefs`) and a `CopyFromReg`'s,
+    /// that have a user.
+    fn each_def(
         &self,
         nodes: &[u32],
-    ) -> usize {
-        let mut count = 0;
+        mut f: impl FnMut(usize, EVT),
+    ) {
+        let mut at = 0;
         for &n in nodes {
             let defs = match self.machine(n) {
                 Some(op) => self.values(n).len().min(self.info.num_defs(op)),
                 None if self.opcode(n) == ISD::CopyFromReg => 1,
                 None => 0,
             };
-            count += (0..defs).filter(|&i| self.has_any_use_of_value(n, i)).count();
+            for i in (0..defs).filter(|&i| self.has_any_use_of_value(n, i)) {
+                f(at, self.values(n)[i]);
+                at += 1;
+            }
         }
+    }
+
+    /// `InitNumRegDefsLeft`.
+    fn count_reg_defs(
+        &self,
+        nodes: &[u32],
+    ) -> usize {
+        let mut count = 0;
+        self.each_def(nodes, |_, _| count += 1);
         count
     }
 
@@ -598,6 +667,12 @@ impl<'a> Graph<'a> {
                         self.sus[su].has_phys_reg_defs = true;
                     }
                 }
+                if let Some(op) = self.machine(n)
+                    && (0..self.info.num_defs(op).min(self.values(n).len()))
+                        .any(|i| self.info.fixed_register_def(op, i).is_some() && self.has_any_use_of_value(n, i))
+                {
+                    self.sus[su].has_phys_reg_defs = true;
+                }
                 for (at, operand) in self.ops(n).to_vec().into_iter().enumerate() {
                     let op_node = operand.node;
                     if is_passive(self.opcode(op_node)) {
@@ -614,7 +689,11 @@ impl<'a> Graph<'a> {
                     if is_chain && self.opcode(op_node) == ISD::TokenFactor {
                         latency = 0;
                     }
-                    let reg = if is_chain { None } else { self.phys_reg_dependency(operand, n, at) };
+                    let reg = if is_chain {
+                        None
+                    } else {
+                        self.phys_reg_dependency(operand, n, at).or_else(|| self.fixed_result_register(operand))
+                    };
                     let dep = Dep { su: op_su, kind: if is_chain { Kind::Barrier } else { Kind::Data }, latency, reg };
                     // Several register uses in one unit count as one: the
                     // definitions left are reduced to match.
@@ -624,6 +703,15 @@ impl<'a> Graph<'a> {
                 }
             }
         }
+    }
+
+    /// The register `def` is, when the target's class for it is one register
+    /// ([`SchedInfo::fixed_register_def`]).
+    fn fixed_result_register(
+        &self,
+        def: SDValue,
+    ) -> Option<u16> {
+        self.info.fixed_register_def(self.machine(def.node)?, usize::from(def.res))
     }
 
     /// `CheckForPhysRegDependency`: the physical register `user` takes from
@@ -926,7 +1014,14 @@ impl<'a> Graph<'a> {
         // Nothing to backtrack to: the live register's definition is cloned
         // where the target cannot copy the register (`CopyAndMoveSuccessors`).
         let (try_su, lregs) = self.interferences[0].clone();
+        // DEVIATE: a unit held only by the copy-clobber rule (`copy_clobbers`)
+        // is a preference, not a dependency: the pin has no such hold-back and
+        // so never clones for it. Cloning the flag setter instead cost
+        // partition 68000 -O2 two instructions a trip (1268 -> 1444 clk, memset
+        // and memcpy +30%). Owner m68k. Exit: with `copy_clobbers`.
+        let only_copies = self.sus[try_su].nodes.iter().all(|&node| self.is_virtual_copy(node));
         if let [reg] = lregs[..]
+            && !only_copies
             && self.info.has_cross_copy_class(reg)
             && let Some(&lr_def) = self.live_reg_defs.get(&reg)
             && let Some(new_def) = self.copy_and_move_successors(lr_def, queue)
@@ -943,19 +1038,176 @@ impl<'a> Graph<'a> {
         Some(su)
     }
 
-    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
-    /// that takes over the successors already scheduled. None for a unit of
-    /// several nodes or one with a chain or glue result (the pin unfolds a
-    /// load there, which is not translated).
-    fn copy_and_move_successors(
+    /// A unit for `node`, as `BuildSchedUnits` makes it for a node of its own.
+    fn new_sched_unit(
+        &mut self,
+        node: u32,
+    ) -> usize {
+        let num = self.sus.len();
+        let mut su = SUnit::new(node);
+        self.node_id[node as usize] = num as i32;
+        su.latency = 1;
+        su.reg_defs = self.count_reg_defs(&su.nodes) as u32;
+        su.num_reg_defs_left = su.reg_defs;
+        self.sus.push(su);
+        num
+    }
+
+    /// Whether `su` holds a node that `node` reads (`isOperandOf`).
+    fn is_operand_of(
+        &self,
+        su: usize,
+        node: u32,
+    ) -> bool {
+        self.sus[su].nodes.iter().any(|&n| self.ops(node).iter().any(|op| op.node == n))
+    }
+
+    /// `TryUnfoldSU` ([L975][pin]): the unit of a node with a folded load is
+    /// replaced by a unit for the load and one for the node on registers. The
+    /// new unit, or None where the target cannot unfold the node. When a
+    /// scheduled unit is already one of the two nodes, `su` itself.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L975
+    fn try_unfold_su(
         &mut self,
         su: usize,
         queue: &mut Queue,
     ) -> Option<usize> {
-        if self.sus[su].nodes.len() != 1
-            || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE || *vt == EVT::OTHER)
-        {
+        let node = self.sus[su].node();
+        let info = self.info;
+        let [load_node, new_node] = info.unfold_memory_operand(self.dag, node)?;
+        // The nodes made are not in the user lists the graph was built with.
+        let (start, list) = Self::live_users(self.dag, self.root);
+        self.user_start = start;
+        self.user_list = list;
+        self.node_id.resize(self.dag.node_count(), -1);
+        let num_vals = self.values(new_node).len();
+        let old_num_vals = self.values(node).len();
+
+        // "LoadNode may already exist": another load of the same cell.
+        let (load_su, is_new_load) = if self.node_id[load_node as usize] != -1 {
+            let load_su = self.node_id[load_node as usize] as usize;
+            // "If LoadSU has already been scheduled, we should clone it but
+            // this would negate the benefit to unfolding so just return SU."
+            if self.sus[load_su].is_scheduled {
+                return Some(su);
+            }
+            (load_su, false)
+        } else {
+            (self.new_sched_unit(load_node), true)
+        };
+        let (new_su, is_new_n) = if self.node_id[new_node as usize] != -1 {
+            let new_su = self.node_id[new_node as usize] as usize;
+            if self.sus[new_su].is_scheduled {
+                return Some(su);
+            }
+            (new_su, false)
+        } else {
+            (self.new_sched_unit(new_node), true)
+        };
+
+        // "Now that we are committed to unfolding replace DAG Uses."
+        for i in 0..num_vals {
+            self.dag.replace_all_uses_with(SDValue { node, res: i as u8 }, SDValue { node: new_node, res: i as u8 });
+        }
+        self.dag.replace_all_uses_with(
+            SDValue { node, res: (old_num_vals - 1) as u8 },
+            SDValue { node: load_node, res: 1 },
+        );
+        let (start, list) = Self::live_users(self.dag, self.root);
+        self.user_start = start;
+        self.user_list = list;
+
+        // "Record all the edges to and from the old SU, by category."
+        let (mut chain_preds, mut chain_succs, mut load_preds, mut node_preds, mut node_succs) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for pred in self.sus[su].preds.clone() {
+            if pred.is_ctrl() {
+                chain_preds.push(pred);
+            } else if self.is_operand_of(pred.su, load_node) {
+                load_preds.push(pred);
+            } else {
+                node_preds.push(pred);
+            }
+        }
+        for succ in self.sus[su].succs.clone() {
+            if succ.is_ctrl() {
+                chain_succs.push(succ);
+            } else {
+                node_succs.push(succ);
+            }
+        }
+
+        // "Now assign edges to the newly-created nodes."
+        for pred in chain_preds {
+            self.remove_pred(su, pred);
+            if is_new_load {
+                self.add_pred(load_su, pred);
+            }
+        }
+        for pred in load_preds {
+            self.remove_pred(su, pred);
+            if is_new_load {
+                self.add_pred(load_su, pred);
+            }
+        }
+        for pred in node_preds {
+            self.remove_pred(su, pred);
+            self.add_pred(new_su, pred);
+        }
+        for dep in node_succs {
+            let succ = dep.su;
+            self.remove_pred(succ, Dep { su, ..dep });
+            self.add_pred(succ, Dep { su: new_su, ..dep });
+        }
+        for dep in chain_succs {
+            let succ = dep.su;
+            self.remove_pred(succ, Dep { su, ..dep });
+            if is_new_load {
+                self.add_pred(succ, Dep { su: load_su, ..dep });
+            }
+        }
+
+        // "Add a data dependency to reflect that NewSU reads the value defined
+        // by LoadSU."
+        let latency = self.sus[load_su].latency;
+        self.add_pred(new_su, Dep { su: load_su, kind: Kind::Data, latency, reg: None });
+
+        // `AvailableQueue->addNode`.
+        queue.sethi_ullman.resize(self.sus.len(), 0);
+        if is_new_load {
+            queue.calc_sethi_ullman(&self.sus, load_su);
+        }
+        if is_new_n {
+            queue.calc_sethi_ullman(&self.sus, new_su);
+        }
+        if self.sus[new_su].num_succs_left == 0 {
+            self.sus[new_su].is_available = true;
+        }
+        Some(new_su)
+    }
+
+    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
+    /// that takes over the successors already scheduled. None for a unit of
+    /// several nodes or one with a glue result; a node with a chain result is
+    /// unfolded first (`TryUnfoldSU`) and None where it cannot be.
+    fn copy_and_move_successors(
+        &mut self,
+        mut su: usize,
+        queue: &mut Queue,
+    ) -> Option<usize> {
+        if self.sus[su].nodes.len() != 1 || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE) {
             return None;
+        }
+        // "If possible unfold instruction."
+        if self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::OTHER) {
+            su = self.try_unfold_su(su, queue)?;
+            // "If this can be scheduled don't bother duplicating and just
+            // return"
+            if self.sus[su].num_succs_left == 0 {
+                return Some(su);
+            }
         }
         let new = self.sus.len();
         let mut clone = self.sus[su].clone();
@@ -1110,6 +1362,9 @@ impl<'a> Graph<'a> {
                 queue.push(&mut self.sus, su);
             }
         }
+        if preference(self.info) == Preference::Ilp {
+            self.unscheduled_node(su);
+        }
     }
 
     /// `DelayForLiveRegsBottomUp`: the live physical registers `su` would
@@ -1152,6 +1407,18 @@ impl<'a> Graph<'a> {
             }
             for &reg in self.info.implicit_defs(op) {
                 self.check_for_live_reg_def(su, reg, &mut live);
+            }
+            for &mask in self.ops(node) {
+                if let NodeData::RegMask(at) = self.dag.node(mask).data {
+                    for &reg in &self.dag.register_masks[at as usize] {
+                        self.check_for_live_reg_def(su, reg, &mut live);
+                    }
+                }
+            }
+            for i in 0..self.info.num_defs(op).min(self.values(node).len()) {
+                if let Some(reg) = self.info.fixed_register_def(op, i) {
+                    self.check_for_live_reg_def(su, reg, &mut live);
+                }
             }
         }
         live
@@ -1366,15 +1633,18 @@ impl<'a> Graph<'a> {
         }
     }
 
+    /// Whether the class of `vt` is at its limit.
+    fn at_limit(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        let class = self.info.rep_reg_class(vt);
+        self.reg_pressure.get(&class).copied().unwrap_or(0) >= self.info.reg_pressure_limit(class)
+    }
+
     /// `RegPressureDiff` without the live-use count (that priority is off):
     /// the definitions of the predecessors that are not all used yet, less
     /// this unit's own, in the register classes at their limit.
-    ///
-    /// DEVIATE SD32: the pressure per register class is not tracked. Reason:
-    /// the one target on the ILP scheduler, M68k, keeps the default
-    /// `getRegPressureLimit` of 0, so every class is always at its limit and
-    /// only the counts of definitions matter. Exit: a target that sets a
-    /// limit and asks for `Preference::Ilp`. Owner: m68k-spike.
     fn reg_pressure_diff(
         &self,
         su: usize,
@@ -1383,9 +1653,8 @@ impl<'a> Graph<'a> {
         for pred in self.sus[su].preds.iter().filter(|p| !p.is_ctrl()) {
             // zero when enough uses of the node are scheduled to cover its
             // definitions: they are all live
-            let left = self.sus[pred.su].num_reg_defs_left;
-            if left != 0 {
-                diff += self.sus[pred.su].reg_defs as i32;
+            if self.sus[pred.su].num_reg_defs_left != 0 {
+                self.each_def(&self.sus[pred.su].nodes, |_, vt| diff += i32::from(self.at_limit(vt)));
             }
         }
         let unit = &self.sus[su];
@@ -1394,21 +1663,109 @@ impl<'a> Graph<'a> {
             && unit.num_succs != 0
         {
             let defs = self.values(node).len().min(self.info.num_defs(op));
-            diff -= (0..defs).filter(|&i| self.has_any_use_of_value(node, i)).count() as i32;
+            for i in (0..defs).filter(|&i| self.has_any_use_of_value(node, i)) {
+                diff -= i32::from(self.at_limit(self.values(node)[i]));
+            }
         }
         diff
     }
 
-    /// `scheduledNode` of the register-pressure queue: the uses of the
-    /// predecessors' definitions one fewer. (The pressure per class is not
-    /// kept: see [`Graph::reg_pressure_diff`].)
+    fn add_pressure(
+        &mut self,
+        vt: EVT,
+    ) {
+        let class = self.info.rep_reg_class(vt);
+        *self.reg_pressure.entry(class).or_insert(0) += self.info.rep_reg_class_cost(vt);
+    }
+
+    /// The pin clamps at zero: "register pressure tracking is imprecise".
+    fn sub_pressure(
+        &mut self,
+        vt: EVT,
+    ) {
+        let (class, cost) = (self.info.rep_reg_class(vt), self.info.rep_reg_class_cost(vt));
+        let live = self.reg_pressure.entry(class).or_insert(0);
+        *live = live.saturating_sub(cost);
+    }
+
+    /// `RegReductionPQBase::scheduledNode`: the predecessors' definitions this
+    /// unit uses become live, its own die.
     fn scheduled_node(
         &mut self,
         su: usize,
     ) {
         for pred in self.sus[su].preds.clone().iter().filter(|p| !p.is_ctrl()) {
-            let left = &mut self.sus[pred.su].num_reg_defs_left;
-            *left = left.saturating_sub(1);
+            let left = self.sus[pred.su].num_reg_defs_left;
+            if left == 0 {
+                continue;
+            }
+            self.sus[pred.su].num_reg_defs_left = left - 1;
+            // the dependence does not say which value it takes: the pin
+            // pressurizes the one at the index of the uses left
+            let mut live = None;
+            self.each_def(&self.sus[pred.su].nodes, |at, vt| {
+                if at == (left - 1) as usize {
+                    live = Some(vt);
+                }
+            });
+            if let Some(vt) = live {
+                self.add_pressure(vt);
+            }
+        }
+        let skip = self.sus[su].num_reg_defs_left as usize;
+        let mut dying = Vec::new();
+        self.each_def(&self.sus[su].nodes, |at, vt| {
+            if at >= skip {
+                dying.push(vt);
+            }
+        });
+        for vt in dying {
+            self.sub_pressure(vt);
+        }
+    }
+
+    /// `RegReductionPQBase::unscheduledNode`: the pressure of a unit taken
+    /// back out of the sequence.
+    fn unscheduled_node(
+        &mut self,
+        su: usize,
+    ) {
+        let node = self.sus[su].node();
+        let machine = self.machine(node).is_some();
+        if !machine && self.opcode(node) != ISD::CopyToReg {
+            return;
+        }
+        for pred in self.sus[su].preds.clone().iter().filter(|p| !p.is_ctrl()) {
+            // a predecessor with a user left scheduled is live still
+            if self.sus[pred.su].num_succs_left as usize != self.sus[pred.su].succs.len() {
+                continue;
+            }
+            let pn = self.sus[pred.su].node();
+            let Some(op) = self.machine(pn) else {
+                if self.opcode(pn) == ISD::CopyFromReg {
+                    self.add_pressure(self.values(pn)[0]);
+                }
+                continue;
+            };
+            let defs = self.values(pn).len().min(self.info.num_defs(op));
+            let dying: Vec<EVT> =
+                (0..defs).filter(|&i| self.has_any_use_of_value(pn, i)).map(|i| self.values(pn)[i]).collect();
+            for vt in dying {
+                self.sub_pressure(vt);
+            }
+        }
+        if self.sus[su].num_succs != 0
+            && let Some(op) = self.machine(node)
+        {
+            let values = self.values(node).to_vec();
+            for i in self.info.num_defs(op)..values.len() {
+                if matches!(values[i], EVT::GLUE | EVT::OTHER) {
+                    continue;
+                }
+                if self.has_any_use_of_value(node, i) {
+                    self.add_pressure(values[i]);
+                }
+            }
         }
     }
 
@@ -1834,14 +2191,11 @@ impl Queue {
         Some(su)
     }
 
-    /// `getNodeOrdering`: the IR order of the unit's node under `SrcOrder`.
+    /// `getNodeOrdering`: the IR order of the unit's node, under every queue.
     fn node_ordering(
         graph: &Graph<'_>,
         su: usize,
     ) -> u32 {
-        if preference(graph.info) == Preference::Burr {
-            return 0;
-        }
         graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
     }
 

@@ -127,3 +127,10 @@ static std::vector<Fmt> formats() {
       {"x87", &APFloat::x87DoubleExtended(), 15, 63, true, 80, false},
   };
 }
+
+// The formats the APFloat driver runs on: `formats()` and IEEE quad, which no other driver models yet.
+static std::vector<Fmt> formatsWithQuad() {
+  std::vector<Fmt> f = formats();
+  f.push_back({"quad", &APFloat::IEEEquad(), 15, 112, false, 128, false});
+  return f;
+}

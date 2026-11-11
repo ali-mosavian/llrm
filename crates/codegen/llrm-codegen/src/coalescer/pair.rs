@@ -45,6 +45,29 @@ pub trait CoalescerEnv {
         false
     }
 
+    /// `getMatchingSuperRegClass(WideRC, NarrowRC, SubIdx)` for the
+    /// sub-register at byte `offset` of the wide value (`SubIdx` other than
+    /// the low one): the registers `wide` may take have, at that offset,
+    /// registers `narrow` may take. A target without such a view answers
+    /// no, and a copy to or from a lane above the low one is left alone.
+    fn can_share_lane(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+        _offset: u32,
+    ) -> bool {
+        false
+    }
+
+    /// `narrow_sub` for the lane at byte `offset` of `wide`.
+    fn narrow_lane(
+        &self,
+        _wide: u32,
+        _narrow_value: u32,
+        _offset: u32,
+    ) {
+    }
+
     /// `narrow` for a partial pair: `narrow_value` was merged into `wide`,
     /// which may now take only the registers whose low part `narrow_value`
     /// could.
@@ -53,6 +76,13 @@ pub trait CoalescerEnv {
         _wide: u32,
         _narrow_value: u32,
     ) {
+    }
+
+    /// Whether the env keeps a summary of what names each value, so the
+    /// intervals record the instructions put in and taken out for it
+    /// (DEVIATE C14).
+    fn tracks_uses(&self) -> bool {
+        false
     }
 
     /// `TRI->shouldCoalesce(CopyMI, SrcRC, DstRC, NewRC, LIS)`: whether the
@@ -73,6 +103,19 @@ pub trait CoalescerEnv {
     /// copies go last. False: one top-down list per block, terminals last.
     fn joins_global_copies(&self) -> bool {
         true
+    }
+
+    /// DEVIATE C15: among blocks the pin orders alike (same loop depth, split
+    /// edge and connectivity) it takes the lower number first. True: a block
+    /// whose copies read a value that is live at the loop header, a
+    /// loop-carried one, goes first, so the join that makes the carried value
+    /// and its update one register is tried before a join with a value born in
+    /// the loop body. `m = max(m, p[i])`: joining `m' = p[i]` first leaves a
+    /// copy on both paths; joining `m' = m` first leaves one on the path
+    /// that takes the new value. Owner: m68k. Exit: 2026-11-22, the pin's
+    /// order or a frequency-priced choice replaces it.
+    fn joins_loop_carried_first(&self) -> bool {
+        false
     }
 
     /// DEVIATE C13: whether a copy between widths (`CP.isPartial()`) is joined.
@@ -125,8 +168,15 @@ pub trait CoalescerEnv {
     }
 
     /// A build for size: a copy of a constant is made again only where that
-    /// leaves no second copy of the constant (DEVIATE C10).
+    /// leaves no second copy of the constant (DEVIATE C10), unless the target
+    /// prices it ([`CoalescerEnv::prices_remat`]).
     fn tuned_for_size(&self) -> bool {
+        false
+    }
+
+    /// Whether [`CoalescerEnv::remat_wins`] is the target's own price (its
+    /// encodings), not the default that always remakes.
+    fn prices_remat(&self) -> bool {
         false
     }
 
@@ -156,11 +206,29 @@ pub trait CoalescerEnv {
             && insn.call.is_none()
             && crate::greedy::remat::is_trivially_re_materializable(insn, false)
     }
+
+    /// Whether making `def` again beats the copy `source -> destination` it
+    /// would replace: the target's own price (`isAsCheapAsAMove` against a
+    /// move of that register pair). The pin's `reMaterializeDef` asks none, so
+    /// a target without one remats whenever it can.
+    fn remat_wins(
+        &self,
+        _def: &Insn,
+        _source: u32,
+        _destination: u32,
+        _alone: bool,
+    ) -> bool {
+        true
+    }
 }
 
 /// The (destination, source) of a plain move between values of one width
 /// (`isMoveInstr` for a full copy).
 pub fn full_copy(insn: &Insn) -> Option<(Held, Held)> {
+    // A def of one lane is a sub-register copy (`isFullCopy` is false).
+    if !insn.def_lanes.is_empty() {
+        return None;
+    }
     let what = insn.what.as_ref()?;
     if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
         return None;
@@ -184,12 +252,26 @@ pub fn move_copy(insn: &Insn) -> Option<(Held, Held)> {
     }
 }
 
+/// A copy between two whole values of one width. A lane (an offset above the
+/// low byte) makes a pair partial whatever the widths.
+fn is_whole(
+    dst: Held,
+    src: Held,
+) -> bool {
+    dst.width == src.width && dst.offset == 0 && src.offset == 0
+}
+
 #[derive(Clone, Debug)]
 pub struct CoalescerPair {
     src_reg: u32,
     dst_reg: u32,
     flipped: bool,
     partial: bool,
+    /// The pin's `SrcIdx`/`DstIdx` of a partial pair: the byte of `dst_reg`
+    /// that `src_reg` is. Zero for every pair of the low part.
+    lane_offset: u32,
+    /// The bytes of `src_reg` (`lane_offset` .. `+ lane_width` of `dst_reg`).
+    lane_width: u32,
 }
 
 impl CoalescerPair {
@@ -200,20 +282,47 @@ impl CoalescerPair {
         env: &dyn CoalescerEnv,
     ) -> Option<Self> {
         let (dst, src) = move_copy(copy)?;
-        if dst.width == src.width {
+        // A byte copied into the low lane of a pair is the same width as the
+        // operand it names, so only the copy's own lane def says it is a lane.
+        let lane_def = copy.def_lanes.iter().any(|(value, _)| *value == dst.value);
+        if is_whole(dst, src) && !lane_def {
             if !env.can_share(src.value, dst.value) {
                 return None;
             }
-            return Some(Self { src_reg: src.value, dst_reg: dst.value, flipped: false, partial: false });
+            return Some(Self {
+                src_reg: src.value,
+                dst_reg: dst.value,
+                flipped: false,
+                partial: false,
+                lane_offset: 0,
+                lane_width: src.width,
+            });
         }
         // The narrow value is merged into the wide one, whichever way the
         // copy goes.
-        let truncates = dst.width < src.width;
+        let truncates = dst.width < src.width || (dst.width == src.width && src.offset != 0);
         let (narrow, wide) = if truncates { (dst, src) } else { (src, dst) };
-        if narrow.value == wide.value || !env.can_share_sub(narrow.value, wide.value) {
+        if narrow.offset != 0
+            || narrow.value == wide.value
+            || (wide.offset == 0 && wide.width == narrow.width && !lane_def)
+        {
             return None;
         }
-        Some(Self { src_reg: narrow.value, dst_reg: wide.value, flipped: truncates, partial: true })
+        let shareable = match wide.offset {
+            0 => env.can_share_sub(narrow.value, wide.value),
+            offset => env.can_share_lane(narrow.value, wide.value, offset),
+        };
+        if !shareable {
+            return None;
+        }
+        Some(Self {
+            src_reg: narrow.value,
+            dst_reg: wide.value,
+            flipped: truncates,
+            partial: true,
+            lane_offset: wide.offset,
+            lane_width: narrow.width,
+        })
     }
 
     /// `isPartial`: one value is a sub-register of the other.
@@ -227,6 +336,16 @@ impl CoalescerPair {
 
     pub fn dst_reg(&self) -> u32 {
         self.dst_reg
+    }
+
+    /// The byte of `dst_reg` that `src_reg` is (`DstIdx`).
+    pub fn lane_offset(&self) -> u32 {
+        self.lane_offset
+    }
+
+    /// The bytes of `dst_reg` that `src_reg` is (`DstIdx` as a lane mask).
+    pub fn lanes(&self) -> llrm_lir::valuelanes::ValueLanes {
+        llrm_lir::valuelanes::ValueLanes::at(self.lane_offset, self.lane_width)
     }
 
     pub fn is_flipped(&self) -> bool {
@@ -246,7 +365,10 @@ impl CoalescerPair {
         insn: &Insn,
     ) -> bool {
         let Some((dst, src)) = move_copy(insn) else { return false };
-        if self.partial != (dst.width != src.width) {
+        if self.partial == is_whole(dst, src) {
+            return false;
+        }
+        if self.partial && dst.offset.max(src.offset) != self.lane_offset {
             return false;
         }
         let (mut src, mut dst) = (src.value, dst.value);

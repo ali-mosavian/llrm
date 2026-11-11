@@ -2,7 +2,7 @@
 //! functions of a module, one after another.
 
 use crate::Width;
-use crate::dag::{Options, compile_function};
+use crate::dag::{ModuleFacts, Options, compile_function_with};
 use crate::print;
 
 /// The width `-mtriple=` names.
@@ -30,6 +30,8 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
@@ -37,14 +39,15 @@ pub enum Level {
 impl Level {
     /// The level `-O<text>` names.
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -57,11 +60,25 @@ impl Level {
             Self::O1 => MidEnd::basic(),
             Self::O2 => MidEnd::default(),
             Self::O3 => MidEnd::speed(),
+            Self::Omax => MidEnd::aggressive(),
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         };
-        MidEnd { lower_switches: false, ..options }
+        // The DAG's `mergeConsecutiveStores` widens the stores, as in the pin.
+        // The pin's -O1 has no GVN: a global's store is not forwarded across
+        // blocks.
+        MidEnd { lower_switches: false, merge_stores: false, write_through: false, ..options }
     }
+}
+
+/// The `-f` switches of the command line (`-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end run of the process: the
+/// same parser as every other backend's `llc`.
+static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
+    std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
+
+/// Records `flag` if the driver passes it on to a backend; false when it is not one.
+pub fn pass_flag(flag: &str) -> bool {
+    POLICY.lock().unwrap().take(flag)
 }
 
 /// `module` through the shared mid-end at `level`.
@@ -76,11 +93,16 @@ fn optimized(
     // through it (`LLRM_WASM_IR`) is compared with the pin's `llc` as it
     // stands. A second run is no fixed point (it inlined `gcd` in recgcd
     // -O1).
-    let options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
+    let mut options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
         MidEnd::none()
     } else {
-        MidEnd { library: Vec::new(), ..level.mid_end() }
+        MidEnd { library: c_library(), ..level.mid_end() }
     };
+    {
+        let policy = POLICY.lock().unwrap();
+        policy.mark(&mut program)?;
+        policy.apply(&mut options);
+    }
     // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
     // DIR.
     let dump = std::env::var_os("LLRM_WASM_DUMP").map(std::path::PathBuf::from);
@@ -142,6 +164,8 @@ fn prepared(
     if options.level != Level::O0 {
         module = optimized(module, options.level)?;
     }
+    // `PreISelIntrinsicLowering` runs `LowerConstantIntrinsics` at every level; at -O0 the mid-end has not.
+    llrm_transforms::lowerconstantintrinsics::module_lowered(&mut module)?;
     llrm_mir::atomic::lowered_single_thread(&mut module)?;
     crate::fix_function_bitcasts::fix(&mut module)?;
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
@@ -159,12 +183,14 @@ pub fn assembly(
     let module = prepared(text, width, options)?;
     let mut out = String::new();
     let mut labels = print::Labels::default();
+    let facts = ModuleFacts::of(&module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(&module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
@@ -213,13 +239,15 @@ fn object_of(
     let mut functions = Vec::new();
     // `EmitTargetFeatures` reads the subtarget of the last function compiled.
     let mut features = crate::features::Features::default();
+    let facts = ModuleFacts::of(module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
-        let f = compile_function(module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
@@ -349,4 +377,10 @@ fn data(
         });
     }
     Ok(out)
+}
+
+/// The compare routines of the platform's C library, by their IR names:
+/// what `SimplifyLibCalls` may form.
+fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
+    llrm_mir::libfunc::Routine::stated(llrm_mir::libfunc::HOSTED_COMPARE, str::to_owned, 0)
 }

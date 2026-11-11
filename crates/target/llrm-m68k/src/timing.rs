@@ -23,6 +23,7 @@
 //! # See also
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
+mod counts;
 mod family;
 mod m68020;
 mod m68030;
@@ -51,6 +52,12 @@ enum Mode {
     Pre,
     Disp,
     Index,
+    /// The 68020's full-format index with a 16-bit base displacement.
+    IndexW,
+    /// ... with a 32-bit base displacement.
+    IndexL,
+    /// ... with the base displacement suppressed.
+    IndexB,
     AbsW,
     AbsL,
     PcDisp,
@@ -102,6 +109,22 @@ fn split_operands(text: &str) -> Vec<&str> {
     parts
 }
 
+/// A base displacement as the disassembler prints it: decimal, or `0x` hex.
+fn displacement(text: &str) -> Option<i64> {
+    let (sign, digits) = text.strip_prefix('-').map_or((1, text), |rest| (-1, rest));
+    let value = match digits.strip_prefix("0x") {
+        Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+        None => digits.parse::<i64>().ok()?,
+    };
+    Some(sign * value)
+}
+
+/// `%d1.l*4`, `%a2.w`, `%d0`: an index register with its size and scale.
+fn is_index(text: &str) -> bool {
+    let register = text.split('.').next().unwrap_or(text);
+    is_data(register) || is_address(register)
+}
+
 fn is_data(register: &str) -> bool {
     register.len() == 3 && register.starts_with("%d") && register.as_bytes()[2].is_ascii_digit()
 }
@@ -118,7 +141,13 @@ fn list_size(text: &str) -> Option<u32> {
     for part in text.split('/') {
         match part.split_once('-') {
             Some((from, to)) => {
-                let number = |register: &str| register.get(2..)?.parse::<u32>().ok();
+                // `%fp` and `%sp` end the lists gcc and the pin print
+                // (`%d2-%d7/%a2-%fp`): `%a6` and `%a7`.
+                let number = |register: &str| match register {
+                    "%fp" => Some(6),
+                    "%sp" => Some(7),
+                    _ => register.get(2..)?.parse::<u32>().ok(),
+                };
                 count += number(to)?.checked_sub(number(from)?)? + 1;
             }
             None if is_data(part) || is_address(part) => count += 1,
@@ -127,6 +156,9 @@ fn list_size(text: &str) -> Option<u32> {
     }
     Some(count)
 }
+
+/// An error that is a parser fault, not a missing table row: the cycles tool stops on it.
+pub const UNPARSEABLE: &str = "unparseable displacement";
 
 fn operand(text: &str) -> Result<Operand, String> {
     let unsupported = || format!("operand `{text}` is not in the tables");
@@ -172,15 +204,29 @@ fn operand(text: &str) -> Result<Operand, String> {
             [base] if is_address(base) => Ok(Operand::Mode(Mode::Ind, 0)),
             [_, base] if is_address(base) => Ok(Operand::Mode(Mode::Disp, 0)),
             [_, "%pc"] => Ok(Operand::Mode(Mode::PcDisp, 0)),
-            [_, base, _] if is_address(base) => Ok(Operand::Mode(Mode::Index, 0)),
-            [_, "%pc", _] => Ok(Operand::Mode(Mode::PcIndex, 0)),
+            // a displacement that does not fit the brief format's 8 bits is
+            // the full format's base displacement (68020 and up)
+            // an empty base is the full format's suppressed one: `@(ffffffff800020a0,%d0:l)`
+            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => match (displacement(disp), *base == "%pc") {
+                (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
+                    Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+                }
+                (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
+                (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
+                (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
+            },
+            [base, index] if (is_address(base) || *base == "%pc") && is_index(index) => {
+                Ok(Operand::Mode(Mode::IndexB, 0))
+            }
             _ => Err(unsupported()),
         };
     }
     if text.strip_suffix(":l").is_some_and(|address| address.starts_with("0x")) {
         return Ok(Operand::Mode(Mode::AbsL, 0));
     }
-    if text.strip_suffix(":w").is_some_and(|address| address.starts_with("0x")) {
+    if text.strip_suffix(":w").is_some_and(|address| {
+        address.starts_with("0x") || address.trim_start_matches('-').chars().all(|c| c.is_ascii_digit())
+    }) {
         return Ok(Operand::Mode(Mode::AbsW, 0));
     }
     let first = text.chars().next();
@@ -292,6 +338,51 @@ pub fn trade_passes(
     saved_clocks * 1000 >= extra_bytes * byte_milliclocks(cpu)
 }
 
+/// What a choice between two priced candidates minimizes: the level's price.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Price {
+    /// Bytes, then clocks (`-Os`).
+    Size,
+    /// A candidate is taken only when no larger and no slower (`-O1`).
+    Strict,
+    /// Clocks plus bytes at the CPU's byte price (`-O2`, `-O3`).
+    #[default]
+    Rate,
+}
+
+impl Price {
+    /// The price of a build: `size` wins, then `strict`.
+    pub fn of(
+        size: bool,
+        strict: bool,
+    ) -> Price {
+        if size {
+            Price::Size
+        } else if strict {
+            Price::Strict
+        } else {
+            Price::Rate
+        }
+    }
+
+    /// Whether `candidate` beats `incumbent`, each `(bytes, clocks)`, on `cpu`.
+    pub fn beats(
+        self,
+        cpu: SelectCpu,
+        candidate: (usize, u32),
+        incumbent: (usize, u32),
+    ) -> bool {
+        match self {
+            Price::Size => candidate < incumbent,
+            Price::Strict => candidate.0 <= incumbent.0 && candidate.1 <= incumbent.1 && candidate != incumbent,
+            Price::Rate => {
+                let key = |(bytes, clocks): (usize, u32)| order(cpu, false, clocks, bytes as u32);
+                key(candidate) < key(incumbent)
+            }
+        }
+    }
+}
+
 /// The order a priced choice minimizes on `cpu`: bytes then clocks for size,
 /// else clocks plus bytes at the CPU's byte price, ties to fewer clocks.
 pub fn order(
@@ -328,12 +419,27 @@ pub fn cost(
     )
 }
 
+pub use counts::DataRegisters;
+
 /// [`cost`] for any CPU of the family.
 pub fn cost_on(
     cpu: Cpu,
     text: &str,
     bytes: u32,
     taken: bool,
+) -> Result<Cost, String> {
+    cost_on_counted(cpu, text, bytes, taken, None)
+}
+
+/// [`cost_on`] with the places a shift by a register moves, when the trace
+/// knows them ([`DataRegisters::places_of`]): the 68000 and 68010 add two
+/// clocks a place and the cost is no longer a bound.
+pub fn cost_on_counted(
+    cpu: Cpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+    count: Option<u32>,
 ) -> Result<Cost, String> {
     let text = text.trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
@@ -342,6 +448,12 @@ pub fn cost_on(
         None => (name, None),
     };
     let mut operands: Vec<Operand> = split_operands(rest).into_iter().map(operand).collect::<Result<_, _>>()?;
+    if matches!(base, "lea" | "pea") {
+        // the address of a symbol is absolute short in four bytes, long in six
+        if let Some(one @ Operand::Target) = operands.first_mut() {
+            *one = Operand::Mode(if bytes == 4 { Mode::AbsW } else { Mode::AbsL }, 0);
+        }
+    }
     if base == "movem" {
         // a list of one register reads as a register operand
         for one in &mut operands {
@@ -363,24 +475,29 @@ pub fn cost_on(
         && matches!(cpu, Cpu::M68000 | Cpu::M68010)
         && places(&operands).is_none()
         && operands.len() == 2;
+    let counted = by_register && count.is_some();
+    let clocks = clocks + 2 * count.filter(|_| by_register).unwrap_or(0);
     let partial = if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
-    } else if cpu == Cpu::M68020 {
+    } else if matches!(cpu, Cpu::M68020 | Cpu::M68030 | Cpu::M68040) {
+        // bit fields and `cas` are a bound on the 68020 and 68030 (the "< 5
+        // bytes" and successful-compare rows) and omit the long-word-boundary
+        // term on the 68040
         matches!(base, "mulu" | "muls" | "divu" | "divs") || m68020::partial(base)
     } else {
         matches!(base, "mulu" | "muls" | "divu" | "divs")
-            || by_register
+            || (by_register && !counted)
             || (set_on_condition(base) && cpu == Cpu::M68000)
     };
     Ok(Cost { clocks, partial })
 }
 
-const BASES: [&str; 62] = [
+const BASES: [&str; 63] = [
     "movea", "move", "moveq", "movem", "adda", "addi", "addq", "addx", "add", "suba", "subi", "subq", "subx", "sub",
     "andi", "and", "ori", "or", "eori", "eor", "cmpa", "cmpi", "cmpm", "cmp", "clr", "negx", "neg", "not", "tst",
-    "ext", "swap", "lsl", "lsr", "asl", "asr", "rol", "ror", "roxl", "roxr", "link", "unlk", "lea", "pea", "jsr",
-    "jmp", "rts", "bra", "bsr", "mulu", "muls", "divu", "divs", "exg", "nop", "dbf", "dbra", "dbt", "dbne", "dbeq",
-    "scc", "seq", "sne",
+    "ext", "extb", "swap", "lsl", "lsr", "asl", "asr", "rol", "ror", "roxl", "roxr", "link", "unlk", "lea", "pea",
+    "jsr", "jmp", "rts", "bra", "bsr", "mulu", "muls", "divu", "divs", "exg", "nop", "dbf", "dbra", "dbt", "dbne",
+    "dbeq", "scc", "seq", "sne",
 ];
 
 /// `name` of GNU syntax (`addql`, `bnew`) as the pin's `base.size`.
@@ -428,7 +545,11 @@ fn gnu_operand(text: &str) -> String {
                 };
             match parts.next() {
                 None => format!("({displacement},{base})"),
-                Some(index) => format!("({displacement},{base},{})", index.split(':').next().unwrap_or(index)),
+                Some(index) => {
+                    // binutils prints an index displacement as bare hex, sign-extended to 64 bits
+                    let decimal = u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
+                    format!("({decimal},{base},{})", index.split(':').next().unwrap_or(index))
+                }
             }
         }
     }
@@ -461,8 +582,9 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
         .into_iter()
         .map(gnu_operand)
         .map(|one| {
-            if !target && one.len() >= 4 && one.chars().all(|c| c.is_ascii_hexdigit()) {
-                format!("0x{one}:l")
+            if !target && !one.is_empty() && one.chars().all(|c| c.is_ascii_hexdigit()) {
+                // a short address is the 16-bit absolute form (`pea 0:w`)
+                format!("0x{one}:{}", if one.len() >= 4 { 'l' } else { 'w' })
             } else {
                 one
             }
@@ -470,6 +592,9 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
         .collect();
     let operands = match operands.as_slice() {
         [source, _, quotient] if long_divide => vec![source.clone(), quotient.clone()],
+        // `mulu.l %d1,%d4,%d0` is the 32 x 32 -> 64 product, `%d4` its high
+        // half: the manual's table has one `MUL.L` row for both forms
+        [source, _, low] if matches!(name.as_str(), "mulu.l" | "muls.l") => vec![source.clone(), low.clone()],
         _ => operands,
     };
     Ok(if operands.is_empty() { name } else { format!("{name} {}", operands.join(", ")) })

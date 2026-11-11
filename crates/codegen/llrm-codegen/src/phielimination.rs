@@ -19,13 +19,27 @@
 //! loop from outside. A block whose predecessors all have several successors
 //! lowers identical phis through one register.
 //!
+//! DEVIATE PHI-SHARE (owner x87, exit 2026-11-29; `Profile::share_congruent_phis`,
+//! off: the pin's rule): the pin lowers identical phis through one register
+//! (`LoweredPHIs`), and only where every edge is critical. A loop's header
+//! phis and the zero-trip join after it differ in the preheader alone: the
+//! pin copies every carried value into two registers at the latch, and with
+//! an empty preheader kept (CodeGenPrepare protects it) that is 22 copies for
+//! ten live values. Here a phi in another block that reads the same value as
+//! an earlier one from each predecessor they share takes that phi's register;
+//! only its other predecessors get a copy. x87rotate m16 -Os 612 -> 568 B,
+//! m32 -Os 644 -> 612. Only x87 values share: a copy of one is a stack
+//! rotation or a spill round trip the coalescer cannot remove, while an
+//! integer copy is one clock and coalesces, so sharing there only lengthens
+//! the live range (m16 fib O2 +1.3% clocks, mergesort +15 B).
+//!
 //! No deviation for a phi that reads from a block outside the body: LLVM's phis
 //! list only predecessors in their function, so it is an error here too (the
 //! verifier says the same, `a phi ... is not a predecessor`); it was left alone
 //! before.
 //!
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
-//! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
+//! CF-3 in docs/working/vreg-class-field-plan.md; owner anyisa; review
 //! 2026-11-14): a temporary is made in its result's class by name
 //! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it
 //! the class the result has, which the type gave the result when isel made it.
@@ -64,6 +78,9 @@ use crate::backend::phielim::{self, Split};
 use crate::model::ir::Held;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::{HashMap, IndexMap};
+
+/// The width of an x87 value (`Held::width`), the only class PHI-SHARE serves.
+const X87_WIDTH: u32 = 10;
 
 #[cfg(test)]
 thread_local! {
@@ -154,8 +171,25 @@ fn edges_to_split(
     split
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Blocks looked at as predecessors of a block with phis, over one `lowered`.
+    pub(crate) static PREDECESSORS_LOOKED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `body` with every phi lowered to copies.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
+    lowered_with(body, true, false)
+}
+
+/// [`lowered`] with `SplitPHIEdges` on or off. The pin runs it only when
+/// `LiveVariables` or `LiveIntervals` is available (PHIElimination.cpp#L245),
+/// which -O0 has neither of. `share`: DEVIATE PHI-SHARE.
+pub fn lowered_with(
+    body: &LirBody,
+    split_edges: bool,
+    share: bool,
+) -> Result<LirBody, String> {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
         return Ok(body.clone());
     }
@@ -170,11 +204,19 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             }
         }
     }
-    let widths = phielim::_widths(body);
+    // The values phis name: the only ones the widths and the undefined scan
+    // below are asked about.
+    let phi_values: crate::support::hash::HashSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.phis.iter())
+        .flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, value)| value)))
+        .collect();
+    let widths = phielim::_widths_of(body, Some(&phi_values));
     let kept_phis = |body: &LirBody| -> IndexMap<i64, Vec<Phi>> {
         body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect()
     };
-    let split = edges_to_split(body, &at_of);
+    let split = if split_edges { edges_to_split(body, &at_of) } else { Vec::new() };
     let split_body;
     let body = if split.is_empty() {
         body
@@ -199,7 +241,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
         let mut seen: HashMap<u32, (usize, usize)> = HashMap::default();
         for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
             let implicit = crate::processimpdefs::implicit_def_of(one).is_some();
-            for &value in &one.defines {
+            for &value in one.defines.iter().filter(|value| phi_values.contains(value)) {
                 let entry = seen.entry(value).or_insert((0, 0));
                 entry.0 += 1;
                 entry.1 += usize::from(implicit);
@@ -213,20 +255,33 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut born: IndexMap<u32, u32> = IndexMap::default();
-    let mut preds: IndexMap<i64, usize> = IndexMap::default();
+    let mut predecessors: IndexMap<i64, Vec<&Block>> = IndexMap::default();
     for block in &body.blocks {
         for &to in block.succ.iter() {
-            *preds.entry(to).or_insert(0) += 1;
+            predecessors.entry(to).or_default().push(block);
         }
     }
     // `LoweredPHIs`: kept for the whole function, so identical phis of
     // different blocks share the temporary.
     let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
+    // Registers other blocks' phis may share: where each is written, from
+    // what, which blocks read it, and its width.
+    type Written = (Vec<(i64, u32)>, Vec<i64>, u32);
+    let mut regs: HashMap<u32, Written> = HashMap::default();
+    let mut shared: HashMap<(i64, u32), Vec<u32>> = HashMap::default();
     for block in &body.blocks {
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
-        let all_critical = preds.get(&block.at).copied().unwrap_or(0) >= 2
-            && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
+        // `AllEdgesCritical`: walks the block's own predecessors, and only where there are phis.
+        let all_critical = !block.phis.is_empty()
+            && predecessors.get(&block.at).is_some_and(|found| {
+                found.len() >= 2
+                    && found.iter().all(|one| {
+                        #[cfg(test)]
+                        PREDECESSORS_LOOKED_AT.with(|n| n.set(n.get() + 1));
+                        one.succ.len() >= 2
+                    })
+            });
         for phi in block.phis.iter() {
             let width = widths[&phi.result];
             // `allPhiOperandsUndefined`: an `implicit_def` of the result, and
@@ -241,16 +296,44 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
                 key
             };
             let reused = if all_critical { lowered_phis.get(&key).copied() } else { None };
-            let incoming = reused.unwrap_or_else(|| {
+            let sharing = if reused.is_none() && share {
+                phi.incoming.iter().find_map(|pair| {
+                    shared.get(pair)?.iter().copied().find(|reg| {
+                        let (writes, readers, held) = &regs[reg];
+                        *held == width
+                            && width == X87_WIDTH
+                            && !readers.contains(&block.at)
+                            && phi.incoming.iter().all(|&(pre, source)| {
+                                !undefined.contains(&source)
+                                    && writes.iter().all(|&(at, other)| at != pre || other == source)
+                            })
+                    })
+                })
+            } else {
+                None
+            };
+            let incoming = reused.or(sharing).unwrap_or_else(|| {
                 let made = next;
                 next += 1;
                 made
             });
-            if all_critical && reused.is_none() {
+            if all_critical && reused.is_none() && sharing.is_none() {
                 lowered_phis.insert(key, incoming);
             }
-            if reused.is_none() {
+            if reused.is_none() && sharing.is_none() {
                 born.insert(incoming, phi.result);
+            }
+            let written_before: Vec<i64> =
+                regs.get(&incoming).map(|entry| entry.0.iter().map(|pair| pair.0).collect()).unwrap_or_default();
+            if reused.is_none() && share && !phi.incoming.iter().any(|(_, source)| undefined.contains(source)) {
+                let entry = regs.entry(incoming).or_insert_with(|| (Vec::new(), Vec::new(), width));
+                for &pair in &phi.incoming {
+                    if !entry.0.contains(&pair) {
+                        entry.0.push(pair);
+                        shared.entry(pair).or_default().push(incoming);
+                    }
+                }
+                entry.1.push(block.at);
             }
             // The copy at the top of the block, after any remaining phis
             // (`head` is in lowering order; the block gets it
@@ -263,6 +346,10 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
             let mut done: Vec<i64> = Vec::new();
             for &(pre, source) in phi.incoming.iter().rev() {
                 if done.contains(&pre) {
+                    continue;
+                }
+                // A predecessor the shared register is already written at.
+                if sharing.is_some() && written_before.contains(&pre) {
                     continue;
                 }
                 done.push(pre);
@@ -332,7 +419,7 @@ fn _implicit_def(
     let what = crate::model::ir::Semantics {
         op: crate::model::ir::Operation::Nothing,
         name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
-        dests: vec![crate::model::ir::Loc::Held(Held { value, width })],
+        dests: vec![crate::model::ir::Loc::Held(Held { value, width, offset: 0 })],
         sources: Vec::new(),
         ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
     };
@@ -346,7 +433,7 @@ fn _held(
     value: u32,
     width: u32,
 ) -> Held {
-    Held { value, width }
+    Held { value, width, offset: 0 }
 }
 
 #[cfg(test)]
@@ -355,7 +442,7 @@ mod tests {
     use crate::model::ir::{Imm, Loc, Operation, Semantics};
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn def(v: u32) -> Arc<Insn> {
@@ -480,7 +567,7 @@ mod tests {
     /// (d_faces -O2: that stage cost 11.7 M instructions on one body).
     #[test]
     fn test_a_phi_of_an_8_byte_integer_is_lowered_like_any_other() {
-        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
         let make = |value: u32| {
             let what = Semantics {
                 name: Some("mov".into()),
@@ -504,7 +591,7 @@ mod tests {
     /// for `phielim`'s own lowering, which is deleted).
     #[test]
     fn test_an_x87_phi_is_lowered_like_any_other() {
-        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let float = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let load = |value: u32| {
             let what = Semantics {
                 name: Some("fldz".into()),
@@ -620,6 +707,98 @@ mod tests {
         assert_eq!(copies(made).len(), 1, "the copy is in the edge block");
     }
 
+    /// A loop with a kept preheader and a zero-trip join after it: the header
+    /// phi and the join phi read the same value from the loop block and differ
+    /// in the preheader alone. The pin carries it twice (two copies at the
+    /// latch, 22 for x87rotate's ten values, so FloatAlloc spilled nine
+    /// slots); with PHI-SHARE one register serves both.
+    #[test]
+    fn test_phis_that_differ_in_the_preheader_alone_share_a_register_under_phi_share() {
+        let (pin, shared) = preheader_alone(X87_WIDTH);
+        assert_eq!(pin.len(), 3, "two phis, two registers: {:?}", pin);
+        assert_eq!(shared.len(), 2, "one register serves both: {:?}", shared);
+    }
+
+    /// An integer copy is one clock and coalesces; sharing only lengthened the
+    /// live range (m16 fib O2 gained `mov si, ax` in the entry, +1.3% clocks;
+    /// mergesort +15 B).
+    #[test]
+    fn test_integer_phis_keep_their_own_registers_under_phi_share() {
+        let (pin, shared) = preheader_alone(4);
+        assert_eq!(shared, pin, "no sharing for an integer");
+    }
+
+    /// The copies at the top of the loop block, for the pin and for PHI-SHARE.
+    fn preheader_alone(width: u32) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
+        let phis = |header: bool| {
+            if header {
+                vec![Phi { result: 10, incoming: vec![(1, 1), (2, 12)] }]
+            } else {
+                vec![Phi { result: 11, incoming: vec![(0, 1), (2, 12)] }]
+            }
+        };
+        let make = |value: u32| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value, width, offset: 0 })],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![value], vec![]))
+        };
+        let was = body(vec![
+            block(0, vec![make(1), branch(3)], &[3, 1], vec![]),
+            block(1, vec![jump(2)], &[2], vec![]),
+            block(2, vec![make(12), read(10), branch(2)], &[2, 3], phis(true)),
+            block(3, vec![read(11)], &[], phis(false)),
+        ]);
+        let in_loop = |share: bool| {
+            let now = lowered_with(&was, true, share).expect("lowers");
+            copies(now.blocks.iter().find(|one| one.at == 2).expect("a block")).to_vec()
+        };
+        (in_loop(false), in_loop(true))
+    }
+
+    /// The pin splits no critical edge at -O0 (no `LiveVariables` or
+    /// `LiveIntervals`, PHIElimination.cpp#L245). Ours solved liveness rows
+    /// and made a block on the edge: 4.1 M Ir on div_constants_short.
+    #[test]
+    fn test_o0_splits_no_critical_edge_and_solves_no_rows() {
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (3, 2)] }];
+        let mut was = body(vec![
+            block(0, vec![def(1), branch(2)], &[2, 1], vec![]),
+            block(1, vec![read(1), jump(3)], &[3], vec![]),
+            block(2, vec![read(10)], &[], vec![]),
+            block(3, vec![def(2), jump(2)], &[2], vec![]),
+        ]);
+        was.blocks[2] = Block::from(block(2, vec![read(10)], &[], phis));
+        let before = ROWS_SOLVED.with(std::cell::Cell::get);
+        let now = lowered_with(&was, false, false).expect("lowers");
+        assert_eq!(now.blocks.len(), 4, "a block was made on the edge at -O0");
+        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "rows solved at -O0");
+        assert_eq!(copies(&now.blocks[0]).len(), 1, "the copy stays in the predecessor");
+    }
+
+    /// The widths were found for every value of the body, though a phi's
+    /// widths join only the values of its own phis: whole-body work for the
+    /// few values asked (1.2 M Ir in `lowered` on div_constants_short at -O0).
+    #[test]
+    fn test_only_the_values_phis_name_are_given_a_width() {
+        use crate::backend::phielim::WIDTHS_KEPT;
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 12)] }];
+        let mut defs: Vec<_> = (100..150).map(def).collect();
+        defs.insert(0, def(1));
+        defs.push(jump(1));
+        let was = body(vec![
+            block(0, defs, &[1], vec![]),
+            block(1, vec![def(12), read(10), branch(1)], &[1, 2], phis),
+            block(2, vec![read(10)], &[], vec![]),
+        ]);
+        WIDTHS_KEPT.with(|kept| kept.set(0));
+        lowered(&was).expect("lowers");
+        assert_eq!(WIDTHS_KEPT.with(std::cell::Cell::get), 3, "a width for each of 10, 1 and 12 only");
+    }
+
     /// The rows of liveness were solved for every value of every body with a
     /// phi, though only the values a critical edge's phi hands over are asked
     /// (d_faces dist: 1.5 M Ir in three solves). Asked of a body with none they
@@ -675,5 +854,30 @@ mod tests {
             copies(&now.blocks[0])
         );
         assert_eq!(copies(&now.blocks[3]).len(), 1, "{:?}", copies(&now.blocks[3]));
+    }
+
+    /// `AllEdgesCritical` scanned every block of the body for the predecessors of every
+    /// block that has two or more, phis or not (`PHIElimination.cpp` L332-338 walks only
+    /// the block's own predecessors, and only for a block that starts with a phi):
+    /// memory_expansion -O2 spent 29 M Ir in `lowered`, quadratic in the blocks.
+    #[test]
+    fn test_the_predecessors_of_a_block_with_phis_are_not_found_by_scanning_the_body() {
+        const DIAMONDS: i64 = 100;
+        let mut blocks = Vec::new();
+        for k in 0..DIAMONDS {
+            let (head, left, right, join) = (3 * k, 3 * k + 1, 3 * k + 2, 3 * k + 3);
+            let (x, y) = (10 + 2 * k as u32, 11 + 2 * k as u32);
+            let phi = Phi { result: 1000 + k as u32, incoming: vec![(left, x), (right, y)] };
+            let phis = if k == 0 { vec![] } else { vec![Phi { result: 999 + k as u32, incoming: vec![(head - 2, 10 + 2 * (k as u32 - 1)), (head - 1, 11 + 2 * (k as u32 - 1))] }] };
+            blocks.push(block(head, vec![branch(right), jump(left)], &[left, right], phis));
+            blocks.push(block(left, vec![def(x), jump(join)], &[join], vec![]));
+            blocks.push(block(right, vec![def(y), jump(join)], &[join], vec![]));
+            let _ = phi;
+        }
+        blocks.push(block(3 * DIAMONDS, vec![read(1)], &[], vec![]));
+        PREDECESSORS_LOOKED_AT.with(|n| n.set(0));
+        lowered(&body(blocks)).expect("lowers");
+        let looked_at = PREDECESSORS_LOOKED_AT.with(|n| n.get());
+        assert!(looked_at <= 4 * DIAMONDS as usize, "{looked_at} blocks looked at for {DIAMONDS} joins");
     }
 }

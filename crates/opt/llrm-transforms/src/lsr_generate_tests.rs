@@ -81,7 +81,7 @@ fn generated_sized(
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[] };
     let mut users = IvUsers::of(&mut se, &cx, header, &env);
     if post_inc {
         let conds: Vec<InstId> = users
@@ -253,6 +253,9 @@ fn too_many_formulae_are_narrowed_to_the_shared_register() {
 #[test]
 fn the_solver_shares_the_exit_counter_with_the_store() {
     generated_for("i486", STORE, |_, se, lsr, _| {
+        // The pass adds the formulae after the pin's narrowing and keeps the
+        // solution that costs less.
+        lsr.generate_end_biased(se);
         let solution = lsr.solve(se);
         assert_eq!(solution.len(), 2);
         let chosen: Vec<_> = lsr.uses.iter().zip(&solution).map(|(lu, &f)| (lu.kind, &lu.formulae[f])).collect();
@@ -361,4 +364,27 @@ fn loop_carried_values_that_are_not_recurrences_take_registers() {
     }
     // The index is a recurrence LSR rewrites; the sum is not.
     assert_eq!(units, [2, 4]);
+}
+
+/// nibbles -Os (+3 B): the outer loop's counter lives across the inner loop
+/// and holds a register there, but only the inner loop's own values were
+/// counted, so LSR spent a register the outer counter then spilled for.
+#[test]
+fn a_value_of_the_enclosing_loop_that_lives_across_the_loop_takes_a_register() {
+    let nested = || {
+        let after = "store i32 %s2, ptr %p";
+        format!(
+            "define void @f(ptr %p, i32 %n) {{\nentry:\n  br label %outer\nouter:\n  %j = phi i32 [ 0, %entry ], [ %jn, %latch ]\n  br label %inner\ninner:\n  %i = phi i32 [ 0, %outer ], [ %next, %inner ]\n  %s = phi i32 [ 0, %outer ], [ %s2, %inner ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %s2 = add i32 %s, %v\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %latch, label %inner\nlatch:\n  {after}\n  %jn = add i32 %j, 1\n  %d = icmp eq i32 %jn, 81\n  br i1 %d, label %exit, label %outer\nexit:\n  ret void\n}}\n"
+        )
+    };
+    let flat = "define void @f(ptr %p, i32 %n) {\nentry:\n  br label %inner\ninner:\n  %i = phi i32 [ 0, %entry ], [ %next, %inner ]\n  %s = phi i32 [ 0, %entry ], [ %s2, %inner ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %s2 = add i32 %s, %v\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %latch, label %inner\nlatch:\n  store i32 %s2, ptr %p\n  ret void\n}\n";
+    let mut units = Vec::new();
+    for text in [flat.to_string(), nested()] {
+        generated(&text, |cx, se, _, _| {
+            let inner = cx.loops.get_loops_in_preorder().pop().expect("a loop").get_header();
+            units.push(crate::lsr_collect::loop_register_units(se, cx, &X86::of_cpu("i486").unwrap(), inner));
+        });
+    }
+    // The nested loop's counter `%j` is one more.
+    assert_eq!(units[1], units[0] + 1, "{units:?}");
 }

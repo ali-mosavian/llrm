@@ -144,7 +144,26 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `getScalarShiftAmountTy`: wasm shifts by the type of the value shifted
+    /// (the combiner's default is a byte).
+    fn shift_amount_type(
+        &self,
+        shifted: EVT,
+    ) -> EVT {
+        shifted
+    }
+
     fn fold_and_of_extload(&self) -> bool {
+        true
+    }
+
+    /// `visitSUB`'s `C2-(A+C1)` is `(C2-C1)-A` (DAGCombiner.cpp#L4432) and the
+    /// folds beside it: the pin has them on for every target.
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
+
+    fn fold_sext_in_reg_of_load(&self) -> bool {
         true
     }
 
@@ -156,17 +175,32 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`
+    /// (DAGCombiner.cpp#L5080), for a single-use add where
+    /// `isMulAddWithConstProfitable` holds, which is the pin's default for
+    /// wasm.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        true
+    }
+
+    /// `tryStoreMergeOfConstants`: two byte stores are one `i32.store16`, a
+    /// truncating store of the promoted type (`isTruncStoreLegal(i32, i16)`).
+    fn merge_stores_via_trunc_store(&self) -> bool {
+        true
+    }
+
+    /// `replaceStoreOfFPConstant`: a `float`/`double` constant store, volatile
+    /// too (`isNormalStore`), is an `i32`/`i64` constant store, as the pin does
+    /// for wasm.
+    fn store_fp_constant_as_i64(&self) -> bool {
+        true
+    }
+
     fn merge_stores_after_legalization(
         &self,
         _mem: EVT,
     ) -> bool {
         // The pin's default; EVT holds no vectors yet.
-        true
-    }
-
-    /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
-    /// target.
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
         true
     }
 }
@@ -247,6 +281,9 @@ pub fn select_block(
     optimize: bool,
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu, features);
+    // The scratch objects the legalizers ask for (an `i128` libcall result's
+    // memory) are frame objects numbered after the function's.
+    dag.first_temporary = info.next_stack_object();
     let tables = &info.jump_tables;
     let mut lowering = WasmLowering { tables };
     if optimize {
@@ -260,6 +297,9 @@ pub fn select_block(
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     combine(dag, CombineLevel::AfterLegalizeTypes, &tli, alias, optimize);
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
+    for (size, align) in std::mem::take(&mut dag.temporaries) {
+        info.new_stack_object(size, align);
+    }
     combine(dag, CombineLevel::AfterLegalizeDag, &tli, alias, optimize);
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
@@ -270,7 +310,6 @@ pub fn select_block(
     if llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("{}", dag.dump());
     }
-    llrm_codegen::backend::selectiondag::dag_select::remove_assertions(dag);
     let selector = Selector::new(match cpu {
         Cpu::Wasm32 => wasm_wasm32::TABLE,
         Cpu::Wasm64 => wasm_wasm64::TABLE,

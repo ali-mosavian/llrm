@@ -1,10 +1,9 @@
 //! `AArch64MIPeepholeOpt::visitORR`: a zero extend of a 32-bit result is free.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 fn asm(ir: &str) -> String {
-    driver::set_isel_mode(IselMode::Dag);
     driver::assembly(ir, Platform::Linux, true).expect("lowers")
 }
 

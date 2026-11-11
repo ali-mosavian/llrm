@@ -294,7 +294,7 @@ pub(super) fn kept_far(compiler: &Compiler) -> BTreeSet<String> {
             group_of.insert(a, b);
         }
     }
-    let trace = std::env::var_os("LLRM_QB_PLACEMENT_TRACE").is_some();
+    let trace = llrm_support::env_set("LLRM_QB_PLACEMENT_TRACE");
     let mut far_groups: BTreeSet<Array> = BTreeSet::new();
     for (name, function) in &by_key {
         for one in loops(function).iter().filter(|one| one.innermost) {

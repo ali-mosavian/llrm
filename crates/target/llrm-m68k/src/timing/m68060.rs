@@ -168,6 +168,8 @@ fn label(
         Mode::PcDisp => "(d16,PC)",
         Mode::PcIndex => "(d8,PC,Xi*SF)",
         Mode::Imm => "#<data>",
+        // full-format forms are not read for the 68060: no row matches
+        Mode::IndexW | Mode::IndexL | Mode::IndexB => "(full-format index)",
     }
 }
 
@@ -180,7 +182,11 @@ fn ea_time(mode: Mode) -> Option<u32> {
 
 /// The memory operand's mode, else the last register one.
 fn effective(operands: &[Operand]) -> Option<Mode> {
-    let modes: Vec<Mode> = operands.iter().filter_map(mode).collect();
+    // a bare number or symbol is an absolute address in an <ea> position
+    let modes: Vec<Mode> = operands
+        .iter()
+        .filter_map(|operand| if *operand == Operand::Target { Some(Mode::AbsL) } else { mode(operand) })
+        .collect();
     modes
         .iter()
         .copied()
@@ -219,6 +225,13 @@ fn by_destination(
     size: Size,
     mode: Mode,
 ) -> Option<u32> {
+    // Table 10-5 prints `(d16,PC)` and `(d8,PC,Xi*SF)` at the times of `(d16,An)` and
+    // `(d8,An,Xi*SF)`, and Table 10-10 has no PC column: the PC form is the address form.
+    let mode = match mode {
+        Mode::PcDisp => Mode::Disp,
+        Mode::PcIndex => Mode::Index,
+        other => other,
+    };
     grid.cell(name, size_word(size), label(mode, true), 0)
 }
 
@@ -416,14 +429,15 @@ pub(super) fn clocks(
             by_destination(&tables.bit_field, &format!("{name} (< 5 Bytes)"), Size::L, effective(operands)?)
         }
         ("lea" | "pea", [source, ..]) => {
-            let column = label(mode(source)?, false);
+            // a bare number or symbol is an absolute address
+            let column = label(if *source == Operand::Target { Mode::AbsL } else { mode(source)? }, true);
             tables.lea.cell(&name, "", column, 0)
         }
         ("movem", [Operand::List(registers), memory]) => {
-            tables.lea.cell("MOVEM Reg->Mem", "", label(mode(memory)?, false), *registers)
+            tables.lea.cell("MOVEM Reg->Mem", "", label(mode(memory)?, true), *registers)
         }
         ("movem", [memory, Operand::List(registers)]) => {
-            tables.lea.cell("MOVEM Mem->Reg", "", label(mode(memory)?, false), *registers)
+            tables.lea.cell("MOVEM Mem->Reg", "", label(mode(memory)?, true), *registers)
         }
         ("abcd" | "sbcd" | "addx" | "subx", [first, _]) => {
             let column = if mode(first)? == Mode::Dn { "op Dy,Dx" } else { "op <ea>y,<ea>x" };

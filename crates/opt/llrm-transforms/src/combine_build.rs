@@ -122,9 +122,28 @@ impl Combiner<'_> {
         ty: TypeId,
         args: &[Operand],
     ) -> Operand {
+        let call = self.insert_intrinsic_call(at, name, ty, args);
+        self.value_of(call)
+    }
+
+    /// [`Self::create_intrinsic_named`] for any return type, `void` included:
+    /// the call instruction.
+    pub fn insert_intrinsic_call(
+        &mut self,
+        at: InstId,
+        name: &str,
+        ty: TypeId,
+        args: &[Operand],
+    ) -> InstId {
         let parameters: Vec<TypeId> = args.iter().map(|&arg| self.type_of(arg)).collect();
         let function_type = self.context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
         let callee = self.declared.declare(name, function_type);
+        if callee.0 as usize >= self.env.globals.len()
+            && !self.pending_intrinsics.iter().any(|(id, _)| *id == callee.0)
+            && let Some(intrinsic) = llrm_mir::valuetracking::pattern::intrinsic_id_of_name(name)
+        {
+            self.pending_intrinsics.push((callee.0, intrinsic));
+        }
         let pointer = self.context.types.ptr(0);
         let callee =
             Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
@@ -138,8 +157,7 @@ impl Combiner<'_> {
         };
         let mut operands = args.to_vec();
         operands.push(callee);
-        let new = self.insert_before(at, Opcode::Call(Box::new(info)), ty, operands, Flags::default());
-        self.value_of(new)
+        self.insert_before(at, Opcode::Call(Box::new(info)), ty, operands, Flags::default())
     }
 
     /// `Builder.CreateIntrinsic(umul/smul.with.overflow, {a, b})`: the call,
@@ -267,6 +285,38 @@ impl Combiner<'_> {
         let ty = self.context.types.int(1);
         let new = self.insert_before(at, Opcode::ICmp(pred), ty, vec![a, b], Flags::default());
         self.value_of(new)
+    }
+
+    /// `insertRangeTest(V, Lo, Hi, isSigned, Inside)`: `V >= Lo && V < Hi`
+    /// where `inside`, else `V < Lo || V >= Hi`. `lo < hi` in the compare's
+    /// signedness.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L61>
+    pub fn insert_range_test(
+        &mut self,
+        at: InstId,
+        v: Operand,
+        (lo, hi): (u128, u128),
+        is_signed: bool,
+        inside: bool,
+    ) -> Operand {
+        let ty = self.type_of(v);
+        let width = self.context.types.int_bits(ty).expect("an integer");
+        let pred = if inside { IntPredicate::Ult } else { IntPredicate::Uge };
+        // V >= Min && V <  Hi --> V <  Hi
+        // V <  Min || V >= Hi --> V >= Hi
+        let min = if is_signed { 1u128 << (width - 1) } else { 0 };
+        if lo == min {
+            let pred = if is_signed { pred.signed() } else { pred };
+            let hi = self.int(ty, hi);
+            return self.create_icmp(at, pred, v, hi);
+        }
+        // V >= Lo && V <  Hi --> V - Lo u<  Hi - Lo
+        // V <  Lo || V >= Hi --> V - Lo u>= Hi - Lo
+        let lo_c = self.int(ty, lo);
+        let v_minus_lo = self.create_sub(at, v, lo_c);
+        let hi_minus_lo = self.int(ty, hi.wrapping_sub(lo));
+        self.create_icmp(at, pred, v_minus_lo, hi_minus_lo)
     }
 
     /// `Builder.CreateSelect(cond, if_true, if_false)`.

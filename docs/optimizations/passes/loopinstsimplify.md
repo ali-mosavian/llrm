@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopinstsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopinstsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopinstsimplify.rs sha256:5bff7aa57078232b9a936f29437a9f6c247e70a97e8962411e1323dcecef70cf -->
+<!-- src: crates/opt/llrm-transforms/src/loopinstsimplify.rs sha256:3bccce3a9b99a669aece1ff7c35d94f6b4968f0fc934caf919c524a909f41960 -->
 
 # loopinstsimplify
 
@@ -36,4 +36,4 @@ An `add %x, 0` in a loop body is replaced by `%x`; a phi that merges the
 same value from both sides is replaced by it.
 
 ## Used by
-Named by `pipeline`, `pipeline_text`.
+Named by `assume_declared_is_scanned_once_per_module`, `pipeline`, `pipeline_text`.

@@ -62,19 +62,16 @@ fn may_have_side_effects(
         Opcode::Store { .. } => true,
         Opcode::Load { volatile, .. } => *volatile,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume => {
-            accesses
-                .writes_in(
-                    &llrm_analysis::memory::Unit::over(
-                        unit.context,
-                        unit.layout,
-                        &outer.metadata,
-                        &outer.globals,
-                        function,
-                    ),
-                    inst,
-                )
-                .is_none_or(|writes| !writes.is_empty())
-                || calls::may_throw(outer, unit.context, function, inst)
+            accesses.writes_any_in(
+                &llrm_analysis::memory::Unit::over(
+                    unit.context,
+                    unit.layout,
+                    &outer.metadata,
+                    &outer.globals,
+                    function,
+                ),
+                inst,
+            ) || calls::may_throw(outer, unit.context, function, inst)
                 || !calls::will_return(outer, unit.context, function, inst)
         }
         Opcode::Ret | Opcode::Br | Opcode::Switch | Opcode::Unreachable | Opcode::LandingPad { .. } => true,
@@ -83,22 +80,19 @@ fn may_have_side_effects(
 }
 
 /// The instructions that read `inst`'s result and are still in the function.
-fn users(
-    ctx: &LoopCtx,
+fn users<'a>(
+    ctx: &'a LoopCtx,
     inst: InstId,
-) -> Vec<InstId> {
-    let Some(result) = ctx.function.instruction(inst).result else { return Vec::new() };
-    let (gone, sunk) = (ctx.state.gone.borrow(), ctx.state.sunk.borrow());
+) -> impl Iterator<Item = InstId> + 'a {
+    let result = ctx.function.instruction(inst).result;
+    let mut last = None;
     // An instruction sunk reads its operands from the exit block: a user there.
-    let mut found: Vec<InstId> = ctx
-        .function
-        .users(result)
-        .iter()
+    result
+        .into_iter()
+        .flat_map(|result| ctx.function.users(result).iter())
         .map(|one| one.user)
-        .filter(|user| !gone.contains(user) || sunk.contains(user))
-        .collect();
-    found.dedup();
-    found
+        .filter(move |user| !ctx.state.gone.borrow().contains(user) || ctx.state.sunk.borrow().contains(user))
+        .filter(move |&user| last.replace(user) != Some(user))
 }
 
 /// [`sinkRegion`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L553):
@@ -129,7 +123,7 @@ pub fn sink_region(
             // The instruction is not used in the loop if it is dead. In this
             // case, we just delete it instead of sinking it.
             if function.instruction(inst).result.is_some()
-                && users(ctx, inst).is_empty()
+                && users(ctx, inst).next().is_none()
                 && !may_have_side_effects(unit, outer, accesses, inst)
                 && !function.instruction(inst).opcode.is_terminator()
             {
@@ -190,7 +184,6 @@ fn is_foldable_in_loop(
     }
     let block = function.parent(inst);
     users(ctx, inst)
-        .into_iter()
         .filter(|&user| ctx.contains(user))
         .all(
             |user| function.parent(user) == block
@@ -210,12 +203,11 @@ fn is_not_used_or_foldable_in_loop(
     ctx: &LoopCtx,
     inst: InstId,
 ) -> Option<(BlockId, bool)> {
-    let users = users(ctx, inst);
-    let in_loop = users.iter().any(|&user| ctx.contains(user));
+    let in_loop = users(ctx, inst).any(|user| ctx.contains(user));
     if in_loop && !is_foldable_in_loop(unit, outer, ctx, inst) {
         return None;
     }
-    let first = users.iter().copied().find(|&user| !ctx.contains(user))?;
+    let first = users(ctx, inst).find(|&user| !ctx.contains(user))?;
     let into = ctx.state.moved.borrow().get(&first).copied().or_else(|| ctx.function.parent(first))?;
     Some((into, in_loop))
 }
@@ -231,9 +223,9 @@ fn can_sink(
 ) -> bool {
     let function = ctx.function;
     let Some(result) = function.instruction(inst).result else { return false };
-    let users: Vec<InstId> = users(ctx, inst).into_iter().filter(|&user| !ctx.contains(user)).collect();
-    !users.is_empty()
-        && users.iter().all(|&user| {
+    let mut outside = users(ctx, inst).filter(|&user| !ctx.contains(user)).peekable();
+    outside.peek().is_some()
+        && outside.all(|user| {
             // A user that was sunk reads it through a phi made for the clone.
             if ctx.state.sunk.borrow().contains(&user) {
                 return true;

@@ -10,12 +10,12 @@
 //! See SD522: the complex patterns `addr` lists as not translated answer false.
 
 use llrm_dagisel::aarch64_predicates::encode_logical_immediate;
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1 as table;
 use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::addr;
 use super::globals::Globals;
@@ -60,38 +60,55 @@ impl PatternContext for NoContext {
     fn is_legal_to_call_immediate_addr(&self) -> bool {
         false
     }
+    /// `Subtarget->isNeonAvailable()`: with the vectors flag; off, the NEON
+    /// patterns never match, as when the table dropped them.
+    fn neon_available(&self) -> bool {
+        crate::machine::vectors_enabled()
+    }
 }
 
 pub struct Aarch64Hooks {
-    complex: Vec<Complex>,
+    complex: &'static [Complex],
     globals: Globals,
+    /// `CurDAG->shouldOptForSize()`: every operand fold is worth its extra
+    /// uses.
+    opt_for_size: bool,
 }
 
+/// What each complex pattern of the table is, decoded once: it was decoded for
+/// every block selected (0.33 M of rectwo's isel in 17 blocks).
+static COMPLEX: std::sync::LazyLock<Vec<Complex>> = std::sync::LazyLock::new(|| {
+    let patterns = table::COMPLEX_PATTERNS;
+    let mut complex = vec![Complex::Never; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
+    for &(number, function, _) in patterns {
+        complex[usize::from(number)] = match function {
+            "SelectArithImmed" => Complex::ArithImmed,
+            "SelectNegArithImmed" => Complex::NegArithImmed,
+            "SelectArithShiftedRegister" => Complex::ArithShiftedRegister,
+            "SelectLogicalShiftedRegister" => Complex::LogicalShiftedRegister,
+            f if f.starts_with("SelectAddrModeIndexed7S") => Complex::Indexed7S(size_of_name(f)),
+            f if f.starts_with("SelectAddrModeIndexed") => Complex::Indexed(size_of_name(f)),
+            f if f.starts_with("SelectAddrModeUnscaled") => Complex::Unscaled,
+            f if f.starts_with("SelectAddrModeXRO") => Complex::Xro(size_of_name(f)),
+            f if f.starts_with("SelectAddrModeWRO") => Complex::Wro(size_of_name(f)),
+            "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
+            "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
+            "SelectExtractHigh" | "SelectDupZero" | "SelectRoundingVLShr" => Complex::Never,
+            f if f.starts_with("SelectCVTFixedPos") => {
+                Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
+            }
+            other => panic!("complex pattern `{other}` is not translated"),
+        };
+    }
+    complex
+});
+
 impl Aarch64Hooks {
-    pub fn new(globals: Globals) -> Aarch64Hooks {
-        let patterns = table::COMPLEX_PATTERNS;
-        let mut complex = vec![Complex::Never; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
-        for &(number, function, _) in patterns {
-            complex[usize::from(number)] = match function {
-                "SelectArithImmed" => Complex::ArithImmed,
-                "SelectNegArithImmed" => Complex::NegArithImmed,
-                "SelectArithShiftedRegister" => Complex::ArithShiftedRegister,
-                "SelectLogicalShiftedRegister" => Complex::LogicalShiftedRegister,
-                f if f.starts_with("SelectAddrModeIndexed7S") => Complex::Indexed7S(size_of_name(f)),
-                f if f.starts_with("SelectAddrModeIndexed") => Complex::Indexed(size_of_name(f)),
-                f if f.starts_with("SelectAddrModeUnscaled") => Complex::Unscaled,
-                f if f.starts_with("SelectAddrModeXRO") => Complex::Xro(size_of_name(f)),
-                f if f.starts_with("SelectAddrModeWRO") => Complex::Wro(size_of_name(f)),
-                "SelectArithExtendedRegister" => Complex::ArithExtendedRegister,
-                "SelectArithUXTXRegister" => Complex::ArithUxtxRegister,
-                "SelectExtractHigh" | "SelectDupZero" => Complex::Never,
-                f if f.starts_with("SelectCVTFixedPos") => {
-                    Complex::CvtFixedPos { reg_width: size_of_name(f) * 8, reciprocal: f.contains("Recip") }
-                }
-                other => panic!("complex pattern `{other}` is not translated"),
-            };
-        }
-        Aarch64Hooks { complex, globals }
+    pub fn new(
+        globals: Globals,
+        opt_for_size: bool,
+    ) -> Aarch64Hooks {
+        Aarch64Hooks { complex: COMPLEX.as_slice(), globals, opt_for_size }
     }
 }
 
@@ -129,20 +146,28 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         match self.complex[usize::from(pattern)] {
             Complex::ArithImmed => addr::arith_immed(dag, value).map(|v| push(&v)).is_some(),
             Complex::NegArithImmed => addr::neg_arith_immed(dag, value).map(|v| push(&v)).is_some(),
-            Complex::ArithShiftedRegister => addr::shifted_register(dag, value, false).map(|v| push(&v)).is_some(),
-            Complex::LogicalShiftedRegister => addr::shifted_register(dag, value, true).map(|v| push(&v)).is_some(),
+            Complex::ArithShiftedRegister => {
+                addr::shifted_register(dag, self.opt_for_size, value, false).map(|v| push(&v)).is_some()
+            }
+            Complex::LogicalShiftedRegister => {
+                addr::shifted_register(dag, self.opt_for_size, value, true).map(|v| push(&v)).is_some()
+            }
             Complex::Indexed(size) => {
                 addr::addr_mode_indexed(dag, &self.globals, value, size).map(|v| push(&v)).is_some()
             }
             Complex::Unscaled => addr::addr_mode_unscaled(dag, value).map(|v| push(&v)).is_some(),
-            Complex::Xro(size) => addr::addr_mode_xro(dag, value, size).map(|v| push(&v)).is_some(),
-            Complex::Wro(size) => addr::addr_mode_wro(dag, value, size).map(|v| push(&v)).is_some(),
+            Complex::Xro(size) => addr::addr_mode_xro(dag, self.opt_for_size, value, size).map(|v| push(&v)).is_some(),
+            Complex::Wro(size) => addr::addr_mode_wro(dag, self.opt_for_size, value, size).map(|v| push(&v)).is_some(),
             Complex::Indexed7S(size) => {
                 push(&addr::addr_mode_indexed_7s(dag, value, size));
                 true
             }
-            Complex::ArithExtendedRegister => addr::arith_extended_register(dag, value).map(|v| push(&v)).is_some(),
-            Complex::ArithUxtxRegister => addr::arith_uxtx_register(dag, value).map(|v| push(&v)).is_some(),
+            Complex::ArithExtendedRegister => {
+                addr::arith_extended_register(dag, self.opt_for_size, value).map(|v| push(&v)).is_some()
+            }
+            Complex::ArithUxtxRegister => {
+                addr::arith_uxtx_register(dag, self.opt_for_size, value).map(|v| push(&v)).is_some()
+            }
             Complex::CvtFixedPos { reg_width, reciprocal } => {
                 addr::cvt_fixed_pos(dag, value, reg_width, reciprocal).map(|v| push(&v)).is_some()
             }
@@ -170,7 +195,7 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         let signed = || dag.constant(value).expect("an xform of a constant");
         // `fpimm32XForm`, `fpimm64XForm`: the 8-bit code;
         // `bitcast_fpimm_to_i32`/`i64`: the bits.
-        if matches!(xform, 34 | 35 | 38 | 39) {
+        if matches!(xform, 34 | 35 | 36 | 37 | 38 | 39) {
             let bits = dag.fp_bits(value).expect("an xform of a float constant");
             let code = || {
                 i64::from(
@@ -180,6 +205,10 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             };
             let (constant, vt) = match xform {
                 34 | 35 => (code(), mvt::i32),
+                // `fpimm64SIMDModImmType10XForm`: a bit per byte;
+                // `fpimm32SIMDModImmType4XForm`: the top byte.
+                36 => (super::vector::encode_mod_imm_type10(bits as u64) as i64, mvt::i32),
+                37 => (((bits as u32 & 0xff00_0000) >> 24) as i64, mvt::i32),
                 38 => (bits as u32 as i64, mvt::i32),
                 _ => (bits as u64 as i64, mvt::i64),
             };

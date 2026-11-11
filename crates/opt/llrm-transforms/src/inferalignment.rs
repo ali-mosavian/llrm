@@ -133,6 +133,7 @@ impl State<'_> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -270,6 +271,17 @@ impl State<'_> {
                 return true;
             }
         }
+        // Only a mask, a truncation or a call is looked at below; the others
+        // are not worth a copy of the instruction (56,940 copies, 48 M Ir of
+        // this pass's 50 M on memexp -O2).
+        if !matches!(
+            self.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::And) | Opcode::Cast(CastOp::Trunc) | Opcode::Call(_)
+        ) {
+            return false;
+        }
+        #[cfg(test)]
+        COPIES.with(|copies| copies.set(copies.get() + 1));
         let instruction = self.function.instruction(inst).clone();
         if let Some(changed) = self.fold_mask_or_trunc(walk, inst, &instruction) {
             return changed;
@@ -393,7 +405,27 @@ fn infer_alignment(
     layout: &DataLayout,
     function: &mut Function,
 ) -> bool {
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
+    infer_alignment_declared(
+        context,
+        globals,
+        metadata,
+        layout,
+        function,
+        llrm_mir::valuetracking::assume_declared(globals),
+    )
+}
+
+/// `infer_alignment`, told whether the module declares `llvm.assume`.
+fn infer_alignment_declared(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    assume_declared: bool,
+) -> bool {
+    let analyses = FunctionAnalyses::of_declared(context, globals, metadata, layout, function, assume_declared)
+        .with_lazy_dom_conditions();
     let mut state =
         State { context, function, env: Env { globals, metadata, layout }, analyses, bases: Scoped::default() };
     let mut changed = false;
@@ -410,7 +442,8 @@ fn infer_alignment(
 
     // The alloca the first walk raised changes what `computeKnownBits` says.
     state.analyses =
-        FunctionAnalyses::of(state.context, globals, metadata, layout, state.function).with_lazy_dom_conditions();
+        FunctionAnalyses::of_declared(state.context, globals, metadata, layout, state.function, assume_declared)
+            .with_lazy_dom_conditions();
     let tree: &DomTree = &state.analyses.dominator_tree().clone();
     enum Step {
         Enter(BlockId),
@@ -436,6 +469,12 @@ fn infer_alignment(
     changed
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Instructions `try_to_improve` has copied on this thread.
+    pub(crate) static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub struct InferAlignment;
 
 impl FunctionPass for InferAlignment {
@@ -457,7 +496,14 @@ impl FunctionPass for InferAlignment {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        if infer_alignment(unit.context, &outer.globals, unit.metadata, unit.layout, unit.function) {
+        if infer_alignment_declared(
+            unit.context,
+            &outer.globals,
+            unit.metadata,
+            unit.layout,
+            unit.function,
+            outer.assume_declared(),
+        ) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()

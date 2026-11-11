@@ -1,12 +1,15 @@
-//! `llrm-z80-llc [-S] [-g] [-O<n>] [-o OUT] FILE.ll`: LLVM IR from clang's
+//! `llrm-z80-llc [-S] [-g] [-O<n>] [-f[no-]PASS...] [-o OUT] FILE.ll`: LLVM IR from clang's
 //! front end alone through the mid-end and the Z80 backend to sdasz80 text.
 //! `-S` is the only output; `-g` adds SDCC's `C$` line symbols (no `.adb`). A
 //! function the backend refuses is named on stderr and the exit status is 1;
 //! the others are still written.
 
-use llrm_z80::compile::text;
-use llrm_z80::driver::{Level, Request, selections};
+use llrm_z80::compile::{prepare, text_in};
+use llrm_z80::driver::{Level, Request};
 use llrm_z80::inline_rt::inline_sole_uses;
+
+#[global_allocator]
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
@@ -17,6 +20,7 @@ fn main() {
 fn run() -> i32 {
     let mut level = Level::O2;
     let mut debug = false;
+    let mut passes = Vec::new();
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
@@ -24,6 +28,8 @@ fn run() -> i32 {
         match argument.as_str() {
             "-S" => {}
             "-g" => debug = true,
+            // `-f[no-]PASS`, as the program's own `// flags:` line gives it
+            other if other.starts_with("-f") => passes.push(other.to_owned()),
             "-o" => output = arguments.next(),
             other if other.starts_with("-O") => match Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
@@ -50,19 +56,19 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let request = Request { debug, ..Request::new(level) };
-    let names: Vec<String> = match selections(&ir, &request) {
-        Ok(selected) => selected.into_iter().map(|(name, _)| name).collect(),
+    let request = Request { debug, passes, ..Request::new(level) };
+    let prepared = match prepare(&ir, &request) {
+        Ok(prepared) => prepared,
         Err(why) => {
             eprintln!("llrm-z80-llc: {why}");
             return 1;
         }
     };
+    let names: Vec<String> = prepared.names().map(str::to_owned).collect();
     let mut status = 0;
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
-        module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
-        match text(&ir, name, number, &request) {
+        match text_in(&prepared, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => {
                 eprintln!("llrm-z80-llc: REFUSED @{name}: {why}");

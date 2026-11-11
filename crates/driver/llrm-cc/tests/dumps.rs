@@ -1,5 +1,6 @@
-//! The debugging switches llrm-c had reach the backend through llrm-cc. Needs
-//! the pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
+//! The debugging switches llrm-cc had reach the backend through llrm-cc. Needs
+//! the pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`,
+//! tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -12,8 +13,8 @@ fn compile(
     env: &[(&str, &str)],
     flags: &[&str],
 ) -> Option<(Output, std::path::PathBuf)> {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return None;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -22,7 +23,7 @@ fn compile(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("d.c"), "int f(int a, int b) { return a * b + 1; }\n").unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env(
             "LLRM_LLC",
@@ -57,7 +58,7 @@ fn dump_and_dump_inputs_reach_the_backend() {
     assert!(manifest, "no input dumped under LLRM_DUMP_INPUTS");
 }
 
-/// `LLRM_DEBUG=counts` printed nothing from llrm-llc: llrm-c printed the
+/// `LLRM_DEBUG=counts` printed nothing from llrm-llc: llrm-cc printed the
 /// counts at its end, llrm-cc ran with none.
 #[test]
 fn debug_counts_are_printed() {

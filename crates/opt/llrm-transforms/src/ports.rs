@@ -28,7 +28,7 @@
 //! DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the
 //! intrinsic definition, ours asks the target per call; exit: the frontends
 //! declare the memory attribute on the `in`/`out` intrinsics and this pass is
-//! deleted; owner w-6; review 2026-11-13).
+//! deleted; owner w10-instcombine; review 2026-11-13).
 //!
 //! # Example
 //! Before:
@@ -169,7 +169,13 @@ fn silent(
                 Some(bits) => Some(((bits & 0xFFFF) as i64, (bits & 0xFFFF) as i64)),
                 None => {
                     let assumptions = assumptions.get_or_init(|| {
-                        AssumptionCache::of(unit.context, &outer.globals, &outer.metadata, unit.function)
+                        AssumptionCache::of_declared(
+                            unit.context,
+                            &outer.globals,
+                            &outer.metadata,
+                            unit.function,
+                            unit.declared.assume_declared(&outer.globals),
+                        )
                     });
                     ranges::value_tracking_at(&memory, Some(tree), Some(assumptions), inst, port)
                         .and_then(|interval| unsigned(&interval.low, &interval.high))

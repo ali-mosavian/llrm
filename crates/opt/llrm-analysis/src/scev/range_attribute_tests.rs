@@ -36,7 +36,7 @@ fn unsigned_range_of(
         .expect("the named value");
     let mut se = ScalarEvolution::new();
     let s = se.get_scev(&cx, Operand::Value(value));
-    let range = se.get_unsigned_range(&cx, s);
+    let range = se.get_unsigned_range(&cx, s).to_word::<u128>();
     (range.get_unsigned_min(), range.get_unsigned_max())
 }
 

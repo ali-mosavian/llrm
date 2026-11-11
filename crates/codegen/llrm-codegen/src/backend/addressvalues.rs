@@ -124,15 +124,15 @@ mod tests {
             sources,
             ..Semantics::new(op)
         };
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let mem = |addr, through, offset, disp_width| Mem { through, offset, disp_width, ..Mem::new(Some(addr), 2) };
         let frame = Mem {
-            base: Some(Held { value: 1, width: 2 }),
+            base: Some(Held { value: 1, width: 2, offset: 0 }),
             scale: 2,
             ..mem(Addr::new(Space::Frame, -6), RegId::SI, 3, 1)
         };
         let seg = Mem {
-            base: Some(Held { value: 2, width: 2 }),
+            base: Some(Held { value: 2, width: 2, offset: 0 }),
             index_through: RegId::DI,
             ..mem(Addr::new(Space::Segment, 8), RegId::BX, 5, 2)
         };

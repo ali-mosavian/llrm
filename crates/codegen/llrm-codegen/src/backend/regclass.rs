@@ -254,6 +254,10 @@ pub enum Kind {
 impl Kind {
     const ALL: [Kind; 5] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes, Kind::Xmm];
 
+    fn bit(self) -> u8 {
+        1 << Self::ALL.iter().position(|one| *one == self).unwrap_or(0)
+    }
+
     fn registers<'a>(
         self,
         registers: &'a RegisterClasses,
@@ -380,7 +384,7 @@ pub fn contribution(
     // in one: LLVM gives the vreg copied from a physical register that
     // register's class. Its only reads may be copies, which name no class.
     for (held, register) in one.requires.iter().chain(&one.delivers) {
-        if regs.in_class(*register, llrm_lir::registers::class::XMM) {
+        if regs.in_float_class(*register) {
             let defining = one.delivers.iter().any(|(other, _)| other.value == held.value);
             items.push(Item::Restrict { value: held.value, kind: Kind::Xmm, role: Role::Xmm, defining });
         }
@@ -666,6 +670,10 @@ thread_local! {
     /// for the test that fixes how many one allocation makes.
     #[cfg(test)]
     pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Intersections of register sets made while collecting classes, counted for the
+    /// test that fixes how many a value's repeated restrictions cost.
+    #[cfg(test)]
+    pub(crate) static INTERSECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A set of register numbers as bits: `collected` inserts one for most
@@ -728,6 +736,8 @@ fn collected(
     SCANS.with(|one| one.set(one.get() + 1));
     let regs = body.regs();
     let mut out: Classes = IndexMap::default();
+    // Each value's restricting kinds, as a mask: intersected once per mask, not per item.
+    let mut confined_by: IndexMap<u32, u8> = IndexMap::default();
     let mut selecting = Bits::default();
     let mut numeric = Bits::default();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
@@ -756,7 +766,8 @@ fn collected(
                                 spare: false,
                             });
                         }
-                        _restrict(&mut out, value, choices);
+                        let _ = choices;
+                        *confined_by.entry(value).or_insert(0u8) |= kind.bit();
                     }
                     Item::Numeric(value) => {
                         numeric.insert(value);
@@ -776,6 +787,20 @@ fn collected(
         }
     }
     drop(_scan);
+    let mut by_mask: crate::support::hash::HashMap<u8, BTreeSet<RegId>> = Default::default();
+    for (&value, &mask) in &confined_by {
+        let set = by_mask.entry(mask).or_insert_with(|| {
+            let mut kinds = Kind::ALL.iter().filter(|kind| mask & kind.bit() != 0);
+            let mut set = kinds.next().map(|kind| kind.registers(registers).clone()).unwrap_or_default();
+            for kind in kinds {
+                #[cfg(test)]
+                INTERSECTIONS.with(|n| n.set(n.get() + 1));
+                set = set.intersection(kind.registers(registers)).copied().collect();
+            }
+            set
+        });
+        out.insert(value, set.clone());
+    }
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     for value in selecting.without(&numeric) {
         _restrict(&mut out, value, &selectors);
@@ -842,7 +867,8 @@ fn _through_xmm_copies(
     registers: &RegisterClasses,
     out: &mut Classes,
 ) {
-    if registers.xmm_set.is_empty() {
+    // A web with no xmm-confined member changes nothing: most bodies have none.
+    if registers.xmm_set.is_empty() || !out.values().any(|class| *class == registers.xmm_set) {
         return;
     }
     let mut web: IndexMap<u32, u32> = IndexMap::default();
@@ -1325,8 +1351,8 @@ mod tests {
     fn test_a_segment_only_a_phi_reads_has_the_class_of_its_web() {
         let (entry_segment, segment, base, loaded) = (1, 2, 3, 4);
         let cell = Mem {
-            base: Some(Held { value: base, width: 2 }),
-            selector: Some(Held { value: segment, width: 2 }),
+            base: Some(Held { value: base, width: 2, offset: 0 }),
+            selector: Some(Held { value: segment, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources, target| Semantics {
@@ -1336,7 +1362,7 @@ mod tests {
             target,
             ..Semantics::new(op)
         };
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let make =
             |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
         let entry = LirBlock {
@@ -1422,7 +1448,7 @@ mod tests {
     #[test]
     fn test_a_stored_word_recomputes_to_no_class_and_its_base_keeps_one() {
         let (base, word) = (1, 2);
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let semantics = |op, name: &str, dests, sources| Semantics {
             name: Some(name.into()),
             dests,
@@ -1432,7 +1458,7 @@ mod tests {
         let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
         let make =
             |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
-        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let cell = Mem { base: Some(Held { value: base, width: 2, offset: 0 }), ..Mem::new(None, 2) };
         let block = LirBlock {
             at: 0,
             insns: vec![
@@ -1460,6 +1486,33 @@ mod tests {
         assert!(of(base).is_some_and(|class| class.contains(&RegId::BX) && !class.contains(&RegId::AX)));
     }
 
+    /// Every body built a union-find over its moves to carry an xmm class
+    /// through copies, however few xmm values it had: 2.6 M of a 182 M -O0
+    /// compile, whose bodies had none. With no xmm-confined value there is
+    /// nothing to carry, and nothing is built.
+    #[test]
+    fn test_moves_are_not_walked_for_xmm_where_no_value_is_xmm() {
+        let registers = crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64);
+        assert!(!registers.xmm_set.is_empty(), "the premise: this target has xmm");
+        let held = |value| Loc::Held(Held { value, width: 4, offset: 0 });
+        let insns: Vec<Arc<Insn>> = (0..200)
+            .map(|at| {
+                let what = Semantics {
+                    name: Some("mov".into()),
+                    dests: vec![held(at + 1)],
+                    sources: vec![held(at)],
+                    ..Semantics::new(Operation::Move)
+                };
+                Arc::new(Insn::new(at as i64, None, Some(what), vec![at + 1], vec![at]))
+            })
+            .collect();
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut out = Classes::default();
+        let ((), made) = llrm_support::alloc_count::counted(|| _through_xmm_copies(&body, &registers, &mut out));
+        assert!(out.is_empty());
+        assert!(made <= 2, "{made} allocations for a body with no xmm value");
+    }
+
     /// What the form says fills an operand, not the register's width: an
     /// `addsd` operand held 8 bytes got no xmm restriction (the value was
     /// free to take a general register), and a 16-byte operand of an
@@ -1468,7 +1521,7 @@ mod tests {
     fn test_an_operand_is_xmm_by_its_form_not_its_width() {
         let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
         let restricted = |name: &str, width: u32| {
-            let held = |value| Loc::Held(Held { value, width });
+            let held = |value| Loc::Held(Held { value, width, offset: 0 });
             let what = Semantics {
                 name: Some(name.into()),
                 dests: vec![held(1)],
@@ -1482,6 +1535,35 @@ mod tests {
         assert!(restricted("addsd", 8), "an xmm operand held 8 bytes");
         assert!(restricted("addsd", 16));
         assert!(!restricted("add", 16), "a 16-byte integer operand");
+    }
+
+    /// Every restriction of a value was an intersection of two `BTreeSet`s and a new
+    /// set: 50 `addsd` on one value made 49 (mem expansion -O2: `collected` 114 M Ir,
+    /// the set intersections and drops the biggest part). A value's restrictions are
+    /// now a mask of kinds, intersected once per distinct mask.
+    #[test]
+    fn test_repeated_restrictions_of_one_value_are_intersected_once() {
+        let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let held = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let insns: Vec<Arc<Insn>> = (0..50)
+            .map(|at| {
+                let what = Semantics {
+                    name: Some("addsd".into()),
+                    dests: vec![held(1)],
+                    sources: vec![held(1), held(2)],
+                    ..Semantics::new(Operation::Binary)
+                };
+                Arc::new(Insn::new(at, None, Some(what), vec![1], vec![1, 2]))
+            })
+            .collect();
+        let block = LirBlock { at: 0, insns: insns.into(), succ: vec![].into(), phis: vec![].into(), cold: false, align: 0, max_skip: 0 };
+        let mut body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        body.registers = Some(regs);
+        INTERSECTIONS.with(|n| n.set(0));
+        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64));
+        assert!(found.get(&1).is_some_and(|class| !class.is_empty()), "the value keeps its xmm class");
+        let made = INTERSECTIONS.with(|n| n.get());
+        assert!(made <= 2, "{made} intersections for 100 restrictions of 2 values");
     }
 }
 
@@ -1636,4 +1718,5 @@ pub fn explicit_selectors_given(
         blocks.push(block.with_insns(insns));
     }
     Some(body.with_blocks(blocks))
+
 }

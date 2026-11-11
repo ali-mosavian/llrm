@@ -90,7 +90,7 @@ pub fn _return_state(regs: Regs) -> Vec<RegId> {
 pub fn _universe(regs: Regs) -> Lanes {
     let mut lanes = _flag_lanes(0xFFFF_FFFF);
     for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
-        lanes.extend(_lanes(regs, register));
+        lanes.include(_lanes(regs, register));
     }
     lanes
 }
@@ -190,6 +190,16 @@ pub fn with_effect<R>(
     if *was == bits { with(answer.as_ref()) } else { with(worked_out(regs, bits, one).as_ref()) }
 }
 
+/// An x87 compare pseudo (`fcom`, `ficom`, their pops).
+pub fn is_x87_compare(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Compare
+                && what.name.as_deref().is_some_and(|name| name.starts_with("fcom") || name.starts_with("ficom")),
+        )
+}
+
 /// `one`'s effect as it decodes, else as its contract declares; None when
 /// unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(
@@ -221,7 +231,21 @@ fn worked_out(
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    let (reads, writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    // `ADJCALLSTACKDOWN`/`UP`: `implicit-def dead $eflags`. Without this the flags
+    // of the instruction before one read as live, and a two-address `add` kept its
+    // copy where the pin makes a `lea`.
+    if one.what.as_ref().is_some_and(|what| matches!(what.name.as_deref(), Some("call_frame_setup" | "call_frame_destroy"))) {
+        let mut writes = Lanes::new();
+        writes.include(_flag_lanes(0xFFFF_FFFF));
+        return Some(Effect { reads: Lanes::new(), writes, moved: Vec::new() });
+    }
+    let (reads, mut writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    // The x87 compare is a pseudo here, expanded after the stackifier into
+    // `fcom; fnstsw ax; sahf`; the pin's MIR has the flags write (`SAHF`) from
+    // instruction selection on.
+    if is_x87_compare(one) {
+        writes.include(_flag_lanes(0xFFFF_FFFF));
+    }
     Some(match _moved_lanes(regs, bits, one) {
         Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
         None => Effect { reads, writes, moved: Vec::new() },
@@ -313,7 +337,7 @@ pub fn _declared(
         // architectural state its generated epilogue itself needs.
         let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
         for register in _return_state(regs) {
-            reads.extend(_lanes(regs, register));
+            reads.include(_lanes(regs, register));
         }
         let writes = _universe(regs).minus(&reads);
         return Some((reads, writes));
@@ -325,7 +349,7 @@ pub fn _declared(
     // A callee runs on the caller's frame chain, stack and data group.
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
         for register in _return_state(regs) {
-            reads.extend(_lanes(regs, register));
+            reads.include(_lanes(regs, register));
         }
     }
     // A transfer's decoded effects are unavailable, but its explicit operands
@@ -333,22 +357,22 @@ pub fn _declared(
     // before the calling convention clobbers it.
     for source in one.what.as_ref().map_or(&[][..], |what| what.sources.as_slice()) {
         if let Loc::Reg(source) = source {
-            reads.extend(_lanes(regs, source.register));
+            reads.include(_lanes(regs, source.register));
         }
         // `selector` is a `Held`, never an `ir.Reg`.
         if let Some(at) = source.address() {
-            reads.extend(_lanes(regs, at.through));
-            reads.extend(_lanes(regs, at.index_through));
+            reads.include(_lanes(regs, at.through));
+            reads.include(_lanes(regs, at.index_through));
         }
     }
     let mut writes: Lanes = one.delivers.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
     for register in &one.clobbers {
-        writes.extend(_lanes(regs, *register));
+        writes.include(_lanes(regs, *register));
     }
     for register in &one.clobbers_high {
         writes.extend(_lanes(regs, *register).into_iter().filter(|lane| lane.1 >= 2));
     }
-    writes.extend(_flag_lanes(0xFFFF_FFFF));
+    writes.include(_flag_lanes(0xFFFF_FFFF));
     Some((reads, writes))
 }
 
@@ -691,7 +715,7 @@ mod tests {
             vec![],
             vec![1],
         );
-        ret.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)];
+        ret.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::AX)];
         ret.reads_complete = true;
         let block = LirBlock::new(
             1,

@@ -122,7 +122,7 @@ pub fn promote(
                 _ => false,
             }
         {
-            destinations[0] = Loc::Held(ir::Held { value, width: 4 });
+            destinations[0] = Loc::Held(ir::Held { value, width: 4, offset: 0 });
             let mut changed = (*one).clone();
             changed.what = Some(Semantics {
                 op: Operation::Extend,
@@ -146,7 +146,7 @@ pub fn promote(
             return Err(format!("value#{value} cannot be promoted from {spelled}"));
         }
         let temporary = fresh();
-        destinations[0] = Loc::Held(ir::Held { value: temporary, width: 2 });
+        destinations[0] = Loc::Held(ir::Held { value: temporary, width: 2, offset: 0 });
         let mut leader = (*one).clone();
         leader.what = Some(Semantics { dests: destinations, ..what.clone() });
         leader.defines = one.defines.iter().map(|&found| if found == value { temporary } else { found }).collect();
@@ -167,8 +167,8 @@ fn extension(
     let mut follower = (*lir::anchor(Arc::clone(one))).clone();
     follower.what = Some(Semantics {
         name: Some("movzx".into()),
-        dests: vec![Loc::Held(ir::Held { value, width: 4 })],
-        sources: vec![Loc::Held(ir::Held { value: temporary, width: 2 })],
+        dests: vec![Loc::Held(ir::Held { value, width: 4, offset: 0 })],
+        sources: vec![Loc::Held(ir::Held { value: temporary, width: 2, offset: 0 })],
         ..Semantics::new(Operation::Extend)
     });
     follower.defines = vec![value];

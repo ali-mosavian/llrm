@@ -545,9 +545,9 @@ impl Flags {
 /// A function, parameter, return or call-site attribute.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Attribute {
-    Flag(String),
-    Int(String, u64),
-    Type(String, TypeId),
+    Flag(AttrName),
+    Int(AttrName, u64),
+    Type(AttrName, TypeId),
     /// `memory(...)`: each location, or none for the default, and its access.
     Memory(Vec<(Option<String>, String)>),
     /// `range(iN lower, upper)`: the half-open range of values, as bits.
@@ -560,7 +560,101 @@ pub enum Attribute {
     /// pointer parameter's memory the function writes before reading, on
     /// every path to a return.
     Initializes(Vec<(i64, i64)>),
-    Str(String, Option<String>),
+    Str(AttrName, Option<String>),
+}
+
+/// An attribute's name. The fact a flag name states is resolved once, when the
+/// name is made, so asking whether attributes state a fact compares ids, not
+/// text (the pin's `Attribute::AttrKind`).
+#[derive(Clone, Debug, Eq)]
+pub struct AttrName {
+    text: String,
+    fact: Option<crate::facts::Fact>,
+}
+
+impl AttrName {
+    pub fn new(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let fact = crate::facts::Fact::flag(&text);
+        Self { text, fact }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The flag fact the name spells, resolved when the name was made.
+    #[inline]
+    pub fn fact(&self) -> Option<crate::facts::Fact> {
+        self.fact
+    }
+}
+
+impl std::ops::Deref for AttrName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::hash::Hash for AttrName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.text.hash(state)
+    }
+}
+
+impl PartialEq for AttrName {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl PartialEq<str> for AttrName {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for AttrName {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for AttrName {
+    fn eq(&self, other: &String) -> bool {
+        &self.text == other
+    }
+}
+
+impl PartialEq<AttrName> for str {
+    fn eq(&self, other: &AttrName) -> bool {
+        self == other.text
+    }
+}
+
+impl PartialEq<AttrName> for &str {
+    fn eq(&self, other: &AttrName) -> bool {
+        *self == other.text
+    }
+}
+
+impl From<&str> for AttrName {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<String> for AttrName {
+    fn from(text: String) -> Self {
+        Self::new(text)
+    }
+}
+
+impl std::fmt::Display for AttrName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
 }
 
 impl Attribute {
@@ -581,7 +675,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 46] = [
+pub const FLAG_ATTRIBUTES: [&str; 54] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -593,6 +687,12 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "immarg",
     "inlinehint",
     "inreg",
+    "llrm-end-biased",
+    "llrm-fill",
+    "llrm-mulsi3",
+    "llrm-no-end-biased",
+    "llrm-promoted-in-walk",
+    "llrm-self-copied",
     "minsize",
     "mustprogress",
     "naked",
@@ -608,6 +708,7 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "nomerge",
     "nonnull",
     "norecurse",
+    "noredzone",
     "noretain",
     "noreturn",
     "nosync",
@@ -624,6 +725,7 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "signext",
     "speculatable",
     "threeway",
+    "tre-deferred",
     "willreturn",
     "writable",
     "writeonly",
@@ -645,6 +747,31 @@ pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
     "sspstrong",
     "uwtable",
 ];
+
+/// The spelling of `uwtable(sync)`; `uwtable` alone is the asynchronous kind.
+pub const UWTABLE_SYNC: &str = "uwtable(sync)";
+
+/// The kind of unwind table a function asks for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnwindTable {
+    /// `uwtable(sync)`: precise at calls only.
+    Sync,
+    /// `uwtable`: precise at every instruction.
+    Async,
+}
+
+/// `Function::getUWTableKind`, or none without the attribute.
+pub fn unwind_table(attrs: &[Attribute]) -> Option<UnwindTable> {
+    attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Flag(name) if name == UWTABLE_SYNC => Some(UnwindTable::Sync),
+                Attribute::Flag(name) if name == "uwtable" => Some(UnwindTable::Async),
+                _ => None,
+            },
+        )
+}
 
 pub const INT_ATTRIBUTES: [&str; 4] = ["align", "alignstack", "dereferenceable", "dereferenceable_or_null"];
 
@@ -672,12 +799,13 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 12] = [
+pub const CONVENTIONS: [(&str, u32); 13] = [
     ("ccc", 0),
     ("fastcc", 8),
     ("coldcc", 9),
     ("x86_stdcallcc", 64),
     ("x86_fastcallcc", 65),
+    ("win64cc", WIN64),
     ("x86_intrcc", 83),
     ("x86_regcallcc", REGCALL),
     ("watcallcc", WATCALL),
@@ -717,6 +845,9 @@ pub const REGPARM3: u32 = 1005;
 
 /// `regparm3popcc`: `regparm3cc` whose callee removes the stack arguments.
 pub const REGPARM3POP: u32 = 1006;
+
+/// LLVM's `win64cc`: the Microsoft x64 convention.
+pub const WIN64: u32 = 79;
 
 /// `ia16cc`: gcc-ia16's convention.
 pub const IA16: u32 = 1004;
@@ -762,6 +893,14 @@ pub enum Opcode {
     Cast(CastOp),
     ExtractValue(Vec<u32>),
     InsertValue(Vec<u32>),
+    /// `extractelement`: operands (vector, index); the element, or poison for
+    /// an index past the end.
+    ExtractElement,
+    /// `insertelement`: operands (vector, element, index).
+    InsertElement,
+    /// `shufflevector`: operands (first, second); lane `i` of the result is
+    /// the mask's `i`th entry counted over both inputs' lanes, -1 for poison.
+    ShuffleVector(Vec<i32>),
     Alloca {
         allocated: TypeId,
         align: Option<u64>,
@@ -793,6 +932,10 @@ pub enum Opcode {
     FCmp(FloatPredicate),
     Phi,
     Select,
+    /// `VAArgInst`: the next variadic argument of type `ty` read through the
+    /// `va_list` pointer (operand 0), which it advances. Reads and writes that
+    /// list; the target's `VAARG` legalization says how.
+    VaArg,
     Freeze,
     Call(Box<CallInfo>),
     LandingPad {
@@ -838,6 +981,7 @@ impl Opcode {
                 | Self::Call(_)
                 | Self::ExtractValue(_)
                 | Self::InsertValue(_)
+                | Self::ShuffleVector(_)
                 | Self::Alloca { .. }
                 | Self::Load { .. }
                 | Self::Store { .. }
@@ -856,6 +1000,7 @@ impl Opcode {
         match (self, other) {
             (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
+            (Self::ShuffleVector(a), Self::ShuffleVector(b)) => a == b,
             (
                 Self::Alloca { allocated: a, align: b, address_space: c },
                 Self::Alloca { allocated: d, align: e, address_space: f },
@@ -890,8 +1035,12 @@ impl Opcode {
             Self::Binary(op) => spelling(&BINARY, *op),
             Self::Cast(op) => spelling(&CAST, *op),
             Self::ExtractValue(_) => "extractvalue",
+            Self::ExtractElement => "extractelement",
+            Self::InsertElement => "insertelement",
+            Self::ShuffleVector(_) => "shufflevector",
             Self::InsertValue(_) => "insertvalue",
             Self::Alloca { .. } => "alloca",
+            Self::VaArg => "va_arg",
             Self::Load { .. } => "load",
             Self::Store { .. } => "store",
             Self::Atomic(info) => match info.kind {
@@ -955,6 +1104,10 @@ mod tests {
             Opcode::ExtractValue(vec![0]),
             Opcode::ExtractValue(vec![1]),
             Opcode::InsertValue(vec![0]),
+            Opcode::ExtractElement,
+            Opcode::InsertElement,
+            Opcode::ShuffleVector(vec![0, 1]),
+            Opcode::ShuffleVector(vec![1, 0]),
             Opcode::Call(info()),
             Opcode::Invoke(info()),
             Opcode::LandingPad { cleanup: false, clauses: vec![] },

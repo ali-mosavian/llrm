@@ -6,7 +6,7 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd); qb=$root/runtime/qb
 out=${1:-$(mktemp -d)}; mkdir -p "$out"
 export LLRM_CC_TARGET=arm64-macos
-cargo build --release -q -p llrm-cc -p llrm-arm64 || exit 1
+cargo build --release -q --bin llrm-cc || exit 1; cargo build --release -q -p llrm-arm64 || exit 1
 cc=${CARGO_TARGET_DIR:-$root/target}/release/llrm-cc
 sdk=$(xcrun --show-sdk-path); sdl=$(brew --prefix sdl2)
 sources=("$qb"/*.c "$qb"/dev/sdl/*.c "$qb"/dev/host/{video,vgadata,tick}.c "$root"/runtime/shared/posix/os.c

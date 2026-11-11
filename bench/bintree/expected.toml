@@ -1,10 +1,23 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "75b4c384fd4bf24cbb92c073dbec2063"
+
+[ow.O1]
+instructions = 99429
+memory_operands = 30234
+clocks = 304321
+code_bytes = 345
+helper_bytes = 24
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.3276
 
 [ow.O2]
 instructions = 109307
 memory_operands = 23057
-code_bytes = 335
+clocks = 287709
+code_bytes = 359
+helper_bytes = 24
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.4594
@@ -12,15 +25,29 @@ kernel_ms = 1.4594
 [ow.Os]
 instructions = 99429
 memory_operands = 30234
-code_bytes = 321
+clocks = 304321
+code_bytes = 345
+helper_bytes = 24
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.3276
 
+[bcc.O1]
+instructions = 138275
+memory_operands = 22251
+clocks = 403415
+code_bytes = 359
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.8488
+
 [bcc.O2]
 instructions = 137679
 memory_operands = 22851
+clocks = 351443
 code_bytes = 383
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.8409
@@ -28,15 +55,29 @@ kernel_ms = 1.8409
 [bcc.Os]
 instructions = 138275
 memory_operands = 22251
+clocks = 403415
 code_bytes = 359
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.8488
 
+[tc.O1]
+instructions = 141131
+memory_operands = 29727
+clocks = 430587
+code_bytes = 390
+helper_bytes = 25
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.8839
+
 [tc.O2]
 instructions = 141133
 memory_operands = 29727
-code_bytes = 370
+clocks = 430576
+code_bytes = 395
+helper_bytes = 25
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.8839
@@ -44,15 +85,29 @@ kernel_ms = 1.8839
 [tc.Os]
 instructions = 141131
 memory_operands = 29727
-code_bytes = 365
+clocks = 430587
+code_bytes = 390
+helper_bytes = 25
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.8839
 
+[tcpp.O1]
+instructions = 125974
+memory_operands = 31618
+clocks = 445432
+code_bytes = 375
+helper_bytes = 23
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.6817
+
 [tcpp.O2]
 instructions = 152696
 memory_operands = 31618
-code_bytes = 385
+clocks = 397081
+code_bytes = 408
+helper_bytes = 23
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 2.0381
@@ -60,7 +115,9 @@ kernel_ms = 2.0381
 [tcpp.Os]
 instructions = 125974
 memory_operands = 31618
-code_bytes = 352
+clocks = 445432
+code_bytes = 375
+helper_bytes = 23
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.6817

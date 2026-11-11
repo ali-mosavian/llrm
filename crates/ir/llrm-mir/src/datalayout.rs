@@ -514,6 +514,18 @@ impl DataLayout {
         source: TypeId,
         indices: &[Option<i128>],
     ) -> (i128, Vec<(usize, u64)>) {
+        let (constant, variable, _) = self.collect_offset_typed(types, source, indices);
+        (constant, variable)
+    }
+
+    /// `collect_offset` and the type the last index selects (`GTI.getIndexedType()`
+    /// of the last operand; the source type for a lone index).
+    pub fn collect_offset_typed(
+        &self,
+        types: &Types,
+        source: TypeId,
+        indices: &[Option<i128>],
+    ) -> (i128, Vec<(usize, u64)>, TypeId) {
         let mut constant = 0;
         let mut variable = Vec::new();
         let mut current = source;
@@ -537,7 +549,7 @@ impl DataLayout {
                 None => variable.push((at, scale)),
             }
         }
-        (constant, variable)
+        (constant, variable, current)
     }
 
     /// A struct's size and each field's offset.
@@ -593,6 +605,7 @@ pub fn float_bits(kind: FloatKind) -> u32 {
         FloatKind::Float => 32,
         FloatKind::Double => 64,
         FloatKind::X86Fp80 => 80,
+        FloatKind::F128 => 128,
     }
 }
 

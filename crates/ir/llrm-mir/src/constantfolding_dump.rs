@@ -66,6 +66,7 @@ fn show(
             _ => format!("{t} fp"),
         },
         ConstantKind::Float80(bits) => format!("{t} 0xK{bits:020X}"),
+        ConstantKind::Float128(bits) => format!("{t} 0xL{:016X}{:016X}", *bits as u64, (*bits >> 64) as u64),
         ConstantKind::Null if context.types.int_bits(constant.ty).is_some() => format!("{t} 0"),
         ConstantKind::Null => format!("{t} null"),
         ConstantKind::Poison => format!("{t} poison"),

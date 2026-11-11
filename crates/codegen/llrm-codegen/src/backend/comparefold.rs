@@ -74,7 +74,7 @@ pub fn selected(
                     && matches!(what.dests.as_slice(), [Loc::Held(_)])
                     && matches!(what.sources.as_slice(), [Loc::Mem(_)]) =>
             {
-                let (Loc::Held(Held { value, width }), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0]) else {
+                let (Loc::Held(Held { value, width, .. }), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0]) else {
                     unreachable!()
                 };
                 (*value, *width, cell.clone())
@@ -85,7 +85,7 @@ pub fn selected(
                     && matches!(what.dests.as_slice(), [Loc::Held(_)])
                     && matches!(what.sources.as_slice(), [Loc::Mem(_)]) =>
             {
-                let (Loc::Held(Held { value, width }), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0]) else {
+                let (Loc::Held(Held { value, width, .. }), Loc::Mem(cell)) = (&what.dests[0], &what.sources[0]) else {
                     unreachable!()
                 };
                 if cell.width >= *width {
@@ -127,7 +127,7 @@ pub fn selected(
         let positions: Vec<usize> = sources
             .iter()
             .enumerate()
-            .filter(|(_, source)| **source == Loc::Held(Held { value, width }))
+            .filter(|(_, source)| **source == Loc::Held(Held { value, width, offset: 0 }))
             .map(|(index, _)| index)
             .collect();
         if positions.len() != 1 {
@@ -251,8 +251,8 @@ mod tests {
             through: RegId::None,
             offset: 0,
             disp_width: 2,
-            base: Some(Held { value: base, width: 2 }),
-            selector: Some(Held { value: selector, width: 2 }),
+            base: Some(Held { value: base, width: 2, offset: 0 }),
+            selector: Some(Held { value: selector, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources| Semantics {
@@ -267,7 +267,7 @@ mod tests {
             Some(semantics(
                 Operation::Move,
                 "mov",
-                vec![Loc::Held(Held { value: loaded, width: 2 })],
+                vec![Loc::Held(Held { value: loaded, width: 2, offset: 0 })],
                 vec![Loc::Mem(cell.clone())],
             )),
             vec![loaded],
@@ -287,7 +287,10 @@ mod tests {
                 Operation::Compare,
                 "cmp",
                 Vec::new(),
-                vec![Loc::Held(Held { value: loaded, width: 2 }), Loc::Held(Held { value: other, width: 2 })],
+                vec![
+                    Loc::Held(Held { value: loaded, width: 2, offset: 0 }),
+                    Loc::Held(Held { value: other, width: 2, offset: 0 }),
+                ],
             )),
             Vec::new(),
             vec![loaded, other],
@@ -300,7 +303,7 @@ mod tests {
         assert!(result[0].defines.is_empty() && result[0].uses.is_empty());
         assert_eq!(
             result[2].what.as_ref().unwrap().sources,
-            vec![Loc::Mem(cell), Loc::Held(Held { value: other, width: 2 })]
+            vec![Loc::Mem(cell), Loc::Held(Held { value: other, width: 2, offset: 0 })]
         );
         assert_eq!(result[2].uses, vec![base, selector, other]);
     }
@@ -315,7 +318,7 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("movzx".into()),
-                dests: vec![Loc::Held(Held { value: loaded, width: 2 })],
+                dests: vec![Loc::Held(Held { value: loaded, width: 2, offset: 0 })],
                 sources: vec![Loc::Mem(cell.clone())],
                 ..Semantics::new(Operation::Extend)
             }),
@@ -328,7 +331,7 @@ mod tests {
             Some(Semantics {
                 name: Some("cmp".into()),
                 sources: vec![
-                    Loc::Held(Held { value: loaded, width: 2 }),
+                    Loc::Held(Held { value: loaded, width: 2, offset: 0 }),
                     Loc::Imm(Imm { value: 0, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Compare)
@@ -352,7 +355,10 @@ mod tests {
         let compare = {
             let mut one = (*compare).clone();
             one.what = Some(Semantics {
-                sources: vec![Loc::Held(Held { value: 5, width: 2 }), Loc::Held(Held { value: 6, width: 2 })],
+                sources: vec![
+                    Loc::Held(Held { value: 5, width: 2, offset: 0 }),
+                    Loc::Held(Held { value: 6, width: 2, offset: 0 }),
+                ],
                 ..one.what.clone().unwrap()
             });
             one.uses = vec![5, 6];
@@ -362,7 +368,7 @@ mod tests {
         let result = selected(&[Arc::new(plain), compare], &users, &BTreeSet::new());
         assert_eq!(
             result[1].what.as_ref().unwrap().sources,
-            vec![Loc::Mem(cell), Loc::Held(Held { value: 6, width: 2 })]
+            vec![Loc::Mem(cell), Loc::Held(Held { value: 6, width: 2, offset: 0 })]
         );
     }
 
@@ -384,7 +390,7 @@ mod tests {
             through: RegId::BP,
             offset: -1028,
             disp_width: 2,
-            index: Some(Held { value: index, width: 2 }),
+            index: Some(Held { value: index, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr::new(Space::Frame, -1028)), 1)
         };
         let [load, compare] = widened(loaded, &cell, vec![index]);

@@ -1,6 +1,6 @@
 """The llrm side of the QB tests: a BASIC program on our runtime for both targets, linked by jwlink.
 
-The real-mode target is built with llrm-qb and llrm-c and the target's own start-up, the flat one runs under DOS/32A.  Neither
+The real-mode target is built with llrm-qb and llrm-cc and the target's own start-up, the flat one runs under DOS/32A.  Neither
 goes through Microsoft's LINK or LIB; BCOM45 (BC, LINK and its runtime) stays what a test compares against, built by
 dosbatch.  The targets are the ones the link recipes name."""
 
@@ -49,7 +49,7 @@ def runtime16(work: Path) -> dict[str, Path]:
         made[name] = obj
 
     shared = qbruntime.shared_sources()
-    for source in qbruntime.portable_sources():
+    for source in qbruntime.portable_not_replaced(qbruntime.portable_sources(), qbruntime.platform_sources()):
         make(source.stem, source, lambda obj, source=source: qbruntime._compile_c(source, obj, include))
     for source in [*qbruntime.platform_sources(), *shared]:
         if source.suffix == ".c":

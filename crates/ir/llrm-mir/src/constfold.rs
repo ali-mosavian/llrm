@@ -29,9 +29,10 @@
 
 use std::cmp::Ordering;
 
-use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_SINGLE};
+use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_QUAD, IEEE_SINGLE};
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::fp80;
+use crate::fp128;
 use crate::fpclass::RoundingMode;
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
 use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
@@ -73,7 +74,7 @@ pub fn null_value(
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
         Type::Int(_) => ConstantKind::Int(0),
-        Type::Float(_) => ConstantKind::Float(0),
+        Type::Float(kind) => ConstantKind::float_zero(*kind),
         Type::Pointer(_) => ConstantKind::Null,
         _ => ConstantKind::Zero,
     };
@@ -267,6 +268,25 @@ fn is_x87(
     )
 }
 
+/// Whether `id` is of type `fp128`.
+fn is_f128(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    matches!(
+        context.types.get(context.get(id).ty),
+        Type::Float(FloatKind::F128)
+    )
+}
+
+/// The value of an `x86_fp80` or `fp128` constant.
+fn wide_value(
+    context: &Context,
+    id: ConstantId,
+) -> Option<crate::apfloat::ApFloat> {
+    if is_f128(context, id) { fp128::value(&context.get(id).kind) } else { fp80::value(&context.get(id).kind) }
+}
+
 /// A floating constant's value as a double and its kind: `Float` bits are IEEE
 /// single in the low 32, `Double` IEEE double, `X86Fp80` the double nearest its
 /// value (MIR holds an 80-bit constant that way), and a zero is +0.0.
@@ -282,6 +302,8 @@ fn float_number(
             match kind {
                 FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
                 FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                // An fp128 constant is Float128, never Float.
+                FloatKind::F128 => return None,
             },
         )),
         ConstantKind::Null | ConstantKind::Zero => Some((kind, 0.0)),
@@ -301,6 +323,7 @@ fn float_constant(
     let bits = match kind {
         FloatKind::Float => u64::from((value as f32).to_bits()),
         FloatKind::Double | FloatKind::X86Fp80 => value.to_bits(),
+        FloatKind::F128 => unreachable!("float_number gives no fp128, so nothing folds into one"),
     };
     context.constant(Constant { ty, kind: ConstantKind::Float(bits) })
 }
@@ -338,6 +361,29 @@ pub fn cast(
             }
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Float(x as u64) }))
         }
+        // `bitcastToAPInt` / `APFloat(Semantics, APInt)` of the wider formats.
+        (CastOp::BitCast, Type::Int(80)) => {
+            let ConstantKind::Float80(bits) = context.get(c).kind else { return None };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(bits) }))
+        }
+        (CastOp::BitCast, Type::Int(128)) => {
+            let ConstantKind::Float128(bits) = context.get(c).kind else { return None };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(bits) }))
+        }
+        (CastOp::BitCast, Type::Float(FloatKind::X86Fp80)) => {
+            let (ConstantKind::Int(bits), Type::Int(80)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            else {
+                return None;
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float80(*bits) }))
+        }
+        (CastOp::BitCast, Type::Float(FloatKind::F128)) => {
+            let (ConstantKind::Int(bits), Type::Int(128)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            else {
+                return None;
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float128(*bits) }))
+        }
         (CastOp::BitCast, Type::Int(width @ (32 | 64))) => {
             let ConstantKind::Float(bits) = context.get(c).kind else { return None };
             let float = match context.types.get(context.get(c).ty) {
@@ -346,6 +392,46 @@ pub fn cast(
                 _ => return None,
             };
             (float == width).then(|| context.constant(Constant { ty: to, kind: ConstantKind::Int(u128::from(bits)) }))
+        }
+        (CastOp::FPTrunc | CastOp::FPRound, Type::Float(kind @ (FloatKind::Float | FloatKind::Double)))
+            if is_f128(context, c) =>
+        {
+            let mut number = fp128::value(&context.get(c).kind)?;
+            if !number.is_finite() {
+                return None;
+            }
+            number.convert(
+                if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE },
+                RoundingMode::NearestTiesToEven,
+            );
+            (number.is_finite())
+                .then(|| context.constant(Constant { ty: to, kind: ConstantKind::Float(number.to_bits() as u64) }))
+        }
+        (CastOp::FPExt, Type::Float(FloatKind::F128))
+            if matches!(
+                context.types.get(context.get(c).ty),
+                Type::Float(FloatKind::Float | FloatKind::Double)
+            ) =>
+        {
+            let ConstantKind::Float(bits) = context.get(c).kind else { return None };
+            let semantics = match context.types.get(context.get(c).ty) {
+                Type::Float(FloatKind::Float) => IEEE_SINGLE,
+                _ => IEEE_DOUBLE,
+            };
+            let mut number = crate::apfloat::ApFloat::from_bits(semantics, u128::from(bits));
+            if !number.is_finite() {
+                return None;
+            }
+            number.convert(IEEE_QUAD, RoundingMode::NearestTiesToEven);
+            Some(fp128::constant(context, to, &number))
+        }
+        (CastOp::FPToSI | CastOp::FPToUI, Type::Int(width)) if width <= 127 && is_f128(context, c) => {
+            let number = fp128::value(&context.get(c).kind)?;
+            // Out of range or not a number is poison, as for the other formats.
+            let Some(value) = fp128::to_integer(&number, RoundingMode::TowardZero, width, op == CastOp::FPToSI) else {
+                return Some(poison(context, to));
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(value as u128 & mask(width)) }))
         }
         (CastOp::FPTrunc | CastOp::FPRound, Type::Float(kind @ (FloatKind::Float | FloatKind::Double)))
             if is_x87(context, c) =>
@@ -408,6 +494,28 @@ pub fn cast(
             }
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Int((value as i128) as u128 & mask(width)) }))
         }
+        // An integer of up to 64 significant bits is exact in binary128.
+        (CastOp::SIToFP | CastOp::UIToFP, Type::Float(FloatKind::F128)) => {
+            let (x, from) = number(context, c)?;
+            let (magnitude, negative) = if op == CastOp::SIToFP && signed(x, from) < 0 {
+                (signed(x, from).unsigned_abs(), true)
+            } else if op == CastOp::SIToFP {
+                (signed(x, from) as u128, false)
+            } else {
+                (x, false)
+            };
+            let bits = if magnitude == 0 {
+                0
+            } else {
+                let top = 127 - magnitude.leading_zeros();
+                if top > 112 {
+                    return None;
+                }
+                let fraction = (magnitude << (112 - top)) & ((1u128 << 112) - 1);
+                (u128::from(negative) << 127) | ((0x3FFF + u128::from(top)) << 112) | fraction
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float128(bits) }))
+        }
         (CastOp::SIToFP | CastOp::UIToFP, Type::Float(kind)) if kind != FloatKind::X86Fp80 => {
             let (x, from) = number(context, c)?;
             // Straight from the integer to the target precision: no rounding
@@ -468,8 +576,8 @@ pub fn compare_float(
     if is_undef(context, c1) || is_undef(context, c2) {
         return Some(result(predicate.holds(None)));
     }
-    if is_x87(context, c1) {
-        let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
+    if is_x87(context, c1) || is_f128(context, c1) {
+        let (a, b) = (wide_value(context, c1)?, wide_value(context, c2)?);
         let order = match a.compare(&b) {
             CmpResult::LessThan => Some(Ordering::Less),
             CmpResult::Equal => Some(Ordering::Equal),
@@ -517,6 +625,11 @@ pub fn float_binary(
         let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
         let ty = context.get(c1).ty;
         return Some(fp80::constant(context, ty, &fp80::binary(op, &a, &b)?));
+    }
+    if is_f128(context, c1) {
+        let (a, b) = (fp128::value(&context.get(c1).kind)?, fp128::value(&context.get(c2).kind)?);
+        let ty = context.get(c1).ty;
+        return Some(fp128::constant(context, ty, &fp128::binary(op, &a, &b)?));
     }
     let ((kind, x), (kind2, y)) = (float_number(context, c1)?, float_number(context, c2)?);
     if kind != kind2 || kind == FloatKind::X86Fp80 || !x.is_finite() || !y.is_finite() {
@@ -902,6 +1015,21 @@ mod tests {
         assert_eq!(context.get(float).kind, ConstantKind::Float(0x3f80_0000));
         let back = cast(&mut context, CastOp::BitCast, float, i32t).expect("bitcast to int");
         assert_eq!(back, one);
+    }
+
+    /// `bitcast (x86_fp80 0xK403791A2B3C4D5E6F780 to i80)` stayed a constant
+    /// expression: only float and double folded. The pin folds every format
+    /// (`bitcastToAPInt`), and the long double pun in long_double_union_pun
+    /// then selects as five immediates, not a store, a load and shifts.
+    #[test]
+    fn the_bits_of_an_extended_float_are_an_i80_and_back() {
+        let mut context = Context::new();
+        let (i80, f80) = (context.types.int(80), context.types.intern(Type::Float(FloatKind::X86Fp80)));
+        let bits = 0x4037_91A2_B3C4_D5E6_F780_u128;
+        let float = context.constant(Constant { ty: f80, kind: ConstantKind::Float80(bits) });
+        let int = cast(&mut context, CastOp::BitCast, float, i80).expect("bitcast to i80");
+        assert_eq!(context.get(int).kind, ConstantKind::Int(bits));
+        assert_eq!(cast(&mut context, CastOp::BitCast, int, f80), Some(float));
     }
 }
 

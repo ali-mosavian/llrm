@@ -34,11 +34,11 @@ static COUNTING: Counting = Counting;
 
 #[test]
 fn test_asking_what_an_operand_names_allocates_nothing() {
-    let held = Held { value: 7, width: 2 };
+    let held = Held { value: 7, width: 2, offset: 0 };
     let cell = Mem {
-        base: Some(Held { value: 1, width: 2 }),
-        index: Some(Held { value: 2, width: 2 }),
-        selector: Some(Held { value: 3, width: 2 }),
+        base: Some(Held { value: 1, width: 2, offset: 0 }),
+        index: Some(Held { value: 2, width: 2, offset: 0 }),
+        selector: Some(Held { value: 3, width: 2, offset: 0 }),
         ..Mem::new(None, 2)
     };
     let operands = [Loc::Held(held), Loc::Mem(cell)];

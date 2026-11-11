@@ -14,11 +14,14 @@
 //!    it.
 //! 2. Bit fields are the "< 5 bytes" rows; `cas` and `cas2` the successful
 //!    compare. Both are `partial`.
-//! 3. Memory-indirect and full-format modes are not priced.
+//! 3. Memory-indirect modes are not priced. The full format with an index is: a
+//!    base displacement past 8 bits is the `(d16,An,Xn)` row (16 bits) or the
+//!    `(d32,B)` row (32 bits), none is `(B)`; the manual lists `(d16,B)` too,
+//!    and the row that names An and Xn is read for this form.
 //! 4. Table 8.2.4 prints no `-(An)` row, so `movem` to `-(An)` takes the
 //!    `(An)+` row.
-//! 5. Exception processing, `trapcc`, `stop`, `reset`, `rte`, `callm` and `rtm`
-//!    are not priced.
+//! 5. `trap #n` is Table 8.2.17's exception entry (20 clocks), not the handler;
+//!    the rest of that table, `rte`, `callm` and `rtm` are not priced.
 
 use std::sync::LazyLock;
 
@@ -45,6 +48,7 @@ static ROWS: LazyLock<Vec<Row>> = LazyLock::new(|| {
         include_str!("m68020/t8.2.14.csv"),
         include_str!("m68020/t8.2.15.csv"),
         include_str!("m68020/t8.2.16.csv"),
+        include_str!("m68020/t8.2.17.csv"),
     ];
     files
         .iter()
@@ -105,6 +109,12 @@ fn label(
         Mode::AbsW => "(xxx).W",
         Mode::AbsL => "(xxx).L",
         Mode::Index | Mode::PcIndex => "(d8,An,Xn) or (d8,PC,Xn)",
+        // the full format, the manual's `B` and base displacement rows: the
+        // time does not depend on which of An, PC and Xn make the base, nor on
+        // the scale or size of Xn
+        Mode::IndexW => "(d16,An,Xn) or (d16,PC,Xn)",
+        Mode::IndexL => "(d32,B)",
+        Mode::IndexB => "(B)",
         Mode::Imm => match size {
             Size::B => "#<data>.B",
             Size::W => "#<data>.W",
@@ -131,7 +141,13 @@ fn immediate_label(
         Mode::Ind => "(An)",
         Mode::Post => "(An)+",
         Mode::Pre => "-(An)",
-        Mode::Disp => "(bd,An)",
+        Mode::Disp | Mode::PcDisp => "(bd,An)",
+        Mode::IndexW => "(d16,An,Xn) or (d16,PC,Xn)",
+        Mode::IndexL => "(d32,B)",
+        Mode::IndexB => "(B)",
+        // an immediate source of `mulu.l`, `divs.l`...: the extension word is
+        // the `#<data>.W`, the operand the `.L`
+        Mode::Imm => "#<data>.L",
         Mode::AbsW => "xxx.W",
         Mode::AbsL => "xxx.L",
         Mode::Index => "(d8,An,Xn) or (d8,PC,Xn)",
@@ -265,6 +281,8 @@ pub(super) fn clocks(
         ("movec", [Operand::Control, _]) => price("MOVEC", "Cr,Rn", None, size, 0),
         ("movec", [_, Operand::Control]) => price("MOVEC", "Rn,Cr", None, size, 0),
         ("move" | "movea", [source, destination]) => move_clocks(mode(source)?, size, mode(destination)?),
+        // Table 8.2.17 (p. 8-39): the exception, not the handler
+        ("trap", [Operand::Mode(Mode::Imm, _)]) => named("TRAP #n"),
         ("moveq", [_, _]) => price("MOVEQ", "#<data>,Dn", None, size, 0),
         ("add" | "sub" | "and" | "or" | "eor" | "cmp" | "adda" | "suba" | "cmpa", [source, destination]) => {
             let (source, destination) = (mode(source)?, mode(destination)?);
@@ -313,6 +331,8 @@ pub(super) fn clocks(
             memory => price(&name, "Mem", Some(memory), size, 0),
         },
         ("ext" | "nbcd", _) => price(&name, "Dn", None, size, 0),
+        // the manual's `EXT` row is `EXT, EXTB`
+        ("extb", _) => price("EXT", "Dn", None, size, 0),
         ("tas", [destination]) => match mode(destination)? {
             Mode::Dn => price("TAS", "Dn", None, size, 0),
             memory => price("TAS", "Mem", Some(memory), size, 0),

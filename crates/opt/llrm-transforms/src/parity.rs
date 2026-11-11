@@ -108,6 +108,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the pin's default options runs here and Decide does not (#2907); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1178) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
     ),
+    entry("vastart@1178", Early, "none (DEVIATE VASTART-PROMOTE, no pin pass)", Old, ""),
     entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
     entry("earlycse@1180", Early, "early-cse", Translated, ""),
     entry("promote@1241", Cleanup, "mem2reg", Translated, "mem2reg.rs"),
@@ -163,7 +164,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("reassociate@696", Simplify, "reassociate", Translated, ""),
     entry("constraint-elimination@699", Simplify, "constraint-elimination", Translated, ""),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@764", Simplify, "lcssa", Translated, ""),
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
     entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
@@ -183,7 +184,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@772", Simplify, "lcssa", Translated, ""),
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     partial(
@@ -237,7 +238,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: DSE stage 1 (deadstore.rs) removes what opt -passes=dse does on near pointers (tools/llvmport/dsecompare.py, 9000 cases); exit: stages 2-3 (free as a terminator, calloc folding, dominating conditions)",
     ),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@823", Simplify, "lcssa", Translated, ""),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
     partial(
         "combine@1403",
@@ -274,6 +275,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry("rotate@1621", Late, "loop-rotate<header-duplication;check-exit-count>", Translated, ""),
     entry(
         "loop-interchange@1631",
         Late,
@@ -317,12 +319,27 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    partial(
+        "loop-vectorize@1354",
+        Late,
+        "loop-vectorize",
+        "loopvectorize.rs widens single-block innermost loops of consecutive integer loads and stores whose constant trip count VF x IC divides, with the planner's (loopvectorizeplan.rs) and legality's (loopvectorizelegality.rs) pin factors; a no-op unless the target takes vector values (arm64 with LLRM_ARM64_VECTORS, default off); deviations LV-D1..D7, VP1..VP7, LVP1..LVP4; criterion: VF and IC equal the pin's remark on the tests; exit: epilogue and runtime checks, reductions, widening, FP lanes (ARM64-VEC POC, 2026-11-10)",
+    ),
+    entry(
+        "drop-unnecessary-assumes@1360",
+        Late,
+        "drop-unnecessary-assumes<drop-deref>",
+        Translated,
+        "dropunnecessaryassumes.rs",
+    ),
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
+    entry("drop-unnecessary-assumes@1577", Late, "drop-unnecessary-assumes", Translated, "dropunnecessaryassumes.rs"),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
+    entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",
@@ -338,6 +355,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // Runs in the strength slot,
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
+    // Runs in the strength slot, right after `lsr`: `looptermfold::LoopTermFold`.
+    entry("looptermfold", Module, "loop-term-fold (LoopTermFold.cpp)", Translated, ""),
+    // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
+    entry("hardwareloops", Module, "hardware-loops", Translated, ""),
+    // Runs in the strength slot, after `hardwareloops`: `constanthoisting::ConstantHoisting`.
+    entry("constanthoisting", Module, "consthoist (ConstantHoisting.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     partial(
         "indvars@753",
@@ -375,6 +398,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a SUB nothing reads is a CMP before allocation (optimizeCompareInstr, first switch), x_heapsort cmp/sub as the pin's; exit: the rest of optimizeCompareInstr (flags of an earlier instruction reused, NewCC, InstsToUpdate) and the other PeepholeOptimizer rewrites",
     ),
     entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
+    entry("cmovconversion@4", Backend, "x86-cmov-conversion (X86CmovConversion.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     partial(
@@ -388,6 +412,9 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    entry("statustest@5", Backend, "x86 x87 compare read from the status word, no sahf (target; DEVIATE X87-FCMP-AH, no pin pass)", Old, ""),
+    entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
+    entry("floatunhoist@6", Backend, "x86 hoisted float load made again in the loop (target; DEVIATE M16-NBODY-O2, no pin pass)", Old, ""),
     partial(
         "pushfold@6",
         Backend,
@@ -430,6 +457,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
     entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
+    entry("breakfalsedeps@19", Backend, "break-false-deps (BreakFalseDeps.cpp)", Translated, ""),
     partial(
         "earlytaildup@1",
         Backend,
@@ -437,8 +465,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a join of at most two instructions (its jump counted) goes into every predecessor that jumps to it alone, a one-jump block is bypassed, phis and read-outside values get an SSA update; exit: the pin's merge into the layout predecessor is the same result here (ET3); EH pads and INLINEASM_BR have no counterpart (ET2)",
     ),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
-    // (lir-cleanup-port, 2026-11-13).
+    // (lir-cleanup-port, 2026-11-22). Measured 2026-11-08 with CS2 (cgpselectarms)
+    // off, m32 -O2: -2510 B over 176 cells, but sfm16_float_mul/sub/div +758 clk
+    // and x_jpeg_fixed +2.9% clk; it needs a clock-priced CS2, not a switch.
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
+    // ExecutionDomainFix picks movdqa for integer data where ours picks movaps,
+    // one byte shorter; no domain-crossing penalty at 486/P5. Won't translate.
+    entry("execution-domain-fix", Backend, "x86-execution-domain-fix (ExecutionDomainFix.cpp)", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
 ];
 
@@ -639,6 +672,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "none: DEVIATE; TypeBasedAA is the pin's counterpart (not translated)",
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
+    old_analysis(
+        "assume-declared",
+        "AssumeDeclared",
+        "none",
+        "none: DEVIATE; LLVM's AssumptionCache walks the body, we skip it where no llvm.assume is declared",
+    ),
     old_analysis(
         "global-names",
         "GlobalNames",

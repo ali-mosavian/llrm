@@ -22,7 +22,7 @@ impl CoalescerEnv for AnyClass {
 }
 
 fn held(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 4 })
+    Loc::Held(Held { value, width: 4, offset: 0 })
 }
 
 fn copy(
@@ -109,6 +109,21 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// A join renamed the instruction that named the absorbed value into a new
+/// one (a new identity, a rebuilt slot index): the pin's `setReg` edits the
+/// operand where the instruction stands. Both survivors keep their identity.
+#[test]
+fn test_a_join_renames_the_instructions_that_name_the_absorbed_value_in_place() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let was = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&r)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    let ids: Vec<u64> = lis.blocks().iter().flatten().map(|one| one.id()).collect();
+    assert_eq!(ids, vec![a.id(), r.id()], "the def and the read are the instructions they were");
+}
+
 /// `v1 := def; v2 := mov v1` and nothing reads `v2`: the copy is dead, and so
 /// then is the definition it alone read. Only the copy went, leaving a `v1`
 /// that nothing reads (C5: `eliminateDeadDefs` was not run).
@@ -131,7 +146,7 @@ fn test_a_dead_copy_takes_the_definition_only_it_read() {
 fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
     let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
     let mut call = Insn::new(0, None, Some(what), vec![1], vec![]);
-    call.delivers = vec![(Held { value: 1, width: 4 }, llrm_lir::registers::RegId::EAX)];
+    call.delivers = vec![(Held { value: 1, width: 4, offset: 0 }, llrm_lir::registers::RegId::EAX)];
     let (call, c) = (Arc::new(call), copy(2, 1));
     let was = body(&[(&[Arc::clone(&call), Arc::clone(&c)], &[])]);
     let mut lis = LiveIntervals::new(&was);
@@ -237,7 +252,7 @@ fn priority(
     is_split: bool,
     connectivity: usize,
 ) -> MbbPriority {
-    MbbPriority { block, depth, is_split, connectivity }
+    MbbPriority { block, depth, is_split, connectivity, carried: 0 }
 }
 
 /// `compareMBBPriority`: the deeper loop, then the split edge, then the better
@@ -253,6 +268,18 @@ fn test_blocks_are_ordered_by_depth_then_split_edge_then_connectivity_then_numbe
     ];
     blocks.sort_by(compare_mbb_priority);
     assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![2, 3, 4, 1, 0]);
+}
+
+/// DEVIATE C15: of two blocks the pin orders alike, the one that reads more
+/// loop-carried values goes first; depth, split edge and connectivity still
+/// rank above it.
+#[test]
+fn test_a_carried_value_breaks_only_a_tie_of_depth_split_edge_and_connectivity() {
+    let carried =
+        |block, depth, connectivity, carried| MbbPriority { carried, ..priority(block, depth, false, connectivity) };
+    let mut blocks = vec![carried(1, 1, 2, 0), carried(2, 1, 2, 3), carried(3, 1, 4, 0), carried(4, 0, 2, 9)];
+    blocks.sort_by(compare_mbb_priority);
+    assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![3, 2, 1, 4]);
 }
 
 /// A chain of copies in one block is all joined by one round: one value stays.
@@ -309,6 +336,21 @@ fn test_the_join_map_names_the_survivor_of_each_absorbed_value() {
     let was = body(&[(&[a, c, b, r1, r2], &[])]);
     let (_, map) = super::env::joined_with_map(&was, &AnyClass, &[0]);
     assert_eq!((map.survivor(1), map.survivor(2)), (1, 2), "a copy left stays two values: {map:?}");
+}
+
+/// `RegisterCoalescer` returns at once for a function that exposes
+/// `returns_twice`: a copy joined across a `setjmp` merges a variable the first
+/// return never set with a predictable one. basic.c's `main` (a `setjmp`) was
+/// coalesced like any other function.
+#[test]
+fn test_a_function_that_returns_twice_keeps_its_copies() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let mut was = body(&[(&[a, c, r], &[])]);
+    let (_, joined) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_ne!(joined.survivor(1), 1, "a plain copy joins: {joined:?}");
+    was.returns_twice = true;
+    let (_, kept) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_eq!((kept.survivor(1), kept.survivor(2)), (1, 2), "{kept:?}");
 }
 
 /// wasm and m68k run the pin's coalescer with `JoinGlobalCopies` false
@@ -429,7 +471,7 @@ fn test_two_copies_into_one_value_leave_every_read_defined() {
 #[test]
 fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
-    let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
+    let memory = Mem { base: Some(Held { value: 2, width: 2, offset: 0 }), ..Mem::new(None, 2) };
     let what = Semantics {
         name: Some("mov".into()),
         dests: vec![held(3)],
@@ -584,6 +626,133 @@ fn test_a_copy_of_a_constant_that_cannot_be_joined_is_made_again() {
     assert_consistent(&lis, &was, 2);
 }
 
+/// `value := add value, 1`: a read-modify-write.
+fn step(value: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("add".into()),
+        dests: vec![held(value)],
+        sources: vec![held(value), Loc::Imm(crate::model::ir::Imm { value: 1, width: 4, address: None })],
+        ..Semantics::new(Operation::Nothing)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![value], vec![value]))
+}
+
+/// `v := <name> 7`: a constant the target names its own way (wasm
+/// `CONST_I32`, m68k `MOVI32ri`).
+fn constant_named(
+    v: u32,
+    name: &str,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some(name.into()),
+        dests: vec![held(v)],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value: 7, width: 4, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// The shape of queens `place`: `v1 := 7` starts an accumulator and `v2 := v1`
+/// an induction variable, both stepped in a loop and diverging. The join is
+/// refused (both live in the loop), and the value of `v1` reaching the copy is
+/// the constant, so the copy becomes `v2 := 7` as the pin's reMaterializeDef
+/// makes it ("Remat: %41 = CONST_I32 0"). With a constant named as x86 names
+/// it the shared coalescer already does.
+#[test]
+fn test_the_induction_start_copied_from_a_loop_carried_constant_is_made_again() {
+    let (a, c) = (constant_named(1, "mov"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = names(&lis);
+    assert!(!kept.contains(&(vec![2], vec![1])), "the copy is left: {kept:?}");
+}
+
+/// The same loop with the constant a wasm `CONST_I32`: the coalescer asked an
+/// x86-named test ("mov") whether it was worth making again, so on every other
+/// target no copy of a constant was ever made again, and queens `place` kept
+/// `v2 := v1` where the pin has `v2 := CONST_I32 0`. The target's own test
+/// (`TargetEnv::remat`, the one the spiller asks) decides.
+#[test]
+fn test_a_constant_the_target_names_its_own_way_is_made_again() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let (a, c) = (constant_named(1, "CONST_I32"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: None,
+        freq: Vec::new(),
+        remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
+        remat_wins: None,
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        joins_lanes: false,
+        joins_loop_carried_first: false,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+        free_when_unnarrowed: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = names(&lis);
+    assert!(!kept.contains(&(vec![2], vec![1])), "the copy is left: {kept:?}");
+}
+
+/// The same loop on a target that prices the remat: the constant costs more
+/// than the register copy it would replace (6502: `lda #0`, 2 bytes, for
+/// `txa`, 1), so the copy stays, where without a price the copy of every
+/// constant was made again (lz4 +1 byte on three rows).
+#[test]
+fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let (a, c) = (constant_named(1, "CONST_I32"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: None,
+        freq: Vec::new(),
+        remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
+        remat_wins: Some(Box::new(|_, _, _, _, _| false)),
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        joins_lanes: false,
+        joins_loop_carried_first: false,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+        free_when_unnarrowed: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    let kept = names(&lis);
+    assert!(kept.contains(&(vec![2], vec![1])), "the copy was made a constant again: {kept:?}");
+}
+
 /// A copy of a loaded value is not cheap to make again: it stays.
 #[test]
 fn test_a_copy_of_a_load_that_cannot_be_joined_is_not_made_again() {
@@ -639,22 +808,30 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     use super::env::TargetEnv;
     let palette = |registers: &[RegId]| registers.iter().copied().collect::<BTreeSet<_>>();
     let palettes = IndexMap::from_iter([
-        (1, palette(&[RegId::AX, RegId::BX, RegId::SI])),
-        (2, palette(&[RegId::BX, RegId::BP])),
-        (3, palette(&[RegId::SI, RegId::DI])),
+        (1, std::rc::Rc::new(palette(&[RegId::AX, RegId::BX, RegId::SI]))),
+        (2, std::rc::Rc::new(palette(&[RegId::BX, RegId::BP]))),
+        (3, std::rc::Rc::new(palette(&[RegId::SI, RegId::DI]))),
     ]);
     let env = TargetEnv {
         joins_global_copies: true,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: false,
+        joins_loop_carried_first: false,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
+        remat: None,
+        remat_wins: None,
         regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -905,7 +1082,7 @@ fn held_at(
     value: u32,
     width: u32,
 ) -> Loc {
-    Loc::Held(Held { value, width })
+    Loc::Held(Held { value, width, offset: 0 })
 }
 
 /// `dst := mov src` between two widths.
@@ -1001,17 +1178,15 @@ fn test_a_target_can_leave_every_copy_between_widths_unjoined() {
     assert_eq!(result, JoinResult::Rejected);
 }
 
-/// With the joins between widths off, the driver sees no copy between widths:
-/// before, such a copy sat in the work lists and the terminal rule counted
-/// it, which moved a register choice in m68k's phi_slot_unknown_arm (-O1)
-/// though no join differed.
+/// The driver sees a copy between widths whatever the target says (#7968):
+/// `join_copy` decides, so a narrow copy that lies inside its wide value joins
+/// even with the joins between widths off.
 #[test]
-fn test_with_the_joins_between_widths_off_the_driver_sees_no_such_copy() {
+fn test_with_the_joins_between_widths_off_the_driver_still_sees_the_copy() {
     let (narrow, same) = (copy_at((2, 2), (1, 4)), copy_at((3, 4), (1, 4)));
-    let pick = super::driver::pick_of(&NoSubRegisterJoins);
-    assert!(pick(&narrow).is_none() && pick(&same).is_some());
-    let pick = super::driver::pick_of(&SubRegisters);
-    assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    for pick in [super::driver::pick_of(&NoSubRegisterJoins), super::driver::pick_of(&SubRegisters)] {
+        assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    }
 }
 
 /// `v1:4 := def; v2:2 := mov v1:4; read v2:2`, the truncating copy of a
@@ -1099,7 +1274,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
     TargetEnv {
         palettes: palettes
             .iter()
-            .map(|(value, registers)| (*value, registers.iter().copied().collect()))
+            .map(|(value, registers)| (*value, std::rc::Rc::new(registers.iter().copied().collect())))
             .collect::<IndexMap<_, _>>()
             .into(),
         pins: IndexMap::default(),
@@ -1108,10 +1283,18 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: true,
+        joins_loop_carried_first: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+        free_when_unnarrowed: false,
+        remat: None,
+        remat_wins: None,
     }
 }
 
@@ -1153,15 +1336,24 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
         let env = TargetEnv {
             joins_global_copies: true,
             joins_pinned_copies,
-            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))])
+                .into(),
             pins: IndexMap::from_iter([(1, RegId::AX)]),
             size: false,
             keep_pinned: true,
             aliases: Default::default(),
-            should_join: Box::new(|_| true),
+            should_join: None,
             freq: Vec::new(),
             joins_sub_registers: true,
+            joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
+            kind_of: None,
+            kinds: Default::default(),
+            check_kinds: false,
+            free_when_unnarrowed: false,
+            remat: None,
+            remat_wins: None,
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);
@@ -1171,4 +1363,576 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
     };
     assert_eq!(join(true), JoinResult::Joined, "premise: the copy joins when the target allows it");
     assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
+}
+
+/// A target with a view of the wide value's high byte.
+struct LaneViews;
+
+impl CoalescerEnv for LaneViews {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_sub(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_lane(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+        _offset: u32,
+    ) -> bool {
+        true
+    }
+}
+
+/// `v2:2@1 := mov v1:1` into the byte above the low one, as `read_at` sees it.
+fn copy_into_lane(offset: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 2, width: 1, offset })],
+        sources: vec![held_at(1, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]))
+}
+
+/// `v2.hi := mov v1` joined v1 into the low byte of v2 (the wide-copy case
+/// only knew the low part): a byte copied to the high byte of a pair was named
+/// at offset 0, so the pair's two bytes overlapped. The join puts v1's def at
+/// byte 1 of v2.
+#[test]
+fn test_a_copy_into_the_high_byte_joins_the_byte_at_its_offset() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &LaneViews, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 2, "the copy is gone");
+    assert_eq!(
+        kept[0].what.as_ref().unwrap().dests,
+        vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })],
+        "the byte def names the high byte of the pair"
+    );
+}
+
+/// A target with no view of the high byte leaves the copy: the pair needs
+/// `can_share_lane`.
+#[test]
+fn test_without_a_view_of_the_high_byte_the_copy_is_left() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+}
+
+/// The kept uses of a value, summed by kind for the target's join price, must
+/// be the instructions' after every rewrite and erase the joins make
+/// (`LLRM_CHECK_USE_SUMMARY`'s check, on in `check_kinds`). A join took the
+/// dead definition a copy alone read (C5), moved a copy to a loop's
+/// preheader, or extended a value over a copy back, and left a kept list
+/// with an instruction that is gone or without the one that replaced it, so
+/// the next join was priced on uses that were not there.
+#[test]
+fn test_the_kept_uses_of_a_value_follow_the_rewrites_and_erases_of_the_joins() {
+    let palette: &[(u32, &[RegId])] =
+        &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX]), (3, &[RegId::AX, RegId::BX])];
+    let checked = || {
+        let mut env = env_with_palettes(palette);
+        env.kind_of = Some(Box::new(|_, _| Some(0)));
+        env.check_kinds = true;
+        env.freq = vec![1.0, 4.0, 1.0];
+        env
+    };
+    // a dead copy and the definition only it read, with a copy after them
+    let (a, c, d, e) = (def(1), copy(2, 1), load(3), copy(1, 3));
+    let dead_copy = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&d), Arc::clone(&e), read(1)], &[])]);
+    // a copy back of a copy
+    let (first, to, back, redefined) = (load(1), copy(2, 1), copy(1, 2), load(2));
+    let copy_back = body(&[(&[first, to, back, redefined, read(1), read(2)], &[])]);
+    // a copy at a loop entry that the latch reverses
+    let (first, to, user, back) = (load(1), copy(2, 1), read(2), copy(1, 2));
+    let (again, kept, after) = (load(1), read(2), read(1));
+    let loop_entry = body(&[(&[first], &[1]), (&[to, user, back], &[1, 2]), (&[again, kept, after], &[])]);
+    for (name, was) in [("dead copy", dead_copy), ("copy back", copy_back), ("loop entry", loop_entry)] {
+        let env = checked();
+        let depth = vec![0; was.blocks.len()];
+        let _ = super::env::joined(&was, &env, &depth);
+        eprintln!("{name}: kept lists checked at {} prices", env.kinds.borrow().len());
+    }
+}
+
+/// A kind's kept sum is f32: put and taken at blocks of frequency 1e5 and 0.7
+/// (the hot one taken first) it ends near 0.003, not 0, so a kind whose last
+/// instruction was taken stayed in the list and the next join was priced on a
+/// use that was not there (`LLRM_CHECK_USE_SUMMARY` saw one kind too many).
+/// The kind goes with its last instruction.
+#[test]
+fn test_a_kind_with_no_instruction_left_is_not_kept_at_high_frequency() {
+    let palette: &[(u32, &[RegId])] = &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX])];
+    let (first, to, here, there) = (load(1), copy(2, 1), read(1), read(2));
+    let was = body(&[(&[first, Arc::clone(&to), here, there], &[1]), (&[read(1)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.track_changes();
+    let mut env = env_with_palettes(palette);
+    // the probes are the instructions named "use": a kind of their own
+    env.kind_of = Some(Box::new(|insn, _| {
+        Some(if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("use")) { 1 } else { 0 })
+    }));
+    env.check_kinds = true;
+    env.freq = vec![1.0e5, 0.7];
+    assert!(env.should_coalesce(&lis, to.id(), 1, 2), "premise: the kept lists are made");
+    for cycle in 0..5 {
+        let (hot, cold) = (read_at(1, 4), read_at(1, 4));
+        lis.insert_instr_before_at(0, None, Arc::clone(&hot), false);
+        lis.insert_instr_before_at(1, None, Arc::clone(&cold), false);
+        lis.remove_instr(0, hot.id());
+        lis.remove_instr(1, cold.id());
+        assert!(env.should_coalesce(&lis, to.id(), 1, 2), "cycle {cycle}");
+    }
+}
+
+/// `v2:1@l := mov x` with the lane the copy defines named, as tolir will.
+fn lane_copy(
+    dst: u32,
+    offset: u32,
+    src: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: dst, width: 1, offset })],
+        sources: vec![held_at(src, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let mut copy = Insn::new(0, None, Some(what), vec![dst], vec![src]);
+    copy.def_lanes = vec![(dst, llrm_lir::valuelanes::ValueLanes::at(offset, 1))];
+    // The lane above the first keeps the lanes already defined.
+    if offset != 0 {
+        copy.partial_defs = vec![dst];
+    }
+    Arc::new(copy)
+}
+
+/// A pair built from two bytes: `v2.lo := v1; v2.hi := v3; read v2`. The
+/// whole-value join of the second byte met `v2` live (its low byte) across
+/// `v3` and refused, so one byte copy stayed in every pair. Each byte joins
+/// into its own lane, and the two copies go.
+#[test]
+fn test_both_bytes_of_a_pair_join_into_their_lanes() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 3, "both copies are gone");
+    let dests = |insn: &Arc<Insn>| insn.what.as_ref().unwrap().dests.clone();
+    assert_eq!(dests(&kept[0]), vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })]);
+    assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
+}
+
+/// The high byte joins before the low one, while the pair is not yet live at
+/// the byte's def: the def still keeps the other lane (the copy it replaces
+/// read it). It started the pair, so the low lane was dead there and a
+/// reload of the pair was given its registers (lz4c -Oz returned 0x3131).
+#[test]
+fn test_a_byte_joined_into_a_lane_before_the_pair_is_live_keeps_the_other_lane() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let definer = kept.iter().find(|insn| insn.def_lanes.iter().any(|(v, _)| *v == 2)).expect("the byte's def");
+    assert_eq!(definer.partial_defs, vec![2], "premise: the def is of a lane of the pair; it keeps the rest");
+}
+
+/// The high byte is computed before the low one's copy, which starts the pair
+/// (`undef_super`). Once the high byte joins its lane the pair is live at the
+/// low copy: it must keep the high lane, else the high byte's def reads dead
+/// and is deleted (lz4c -Oz returned 0x57b3).
+#[test]
+fn test_a_lane_def_after_a_joined_lane_keeps_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let mut starts = (*lo).clone();
+    starts.undef_super = true;
+    let lo = Arc::new(starts);
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept
+        .iter()
+        .find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1)))
+        .expect("the low copy");
+    assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
+}
+
+/// The low lane copy of a pair that an earlier join left plain (no
+/// `undef_super`, nothing kept) stands over the high lane once that joins:
+/// it must keep it too, else the low def is the only one the high lane's
+/// readers see and the main range loses the high lane's stretch (lz4c -O2
+/// asserted "Inconsistent LiveInterval" in the union).
+#[test]
+fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(!lo.undef_super && !lo.partial_defs.contains(&2), "premise: the low copy keeps nothing");
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept
+        .iter()
+        .find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1)))
+        .expect("the low copy");
+    assert!(low.partial_defs == vec![2], "{low:?}");
+}
+
+/// One instruction defines both bytes of a pair (a LEA's address): once both
+/// join their lanes it defines the whole pair. The high lane's copy kept the
+/// low one, so the def was marked to read the pair, which nothing defined
+/// before it: the pair was live from the function entry and the split of it
+/// died on "Cannot overlap different values" (6502, write_through_parameter
+/// -O1).
+#[test]
+fn test_one_instruction_defining_both_bytes_does_not_read_the_pair() {
+    let both = Arc::new(Insn::new(0, None, None, vec![1, 3], vec![]));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(hi.partial_defs == vec![2], "premise: the high copy keeps the low lane");
+    let was = body(&[(&[Arc::clone(&both), Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let definer = kept.iter().find(|insn| insn.defines.contains(&2)).expect("the def of both bytes");
+    assert!(definer.partial_defs.is_empty(), "{definer:?}");
+    let at = lis.indexes.get_instruction_index(definer.id());
+    assert!(!lis.interval(2).live_at(&at), "live before its def");
+}
+
+/// A copy of a pair built by lane defs, the pair still read after it, was
+/// refused (whole values with lane defs never joined): the quicksort inner loop
+/// of the 6502 at -O2 copied its element address (`lda rc16; sta rc22; lda
+/// rc17; sta rc23`) every trip, 2 instructions and 3% of the cycles.
+#[test]
+fn test_a_whole_copy_of_a_pair_built_by_lane_defs_is_joined() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let whole = copy(4, 2);
+    let was = body(&[(&[d1, d3, lo, hi, Arc::clone(&whole), read_at(2, 2), read_at(4, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=4 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), whole.id());
+    assert_eq!(result, JoinResult::Joined, "the copy of the pair stayed");
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert!(kept.iter().all(|insn| insn.id() != whole.id()), "the copy is gone");
+    assert!(kept.iter().all(|insn| !insn.defines.contains(&4) && !insn.uses.contains(&4)), "{kept:?}");
+}
+
+/// A byte copied into the low lane of a pair names the same width at the same
+/// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
+/// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz
+/// round-tripped a byte through `h`). Its lane def says it is a lane.
+#[test]
+fn test_a_byte_copied_into_the_low_lane_is_a_lane_copy_not_a_byte_copy() {
+    let env = env_with_palettes(&[(1, &[RegId::AL]), (2, &[RegId::AX])]);
+    assert!(!env.can_share(1, 2), "premise: the byte and the pair share no registers whole");
+    assert!(env.can_share_sub(1, 2), "premise: al is the low byte of ax");
+    let lane = lane_copy(2, 0, 1);
+    let pair = super::pair::CoalescerPair::set_registers(&lane, &env).expect("a lane of the pair");
+    assert!(pair.is_partial() && pair.lane_offset() == 0, "the byte is the pair's low lane");
+    assert!(super::pair::full_copy(&lane).is_none(), "a lane def is not a full copy");
+}
+
+/// A byte joins the lane of a pair only where some register of the pair's
+/// palette has a register of the byte's palette at that offset: `ah` is the
+/// byte above `al` in `ax`, and `al` is not. Before, `can_share_lane` had no
+/// answer and every copy into a high byte stayed.
+#[test]
+fn test_a_byte_joins_the_lane_of_the_pair_that_has_that_byte_at_that_offset() {
+    let env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH]), (3, &[RegId::AL])]);
+    assert!(env.can_share_lane(2, 1, 1), "ah is the byte above al");
+    assert!(!env.can_share_lane(3, 1, 1), "al is the low byte, not the high one");
+    assert!(env.can_share_sub(3, 1), "premise: al is the low byte of ax");
+}
+
+/// A target that does not join lanes says no whatever the registers.
+#[test]
+fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
+    let mut env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH])]);
+    env.joins_lanes = false;
+    assert!(!env.can_share_lane(2, 1, 1));
+}
+
+/// `TargetEnv::should_coalesce` built a `Join` (two palette clones, use-kind
+/// sums) for every copy and handed it to a `should_join` that said yes: 13 M of
+/// the 88 M the coalescer costs on jpeg_fixed (1839 calls, 7 K instructions
+/// each), and on arm64 shellsort 17.6 M of 41 M (571 joins, 31 K each). A
+/// target with no opinion builds none, and neither does a join that leaves
+/// both values the registers they had (it prices 0, so the rule says yes).
+#[test]
+fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::{JOINS_BUILT, TargetEnv};
+    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>, free: bool, narrows: bool| {
+        let c = copy(2, 1);
+        let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
+        let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+        let narrower: BTreeSet<RegId> = if narrows { [RegId::AX].into_iter().collect() } else { palette.clone() };
+        let env = TargetEnv {
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette)), (2, std::rc::Rc::new(narrower))]).into(),
+            pins: IndexMap::default(),
+            size: false,
+            keep_pinned: false,
+            aliases: Default::default(),
+            should_join,
+            freq: Vec::new(),
+            remat: None,
+            remat_wins: None,
+            joins_global_copies: false,
+            joins_pinned_copies: true,
+            joins_sub_registers: true,
+            joins_lanes: false,
+            joins_loop_carried_first: false,
+            regs: None,
+            kind_of: None,
+            kinds: Default::default(),
+            check_kinds: false,
+            free_when_unnarrowed: free,
+        };
+        let mut lis = LiveIntervals::new(&was);
+        let before = JOINS_BUILT.with(std::cell::Cell::get);
+        let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+        assert_eq!(result, JoinResult::Joined);
+        JOINS_BUILT.with(std::cell::Cell::get) - before
+    };
+    let yes = || Some(Box::new(|_: &super::env::Join| true) as Box<dyn Fn(&super::env::Join) -> bool>);
+    assert_eq!(run(yes(), false, false), 1, "premise: an opinion is built a join for");
+    assert_eq!(run(None, false, false), 0);
+    assert_eq!(run(yes(), true, false), 0, "a join that narrows nothing is priced 0 and taken unbuilt");
+    assert_eq!(run(yes(), true, true), 1, "a join that takes a register away is priced");
+}
+
+/// `v := implicit_def`: the value a phi's predecessor gets where the phi's
+/// input is poison.
+fn implicit_def(v: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+        dests: vec![held(v)],
+        ..Semantics::new(Operation::Nothing)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// A run-time unroll's prolog leaves two phi values the same (`acc.unr` from
+/// poison, `acc.unr2` from 0.0) and both are copies of one prolog value. The
+/// bypass edge gives `v2` an `implicit_def` that overlaps `v1`'s 0.0: the pin
+/// erases it (`ErasableImplicitDef`), the two join, and no copy is left.
+/// Without the port `v1` and `v2` stayed two registers with a copy in the
+/// prolog loop: wasm bench/recfloat at O2 was 512 B to the pin's 487.
+#[test]
+fn test_an_implicit_def_overlapping_a_live_value_is_erased_by_the_join() {
+    let bypass = block_at(0, vec![def(1), implicit_def(2), jump(0x20)], &[0x20, 0x10]);
+    let prolog = block_at(0x10, vec![def(3), copy(2, 3), copy(1, 3), jump(0x20)], &[0x20]);
+    let exit = block_at(0x20, vec![read(1), read(2)], &[]);
+    let was = body_of(vec![bypass, prolog, exit]);
+    let mut lis = LiveIntervals::new(&was);
+    let stats = super::driver::run(&mut lis, &AnyClass, &[0, 0, 0]);
+    assert!(stats.joined >= 1, "premise: something joined: {stats:?}");
+    let after = lis.body_like(&was);
+    let insns: Vec<_> = after.blocks.iter().flat_map(|one| one.insns.iter()).collect();
+    let copies = insns
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Held(_)))))
+        .count();
+    assert_eq!(copies, 0, "a copy is left: {insns:?}");
+    let last = insns.iter().rev().find(|one| one.uses.len() == 1).unwrap();
+    let reads: Vec<u32> =
+        insns.iter().filter(|one| one.defines.is_empty() && one.uses.len() == 1).map(|one| one.uses[0]).collect();
+    assert_eq!(reads.len(), 2, "{last:?}");
+    assert_eq!(reads[0], reads[1], "the two phi values are one register");
+}
+
+/// `v := mov value`: a constant with its value, for a size price.
+fn constant_of(
+    v: u32,
+    value: i64,
+    width: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: v, width, offset: 0 })],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value, width, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// The encoded sizes of a flat 32-bit target: a copy is two bytes, three for a
+/// word (66h) or a qword (REX.W), a zero is `xor` (two), any other constant
+/// five.
+fn flat_bytes() -> llrm_target::MoveBytes {
+    llrm_target::MoveBytes {
+        plain: 4,
+        copy: |width, _| if width == 4 { 2 } else { 3 },
+        literal: |number, _, _, _| if number == 0 { 2 } else { 5 },
+    }
+}
+
+/// Whether the copy of the constant `value`, which stays read after the loop,
+/// is made again in a build for size, with `price` as the target's.
+fn size_copy_of_constant_is_remade(
+    value: i64,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    size_copy_of_def_is_remade(constant_of(1, value, width), width, price)
+}
+
+/// `size_copy_of_constant_is_remade` for any definition `a` of value 1.
+fn size_copy_of_def_is_remade(
+    a: Arc<Insn>,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    size_copy_of_def_is_remade_after(Vec::new(), Vec::new(), a, width, price)
+}
+
+/// `size_copy_of_def_is_remade`, with `before` the definition and `after` the
+/// copy.
+fn size_copy_of_def_is_remade_after(
+    before: Vec<Arc<Insn>>,
+    after: Vec<Arc<Insn>>,
+    a: Arc<Insn>,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    use std::collections::BTreeSet;
+
+    let wide = |v: u32| Loc::Held(Held { value: v, width, offset: 0 });
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![wide(2)],
+        sources: vec![wide(1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let c = Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]));
+    let head: Vec<Arc<Insn>> = before.into_iter().chain([a, Arc::clone(&c)]).chain(after).collect();
+    let was = body(&[(&head, &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: std::rc::Rc<BTreeSet<RegId>> = std::rc::Rc::new([RegId::AX, RegId::BX].into_iter().collect());
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::clone(&palette)), (2, palette)]).into(),
+        pins: IndexMap::default(),
+        size: true,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: None,
+        freq: Vec::new(),
+        remat: Some(Box::new(|_| true)),
+        remat_wins: price,
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        joins_lanes: false,
+        joins_loop_carried_first: false,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+        free_when_unnarrowed: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    result == JoinResult::Joined && !names(&lis).contains(&(vec![2], vec![1]))
+}
+
+/// The target's encodings decide at size: a word zero (`xor` 2 B against a 66h
+/// copy, 3 B) is remade, a dword zero is a tie with the copy and stays one, and
+/// so does a constant dearer than the copy. A qword zero is left a copy (C13):
+/// its `xor` beat the REX.W copy (m64 `recgcd`, +2 B) but a remade zero that
+/// spills is a 9 B `movq $0, slot` (jpeg_fixed m64 -Os +42 B,
+/// over_aligned_local_after_even_pushes +9).
+#[test]
+fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
+    let price = || Some(super::pass::remat_priced(flat_bytes()));
+    assert!(size_copy_of_constant_is_remade(0, 2, price()), "xor 2 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(0, 4, price()), "a tie keeps the copy");
+    assert!(!size_copy_of_constant_is_remade(7, 2, price()), "5 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(0, 8, price()), "a qword zero may spill (C13)");
+}
+
+/// A target that states no price keeps DEVIATE C10: at size no copy of a
+/// constant that stays read is remade (40 of 813 sources +1,383 bytes).
+#[test]
+fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
+    assert!(!size_copy_of_constant_is_remade(0, 2, None));
+}
+
+/// mul_constants m32 -Os: `mov edx, eax` became `lea eax, [esi+0x3c6ef35f]` (6
+/// B for 2): the definition was an `lea` of a register and a constant, not a
+/// plain constant, which the byte price did not cover and let through. It stays
+/// a copy.
+#[test]
+fn test_for_size_an_lea_of_a_register_that_stays_read_stays_a_copy() {
+    let base = Loc::Held(Held { value: 9, width: 4, offset: 0 });
+    let what = Semantics {
+        name: Some("lea".into()),
+        dests: vec![held(1)],
+        sources: vec![base, Loc::Imm(crate::model::ir::Imm { value: 0x3c6e_f35f, width: 4, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    let lea = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![9]));
+    let price = Some(super::pass::remat_priced(flat_bytes()));
+    assert!(!size_copy_of_def_is_remade_after(vec![def(9)], vec![read(9)], lea, 4, price));
 }

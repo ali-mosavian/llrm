@@ -1,0 +1,23 @@
+# Dot product of two slices of different lengths: the loop runs to the shorter. Nib has no globals.
+fn dot(a: &[i16], b: &[i16]) -> i32:
+    let mut total: i32 = 0
+    for (x, y) in zip(a, b):
+        total += i32(x) * i32(y)
+    return total
+
+fn bench_dot() -> i32:
+    let mut a: i16[64] = [0] * 64
+    let mut b: i16[48] = [0] * 48
+    for i in 0..64:
+        a[i] = i * 3 - 90
+    for i in 0..48:
+        b[i] = 70 - i * 2
+    let mut sum: i32 = 0
+    for round in 0..40:
+        a[0] = round
+        sum += dot(a, b)
+    return sum
+
+fn main() -> i16:
+    print(bench_dot())
+    return 0

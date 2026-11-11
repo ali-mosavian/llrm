@@ -132,14 +132,19 @@ fn add(
         ("loop-reduce", None) => manager.add(crate::lsr_pass::LoopStrengthReduce { size: false }),
         ("indvars", None) => manager.add(crate::indvars::IndVars { lftr: true, size: false }),
         ("indvars", Some("no-lftr")) => manager.add(crate::indvars::IndVars { lftr: false, size: false }),
-        ("loop-rotate", None) => manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false }),
+        ("loop-rotate", None) => {
+            manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false, free_guard: false })
+        }
+        ("loop-rotate", Some("header-duplication;no-prepare-for-lto;check-exit-count")) => {
+            manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: true, free_guard: false })
+        }
         ("loop-deletion", None) => manager.add(crate::loopdeletion::LoopDeletion),
         ("loop-simplify", None) => manager.add(crate::loopsimplify::LoopSimplify),
         ("loop-instsimplify", None) => manager.add(crate::loopinstsimplify::LoopInstSimplify),
         ("lcssa", None) => manager.add(crate::lcssa::LoopClosedSSA),
         ("dce", None) => manager.add(crate::dead::Dead),
         ("adce", None) => manager.add(crate::adce::Adce),
-        ("instcombine", None) => manager.add(crate::combine_pass::Combine { enabled: true }),
+        ("instcombine", None) => manager.add(crate::combine_pass::Combine { enabled: true, phi_constant_users: false }),
         ("simplifycfg", None) => manager.add(crate::simplifycfg::SimplifyCfg::default()),
         (_, Some(params)) => return Err(unsupported(&format!("{name}<{params}>"))),
         _ => return Err(unsupported(name)),

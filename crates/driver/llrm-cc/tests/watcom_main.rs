@@ -1,5 +1,5 @@
 //! C semantics the Watcom targets keep. Needs the pinned clang
-//! (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
+//! (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -11,15 +11,15 @@ use std::process::Command;
 /// leave the return value unset, so the program exited with a stack load.
 #[test]
 fn main_that_falls_off_its_end_returns_zero() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-main-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("m.c"), "int v;\nint main(void) { v = 2; }\n").unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env(
             "LLRM_LLC",
@@ -41,8 +41,8 @@ fn main_that_falls_off_its_end_returns_zero() {
 /// unmarked function stays the register one, `name_`.
 #[test]
 fn cdecl_is_the_stack_convention_on_x86_32_wat() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -53,7 +53,7 @@ fn cdecl_is_the_stack_convention_on_x86_32_wat() {
         "int __cdecl a(int x, int y) { return x + y; }\nint b(int x, int y) { return x - y; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env(
             "LLRM_LLC",
@@ -72,12 +72,12 @@ fn cdecl_is_the_stack_convention_on_x86_32_wat() {
 }
 
 /// A float spilled to the cell of its type, as the pin's RFP32 does and
-/// llrm-c ran it: without `rounds_float_spills` llrm-cc spilled each of the
+/// llrm-cc ran it: without `rounds_float_spills` llrm-cc spilled each of the
 /// ten live floats here as a qword (12 `fstp qword`, no `fstp dword`).
 #[test]
 fn a_spilled_float_is_stored_in_a_dword_cell() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -91,7 +91,7 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
         }\n\
         return a+b+c+d+e+f+h+i+j+k;\n}\n";
     std::fs::write(dir.join("s.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env(
             "LLRM_LLC",
@@ -115,8 +115,8 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
 /// not compile at x86_32-wat.
 #[test]
 fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -127,7 +127,7 @@ fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
         "extern void *memcpy(void *, const void *, unsigned long);\nstatic void *(*volatile copy)(void *, const void *, unsigned long) = memcpy;\nint f(char *d, char *s) { copy(d, s, 4); return 0; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env(
             "LLRM_LLC",
@@ -200,8 +200,8 @@ fn pragma_aux_link_name_is_the_symbol_at_m32() {
         eprintln!("skipped: LLRM_CLANG_M16 is not set");
         return;
     };
-    if std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_OW is not set");
+    if !llrm_cc::ow_present() {
+        eprintln!("skipped: the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -213,7 +213,7 @@ fn pragma_aux_link_name_is_the_symbol_at_m32() {
             "#pragma aux cb \"B$COPY\"\nextern int cb(int a, int b);\nint f(int x) { return cb(x, 2); }\n",
         )
         .unwrap();
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", row)
             .env("LLRM_CLANG_M16", &fork)
             .env(
@@ -239,8 +239,8 @@ fn pragma_aux_link_name_is_the_symbol_at_m32() {
 /// against a call of `sqrtf_`.
 #[test]
 fn a_program_links_whichever_target_directory_the_driver_is_in() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -251,7 +251,7 @@ fn a_program_links_whichever_target_directory_the_driver_is_in() {
         "volatile float v = 4.0f;\nint main(void) { return (int)__builtin_sqrtf(v) - 2; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env_remove("LLRM_CC_BIN")
         .env(
@@ -274,8 +274,8 @@ fn a_program_links_whichever_target_directory_the_driver_is_in() {
 /// 29 debug-info tests could link (the float support calls `atan2`).
 #[test]
 fn library_calls_are_the_watcom_names_at_both_models() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -287,7 +287,7 @@ fn library_calls_are_the_watcom_names_at_both_models() {
     )
     .unwrap();
     for target in ["x86_16-wat", "x86_32-wat"] {
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", target)
             .env(
                 "LLRM_LLC",
@@ -311,7 +311,7 @@ fn library_calls_are_the_watcom_names_at_both_models() {
 /// m16 program failed to link with `undefined symbol main_`.
 #[test]
 fn an_m16_program_links_against_watcoms_start_up() {
-    let ow = std::env::var_os("LLRM_OW").map(std::path::PathBuf::from);
+    let ow = Some(llrm_cc::ow_tree());
     if std::env::var_os("LLRM_PIN_CLANG").is_none()
         || std::env::var_os("LLRM_CLANG_M16").is_none()
         || !ow.as_ref().is_some_and(|ow| ow.join("bld/clib/library/msdos.086/mm/clibm.lib").exists())
@@ -322,9 +322,9 @@ fn an_m16_program_links_against_watcoms_start_up() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-m16-link-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("m.c"), "int main(void) { return 3; }\n").unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
-        .env("LLRM_CC_BIN", env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_BIN", env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .args(["-O1", "-w", "-o"])
         .arg(dir.join("m.exe"))
         .arg(dir.join("m.c"))
@@ -345,8 +345,8 @@ fn an_m16_program_links_against_watcoms_start_up() {
 /// global", and the QB runtime's gfxdev.c did not build at x86_16-wat.
 #[test]
 fn a_far_pointer_initialised_from_an_integer_is_data() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -357,7 +357,7 @@ fn a_far_pointer_initialised_from_an_integer_is_data() {
         "typedef volatile unsigned char far Video;\nstatic Video *screen = (Video far *)0xA0000000UL;\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",
@@ -375,8 +375,8 @@ fn a_far_pointer_initialised_from_an_integer_is_data() {
 /// The same on the flat target, a near pointer (`(void *)(0xA000 << 4)`).
 #[test]
 fn a_near_pointer_initialised_from_an_integer_is_data() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -387,7 +387,7 @@ fn a_near_pointer_initialised_from_an_integer_is_data() {
         "typedef volatile unsigned char Video;\nstatic Video *screen = (Video *)(0xA000UL << 4);\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env(
             "LLRM_LLC",
@@ -403,13 +403,13 @@ fn a_near_pointer_initialised_from_an_integer_is_data() {
 }
 
 /// The m16 `main_` pushed and popped bx, cx and dx (6 bytes in 56 programs,
-/// +336 B over llrm-c) for a start-up that discards every register after it
+/// +336 B over llrm-cc) for a start-up that discards every register after it
 /// returns. Nothing in the module calls it, so it keeps nothing; one that
 /// something calls keeps Watcom's contract.
 #[test]
 fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -419,7 +419,7 @@ fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
     let again = format!("{body}int again(void) {{ return main(); }}\n");
     let compile = |name: &str, source: &str| {
         std::fs::write(dir.join(format!("{name}.c")), source).unwrap();
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_16-wat")
             .env(
                 "LLRM_LLC",
@@ -447,12 +447,12 @@ fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
 /// The all-llrm DOS configuration: `x86_16-dos-rp3` is regparm3 (`name@3`,
 /// `main_`) where `x86_16-dos` is cdecl (`_name`), and a program in it links
 /// with the shared start-up. Without the row, QCport-sized comparisons against
-/// llrm-c had cdecl's push/pop cleanup in them (+8.6 KB of +9.8 KB over 65
+/// llrm-cc had cdecl's push/pop cleanup in them (+8.6 KB of +9.8 KB over 65
 /// modules).
 #[test]
 fn the_rp3_dos_row_is_regparm3_and_links() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -461,7 +461,7 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
     std::fs::write(dir.join("g.c"), "int g(int a) { return a + 1; }\nint main(void) { return g(1) - 2; }\n").unwrap();
     let llc = std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into());
     let cc = |target: &str, args: &[&str], output: &str| {
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", target)
             .env("LLRM_LLC", &llc)
             .args(args)
@@ -485,15 +485,15 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
 }
 
 /// The m32 row packed structs to a byte (`-fpack-struct=1`, copied from the m16
-/// rows): `struct { char id; void *next; }` was 5 bytes where llrm-c
+/// rows): `struct { char id; void *next; }` was 5 bytes where llrm-cc
 /// and the assembly sharing the QB runtime's structs (compvect: ids at +4,
 /// vectors at +8) have 8, so every m32 QB program died at start-up
 /// ("Out of memory", "String formula too complex") once the runtime was built
 /// by llrm-cc.
 #[test]
 fn a_struct_has_its_natural_layout_at_m32_and_is_byte_packed_at_m16() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -505,7 +505,7 @@ fn a_struct_has_its_natural_layout_at_m32_and_is_byte_packed_at_m16() {
     )
     .unwrap();
     let size = |target: &str| {
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", target)
             .env(
                 "LLRM_LLC",
@@ -543,7 +543,7 @@ fn a_far_function_pointer_takes_a_far_function() {
         "int far callee(int x) { return x + 1; }\nint (far *fp)(int) = callee;\nint (*np)(int) = callee;\nint (* far fq)(int) = callee;\nint apply(int (far *f)(int), int v) { return f(v); }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env("LLRM_CLANG_M16", fork)
         .env(
@@ -565,8 +565,8 @@ fn a_far_function_pointer_takes_a_far_function() {
 /// (DOS error -6 for 6 in os_files, os_find, bench_io).
 #[test]
 fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -574,7 +574,7 @@ fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("o.c"), "#include \"llrm_os.h\"\nint f(short h) { return llrm_os_close(h) + 1; }\n")
         .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",
@@ -600,8 +600,8 @@ fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
 /// `sqrt_`, `fabs_`), while the program's own functions stay `_name@3`.
 #[test]
 fn the_rp3_row_calls_the_library_by_its_c_names() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -612,7 +612,7 @@ fn the_rp3_row_calls_the_library_by_its_c_names() {
         "double cos(double);\ndouble fabs(double);\ndouble f(double x) { return cos(x) + fabs(x); }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos-rp3")
         .env(
             "LLRM_LLC",
@@ -635,15 +635,15 @@ fn the_rp3_row_calls_the_library_by_its_c_names() {
 /// 16-bit branch at x86_32-wat, and the torture limits.h gave `int` 32767.
 #[test]
 fn the_wat_rows_predefine_the_watcom_cpu_macro() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-cpu-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for (row, want, other) in [("x86_32-wat", "__386__", "__I86__"), ("x86_16-wat", "__I86__", "__386__")] {
         std::fs::write(dir.join("m.c"), format!("#ifndef {want}\n#error {want} is not defined\n#endif\n#ifdef {other}\n#error {other} is defined\n#endif\nint v;\n")).unwrap();
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", row)
             .args(["-O2", "-w", "-S", "-o"])
             .arg(dir.join("m.s"))
@@ -659,15 +659,15 @@ fn the_wat_rows_predefine_the_watcom_cpu_macro() {
 /// types (torture 930608-1); clang 16+ makes that an error by default.
 #[test]
 fn the_wat_rows_take_incompatible_function_pointer_assignments_as_warnings() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-fnptr-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("m.c"), "void g(long);\nvoid (*p)(int);\nvoid f(void) { p = g; }\n").unwrap();
     for row in ["x86_32-wat", "x86_16-wat"] {
-        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", row)
             .args(["-O2", "-S", "-o"])
             .arg(dir.join("m.s"))

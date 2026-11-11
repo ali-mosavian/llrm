@@ -80,7 +80,7 @@ pub fn match_constant_float(
     let sem = match kind {
         FloatKind::Float => IEEE_SINGLE,
         FloatKind::Double => IEEE_DOUBLE,
-        FloatKind::X86Fp80 => return None,
+        FloatKind::X86Fp80 | FloatKind::F128 => return None,
     };
     match constant.kind {
         ConstantKind::Float(bits) => Some(ApFloat::from_bits(sem, u128::from(bits))),

@@ -155,7 +155,7 @@ fn writes_a_segment(
     regs: Regs,
     one: &Insn,
 ) -> bool {
-    one.call.is_some() || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(regs, *register))
+    one.call.as_ref().is_some_and(|call| !call.block) || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(regs, *register))
 }
 
 fn is_segment_loc(
@@ -174,6 +174,16 @@ fn identical(
         (Some(left), Some(right)) => left.same_meaning(right),
         _ => false,
     }
+}
+
+thread_local! {
+    static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has walked a body's blocks, for a test that a
+/// body with no segment entry is walked once.
+pub fn walks() -> usize {
+    WALKS.with(std::cell::Cell::get)
 }
 
 /// `MachineLateInstrsCleanup::run`.
@@ -213,6 +223,7 @@ pub fn cleaned(body: LirBody) -> LirBody {
     // entries are walked again until they stop changing (LC2): `assume` is the
     // last walk's, and a block not yet walked holds all of them (`None`).
     let walk = |assume: &[Option<HashMap<Loc, Held>>]| {
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         let mut defs: Vec<Option<HashMap<Loc, Held>>> = vec![None; body.blocks.len()];
         let mut redundant: HashSet<usize> = HashSet::default();
         for &index in &order {
@@ -295,7 +306,10 @@ pub fn cleaned(body: LirBody) -> LirBody {
                 })
                 .collect::<Vec<_>>()
         };
-        let stable = assume.iter().all(Option::is_some) && keys(&defs) == keys(&assume);
+        // Only the segment entries read the last walk's, so a walk that left
+        // none is the last (the pin walks once).
+        let none = keys(&defs).iter().all(Vec::is_empty);
+        let stable = none || assume.iter().all(Option::is_some) && keys(&defs) == keys(&assume);
         assume = defs;
         if stable {
             break;
@@ -451,6 +465,16 @@ mod tests {
     }
 
     /// A different constant is another load.
+    /// A body with no segment entry was walked twice (the second walk only to
+    /// see that nothing changed): twice the pass's time for every function of
+    /// a target without segment registers (the pin walks once).
+    #[test]
+    fn a_body_with_no_segment_entry_is_walked_once() {
+        let before = super::walks();
+        let _ = cleaned(body(vec![block(0, vec![mov(0, 5, RegId::AX), mov(3, 5, RegId::AX)], vec![])]));
+        assert_eq!(super::walks() - before, 1);
+    }
+
     #[test]
     fn a_load_of_another_constant_stays() {
         let result = cleaned(body(vec![block(0, vec![mov(0, 5, RegId::AX), mov(3, 6, RegId::AX)], vec![])]));

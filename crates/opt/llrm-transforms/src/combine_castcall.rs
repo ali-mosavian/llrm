@@ -130,7 +130,7 @@ impl Combiner<'_> {
             let kind = match self.context.types.get(ty) {
                 Type::Pointer(_) => ConstantKind::Null,
                 Type::Int(_) => ConstantKind::Int(0),
-                Type::Float(_) => ConstantKind::Float(0),
+                Type::Float(kind) => ConstantKind::float_zero(*kind),
                 _ => ConstantKind::Zero,
             };
             new_operands.push(Operand::Constant(self.context.constant(Constant { ty, kind })));

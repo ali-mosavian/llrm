@@ -1,8 +1,10 @@
 // RUN: llrm-cc %s -m32 -mabi=sysv -march=i486 -Os -S -o /dev/stdout
-// A static called twice, ~12 operations, at -Os: the pin prices the first site 45 against its threshold of 50 and inlines it, then the second as
-// the last call (clang -Os -Rpass=inline). D11 (a callee that stays must not outgrow its call) is the 16-bit target's only (`inline_size_guard`), so m32 follows the pin.
+// A static called twice, ~12 operations, at -Os. The pin prices the first site 45 against its threshold of 50 and
+// inlines it (clang -Os -Rpass=inline). D11 (a callee that stays must not outgrow its call) now holds at m32 too
+// (f13d0ac679, `inline_size_guard_at_size`): the copies grow the code, so both sites stay calls, as in gcc -Os.
 // CHECK-LABEL: _g proc
-// CHECK-NOT: call
+// CHECK: call _twice
+// CHECK: call _twice
 // CHECK: _g endp
 static int sum(const int *a, int n)
 {

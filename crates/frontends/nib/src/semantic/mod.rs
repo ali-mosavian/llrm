@@ -1012,7 +1012,22 @@ impl Signature {
         types: &TypeRegistry,
     ) -> u32 {
         let hidden = self.result_pointer.map_or(0, |one| types.width(type_id(one)));
-        self.parameters.iter().map(|one| types.width(one.hir_type()).max(types.sizes.slot)).sum::<u32>() + hidden
+        self.parameters
+            .iter()
+            .flat_map(|one| one.wire_types(types.word_id()))
+            .map(|id| types.width(id).max(types.sizes.slot))
+            .sum::<u32>()
+            + hidden
+    }
+
+    /// Passes each slice as its descriptor's address, as a caller outside
+    /// this program (a foreign or exported function's) expects.
+    fn unsplit(&mut self) {
+        for parameter in &mut self.parameters {
+            if let SignatureParameter::Borrowed { data, .. } = parameter {
+                *data = None;
+            }
+        }
     }
 
     /// Whether it takes and gives what `other` does, a value matching a
@@ -1032,6 +1047,7 @@ impl Signature {
         &self,
         types: &mut TypeRegistry,
     ) -> hir::Callable {
+        let word = types.word_id();
         hir::Callable {
             id: self.id,
             name: self.name.clone(),
@@ -1039,7 +1055,7 @@ impl Signature {
             parameter_types: self
                 .slot_pointer(types)
                 .into_iter()
-                .chain(self.parameters.iter().map(|one| one.hir_type()))
+                .chain(self.parameters.iter().flat_map(|one| one.wire_types(word)))
                 .chain(self.result_pointer.map(type_id))
                 .collect(),
             defined: !self.foreign,
@@ -1087,6 +1103,9 @@ enum SignatureParameter {
         mutable: bool,
         target: BindingType,
         pointer: u32,
+        /// A slice passed by value: the far data pointer's type, after the
+        /// `rank + 1` descriptor words. `None` passes the descriptor's address.
+        data: Option<u32>,
     },
     /// A BASIC argument passed by reference: the near pointer `pointer`,
     /// through which the callee borrows `target`.
@@ -1105,6 +1124,22 @@ impl SignatureParameter {
             Self::Scalar(type_name) => BindingType::Scalar(type_name),
             Self::Owned { struct_id, .. } => BindingType::Struct(struct_id),
             Self::Borrowed { target, .. } | Self::Adapter { target, .. } => target,
+        }
+    }
+
+    /// The values it passes: a slice split into parts is its descriptor
+    /// words, then its data pointer.
+    fn wire_types(
+        self,
+        word: u32,
+    ) -> Vec<u32> {
+        match self {
+            Self::Borrowed { target: BindingType::Slice { rank, .. }, data: Some(data), .. } => {
+                let mut wire = vec![word; usize::from(rank) + 1];
+                wire.push(data);
+                wire
+            }
+            _ => vec![self.hir_type()],
         }
     }
 
@@ -1422,6 +1457,20 @@ fn signature(
         .iter()
         .map(|parameter| parameter_kind(types, parameter))
         .collect::<Result<Vec<_>, Diagnostic>>()?;
+    // A function only this program calls takes each slice as its parts;
+    // `unsplit` restores the descriptor where another compiler calls it.
+    let resolved_parameters = resolved_parameters
+        .into_iter()
+        .map(|parameter| match parameter {
+            SignatureParameter::Borrowed {
+                mutable,
+                target: target @ BindingType::Slice { element, .. },
+                pointer,
+                ..
+            } => SignatureParameter::Borrowed { mutable, target, pointer, data: Some(types.pointer(element.id(), 0)) },
+            other => other,
+        })
+        .collect::<Vec<_>>();
     let mut view = None;
     let (result, slot) = match types.parameter_target(&function.result, function.span)? {
         (BindingType::Scalar(type_name), _) => (type_name, None),
@@ -1475,7 +1524,7 @@ fn parameter_kind(
                 BindingType::Slice { element, rank } => types.slice_pointer(element, rank),
                 _ => types.pointer(target_id, 0),
             };
-            Ok(SignatureParameter::Borrowed { mutable: *mutable, target, pointer })
+            Ok(SignatureParameter::Borrowed { mutable: *mutable, target, pointer, data: None })
         }
     }
 }
@@ -1544,6 +1593,7 @@ fn program(
                 foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
             }
             signature.exported = true;
+            signature.unsplit();
             signature.name = export
                 .symbol
                 .clone()
@@ -2053,8 +2103,11 @@ impl<'a> FunctionCompiler<'a> {
             compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), Binding { type_, mutable: true, storage });
         }
         for (ordinal, (parameter, resolved)) in function.parameters.iter().zip(&signature.parameters).enumerate() {
-            let value = compiler.value_type(resolved.hir_type());
-            compiler.parameters.push(value);
+            let word = compiler.types.word_id();
+            let values: Vec<u32> = resolved.wire_types(word).into_iter().map(|one| compiler.value_type(one)).collect();
+            compiler.parameters.extend(values.iter().copied());
+            // The parameter itself, or a slice's data pointer, the last part.
+            let value = *values.last().expect("a parameter is at least one value");
             let subject = llrm_codegen::hir::facts::Subject::Param {
                 function: i64::from(signature.id),
                 index: compiler.parameters.len() as i64 - 1,
@@ -2065,6 +2118,16 @@ impl<'a> FunctionCompiler<'a> {
             match *resolved {
                 // A borrowed view's descriptor is the caller's, and only
                 // reseating a binding writes one: no parameter is reseated.
+                // A slice passed in parts holds the caller's data, read only
+                // where the borrow is shared.
+                SignatureParameter::Borrowed { mutable, target: BindingType::Slice { .. }, data: Some(_), .. } => {
+                    // The checker keeps a mutable lend apart from every other
+                    // argument of the call, so nothing else reaches the data.
+                    compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias);
+                    if !mutable {
+                        compiler.stated.state(subject, llrm_mir::facts::Fact::ReadOnly);
+                    }
+                }
                 SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } => {
                     let view_bytes = descriptor::size(rank, compiler.word_bytes()) + 4;
                     compiler
@@ -2098,6 +2161,23 @@ impl<'a> FunctionCompiler<'a> {
             let binding = match *resolved {
                 SignatureParameter::Adapter { basic, adapter, target, pointer } => {
                     compiler.adapter_binding(basic, adapter, target, pointer, value, parameter.span)?
+                }
+                // The parts become a descriptor on this frame, so every use of
+                // the slice is as before; promotion folds the stores and loads.
+                SignatureParameter::Borrowed {
+                    mutable,
+                    target: target @ BindingType::Slice { .. },
+                    pointer,
+                    data: Some(_),
+                } => {
+                    compiler.named_parameters.push((value, parameter.name.clone()));
+                    let words = values[..values.len() - 1].iter().map(|one| hir::Operand::Value(*one)).collect();
+                    let hir::Operand::Value(descriptor) =
+                        compiler.view_descriptor(&parameter.name, pointer, words, value)
+                    else {
+                        unreachable!("a descriptor's address is a value")
+                    };
+                    Binding { type_: target, mutable, storage: Storage::Slice(descriptor) }
                 }
                 _ => compiler.parameter_binding(&parameter.name, resolved, value),
             };

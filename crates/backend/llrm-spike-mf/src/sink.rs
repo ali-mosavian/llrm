@@ -15,11 +15,11 @@
 //! DEVIATE: `PerformSinkAndFold`, `SinkInstsIntoCycle` and debug values are
 //! not translated (off by default or no debug info in the spike). Reason: the
 //! pin leaves them off for this target. Exit: when a target turns them on.
-//! DEVIATE: successors are ordered by cycle depth alone and an edge's
-//! probability is `1 / successors`. Reason: no `MachineBlockFrequencyInfo` or
-//! `MachineBranchProbabilityInfo` here. Exit: the neutral-LIR task. The pin
-//! sorts by cycle depth when both frequencies are 0 and when optimizing for
-//! size.
+//! DEVIATE: successors are ordered by cycle depth alone, and an edge without
+//! an entry in `MFunction::odds` has probability `1 / successors`. Reason: no
+//! `MachineBlockFrequencyInfo` here, and a target may not compute edge odds.
+//! Exit: the neutral-LIR task. The pin sorts by cycle depth when both
+//! frequencies are 0 and when optimizing for size.
 //! DEVIATE: register pressure is the most virtual registers of a class live at
 //! once in a block, against the number of registers the class allows; the pin
 //! counts per pressure set. Reason: no `RegisterClassInfo` here. Exit: the
@@ -30,6 +30,7 @@
 
 use std::collections::BTreeMap;
 
+use llrm_mir::blockfrequency::BranchProbability;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
@@ -39,8 +40,10 @@ use crate::regalloc::Target;
 /// `SinkLoadInstsPerBlockThreshold` and `SinkLoadBlocksThreshold`.
 const LOAD_INSTS_PER_BLOCK: usize = 30;
 const LOAD_BLOCKS: usize = 20;
-/// `SplitEdgeProbabilityThreshold`, percent.
-const SPLIT_EDGE_PROBABILITY: usize = 40;
+/// `SplitEdgeProbabilityThreshold`, 40 percent
+/// ([MachineSink.cpp#L82](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L82)).
+// 0.4 * 2^31, rounded
+const SPLIT_EDGE_PROBABILITY: BranchProbability = BranchProbability::get_raw(858_993_459);
 
 /// How a target spells a jump to a block.
 pub trait Jump {
@@ -114,18 +117,29 @@ struct Sink<'a, T: Target> {
     cfg: Cfg,
     def_block: Vec<Option<usize>>,
     def_is_copy: Vec<bool>,
+    /// How many instructions and phis define each register: 1 on the SSA the
+    /// pin's pass runs on, more where phi copies were made before this pass.
+    def_count: Vec<u32>,
     copy_source: Vec<Option<u32>>,
     uses: Vec<Vec<Use>>,
     /// `CEBCandidates`, `CEMergeCandidates` and `ToSplit`, by block id.
     considered: HashSet<(u32, u32)>,
     merge: HashMap<(u32, u32), u32>,
     to_split: Vec<(u32, u32)>,
-    live_out: Option<Vec<HashSet<u32>>>,
+    live_out: Option<Vec<Vec<u64>>>,
     /// Whether an edge may get a block of its own for an instruction to land
     /// in.
     allow_split: bool,
     /// Whether a copy or a rematerializable instruction stays where it is.
     keep_cheap: bool,
+}
+
+/// Whether bit `v` of the set is on.
+fn has(
+    bits: &[u64],
+    v: u32,
+) -> bool {
+    bits.get(v as usize / 64).is_some_and(|word| word >> (v % 64) & 1 != 0)
 }
 
 fn virt(reg: Reg) -> Option<u32> {
@@ -164,6 +178,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             function,
             def_block: Vec::new(),
             def_is_copy: Vec::new(),
+            def_count: Vec::new(),
             copy_source: Vec::new(),
             uses: Vec::new(),
             considered: HashSet::default(),
@@ -183,6 +198,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         self.cfg = Cfg::new(self.function);
         self.def_block = vec![None; count];
         self.def_is_copy = vec![false; count];
+        self.def_count = vec![0; count];
         self.copy_source = vec![None; count];
         self.uses = vec![Vec::new(); count];
         self.live_out = None;
@@ -190,6 +206,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             for phi in &block.phis {
                 if let Some(v) = virt(phi.result) {
                     self.def_block[v as usize] = Some(at);
+                    self.def_count[v as usize] += 1;
                 }
                 for (pred, reg) in &phi.incoming {
                     if let Some(v) = virt(*reg) {
@@ -202,6 +219,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                     if let Some(v) = virt(reg) {
                         self.def_block[v as usize] = Some(at);
                         self.def_is_copy[v as usize] = inst.kind == Kind::Copy;
+                        self.def_count[v as usize] += 1;
                         if let (Kind::Copy, Some(Reg::Virt(src))) = (inst.kind, uses_of(inst).next()) {
                             self.copy_source[v as usize] = Some(src);
                         }
@@ -274,78 +292,117 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         if self.live_out.is_none() {
             self.live_out = Some(self.liveness());
         }
-        let mut live: HashSet<u32> = self.live_out.as_ref().unwrap()[block].clone();
-        let mut peak: Vec<(T::Class, usize)> = Vec::new();
-        let mut note = |live: &HashSet<u32>, classes: &[T::Class]| {
-            let mut now: Vec<(T::Class, usize)> = Vec::new();
-            for v in live {
-                let class = classes[*v as usize];
-                match now.iter_mut().find(|(one, _)| *one == class) {
-                    Some((_, count)) => *count += 1,
-                    None => now.push((class, 1)),
-                }
+        let classes = &self.function.classes;
+        let mut live: Vec<u64> = self.live_out.as_ref().unwrap()[block].clone();
+        // live registers per class, kept as registers come and go
+        let mut counts: Vec<(T::Class, usize)> = Vec::new();
+        let bump = |counts: &mut Vec<(T::Class, usize)>, v: u32, up: bool| {
+            let class = classes[v as usize];
+            match counts.iter_mut().find(|(one, _)| *one == class) {
+                Some((_, count)) => *count = if up { *count + 1 } else { *count - 1 },
+                None => counts.push((class, 1)),
             }
-            for (class, count) in now {
+        };
+        for (word, bits) in live.iter().enumerate() {
+            let mut bits = *bits;
+            while bits != 0 {
+                bump(&mut counts, (word * 64) as u32 + bits.trailing_zeros(), true);
+                bits &= bits - 1;
+            }
+        }
+        let mut peak = counts.clone();
+        let mut note = |counts: &[(T::Class, usize)]| {
+            for &(class, count) in counts {
                 match peak.iter_mut().find(|(one, _)| *one == class) {
                     Some((_, most)) => *most = (*most).max(count),
                     None => peak.push((class, count)),
                 }
             }
         };
-        note(&live, &self.function.classes);
         for inst in self.function.blocks[block].insts.iter().rev() {
             for reg in defs_of(inst) {
-                if let Some(v) = virt(reg) {
-                    live.remove(&v);
+                if let Some(v) = virt(reg)
+                    && has(&live, v)
+                {
+                    live[v as usize / 64] &= !(1 << (v % 64));
+                    bump(&mut counts, v, false);
                 }
             }
             for reg in uses_of(inst) {
-                if let Some(v) = virt(reg) {
-                    live.insert(v);
+                if let Some(v) = virt(reg)
+                    && !has(&live, v)
+                {
+                    if v as usize / 64 >= live.len() {
+                        live.resize(v as usize / 64 + 1, 0);
+                    }
+                    live[v as usize / 64] |= 1 << (v % 64);
+                    bump(&mut counts, v, true);
                 }
             }
-            note(&live, &self.function.classes);
+            note(&counts);
         }
         peak
     }
 
-    /// The virtual registers live out of each block.
-    fn liveness(&self) -> Vec<HashSet<u32>> {
-        let count = self.function.blocks.len();
-        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::default(); count];
-        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::default(); count];
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in (0..count).rev() {
-                let mut out: HashSet<u32> = HashSet::default();
-                for &succ in &self.cfg.succs[block] {
-                    let results: HashSet<u32> =
-                        self.function.blocks[succ].phis.iter().filter_map(|phi| virt(phi.result)).collect();
-                    out.extend(live_in[succ].iter().filter(|v| !results.contains(v)));
-                    for phi in &self.function.blocks[succ].phis {
-                        for (pred, reg) in &phi.incoming {
-                            if *pred == block {
-                                out.extend(virt(*reg));
-                            }
-                        }
+    /// The virtual registers live out of each block, as bit sets.
+    fn liveness(&self) -> Vec<Vec<u64>> {
+        let blocks = self.function.blocks.len();
+        let words = self.function.classes.len().div_ceil(64);
+        if words == 0 {
+            return vec![Vec::new(); blocks];
+        }
+        // one table per kind, `words` to a block
+        let set = |table: &mut [u64], block: usize, v: u32| table[block * words + v as usize / 64] |= 1 << (v % 64);
+        // what each block reads before it writes, what it writes, what its
+        // phis define, and what it hands to its successors' phis (an input is
+        // live out of the block it comes from, and of no other)
+        let mut gen_ = vec![0u64; blocks * words];
+        let mut kill = vec![0u64; blocks * words];
+        let mut phi_defs = vec![0u64; blocks * words];
+        let mut handed = vec![0u64; blocks * words];
+        for (at, block) in self.function.blocks.iter().enumerate() {
+            for phi in &block.phis {
+                if let Some(result) = virt(phi.result) {
+                    set(&mut phi_defs, at, result);
+                }
+                for (pred, reg) in &phi.incoming {
+                    if let Some(v) = virt(*reg) {
+                        set(&mut handed, *pred, v);
                     }
                 }
-                let mut live = out.clone();
-                for inst in self.function.blocks[block].insts.iter().rev() {
-                    for reg in defs_of(inst) {
-                        live.remove(&virt(reg).unwrap_or(u32::MAX));
-                    }
-                    live.extend(uses_of(inst).filter_map(virt));
+            }
+            for inst in block.insts.iter().rev() {
+                for reg in defs_of(inst).filter_map(virt) {
+                    gen_[at * words + reg as usize / 64] &= !(1 << (reg % 64));
+                    set(&mut kill, at, reg);
                 }
-                if out != live_out[block] || live != live_in[block] {
-                    live_out[block] = out;
-                    live_in[block] = live;
-                    changed = true;
+                for reg in uses_of(inst).filter_map(virt) {
+                    set(&mut gen_, at, reg);
                 }
             }
         }
-        live_out
+        let mut live_in = vec![0u64; blocks * words];
+        let mut live_out = vec![0u64; blocks * words];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in (0..blocks).rev() {
+                for w in 0..words {
+                    let mut out = handed[block * words + w];
+                    for &succ in &self.cfg.succs[block] {
+                        out |= live_in[succ * words + w] & !phi_defs[succ * words + w];
+                    }
+                    let at = block * words + w;
+                    let input = gen_[at] | (out & !kill[at]);
+                    if out != live_out[at] || input != live_in[at] {
+                        live_out[at] = out;
+                        live_in[at] = input;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        live_out.chunks(words).map(<[u64]>::to_vec).collect()
     }
 
     /// `registerPressureSetExceedsLimit(1, class, block)`.
@@ -552,7 +609,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                 }
             }
         }
-        if self.cfg.succs[from].contains(&to) && 100 / self.cfg.succs[from].len() <= SPLIT_EDGE_PROBABILITY {
+        if self.cfg.succs[from].contains(&to) && self.edge_probability(from, to) <= SPLIT_EDGE_PROBABILITY {
             return true;
         }
         for reg in uses_of(inst) {
@@ -562,6 +619,20 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             }
         }
         false
+    }
+
+    /// `MBPI->getEdgeProbability`: the target's odds for the edge, else an
+    /// even share among the successors.
+    fn edge_probability(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> BranchProbability {
+        let key = (self.function.blocks[from].id, self.function.blocks[to].id);
+        match self.function.odds.as_ref().and_then(|odds| odds.get(&key)) {
+            Some(&(probability, _)) => probability,
+            None => BranchProbability::new(1, self.cfg.succs[from].len() as u32),
+        }
     }
 
     /// `PostponeSplitCriticalEdge`.
@@ -604,6 +675,14 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
     }
 
     /// `PerformTrivialForwardCoalescing`.
+    ///
+    /// DEVIATE SINK-SSA-1: both registers must have one definition. Reason: the
+    /// pin runs this on SSA, where `replaceRegWith` of the copy's
+    /// destination by its source is the whole meaning of the destination;
+    /// with a second definition of the destination (a select's other arm)
+    /// the reads of it are rewritten to a value only one path made. Exit: a
+    /// target that gives this pass SSA (row SINK-SSA-1,
+    /// above-main-rows.md).
     fn forward_coalesce(
         &mut self,
         block: usize,
@@ -620,6 +699,8 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         };
         let (dst, src) = (*dst, *src);
         if self.uses[src as usize].len() != 1
+            || self.def_count[src as usize] != 1
+            || self.def_count[dst as usize] != 1
             || self.function.classes[src as usize] != self.function.classes[dst as usize]
             || self.def_block[src as usize].is_none()
             || self.def_is_copy[src as usize]
@@ -800,6 +881,8 @@ pub fn split_critical_edge<C>(
         return None;
     }
     let new_id = function.fresh_block_id();
+    let from_id = function.blocks[from].id;
+    function.split_odds(from_id, to_id, new_id);
     for inst in function.blocks[from].insts.iter_mut().rev().take_while(|inst| inst.terminator) {
         for operand in &mut inst.operands {
             if matches!(operand, Operand::Block(id) if *id == to_id) {

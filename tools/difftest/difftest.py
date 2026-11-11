@@ -2,7 +2,7 @@
 """A pass of llrm against LLVM's counterpart, on the same input: what the two write differently, by instruction and by line.
 
     tools/difftest/difftest.py run PASS [--inputs DIR] [--config NAME ...] [--limit N] [--json OUT]
-    tools/difftest/difftest.py dumps PASS DIR [--limit N]        the step files of an `llrm-c --dump DIR` made on an order branch
+    tools/difftest/difftest.py dumps PASS DIR [--limit N]        the step files of an `llrm-cc --dump DIR` made on an order branch
     tools/difftest/difftest.py pair INPUT.ll LLRM_OUT.ll --pass PASS    one input, llrm's answer, LLVM's
 
 The inputs are LLRM_DUMP_INPUTS's (tools/mkinputs.sh): per config a MANIFEST.tsv of `config fn pass run file instructions`. llrm's
@@ -393,7 +393,7 @@ STEP = re.compile(r"^(\d+)-r(\d+)-(.+)@(\d+)\.ll$")
 
 
 def dump_pairs(directory: Path, name: str) -> list[tuple[dict, Path]]:
-    """(the row of every step `name`, the file of its answer) for `llrm-c --dump DIR` step files: <body>/NNN-rRR-<pass>@<slot>.ll is the body
+    """(the row of every step `name`, the file of its answer) for `llrm-cc --dump DIR` step files: <body>/NNN-rRR-<pass>@<slot>.ll is the body
     after a step that changed it, so its answer is the file itself and its input is the file numbered one less in the same pass list. The lists of a
     pipeline each count from 001 into the one directory, so of the files numbered NNN-1 the input is the one whose slot is nearest. A first
     step (001) has no input here and is left out. (The row names the input.)"""
@@ -409,7 +409,7 @@ def dump_pairs(directory: Path, name: str) -> list[tuple[dict, Path]]:
 
 
 def input_pairs(directory: Path, name: str) -> list[tuple[dict, None]]:
-    """(the row of every run of `name` in `llrm-c --dump DIR` made with LLRM_DUMP_INPUTS, None): <body>/NNNN-in-<pass>@<slot>.ll is the body a run
+    """(the row of every run of `name` in `llrm-cc --dump DIR` made with LLRM_DUMP_INPUTS, None): <body>/NNNN-in-<pass>@<slot>.ll is the body a run
     was about to get, whether the run then changed it or not, so llrm declining where LLVM acts is seen too. There is no answer file: llrm-pass makes it."""
     return [
         ({"config": directory.name, "fn": body.name, "pass": name, "run": int(f.name.split("-")[0]), "file": str(f)}, None)
@@ -599,7 +599,7 @@ def main() -> int:
     dumps.add_argument("--json", type=Path)
     dumps.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     dumps.add_argument("--llrm-pass", type=Path, help="the llrm-pass of the tree that made the dumps")
-    inputs = sub.add_parser("inputs", help="the pass or slot on the inputs `llrm-c --dump DIR` made with LLRM_DUMP_INPUTS=1: every run, changed or not")
+    inputs = sub.add_parser("inputs", help="the pass or slot on the inputs `llrm-cc --dump DIR` made with LLRM_DUMP_INPUTS=1: every run, changed or not")
     inputs.add_argument("pass_name", metavar="PASS")
     inputs.add_argument("directory", type=Path, nargs="+")
     inputs.add_argument("--limit", type=int, default=0)

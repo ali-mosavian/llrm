@@ -203,3 +203,50 @@ fn test_a_poison_walk_of_up_to_sixteen_values_allocates_no_table() {
     assert!(set.insert(value(16)) && set.spilled());
     assert!(set.contains(&value(0)) && set.contains(&value(16)) && !set.contains(&value(17)));
 }
+
+/// Old: every scanned instruction of `program_undefined_if_undef_or_poison_of`
+/// ran the 6-register-prologue attribute paths, ~55 Ir each for an `add`:
+/// 2.2x the pin per instruction on jpeg_fixed. Opcodes that cannot throw,
+/// fail to return or read operands never reach them.
+#[test]
+fn test_plain_opcodes_never_reach_the_attribute_paths() {
+    use crate::valuetracking::guarantee::{
+        EFFECT_CHECKS, is_guaranteed_to_transfer_execution_to_successor as transfers, must_trigger_ub,
+    };
+    let module = parse::module(
+        "declare void @h(ptr)
+         define i32 @f(i32 %a, ptr %p) {
+           %s = add i32 %a, 1
+           %c = icmp eq i32 %s, 0
+           %v = select i1 %c, i32 %s, i32 %a
+           %g = getelementptr i8, ptr %p, i32 4
+           %l = load i32, ptr %g
+           call void @h(ptr %g)
+           ret i32 %v
+         }",
+    )
+    .expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => Some(function),
+            _ => None,
+        })
+        .expect("a body");
+    let q = Query::new(&module, function, &layout);
+    let insts: Vec<_> = function.walk().map(|(_, inst)| inst).collect();
+    let poison = crate::valuetracking::guarantee::PoisonSet::default();
+    let checks = || EFFECT_CHECKS.with(|one| one.get());
+    EFFECT_CHECKS.with(|one| one.set(0));
+    for &inst in &insts[..4] {
+        assert!(transfers(&q, inst));
+        assert!(!must_trigger_ub(&q, inst, &poison));
+    }
+    assert_eq!(checks(), 0, "an add/icmp/select/gep read attributes");
+    assert!(transfers(&q, insts[4]), "a plain load transfers");
+    assert!(checks() > 0, "a load must still take the full path");
+    assert!(!transfers(&q, insts[5]), "a call to a function without willreturn/nounwind");
+    assert!(!transfers(&q, insts[6]), "ret");
+}

@@ -1,69 +1,126 @@
-reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
-blessed = "2026-10-14"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "2ece02804761085fd061855dde5fe383"
+
+[ow.O1]
+instructions = 74019
+memory_operands = 12000
+clocks = 106045
+code_bytes = 118
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9884
 
 [ow.O2]
-instructions = 52028
-memory_operands = 10001
-code_bytes = 121
+instructions = 70019
+memory_operands = 12000
+clocks = 102045
+code_bytes = 120
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.695
+kernel_ms = 0.935
 
 [ow.Os]
-instructions = 56025
+instructions = 74019
 memory_operands = 12000
-code_bytes = 114
+clocks = 106045
+code_bytes = 118
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.7483
+kernel_ms = 0.9884
 
-[bcc.O2]
-instructions = 62041
-memory_operands = 22008
-code_bytes = 176
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.8286
-
-[bcc.Os]
+[bcc.O1]
 instructions = 64023
 memory_operands = 24004
-code_bytes = 149
+clocks = 122106
+code_bytes = 142
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.855
+
+[bcc.O2]
+instructions = 64027
+memory_operands = 24004
+clocks = 122084
+code_bytes = 146
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.8551
 
-[tc.O2]
-instructions = 66034
-memory_operands = 50012
-code_bytes = 169
+[bcc.Os]
+instructions = 64023
+memory_operands = 24004
+clocks = 122106
+code_bytes = 142
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8819
+kernel_ms = 0.855
+
+[tc.O1]
+instructions = 82027
+memory_operands = 42008
+clocks = 154113
+code_bytes = 155
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0952
+
+[tc.O2]
+instructions = 82030
+memory_operands = 42008
+clocks = 154084
+code_bytes = 161
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0952
 
 [tc.Os]
-instructions = 66031
-memory_operands = 50012
-code_bytes = 163
+instructions = 82027
+memory_operands = 42008
+clocks = 154113
+code_bytes = 155
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8818
+kernel_ms = 1.0952
+
+[tcpp.O1]
+instructions = 68031
+memory_operands = 30006
+clocks = 118116
+code_bytes = 154
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9085
 
 [tcpp.O2]
-instructions = 62039
-memory_operands = 30008
-code_bytes = 166
+instructions = 68035
+memory_operands = 30006
+clocks = 118094
+code_bytes = 158
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8285
+kernel_ms = 0.9085
 
 [tcpp.Os]
-instructions = 62035
-memory_operands = 30008
-code_bytes = 162
+instructions = 68031
+memory_operands = 30006
+clocks = 118116
+code_bytes = 154
+helper_bytes = 0
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8285
+kernel_ms = 0.9085
 
 [bc.O2]
 instructions = 94172
@@ -84,7 +141,7 @@ kernel_ms = 1.2672
 [vbdos.O2]
 instructions = 94238
 memory_operands = 56089
-code_bytes = 366
+code_bytes = 365
 data_bytes = 7
 bss_bytes = 10
 kernel_ms = 1.2654

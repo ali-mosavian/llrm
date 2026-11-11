@@ -42,6 +42,8 @@ pub struct Platform {
     /// What of the system's ABI the target does not carry yet; the driver
     /// refuses the system while this is set.
     pub pending: Option<String>,
+    /// The ABI family the system has without `-mabi=`.
+    pub abi: Option<String>,
 }
 
 /// A target's data layout.
@@ -256,6 +258,7 @@ impl Layout {
                 datalayout: field("datalayout")?,
                 format: field("format")?,
                 pending: field("pending").ok(),
+                abi: field("abi").ok(),
             });
         }
         Ok(Self {

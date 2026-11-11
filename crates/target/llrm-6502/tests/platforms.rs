@@ -18,12 +18,13 @@ fn every_row_parses_and_fits_zero_page() {
             row.name
         })
         .collect();
-    assert_eq!(names, ["c64", "sim65", "apple2", "atari8", "nes", "bbc"]);
+    assert_eq!(names, ["c64", "sim65", "sim65-cc65", "apple2", "atari8", "nes", "bbc"]);
 }
 
-const CC65_CFG: [(&str, &str); 6] = [
+const CC65_CFG: [(&str, &str); 7] = [
     ("c64", "c64.cfg"),
     ("sim65", "sim6502.cfg"),
+    ("sim65-cc65", "sim6502.cfg"),
     ("apple2", "apple2.cfg"),
     ("atari8", "atari.cfg"),
     ("nes", "nes.cfg"),

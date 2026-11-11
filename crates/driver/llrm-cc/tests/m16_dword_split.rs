@@ -1,6 +1,6 @@
 //! A dword read only as its two words is two word loads (DEVIATE LS1), where
 //! the pin keeps one dword load and `shld`. Needs the pinned clang
-//! (`LLRM_CLANG_M16`) and the Open Watcom headers (`LLRM_OW`).
+//! (`LLRM_CLANG_M16`) and the Open Watcom headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -25,7 +25,7 @@ fn compile(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("d.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env(
             "LLRM_LLC",
@@ -41,9 +41,9 @@ fn compile(
 }
 
 fn available() -> bool {
-    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && std::env::var_os("LLRM_OW").is_some();
+    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && llrm_cc::ow_present();
     if !set {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
     }
     set
 }
@@ -87,7 +87,7 @@ fn one_half_of_a_dword_load_does_not_loop() {
         "struct S { long a; long b; };\nextern void use(short v);\nvoid f(struct S *p) { use((short)p->b); }\n",
     )
     .unwrap();
-    let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env(
             "LLRM_LLC",

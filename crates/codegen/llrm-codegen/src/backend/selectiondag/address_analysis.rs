@@ -29,7 +29,6 @@ use llrm_analysis::placealias::{Object, alias_of};
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::known_bits::masked_value_is_zero;
-use super::x86_lowering::x86isd;
 
 /// `BaseIndexOffset`; no `base` is a failed match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +66,11 @@ fn unwrap(
     dag: &SelectionDAG,
     value: SDValue,
 ) -> SDValue {
-    if matches!(dag.opcode(value), x86isd::WRAPPER | x86isd::WRAPPER_RIP) { dag.operand(value, 0) } else { value }
+    if [dag.config().nodes.wrapper, dag.config().nodes.wrapper_rip].contains(&Some(dag.opcode(value))) {
+        dag.operand(value, 0)
+    } else {
+        value
+    }
 }
 
 fn is_any_add(
@@ -90,6 +93,8 @@ impl BaseIndexOffset {
         let ptr = match dag.opcode(node) {
             ISD::Load => dag.operand(node, 1),
             ISD::Store => dag.operand(node, 2),
+            // `BaseIndexOffset::match(LifetimeSDNode)`: the frame index.
+            ISD::LifetimeStart | ISD::LifetimeEnd => dag.operand(node, 1),
             _ => return Self::NONE,
         };
         // (((B + I*M) + c)) + c ...
@@ -151,6 +156,21 @@ impl BaseIndexOffset {
             return Self { base: Some(potential), index: Some(at), offset, index_sign_ext };
         }
         Self { base: Some(base), index, offset, index_sign_ext }
+    }
+
+    /// `BaseIndexOffset::contains`: `other`, `other_bits` wide, lies wholly
+    /// inside the `bits` that start at `self`
+    /// ([SelectionDAGAddressAnalysis.cpp#L177](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGAddressAnalysis.cpp#L177)).
+    #[must_use]
+    pub fn contains(
+        &self,
+        dag: &SelectionDAG,
+        bits: i64,
+        other: &Self,
+        other_bits: i64,
+    ) -> bool {
+        // An `other` that starts before `self` is not contained.
+        self.equal_base_index(other, dag).is_some_and(|offset| offset >= 0 && 8 * offset + other_bits <= bits)
     }
 
     /// `equalBaseIndex`: the bytes from `self` to `other`, when both share a

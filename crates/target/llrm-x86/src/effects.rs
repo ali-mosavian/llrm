@@ -98,7 +98,7 @@ fn used(
                     // A frame cell indexed by a value the allocator has not
                     // placed cannot be encoded yet, and reads the registers
                     // it does name (the frame register, its segment).
-                    None if named && unplaced => {
+                    None if named && (unplaced || select::awaits_frame_layout(one)) => {
                         add(reads, one.through);
                         add(reads, one.index_through);
                         if [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&one.through) {
@@ -331,11 +331,21 @@ pub fn effects(
         return Some(Served::Known(Effects::default()));
     }
     // `xor ax, ax` reads nothing.
-    let zeroing = row.reads.contains(&"idiom")
+    // `or ax, -1` reads nothing either: every bit is set whatever it held.
+    let filling = name == "or"
         && matches!(
-            dests.as_slice(),
-            [Loc::Reg(dest)] if sources.iter().all(|source| matches!(source, Loc::Reg(one) if one.register == dest.register))
+            (dests.as_slice(), what.sources.as_slice()),
+            ([Loc::Reg(dest)], [Loc::Reg(held), Loc::Imm(fill)])
+                if held.register == dest.register
+                    && fill.address.is_none()
+                    && (fill.value == -1 || (fill.width < 8 && fill.value == (1i64 << (8 * fill.width)) - 1))
         );
+    let zeroing = filling
+        || row.reads.contains(&"idiom")
+            && matches!(
+                dests.as_slice(),
+                [Loc::Reg(dest)] if sources.iter().all(|source| matches!(source, Loc::Reg(one) if one.register == dest.register))
+            );
     if !zeroing {
         if !used(&sources, bits, &mut found.reads, None) {
             return Some(Served::Unknown);

@@ -27,6 +27,12 @@ echo "3012 h3012 paritysha1" > $d/refused.state; echo "3013 h3013 oldparity" >> 
 again=$(REFUSED_STATE=$d/refused.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
 echo "$again" | grep -qw 3012 && { echo "FAIL: a PR refused at this head and this release/next was queued again (the runner spun on it every second)"; exit 1; }
 echo "$again" | grep -qw 3013 || { echo "FAIL: a PR refused against an older release/next was not queued again"; exit 1; }
+# a PR refused at this head within RETRY_AFTER stays out although release/next moved (#6785 was retried 12 times in 140 min); after it, it is queued again
+echo "3016 h3016 oldparity 1000" > $d/refused3.state; echo "3017 h3017 oldparity 1000" >> $d/refused3.state
+backoff=$(NOW=1500 RETRY_AFTER=1800 REFUSED_STATE=$d/refused3.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
+echo "$backoff" | grep -qw 3016 && { echo "FAIL: a PR refused 500 s ago at this head was retried because release/next moved"; exit 1; }
+later=$(NOW=3000 RETRY_AFTER=1800 REFUSED_STATE=$d/refused3.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
+echo "$later" | grep -qw 3016 || { echo "FAIL: a PR refused 2000 s ago was not queued again"; exit 1; }
 # a PR refused for its own head stays out whatever release/next does, until its head changes (held.state)
 printf '3014 h3014\n3015 hOTHER\n' > $d/held.state
 held=$(HELD_STATE=$d/held.state REFUSED_STATE=$d/none.state PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')

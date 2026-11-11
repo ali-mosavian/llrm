@@ -1,26 +1,26 @@
-use llrm_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_lir::registers::RegId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_support::hash::HashMap;
 use llrm_target::Target;
+use llrm_x86_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
-use super::dag_select::select_block;
-use super::emit::{EmitContext, FrameMap};
+use super::emit_api::{EmitContext, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
 use super::schedule::SchedInfo;
+use super::select::select_block;
 use super::x86_lowering::X86Lowering;
 use crate::backend::isel::Parameter;
 use crate::model::ir::{Addr, Mem, Space};
 
 struct NoGlobals;
 
-impl super::emit::GlobalMap for NoGlobals {
+impl super::emit_api::GlobalMap for NoGlobals {
     fn segment(
         &self,
         _symbol: Option<u32>,
@@ -39,7 +39,7 @@ impl super::emit::GlobalMap for NoGlobals {
 
 struct NoTemps;
 
-impl super::x86_preprocess::FrameObjects for NoTemps {
+impl super::dag_target::FrameObjects for NoTemps {
     fn objects(&self) -> i32 {
         0
     }
@@ -60,21 +60,21 @@ impl SchedInfo for Info {
         &self,
         opcode: u32,
     ) -> usize {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
     }
 
     fn implicit_defs(
         &self,
         opcode: u32,
     ) -> &[u16] {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
     }
 
     fn is_call(
         &self,
         opcode: u32,
     ) -> bool {
-        llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).is_some_and(|d| d.is_call())
     }
 }
 
@@ -100,7 +100,7 @@ fn hooks() -> X86Hooks {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
     })
 }
 
@@ -109,7 +109,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
     let layout =
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
-    let target = BuilderTarget::m32();
+    let target = BuilderTarget::for_pointer_bits(32);
     let machine = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_target::instr::parse(&machine.forms_text(), machine.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
@@ -121,19 +121,21 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
+        x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
-        conventions: &super::emit::NoConventions,
-        constants: &super::emit::NoConstants,
+        conventions: &super::emit_api::NoConventions,
+        constants: &super::emit_api::NoConstants,
         stack_pointer: RegId::SP,
         strings: None,
         registers: llrm_target::Target::registers(&machine),
         globals: &NoGlobals,
         block_at: &HashMap::default(),
         frame: &frame,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
         opt_size: false,
         call_alignment: 1,
+        reserved_calls: false,
         map: &map,
         names: &names,
     };
@@ -144,14 +146,28 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
         let emitted = select_block(
+            &mut info,
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+            &mut X86Lowering {
+                multiply_early_out: None,
+                imul_if_smaller: false,
+                share_products: false,
+                cmov: false,
+                sse2: false,
+                min_size: false,
+                three_address_adds: false,
+                i16_mul_chains: false,
+                sext_load: false,
+                zext_free: false,
+                branch_constant_selects: false,
+                profile: None,
+            },
             &selector,
             &mut hooks(),
             &Info,
             &ctx,
-            &mut super::emit::EmitState::default(),
+            &mut super::emit_api::EmitState::default(),
             0,
             &machine,
             &mut NoTemps,
@@ -183,6 +199,20 @@ fn a_sum_of_two_arguments_goes_through() {
     assert!(blocks[0][1].contains("Mem"), "the second load folds into the add: {blocks:#?}");
 }
 
+/// A hoisted constant is `bitcast iN C` (an opaque constant); `add %hoisted, d`
+/// stays an add of a register and `d`. SimplifyDemandedBits folded it to the
+/// constant (every bit known), undoing ConstantHoisting: the pin skips the fold
+/// when an operand is an opaque constant. sfm16 -O1 kept one merged compare
+/// of two `mov imm`s where the pin has two `cmp`/`jae` on one hoisted base.
+#[test]
+fn an_add_of_an_opaque_constant_is_not_folded_to_a_constant() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i1 @f(i32 %x) {\nentry:\n  %c = bitcast i32 -2147483648 to i32\n  %m = add i32 %c, 2130706433\n  %r = icmp ult i32 %x, %m\n  ret i1 %r\n}\n";
+    let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
+    let names: Vec<&str> =
+        blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
+    assert!(names.contains(&"lea") || names.iter().filter(|name| **name == "mov").count() >= 2, "{blocks:#?}");
+}
+
 /// `x * 5` reaches selection with no `MUL` node: the combiner ran between
 /// the legalizers. Without the `Combine` calls the multiply by a constant
 /// is selected as `IMUL32rmi`, which the pin turns into a `lea`.
@@ -198,14 +228,35 @@ fn the_combiner_runs_between_the_legalizers() {
     let convention = crate::backend::isel::convention(&module, &layout, id, &machine).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let block = function.layout()[0];
-    let mut built =
-        build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
-            .expect("builds");
+    let mut built = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::for_pointer_bits(32),
+        &machine,
+        &convention,
+        &mut info,
+        block,
+    )
+    .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(
+    super::select::legalized(
         &mut built.dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            multiply_early_out: None,
+            imul_if_smaller: false,
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            branch_constant_selects: false,
+            profile: None,
+        },
         &machine,
     )
     .expect("legalizes");
@@ -267,8 +318,8 @@ fn nodes_a_selection_makes_are_selected_too() {
 /// units it returns are the ones x86's own wrapper gets.
 #[test]
 fn a_dag_target_is_preprocessed_once_before_it_selects() {
-    use super::dag_select::{X86Chooser, X86Target};
     use super::dag_target::{DagTarget, Phases, select_units};
+    use super::select::{X86Chooser, X86Target};
 
     struct Recording<'a> {
         inner: X86Target<'a, 'a>,
@@ -290,7 +341,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         fn preprocess(
             &mut self,
             dag: &mut super::SelectionDAG,
-            temporaries: &mut dyn super::x86_preprocess::FrameObjects,
+            temporaries: &mut dyn super::dag_target::FrameObjects,
         ) {
             self.log.push("preprocess");
             self.inner.preprocess(dag, temporaries);
@@ -312,16 +363,32 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
             &module,
             function,
             &layout,
-            &BuilderTarget::m32(),
+            &BuilderTarget::for_pointer_bits(32),
             &machine,
             &convention,
             &mut info,
             function.layout()[0],
         )
         .expect("builds");
-        let (mut lowering, mut hooks) =
-            (X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None }, hooks());
+        let (mut lowering, mut hooks) = (
+            X86Lowering {
+                multiply_early_out: None,
+                imul_if_smaller: false,
+                share_products: false,
+                cmov: false,
+                sse2: false,
+                min_size: false,
+                three_address_adds: false,
+                i16_mul_chains: false,
+                sext_load: false,
+                zext_free: false,
+                branch_constant_selects: false,
+                profile: None,
+            },
+            hooks(),
+        );
         let x86 = X86Target {
+            live: &mut info,
             tli: &tli,
             lowering: &mut lowering,
             chooser: X86Chooser { selector: &selector, hooks: &mut hooks },

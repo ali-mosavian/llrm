@@ -1,4 +1,4 @@
-//! A decimal literal rounded once to an `x86_fp80`
+//! A decimal literal rounded once to an `x86_fp80` or an `fp128`
 //! (`APFloat::convertFromString`).
 //!
 //! The IR writer prints an extended constant in decimal when the shortest
@@ -117,12 +117,31 @@ impl PartialOrd for Big {
 const SMALLEST_EXPONENT: i64 = -16382;
 const LARGEST_EXPONENT: i64 = 16383;
 const BIAS: i64 = 16383;
-/// The quantum of the smallest denormal: 2^-16445.
-const DENORMAL_QUANTUM: i64 = SMALLEST_EXPONENT - 63;
 
-/// The 80 bits of the `x86_fp80` nearest `text`, ties to even; None if `text`
-/// is not `[-]digits[.digits][e[+-]digits]`.
-pub fn x87_bits(text: &str) -> Option<u128> {
+/// What a decimal rounds to at `precision` bits of significand.
+enum Rounded {
+    Zero {
+        negative: bool,
+    },
+    Infinity {
+        negative: bool,
+    },
+    /// `m` x 2^(`e` - `precision` + 1): `m` below 2^`precision`, at least
+    /// 2^(`precision` - 1) unless the value is denormal.
+    Finite {
+        negative: bool,
+        e: i64,
+        m: u128,
+    },
+}
+
+/// `text` rounded once, to nearest even, at `precision` bits (at most 120)
+/// over the range both extended formats share; None if `text` is not
+/// `[-]digits[.digits][e[+-]digits]`.
+fn round(
+    text: &str,
+    precision: u32,
+) -> Option<Rounded> {
     let (negative, rest) =
         text.strip_prefix('-').map_or((false, text.strip_prefix('+').unwrap_or(text)), |rest| (true, rest));
     let (number, exponent) = rest
@@ -137,18 +156,17 @@ pub fn x87_bits(text: &str) -> Option<u128> {
         return None;
     }
     let digits = digits.trim_start_matches('0');
-    let sign = u128::from(negative) << 79;
     if digits.is_empty() {
-        return Some(sign);
+        return Some(Rounded::Zero { negative });
     }
     let scale = exponent - fraction.len() as i64;
     let magnitude = digits.len() as i64 + scale;
-    // Above 10^4933 or below 10^-4960 whatever the digits are: infinity, zero.
+    // Above 10^4933 or below 10^-4967 whatever the digits are: infinity, zero.
     if magnitude > 4933 + 1 {
-        return Some(sign | (0x7FFF << 64) | (1 << 63));
+        return Some(Rounded::Infinity { negative });
     }
-    if magnitude < -4960 {
-        return Some(sign);
+    if magnitude < -4967 {
+        return Some(Rounded::Zero { negative });
     }
     let mut numerator = Big::zero();
     for chunk in digits.as_bytes().chunks(9) {
@@ -160,17 +178,19 @@ pub fn x87_bits(text: &str) -> Option<u128> {
     for _ in 0..scale.unsigned_abs() {
         scaled.mul_add(10, 0);
     }
+    let fraction_bits = i64::from(precision) - 1;
+    let denormal_quantum = SMALLEST_EXPONENT - fraction_bits;
     // The leading bit of the value is 2^e, with e one of these two.
     let mut e = numerator.bits() - denominator.bits() - 1;
     let (m, e) = loop {
-        let quantum = (e - 63).max(DENORMAL_QUANTUM);
+        let quantum = (e - fraction_bits).max(denormal_quantum);
         let (num, den) = if quantum < 0 {
             (numerator.shl(quantum.unsigned_abs() as u32), denominator.clone())
         } else {
             (numerator.clone(), denominator.shl(quantum as u32))
         };
-        let (floor, rest) = num.div_rem(&den, 70);
-        if floor >> 64 != 0 {
+        let (floor, rest) = num.div_rem(&den, precision + 6);
+        if floor >> precision != 0 {
             e += 1;
             continue;
         }
@@ -179,15 +199,40 @@ pub fn x87_bits(text: &str) -> Option<u128> {
             Ordering::Equal => floor + (floor & 1),
             Ordering::Less => floor,
         };
-        break if m >> 64 != 0 { (m >> 1, e + 1) } else { (m, e) };
+        break if m >> precision != 0 { (m >> 1, e + 1) } else { (m, e) };
     };
     if e > LARGEST_EXPONENT {
-        return Some(sign | (0x7FFF << 64) | (1 << 63));
+        return Some(Rounded::Infinity { negative });
     }
-    // A denormal that rounded up to the smallest normal has the integer bit
-    // set, and exponent 1.
-    let biased = if m >> 63 == 0 { 0 } else { (e.max(SMALLEST_EXPONENT) + BIAS) as u128 };
-    Some(sign | (biased << 64) | m)
+    Some(Rounded::Finite { negative, e, m })
+}
+
+/// The 80 bits of the `x86_fp80` nearest `text`, ties to even; None if `text`
+/// is not `[-]digits[.digits][e[+-]digits]`.
+pub fn x87_bits(text: &str) -> Option<u128> {
+    Some(match round(text, 64)? {
+        Rounded::Zero { negative } => u128::from(negative) << 79,
+        Rounded::Infinity { negative } => (u128::from(negative) << 79) | (0x7FFF << 64) | (1 << 63),
+        // A denormal that rounded up to the smallest normal has the integer
+        // bit set, and exponent 1.
+        Rounded::Finite { negative, e, m } => {
+            let biased = if m >> 63 == 0 { 0 } else { (e.max(SMALLEST_EXPONENT) + BIAS) as u128 };
+            (u128::from(negative) << 79) | (biased << 64) | m
+        }
+    })
+}
+
+/// The 128 bits of the `fp128` nearest `text`, ties to even; None if `text`
+/// is not `[-]digits[.digits][e[+-]digits]`.
+pub fn quad_bits(text: &str) -> Option<u128> {
+    Some(match round(text, 113)? {
+        Rounded::Zero { negative } => u128::from(negative) << 127,
+        Rounded::Infinity { negative } => (u128::from(negative) << 127) | (0x7FFF << 112),
+        Rounded::Finite { negative, e, m } => {
+            let biased = if m >> 112 == 0 { 0 } else { (e.max(SMALLEST_EXPONENT) + BIAS) as u128 };
+            (u128::from(negative) << 127) | (biased << 112) | (m & ((1 << 112) - 1))
+        }
+    })
 }
 
 #[cfg(test)]

@@ -16,7 +16,11 @@ STATE=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}
 parity=$(python3 "$HERE/pr_state.py" parity 2>/dev/null); [ -n "$parity" ] || parity=$(gh api "repos/$R/git/ref/heads/$LAND_BRANCH" -q .object.sha 2>/dev/null)
 # an unreadable parity (a 403) would match no refused.state line and re-queue every refused PR: keep the old queue
 [ -n "$parity" ] || { echo "gh could not read $LAND_BRANCH (rate limit?); keeping the old queue" >&2; exit 1; }
-ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h $parity" "$STATE" 2>/dev/null || echo "$n $m $o $h"; done)
+# a refusal also holds its head for RETRY_AFTER seconds (4th column, written by land.sh) whatever $LAND_BRANCH does: every landing moves it, so #6785 was retried 12 times in 140 min at an unchanged head
+RETRY_AFTER=${RETRY_AFTER:-1800}; NOW=${NOW:-$(date +%s)}
+ready=$(echo "$ready" | while read -r n m o h; do
+  grep -q "^$n $h $parity\( \|\$\)" "$STATE" 2>/dev/null || awk -v n="$n" -v h="$h" -v now="$NOW" -v r="$RETRY_AFTER" '$1==n && $2==h && $4!="" && now-$4<r{f=1} END{exit !f}' "$STATE" 2>/dev/null || echo "$n $m $o $h"
+done)
 # a PR refused for its own head stays out until that head changes (held.state, written by the runner: `<PR> <head sha>`); a retry at the same head cost a batch each time
 HELD=${HELD_STATE:-${LAND_TMP:-/tmp/landing}/held.state}
 ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h" "$HELD" 2>/dev/null || echo "$n $m $o $h"; done)

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:e28bd50250d9c116553af948e0cf2ac97b3076d2024a1d79dd3319bcd608b6de -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:d41924fe2b737d73f995b17a8db92c56f029257164199b67fe807759527db42c -->
 
 # machinesink
 
@@ -74,9 +74,11 @@ larger by 1 to 2 B), no program slower; mandel.nib 185 -> 178 B and
 
 DEVIATE M6 (no number): an instruction that reads or writes any physical
 register stays, where `FindSuccToSinkTo` lets a physical def marked dead
-through (and a use of a constant register). Effect: none seen, 0 sinks
-missed over d_faces and the 820-object corpus at -O2 (counted: no
-instruction that passes `safe_to_move` has a physical write and no read).
+through (and a use of a constant register). The frame register of a frame
+cell, local or argument, is not one: the pin's frame index carries none
+(os_execute m64 -Os kept eight `mov r8,[rsp+k]` the pin sinks and folds,
++35 B). The earlier count (0 sinks missed over d_faces and the 820-object
+corpus at -O2) saw physical writes only, not reads.
 The flags are the pin's rule in full: a def moves only if dead (read by no
 later instruction of its block and no successor), and not into a block that
 reads them (`SinkInstruction`'s zombie check).

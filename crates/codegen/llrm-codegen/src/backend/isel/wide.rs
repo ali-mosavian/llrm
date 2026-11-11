@@ -320,7 +320,7 @@ impl Selector<'_, '_, '_> {
                     out,
                 );
             }
-            let into = Held { value: self.value(result), width: super::FLOAT };
+            let into = Held { value: self.value(result), width: super::FLOAT, offset: 0 };
             self.float_loaded(into, "fld", cell, 8, false, at, out);
             return Ok(());
         }
@@ -387,7 +387,7 @@ impl Selector<'_, '_, '_> {
                 at,
                 out,
             );
-            let into = Held { value: self.value(result), width: super::FLOAT };
+            let into = Held { value: self.value(result), width: super::FLOAT, offset: 0 };
             let size = self.size(to)? as u32;
             let rounds = self.cpu.float_store && size < 10;
             let sum = if rounds { self.fresh_held(super::FLOAT) } else { into };
@@ -409,7 +409,7 @@ impl Selector<'_, '_, '_> {
         }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
-            let into = Held { value: self.value(result), width: self.width(to)? };
+            let into = Held { value: self.value(result), width: self.width(to)?, offset: 0 };
             let what = if self.types().int_bits(to) == Some(1) {
                 semantics(
                     Operation::Binary,
@@ -889,7 +889,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(), Unselected> {
         let instruction = self.function.instruction(inst);
         let ty = instruction.ty;
-        let result = Held { value: self.value(instruction.result.expect("a result")), width: 4 };
+        let result = Held { value: self.value(instruction.result.expect("a result")), width: 4, offset: 0 };
         let scale = self.constant(arguments[2], 4).filter(|scale| (1..32).contains(scale));
         let (Some(scale), Some(32)) = (scale, self.types().int_bits(ty)) else {
             return refuse("a fixed point other than i32 by 1 to 31 bits");

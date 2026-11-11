@@ -76,7 +76,7 @@ fn described(
 fn eh_frame_describes_the_stack_pointer_moves_the_code_makes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let object = std::env::temp_dir().join(format!("eh_frame_{}.o", std::process::id()));
-    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-c", "-m64", "-O2", "-fomit-frame-pointer", "-fobject-format=elf"])

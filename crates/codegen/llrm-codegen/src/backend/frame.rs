@@ -177,6 +177,13 @@ pub struct Frame {
     /// dword or a quad is not left across a doubleword boundary, which a 486
     /// charges 3 clocks for (`WORD` where BC's frame is word-aligned).
     pub align: i64,
+    /// The most an object of the frame is aligned to, where that is not `align`
+    /// (`object_cap`). `align` is the call alignment the frame is padded to
+    /// (`StackAlign`); the pin aligns each object by its own
+    /// (`MachineFrameInfo::getObjectAlign`) and only the end of the frame to
+    /// the stack's, so the two are separate facts once a convention's call
+    /// alignment exceeds its objects' (`calculateFrameObjectOffsets`).
+    pub object_align: Option<i64>,
     /// The widest alignment of an alloca or stack temporary: a hole above them
     /// that is not a multiple of it moves them by more than itself.
     pub alloca_align: i64,
@@ -192,6 +199,13 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// The most an object of the frame is aligned to: `object_align`, else the
+    /// call alignment `align`.
+    #[must_use]
+    pub fn object_cap(&self) -> i64 {
+        self.object_align.unwrap_or(self.align)
+    }
+
     #[must_use]
     pub fn new(floor: i64) -> Self {
         Self {
@@ -205,6 +219,7 @@ impl Frame {
             defer_colours: false,
             stacks: IndexMap::default(),
             align: WORD,
+            object_align: None,
             alloca_align: 1,
             call_area: 0,
             scratch: Default::default(),
@@ -355,7 +370,7 @@ impl Frame {
             let capacity = width.max(WORD);
             // Aligned as its width is, at most to `align`: gcc's
             // `assign_stack_local` and LLVM's `calculateFrameObjectOffsets`.
-            let align = (1 << capacity.ilog2()).min(self.align).max(1);
+            let align = (1 << capacity.ilog2()).min(self.object_cap()).max(1);
             let below = |at: i64| at.div_euclid(align) * align;
             let filled = self.slots.values().copied().filter(|home| *home >= -self.hole).min().unwrap_or(0);
             let home = if below(filled - capacity) >= -self.hole {
@@ -549,7 +564,7 @@ mod tests {
         const DX: RegId = RegId::DX;
         const SI: RegId = RegId::SI;
         for registers in [vec![CX], vec![BX, CX], vec![AX, BX, CX, DX, SI, DI]] {
-            let size = Held { value: 100, width: 2 };
+            let size = Held { value: 100, width: 2, offset: 0 };
             let init = Insn::new(
                 0,
                 Some((0, 3)),
@@ -564,7 +579,7 @@ mod tests {
             );
             let operands: Vec<Held> = registers
                 .iter()
-                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2 } })
+                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2, offset: 0 } })
                 .collect();
             let mut call = Insn::new(
                 3,
@@ -588,12 +603,12 @@ mod tests {
             address.what = Some(semantics(
                 Operation::Move,
                 "lea",
-                vec![Loc::Held(Held { value: 101, width: 2 })],
+                vec![Loc::Held(Held { value: 101, width: 2, offset: 0 })],
                 vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -32))))],
             ));
             let addressed = body_of(vec![init.clone(), call.clone(), address]);
             assert_eq!(of(&addressed, Some(&calls), "", None).unwrap().slot(200_i64, 2), Ok(-34));
-            for required in [vec![], vec![(Held { value: 999, width: 2 }, CX)]] {
+            for required in [vec![], vec![(Held { value: 999, width: 2, offset: 0 }, CX)]] {
                 let mut invalid_call = call.clone();
                 invalid_call.requires = required;
                 let invalid = body_of(vec![init.clone(), invalid_call]);
@@ -637,6 +652,24 @@ mod tests {
         let mut real = super::Frame::new(0);
         assert_eq!(real.slot(1_i64, 2).expect("a slot"), -2);
         assert_eq!(real.slot(2_i64, 8).expect("a slot"), -10, "real mode keeps BC's words");
+    }
+
+    /// A call alignment above the objects' own (sysv32 pads calls to 16, a
+    /// double is 8-aligned) must not widen the objects: `al.c` `f()` read
+    /// `sub esp,44` under the pin and `60` when one field carried both facts
+    /// (2026-11-08, `~/scratch/handoff/cf1/`). The slot takes the object's cap,
+    /// the frame keeps the call alignment.
+    #[test]
+    fn test_a_call_alignment_above_the_object_cap_does_not_widen_a_slot() {
+        let place = |object_align| {
+            let mut frame = super::Frame::new(0);
+            frame.align = 16;
+            frame.object_align = object_align;
+            frame.slot(1_i64, 4).expect("a word");
+            frame.slot(2_i64, 20).expect("a 20-byte slot, 16 by its width")
+        };
+        assert_eq!(place(Some(8)), -24, "at the object cap of 8, not the call's 16");
+        assert_eq!(place(None), -32, "without an object cap the call alignment is the cap, as before");
     }
 
     #[test]

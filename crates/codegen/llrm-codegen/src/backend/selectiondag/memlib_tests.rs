@@ -20,7 +20,15 @@ fn built(
     function_name: &str,
     target: &BuilderTarget,
 ) -> Result<String, &'static str> {
-    let module = llrm_mir::parse::module(BODY).unwrap_or_else(|error| panic!("{error}"));
+    built_from(BODY, function_name, target)
+}
+
+fn built_from(
+    text: &str,
+    function_name: &str,
+    target: &BuilderTarget,
+) -> Result<String, &'static str> {
+    let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module
         .functions()
@@ -44,24 +52,24 @@ fn built(
 
 #[test]
 fn a_variable_copy_calls_memcpy_only_if_the_runtime_has_it() {
-    let off = built("copy", &BuilderTarget::m32().with_libcalls(&[])).expect("builds");
+    let off = built("copy", &BuilderTarget::for_pointer_bits(32).with_libcalls(&[])).expect("builds");
     assert!(off.contains("REP_MOVS") && !off.contains("'memcpy'"), "{off}");
-    let on = built("copy", &BuilderTarget::m32().with_libcalls(&["memcpy"])).expect("builds");
+    let on = built("copy", &BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy"])).expect("builds");
     assert!(on.contains("TargetExternalSymbol:i32'memcpy'") && !on.contains("REP_MOVS"), "{on}");
 }
 
 #[test]
 fn a_variable_fill_calls_memset_only_if_the_runtime_has_it() {
-    let off = built("fill", &BuilderTarget::m32().with_libcalls(&[])).expect("builds");
+    let off = built("fill", &BuilderTarget::for_pointer_bits(32).with_libcalls(&[])).expect("builds");
     assert!(off.contains("REP_STOS") && !off.contains("'memset'"), "{off}");
-    let on = built("fill", &BuilderTarget::m32().with_libcalls(&["memset"])).expect("builds");
+    let on = built("fill", &BuilderTarget::for_pointer_bits(32).with_libcalls(&["memset"])).expect("builds");
     assert!(on.contains("TargetExternalSymbol:i32'memset'") && !on.contains("REP_STOS"), "{on}");
 }
 
 #[test]
 fn a_variable_move_is_refused_without_a_memmove() {
-    assert!(built("move", &BuilderTarget::m32().with_libcalls(&[])).is_err());
-    let on = built("move", &BuilderTarget::m32().with_libcalls(&["memmove"])).expect("builds");
+    assert!(built("move", &BuilderTarget::for_pointer_bits(32).with_libcalls(&[])).is_err());
+    let on = built("move", &BuilderTarget::for_pointer_bits(32).with_libcalls(&["memmove"])).expect("builds");
     assert!(on.contains("TargetExternalSymbol:i32'memmove'"), "{on}");
 }
 
@@ -89,7 +97,7 @@ fn a_forward_move_is_lowered_as_a_move() {
             &module,
             function,
             &layout,
-            &BuilderTarget::m32().with_libcalls(&[]),
+            &BuilderTarget::for_pointer_bits(32).with_libcalls(&[]),
             &llrm_x86_m32::M32,
             &convention,
             &mut info,
@@ -125,7 +133,7 @@ fn real_m32_fact() -> Vec<String> {
 fn the_real_m32_fact_names_memcpy_memmove_and_memset() {
     assert_eq!(real_m32_fact(), ["memcpy", "memmove", "memset"]);
     for function in ["fill", "move", "copy"] {
-        let why = built(function, &BuilderTarget::m32()).expect_err(function);
+        let why = built(function, &BuilderTarget::for_pointer_bits(32)).expect_err(function);
         assert!(why.contains("symbol and convention are the target fact's"), "{function}: {why}");
     }
 }
@@ -163,10 +171,11 @@ fn every_libcall_a_c_toml_names_is_in_its_runtime() {
     }
 }
 
-/// Inline memset width at x86-64: the pin's `getOptimalMemOpType` gives `i64`
-/// for eight bytes or more there, so a 16-byte clear is two stores, not four.
+/// Inline memset width at x86-64: the pin's `getOptimalMemOpType` gives `v4i32`
+/// for sixteen bytes with SSE2, so a 16-byte clear is one `xorps` and one
+/// 16-byte store, not two `mov qword [..], 0` (9 B each; nbody O2 +31 B).
 #[test]
-fn a_16_byte_clear_at_m64_is_two_qword_stores() {
+fn a_16_byte_clear_at_m64_is_one_16_byte_store() {
     let ir = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
         @g = global [16 x i8] zeroinitializer\n\
         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
@@ -183,7 +192,7 @@ fn a_16_byte_clear_at_m64_is_two_qword_stores() {
         &module,
         function,
         &layout,
-        &BuilderTarget::m64(),
+        &BuilderTarget::for_pointer_bits(64),
         &llrm_x86_m64::M64,
         &convention,
         &mut info,
@@ -191,5 +200,127 @@ fn a_16_byte_clear_at_m64_is_two_qword_stores() {
     )
     .map(|built| built.dag.dump())
     .unwrap_or_else(|why| panic!("{}", why.0));
-    assert_eq!(dump.matches("store (s64)").count(), 2, "{dump}");
+    assert_eq!(dump.matches("store (s64)").count(), 0, "{dump}");
+    assert_eq!(dump.matches("LLRM_ZERO128").count(), 1, "{dump}");
+}
+
+/// m64 memory_expansion -O1: `mv64` was eight `mov r64,[src+N]` loads and eight
+/// stores (64 B) where the pin's `getMemmoveLoadsAndStores` takes
+/// `getOptimalMemOpType` = `v4i32` and does four `movups` loads, four stores
+/// (32 B); lc64 +55, mv33 +17, 14 functions in all. A 64-byte `memmove` at m64
+/// is one `LLRM_MOVE128` node of four pieces.
+#[test]
+fn a_64_byte_memmove_at_m64_moves_four_16_byte_pieces() {
+    let ir = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
+        declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+        define void @f(ptr %d, ptr %s) {\n  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 64, i1 false)\n  ret void\n}\n";
+    let module = llrm_mir::parse::module(ir).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module
+        .functions()
+        .find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f"))
+        .unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m64::M64).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let dump = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::for_pointer_bits(64),
+        &llrm_x86_m64::M64,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .map(|built| built.dag.dump())
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    assert_eq!(dump.matches("load (s64)").count(), 0, "{dump}");
+    assert_eq!(dump.matches("LLRM_MOVE128").count(), 1, "{dump}");
+}
+
+/// The memory_expansion Os cell grew 31 B once `memmove` of 64 bytes became the pin's four `movups` pairs (31 B) where
+/// gcc -Os and the library call are `mov edx, 64; jmp memmove` (10 B): tuned for size on x86-64 a constant copy whose
+/// pieces take more bytes than the call is the call, and a 16-byte one (one pair, 8 B) stays inline.
+#[test]
+fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() {
+    let tuning = llrm_mir::target::Tuning {
+        size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+        ..llrm_mir::target::Tuning::PIN
+    };
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let target = BuilderTarget::for_pointer_bits(64).with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
+    let text = |bytes: u64, call: &str| {
+        format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
+            declare void @llvm.{call}.p0.p0.i64(ptr, ptr, i64, i1)\n\
+            define void @f(ptr %d, ptr %s) optsize {{\n  call void @llvm.{call}.p0.p0.i64(ptr %d, ptr %s, i64 {bytes}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    for call in ["memmove", "memcpy"] {
+        let long = built_from(&text(64, call), "f", &target).expect("builds");
+        assert!(long.contains(&format!("'{call}'")) && !long.contains("LLRM_MOVE128"), "{call} 64\n{long}");
+        let short = built_from(&text(16, call), "f", &target).expect("builds");
+        assert!(!short.contains(&format!("'{call}'")), "{call} 16\n{short}");
+    }
+}
+
+/// A constant clear for size, with no `memset` in the runtime, was `rep stosb`:
+/// a clock per byte, 512 clocks for matmul.nib's three arrays (+669 clocks at
+/// -Os). It is `rep stos` of whole pointer-width units at that alignment.
+#[test]
+fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
+    let module = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
+        declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)\n\
+        define void @clear(ptr align 4 %d) optsize {\n  call void @llvm.memset.p0.i32(ptr align 4 %d, i8 0, i32 256, i1 false)\n  ret void\n}\n";
+    let dump = built_from(module, "clear", &BuilderTarget::for_pointer_bits(32).with_libcalls(&[])).expect("builds");
+    assert!(dump.contains("$ecx, Constant:i32<64>") && dump.contains("ValueType:ch:i32"), "{dump}");
+}
+
+/// x_mergesort -O3 at m32: the three copy loops of `msort` became `call
+/// _memcpy` (three pushes, the call, the callee's setup: ~35 clk each, 72146
+/// clk against 54487 with the loops left). With the target's tuning bit a
+/// variable length is `rep movsd` inline at speed, and the call at size.
+#[test]
+fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
+    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy"]);
+    let before = built("copy", &target).expect("builds");
+    assert!(before.contains("'memcpy'") && !before.contains("REP_MOVS"), "premise: the pin's call\n{before}");
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = target.with_tti(Some(std::rc::Rc::new(tti)));
+    let after = built("copy", &target).expect("builds");
+    assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
+}
+
+/// x_jpeg_single -O1 at m32: `next()` inlined twice into `getbit` with the refill's variable
+/// copy as an inline `rep movs` (about 30 B each against a call's 13), the cell 1762 B over
+/// the best external. MEM-1 trades bytes for clocks at -O2/-O3 only: -O1 keeps the call.
+#[test]
+fn a_variable_copy_stays_a_call_where_bytes_are_strict() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = BuilderTarget::for_pointer_bits(32)
+        .with_libcalls(&["memcpy"])
+        .with_tti(Some(std::rc::Rc::new(tti)))
+        .with_bytes_strict(true);
+    let dump = built("copy", &target).expect("builds");
+    assert!(dump.contains("'memcpy'") && !dump.contains("REP_MOVS"), "-O1 keeps the call:\n{dump}");
+}
+
+/// x_mergesort -O3: a copy of `n << 2` bytes ended in a `rep movsb` of `xor
+/// ecx, ecx` (a dead tail, ~5 clk and three instructions per copy, 1818
+/// copies). A length with its low two bits known zero has one `rep movs`.
+#[test]
+fn a_dword_multiple_variable_copy_has_no_byte_tail() {
+    let text = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
+        declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+        define void @cells(ptr %d, ptr %s, i32 %n) {\n  %b = shl i32 %n, 2\n  call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %b, i1 false)\n  ret void\n}\n";
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy"]).with_tti(Some(std::rc::Rc::new(tti)));
+    let dump = built_from(text, "cells", &target).expect("builds");
+    assert_eq!(dump.matches("REP_MOVS").count(), 1, "{dump}");
 }

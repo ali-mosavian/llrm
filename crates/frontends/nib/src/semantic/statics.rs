@@ -231,6 +231,15 @@ impl TypeRegistry {
         }
         let folded = super::super::consts::folded(value, &BTreeMap::new());
         let number = match folded.as_ref() {
+            Some(Expr::Float(spelling, _)) if is_float(type_name) && matches!(width, 4 | 8) => {
+                let spelling = spelling.replace('_', "");
+                let parsed = if width == 4 {
+                    spelling.parse::<f32>().ok().map(|one| i64::from(one.to_bits()))
+                } else {
+                    spelling.parse::<f64>().ok().map(|one| one.to_bits() as i64)
+                };
+                parsed.ok_or_else(|| Diagnostic::new(value.span(), "a module variable's float is not a number"))?
+            }
             Some(Expr::Boolean(value, _)) => i64::from(*value),
             Some(Expr::Character(value, _)) => i64::from(*value),
             Some(one) => super::super::consts::integer(one)

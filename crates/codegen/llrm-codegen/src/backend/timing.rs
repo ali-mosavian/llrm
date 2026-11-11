@@ -160,8 +160,8 @@ mod tests {
     fn test_486_reciprocal_is_priced_by_the_dividend_s_length_and_by_the_minimum_where_unknown() {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
-        let held = ir::Held { value: 1, width: 4 };
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
+        let held = ir::Held { value: 1, width: 4, offset: 0 };
         assert_eq!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, Some(32)), Ok(None));
         assert!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, None).unwrap().is_some());
     }
@@ -176,10 +176,11 @@ mod tests {
     /// remainder.
     #[test]
     fn test_quotient_only_reciprocal_omits_remainder_reconstruction() {
-        let (quotient, remainder) = (ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 });
+        let (quotient, remainder) =
+            (ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 });
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let held = ir::Held { value: 1, width: 4 };
+        let held = ir::Held { value: 1, width: 4, offset: 0 };
         let parts = division::reciprocal(held, 7, &[quotient, remainder], &mut fresh, "P5", false, None)
             .unwrap()
             .expect("a reciprocal");

@@ -1,5 +1,6 @@
 //! Watcom m16 programs the first i8086 fork could not compile. Needs the fork's
-//! clang (`LLRM_CLANG_M16`) and the Open Watcom headers (`LLRM_OW`).
+//! clang (`LLRM_CLANG_M16`) and the Open Watcom headers (`{ow}`,
+//! tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -11,8 +12,8 @@ fn compiles(
     name: &str,
     source: &str,
 ) -> Result<(), String> {
-    let (Some(_), Some(_)) = (std::env::var_os("LLRM_CLANG_M16"), std::env::var_os("LLRM_OW")) else {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    let (Some(_), true) = (std::env::var_os("LLRM_CLANG_M16"), llrm_cc::ow_present()) else {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return Ok(());
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -20,7 +21,7 @@ fn compiles(
     std::fs::create_dir_all(&dir).unwrap();
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",
@@ -56,13 +57,13 @@ fn a_long_double_between_a_char_and_a_short_with_an_initializer() {
 fn a_huge_pointer_stepping_past_64k_draws_no_warning() {
     let source = "long __huge a[20000];\nlong take(void) { long __huge *p = a; p += 17000; return *p; }\n";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
         return;
     }
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat16-huge-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("h.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",

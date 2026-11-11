@@ -816,12 +816,13 @@ impl GvnPass<'_> {
                 let analyses = self
                     .simplifier
                     .get_or_insert_with(
-                        || llrm_mir::valuetracking::FunctionAnalyses::of(
+                        || llrm_mir::valuetracking::FunctionAnalyses::of_declared(
                             self.context,
                             &self.outer.globals,
                             &self.outer.metadata,
                             self.layout,
                             self.function,
+                            self.outer.assume_declared(),
                         ),
                     );
                 llrm_mir::simplify::simplify_instruction_in(

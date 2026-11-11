@@ -240,6 +240,7 @@ fn run_on_loop(
         bytes: None,
         clocks: None,
         speed: None,
+        memset_stores: 0,
         name,
         env: &env,
         context: &mut context,
@@ -324,6 +325,46 @@ fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
     assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
 }
 
+/// A row-by-row clear (8 rows of 16 bytes): the inner loop becomes a memset,
+/// and the outer loop, which then holds a call to an intrinsic the pass has
+/// just declared, becomes one memset of 128 bytes. The call read as one that
+/// may throw and not return until the declaration reached the pass's later
+/// loops, so the nest stayed 8 memsets of 16 (matmul nib -Os: three row loops
+/// of `rep stosb`, +11 B and +721 clocks over the bar).
+#[test]
+fn test_a_nest_of_row_clears_becomes_one_memset() {
+    let text = "define void @f(ptr %p) {
+entry:
+  br label %outer
+
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i2, %latch ]
+  %row = mul nuw nsw i32 %i, 16
+  %rp = getelementptr inbounds i8, ptr %p, i32 %row
+  br label %inner
+
+inner:
+  %j = phi i32 [ 0, %outer ], [ %j2, %inner ]
+  %q = getelementptr inbounds i16, ptr %rp, i32 %j
+  store i16 0, ptr %q
+  %j2 = add nuw nsw i32 %j, 1
+  %jc = icmp eq i32 %j2, 8
+  br i1 %jc, label %latch, label %inner
+
+latch:
+  %i2 = add nuw nsw i32 %i, 1
+  %ic = icmp eq i32 %i2, 8
+  br i1 %ic, label %exit, label %outer
+
+exit:
+  ret void
+}
+";
+    let after = pass_output(text);
+    assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");
+    assert!(after.contains("i8 0, i64 128, i1 false)"), "{after}");
+}
+
 /// A function with `"no-builtins"` has every library function disabled in the
 /// pin's `TargetLibraryInfo`: x_radix (Open Watcom, `-fno-builtin`) had its
 /// zeroing loop made a memset, which the pin leaves a loop, and the unroll
@@ -349,6 +390,71 @@ fn idiom_trip_counts(
     let before = llrm_analysis::scev::trip::backedge_taken_computations();
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// A loop with no effect (deleted), a fill loop (turned into a `memset`) and
+/// a loop with a call (left alone).
+const DEAD_FILL_AND_CALL: &str = "declare void @g(i32)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare i32 @llvm.smax.i32(i32, i32)
+define void @f(ptr %p, i32 %n, i32 %m) {
+entry:
+  br label %d
+d:
+  %x = phi i32 [ 0, %entry ], [ %x2, %d ]
+  %x2 = add i32 %x, 1
+  %e = icmp slt i32 %x2, %n
+  br i1 %e, label %d, label %h0
+h0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %h0 ], [ %i2, %h ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store i8 0, ptr %a
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %mid
+mid:
+  br label %k
+k:
+  %j = phi i32 [ 0, %mid ], [ %j2, %k ]
+  call void @g(i32 %j)
+  %j2 = add i32 %j, 1
+  %d2 = icmp slt i32 %j2, %m
+  br i1 %d2, label %k, label %exit
+exit:
+  ret void
+}
+";
+
+fn after_deletion_trip_counts(
+    text: &str,
+    then_idiom: bool,
+) -> usize {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::AfterDeletion {
+        deletion: crate::loopdeletion::LoopDeletion,
+        idiom: super::pass::LoopIdiom::new(),
+    });
+    if then_idiom {
+        manager.add(super::pass::LoopIdiom::new());
+    }
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// `AfterDeletion` said it kept nothing, so the loop pass after it counted
+/// every loop again, and so did each round of the pipeline (jpeg_fixed -O2:
+/// 13 rounds of 38 counts, 82 M of 1,255 M Ir). The pin's loop passes keep
+/// ScalarEvolution and forget only the loop they edited (the fill loop here).
+#[test]
+fn test_the_pass_after_loop_deletion_counts_only_the_loop_the_idiom_run_edited() {
+    let (alone, followed) =
+        (after_deletion_trip_counts(DEAD_FILL_AND_CALL, false), after_deletion_trip_counts(DEAD_FILL_AND_CALL, true));
+    assert!(alone > 0, "the idiom run asks for counts: {alone}");
+    assert_eq!(followed, alone + 1, "alone {alone} counts, followed by another run {followed}");
 }
 
 /// Every run started a `ScalarEvolution` of its own, so a loop it left alone
@@ -410,7 +516,7 @@ exit:
 /// `a[i + 1] = a[i]` going up reads what it wrote: it spreads `a[0]`, which no
 /// memmove does. The check that the store is not ahead of the load had its
 /// sense inverted (`loadAndStoreMayFormMemmove` returned what LLVM's `return
-/// false` condition said), so the loop became a memmove and `llrm-c` stopped
+/// false` condition said), so the loop became a memmove and `llrm-cc` stopped
 /// with "a memmove whose direction no pass proved" (tests/run/c/idioms.c, once
 /// LoopRotate was on).
 #[test]
@@ -428,7 +534,7 @@ fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
     let after = pass_output(&shift_loop(1, 0, false));
     assert!(after.contains("llvm.memmove"), "{after}");
     // llrm's code generator lowers a memmove only with its direction stated:
-    // `llrm-c` stopped with "a memmove whose direction no pass proved".
+    // `llrm-cc` stopped with "a memmove whose direction no pass proved".
     assert!(after.contains("!llrm.forward"), "{after}");
     let after = pass_output(&shift_loop(0, 1, true));
     assert!(after.contains("llvm.memmove"), "{after}");
@@ -465,4 +571,48 @@ exit:
 ";
     let after = pass_output(text);
     assert!(!after.contains("llvm.memcpy") && !after.contains("llvm.memmove"), "{after}");
+}
+
+/// `a[i] = p[i], b[i] = 0xEE` over 700 trips at speed: the pin makes the copy
+/// a memcpy and the fill a memset in one run. The fill was judged beside the
+/// copy's store, a computed one, and left a loop until a second run; only the
+/// full-pipeline reruns after IPO stages gave it (memory_expansion `lr1`,
+/// x86_32 -O2: a 700-trip byte loop, not a memset call).
+#[test]
+fn test_a_fill_beside_a_copy_is_a_memset_in_the_run_that_makes_the_memcpy() {
+    let text = format!(
+        "{}define void @f(ptr %p) {{
+entry:
+  %a = alloca [700 x i8], align 1
+  %b = alloca [700 x i8], align 1
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %entry ], [ %i2, %h ]
+  %s = getelementptr inbounds i8, ptr %p, i16 %i
+  %v = load i8, ptr %s, align 1
+  %da = getelementptr inbounds i8, ptr %a, i16 %i
+  store i8 %v, ptr %da, align 1
+  %db = getelementptr inbounds i8, ptr %b, i16 %i
+  store i8 -18, ptr %db, align 1
+  %i2 = add nuw nsw i16 %i, 1
+  %c = icmp ne i16 %i2, 700
+  br i1 %c, label %h, label %exit
+
+exit:
+  call void @sink(ptr %a, ptr %b)
+  ret void
+}}
+
+declare void @sink(ptr, ptr)
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = crate::testing::parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::LoopIdiom::new());
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = llrm_mir::print::module(&module);
+    assert!(after.contains("llvm.memcpy"), "premise: the copy is a memcpy\n{after}");
+    assert!(after.contains("llvm.memset"), "{after}");
 }

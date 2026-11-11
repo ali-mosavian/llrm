@@ -1,7 +1,7 @@
 //! At m16 a bit field is allocated in units of its declared type, as Watcom,
 //! Borland and MSVC do (`-mms-bitfields`), not packed across them as the
 //! Itanium ABI would. Needs the patched clang (`LLRM_CLANG_M16`) and the Open
-//! Watcom headers (`LLRM_OW`).
+//! Watcom headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,8 +14,8 @@ use std::process::Command;
 /// dword read-modify-write instead of a byte or a word.
 #[test]
 fn bit_fields_are_laid_out_in_units_of_their_declared_type() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -33,7 +33,7 @@ fn bit_fields_are_laid_out_in_units_of_their_declared_type() {
          int x;\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",

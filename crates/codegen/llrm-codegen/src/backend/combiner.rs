@@ -40,7 +40,7 @@
 //! `reduceRegisterPressure` and the throughput and accumulator patterns are
 //! not X86's. Optimizing for size does not take the pin's shortcut.
 //!
-//! DEVIATE MC1 (owner funcattrs-port, exit 2026-11-13): the trace is the
+//! DEVIATE MC1 (owner anyisa, exit 2026-11-13): the trace is the
 //! block alone. `MachineTraceMetrics`
 //! ([updatePhysDepsDownwards](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineTraceMetrics.cpp#L745))
 //! also follows predecessors and every physical register; here only the stack
@@ -48,11 +48,11 @@
 //! two calls arrive in order (still O(n)). A value made outside the block has
 //! depth 0 and the latency of its definition. Exit: a trace analysis on LIR.
 //!
-//! DEVIATE MC2 (owner funcattrs-port, exit 2026-11-13): the latency table is
+//! DEVIATE MC2 (owner anyisa, exit 2026-11-13): the latency table is
 //! the default one written above, read from the operands (a memory source is a
 //! load); the pin asks the opcode's `mayLoad`.
 //!
-//! DEVIATE MC3 (owner funcattrs-port, exit 2026-11-13): reads of a value are
+//! DEVIATE MC3 (owner anyisa, exit 2026-11-13): reads of a value are
 //! counted from the operands and phis of the body (`hasOneNonDBGUse`), and a
 //! value's one definition is found in a table made once, not
 //! `MachineRegisterInfo`'s use-def chains. No kill flags exist in LIR, so none
@@ -305,7 +305,7 @@ fn rebuilt(
     let y = if pattern.commuted() { root_left } else { root_right };
     let (swap_root, swap_prev) = pattern.swaps();
     let (first, second) = if swap_prev { (y, x) } else { (x, y) };
-    let fresh = Held { value: new_value, width };
+    let fresh = Held { value: new_value, width, offset: 0 };
     let inner_depth = depth_of(facts, depth, &[first.value, second.value]);
     // The new inner instruction is a register operation: latency 1.
     let depth_of_root = arrives(facts, depth, a.value).max(inner_depth + 1);
@@ -514,7 +514,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -541,7 +541,7 @@ mod tests {
         value: u32,
         base: u32,
     ) -> Arc<Insn> {
-        let cell = Mem { base: Some(Held { value: base, width: 4 }), ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: base, width: 4, offset: 0 }), ..Mem::new(None, 4) };
         insn(i64::from(value), Operation::Move, "mov", vec![held(value)], vec![Loc::Mem(cell)], vec![value], vec![base])
     }
 
@@ -688,6 +688,7 @@ mod tests {
             effects: llrm_mir::memory::Effects { reads: true, writes: true },
             private: vec![],
             disturbs: Default::default(),
+            block: false,
         }));
         Arc::new(one)
     }

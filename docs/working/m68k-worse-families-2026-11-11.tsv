@@ -1,0 +1,479 @@
+prog	cpu	level	best_ext	top_class	top_excess_clk	top2	helpers_and_cover
+bit_setclear	68000	O1	clang	reg/imm move	52	reg/imm move=52;compare/test=20	 cover=96%
+bit_test	68000	O1	clang	reg/imm move	132	reg/imm move=132;compare/test=20	 cover=97%
+bitcount_u64	68000	O1	gcc	reg/imm move	436	reg/imm move=436;branch/return=140	 cover=96%
+byte_multiply	68000	O1	gcc	alu	49180	alu=49180;shift/rotate=2048	 cover=90%
+byval_inline	68000	O1	gcc	call	24	call=24;reg/imm move=24	 cover=96%
+byvalue_struct_address	68000	O1	clang	runtime:__mulsi3	2278	runtime:__mulsi3=2278;lea/pea=164	 cover=97%
+call_cleanup_keeps_pair	68000	O1	gcc	branch/return	4624	branch/return=4624;reg/imm move=4448	 cover=99%
+call_clobbers_flags	68000	O1	gcc	reg/imm move	160	reg/imm move=160;alu=80	 cover=97%
+call_keeps	68000	O1	gcc	runtime:__mulsi3	2124	runtime:__mulsi3=2124;call=150	 cover=97%
+compare_to_int64	68000	O1	gcc	alu	538	alu=538;reg/imm move=324	 cover=94%
+compound_assignment_types	68000	O1	clang	movem	24	movem=24;lea/pea=16	 cover=94%
+constant_int_float_compare	68000	O1	gcc	reg/imm move	36	reg/imm move=36;call=24	 cover=96%
+div8_os	68000	O1	gcc	runtime:__mulsi3	9705984	runtime:__mulsi3=9705984;reg/imm move=690188	 cover=96%
+div_constants_short	68000	O1	gcc	runtime:udivmod	15711342	runtime:udivmod=15711342;runtime:__mulsi3=3882816	 cover=91%
+double_against_int	68000	O1	gcc	reg/imm move	76	reg/imm move=76;call=20	 cover=96%
+float_bits	68000	O1	gcc	reg/imm move	36	reg/imm move=36;call=28	 cover=96%
+float_conversions_loop	68000	O1	gcc	runtime:__fixdfsi	816	runtime:__fixdfsi=816;alu=208	 cover=76%
+float_in_memory_loop	68000	O1	gcc	runtime:add_bits_64	2370400	runtime:add_bits_64=2370400;runtime:sf64_pack=720000	 cover=88%
+float_in_place_update	68000	O1	gcc	runtime:__divdf3	16866	runtime:__divdf3=16866;runtime:__muldf3=16808	 cover=81%
+function_table	68000	O1	gcc	reg/imm move	68	reg/imm move=68;alu=24	 cover=96%
+known_loads_walks	68000	O1	gcc	reg/imm move	139708	reg/imm move=139708;movem=5120	 cover=96%
+logical_value	68000	O1	gcc	alu	890	alu=890;reg/imm move=680	 cover=97%
+long_compare_chain	68000	O1	gcc	reg/imm move	200788	reg/imm move=200788;call=1800	 cover=98%
+long_step_by_one	68000	O1	gcc	reg/imm move	476	reg/imm move=476;alu=360	 cover=96%
+loop_versioning	68000	O1	gcc	runtime:__mulsi3	138752	runtime:__mulsi3=138752;alu=17336	 cover=97%
+mul_constants	68000	O1	gcc	runtime:__mulsi3	655200	runtime:__mulsi3=655200;call=49600	 cover=97%
+over_aligned_local_after_even_pushes	68000	O1	gcc	reg/imm move	33148	reg/imm move=33148;call=938	 cover=98%
+overflow_builtins	68000	O1	gcc	runtime:__mulsi3	60440	runtime:__mulsi3=60440;mul/div=10710	 cover=96%
+pattern_fill	68000	O1	gcc	reg/imm move	15348	reg/imm move=15348;alu=1864	 cover=96%
+predefined_macros	68000	O1	gcc	reg/imm move	76	reg/imm move=76;call=20	 cover=96%
+rep_count	68000	O1	gcc	alu	28176	alu=28176;reg/imm move=10784	 cover=95%
+rotate_small	68000	O1	gcc	reg/imm move	5056	reg/imm move=5056;alu=970	 cover=98%
+select_of_constants	68000	O1	gcc	reg/imm move	292050	reg/imm move=292050;alu=10828	 cover=98%
+shift_int32_variable	68000	O1	clang	reg/imm move	17260	reg/imm move=17260;lea/pea=68	 cover=96%
+shift_int64_masked_amount	68000	O1	gcc	reg/imm move	24724	reg/imm move=24724;branch/return=12766	 cover=99%
+shift_int64_variable	68000	O1	gcc	reg/imm move	88016	reg/imm move=88016;alu=19944	 cover=96%
+shift_until_idioms	68000	O1	gcc	reg/imm move	4198	reg/imm move=4198;movem=3608	 cover=96%
+shl_long_by_one	68000	O1	clang	reg/imm move	1180	reg/imm move=1180;lea/pea=8	 cover=96%
+shrink_wrapped_frame	68000	O1	gcc	alu	1046	alu=1046;movem=68	 cover=96%
+shrink_wrapped_saves	68000	O1	clang	reg/imm move	340	reg/imm move=340;lea/pea=168	 cover=97%
+shuttle_value	68000	O1	gcc	reg/imm move	36	reg/imm move=36;call=32	 cover=96%
+signbit_idioms	68000	O1	clang	reg/imm move	32528	reg/imm move=32528;compare/test=1818	 cover=95%
+spill_store_order	68000	O1	gcc	reg/imm move	68654	reg/imm move=68654;alu=12222	 cover=96%
+split_loops	68000	O1	gcc	runtime:__mulsi3	17248	runtime:__mulsi3=17248;reg/imm move=4262	 cover=97%
+static_pointers	68000	O1	gcc	reg/imm move	236	reg/imm move=236;branch/return=172	 cover=96%
+struct_odd_sizes	68000	O1	gcc	runtime:__mulsi3	546	runtime:__mulsi3=546;reg/imm move=340	 cover=97%
+struct_with_i64	68000	O1	gcc	runtime:__mulsi3	1924	runtime:__mulsi3=1924;reg/imm move=436	 cover=96%
+switch_empty_cases	68000	O1	gcc	reg/imm move	68	reg/imm move=68;alu=48	 cover=97%
+switch_i64	68000	O1	gcc	reg/imm move	116	reg/imm move=116;call=28	 cover=96%
+switch_jump_table	68000	O1	gcc	branch/return	858	branch/return=858;compare/test=778	 cover=96%
+switch_peeled_table	68000	O1	gcc	compare/test	15068	compare/test=15068;branch/return=4208	 cover=96%
+sysv_abi	68000	O1	gcc	reg/imm move	96	reg/imm move=96;call=28	 cover=96%
+tail_call_long_argument	68000	O1	gcc	runtime:__mulsi3	1476	runtime:__mulsi3=1476;call=44	 cover=97%
+u64_shift_select_arms	68000	O1	clang	reg/imm move	304	reg/imm move=304;movem=228	 cover=97%
+uint64_to_float	68000	O1	clang	runtime:sf_cmp_bits_64	13734	runtime:sf_cmp_bits_64=13734;runtime:__floatundidf=3664	 cover=97%
+wide_shift_by_one	68000	O1	clang	reg/imm move	8840	reg/imm move=8840;alu=4272	 cover=89%
+word_compare_branches	68000	O1	gcc	runtime:__mulsi3	232456	runtime:__mulsi3=232456;reg/imm move=12140	 cover=97%
+wrapv_overflow_check	68000	O1	gcc	reg/imm move	52	reg/imm move=52;call=20	 cover=96%
+write_through_parameter	68000	O1	gcc	alu	88	alu=88;branch/return=40	 cover=96%
+x87rotate	68000	O1	clang	runtime:add_bits	7032	runtime:add_bits=7032;runtime:sf32_pack=2430	 cover=89%
+bit_setclear	68000	O2	clang	reg/imm move	76	reg/imm move=76;compare/test=20	 cover=96%
+bit_test	68000	O2	clang	reg/imm move	156	reg/imm move=156;compare/test=20	 cover=97%
+bitfield_long_long	68000	O2	gcc	alu	62	alu=62;shift/rotate=8	 cover=96%
+byte_multiply	68000	O2	gcc	alu	50204	alu=50204;shift/rotate=2048	 cover=90%
+byval_struct	68000	O2	clang	alu	484	alu=484;reg/imm move=340	 cover=96%
+call_cleanup_keeps_pair	68000	O2	clang	reg/imm move	15052	reg/imm move=15052;branch/return=4608	 cover=99%
+call_clobbers_flags	68000	O2	gcc	reg/imm move	160	reg/imm move=160;alu=96	 cover=97%
+call_keeps	68000	O2	gcc	runtime:__mulsi3	2124	runtime:__mulsi3=2124;call=150	 cover=97%
+compare_to_int64	68000	O2	clang	alu	1688	alu=1688;reg/imm move=792	 cover=93%
+constant_int_float_compare	68000	O2	gcc	reg/imm move	60	reg/imm move=60;alu=2	 cover=96%
+div8_os	68000	O2	gcc	runtime:__mulsi3	3406848	runtime:__mulsi3=3406848;mul/div=578048	 cover=96%
+div_constants_short	68000	O2	gcc	lea/pea	360976	lea/pea=360976;call=147680	 cover=86%
+double_to_uint64	68000	O2	clang	runtime:memcpy	1768	runtime:memcpy=1768;branch/return=96	 cover=94%
+fcmp_all	68000	O2	gcc	runtime:__mulsi3	120576	runtime:__mulsi3=120576;call=7696	 cover=98%
+float_bits	68000	O2	gcc	reg/imm move	60	reg/imm move=60;alu=6	 cover=96%
+float_in_memory_loop	68000	O2	clang	runtime:add_bits_64	2370400	runtime:add_bits_64=2370400;runtime:sf64_pack=720000	 cover=88%
+idioms	68000	O2	gcc	runtime:__mulsi3	8532560	runtime:__mulsi3=8532560;reg/imm move=439904	 cover=97%
+idiv_loop_os	68000	O2	gcc	call	11184	call=11184;shift/rotate=7800	 cover=92%
+known_loads_walks	68000	O2	gcc	reg/imm move	50876	reg/imm move=50876;branch/return=16800	 cover=100%
+long_compare_chain	68000	O2	clang	reg/imm move	324090	reg/imm move=324090;compare/test=41880	 cover=98%
+long_shift_by_a_call_result	68000	O2	clang	reg/imm move	800	reg/imm move=800;compare/test=248	 cover=97%
+long_step_by_one	68000	O2	clang	alu	268	alu=268;branch/return=88	 cover=96%
+loop_versioning	68000	O2	gcc	runtime:__mulsi3	463124	runtime:__mulsi3=463124;reg/imm move=24064	 cover=97%
+mul_constants	68000	O2	gcc	runtime:__mulsi3	655200	runtime:__mulsi3=655200;call=49536	 cover=97%
+os_locals_between_pushes	68000	O2	gcc	runtime:__mulsi3	1092	runtime:__mulsi3=1092;movem=168	 cover=97%
+over_aligned_local_after_even_pushes	68000	O2	gcc	reg/imm move	29636	reg/imm move=29636;call=930	 cover=98%
+overflow_builtins	68000	O2	gcc	runtime:__mulsi3	60440	runtime:__mulsi3=60440;mul/div=10710	 cover=96%
+rep_count	68000	O2	gcc	alu	28176	alu=28176;reg/imm move=10808	 cover=95%
+rotate_small	68000	O2	gcc	reg/imm move	5044	reg/imm move=5044;alu=1012	 cover=98%
+sat_sub_u64_shared_compare	68000	O2	clang	alu	1092	alu=1092;reg/imm move=760	 cover=96%
+select_of_constants	68000	O2	gcc	reg/imm move	299894	reg/imm move=299894;alu=7028	 cover=98%
+shift_int32_variable	68000	O2	clang	reg/imm move	19584	reg/imm move=19584;branch/return=390	 cover=96%
+shift_int64_masked_amount	68000	O2	clang	reg/imm move	51440	reg/imm move=51440;alu=23936	 cover=99%
+shift_int64_variable	68000	O2	gcc	reg/imm move	27392	reg/imm move=27392;alu=8768	 cover=95%
+shift_until_idioms	68000	O2	gcc	reg/imm move	3726	reg/imm move=3726;movem=3624	 cover=96%
+shl_long_by_one	68000	O2	clang	reg/imm move	1180	reg/imm move=1180;lea/pea=8	 cover=96%
+shrink_wrapped_frame	68000	O2	clang	alu	2368	alu=2368;reg/imm move=1256	 cover=95%
+shuttle_value	68000	O2	gcc	reg/imm move	60	reg/imm move=60;alu=6	 cover=96%
+signbit_idioms	68000	O2	clang	reg/imm move	32796	reg/imm move=32796;compare/test=3330	 cover=95%
+spill_store_order	68000	O2	gcc	reg/imm move	65294	reg/imm move=65294;alu=31980	 cover=96%
+split_loops	68000	O2	gcc	runtime:__mulsi3	17248	runtime:__mulsi3=17248;reg/imm move=4290	 cover=97%
+ssub_sat_i64_loop	68000	O2	clang	alu	40	alu=40;branch/return=24	 cover=93%
+static_pointers	68000	O2	clang	lea/pea	228	lea/pea=228;branch/return=172	 cover=96%
+switch_empty_cases	68000	O2	gcc	runtime:__mulsi3	738	runtime:__mulsi3=738;lea/pea=32	 cover=97%
+switch_i64	68000	O2	gcc	reg/imm move	140	reg/imm move=140;alu=8	 cover=96%
+switch_jump_table	68000	O2	gcc	branch/return	1122	branch/return=1122;compare/test=832	 cover=96%
+switch_peeled_table	68000	O2	gcc	compare/test	16522	compare/test=16522;branch/return=10984	 cover=96%
+sysv_abi	68000	O2	gcc	reg/imm move	120	reg/imm move=120;alu=8	 cover=96%
+tail_call_long_argument	68000	O2	gcc	runtime:__mulsi3	1476	runtime:__mulsi3=1476;call=84	 cover=97%
+tail_calls	68000	O2	gcc	call	1470	call=1470;alu=1442	 cover=98%
+u64_shift_select_arms	68000	O2	clang	reg/imm move	56	reg/imm move=56;branch/return=56	 cover=96%
+uint64_to_float	68000	O2	gcc	runtime:__mulsi3	1378	runtime:__mulsi3=1378;call=36	 cover=96%
+wide_shift_by_one	68000	O2	clang	reg/imm move	8840	reg/imm move=8840;alu=4272	 cover=89%
+word_compare_branches	68000	O2	gcc	runtime:__mulsi3	232456	runtime:__mulsi3=232456;reg/imm move=12544	 cover=97%
+word_compares	68000	O2	gcc	alu	9380	alu=9380;shift/rotate=6832	 cover=98%
+wrapv_overflow_check	68000	O2	gcc	reg/imm move	76	reg/imm move=76;call=0	 cover=96%
+x87rotate	68000	O2	clang	reg/imm move	1142	reg/imm move=1142;lea/pea=28	 cover=89%
+bit_setclear	68000	O3	clang	reg/imm move	76	reg/imm move=76;compare/test=20	 cover=96%
+bit_test	68000	O3	clang	reg/imm move	156	reg/imm move=156;compare/test=20	 cover=97%
+bitfield_long_long	68000	O3	gcc	alu	62	alu=62;shift/rotate=8	 cover=96%
+byte_multiply	68000	O3	clang	alu	91368	alu=91368;reg/imm move=20328	 cover=90%
+byval_inline	68000	O3	gcc	reg/imm move	84	reg/imm move=84;call=0	 cover=96%
+byval_struct	68000	O3	clang	alu	484	alu=484;reg/imm move=340	 cover=96%
+call_cleanup_keeps_pair	68000	O3	clang	reg/imm move	15052	reg/imm move=15052;branch/return=4608	 cover=99%
+call_clobbers_flags	68000	O3	gcc	reg/imm move	160	reg/imm move=160;alu=96	 cover=97%
+call_keeps	68000	O3	gcc	runtime:__mulsi3	2124	runtime:__mulsi3=2124;call=150	 cover=97%
+compare_to_int64	68000	O3	clang	alu	1800	alu=1800;reg/imm move=850	 cover=93%
+constant_int_float_compare	68000	O3	gcc	reg/imm move	60	reg/imm move=60;alu=2	 cover=96%
+div8_os	68000	O3	gcc	runtime:__mulsi3	3406848	runtime:__mulsi3=3406848;mul/div=623104	 cover=96%
+div_constants_short	68000	O3	gcc	lea/pea	358752	lea/pea=358752;call=147740	 cover=86%
+double_to_uint64	68000	O3	clang	runtime:memcpy	1768	runtime:memcpy=1768;branch/return=96	 cover=94%
+fcmp_all	68000	O3	gcc	runtime:__mulsi3	120576	runtime:__mulsi3=120576;call=7696	 cover=98%
+float_bits	68000	O3	gcc	reg/imm move	60	reg/imm move=60;alu=6	 cover=96%
+float_in_memory_loop	68000	O3	clang	runtime:add_bits_64	2370400	runtime:add_bits_64=2370400;runtime:sf64_pack=720000	 cover=88%
+idioms	68000	O3	gcc	runtime:__mulsi3	8532560	runtime:__mulsi3=8532560;reg/imm move=442968	 cover=97%
+idiv_loop_os	68000	O3	gcc	call	11204	call=11204;shift/rotate=7800	 cover=92%
+int64_division	68000	O3	clang	runtime:__udivmod_w	585016	runtime:__udivmod_w=585016;runtime:__mulsi3=59950	 cover=71%
+known_loads_walks	68000	O3	gcc	reg/imm move	65304	reg/imm move=65304;branch/return=11168	 cover=102%
+local_initializers	68000	O3	gcc	reg/imm move	40	reg/imm move=40;alu=8	 cover=96%
+long_compare_chain	68000	O3	clang	reg/imm move	324090	reg/imm move=324090;compare/test=41880	 cover=98%
+long_double_constant_store	68000	O3	clang	branch/return	1504	branch/return=1504;alu=1440	 cover=94%
+long_shift_by_a_call_result	68000	O3	clang	reg/imm move	800	reg/imm move=800;compare/test=248	 cover=97%
+long_step_by_one	68000	O3	clang	alu	268	alu=268;branch/return=88	 cover=96%
+loop_versioning	68000	O3	gcc	runtime:__mulsi3	463124	runtime:__mulsi3=463124;reg/imm move=24040	 cover=97%
+mul_constants	68000	O3	gcc	runtime:__mulsi3	655200	runtime:__mulsi3=655200;call=49536	 cover=97%
+os_locals_between_pushes	68000	O3	gcc	runtime:__mulsi3	1092	runtime:__mulsi3=1092;movem=168	 cover=97%
+over_aligned_local_after_even_pushes	68000	O3	gcc	reg/imm move	29636	reg/imm move=29636;call=930	 cover=98%
+overflow_builtins	68000	O3	gcc	runtime:__mulsi3	60440	runtime:__mulsi3=60440;mul/div=10710	 cover=96%
+pattern_fill	68000	O3	gcc	reg/imm move	16802	reg/imm move=16802;other=1536	 cover=96%
+rep_count	68000	O3	gcc	alu	28376	alu=28376;reg/imm move=15220	 cover=95%
+rotate_small	68000	O3	gcc	reg/imm move	4404	reg/imm move=4404;alu=3790	 cover=98%
+sat_builtins	68000	O3	clang	reg/imm move	1512	reg/imm move=1512;branch/return=386	 cover=96%
+sat_sub_u64_shared_compare	68000	O3	clang	alu	1092	alu=1092;reg/imm move=760	 cover=96%
+select_of_constants	68000	O3	gcc	reg/imm move	299894	reg/imm move=299894;alu=7028	 cover=98%
+shift_int32_variable	68000	O3	clang	reg/imm move	19584	reg/imm move=19584;branch/return=390	 cover=96%
+shift_int64_masked_amount	68000	O3	clang	reg/imm move	51440	reg/imm move=51440;alu=23936	 cover=99%
+shift_int64_variable	68000	O3	gcc	reg/imm move	27764	reg/imm move=27764;alu=9104	 cover=95%
+shift_until_idioms	68000	O3	gcc	reg/imm move	5182	reg/imm move=5182;movem=3640	 cover=96%
+shl_long_by_one	68000	O3	clang	reg/imm move	1268	reg/imm move=1268;alu=136	 cover=96%
+shrink_wrapped_frame	68000	O3	gcc	alu	2400	alu=2400;reg/imm move=1292	 cover=95%
+shuttle_value	68000	O3	gcc	reg/imm move	60	reg/imm move=60;alu=6	 cover=96%
+signbit_idioms	68000	O3	clang	reg/imm move	32796	reg/imm move=32796;compare/test=3330	 cover=95%
+spill_store_order	68000	O3	gcc	reg/imm move	86006	reg/imm move=86006;alu=38418	 cover=96%
+split_loops	68000	O3	gcc	runtime:__mulsi3	17248	runtime:__mulsi3=17248;reg/imm move=4246	 cover=97%
+ssub_sat_i64_loop	68000	O3	clang	alu	40	alu=40;branch/return=24	 cover=93%
+static_pointers	68000	O3	clang	lea/pea	228	lea/pea=228;branch/return=172	 cover=96%
+switch_empty_cases	68000	O3	gcc	runtime:__mulsi3	738	runtime:__mulsi3=738;call=20	 cover=97%
+switch_i64	68000	O3	gcc	reg/imm move	140	reg/imm move=140;alu=8	 cover=96%
+switch_jump_table	68000	O3	gcc	branch/return	1122	branch/return=1122;compare/test=832	 cover=96%
+switch_peeled_table	68000	O3	gcc	compare/test	18308	compare/test=18308;branch/return=11538	 cover=96%
+sysv_abi	68000	O3	gcc	reg/imm move	120	reg/imm move=120;alu=8	 cover=96%
+tail_call_long_argument	68000	O3	gcc	runtime:__mulsi3	1476	runtime:__mulsi3=1476;call=84	 cover=97%
+tail_calls	68000	O3	gcc	call	1470	call=1470;alu=1468	 cover=98%
+u64_shift_select_arms	68000	O3	clang	reg/imm move	56	reg/imm move=56;branch/return=56	 cover=96%
+uint64_to_float	68000	O3	gcc	runtime:__mulsi3	1378	runtime:__mulsi3=1378;call=36	 cover=96%
+wide_shift_by_one	68000	O3	clang	reg/imm move	8840	reg/imm move=8840;alu=4272	 cover=89%
+word_compare_branches	68000	O3	gcc	runtime:__mulsi3	232456	runtime:__mulsi3=232456;reg/imm move=12964	 cover=97%
+word_compares	68000	O3	gcc	alu	13188	alu=13188;reg/imm move=7364	 cover=98%
+wrapv_overflow_check	68000	O3	gcc	reg/imm move	76	reg/imm move=76;call=0	 cover=96%
+x87rotate	68000	O3	clang	reg/imm move	1142	reg/imm move=1142;lea/pea=28	 cover=89%
+bit_setclear	68000	Os	clang	reg/imm move	76	reg/imm move=76;compare/test=20	 cover=96%
+bit_test	68000	Os	clang	reg/imm move	140	reg/imm move=140;compare/test=20	 cover=97%
+bitcount_u64	68000	Os	gcc	reg/imm move	536	reg/imm move=536;branch/return=108	 cover=96%
+bitfield_long_long	68000	Os	gcc	alu	62	alu=62;shift/rotate=8	 cover=96%
+byte_multiply	68000	Os	gcc	alu	48664	alu=48664;reg/imm move=2484	 cover=90%
+call_cleanup_keeps_pair	68000	Os	clang	reg/imm move	13320	reg/imm move=13320;branch/return=4608	 cover=99%
+call_clobbers_flags	68000	Os	gcc	reg/imm move	176	reg/imm move=176;alu=112	 cover=97%
+call_keeps	68000	Os	gcc	runtime:__mulsi3	2124	runtime:__mulsi3=2124;call=138	 cover=97%
+compare_to_int64	68000	Os	gcc	alu	378	alu=378;reg/imm move=320	 cover=93%
+constant_int_float_compare	68000	Os	gcc	reg/imm move	60	reg/imm move=60;alu=2	 cover=96%
+copy_runs	68000	Os	gcc	runtime:memcpy	2600	runtime:memcpy=2600;alu=2352	 cover=93%
+data_int64	68000	Os	clang	lea/pea	28	lea/pea=28;reg/imm move=24	 cover=83%
+div8_os	68000	Os	gcc	runtime:__mulsi3	4390400	runtime:__mulsi3=4390400;mul/div=691712	 cover=96%
+div_constants_short	68000	Os	gcc	lea/pea	288916	lea/pea=288916;call=123384	 cover=86%
+fcmp_all	68000	Os	gcc	runtime:__mulsi3	120576	runtime:__mulsi3=120576;call=4616	 cover=98%
+float_bits	68000	Os	gcc	reg/imm move	60	reg/imm move=60;alu=6	 cover=96%
+float_in_memory_loop	68000	Os	gcc	runtime:add_bits_64	2334000	runtime:add_bits_64=2334000;runtime:sf64_pack=720000	 cover=86%
+float_in_place_update	68000	Os	gcc	runtime:__divdf3	11796	runtime:__divdf3=11796;runtime:sf_mul32x32=11136	 cover=79%
+function_table	68000	Os	gcc	reg/imm move	84	reg/imm move=84;alu=32	 cover=96%
+idioms	68000	Os	gcc	runtime:__mulsi3	8532560	runtime:__mulsi3=8532560;call=238728	 cover=97%
+idiv_loop_os	68000	Os	gcc	shift/rotate	11400	shift/rotate=11400;alu=7200	 cover=92%
+int64_division	68000	Os	gcc	runtime:__mulsi3	178894	runtime:__mulsi3=178894;mul/div=11760	 cover=74%
+known_loads_walks	68000	Os	gcc	reg/imm move	194268	reg/imm move=194268;movem=4192	 cover=96%
+logical_value	68000	Os	gcc	reg/imm move	360	reg/imm move=360;alu=166	 cover=97%
+long_compare_chain	68000	Os	gcc	reg/imm move	180934	reg/imm move=180934;branch/return=960	 cover=98%
+long_double_arguments	68000	Os	clang	movem	84	movem=84;lea/pea=80	 cover=90%
+long_step_by_one	68000	Os	gcc	reg/imm move	488	reg/imm move=488;alu=360	 cover=96%
+loop_versioning	68000	Os	gcc	runtime:__mulsi3	463124	runtime:__mulsi3=463124;reg/imm move=17460	 cover=97%
+mul_constants	68000	Os	gcc	runtime:__mulsi3	655200	runtime:__mulsi3=655200;lea/pea=28464	 cover=97%
+os_locals_between_pushes	68000	Os	gcc	runtime:__mulsi3	1092	runtime:__mulsi3=1092;movem=168	 cover=97%
+over_aligned_local_after_even_pushes	68000	Os	gcc	reg/imm move	24352	reg/imm move=24352;call=1204	 cover=98%
+overflow_builtins	68000	Os	gcc	runtime:__mulsi3	60440	runtime:__mulsi3=60440;mul/div=10710	 cover=96%
+rotate_small	68000	Os	gcc	reg/imm move	4642	reg/imm move=4642;shift/rotate=712	 cover=98%
+select_of_constants	68000	Os	gcc	runtime:__mulsi3	4305400	runtime:__mulsi3=4305400;call=144180	 cover=98%
+shift_int32_variable	68000	Os	clang	reg/imm move	18412	reg/imm move=18412;lea/pea=80	 cover=96%
+shl_long_by_one	68000	Os	clang	reg/imm move	1180	reg/imm move=1180;lea/pea=20	 cover=96%
+shrink_wrapped_frame	68000	Os	gcc	alu	968	alu=968;reg/imm move=284	 cover=96%
+shuttle_value	68000	Os	gcc	reg/imm move	60	reg/imm move=60;alu=6	 cover=96%
+signbit_idioms	68000	Os	clang	reg/imm move	32528	reg/imm move=32528;compare/test=1818	 cover=95%
+split_loops	68000	Os	gcc	runtime:__mulsi3	17248	runtime:__mulsi3=17248;reg/imm move=2446	 cover=97%
+static_pointers	68000	Os	gcc	reg/imm move	240	reg/imm move=240;branch/return=172	 cover=96%
+switch_empty_cases	68000	Os	gcc	compare/test	48	compare/test=48;alu=48	 cover=96%
+switch_jump_table	68000	Os	gcc	compare/test	724	compare/test=724;branch/return=648	 cover=96%
+switch_peeled_table	68000	Os	gcc	compare/test	8888	compare/test=8888;alu=5738	 cover=96%
+tail_call_long_argument	68000	Os	gcc	runtime:__mulsi3	1476	runtime:__mulsi3=1476;call=84	 cover=97%
+tail_calls	68000	Os	gcc	alu	1508	alu=1508;call=1488	 cover=98%
+u64_shift_select_arms	68000	Os	clang	reg/imm move	328	reg/imm move=328;movem=228	 cover=97%
+uint64_to_float	68000	Os	clang	lea/pea	20	lea/pea=20;reg/imm move=16	 cover=96%
+wide_shift_by_one	68000	Os	clang	reg/imm move	8840	reg/imm move=8840;alu=4272	 cover=89%
+word_compare_branches	68000	Os	gcc	runtime:__mulsi3	232456	runtime:__mulsi3=232456;reg/imm move=11648	 cover=97%
+word_compares	68000	Os	gcc	shift/rotate	5796	shift/rotate=5796;alu=4884	 cover=97%
+wrapv_overflow_check	68000	Os	gcc	reg/imm move	16	reg/imm move=16;lea/pea=8	 cover=96%
+x87rotate	68000	Os	clang	runtime:add_bits	7032	runtime:add_bits=7032;runtime:sf32_pack=2430	 cover=89%
+zz_f	68000	Os	gcc	reg/imm move	20	reg/imm move=20;alu=2	 cover=96%
+bit_setclear	68020	O1	clang	reg/imm move	18	reg/imm move=18;call=8	 cover=93%
+bit_test	68020	O1	clang	reg/imm move	52	reg/imm move=52;call=12	 cover=93%
+byte_multiply	68020	O1	gcc	mul/div	11520	mul/div=11520;alu=7684	 cover=94%
+byvalue_struct_address	68020	O1	clang	mul/div	180	mul/div=180;reg/imm move=74	 cover=95%
+call_cleanup_keeps_pair	68020	O1	gcc	mul/div	11520	mul/div=11520;branch/return=2568	 cover=98%
+call_clobbers_flags	68020	O1	gcc	reg/imm move	70	reg/imm move=70;mul/div=45	 cover=94%
+call_keeps	68020	O1	clang	mul/div	945	mul/div=945;reg/imm move=353	 cover=95%
+compare_to_int64	68020	O1	gcc	mul/div	810	mul/div=810;branch/return=114	 cover=95%
+compound_assignment_types	68020	O1	gcc	mul/div	270	mul/div=270;movem=62	 cover=96%
+copy_runs	68020	O1	gcc	mul/div	8342	mul/div=8342;lea/pea=275	 cover=97%
+div8_os	68020	O1	gcc	mul/div	776704	mul/div=776704;reg/imm move=24073	 cover=99%
+div_constants_long	68020	O1	gcc	mul/div	2092608	mul/div=2092608;lea/pea=252661	 cover=98%
+div_constants_short	68020	O1	gcc	mul/div	2664144	mul/div=2664144;lea/pea=180057	 cover=98%
+div_constants_ulong	68020	O1	gcc	mul/div	1300320	mul/div=1300320;lea/pea=120465	 cover=98%
+double_to_int64	68020	O1	gcc	mul/div	810	mul/div=810;branch/return=0	 cover=95%
+float_conversions_loop	68020	O1	gcc	runtime:__fixdfsi	431	runtime:__fixdfsi=431;reg/imm move=88	 cover=97%
+float_in_memory_loop	68020	O1	gcc	runtime:add_bits_64	1056600	runtime:add_bits_64=1056600;runtime:sf64_pack=325500	 cover=98%
+float_in_place_update	68020	O1	gcc	runtime:__divdf3	7942	runtime:__divdf3=7942;runtime:__muldf3=6996	 cover=98%
+frameless	68020	O1	gcc	mul/div	1350	mul/div=1350;reg/imm move=268	 cover=94%
+function_table	68020	O1	gcc	reg/imm move	40	reg/imm move=40;branch/return=8	 cover=92%
+known_loads_walks	68020	O1	gcc	reg/imm move	79096	reg/imm move=79096;movem=2793	 cover=93%
+licm_graph_callee_footprint	68020	O1	gcc	mul/div	67500	mul/div=67500;call=3002	 cover=97%
+logical_value	68020	O1	gcc	mul/div	405	mul/div=405;reg/imm move=304	 cover=95%
+long_compare_chain	68020	O1	gcc	reg/imm move	68599	reg/imm move=68599;call=1800	 cover=97%
+loop_versioning	68020	O1	gcc	alu	6208	alu=6208;reg/imm move=1374	 cover=93%
+memmove_overlap	68020	O1	gcc	mul/div	2070	mul/div=2070;runtime:report=0	 cover=92%
+mul_constants	68020	O1	clang	mul/div	513000	mul/div=513000;reg/imm move=33814	 cover=98%
+pattern_fill	68020	O1	gcc	reg/imm move	6950	reg/imm move=6950;other=1536	 cover=92%
+phi_slot_unknown_arm	68020	O1	gcc	mul/div	146940	mul/div=146940;movem=16534	 cover=98%
+recdeep	68020	O1	gcc	mul/div	184500	mul/div=184500;shift/rotate=15000	 cover=99%
+recmany_o1	68020	O1	gcc	mul/div	184500	mul/div=184500;shift/rotate=15000	 cover=99%
+register_upper_half	68020	O1	gcc	mul/div	540	mul/div=540;reg/imm move=157	 cover=95%
+rep_count	68020	O1	gcc	alu	4578	alu=4578;reg/imm move=3656	 cover=89%
+rotate_small	68020	O1	gcc	mul/div	8640	mul/div=8640;reg/imm move=1484	 cover=97%
+select_of_constants	68020	O1	gcc	mul/div	463500	mul/div=463500;reg/imm move=60982	 cover=99%
+shift_int32_variable	68020	O1	clang	reg/imm move	6608	reg/imm move=6608;call=576	 cover=93%
+shift_int64_masked_amount	68020	O1	gcc	mul/div	69120	mul/div=69120;branch/return=9706	 cover=99%
+shift_int64_variable	68020	O1	gcc	mul/div	69120	mul/div=69120;movem=5611	 cover=98%
+shift_until_idioms	68020	O1	gcc	movem	2179	movem=2179;reg/imm move=1689	 cover=93%
+shl_long_by_one	68020	O1	clang	reg/imm move	440	reg/imm move=440;call=100	 cover=93%
+shrink_wrapped_saves	68020	O1	clang	mul/div	540	mul/div=540;reg/imm move=136	 cover=94%
+signbit_idioms	68020	O1	clang	reg/imm move	12160	reg/imm move=12160;call=1296	 cover=95%
+spill_store_order	68020	O1	gcc	mul/div	116800	mul/div=116800;reg/imm move=46510	 cover=96%
+split_loops	68020	O1	gcc	reg/imm move	1715	reg/imm move=1715;mul/div=1584	 cover=93%
+static_pointers	68020	O1	gcc	reg/imm move	176	reg/imm move=176;branch/return=92	 cover=93%
+switch_empty_cases	68020	O1	gcc	mul/div	315	mul/div=315;reg/imm move=54	 cover=94%
+switch_jump_table	68020	O1	gcc	branch/return	414	branch/return=414;compare/test=318	 cover=92%
+switch_peeled_table	68020	O1	gcc	compare/test	6604	compare/test=6604;branch/return=1736	 cover=93%
+switch_table_holes	68020	O1	gcc	mul/div	12600	mul/div=12600;alu=204	 cover=96%
+tail_call_long_argument	68020	O1	gcc	mul/div	90	mul/div=90;call=4	 cover=94%
+u64_shift_select_arms	68020	O1	clang	movem	137	movem=137;reg/imm move=124	 cover=93%
+uint64_to_float	68020	O1	clang	runtime:sf_cmp_bits_64	6528	runtime:sf_cmp_bits_64=6528;runtime:__floatundidf=1719	 cover=97%
+urem_eq	68020	O1	clang	reg/imm move	264043	reg/imm move=264043;mul/div=180000	 cover=99%
+wide_shift_by_one	68020	O1	clang	mul/div	63630	mul/div=63630;reg/imm move=1116	 cover=98%
+word_compare_branches	68020	O1	gcc	mul/div	17640	mul/div=17640;reg/imm move=4648	 cover=95%
+word_compares	68020	O1	gcc	mul/div	8820	mul/div=8820;reg/imm move=5310	 cover=96%
+wrapv_overflow_check	68020	O1	gcc	reg/imm move	26	reg/imm move=26;call=0	 cover=93%
+x87rotate	68020	O1	clang	runtime:add_bits	3170	runtime:add_bits=3170;runtime:sf32_pack=1116	 cover=98%
+bit_setclear	68020	O2	clang	reg/imm move	18	reg/imm move=18;call=8	 cover=93%
+bit_test	68020	O2	clang	reg/imm move	52	reg/imm move=52;call=12	 cover=93%
+byte_multiply	68020	O2	gcc	alu	8708	alu=8708;reg/imm move=4685	 cover=93%
+byval_struct	68020	O2	clang	reg/imm move	171	reg/imm move=171;branch/return=164	 cover=91%
+call_cleanup_keeps_pair	68020	O2	gcc	branch/return	2560	branch/return=2560;reg/imm move=1287	 cover=98%
+call_clobbers_flags	68020	O2	gcc	reg/imm move	72	reg/imm move=72;alu=28	 cover=94%
+compare_to_int64	68020	O2	clang	mul/div	405	mul/div=405;alu=250	 cover=95%
+copy_runs	68020	O2	gcc	mul/div	3977	mul/div=3977;reg/imm move=340	 cover=97%
+div8_os	68020	O2	gcc	mul/div	514048	mul/div=514048;compare/test=512	 cover=99%
+div_constants_long	68020	O2	gcc	mul/div	527688	mul/div=527688;lea/pea=252661	 cover=98%
+div_constants_short	68020	O2	gcc	mul/div	257904	mul/div=257904;lea/pea=180561	 cover=98%
+div_constants_ulong	68020	O2	gcc	mul/div	211680	mul/div=211680;lea/pea=120465	 cover=98%
+double_to_uint64	68020	O2	clang	runtime:memcpy	880	runtime:memcpy=880;branch/return=48	 cover=93%
+dse_merge_byte_order	68020	O2	gcc	lea/pea	4	lea/pea=4;call=0	 cover=93%
+float_in_memory_loop	68020	O2	clang	runtime:add_bits_64	1056600	runtime:add_bits_64=1056600;runtime:sf64_pack=325500	 cover=98%
+function_table	68020	O2	gcc	reg/imm move	4	reg/imm move=4;lea/pea=0	 cover=92%
+idioms	68020	O2	gcc	mul/div	164736	mul/div=164736;reg/imm move=101222	 cover=95%
+idiv_loop_os	68020	O2	gcc	mul/div	126045	mul/div=126045;reg/imm move=11792	 cover=98%
+inlined_tail_call_keeps_frame_stores	68020	O2	clang	reg/imm move	12	reg/imm move=12;lea/pea=8	 cover=93%
+known_loads_walks	68020	O2	gcc	reg/imm move	22642	reg/imm move=22642;branch/return=8320	 cover=97%
+long_compare_chain	68020	O2	gcc	reg/imm move	67925	reg/imm move=67925;call=7320	 cover=97%
+long_shift_by_a_call_result	68020	O2	clang	reg/imm move	300	reg/imm move=300;compare/test=100	 cover=94%
+long_step_by_one	68020	O2	clang	alu	60	alu=60;branch/return=44	 cover=92%
+loop_versioning	68020	O2	gcc	mul/div	9100	mul/div=9100;reg/imm move=5538	 cover=93%
+overflow_builtins	68020	O2	gcc	mul/div	1989	mul/div=1989;other=540	 cover=93%
+recdeep	68020	O2	gcc	reg/imm move	60006	reg/imm move=60006;shift/rotate=27000	 cover=99%
+recmany_o1	68020	O2	gcc	reg/imm move	59999	reg/imm move=59999;shift/rotate=27000	 cover=99%
+register_upper_half	68020	O2	gcc	reg/imm move	547	reg/imm move=547;branch/return=128	 cover=95%
+rotate_small	68020	O2	gcc	reg/imm move	2018	reg/imm move=2018;shift/rotate=264	 cover=96%
+sat_sub_u64_shared_compare	68020	O2	clang	alu	426	alu=426;reg/imm move=366	 cover=92%
+select_of_constants	68020	O2	gcc	reg/imm move	82154	reg/imm move=82154;call=20600	 cover=99%
+shift_int32_variable	68020	O2	clang	reg/imm move	7770	reg/imm move=7770;call=576	 cover=93%
+shift_int64_masked_amount	68020	O2	clang	reg/imm move	21136	reg/imm move=21136;branch/return=11928	 cover=99%
+shift_int64_variable	68020	O2	gcc	reg/imm move	10230	reg/imm move=10230;movem=4061	 cover=97%
+shift_until_idioms	68020	O2	gcc	movem	2193	movem=2193;reg/imm move=1815	 cover=93%
+shl_long_by_one	68020	O2	clang	reg/imm move	440	reg/imm move=440;call=100	 cover=93%
+shrink_wrapped_frame	68020	O2	clang	alu	748	alu=748;branch/return=562	 cover=90%
+signbit_idioms	68020	O2	clang	reg/imm move	12186	reg/imm move=12186;compare/test=1476	 cover=95%
+spill_store_order	68020	O2	gcc	reg/imm move	42527	reg/imm move=42527;lea/pea=9001	 cover=95%
+split_loops	68020	O2	gcc	reg/imm move	1672	reg/imm move=1672;mul/div=864	 cover=93%
+ssub_sat_i64_loop	68020	O2	clang	branch/return	12	branch/return=12;alu=6	 cover=93%
+stack_arrays_copy	68020	O2	clang	branch/return	704	branch/return=704;alu=254	 cover=87%
+static_pointers	68020	O2	clang	lea/pea	96	lea/pea=96;branch/return=92	 cover=93%
+switch_jump_table	68020	O2	gcc	branch/return	578	branch/return=578;compare/test=336	 cover=92%
+switch_peeled_table	68020	O2	gcc	compare/test	7306	compare/test=7306;branch/return=7044	 cover=93%
+tail_call_long_argument	68020	O2	gcc	mul/div	90	mul/div=90;call=18	 cover=94%
+tail_calls	68020	O2	gcc	call	767	call=767;branch/return=308	 cover=95%
+u64_shift_select_arms	68020	O2	clang	branch/return	32	branch/return=32;reg/imm move=28	 cover=93%
+word_compare_branches	68020	O2	gcc	mul/div	8820	mul/div=8820;reg/imm move=4764	 cover=95%
+word_compares	68020	O2	gcc	reg/imm move	3784	reg/imm move=3784;other=2352	 cover=95%
+wrapv_overflow_check	68020	O2	gcc	reg/imm move	26	reg/imm move=26;call=0	 cover=93%
+x87rotate	68020	O2	clang	reg/imm move	390	reg/imm move=390;lea/pea=14	 cover=98%
+bit_setclear	68020	O3	clang	reg/imm move	18	reg/imm move=18;call=8	 cover=93%
+bit_test	68020	O3	clang	reg/imm move	52	reg/imm move=52;call=12	 cover=93%
+byte_multiply	68020	O3	clang	alu	35446	alu=35446;reg/imm move=10422	 cover=93%
+byval_struct	68020	O3	clang	reg/imm move	171	reg/imm move=171;branch/return=164	 cover=91%
+call_cleanup_keeps_pair	68020	O3	gcc	branch/return	2560	branch/return=2560;reg/imm move=1287	 cover=98%
+call_clobbers_flags	68020	O3	gcc	reg/imm move	72	reg/imm move=72;alu=28	 cover=94%
+compare_to_int64	68020	O3	clang	mul/div	405	mul/div=405;alu=282	 cover=94%
+copy_runs	68020	O3	gcc	mul/div	3977	mul/div=3977;lea/pea=287	 cover=97%
+div8_os	68020	O3	gcc	mul/div	794368	mul/div=794368;compare/test=23040	 cover=99%
+div_constants_long	68020	O3	gcc	mul/div	540244	mul/div=540244;lea/pea=252661	 cover=98%
+div_constants_short	68020	O3	gcc	mul/div	264280	mul/div=264280;lea/pea=180561	 cover=98%
+div_constants_ulong	68020	O3	gcc	mul/div	220760	mul/div=220760;lea/pea=120465	 cover=98%
+double_to_uint64	68020	O3	clang	runtime:memcpy	880	runtime:memcpy=880;branch/return=48	 cover=93%
+dse_merge_byte_order	68020	O3	gcc	lea/pea	4	lea/pea=4;call=0	 cover=93%
+fcmp_all	68020	O3	gcc	mul/div	17280	mul/div=17280;branch/return=2432	 cover=97%
+float_in_memory_loop	68020	O3	clang	runtime:add_bits_64	1056600	runtime:add_bits_64=1056600;runtime:sf64_pack=325500	 cover=98%
+function_table	68020	O3	gcc	reg/imm move	4	reg/imm move=4;lea/pea=0	 cover=92%
+idiv_loop_os	68020	O3	gcc	mul/div	126045	mul/div=126045;reg/imm move=12398	 cover=98%
+inlined_tail_call_keeps_frame_stores	68020	O3	clang	reg/imm move	12	reg/imm move=12;lea/pea=8	 cover=93%
+int64_division	68020	O3	clang	runtime:__udivmod_w	267367	runtime:__udivmod_w=267367;reg/imm move=9276	 cover=96%
+known_loads_walks	68020	O3	gcc	reg/imm move	29020	reg/imm move=29020;branch/return=5296	 cover=100%
+long_compare_chain	68020	O3	gcc	reg/imm move	67925	reg/imm move=67925;call=7320	 cover=97%
+long_double_constant_store	68020	O3	clang	branch/return	748	branch/return=748;alu=348	 cover=88%
+long_shift_by_a_call_result	68020	O3	clang	reg/imm move	300	reg/imm move=300;compare/test=100	 cover=94%
+long_step_by_one	68020	O3	clang	alu	60	alu=60;branch/return=44	 cover=92%
+loop_versioning	68020	O3	gcc	mul/div	9100	mul/div=9100;reg/imm move=5526	 cover=93%
+os_locals_between_pushes	68020	O3	gcc	movem	96	movem=96;runtime:pack=84	 cover=94%
+overflow_builtins	68020	O3	gcc	mul/div	1989	mul/div=1989;other=540	 cover=93%
+phi_slot_unknown_arm	68020	O3	gcc	movem	16302	movem=16302;other=9968	 cover=97%
+recdeep	68020	O3	gcc	reg/imm move	60006	reg/imm move=60006;shift/rotate=27000	 cover=99%
+recmany_o1	68020	O3	gcc	reg/imm move	60006	reg/imm move=60006;shift/rotate=27000	 cover=99%
+rotate_small	68020	O3	gcc	reg/imm move	1819	reg/imm move=1819;shift/rotate=1320	 cover=96%
+sat_builtins	68020	O3	clang	reg/imm move	585	reg/imm move=585;branch/return=186	 cover=92%
+sat_sub_u64_shared_compare	68020	O3	clang	alu	426	alu=426;reg/imm move=366	 cover=92%
+select_of_constants	68020	O3	gcc	reg/imm move	82154	reg/imm move=82154;call=20600	 cover=99%
+shift_int32_variable	68020	O3	clang	reg/imm move	7770	reg/imm move=7770;call=576	 cover=93%
+shift_int64_masked_amount	68020	O3	clang	reg/imm move	21136	reg/imm move=21136;branch/return=11928	 cover=99%
+shift_int64_variable	68020	O3	gcc	reg/imm move	10426	reg/imm move=10426;movem=4061	 cover=97%
+shift_until_idioms	68020	O3	gcc	reg/imm move	2505	reg/imm move=2505;movem=2200	 cover=93%
+shl_long_by_one	68020	O3	clang	reg/imm move	484	reg/imm move=484;call=100	 cover=93%
+shrink_wrapped_frame	68020	O3	clang	alu	748	alu=748;branch/return=562	 cover=90%
+signbit_idioms	68020	O3	clang	reg/imm move	12186	reg/imm move=12186;compare/test=1476	 cover=95%
+spill_store_order	68020	O3	gcc	reg/imm move	50569	reg/imm move=50569;branch/return=9694	 cover=94%
+split_loops	68020	O3	gcc	reg/imm move	1654	reg/imm move=1654;mul/div=864	 cover=93%
+ssub_sat_i64_loop	68020	O3	clang	branch/return	12	branch/return=12;alu=6	 cover=93%
+stack_arrays_copy	68020	O3	clang	branch/return	704	branch/return=704;alu=254	 cover=87%
+static_pointers	68020	O3	clang	lea/pea	96	lea/pea=96;branch/return=92	 cover=93%
+switch_empty_cases	68020	O3	gcc	mul/div	45	mul/div=45;call=0	 cover=93%
+switch_jump_table	68020	O3	gcc	branch/return	578	branch/return=578;compare/test=336	 cover=92%
+tail_call_long_argument	68020	O3	gcc	mul/div	90	mul/div=90;call=18	 cover=94%
+tail_calls	68020	O3	gcc	call	767	call=767;branch/return=332	 cover=95%
+u64_shift_select_arms	68020	O3	clang	branch/return	32	branch/return=32;reg/imm move=28	 cover=93%
+word_compare_branches	68020	O3	gcc	mul/div	8820	mul/div=8820;alu=4672	 cover=95%
+word_compares	68020	O3	gcc	reg/imm move	4918	reg/imm move=4918;alu=2698	 cover=95%
+wrapv_overflow_check	68020	O3	gcc	reg/imm move	26	reg/imm move=26;call=0	 cover=93%
+x87rotate	68020	O3	clang	reg/imm move	390	reg/imm move=390;lea/pea=14	 cover=98%
+bit_setclear	68020	Os	clang	reg/imm move	29	reg/imm move=29;lea/pea=10	 cover=93%
+bit_test	68020	Os	clang	reg/imm move	55	reg/imm move=55;shift/rotate=16	 cover=93%
+bitcount_u64	68020	Os	gcc	call	86	call=86;branch/return=74	 cover=94%
+bitfield_long_long	68020	Os	gcc	alu	20	alu=20;shift/rotate=6	 cover=93%
+builtin_expect	68020	Os	clang	lea/pea	31	lea/pea=31;call=0	 cover=93%
+builtins_table	68020	Os	clang	lea/pea	42	lea/pea=42;call=0	 cover=92%
+byte_multiply	68020	Os	gcc	mul/div	11520	mul/div=11520;alu=7684	 cover=94%
+call_cleanup_keeps_pair	68020	Os	clang	mul/div	11520	mul/div=11520;reg/imm move=5246	 cover=98%
+call_clobbers_flags	68020	Os	gcc	reg/imm move	77	reg/imm move=77;mul/div=45	 cover=94%
+call_keeps	68020	Os	clang	mul/div	945	mul/div=945;reg/imm move=382	 cover=95%
+compare_to_int64	68020	Os	gcc	mul/div	810	mul/div=810;branch/return=108	 cover=95%
+compound_assignment_types	68020	Os	gcc	mul/div	85	mul/div=85;movem=62	 cover=95%
+constant_int_float_compare	68020	Os	clang	reg/imm move	11	reg/imm move=11;lea/pea=10	 cover=93%
+data_int64	68020	Os	clang	lea/pea	14	lea/pea=14;reg/imm move=11	 cover=94%
+div8_os	68020	Os	gcc	mul/div	777984	mul/div=777984;compare/test=512	 cover=99%
+div_constants_long	68020	Os	gcc	mul/div	2417904	mul/div=2417904;lea/pea=252447	 cover=98%
+div_constants_short	68020	Os	gcc	mul/div	1768608	mul/div=1768608;lea/pea=171351	 cover=98%
+div_constants_ulong	68020	Os	gcc	mul/div	1149120	mul/div=1149120;lea/pea=102479	 cover=98%
+double_against_int	68020	Os	clang	lea/pea	45	lea/pea=45;call=0	 cover=93%
+double_to_int64	68020	Os	clang	lea/pea	26	lea/pea=26;call=0	 cover=92%
+dse_merge_byte_order	68020	Os	gcc	lea/pea	4	lea/pea=4;call=0	 cover=93%
+float_bits	68020	Os	clang	reg/imm move	11	reg/imm move=11;lea/pea=10	 cover=93%
+float_in_memory_loop	68020	Os	gcc	runtime:add_bits_64	863400	runtime:add_bits_64=863400;runtime:sf64_pack=325500	 cover=98%
+float_in_place_update	68020	Os	gcc	runtime:__divdf3	5771	runtime:__divdf3=5771;runtime:sf_mul32x32=4992	 cover=98%
+frameless	68020	Os	gcc	mul/div	1404	mul/div=1404;reg/imm move=648	 cover=94%
+function_table	68020	Os	gcc	reg/imm move	45	reg/imm move=45;branch/return=8	 cover=92%
+idiv_loop_os	68020	Os	gcc	mul/div	153045	mul/div=153045;alu=6194	 cover=98%
+inlined_tail_call_keeps_frame_stores	68020	Os	clang	reg/imm move	12	reg/imm move=12;lea/pea=8	 cover=93%
+int_compared_with_float	68020	Os	clang	lea/pea	46	lea/pea=46;movem=35	 cover=95%
+known_loads_walks	68020	Os	gcc	reg/imm move	85002	reg/imm move=85002;movem=2743	 cover=93%
+licm_graph_callee_footprint	68020	Os	clang	mul/div	67500	mul/div=67500;call=3002	 cover=97%
+local_initializers	68020	Os	clang	reg/imm move	11	reg/imm move=11;lea/pea=10	 cover=92%
+logical_value	68020	Os	gcc	mul/div	405	mul/div=405;reg/imm move=209	 cover=95%
+long_compare_chain	68020	Os	gcc	reg/imm move	45979	reg/imm move=45979;call=7320	 cover=97%
+long_double_arguments	68020	Os	clang	movem	48	movem=48;lea/pea=40	 cover=98%
+long_double_layout	68020	Os	clang	lea/pea	22	lea/pea=22;movem=14	 cover=96%
+long_double_stride	68020	Os	clang	lea/pea	38	lea/pea=38;call=0	 cover=92%
+loop_versioning	68020	Os	gcc	mul/div	9100	mul/div=9100;alu=3260	 cover=93%
+mul_constants	68020	Os	clang	mul/div	513000	mul/div=513000;reg/imm move=33025	 cover=98%
+os_locals_between_pushes	68020	Os	gcc	runtime:pack	508	runtime:pack=508;movem=96	 cover=94%
+overflow_builtins	68020	Os	gcc	mul/div	1989	mul/div=1989;other=540	 cover=93%
+phi_slot_unknown_arm	68020	Os	clang	mul/div	139140	mul/div=139140;other=9968	 cover=98%
+predefined_macros	68020	Os	clang	lea/pea	45	lea/pea=45;call=0	 cover=93%
+recdeep	68020	Os	gcc	mul/div	193500	mul/div=193500;movem=7	 cover=99%
+recmany_o1	68020	Os	gcc	mul/div	193500	mul/div=193500;movem=14	 cover=99%
+register_upper_half	68020	Os	gcc	reg/imm move	350	reg/imm move=350;branch/return=120	 cover=95%
+rotate_small	68020	Os	gcc	mul/div	8640	mul/div=8640;reg/imm move=1231	 cover=97%
+select_of_constants	68020	Os	gcc	mul/div	463500	mul/div=463500;reg/imm move=88355	 cover=99%
+shift_int32_variable	68020	Os	clang	reg/imm move	7184	reg/imm move=7184;call=576	 cover=93%
+shift_int64_masked_amount	68020	Os	clang	mul/div	69120	mul/div=69120;reg/imm move=17872	 cover=99%
+shift_int64_variable	68020	Os	clang	mul/div	69120	mul/div=69120;reg/imm move=1356	 cover=98%
+shl_long_by_one	68020	Os	clang	reg/imm move	440	reg/imm move=440;call=100	 cover=93%
+shrink_wrapped_saves	68020	Os	clang	lea/pea	31	lea/pea=31;call=0	 cover=92%
+shuttle_value	68020	Os	clang	reg/imm move	11	reg/imm move=11;lea/pea=10	 cover=92%
+signbit_idioms	68020	Os	clang	reg/imm move	12160	reg/imm move=12160;call=1296	 cover=95%
+spill_store_order	68020	Os	gcc	mul/div	116815	mul/div=116815;reg/imm move=10042	 cover=96%
+static_inline	68020	Os	clang	lea/pea	33	lea/pea=33;call=0	 cover=93%
+static_pointers	68020	Os	gcc	reg/imm move	159	reg/imm move=159;branch/return=92	 cover=93%
+strlen_idiom	68020	Os	clang	lea/pea	31	lea/pea=31;call=0	 cover=93%
+struct_with_i64	68020	Os	clang	lea/pea	33	lea/pea=33;call=0	 cover=92%
+switch_empty_cases	68020	Os	gcc	mul/div	315	mul/div=315;reg/imm move=30	 cover=94%
+switch_i64	68020	Os	clang	lea/pea	59	lea/pea=59;call=0	 cover=93%
+switch_jump_table	68020	Os	gcc	compare/test	300	compare/test=300;branch/return=296	 cover=92%
+switch_peeled_table	68020	Os	gcc	compare/test	3812	compare/test=3812;alu=1466	 cover=93%
+switch_table_holes	68020	Os	clang	mul/div	12600	mul/div=12600;branch/return=132	 cover=96%
+sysv_abi	68020	Os	clang	lea/pea	52	lea/pea=52;call=0	 cover=92%
+tail_call_long_argument	68020	Os	gcc	mul/div	90	mul/div=90;call=18	 cover=94%
+tail_calls	68020	Os	gcc	mul/div	1170	mul/div=1170;call=776	 cover=95%
+u64_shift_select_arms	68020	Os	clang	movem	137	movem=137;reg/imm move=135	 cover=93%
+uint64_to_float	68020	Os	clang	reg/imm move	11	reg/imm move=11;lea/pea=10	 cover=93%
+urem_eq	68020	Os	clang	mul/div	1560150	mul/div=1560150;reg/imm move=324048	 cover=99%
+wide_shift_by_one	68020	Os	clang	mul/div	63630	mul/div=63630;reg/imm move=1116	 cover=98%
+word_compare_branches	68020	Os	gcc	mul/div	17640	mul/div=17640;reg/imm move=4708	 cover=95%
+word_compares	68020	Os	gcc	mul/div	8820	mul/div=8820;movem=4333	 cover=95%
+wrapv_overflow_check	68020	Os	gcc	reg/imm move	13	reg/imm move=13;lea/pea=4	 cover=93%
+x87_arguments	68020	Os	clang	movem	256	movem=256;lea/pea=126	 cover=98%
+x87rotate	68020	Os	clang	runtime:add_bits	3197	runtime:add_bits=3197;runtime:sf32_pack=1116	 cover=98%
+zz_f	68020	Os	clang	reg/imm move	11	reg/imm move=11;lea/pea=10	 cover=93%

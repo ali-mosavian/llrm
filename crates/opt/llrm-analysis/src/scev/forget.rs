@@ -197,6 +197,36 @@ impl ScalarEvolution {
         }
     }
 
+    /// `forgetTopmostLoop` / `forgetLoop`, for a nest an edit rewrote: the
+    /// expressions of the values still defined in `blocks`, and of their
+    /// users, and the counts and users of the loops headed by `headers`. A
+    /// value kept with an operand replaced (`%start = %i - 1` once `%i` is
+    /// a constant) holds an add recurrence of a loop that is gone; the
+    /// expression of the phi it read is no operand of its own.
+    pub fn forget_loop_nest(
+        &mut self,
+        cx: &Cx,
+        blocks: &[BlockId],
+        headers: &[BlockId],
+    ) {
+        let mut visited: IdSet<InstId> = IdSet::new();
+        let mut worklist = Vec::new();
+        for &block in blocks {
+            for inst in cx.function.iter_block(block) {
+                if visited.insert(inst) {
+                    worklist.push(inst);
+                }
+            }
+        }
+        let mut to_forget = Vec::new();
+        self.visit_and_clear_users(cx, worklist, &mut visited, &mut to_forget);
+        self.forget_memoized_results(&to_forget);
+        for &header in headers {
+            self.forget_loop_users(cx, header);
+            self.trips.forget(header);
+        }
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8714
     /// `forgetValue`: the SCEV of `v` and of everything computed from it.
     pub fn forget_value(

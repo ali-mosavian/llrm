@@ -43,6 +43,7 @@ mod facts_coverage;
 mod facts_rewrite;
 pub mod footprint;
 pub mod forest;
+pub mod fp128;
 pub mod fp80;
 pub mod fpclass;
 pub mod hash;
@@ -107,6 +108,8 @@ mod constantfprange_tests;
 mod constantrange_tests;
 #[cfg(test)]
 mod edit_tests;
+#[cfg(test)]
+mod fp128_tests;
 #[cfg(test)]
 mod fpclass_tests;
 #[cfg(test)]

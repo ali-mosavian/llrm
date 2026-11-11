@@ -122,6 +122,19 @@ pub fn registers(outer: &Outer) -> Room {
     Room::of(outer)
 }
 
+/// How many native words the integer type `ty` is, where the target states
+/// its native width (`OperationCosts::native_bits`); 1 for anything else.
+fn words(
+    context: &Context,
+    ty: Option<TypeId>,
+    costs: &OperationCosts,
+) -> i64 {
+    match ty.map(|ty| context.types.get(ty)) {
+        Some(Type::Int(bits)) => costs.words(*bits),
+        _ => 1,
+    }
+}
+
 fn floating(
     context: &Context,
     function: &Function,
@@ -202,17 +215,25 @@ pub fn operation(
                 costs.float_load
             }
         }
-        Opcode::Load { .. } => costs.load,
+        Opcode::Load { .. } => {
+            costs.load * words(context, instruction.result.map(|value| function.value(value).ty), costs)
+        }
         Opcode::Store { .. } if floating(context, function, instruction.operands[0]) => costs.float_store,
-        Opcode::Store { .. } => costs.store,
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
-        | Opcode::ICmp(_) => costs.add,
+        Opcode::Store { .. } => {
+            costs.store * words(context, function.operand_type(context, instruction.operands[0]), costs)
+        }
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => {
+            costs.add * words(context, instruction.result.map(|value| function.value(value).ty), costs)
+        }
+        Opcode::ICmp(_) => costs.add * words(context, function.operand_type(context, instruction.operands[0]), costs),
         Opcode::Cast(_) | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Phi | Opcode::Freeze => {
-            costs.r#move
+            costs.r#move * words(context, instruction.result.map(|value| function.value(value).ty), costs)
         }
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
-        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
+        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => {
+            costs.shift * words(context, instruction.result.map(|value| function.value(value).ty), costs)
+        }
         Opcode::GetElementPtr { .. } => {
             let constant = instruction.operands[1..].iter().all(|&index| matches!(index, Operand::Constant(_)));
             advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
@@ -229,6 +250,11 @@ pub fn operation(
             let cells = llrm_mir::intrinsics::length(context, instruction.operands[2])
                 .and_then(|count| i64::try_from(count).ok())
                 .unwrap_or(UNKNOWN_TRIPS);
+            // The backend stores a small constant memset inline.
+            let inline = crate::loopidioms::InlineFills { max_stores: costs.memset_stores, bytes: cells };
+            if costs.memset_stores > 0 && inline.stores() <= inline.max_stores {
+                return Some(inline.price(costs));
+            }
             return Some(costs.fill + cells * costs.fill_cell);
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
@@ -262,76 +288,6 @@ pub fn r#static(
     costs: &OperationCosts,
 ) -> Option<i64> {
     function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
-}
-
-/// Where `loop_` stands in the unit's function: how often it is entered for
-/// each entry of the function, in `UNIT`ths (what its outside predecessors
-/// weigh), and whether it calls a function that may touch memory.
-///
-/// The frequencies are those of the whole function: `frequencies` holds them
-/// for as many loops as ask, which a caller makes once per version of the
-/// function.
-pub fn site(
-    unit: &memory::Unit,
-    outer: &Outer,
-    loop_: &llrm_analysis::graph::loops::Loop,
-    frequencies: &Frequencies,
-) -> llrm_analysis::peelsize::Site {
-    let entries = match frequencies.0.get_or_init(|| {
-        FREQUENCIES.with(|runs| runs.set(runs.get() + 1));
-        let trips = proven_trips(unit);
-        _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
-    }) {
-        Some(frequency) => cfg::graph(unit.function)
-            .iter()
-            .filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header))
-            .map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT))
-            .sum::<i64>()
-            .max(1),
-        None => UNIT,
-    };
-    let callees = outer.callees();
-    let writes = loop_
-        .body
-        .iter()
-        .flat_map(|&at| {
-            let block = cfg::block(at);
-            unit.function.iter_block(block).map(move |inst| (block, inst))
-        })
-        .any(|(_, inst)| {
-            unit.calls_out(inst)
-                && !callee(unit.context, unit.function, inst)
-                    .and_then(|id| callees.get(&id))
-                    .is_some_and(|summary| summary.effects == llrm_mir::memory::Effects::NONE)
-        });
-    llrm_support::debug!(
-        "peelsite",
-        "callees of the loop at b{}: {:?}",
-        loop_.header,
-        unit.function
-            .walk()
-            .filter(|(block, _)| loop_.body.contains(&cfg::id(*block)))
-            .filter(|(_, inst)| unit.calls_out(*inst))
-            .map(|(_, inst)| callee(unit.context, unit.function, inst)
-                .map(|id| (id, callees.get(&id).map(|one| one.effects))))
-            .collect::<Vec<_>>()
-    );
-    llrm_analysis::peelsize::Site { entries, writes }
-}
-
-/// A function's block frequencies, worked out when the first loop asks (`site`)
-/// and kept for the rest.
-#[derive(Default)]
-pub struct Frequencies(std::cell::OnceCell<Option<BTreeMap<i64, i64>>>);
-
-thread_local! {
-    static FREQUENCIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread has worked out a function's frequencies for
-/// `site`.
-pub fn frequencies_worked() -> usize {
-    FREQUENCIES.with(std::cell::Cell::get)
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.

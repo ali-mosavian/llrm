@@ -95,6 +95,12 @@ pub trait Layout {
     fn counts_jumps(&self) -> bool {
         false
     }
+    /// Whether a fall-through gains only where it removes a jump: from a
+    /// block with one successor. A block that ends in a conditional branch
+    /// has the branch whichever way it is laid out (see `fall_through_gains`).
+    fn gains_remove_jumps(&self) -> bool {
+        false
+    }
 }
 
 /// A chain of blocks laid out in a row (`BlockChain`).
@@ -478,7 +484,17 @@ impl<'a, L: Layout> Placer<'a, L> {
     ) -> BlockFrequency {
         let to_top = self.top_fall_through_freq(old_top, loop_set);
         let to_exit = exit.map_or(BlockFrequency(0), |exit| self.edge_frequency(new_top, exit));
-        let back_edge = self.edge_frequency(new_top, old_top);
+        // DEVIATE (M68K-TOP): the pin counts every fall-through. A conditional
+        // block falls through to one successor and branches to the other
+        // either way, so only a block with one successor saves its jump.
+        // Reason: partition 68000 -O2 (a latch that exits and loops back
+        // placed first costs the swap path a `bra` and a not-taken branch
+        // where gcc's order costs one taken branch). Owner m68k. Exit
+        // 2026-11-28. Off unless the layout asks.
+        let removes_jumps = self.layout.gains_remove_jumps();
+        let saves = |block: usize| !removes_jumps || self.layout.successors(block).len() == 1;
+        let back_edge =
+            if saves(new_top) { self.edge_frequency(new_top, old_top) } else { BlockFrequency(0) };
         let mut best_pred = None;
         let mut from_pred = BlockFrequency(0);
         for &pred in self.layout.predecessors(new_top) {
@@ -509,6 +525,10 @@ impl<'a, L: Layout> Placer<'a, L> {
                 new_freq = BlockFrequency(0);
                 from_pred = BlockFrequency(0);
             }
+        }
+        if !best_pred.is_none_or(|pred| saves(pred)) {
+            from_pred = BlockFrequency(0);
+            new_freq = BlockFrequency(0);
         }
         let gains = back_edge + new_freq;
         let lost = to_top + to_exit + from_pred;
@@ -862,6 +882,7 @@ pub type Odds = HashMap<(u32, u32), (BranchProbability, usize)>;
 /// A function's blocks as [`Layout`] asks for them.
 pub struct Graph {
     counts_jumps: bool,
+    gains_remove_jumps: bool,
     succs: Vec<Vec<usize>>,
     preds: Vec<Vec<usize>>,
     probs: Vec<Vec<BranchProbability>>,
@@ -937,8 +958,29 @@ impl Graph {
         size: bool,
     ) -> Graph {
         let cfg = Cfg::new(function);
-        let count = function.blocks.len();
-        let id = |at: usize| function.blocks[at].id;
+        let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();
+        let pinned = (0..ids.len())
+            .map(|at| {
+                analyze(function, at).is_none()
+                    && at + 1 < ids.len()
+                    && !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
+            })
+            .collect();
+        Graph::from_cfg(&cfg, &ids, pinned, odds, size)
+    }
+
+    /// The graph of `cfg`, block `at` numbered `ids[at]` in `odds`; `pinned`
+    /// blocks stay with their layout successor
+    /// ([`Layout::keeps_fall_through`]).
+    pub fn from_cfg(
+        cfg: &Cfg,
+        ids: &[u32],
+        pinned: Vec<bool>,
+        odds: &Odds,
+        size: bool,
+    ) -> Graph {
+        let count = ids.len();
+        let id = |at: usize| ids[at];
         let succs: Vec<Vec<usize>> = (0..count)
             .map(|from| {
                 let mut list = cfg.succs[from].clone();
@@ -976,15 +1018,8 @@ impl Graph {
             let info = BlockFrequencyInfo::calculate(&machine, &Probabilities(&probs), &ci);
             (0..count).map(|block| info.get_block_freq(BlockId(block as u32))).collect()
         };
-        let pinned = (0..count)
-            .map(|at| {
-                analyze(function, at).is_none()
-                    && at + 1 < count
-                    && !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
-            })
-            .collect();
-        let loops = loop_forest(&cfg);
-        Graph { counts_jumps: false, succs, preds, probs, freqs, pinned, loops, size }
+        let loops = loop_forest(cfg);
+        Graph { counts_jumps: false, gains_remove_jumps: false, succs, preds, probs, freqs, pinned, loops, size }
     }
 }
 
@@ -1057,6 +1092,10 @@ impl Layout for Graph {
 
     fn counts_jumps(&self) -> bool {
         self.counts_jumps
+    }
+
+    fn gains_remove_jumps(&self) -> bool {
+        self.gains_remove_jumps
     }
 
     fn successors(
@@ -1206,11 +1245,24 @@ pub fn place_blocks_counting<C, J: Jump>(
     size: bool,
     counts_jumps: bool,
 ) -> bool {
+    place_blocks_priced::<C, J>(function, odds, size, counts_jumps, false)
+}
+
+/// [`place_blocks_counting`] where `gains_remove_jumps` says a fall-through
+/// gains only from a block with one successor ([`Layout::gains_remove_jumps`]).
+pub fn place_blocks_priced<C, J: Jump>(
+    function: &mut MFunction<C>,
+    odds: &Odds,
+    size: bool,
+    counts_jumps: bool,
+    gains_remove_jumps: bool,
+) -> bool {
     if function.blocks.len() < 2 || function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
     }
     let mut graph = Graph::of::<C, J>(function, odds, size);
     graph.counts_jumps = counts_jumps;
+    graph.gains_remove_jumps = gains_remove_jumps;
     let order = place(&graph);
     let identity = order.iter().enumerate().all(|(at, &block)| at == block);
     let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();

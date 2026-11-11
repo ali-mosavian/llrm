@@ -11,7 +11,7 @@ use std::process::Command;
 fn listing(model: &str) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("llrm-cc-model-{model}-{}.s", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-S", "-O1", &format!("-mcmodel={model}"), "-o"])
@@ -60,7 +60,7 @@ fn the_borland_probes_compile_in_every_model() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     for probe in ["conventions", "defaults", "lists", "pointers"] {
         for model in ["small", "medium", "compact", "large", "huge"] {
-            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
                 .env("LLRM_CC_TARGET", "x86_16-dos")
                 .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
                 .args(["-S", "-O1", &format!("-mcmodel={model}"), "-o", "/dev/null"])
@@ -83,7 +83,7 @@ fn watcom_pragmas_name_symbols_and_segments() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("llrm-cc-pragmas-{}.obj", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-c", "-O1", "-o"])
@@ -113,7 +113,7 @@ fn a_constant_huge_offset_carries_a_64k_step_into_the_selector() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("llrm-cc-hugeconst-{}.s", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-S", "-O2", "-o"])
@@ -139,7 +139,7 @@ fn a_program_runs_in_each_model() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     for model in ["small", "medium", "compact", "large", "huge"] {
         let exe = std::env::temp_dir().join(format!("llrm-cc-run-{model}-{}.exe", std::process::id()));
-        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_16-dos")
             .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
             .args(["-w", "-O2", &format!("-mcmodel={model}"), "-o"])
@@ -177,7 +177,7 @@ fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let compile = |extra: &[&str], output: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_16-dos")
             .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
             .args(["-w", "-O2"])
@@ -213,7 +213,7 @@ fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     assert_eq!(said.trim().replace('\n', " "), "12748993 249 0 89 9");
 }
 
-/// tests/run/c programs written for llrm-c use `__far`/`__huge` at m32 (one
+/// tests/run/c programs written for llrm-cc use `__far`/`__huge` at m32 (one
 /// address space: they name nothing) and the OS header's
 /// `PHYSICAL_TEXT_SCREEN`; the x86_32-dos row had neither, so 8 of them
 /// stopped at "expected ';' after top level declarator".
@@ -227,7 +227,7 @@ fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
         "short __far a[4];\nlong __huge *p;\nint f(void) { volatile unsigned char *s = (unsigned char *)PHYSICAL_TEXT_SCREEN; return a[1] + (p != 0) + *s; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-dos")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-O1", "-w", "-S", "-o"])
@@ -240,7 +240,7 @@ fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
 }
 
 /// Plain `char` is signed on the DOS rows and unsigned under `-mabi=watcom`, as
-/// llrm-c had it: a stored 251 read -5 where watcom_far_sum.c wants 251 (it
+/// llrm-cc had it: a stored 251 read -5 where watcom_far_sum.c wants 251 (it
 /// printed 1229 for 1485), and copy_runs.c wants the signed sum.
 #[test]
 fn plain_char_is_unsigned_only_under_the_watcom_abi() {
@@ -254,7 +254,7 @@ fn plain_char_is_unsigned_only_under_the_watcom_abi() {
             continue;
         }
         for (abi, unsigned) in [(plain, false), ("-mabi=watcom", true)] {
-            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
                 .env("LLRM_CC_TARGET", row)
                 .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
                 .args(["-O1", "-w", abi, "-S", "-o"])

@@ -150,6 +150,34 @@ fn flags_end_the_loop(
     false
 }
 
+/// Where each block stands and who branches to it, found once per body: a
+/// loop asks for both, and a scan of the body per loop is O(loops x blocks).
+pub(super) fn block_index(blocks: &[crate::model::lir::Block]) -> (HashMap<i64, usize>, HashMap<i64, Vec<i64>>) {
+    #[cfg(test)]
+    INDEXED.with(|n| n.set(n.get() + 1));
+    let mut preds: HashMap<i64, Vec<i64>> = HashMap::default();
+    for block in blocks {
+        for &next in block.succ.iter() {
+            preds.entry(next).or_default().push(block.at);
+        }
+    }
+    (blocks.iter().enumerate().map(|(n, b)| (b.at, n)).collect(), preds)
+}
+
+/// The blocks outside the loop that branch to its header.
+pub(super) fn entries_of(
+    preds: &HashMap<i64, Vec<i64>>,
+    inside: &std::collections::BTreeSet<i64>,
+    header: i64,
+) -> Vec<i64> {
+    preds.get(&header).into_iter().flatten().copied().filter(|at| !inside.contains(at)).collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn shared(
     body: &LirBody,
     classes: &RegisterClasses,
@@ -161,6 +189,7 @@ pub fn shared(
     let mut out = body.clone();
     let mut next = body.next_value();
     let mut changed = false;
+    let (at_of, preds) = block_index(&out.blocks);
     for lp in &found {
         let inside = lp.body.to_set();
         // Innermost: no other loop's header inside.
@@ -168,13 +197,7 @@ pub fn shared(
             continue;
         }
         let [latch] = lp.latches.iter().copied().collect::<Vec<_>>()[..] else { continue };
-        let at_of: HashMap<i64, usize> = out.blocks.iter().enumerate().map(|(n, b)| (b.at, n)).collect();
-        let entries: Vec<i64> = out
-            .blocks
-            .iter()
-            .filter(|b| !inside.contains(&b.at) && b.succ.contains(&lp.header))
-            .map(|b| b.at)
-            .collect();
+        let entries = entries_of(&preds, &inside, lp.header);
         let [pre] = entries[..] else { continue };
         if out.blocks[at_of[&pre]].succ.len() != 1 {
             continue;
@@ -306,7 +329,7 @@ pub fn shared(
             Some(_) => 2,
             None => continue,
         };
-        let held = |value: u32| Held { value, width };
+        let held = |value: u32| Held { value, width, offset: 0 };
         let b0 = bases[0];
         let iv = next;
         let iv_next = next + 1;
@@ -455,7 +478,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 2 })
+        Loc::Held(Held { value, width: 2, offset: 0 })
     }
 
     fn insn(
@@ -484,8 +507,8 @@ mod tests {
     ) -> LirBody {
         let cell = |base: u32| {
             Loc::Mem(Mem {
-                base: Some(Held { value: base, width: 2 }),
-                index: Some(Held { value: 10, width: 2 }),
+                base: Some(Held { value: base, width: 2, offset: 0 }),
+                index: Some(Held { value: 10, width: 2, offset: 0 }),
                 ..Mem::new(None, 2)
             })
         };
@@ -557,6 +580,33 @@ mod tests {
                 )
             })
             .count()
+    }
+
+    /// A body of 40 loops found its block positions and entries with a scan of
+    /// every block per loop: ivshare and ivzero took 235 M of 7.2 G Ir on
+    /// memory_expansion. The index is made once per body.
+    #[test]
+    fn test_the_block_index_is_made_once_per_body_not_per_loop() {
+        let block = |at: i64, succ: Vec<i64>| LirBlock {
+            succ: succ.into(),
+            ..LirBlock::new(at, vec![insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])])
+        };
+        let loops = 40;
+        let mut blocks: Vec<LirBlock> = (0..loops).map(|n| block(n, vec![n, n + 1])).collect();
+        blocks.push(block(loops, vec![]));
+        let body = LirBody::new(
+            "chain",
+            0,
+            blocks.into_iter().collect::<Vec<crate::model::lir::Block>>(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        INDEXED.with(|n| n.set(0));
+        shared(&body, &RegisterClasses::m16());
+        assert_eq!(INDEXED.with(|n| n.get()), 1, "one index for {loops} loops");
+        INDEXED.with(|n| n.set(0));
+        crate::backend::ivzero::zeroed(&body);
+        assert_eq!(INDEXED.with(|n| n.get()), 1, "ivzero shares the one-index shape");
     }
 
     /// sum_three (BASIC, -O2): three `[bx+base]` streams on one index kept

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:ed361ca41374374677a005673852f5c63746b268582917e53ae1ed445f877d95 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:a50f9be81edc554b80ce83f8748684f4adb4747e5f890c2a9d270c1590608c22 -->
 
 # inlinecost
 
@@ -73,8 +73,12 @@ each site's cost and threshold beside the existing decision; with
   `CodeSize` of the callee's instructions that the walk did not fold must
   not exceed the `CodeSize` of the call and the pushes of its arguments.
   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
-  14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
-  of a local callee, which goes with it, is the pin's. No shape of callee
+  14-instruction loop into ten sites (`idioms.bas`, +690 B).
+  Measured 2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule):
+  47 cells worse, 4 better, +22946 B net (`memory_expansion` 23740 ->
+  40688, `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the
+  one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
+  The last call of a local callee, which goes with it, is the pin's. No shape of callee
   but the loop and the one smaller than its call is tested.
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
   address of a stack slot or a global the caller stored a constant to and
@@ -83,8 +87,13 @@ each site's cost and threshold beside the existing decision; with
   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
   private callee that dies with its last call are tried together, its body
   credited; so are the sites of a private callee called only from this
-  caller, whatever they pass). The pin's cost does not follow a load through
-  a pointer argument, so it never sees the loop or the arithmetic fold.
+  caller, whatever they pass). A trial the instruction units refuse stays if
+  the caller is an eighth or more smaller in bytes by the target's byte
+  prices (`function_bytes`), at a caller with no byte rate, the callee
+  staying: the units count a call by its parameters, not the far-pointer
+  words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a
+  load through a pointer argument, so it never sees the loop or the
+  arithmetic fold.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not

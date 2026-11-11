@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/lanes.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/lanes.rs sha256:53dd34fcc7683e557d786e384bbf4fee3fb6d760487b9629456498ba9ea797ff -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/lanes.rs sha256:a4a1fad275b4918f147c1a381f2d49328ede53a40a7240e67e8f8afcd2294a73 -->
 
 # lanes
 
@@ -32,6 +32,15 @@ block-beta
 
 Union, difference, intersection, subset and disjointness are single word
 operations. Inserting a lane that is none of the 72 panics.
+
+## Other register files
+The table above is the x86 one and the default. A file of another target
+(arm64's 31 roots and 32 vector registers) has its own, built from the
+file's roots: one lane for each root and every view of it (a write of a
+`w` register writes the whole `x`, so a finer lane would never be told
+apart), the 32 flag lanes, and at most 128 in all. `enter` makes a file's
+table the one this thread's `Lanes` read until the guard drops; a mask
+belongs to the table it was made under.
 
 ## Example
 No example: a bit set type. `liveness.rs` shows what it holds.

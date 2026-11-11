@@ -78,8 +78,11 @@ fn priced_params(
         callee_calls: calls,
         callee_dies: dies,
         caller_recursive: false,
+        callee_linear_recursive: false,
         caller_size: size,
         relative_frequency: None,
+        entry_weight: None,
+        planned: None,
         tti,
     };
     match inline_cost(&site, params) {
@@ -248,6 +251,15 @@ b0:
 }
 ";
 
+/// The 64-bit target the pinned costs below were measured on: a position
+/// dependent one. PIE (the default since #7955) prices a global beside an
+/// index higher, 55 for COMPARE_LOOP against the pin's 45.
+fn x86_64_non_pie() -> llrm_x86::tti::X86 {
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    tti.position_independent.set(false);
+    tti
+}
+
 /// D11 at the 64-bit target: an `optsize` caller does not copy a callee that
 /// stays when the copy grows the code, whatever the pin's threshold says (cost
 /// 45 against 50: the compare loop of memory_expansion's `check`, 186 sites,
@@ -255,14 +267,78 @@ b0:
 #[test]
 fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_guards_size() {
     let tti = |guard: bool| {
-        llrm_x86::tti::X86::of_cpu("x86-64")
-            .unwrap()
+        x86_64_non_pie()
             .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_size: guard, ..llrm_mir::target::Tuning::PIN })
     };
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(false)));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(true)));
     assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
+/// SZ2 at the 64-bit target: an external callee with ONE site is not copied
+/// into an `optsize` caller when the copy grows the code (cost 45 against 50
+/// inlined it; crc -Os m64: 139 B against gcc 96, which keeps the call).
+#[test]
+fn test_an_optsize_caller_keeps_a_callee_with_one_site_when_the_target_guards_single_sites() {
+    let tti = |single: bool| {
+        x86_64_non_pie().with_tuning(llrm_mir::target::Tuning {
+            inline_size_guard_at_size: true,
+            inline_size_guard_single_site: single,
+            ..llrm_mir::target::Tuning::PIN
+        })
+    };
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let price = |single: bool| {
+        priced_params(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(single)), params, (1, false))
+    };
+    let (cost, threshold) = price(false);
+    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
+    let (cost, threshold) = price(true);
+    assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
+/// D11 at speed on arm64: a callee with two sites that stays is not copied
+/// into a speed caller when its growth, at a byte's price in clocks, outweighs
+/// the call it saves (the pin's cost 45 against 50 inlined the compare loop;
+/// jpeg_fixed -O2 grew 7.9 KB -> 11 KB). x86 has no price: the pin's.
+#[test]
+fn a_speed_caller_keeps_a_compare_loop_with_two_sites_when_the_target_prices_bytes() {
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&x86));
+    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&arm));
+    assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
+/// The speed guard leaves a dying callee whose growth is under one call's
+/// size to the pin: its sites fold differently, and refusing one of them kept
+/// the callee and a frame (recgcd -O2 on arm64: 136 B -> 188 B, +6.4% instrs).
+#[test]
+fn the_speed_guard_inlines_a_dying_callee_whose_growth_is_under_a_call() {
+    let text = "define internal i32 @callee(i32 %a, i32 %b) nounwind {
+entry:
+  %r = srem i32 %a, %b
+  %s = add i32 %r, %a
+  %t = mul i32 %s, %b
+  %u = xor i32 %t, %a
+  %v = sub i32 %u, %b
+  %w = or i32 %v, %r
+  ret i32 %w
+}
+define i32 @f(i32 %n) {
+entry:
+  %p = call i32 @callee(i32 %n, i32 36)
+  %q = call i32 @callee(i32 %n, i32 90)
+  %s = add i32 %p, %q
+  ret i32 %s
+}
+";
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&arm), params, (2, true));
+    assert!(cost < threshold, "{cost} against {threshold}");
 }
 
 /// An external callee that stays after the inline is not copied into an
@@ -342,6 +418,45 @@ b0:
     assert!(!verdict(2, false), "premise: a callee that stays and outgrows its call is refused");
     assert!(verdict(2, true), "two calls of a callee that dies cost less than the callee and one call");
     assert!(!verdict(60, true), "sixty copies of it outgrow the callee and the calls");
+}
+
+/// At `-Os` on x86 the call's price left out the copy of a by-value argument
+/// (`byvalue_struct_address` m64: `foo(struct baz x)` read 7 units against a
+/// call of 6, so `foo` stayed and `main` built the 20-byte copy). The same
+/// body is refused behind a pointer argument and inlined behind a by-value one.
+#[test]
+fn an_optsize_caller_counts_the_copy_of_a_byval_argument_in_the_call() {
+    let text = |param: &str, arg: &str| {
+        format!(
+            "{GLOBAL}%S = type {{ i32, i32, i32, i32, i32 }}
+
+define i32 @callee({param} %p) {{
+b0:
+  %a = load i32, ptr %p
+  %b = load i32, ptr @g
+  %c = add i32 %a, %b
+  %d = mul i32 %c, %a
+  %e = add i32 %d, %b
+  store i32 %e, ptr @g
+  ret i32 %e
+}}
+
+define i32 @f(ptr %q) {{
+b0:
+  %r = call i32 @callee({arg} %q)
+  ret i32 %r
+}}
+"
+        )
+    };
+    let x86 = x86_real();
+    let params = || InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let verdict = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&x86), params(), (2, false));
+        cost < threshold
+    };
+    assert!(!verdict(&text("ptr", "ptr")), "premise: a callee that stays and outgrows its call is refused");
+    assert!(verdict(&text("ptr byval(%S)", "ptr byval(%S)")), "the 20-byte copy is part of the call");
 }
 
 /// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
@@ -439,8 +554,11 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             callee_calls: 2,
             callee_dies: false,
             caller_recursive: false,
+            callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
+            planned: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -482,8 +600,11 @@ fn an_interposable_callee_is_not_inlined() {
             callee_calls: 2,
             callee_dies: false,
             caller_recursive: false,
+            callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
+            planned: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -538,12 +659,12 @@ fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear()
 
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
-    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false };
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(
         crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
         "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
     );
-    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false };
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(
         crate::inlinecost::remark("g", "f", &dear, false),
         "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
@@ -583,6 +704,7 @@ fn test_a_site_llvms_frequencies_keep_warm_is_not_held_to_the_cold_threshold() {
         &crate::inline::call_counts(&module),
         &Default::default(),
         &Default::default(),
+        &Default::default(),
         InlineParams::from_level(2),
         CallerSize::Speed,
         false,
@@ -611,6 +733,7 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         counts: &counts,
         addressed: &none,
         recursive: &none,
+        linear_recursive: &none,
         params: InlineParams::from_level(2),
         size: CallerSize::Speed,
         always_only: false,
@@ -627,13 +750,14 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         ))
         .collect();
     let one =
-        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies).expect("leaf has a body");
+        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies, None).expect("leaf has a body");
     let mut listed = Vec::new();
     crate::inlinecost::sites(
         &module,
         &layout,
         main,
         &counts,
+        &none,
         &none,
         &none,
         InlineParams::from_level(2),
@@ -643,7 +767,7 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         Some(&mut listed),
     );
     assert_eq!((one.inline, &one.cost), (true, &listed[0].2));
-    assert_eq!(crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies), None);
+    assert_eq!(crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies, None), None);
 }
 
 /// `inlinehint` raises a callee's threshold to the hint threshold, not for a
@@ -719,8 +843,11 @@ b0:
         callee_calls: 1,
         callee_dies: false,
         caller_recursive: false,
+        callee_linear_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
+        entry_weight: None,
+        planned: None,
         tti: None,
     };
     let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -733,9 +860,9 @@ b0:
 /// so the 350-instruction benchmark body was copied into `__main` and kept.
 #[test]
 fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
-    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
-    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
-    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false, hot: false }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false, hot: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false, hot: false }.is_ok());
 }
 
 /// `-fno-inline-functions-called-once` set `Threshold::last` and nothing read
@@ -780,8 +907,11 @@ b0:
             callee_calls: 1,
             callee_dies: false,
             caller_recursive: false,
+            callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
+            planned: None,
             tti: None,
         };
         let params =
@@ -818,4 +948,256 @@ b0:
     let flat = llrm_x86::tti::X86::of_cpu("i486").unwrap();
     let (cost, _) = priced_with(text, 0, true, CallerSize::Speed, Some(&flat));
     assert_eq!(cost, -15025, "the pin prices this callee at -15025");
+}
+
+/// A target that states only its `inline_policy`, and whether its rate binds at -O1.
+struct PolicyOnly(llrm_mir::tti::InlinePolicy, Option<bool>, bool);
+
+impl llrm_mir::tti::Tti for PolicyOnly {
+    fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
+        self.0
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.1.unwrap_or_else(|| llrm_mir::tti::Basic.speed_inline_rate_at_o1())
+    }
+
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        self.2
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        kind: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        volatile: bool,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.memory_op_cost(op, ty, cost, volatile)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        user: llrm_mir::tti::ImmUser,
+        index: u32,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        global: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        kind: llrm_mir::tti::CastKind,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        lhs: llrm_mir::tti::OperandInfo,
+        rhs: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
+}
+
+/// The inliner reads the target's policy and no other inline hook: a target
+/// that returns a rate from `inline_policy` alone has a speed caller's inline of
+/// a compare loop with two sites refused, and `InlinePolicy::PIN` leaves it to
+/// the pin.
+#[test]
+fn the_inliner_reads_the_inline_policy_of_the_target() {
+    use llrm_mir::tti::{InlinePolicy, Tti};
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let pin = PolicyOnly(InlinePolicy::PIN, Some(true), false);
+    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, Some(true), false);
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
+    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
+    assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
+/// z80 -O1 inlined with the -O2 byte price (1 B = 3 T): 5 cells bigger or
+/// slower than -O1 must be (loop_fusion +43,813 T). A rate that does not bind
+/// at -O1 leaves the pin's verdict there and refuses at -O2.
+#[test]
+fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
+    use llrm_mir::tti::InlinePolicy;
+    let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
+    let from_o2 = PolicyOnly(policy, Some(false), false);
+    let always = PolicyOnly(policy, Some(true), false);
+    let verdict = |tti: &dyn llrm_mir::tti::Tti, o1_bound| {
+        let params = InlineParams { compute_full_inline_cost: true, o1_bound, ..InlineParams::from_level(2) };
+        let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(tti), params, (2, false));
+        cost < threshold
+    };
+    assert!(!verdict(&from_o2, false), "-O2 is priced");
+    assert!(verdict(&from_o2, true), "-O1 keeps the pin's verdict");
+    assert!(!verdict(&always, true), "a rate that binds at -O1 still does");
+}
+
+/// m32 -O1 moved (x_jpeg_fixed 5647 -> 6028 B) when a target that stated only a rate inherited the default
+/// "the rate binds at -O1": -O1 is strict, so a rate is opt-in there.
+#[test]
+fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
+    use llrm_mir::tti::InlinePolicy;
+    let rate_only = PolicyOnly(InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN }, None, false);
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&rate_only), params, (2, false));
+    assert!(cost < threshold, "the rate refused a copy at -O1");
+}
+
+/// DEVIATE wasm SZ1 reaches -O1: with the rate off a speed caller holds a
+/// growing inline the pin's `default<O1>` takes (jpeg_fixed -O1 22099 B against
+/// the pin's 26245). Closing #8527 kept it: undoing it moved 33 wasm -O1 rows
+/// up by 28 525 B.
+#[test]
+fn the_size_rule_holds_a_growing_inline_in_a_speed_caller_at_o1() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = PolicyOnly(policy, Some(false), false);
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti), params, (2, false));
+    assert!(cost >= threshold, "-O1 took a growing inline the size rule holds");
+}
+
+const BOUNDED_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer
+@ref = internal global [1200 x i8] zeroinitializer
+@sum = internal global i16 0
+define internal void @callee(i16 %n) nounwind {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %pa = getelementptr inbounds nuw i8, ptr @dst, i16 %i
+  %va = load i8, ptr %pa, align 1
+  %pb = getelementptr inbounds nuw i8, ptr @ref, i16 %i
+  %vb = load i8, ptr %pb, align 1
+  %m = mul i8 %va, %vb
+  %w = zext i8 %m to i16
+  %old = load i16, ptr @sum, align 2
+  %new = add i16 %old, %w
+  store i16 %new, ptr @sum, align 2
+  %next = add nuw nsw i16 %i, 1
+  %end = icmp eq i16 %next, %n
+  br i1 %end, label %done, label %loop
+
+done:
+  ret void
+}
+
+define void @f(i16 %k) {
+b0:
+  call void @callee(i16 noundef 10)
+  call void @callee(i16 noundef %k)
+  ret void
+}
+";
+
+/// z80 loop_fusion -O3: `same(10)` was no longer copied into `main` at 3 T a byte, and the loops it holds no longer
+/// met their constant trip count (39,020 T became 299,430 T). A copy that gives a loop a constant bound is exempt
+/// from the rate, where the target says so; an unknown bound is not.
+#[test]
+fn a_constant_loop_bound_exempts_a_copy_from_the_rate_where_the_target_hints_it() {
+    use llrm_mir::tti::InlinePolicy;
+    let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
+    let (hints, silent) = (PolicyOnly(policy, Some(true), true), PolicyOnly(policy, Some(true), false));
+    let inlined = |tti: &dyn llrm_mir::tti::Tti, at| {
+        let (cost, threshold) = priced_with(BOUNDED_LOOP, at, false, CallerSize::Speed, Some(tti));
+        cost < threshold
+    };
+    assert!(!inlined(&silent, 0), "the premise: the rate refuses the copy");
+    assert!(inlined(&hints, 0), "a constant bound");
+    assert!(!inlined(&hints, 1), "an unknown bound");
+}
+
+/// A target that states its rules through the older hooks gets the policy they
+/// make; one that states nothing gets the pin's.
+#[test]
+fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule, Tti};
+    assert_eq!(llrm_mir::tti::Basic.inline_policy(), InlinePolicy::PIN);
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    // At -Os an inline must not grow the code (#8228): the size rule is the hooks'.
+    let by_size = SizeRule {
+        min_sites: arm.opt_size_inline_guard_min_sites(),
+        yields_to_negative_cost: arm.opt_size_inline_guard_yields_to_negative_cost(),
+    };
+    assert!(arm.opt_size_inline_by_code_size());
+    assert_eq!(
+        arm.inline_policy(),
+        InlinePolicy { by_size: Some(by_size), by_rate: arm.speed_inline_milliclocks_per_byte() }
+    );
+    assert!(arm.inline_policy().by_rate > 0);
+    let x86 = |guard: bool| {
+        llrm_x86::tti::X86::of_cpu("x86-64")
+            .unwrap()
+            .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_size: guard, ..llrm_mir::target::Tuning::PIN })
+    };
+    assert_eq!(x86(false).inline_policy().by_size, None);
+    assert!(x86(true).inline_policy().by_size.is_some());
+}
+
+/// `LLRM_DEBUG=inline` was documented and printed nothing (jpeg_single -O1:
+/// `emit` cost 90 against threshold 90, not the pin's 225, was invisible). The
+/// line it prints for a verdict reads as clang's `-Rpass=inline` does.
+#[test]
+fn a_verdict_is_described_with_its_cost_and_threshold() {
+    use crate::inlinecost::describe;
+    let cost = InlineCost::Cost { cost: 90, threshold: 225, static_bonus: 0, blocked: false, hot: false };
+    assert_eq!(describe(&cost), "cost=90 threshold=225 inline");
+    let over = InlineCost::Cost { cost: 90, threshold: 90, static_bonus: 0, blocked: false, hot: false };
+    assert_eq!(describe(&over), "cost=90 threshold=90 no");
+    assert_eq!(describe(&InlineCost::Never("recursive".into())), "never (recursive)");
 }

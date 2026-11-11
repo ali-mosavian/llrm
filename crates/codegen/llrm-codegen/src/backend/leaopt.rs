@@ -26,11 +26,11 @@
 //! ```
 //!
 //! DEVIATE LO-1 (exit: displacements of a symbol or a frame cell shifted by
-//! `Addr::plus`, owner w-6, 2026-11-09): only an address of registers and a
+//! `Addr::plus`, owner anyisa, 2026-11-09): only an address of registers and a
 //! number is a candidate; the pin also takes a global, a constant-pool entry
 //! or a symbol as the displacement.
 //!
-//! DEVIATE LO-2 (exit: the wrap of a 16-bit offset proved, owner w-6,
+//! DEVIATE LO-2 (exit: the wrap of a 16-bit offset proved, owner anyisa,
 //! 2026-11-09): only a body of 32-bit addresses is rewritten; a displacement
 //! moved between two 16-bit sums can change what wraps.
 //!
@@ -49,7 +49,7 @@
 
 use std::sync::Arc;
 
-use crate::model::ir::{Held, Loc, Mem, Operation};
+use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Space};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
@@ -93,13 +93,25 @@ struct Lea {
     offset: i64,
 }
 
+/// No symbol in the address: none, or the literal 0 DAG selection spells an
+/// address of registers with.
+fn bare(cell: &Mem) -> bool {
+    cell.addr.is_none_or(|at| at == Addr::new(Space::Literal, 0))
+}
+
 /// An address the pass takes: registers and a number, no symbol, segment or
 /// stack argument (LO-1).
 fn plain(cell: &Mem) -> Option<Key> {
-    (cell.addr.is_none() && cell.selector.is_none() && !cell.stack_argument)
+    (bare(cell) && cell.selector.is_none() && !cell.stack_argument)
         .then_some(())
         .and(cell.base)
-        .map(|base| Key { base, index: cell.index, scale: cell.scale })
+        .map(
+            |base| Key {
+                base,
+                index: cell.index,
+                scale: cell.scale,
+            },
+        )
 }
 
 /// An instruction no one tied to a register, group or call.
@@ -284,7 +296,7 @@ fn replaceable(
         let [cell] = cells.as_slice() else { return false };
         named == 1
             && cell.base.is_some_and(|base| base.value == later.value)
-            && cell.addr.is_none()
+            && bare(cell)
             && fits_int32(cell.offset + shift)
     })
 }
@@ -433,7 +445,7 @@ fn through(
     let mut what = made.what.take().expect("an access has semantics");
     {
         let cell = cell_mut(&mut what, source, place);
-        cell.base = Some(Held { value: lea.value, width: lea.width });
+        cell.base = Some(Held { value: lea.value, width: lea.width, offset: 0 });
         cell.index = None;
         cell.scale = 1;
         cell.offset = shift;
@@ -461,12 +473,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::optimized;
-    use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
+    use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Held {
-        Held { value, width: 4 }
+        Held { value, width: 4, offset: 0 }
     }
 
     fn cell(
@@ -476,11 +488,29 @@ mod tests {
         Mem { base: Some(held(base)), offset, ..Mem::new(None, 4) }
     }
 
+    /// A cell as DAG selection makes it: the address is a bare literal 0
+    /// (`Addr::new(Space::Literal, 0)`), not none.
+    fn dag_cell(
+        base: u32,
+        offset: i64,
+    ) -> Mem {
+        Mem { base: Some(held(base)), offset, ..Mem::new(Some(Addr::new(Space::Literal, 0)), 4) }
+    }
+
     fn lea(
         at: i64,
         value: u32,
         base: u32,
         offset: i64,
+    ) -> Arc<Insn> {
+        lea_in(at, value, base, cell(base, offset))
+    }
+
+    fn lea_in(
+        at: i64,
+        value: u32,
+        base: u32,
+        address: Mem,
     ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
@@ -488,7 +518,7 @@ mod tests {
             Some(Semantics {
                 name: Some("lea".into()),
                 dests: vec![Loc::Held(held(value))],
-                sources: vec![Loc::Mem(cell(base, offset))],
+                sources: vec![Loc::Mem(address)],
                 ..Semantics::new(Operation::Address)
             }),
             vec![value],
@@ -502,13 +532,22 @@ mod tests {
         base: u32,
         offset: i64,
     ) -> Arc<Insn> {
+        load_in(at, value, base, cell(base, offset))
+    }
+
+    fn load_in(
+        at: i64,
+        value: u32,
+        base: u32,
+        address: Mem,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
             Some((at, at + 3)),
             Some(Semantics {
                 name: Some("mov".into()),
                 dests: vec![Loc::Held(held(value))],
-                sources: vec![Loc::Mem(cell(base, offset))],
+                sources: vec![Loc::Mem(address)],
                 ..Semantics::new(Operation::Move)
             }),
             vec![value],
@@ -592,6 +631,25 @@ mod tests {
         let input = body(vec![lea(0, 1, 0, 8), load(3, 3, 0, 24)], 32);
         assert_eq!(shape(&optimized(&input, false))[1], ("mov".into(), Some(0), 24));
         assert_eq!(shape(&optimized(&input, true))[1], ("mov".into(), Some(1), 16));
+    }
+
+    /// DAG selection spells an address of registers `addr: Some(Literal 0)`.
+    /// `plain` took only `None`, so no DAG-selected access was ever made
+    /// through its LEA: m32 phi_slot_unknown_arm -Os kept `cmp di, [esi+ebp*2]`
+    /// beside `lea ebx, [esi+ebp*2]` where the pin has `cmp di, [ebx]`.
+    #[test]
+    fn a_dag_selected_access_is_made_through_the_lea_in_a_size_build() {
+        let input = body(vec![lea_in(0, 1, 0, dag_cell(0, 8)), load_in(3, 3, 0, dag_cell(0, 24))], 32);
+        assert_eq!(shape(&optimized(&input, true))[1], ("mov".into(), Some(1), 16));
+    }
+
+    /// The same for the first step: the later of two DAG-selected LEAs goes.
+    #[test]
+    fn a_later_dag_selected_lea_of_the_same_address_is_the_earlier_one() {
+        let insns =
+            vec![lea_in(0, 1, 0, dag_cell(0, 8)), lea_in(3, 2, 0, dag_cell(0, 24)), load_in(6, 3, 2, dag_cell(2, 4))];
+        let result = optimized(&body(insns, 32), false);
+        assert_eq!(shape(&result), [("lea".into(), Some(0), 8), ("mov".into(), Some(1), 20)]);
     }
 
     /// A LEA after the access is lifted to before it.

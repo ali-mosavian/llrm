@@ -155,7 +155,8 @@ pub fn run_sccp(
     let tracks_returns = can_track_returns_interprocedurally(outer, function, id);
     // `addPredicateInfo`: copies of the values a branch, switch or assume
     // tells something about, for the code it holds for.
-    let assumptions = AssumptionCache::of(&*context, &outer.globals, metadata, function);
+    let assumptions =
+        AssumptionCache::of_declared(&*context, &outer.globals, metadata, function, outer.assume_declared());
     let predicates = PredicateInfo::new(&*context, &outer.globals, metadata, function, dt, &assumptions);
     // Solve for constants.
     let results = {
@@ -285,6 +286,7 @@ impl<'a> Rewrite<'a> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 

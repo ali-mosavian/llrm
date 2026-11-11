@@ -260,6 +260,7 @@ fn prepare(
             changed = true;
             continue;
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::CombineInitial);
         worklist.push(inst);
     }
     changed
@@ -329,6 +330,19 @@ pub enum Visit {
 }
 
 /// What `visit` reads besides the function.
+/// What the target's `Tti` lets the combiner do.
+#[derive(Clone, Copy, Default)]
+pub struct TargetHooks {
+    /// `Tti::variable_shift_count_in_fixed_register`.
+    pub fixed_shift_count: bool,
+    /// `Tti::folds_select_to_cmp`.
+    pub select_to_cmp: bool,
+    /// DEVIATE PHICONST (`combine_phi.rs`): fold a phi of constants into all
+    /// its users. Off where bytes are strict: a phi of constants costs a move
+    /// per edge.
+    pub phi_constant_users: bool,
+}
+
 pub struct Env<'a> {
     pub globals: &'a [GlobalValue],
     /// The module's metadata nodes, which ValueTracking reads (`!range`).
@@ -340,6 +354,7 @@ pub struct Env<'a> {
     /// `instcombine-code-sinking` (default true): the driver sinks an
     /// instruction to its only user's block after popping it.
     pub sinking: bool,
+    pub hooks: TargetHooks,
     /// `BackEdges`, computed on the first ask (`computeBackEdges`).
     pub back_edges: std::cell::OnceCell<std::collections::BTreeSet<(BlockId, BlockId)>>,
 }
@@ -354,6 +369,12 @@ pub struct Combiner<'a> {
     /// What the pass declares in its module
     /// (`Intrinsic::getOrInsertDeclaration`).
     pub declared: &'a mut Declared,
+    /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
+    /// dominating conditions while set (`foldICmpUsingKnownBits`).
+    pub without_dom_conditions: bool,
+    /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
+    /// `Query::pending_intrinsics`).
+    pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
 }
 
 impl Combiner<'_> {
@@ -454,15 +475,26 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Cast(CastOp::Trunc) => &[visit_trunc],
         Opcode::Cast(CastOp::ZExt) => &[visit_zext],
         Opcode::Cast(CastOp::SExt) => &[visit_sext],
+        Opcode::Cast(CastOp::PtrToInt) => &[|c, inst| c.visit_ptr_to_int(inst)],
+        Opcode::Cast(CastOp::IntToPtr) => &[|c, inst| c.visit_int_to_ptr(inst)],
+        Opcode::Cast(CastOp::UIToFP) => &[crate::combine_fpcast::visit_uitofp],
+        Opcode::Cast(CastOp::SIToFP) => &[crate::combine_fpcast::visit_sitofp],
+        Opcode::Cast(CastOp::BitCast) => &[crate::combine_bitcast::visit_bitcast],
+        Opcode::Cast(CastOp::FPTrunc) => &[crate::combine_fptrunc::visit_fptrunc],
+        Opcode::Cast(CastOp::FPExt) => &[crate::combine_fpcast::visit_fpext],
+        Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => &[crate::combine_fptoint::visit_fptoi],
         Opcode::ICmp(_) => &[visit_icmp],
+        Opcode::FCmp(_) => &[crate::combine_fcmp::visit_fcmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
         Opcode::Load { .. } => &[|c, inst| c.visit_load(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
-        Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
+        Opcode::Br => &[|c, inst| c.visit_cond_br(inst), |c, inst| c.visit_uncond_br(inst)],
+        Opcode::Switch => &[|c, inst| c.visit_switch(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
         Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
+        Opcode::Freeze => &[|c, inst| c.visit_freeze(inst)],
         _ => &[],
     }
 }
@@ -557,6 +589,7 @@ fn drain(
     visit: fn(&mut Combiner, InstId) -> Visit,
 ) -> bool {
     let mut changed = false;
+    llrm_mir::counts::bump(llrm_mir::counts::Event::CombineDrains);
     while !c.worklist.is_empty() {
         // Walk deferred instructions, deleting the dead among them (and so,
         // chain by chain, what only they read), and push the rest.
@@ -584,6 +617,7 @@ fn drain(
         if c.env.sinking && try_to_sink(c, inst) {
             changed = true;
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::CombineVisits);
         match visit(c, inst) {
             Visit::None => {}
             Visit::Erased => changed = true,
@@ -624,7 +658,23 @@ pub fn combine(
     function: &mut Function,
     declared: &mut Declared,
 ) -> bool {
-    combine_with_sinking(context, globals, callees, metadata, layout, function, visit, true, declared)
+    combine_on_target(context, globals, callees, metadata, layout, function, declared, TargetHooks::default())
+}
+
+/// `combine` on a target that says whether a variable shift count must sit in
+/// one register (`Tti::variable_shift_count_in_fixed_register`) and whether
+/// it makes `scmp`/`ucmp` (`Tti::folds_select_to_cmp`).
+pub fn combine_on_target(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    callees: &Callees,
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    hooks: TargetHooks,
+) -> bool {
+    combine_for(context, globals, callees, metadata, layout, function, visit, true, declared, hooks)
 }
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
@@ -668,11 +718,36 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
+    combine_for(context, globals, callees, metadata, layout, function, visit, sinking, declared, TargetHooks::default())
+}
+
+pub(crate) fn combine_for(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    callees: &Callees,
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    visit: fn(&mut Combiner, InstId) -> Visit,
+    sinking: bool,
+    declared: &mut Declared,
+    hooks: TargetHooks,
+) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
     // those visited so far.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
-    let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default() };
-    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
+    let analyses =
+        FunctionAnalyses::of_declared(context, globals, metadata, layout, function, declared.assume_declared(globals))
+            .with_lazy_dom_conditions();
+    let env = Env { globals, metadata, callees, layout, analyses, sinking, hooks, back_edges: Default::default() };
+    let mut c = Combiner {
+        context,
+        function,
+        env: &env,
+        worklist: InstWorklist::default(),
+        declared,
+        without_dom_conditions: false,
+        pending_intrinsics: Vec::new(),
+    };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);
     changed

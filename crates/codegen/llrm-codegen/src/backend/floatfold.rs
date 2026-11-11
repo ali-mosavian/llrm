@@ -1,6 +1,12 @@
 //! A float load that only one arithmetic instruction reads becomes that
 //! instruction's memory operand: `fld [m]; faddp` is `fadd [m]`.
 //!
+//! DEVIATE FF1 (owner m16, exit 2026-11-17): a volatile cell folds too; the
+//! fused instruction stays volatile and ordered against every other volatile
+//! access. The pin keeps `fld [m]` for it. Cost rule: the fold drops an `fld`
+//! and a stack slot and keeps the one memory read, so it never costs a byte or
+//! a clock; the exit is the pin's own fold, or this stays with the exit moved.
+//!
 //! # How it works
 //! x87 arithmetic has a memory form for a float or a double (`fadd qword ptr
 //! [m]`). Folding saves the load and the x87 register the loaded value held.
@@ -14,8 +20,8 @@
 //!
 //! - it is read exactly once in the body;
 //! - its defining instruction is the nearest earlier definition in the block, a
-//!   plain `fld` or `fild` of a memory cell, not volatile, with no clobbers and
-//!   not part of a group;
+//!   plain `fld` or `fild` of a memory cell, with no clobbers and not part of a
+//!   group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
 //! - the cell is 4 or 8 bytes, or a 2 or 4 byte integer the target prices below
@@ -93,16 +99,20 @@
 
 use std::sync::Arc;
 
+use crate::backend::constpool;
 use crate::backend::floatalloc::{_loads_memory, _reversed, _two_values, cell_of, name_is, semantics};
 use crate::backend::select;
 use crate::backend::storedhomes::may_write;
-use crate::model::ir::{Loc, Mem, Operation};
+use crate::model::ir::{Addr, Loc, Mem, Operation, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
 pub struct FloatFold<'a> {
     pub cpu: &'a crate::backend::cpu::Profile,
+    /// Where a constant folded into an operand is kept (`fold_constants`);
+    /// none: constants stay loaded.
+    pub pool: Option<std::rc::Rc<std::cell::RefCell<crate::backend::constpool::Pool>>>,
     /// How many registers an integer value may take: the pressure a refold
     /// may not take a block over.
     pub registers: usize,
@@ -121,7 +131,8 @@ impl LIRTransform for FloatFold<'_> {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(folded(&body, self.cpu, self.registers))
+        let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
+        Ok(folded_with(&body, self.cpu, self.registers, pool.as_deref_mut()))
     }
 }
 
@@ -130,6 +141,16 @@ pub fn folded(
     body: &LirBody,
     cpu: &crate::backend::cpu::Profile,
     registers: usize,
+) -> LirBody {
+    folded_with(body, cpu, registers, None)
+}
+
+/// [`folded`], with a pool to keep the constants it folds in.
+pub fn folded_with(
+    body: &LirBody,
+    cpu: &crate::backend::cpu::Profile,
+    registers: usize,
+    pool: Option<&mut crate::backend::constpool::Pool>,
 ) -> LirBody {
     let mut uses: HashMap<u32, usize> = HashMap::default();
     let mut defs: HashMap<u32, usize> = HashMap::default();
@@ -147,13 +168,22 @@ pub fn folded(
             }
         }
     }
+    let constants = pool.and_then(|pool| fold_constants(body, &uses, &defs, cpu, pool));
+    let body = constants.as_ref().unwrap_or(body);
     let mut blocks = Vec::new();
-    let mut changed = false;
+    let mut changed = constants.is_some();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut at = 0;
         while at < insns.len() {
             let one = Arc::clone(&insns[at]);
+            if let Some((home, loaded, read)) = _repaired(&insns, at, &uses, &floating, cpu) {
+                insns[home] = loaded;
+                insns[at] = read;
+                changed = true;
+                at += 1;
+                continue;
+            }
             let compared = _compare_with_integer(&insns, at, &uses, cpu);
             let arithmetic = one
                 .what
@@ -208,6 +238,159 @@ pub fn folded(
     _refolded(&folded, &uses, &defs, &floating, cpu, registers).unwrap_or(folded)
 }
 
+/// A constant `fldz` or `fld1` that one arithmetic instruction reads becomes
+/// that instruction's memory operand, the constant kept in the pool: `fld1;
+/// faddp` is `fadd dword [K]`.
+///
+/// DEVIATE FF2 (owner x87, exit 2026-11-28): the pin keeps `fld1`/`fldz` for
+/// every use (LLVM's legal x87 immediates) and gcc folds them when the memory
+/// form is cheaper. The same rule as a load: the clocks the fold saves
+/// (`memory_form`, per CPU) and the bytes at the target's exchange rate; the
+/// memory form is the longer (6 bytes against 4 at m32) and the pool keeps the
+/// constant besides, so code whose bytes are strict (-O1, -Os, -Oz) keeps the
+/// constant: -O1 m16 x_ld_sum grew 9 B with the 486 rows, two new pool cells. x_ld_sum -O2 m32: `x[r] += 1` ran `fld1; faddp` (12
+/// clocks) against `fadd dword [K]` (8); in the loops of x_ld_poly 129 of them.
+fn fold_constants(
+    body: &LirBody,
+    uses: &HashMap<u32, usize>,
+    defs: &HashMap<u32, usize>,
+    cpu: &crate::backend::cpu::Profile,
+    pool: &mut crate::backend::constpool::Pool,
+) -> Option<LirBody> {
+    if cpu.bytes_strict() {
+        return None;
+    }
+    let mut blocks = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
+        let mut at = 0;
+        while at < insns.len() {
+            let one = Arc::clone(&insns[at]);
+            let constant = one
+                .what
+                .as_ref()
+                .filter(
+                    |what| what.op == Operation::FloatLoad
+                        && what.sources.is_empty()
+                        && matches!(what.dests.as_slice(), [Loc::Held(held)] if held.width == 10),
+                );
+            let Some(((value, one_value), what)) = constant.and_then(|what| {
+                let Loc::Held(held) = &what.dests[0] else { return None };
+                let one_value = match what.name.as_deref()? {
+                    "fldz" => false,
+                    "fld1" => true,
+                    _ => return None,
+                };
+                Some(((held.value, one_value), what))
+            }) else {
+                at += 1;
+                continue;
+            };
+            let _ = what;
+            if uses.get(&value) != Some(&1)
+                || defs.get(&value) != Some(&1)
+                || !one.clobbers.is_empty()
+                || one.group.is_some()
+            {
+                at += 1;
+                continue;
+            }
+            // Its reader: the next instruction in the block that names it.
+            let Some(reader) = (at + 1..insns.len()).find(|&next| {
+                insns[next]
+                    .what
+                    .as_ref()
+                    .is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Held(h) if h.value == value)))
+            }) else {
+                at += 1;
+                continue;
+            };
+            let Some(arith) =
+                insns[reader].what.as_ref().filter(|w| w.op == Operation::FloatArith && w.dests.len() == 1)
+            else {
+                at += 1;
+                continue;
+            };
+            let Some((name, left, right)) =
+                _two_values(Some(arith)).filter(|(_, left, right)| left.value != right.value)
+            else {
+                at += 1;
+                continue;
+            };
+            let cell_is_left = left.value == value;
+            // The memory form reads and writes `st(0)`: the other operand must
+            // be the float the block defined last, or an exchange (or the
+            // constant loaded again) follows, which ties in clocks and costs
+            // bytes (x_nbody_f -O3 m32: +378 clocks, a nest laid out again;
+            // x_ld_axpy -O2: `fld [K]` for `fld1`).
+            let other = if cell_is_left { right.value } else { left.value };
+            // Only a value still read at or after the reader is on the stack:
+            // one a `fistp` or a popping operation consumed is gone (x_ldconv
+            // -O2: the folds counted as exchanges lost 3,999 clocks).
+            let newest = insns[..reader]
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(
+                    |(index, earlier)| {
+                        if index == at {
+                            return None;
+                        }
+                        let what = earlier.what.as_ref()?;
+                        what.dests.iter().find_map(|dest| match dest {
+                            Loc::Held(held) if held.width == 10 && earlier.defines.contains(&held.value) => {
+                                let read_between = insns[index + 1..reader]
+                                    .iter()
+                                    .filter_map(|between| between.what.as_ref())
+                                    .flat_map(|what| &what.sources)
+                                    .filter(|source| matches!(source, Loc::Held(read) if read.value == held.value))
+                                    .count();
+                                (uses.get(&held.value).copied().unwrap_or(0) > read_between).then_some(held.value)
+                            }
+                            _ => None,
+                        })
+                    },
+                );
+            if newest != Some(other) {
+                at += 1;
+                continue;
+            }
+            let bytes = constpool::narrowest(if one_value { 1.0 } else { 0.0 });
+            let Some((_, saved)) = memory_form_of(&name, cell_is_left, false, bytes.len() as u32, cpu) else {
+                at += 1;
+                continue;
+            };
+            // Gone: the constant's load and the register form's operand
+            // encoding; added: the memory form's.
+            let probe = Mem {
+                disp_width: 2,
+                ..Mem::new(Some(Addr { index: 0, ..Addr::new(Space::Segment, 0) }), bytes.len() as u32)
+            };
+            // A constant the pool does not hold yet is a cell of its own, which
+            // the fold pays for once (the fold of a repeated constant reuses it).
+            let cell_bytes = if pool.holds(&bytes) { 0 } else { bytes.len() as i64 };
+            let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits) - cell_bytes;
+            let rate = cpu.speed_milliclocks_per_byte();
+            let pays = if rate == 0 { saved > 0 && gained >= 0 } else { saved * 1000 + gained * rate > 0 };
+            if !pays {
+                at += 1;
+                continue;
+            }
+            let cell = pool.cell(bytes);
+            let Some(fused) = read_from_cell(&insns[reader], value, &cell) else {
+                at += 1;
+                continue;
+            };
+            insns[reader] = Arc::new(fused);
+            insns.remove(at);
+            changed = true;
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    changed.then(|| body.with_blocks(blocks))
+}
+
 /// Bytes of an x87 register form (`fmul st, st(i)`, `fld st(i)`).
 const REGISTER_FORM: i64 = 2;
 
@@ -230,6 +413,32 @@ fn _memory_operation_bytes(
         None => wide,
     };
     2 + displacement + i64::from(model.flat() && cell.index.is_some()) + i64::from(cell.selector.is_some())
+}
+
+/// The loads a held cell takes: its own, and one more at each read a call
+/// separates from the one before it (or from the load), as a call empties the
+/// x87 stack and the cell is loaded again where it is read next.
+fn _loads_needed(
+    body: &LirBody,
+    home: (usize, usize),
+    places: &[(usize, usize)],
+) -> i64 {
+    let mut loads = 1;
+    for (index, place) in places.iter().enumerate() {
+        let previous = places[..index].iter().rev().find(|earlier| earlier.0 == place.0).map(|earlier| earlier.1);
+        let from = match previous {
+            Some(at) => at + 1,
+            None if place.0 == home.0 => home.1 + 1,
+            None => 0,
+        };
+        let calls = |one: &Arc<Insn>| {
+            one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call)
+        };
+        if body.blocks[place.0].insns[from..place.1].iter().any(calls) {
+            loads += 1;
+        }
+    }
+    loads
 }
 
 /// A load that arithmetic instructions read, each taking the cell as its
@@ -264,7 +473,6 @@ fn _refolded(
                 && _loads_memory(one.what.as_ref())
                 && defs.get(&value) == Some(&1)
                 && uses.get(&value).is_some_and(|reads| *reads >= 1)
-                && !one.volatile
                 && one.clobbers.is_empty()
                 && one.group.is_none()
             {
@@ -341,17 +549,20 @@ fn _refolded(
         if !foldable {
             continue;
         }
-        let bytes = loaded + held - folded_bytes;
-        let rate =
-            if cpu.size || cpu.min_size { cpu.size_milliclocks_per_byte() } else { cpu.speed_milliclocks_per_byte() };
-        // A target with an exchange rate takes clocks for bytes at it, and
-        // never grows code built for size; one without takes neither worse.
-        let pays = if rate == 0 {
-            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
-        } else if cpu.size || cpu.min_size {
-            bytes > 0
+        let bytes = loaded * _loads_needed(body, *home, places) + held - folded_bytes;
+        // Built for size the bytes decide, on every target and with no
+        // exchange rate; clocks only break a tie. At speed a target with a
+        // rate takes clocks for bytes at it, and one without takes neither
+        // worse.
+        let pays = if cpu.size || cpu.min_size {
+            bytes > 0 || (bytes == 0 && saved > 0)
         } else {
-            saved * 1000 + bytes * rate > 0
+            let rate = cpu.speed_milliclocks_per_byte();
+            if rate == 0 {
+                saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
+            } else {
+                saved * 1000 + bytes * rate > 0
+            }
         };
         if !pays {
             continue;
@@ -493,6 +704,9 @@ fn _fused(
 ) -> Arc<Insn> {
     let mut fused = (**one).clone();
     fused.what = Some(what);
+    // A volatile cell is still read once, by the fused instruction, and kept
+    // in order against every other volatile access (`_home_of`).
+    fused.volatile |= load.volatile;
     let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
     fused.uses = one
         .uses
@@ -545,9 +759,93 @@ pub fn read_from_cell(
     Some(made)
 }
 
+/// An arithmetic instruction that reads a float cell and an integer `fild`
+/// nothing else reads: `fild [i]; fmul dword [K]` becomes `fld dword [K];
+/// fimul [i]` where the target prices the integer memory form further below
+/// its pair than the float one (486: 13 + 16 - 23 = 6 against 3 + 16 - 14 = 5).
+/// The cells are the same two, so the bytes tie; the pin keeps the float form
+/// (the DAG folds the cell before the integer load is seen), gcc takes the
+/// integer one. DEVIATE (owner x87, exit 2026-11-28); not made for size.
+///
+/// Returns the load's place, the `fld` that replaces it and the instruction
+/// that reads the integer cell.
+fn _repaired(
+    insns: &[Arc<Insn>],
+    at: usize,
+    uses: &HashMap<u32, usize>,
+    floating: &HashSet<u32>,
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(usize, Arc<Insn>, Arc<Insn>)> {
+    if cpu.size || cpu.min_size {
+        return None;
+    }
+    let arith = &insns[at];
+    let what = arith.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)?;
+    let [Loc::Held(held), Loc::Mem(float_cell)] = what.sources.as_slice() else { return None };
+    if held.width != 10 || arith.volatile || !matches!(float_cell.width, 4 | 8) || uses.get(&held.value) != Some(&1) {
+        return None;
+    }
+    let home = _home_of(insns, at, held.value)?;
+    let load = &insns[home];
+    if load.volatile || !name_is(load.what.as_ref()?, "fild") {
+        return None;
+    }
+    // The float cell is read at the load's place now: no write to it, and no
+    // register of its address changed, in between.
+    if insns[home + 1..at].iter().any(|between| {
+        between.defines.iter().any(|defined| arith.uses.contains(defined)) || may_write(between, float_cell, false)
+    }) {
+        return None;
+    }
+    let full = what.name.as_deref()?;
+    let integer_is_left = !matches!(full, "fsubr" | "fdivr");
+    let base = full.strip_suffix('r').filter(|_| !integer_is_left).unwrap_or(full);
+    let (operation, saved_integer) = memory_form_of(base, integer_is_left, true, cell_of(load).width, cpu)?;
+    let (_, saved_float) = memory_form_of(base, !integer_is_left, false, float_cell.width, cpu)?;
+    if saved_integer <= saved_float {
+        return None;
+    }
+    let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
+    let mut loaded = (**load).clone();
+    loaded.what = Some(semantics(
+        Operation::FloatLoad,
+        "fld",
+        load.what.as_ref()?.dests.clone(),
+        vec![Loc::Mem(float_cell.clone())],
+    ));
+    loaded.uses = foreign(&arith.uses);
+    loaded.widths = arith.widths.iter().copied().filter(|(one, _)| !floating.contains(one)).collect();
+    let mut read = (**arith).clone();
+    read.what = Some(semantics(
+        Operation::FloatArith,
+        &operation,
+        what.dests.clone(),
+        vec![Loc::Held(*held), Loc::Mem(cell_of(load).clone())],
+    ));
+    read.uses = arith
+        .uses
+        .iter()
+        .copied()
+        .filter(|one| floating.contains(one))
+        .chain(foreign(&load.uses))
+        .collect::<IndexSet<u32>>()
+        .into_iter()
+        .collect();
+    read.widths = arith
+        .widths
+        .iter()
+        .chain(&load.widths)
+        .copied()
+        .filter(|(one, _)| floating.contains(one) || load.uses.contains(one))
+        .collect::<IndexSet<(u32, u32)>>()
+        .into_iter()
+        .collect();
+    Some((home, Arc::new(loaded), Arc::new(read)))
+}
+
 /// The load that defines `value`, if it may be read again at `at` as a memory
-/// operand: the nearest definition in the block, a plain load of a cell, not
-/// volatile, with no clobbers and not part of a group, and nothing between it
+/// operand: the nearest definition in the block, a plain load of a cell, with
+/// no clobbers and not part of a group, and nothing between it
 /// and `at` volatile, a call, a barrier or an escape, or able to write the
 /// cell.
 fn _home_of(
@@ -564,7 +862,7 @@ fn _home_of(
                 .is_some_and(|made| made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))),
         )?;
     let load = &insns[home];
-    if !_loads_memory(load.what.as_ref()) || load.volatile || !load.clobbers.is_empty() || load.group.is_some() {
+    if !_loads_memory(load.what.as_ref()) || !load.clobbers.is_empty() || load.group.is_some() {
         return None;
     }
     let cell = cell_of(load);
@@ -628,6 +926,17 @@ fn memory_form(
     load: &Insn,
     cpu: &crate::backend::cpu::Profile,
 ) -> Option<(String, i64)> {
+    memory_form_of(name, cell_is_left, name_is(load.what.as_ref()?, "fild"), cell_of(load).width, cpu)
+}
+
+/// [`memory_form`] for a cell of `width` bytes, an integer one if `integer`.
+fn memory_form_of(
+    name: &str,
+    cell_is_left: bool,
+    integer: bool,
+    width: u32,
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(String, i64)> {
     let reversed = |name: &str| -> String {
         match name {
             "fsub" => "fsubr".to_owned(),
@@ -640,7 +949,7 @@ fn memory_form(
     // form below the `fild` and the operation it replaces, per operation:
     // the 486 has `fimul` at 23 clocks against 13 and 16, `fiadd` at 20 against
     // 13 and 8.
-    if name_is(load.what.as_ref()?, "fild") {
+    if integer {
         let (integer, float) = match name.as_str() {
             "fadd" => ("x87_add_i", "x87_add"),
             "fsub" | "fsubr" => ("x87_add_i", "x87_add"),
@@ -650,12 +959,12 @@ fn memory_form(
         };
         let price = |key: &str| cpu.cost(key).ok();
         let replaced = price("x87_load_i")? + price(float)?;
-        if !matches!(cell_of(load).width, 2 | 4) || price(integer)? >= replaced {
+        if !matches!(width, 2 | 4) || price(integer)? >= replaced {
             return None;
         }
         return Some((format!("fi{}", &name[1..]), replaced - price(integer)?));
     }
-    if !matches!(cell_of(load).width, 4 | 8) {
+    if !matches!(width, 4 | 8) {
         return None;
     }
     // A float or double cell: the load is saved, and the memory form may cost
@@ -682,7 +991,7 @@ mod tests {
     const REGISTERS: usize = 6;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 10 })
+        Loc::Held(Held { value, width: 10, offset: 0 })
     }
 
     fn global(
@@ -783,6 +1092,225 @@ mod tests {
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
     }
 
+    /// `fold_constants` over a pool of its own.
+    fn constants_folded(
+        body: &LirBody,
+        cpu: &crate::backend::cpu::Profile,
+    ) -> LirBody {
+        let mut pool = crate::backend::constpool::Pool::new(0);
+        folded_with(body, cpu, REGISTERS, Some(&mut pool))
+    }
+
+    /// x_ld_sum -O2 m32: `x[r] += 1` was `fld1; faddp` (12 clocks, 4 bytes)
+    /// where `fadd dword [K]` is 8 clocks and 6 bytes: 129 executed in the
+    /// loops of x_ld_poly, 60 clocks over gcc in x_ld_sum. The constant one
+    /// arithmetic instruction reads is its memory operand where the target
+    /// prices the clocks above the extra bytes.
+    #[test]
+    fn test_a_constant_one_instruction_reads_is_its_memory_operand_at_speed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, cpu)), ["fld", "fadd+m", "fstp"]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fadd+m", "fstp"], "no pool: only the load folds");
+    }
+
+    /// x_ld_sum -O1 m16 grew 9 B (x_nbody_f 21) once the table priced `fld1;
+    /// faddp` above `fadd [K]`: the code ties and the pool cell is the growth.
+    /// Where bytes are strict the constant stays loaded.
+    #[test]
+    fn test_a_constant_stays_loaded_where_bytes_are_strict() {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, &cpu)), ["fld", "fadd+m", "fstp"], "-O2: the control");
+        cpu.speed_rate = false;
+        assert_eq!(names(&constants_folded(&body, &cpu)), ["fld1", "fadd+m", "fstp"], "-O1: the constant stays");
+    }
+
+    /// x_jpeg_single -O1 m16: one pool constant read three times, a call
+    /// between the reads. A call empties the x87 stack, so the held constant
+    /// is loaded again at each read (`fld K; faddp`, 6 B) where the memory form
+    /// is 4 B: 3 x 4 + 6 - 3 x 4 = 6 B in favour of folding. The cell is a pool
+    /// constant, which the call cannot write.
+    #[test]
+    fn test_a_pool_constant_read_across_calls_is_read_from_its_cell_where_bytes_are_strict() {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        cpu.speed_rate = false;
+        let call = |at: i64| insn(at, Operation::Call, "call", vec![], vec![]);
+        let invariant = |one: Arc<Insn>| Arc::new(Insn { invariant: true, ..Insn::clone(&one) });
+        let body = |calls: bool| {
+            let mut insns = vec![invariant(fld(0, 1, global(0, 0)))];
+            for (index, value) in [(1, 10), (3, 11), (5, 12)] {
+                insns.push(insn(index, Operation::FloatLoad, "fld1", vec![held(value)], vec![]));
+                insns.push(arith(index + 1, "fadd", value + 10, value, 1));
+                insns.push(fstp(index + 1, value + 10, frame(-4)));
+                if calls {
+                    insns.push(call(index + 1));
+                }
+            }
+            one_block(insns)
+        };
+        let adds = |done: &LirBody| names(done).iter().filter(|name| *name == "fadd+m").count();
+        assert_eq!(adds(&folded(&body(true), &cpu, REGISTERS)), 3, "calls split the reads: three loads held");
+        assert_eq!(adds(&folded(&body(false), &cpu, REGISTERS)), 0, "no call: one load and three register forms win");
+    }
+
+    /// A fold of `fld1` makes a pool cell the code does not show: 4 B for a
+    /// float. The 486 saves 3 clocks (`fld1; faddp` 11, `fadd [K]` 8) and
+    /// pays it; the Pentium saves 1 (1 + 3 against 3) and does not, unless
+    /// another reader already put the constant in the pool.
+    #[test]
+    fn test_a_constant_fold_pays_for_the_pool_cell_it_makes() {
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        let run = |name: &str, held_before: bool| {
+            let cpu = crate::backend::cpu::profile(name).expect("a profile");
+            let mut pool = crate::backend::constpool::Pool::new(0);
+            if held_before {
+                pool.cell(crate::backend::constpool::narrowest(1.0));
+            }
+            names(&folded_with(&body, cpu, REGISTERS, Some(&mut pool)))
+        };
+        assert_eq!(run("486", false), ["fld", "fadd+m", "fstp"], "486: 3 clocks for 4 B");
+        assert_eq!(run("P5", false), ["fld1", "fadd+m", "fstp"], "P5: 1 clock does not pay for 4 B");
+        assert_eq!(run("P5", true), ["fld", "fadd+m", "fstp"], "P5 with the cell already there");
+    }
+
+    /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last
+    /// float defined, so `fadd [K]` needs an exchange (or the constant loaded
+    /// again): a tie in clocks and 4 bytes more, and in x_nbody_f a nest laid
+    /// out again (+378 clocks). The constant stays `fld1`.
+    #[test]
+    fn test_a_constant_stays_loaded_where_its_memory_form_would_need_an_exchange() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            insn(2, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(3, "fadd", 3, 1, 2),
+            fstp(4, 3, global(0, 0)),
+            fstp(5, 4, global(8, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ldconv -O2 m32: a float defined after the other operand but already
+    /// consumed (stored) is not on the stack, so the operand is the top and the
+    /// memory form needs no exchange.
+    #[test]
+    fn test_a_constant_folds_past_a_newer_value_already_consumed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            fstp(2, 4, global(16, 0)),
+            insn(3, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(4, "fadd", 3, 1, 2),
+            fstp(5, 3, global(0, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ldconv -O2 m32: `fadd v, v` reads a value twice; the count of reads
+    /// between its definition and the constant's reader counted the
+    /// instruction once, so a value already consumed looked live and the
+    /// constant stayed `fld1` (+3,999 clocks against the memory form).
+    #[test]
+    fn test_a_constant_folds_past_a_newer_value_one_instruction_read_twice() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            arith(2, "fadd", 5, 4, 4),
+            fstp(3, 5, global(16, 0)),
+            insn(4, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(5, "fadd", 3, 1, 2),
+            fstp(6, 3, global(0, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ld_matmul -O2 m32: the DAG folds `0.5L` into `fmul dword [K]` and
+    /// leaves `fild [i]`; the integer memory form saves more (13 + 16 - 23
+    /// against 3 + 16 - 14), as gcc has it: `fld [K]; fimul [i]`, +576 clocks.
+    #[test]
+    fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_at_speed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
+    /// The 386 column priced the integer memory form at the 387's numbers
+    /// (`fimul` 35 against `fild` 8 + `fmul` 27), where the pair saves
+    /// nothing and the pair stays: x87rotate-class m16 code was priced at
+    /// fxch 18 and fstp 8 while the bar is the 486 table (fxch 4, `fimul` 23
+    /// against 13 + 16).
+    #[test]
+    fn test_the_386_column_prices_the_integer_memory_form_at_the_486_numbers() {
+        let cpu = crate::backend::cpu::profile("386").expect("a profile");
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
+    /// A constant that two instructions read stays loaded: one `fld1` serves
+    /// both, and each memory form would cost its bytes again.
+    #[test]
+    fn test_a_constant_read_twice_stays_loaded() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            arith(3, "fmul", 4, 3, 2),
+            fstp(4, 4, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, cpu)), ["fld1", "fadd+m", "fmul", "fstp"]);
+    }
+
+    /// int_compared_with_float -Os: a volatile float read once by a compare was
+    /// `fld [m]; fxch; fcompp` (+24 B over six sites); the compare reads the
+    /// cell itself, and stays volatile.
+    #[test]
+    fn test_a_volatile_load_a_compare_reads_once_is_its_memory_operand() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let volatile = {
+            let mut load = (*fld(1, 2, global(0, 0))).clone();
+            load.volatile = true;
+            Arc::new(load)
+        };
+        let compare = insn(2, Operation::Compare, "fcom", vec![], vec![held(1), held(2)]);
+        let body = one_block(vec![fld(0, 1, frame(-4)), volatile, compare]);
+        let done = folded(&body, cpu, REGISTERS);
+        assert_eq!(names(&done), ["fld", "fcom+m"]);
+        assert!(done.blocks[0].insns.last().expect("an instruction").volatile);
+    }
+
     /// A store to the cell between two reads changes the value the second one
     /// reads: the load stays.
     #[test]
@@ -827,7 +1355,7 @@ mod tests {
         between: Vec<Arc<Insn>>,
         crowd: &[u32],
     ) -> LirBody {
-        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         two_blocks_through(pointer, between, crowd)
     }
 
@@ -881,7 +1409,7 @@ mod tests {
     #[test]
     fn test_a_load_is_kept_where_a_store_through_a_pointer_may_reach_its_cell_before_a_reader() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
-        let other = Mem { base: Some(Held { value: 8, width: 2 }), ..Mem::new(None, 4) };
+        let other = Mem { base: Some(Held { value: 8, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut store = (*fstp(3, 2, other)).clone();
         store.uses = vec![8];
         let got = names(&folded(&two_blocks(vec![Arc::new(store)], &[]), cpu, REGISTERS));
@@ -909,8 +1437,8 @@ mod tests {
     #[test]
     fn test_a_cell_with_an_index_and_a_dword_displacement_costs_seven_bytes_at_32_bits() {
         let pointer = Mem {
-            base: Some(Held { value: 9, width: 4 }),
-            index: Some(Held { value: 10, width: 4 }),
+            base: Some(Held { value: 9, width: 4, offset: 0 }),
+            index: Some(Held { value: 10, width: 4, offset: 0 }),
             offset: 320,
             ..Mem::new(None, 4)
         };
@@ -929,9 +1457,9 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("add".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![
-                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Held(Held { value: 9, width: 2, offset: 0 }),
                     Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Binary)
@@ -947,7 +1475,7 @@ mod tests {
     #[test]
     fn test_a_load_is_kept_where_its_pointer_is_written_before_its_one_reader_in_the_block() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
-        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut load = (*fld(0, 1, pointer)).clone();
         load.uses = vec![9];
         let step = Arc::new(Insn::new(
@@ -955,9 +1483,9 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("add".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![
-                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Held(Held { value: 9, width: 2, offset: 0 }),
                     Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Binary)
@@ -973,6 +1501,63 @@ mod tests {
             fstp(3, 3, frame(-4)),
         ]);
         let got = names(&folded(&body, cpu, REGISTERS));
+        assert!(got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// A size profile of a target with no size rate (m32), the memory form of
+    /// `fadd` priced above the pair it replaces (`fld` 6 + `fadd` 6).
+    fn priced_memory_form(memory: i64) -> crate::backend::cpu::Profile {
+        let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile").clone();
+        for (key, price) in [("x87_load", 6), ("x87_add", 6), ("x87_add_m", memory)] {
+            std::sync::Arc::make_mut(&mut cpu._costs).retain(|(name, _)| name != key);
+            std::sync::Arc::make_mut(&mut cpu._costs).push((key.to_owned(), price));
+        }
+        cpu
+    }
+
+    /// A load read by `readers` arithmetic instructions: the several-reader
+    /// refold, the only fold that weighs clocks against bytes (a single reader
+    /// folds as the pin does, whatever the clocks).
+    fn read_by(
+        readers: usize,
+        cell: Mem,
+    ) -> LirBody {
+        let mut insns = vec![fld(0, 1, cell), insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![])];
+        let mut left = 2;
+        for reader in 0..readers {
+            let result = 3 + reader as u32;
+            insns.push(arith(2 + reader as i64, "fadd", result, left, 1));
+            left = result;
+        }
+        insns.push(fstp(10, left, frame(-4)));
+        one_block(insns)
+    }
+
+    /// Built for size the bytes decide: two readers of a 3-byte cell save a
+    /// byte and, at `fadd m64` 20 against 12, cost 16 clocks; the fold is made
+    /// on every target. m32 -Os refused it (no size rate: neither metric may
+    /// grow) and m16 took it only through a fitted 10_000 rate.
+    #[test]
+    fn test_a_refold_that_saves_bytes_and_costs_clocks_is_made_for_size() {
+        let cpu = priced_memory_form(20);
+        let got = names(&folded(&read_by(2, frame(-8)), &cpu, REGISTERS));
+        assert!(!got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// The same refold with the memory form cheaper than the pair.
+    #[test]
+    fn test_a_refold_that_saves_bytes_and_clocks_is_made_for_size() {
+        let cpu = priced_memory_form(6);
+        let got = names(&folded(&read_by(2, frame(-8)), &cpu, REGISTERS));
+        assert!(!got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// A guard, green before and after: three readers of a 4-byte cell save
+    /// clocks and add two bytes; code built for size does not grow.
+    #[test]
+    fn test_a_refold_that_saves_clocks_and_grows_code_is_not_made_for_size() {
+        let cpu = priced_memory_form(6);
+        let got = names(&folded(&read_by(3, global(0, 0)), &cpu, REGISTERS));
         assert!(got.contains(&"fld".to_owned()), "{got:?}");
     }
 }

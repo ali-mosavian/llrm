@@ -78,13 +78,17 @@ impl LocationSize {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct AAInfo {
     pub tbaa: Option<MetadataId>,
+    /// `!alias.scope`.
     pub noalias_scope: Option<MetadataId>,
+    /// `!noalias`.
+    pub noalias: Option<MetadataId>,
 }
 
 impl AAInfo {
     /// The tags an instruction carries.
     pub fn of(op: &llrm_mir::module::Instruction) -> Self {
-        Self { tbaa: op.metadata.iter().find(|(kind, _)| kind == "tbaa").map(|(_, id)| *id), noalias_scope: None }
+        let tag = |wanted: &str| op.metadata.iter().find(|(kind, _)| kind == wanted).map(|(_, id)| *id);
+        Self { tbaa: tag("tbaa"), noalias_scope: tag("alias.scope"), noalias: tag("noalias") }
     }
 }
 
@@ -138,8 +142,7 @@ impl MemoryLocation {
         // `memset`, `memcpy` and `memmove` name the bytes they touch through
         // their destination and source (`getForDest`, `getForSource`).
         let named = llrm_mir::memory::callee(unit.context, unit.function, call)
-            .and_then(|one| unit.globals.get(one.0 as usize)?.name.as_deref())
-            .and_then(llrm_mir::intrinsics::Intrinsic::named);
+            .and_then(|one| unit.globals.get(one.0 as usize)?.intrinsic());
         // `MemoryLocation.cpp#L200-L230`: the bytes an `invariant.start` or
         // `.end` covers are its constant size operand; the scope `.end` takes
         // first is a descriptor never dereferenced.
@@ -322,13 +325,13 @@ impl MemoryEffects {
                         .with(IRMemLocation::ErrnoMem, named("errnomem"))
                         .with(IRMemLocation::Other, default)
                 }
-                Attribute::Flag(_) => {
-                    let through = llrm_mir::memory::through(std::slice::from_ref(attr));
-                    let info = match (through.reads, through.writes) {
-                        (true, true) => ModRefInfo::ModRef,
-                        (true, false) => ModRefInfo::Ref,
-                        (false, true) => ModRefInfo::Mod,
-                        (false, false) => ModRefInfo::NoModRef,
+                Attribute::Flag(name) => {
+                    use llrm_mir::facts::Fact;
+                    let info = match name.fact() {
+                        Some(Fact::ReadNone) => ModRefInfo::NoModRef,
+                        Some(Fact::ReadOnly) => ModRefInfo::Ref,
+                        Some(Fact::WriteOnly) => ModRefInfo::Mod,
+                        _ => continue,
                     };
                     Self { effects: [info; 4] }
                 }
@@ -454,6 +457,8 @@ pub struct AAQueryInfo {
     answers: HashMap<u64, Answer>,
     /// `NumAssumptionUses`: the uses of an assumption still in force.
     assumption_uses: i32,
+    /// `AAQI.Depth`: the queries open, one inside another.
+    pub(crate) depth: u32,
     /// `AssumptionBasedResults`: the pairs whose answer rests on an assumption
     /// of a query not yet decided.
     assumption_based: Vec<u64>,
@@ -505,6 +510,7 @@ impl Default for AAQueryInfo {
             locations: HashMap::default(),
             answers: HashMap::default(),
             assumption_uses: 0,
+            depth: 0,
             assumption_based: Vec::new(),
             capture: Box::<crate::captureanalysis::SimpleCaptureAnalysis>::default(),
             classes: HashMap::default(),
@@ -876,6 +882,33 @@ mod tests {
     use crate::memory::Unit;
     use crate::testing::{DOS, function, layout, parsed};
 
+    /// `get_for_argument` named the callee from its text on every ask (2465 Ir,
+    /// 85,563 asks in DSE of 600 memcpy/memset/store triples). The name keeps
+    /// its intrinsic: asking again looks no name up.
+    #[test]
+    fn asking_for_a_calls_argument_looks_no_name_up() {
+        let text = format!(
+            "{DOS}declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\ndefine void @f(ptr %d, ptr %s) {{\nb0:\n  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 8, i1 false)\n  ret void\n}}\n"
+        );
+        let module = parsed(&text);
+        let (function, layout) = (function(&module, "f"), layout(&module));
+        let unit = Unit::of(&module, &layout, function);
+        let call = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(
+                function.instruction(inst).opcode,
+                llrm_mir::opcode::Opcode::Call(_)
+            ))
+            .unwrap();
+        let before = llrm_mir::intrinsics::names_looked_up();
+        for arg in 0..2 {
+            let found = MemoryLocation::get_for_argument(&unit, call, arg).expect("an argument");
+            assert_eq!(found.size, LocationSize::Precise(8), "arg {arg}");
+        }
+        assert_eq!(llrm_mir::intrinsics::names_looked_up(), before, "names looked up for 2 asks");
+    }
+
     /// An analysis that answers nothing: every pair may alias, every access
     /// does both.
     struct Nothing;
@@ -996,5 +1029,47 @@ mod tests {
             .map(|inst| MemoryLocation::get(&unit, inst).map(|one| one.size))
             .collect();
         assert_eq!(sizes, vec![Some(LocationSize::Precise(2)), Some(LocationSize::Precise(4)), None]);
+    }
+
+    /// `of_attrs` scanned the whole list three times for each flag (via
+    /// `memory::through`): 22 M Ir on memory_expansion. A name is read once;
+    /// no list is scanned, and the answer is unchanged.
+    #[test]
+    fn effects_of_flags_scan_no_attribute_list() {
+        use llrm_mir::counts::{Event, get};
+        use llrm_mir::opcode::Attribute;
+        let flag = |name: &str| Attribute::Flag(name.into());
+        let attrs: Vec<Attribute> =
+            ["nounwind", "mustprogress", "nofree", "readonly", "willreturn"].into_iter().map(flag).collect();
+        let before = get(Event::AttributeScans);
+        let mut effects = MemoryEffects::unknown();
+        for _ in 0..1000 {
+            effects = MemoryEffects::of_attrs(&attrs);
+        }
+        assert_eq!(get(Event::AttributeScans), before, "scanned a list per flag");
+        assert_eq!(effects, MemoryEffects::everywhere(ModRefInfo::Ref));
+        assert_eq!(MemoryEffects::of_attrs(&[flag("readnone"), flag("readonly")]), MemoryEffects::none());
+        assert_eq!(MemoryEffects::of_attrs(&[flag("writeonly")]), MemoryEffects::everywhere(ModRefInfo::Mod));
+    }
+
+    /// Reading attributes matched each flag's name against the facts' names
+    /// (`Fact::flag`, a string match, ~60 Ir): 646,400 matches, 39 M Ir on
+    /// memory_expansion. A name is resolved when the attribute is made; reading
+    /// it resolves nothing.
+    #[test]
+    fn reading_attributes_resolves_no_flag_names() {
+        use llrm_mir::counts::{Event, get};
+        use llrm_mir::opcode::Attribute;
+        let attrs: Vec<Attribute> = ["nounwind", "mustprogress", "nofree", "readonly", "willreturn", "noalias", "nocapture"]
+            .into_iter()
+            .map(|name| Attribute::Flag(name.into()))
+            .collect();
+        let before = get(Event::FlagNamesResolved);
+        for _ in 0..1000 {
+            let _ = MemoryEffects::of_attrs(&attrs);
+            let _ = llrm_mir::facts::Fact::NoAlias.stated_by(&attrs);
+            let _ = llrm_mir::facts::Fact::of_attribute(&attrs[3]);
+        }
+        assert_eq!(get(Event::FlagNamesResolved), before, "a read matched a flag name against the facts");
     }
 }

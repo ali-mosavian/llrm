@@ -20,8 +20,9 @@
 //! - **SD22** The `MatchStateUpdater` is not installed around complex patterns;
 //!   a complex pattern that CSEs a node while matching is a C1 question. Owner
 //!   sdag-c. Exit: C1. Review 2026-12-10.
-//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` never match: no vectors
-//!   before 32-bit parity. Owner sdag-c. Exit: vector MIR. Review 2026-12-10.
+//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` ask
+//!   `Dag::is_build_vector_all`, which answers false for a DAG with no vectors
+//!   (retired for arm64's 128-bit integer vectors, 2026-11-10).
 //!
 //! # Used by
 //! `X86DAGToDAG` (C1) and the shadow harness.
@@ -85,9 +86,10 @@ thread_local! {
     static KEPT: std::cell::Cell<Option<Box<Scratch>>> = const { std::cell::Cell::new(None) };
 }
 
-/// The capacity the buffers kept for the next selection hold.
-#[cfg(test)]
-pub(crate) fn kept_capacity() -> usize {
+/// The capacity the buffers kept for the next selection hold (read by the
+/// x86 table's tests).
+#[doc(hidden)]
+pub fn kept_capacity() -> usize {
     let kept = KEPT.take();
     let capacity = kept.as_ref().map_or(0, |one| one.node_stack.capacity() + one.match_scopes.capacity());
     KEPT.set(kept);
@@ -337,7 +339,12 @@ impl Selector {
                     }
                     false
                 }
-                Matcher::CheckImmAllOnesV | Matcher::CheckImmAllZerosV => false,
+                Matcher::CheckImmAllOnesV | Matcher::CheckImmAllZerosV => {
+                    if dag.is_build_vector_all(n, matches!(item, Matcher::CheckImmAllOnesV)) {
+                        continue;
+                    }
+                    false
+                }
                 Matcher::CheckUndef => {
                     if dag.is_undef(n) {
                         continue;

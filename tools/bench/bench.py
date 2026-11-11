@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import functools
+import hashlib
 import json
 import math
 import shutil
@@ -44,6 +45,7 @@ import maps  # noqa: E402
 import native  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
+import helpers  # noqa: E402
 import icount  # noqa: E402
 import flatcount  # noqa: E402
 import dosbatch  # noqa: E402
@@ -57,12 +59,14 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 def physical_defines() -> list[str]:
-    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-c passes them: the
+    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-cc passes them: the
     reference compilers build the same program, which reads them (bench/textfill)."""
     text = (ROOT / "crates/target/llrm-x86/platform.toml").read_text()
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
 
 
+# The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
+DOSERROR_OBJ = llrmbin.ow_tree() / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
@@ -71,6 +75,11 @@ BENCH = ROOT / "bench"
 # `bas` is BASIC on the Microsoft runtime (MS LINK, in DOSBox: only where QB45 and the others are installed); `bq16` the same source on
 # our runtime, real mode, linked by jwlink: always available.
 LANGUAGES = {"bas": ".bas", "bq16": ".bas", "bq32": ".bas", "c": ".c", "nib": ".nib"}
+# Reference twins: a C source for a Nib semantic the C twin lacks (`init`: locals zero-initialised, `bounds`: indices checked), in
+# `bench/NAME/twin/SEMANTIC.c`. It is a variant of the program named `NAME~SEMANTIC`, measured and given to the reference compilers as any
+# C program, and not judged or ratcheted: the C compilers' bytes on it are the bar a Nib program with that semantic is held to
+# (`bar_program`). It must print what the program prints (`NAME.out`), as every variant does.
+TWINS = ("init", "bounds")
 BASIC_LANGUAGES = ("bas",)
 OURS_BASIC = ("bq16", "bq32")
 # The flat target is counted by the emulator the program runs in (guest instructions, on virtual time), net of its empty start-up
@@ -96,11 +105,12 @@ BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchain
 TURBO = Path(os.environ.get("TURBO", Path.home() / "scratch/toolchains"))
 # Borland-family references: language -> (toolchain folder, compiler, switches per level). All medium model, 8087,
 # linked with the toolchain's own C0M, CM, FP87 and MATHM. BCC's switches (-3 -Ox, -O1) are added by bcc.sh.
+REFERENCE_OPTS = ("O1", "O2", "Os")  # the levels the reference compilers are built at (BORLAND's level maps, build_watcom's flags); O1 is their size level, the nearest to a light -O1: none has a separate one
 BORLAND = {
-    "bcc": (BCC, "bcc", {"O2": "", "Os": "-O1"}),
+    "bcc": (BCC, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"}),
     # TC 2.01: -G speed, -O jumps, -Z registers; `huge` is its spelling of __huge
-    "tc": (TURBO / "tc201", "tcc", {"O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
-    "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
+    "tc": (TURBO / "tc201", "tcc", {"O1": "-O -Z -r -1 -D__huge=huge", "O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
+    "tcpp": (TURBO / "tcpp30", "tcc", {"O1": "-2 -O -Z -r", "O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
@@ -165,7 +175,32 @@ def variants(directory: Path, every_language: bool = False) -> list[Variant]:
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
                               bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)),
                               bool(settings.get("emulated"))))
+    for semantic in TWINS:
+        source = directory / "twin" / f"{semantic}.c"
+        if source.exists() and (every_language or ONLY is None or "c" in ONLY):
+            head = run_tests.header(source)
+            out.append(Variant(f"{name}~{semantic}", "c", source, settings["region"]["c"], head.get("known"), "qb45", bool(settings.get("timed_only")),
+                              tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)), bool(settings.get("emulated"))))
     return out
+
+
+def is_twin_name(name: str) -> bool:
+    """A reference twin's program name (`NAME~SEMANTIC`)."""
+    return "~" in name
+
+
+def is_twin(variant: Variant) -> bool:
+    """A reference twin (TWINS): measured, not judged."""
+    return is_twin_name(variant.name)
+
+
+def bar_program(name: str, language: str, present: set[str]) -> str:
+    """The program whose C reference compilers are the bar for `name` in `language`, among the programs `present` in a table: a Nib program
+    is held to its C twin with the Nib semantics (`NAME~init`, then `NAME~bounds`) where the program has one, and to `NAME` otherwise;
+    the plain twin stays a column of its own."""
+    if language != "nib":
+        return name
+    return next((f"{name}~{semantic}" for semantic in TWINS if f"{name}~{semantic}" in present), name)
 
 
 def expected_output(directory: Path) -> list[str]:
@@ -217,9 +252,9 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     return flags
 
 
-def nib_flags() -> list[str]:
-    """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+def nib_flags(variant: Variant) -> list[str]:
+    """What nib-build.sh is given for a Nib benchmark's compile: only the kernel stays a call, helpers inline as they do in the C twin."""
+    return [f"-fno-inline={variant.region}", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -228,7 +263,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -262,7 +297,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -314,20 +349,61 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
     return failed
 
 
-def code_fields(obj: Path) -> dict:
+STARTUP_SYMBOLS = helpers.STARTUP_SYMBOLS
+
+
+def code_fields(obj: Path, listing: Path | None = None, source: Path | None = None) -> dict:
     """The object's code bytes without alignment padding, the padding apart (`align_bytes`, reported not gated), and why the padding could
-    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`)."""
+    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`). `lib_bytes`, reported not gated, is the
+    standard library's functions in the object, which `code_bytes` leaves out; absent where the object has none (C's I/O is extern).
+
+    With the linker map `listing` and the `source` (a reference compiler's program), the compiler-support routines the object links are in the
+    program and counted: `code_bytes` is the object's plus theirs, `helper_bytes` (0 when none) the part that is theirs. A reference that calls
+    a long divide where ours inlines it carries those bytes once: tc's recpow -O1 read 211 B by its object, 399 as linked. A helper the map
+    does not define refuses the cell."""
     size = sizes.code_size(obj)
-    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {})}
+    called = [name for name in sizes.externs(obj) if name not in STARTUP_SYMBOLS and "report" not in name] if not sizes.is_elf(obj) else []
+    fields = {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {}), **({"lib_bytes": size.library} if size.library else {}), **({"externs": called} if called else {})}
+    if listing is not None:
+        try:
+            found = helpers.linked_helpers(obj, listing, helpers.written_identifiers(source))
+        except helpers.HelperUnresolved as missing:
+            return {"error": f"helper {missing} is called and not in the map: its bytes would be left out"}
+        extra = sum(one for _, one in found)
+        fields |= {"code_bytes": size.code + extra, "helper_bytes": extra, "helper_modules": [name for name, _ in found]}
+    return fields
+
+
+def skip_lines(measured: dict) -> list[str]:
+    """One `SKIP reason (N programs)` line per reason a row was skipped, so a program with no column is counted in the header, not missing from it."""
+    return [f"SKIP {why} ({len({key[0] for key, value in measured.items() if value.get('skip') == why})} programs)" for why in sorted({value["skip"] for value in measured.values() if "skip" in value})]
+
+
+def note_lines(measured: dict) -> list[str]:
+    """One `NOTE reason (N cells)` line per distinct note on a kept row, so an annotated row is counted in the header, not only carried in the json."""
+    notes = [value["note"] for value in measured.values() if "note" in value]
+    return [f"NOTE {why} ({notes.count(why)} cells)" for why in sorted(set(notes))]
+
+
+def reference_job(key: tuple[str, str, str], stem: str, built: tuple[Path, Path], region: str | None, want: list[str], obj: Path, files: tuple, source: Path) -> tuple:
+    """The job `measure` takes for one reference cell: the helpers are counted only where the reference's map names them."""
+    return (stem, built[0], built[1], region, want, obj, files, links_helpers(key[1]), source)
+
+
+def links_helpers(reference: str) -> bool:
+    """Whether a reference's linker map names the library modules its program pulls in: a C reference's does (`Module: LIB(NAME)`). BC's is Microsoft's, its
+    runtime is linked whole, and counting helpers refused every BASIC reference cell (`helper $AC is called and not in the map`, 31 programs x 3 compilers)."""
+    return reference in REFERENCES["c"]
 
 
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
     stem, exe, listing, region, want, obj, *more = job
+    counted = (listing, more[2]) if len(more) > 2 and more[1] else None  # a reference's map and source: the helpers it links are counted
     if region is None:  # timed only: its output is checked where it is timed
-        data, bss = sizes.data_bytes(obj)
-        return {**code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+        data, bss = sizes.data_bytes(obj, exe, listing)
+        return {**code_fields(obj, *(counted or ())), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
         return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
@@ -344,12 +420,12 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"error": result.error}
     if got != want:
         return {"error": f"prints {got}, want {want}"}
-    data, bss = sizes.data_bytes(obj)
+    data, bss = sizes.data_bytes(obj, exe, listing)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
-        return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+        return {"instructions": 0, **code_fields(obj, *(counted or ())), "data_bytes": data, "bss_bytes": bss}
     if result.region.instructions < FOLDED_BELOW:
         return {"error": f"unmeasured: kernel folded away: {region} ran {result.region.instructions} instructions (a kernel that did its work runs {FOLDED_BELOW} or more)"}
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "layout_clocks": result.region.layout_clocks, "pad_nops": result.region.pad_nops, **code_fields(obj, *(counted or ())), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -357,22 +433,32 @@ def references_available() -> bool:
 
 
 def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
-    """Open Watcom, medium model, cdecl as llrm-c calls, no stack checks, inline 8087: tools/loops' reference build.
+    """Open Watcom, medium model, cdecl as llrm-cc calls, no stack checks, inline 8087: tools/loops' reference build.
     Linked with Watcom's own start-up, CLIBM and MATH87M (NOEMU87: no emulator, as BCC's FP87). Only `report` comes
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
-    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
+    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-cc compiles it
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True, timeout=native.COMPILE_SECONDS)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
-    try:
-        support = dosbatch.c_support(dosbatch.REAL_MODE, work)
-        # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
-        dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
-                        "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
-    except dosbatch.BuildError as error:
-        return f"build: {error}"
+    support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    extra: list[str] = []  # error086.obj, once the library turns out not to define `__doserror_`
+    stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
+    while True:
+        try:
+            # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *extra, *[word for one in support for word in ("file", str(one))],
+                            "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
+            break
+        except dosbatch.BuildError as error:
+            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_OBJ.exists():
+                extra = ["file", str(DOSERROR_OBJ)]
+                continue
+            over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
+            if not over or stack <= 4096:
+                return f"build: {error}"
+            stack -= -(-int(over.group(1)) // 16) * 16
     return exe, listing
 
 
@@ -393,10 +479,15 @@ def stage_shared_headers(folder: Path, text: bytes) -> bytes:
     return text.replace(b'"../bench_io.h"', b'"bench_io.h"')
 
 
+BORLAND_DEFINES = {"tcpp": ["-D__huge=huge"]}  # Turbo C++ 3.0 knows `huge`, not `__huge` (BCC 3.1 and Watcom know both); TC 2.01 has no huge arrays at all: its row stays an error
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
-    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm."""
+    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm.
+    Turbo C++ 3.0's CM.LIB (SETUPIO) calls `_isatty`, which jwlink does not find in CM.LIB's dictionary: tcpp links that module as a file.
+    (CS.LIB defines it too, but small-model: it linked, and 94 of 116 programs then never entered their kernel.)"""
     home, compiler, levels = BORLAND[language]
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
@@ -405,19 +496,24 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
             text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (folder / f"{stem}.c").write_bytes(text)
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join(physical_defines())}".strip() for _, stem in variants_]],
-                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
+        if home.name == "tc201":  # the shared header too: its first #ifndef read as unterminated, "Unexpected end of file in conditional"
+            header = folder / "bench_io.h"
+            if header.exists():
+                header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    ran = native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=int(os.environ.get("LLRM_BORLAND_SECONDS", "1800")))
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
         if not obj.exists():
             message = folder / f"{stem}.MSG"
-            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else "no object")
+            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else ran if isinstance(ran, str) else "no object")  # a timed-out job said "no object" for all 31 programs of bcc -Os
             continue
         lib = home / "lib"
         try:
-            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *support,
+            extra = ["file", str(helpers.omf_library_module(lib / "CM.LIB", "ISATTY", folder / "ISATTY.OBJ"))] if language == "tcpp" else []
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *extra, *support,
                             "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
         except dosbatch.BuildError as error:
             out[stem] = f"link: {error}"
@@ -432,14 +528,24 @@ def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]
     return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
+def reference_programs(todo: list[tuple[Path, Variant]]) -> list[tuple[Path, Variant]]:
+    """`todo` less the programs whose bench.toml says `references = false` (C99 or llrm-only sources the reference compilers cannot build),
+    each named on a line: a program left out is announced, not silently absent."""
+    left_out = sorted({directory for directory, _ in todo if tomllib.loads((directory / "bench.toml").read_text()).get("references") is False})
+    for directory in left_out:
+        print(f"not a reference program: {directory_name(directory)} (bench.toml: references = false)", flush=True)
+    return [(directory, variant) for directory, variant in todo if directory not in left_out]
+
+
 def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
     out: dict[tuple[str, str, str], dict] = {}
+    opts = [opt for opt in opts if opt in REFERENCE_OPTS]  # a reference has no O3: `--opt O1 O3` raised KeyError after 35 minutes and dropped the run's JSON
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    todo = with_startup(selected, timing)
+    todo = reference_programs(with_startup(selected, timing))
     stems = [f"R{at:03d}" for at in range(len(todo))]
     jobs, owned, plain, needs = [], [], {}, {}
     def own(key, stem, directory, variant, built, obj=None):
@@ -448,7 +554,8 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], None if variant.timed_only and not variant.emulated else variant.region, expected_output(directory), obj)))
+            files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
+            owned.append((key, reference_job(key, stem, built, variant.region if counted else None, want, obj, files, variant.source)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
@@ -477,7 +584,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             for source, target in ((f"{stem}.EXE", exe), (f"{stem}.MAP", listing), (f"{stem}.OBJ", obj)):
                 shutil.copy(folder / reference / source, target)
             own(key, stem, directory, variant, (exe, listing), obj)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
             out[key] = counts
     if timing:
@@ -485,6 +592,26 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
             out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
     return net_times(out)
+
+
+REFERENCE_STAMP = BENCH / "references.stamp.json"
+
+
+def reference_stamp() -> dict:
+    """What the stored reference numbers were measured with: the compilers' md5, their switches per level, the host's load. Written by
+    --bless --references beside expected.toml, so a clock or count that moved can be told from a compiler or host that changed."""
+    import hashlib
+
+    def md5(path: Path) -> str | None:
+        return hashlib.md5(path.read_bytes()).hexdigest() if path.is_file() else None
+
+    compilers = {"ow": md5(OW / "bwcc")} | {name: md5(home / f"{tool}.exe") for name, (home, tool, _) in BORLAND.items()}
+    return {
+        "date": str(date.today()),
+        "load_average": list(os.getloadavg()),
+        "compilers_md5": compilers,
+        "switches": {name: levels for name, (_, _, levels) in BORLAND.items()} | {"ow": {"O2": "-ox -oe=0", "O1": "-os -ol", "Os": "-os -ol"}, "basic": "/O /FPi"},
+    }
 
 
 def net_times(measured: dict) -> dict:
@@ -545,12 +672,24 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         data, bss = sizes.data_bytes(obj)
         return key, {"instructions": ran.inclusive[region.upper()], **code_fields(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         found = dict(pool.map(one, flat.items()))
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
 START = time.monotonic()
+
+
+def workers() -> int:
+    """Pool size: the guard's base slot count, so a bench run takes no more cores than one admitted job (a storm of 32 workers starved the others)."""
+    return cpulimit.pool_workers()
+
+
+def guarded_argv() -> list[str] | None:
+    """The command that runs this one under tools/load_guard.sh, or None when it already is."""
+    if os.environ.get("LG_GUARDED") == "1":
+        return None
+    return [str(Path(__file__).resolve().parents[1] / "load_guard.sh"), sys.executable, *sys.argv]
 
 
 def cores() -> str:
@@ -579,7 +718,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         for opt in opts:
             out |= measure_opt(selected, opt, work, timing)
     else:
-        with ProcessPoolExecutor(max_workers=len(opts)) as pool:
+        with ProcessPoolExecutor(max_workers=min(len(opts), workers())) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
     if ONLY is None or native.OURS in ONLY:
@@ -600,7 +739,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
     stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
     objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
     stage(f"{opt}: built {len(todo)} programs")
     basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
@@ -626,12 +765,10 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             plain[key] = exe  # timed, not counted
         else:
             # an emulated program is counted on the cut of its corpus the default bench times (ci_bytes), even under --time
-            fed = timing_input(variant, directory, folder / "ci-input" / stem) if variant.emulated else None
-            files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))  # an unavailable corpus leaves it timed only
-            counted = not variant.timed_only or bool(files)
+            files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
@@ -710,6 +847,14 @@ def timing_input(variant: Variant, directory: Path, reduced: Path | None = None)
     return {"files": files, "want": expected_output(directory)}
 
 
+def counting_input(variant: Variant, directory: Path, reduced: Path) -> tuple[tuple[Path, ...], list[str], bool]:
+    """(files the emulated run reads, the output it must print, whether it is counted): an emulated program is counted on the cut of its corpus
+    the default bench times (`ci_bytes`), even under --time; any other, and one whose corpus is unavailable, is timed only if it is timed_only."""
+    fed = timing_input(variant, directory, reduced) if variant.emulated else None
+    files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))
+    return files, want, not variant.timed_only or bool(files)
+
+
 def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: dict | None = None) -> dict[tuple[str, str, str], dict]:
     """Wall time of each whole program in DOSBox, from RDTSC around the run (tools/bench/timeit.asm): {"cycles", "ms"}.
     Whole-program: it includes the runtime's start-up and the print, which differ per toolchain. net_times takes the
@@ -740,6 +885,20 @@ def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: di
     return out
 
 
+def corpus_digest(directory: Path) -> str:
+    """md5 of a program's sources (not its expected.toml or .out): what its stored reference numbers were measured from."""
+    parts = sorted(f for f in directory.iterdir() if f.is_file() and f.name != "expected.toml" and f.suffix != ".out")
+    return hashlib.md5(b"".join(f.name.encode() + f.read_bytes() for f in parts)).hexdigest()
+
+
+def stale_corpus(directory: Path) -> str | None:
+    """Why the stored reference numbers of `directory` no longer belong to its sources, or None (also for a file blessed before `corpus` was recorded)."""
+    recorded = read_expected(directory).get("corpus")
+    if recorded is None or recorded == corpus_digest(directory):
+        return None
+    return f"{directory_name(directory)}: sources changed since the references were blessed (corpus {recorded[:8]}, now {corpus_digest(directory)[:8]}): --bless --references --reason"
+
+
 def read_expected(directory: Path) -> dict:
     path = directory / "expected.toml"
     return tomllib.loads(path.read_text()) if path.exists() else {}
@@ -756,14 +915,14 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     for (benchmark, language, opt), counts in measured.items():
         if benchmark != name or "error" in counts or "skip" in counts:
             continue
-        new = {one: counts[one] for one in (*COUNTERS, *SIZES, "kernel_ms") if one in counts}
+        new = {one: counts[one] for one in (*COUNTERS, "clocks", "layout_clocks", "pad_nops", *SIZES, "helper_bytes", "kernel_ms") if one in counts}
         old = tables.get(language, {}).get(opt, {})
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
-    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists():
+    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists() and not stale_corpus(directory):
         return False
-    lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
+    lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', f'corpus = "{corpus_digest(directory)}"', ""]  # JSON escapes are TOML's
     for language in dict.fromkeys([*LANGUAGES, *BASIC_LANGUAGES, *(one for many in REFERENCES.values() for one in many)]):
         for opt in sorted(tables.get(language, {})):
             lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
@@ -809,7 +968,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
-    got, want = with_footprint(got), with_footprint(want)
+    got, want = pad_corrected(with_footprint(got), with_footprint(want))
     problems = []
     priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
     if priced:
@@ -836,6 +995,22 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
     return problems
 
 
+def pad_corrected(got: dict, want: dict) -> tuple[dict, dict]:
+    """m16 clocks as the judge sees them (M16-CLOCK-FARCALL-PAD): jwlink's far-call pad is a `nop` that runs at even offsets and a free prefix at odd
+    ones, so a one-byte shift earlier in a segment moves one clock per executed call between sites (#8545: jpeg_fixed +172, jpeg_single -170 on
+    the same code). Both sides with `layout_clocks`: those are compared (raw stays in the row). A base without the column: a rise of at most the
+    new side's executed pad nops can be the pad alone (delta = layout delta + new pads - old pads <= new pads), but so can a real rise of that size:
+    that excuse is off unless LLRM_BENCH_EXCUSE_PAD is set, and each excused cell prints a warning. Bless the bases to end it."""
+    if "clocks" not in got or "clocks" not in want:
+        return got, want
+    if "layout_clocks" in got and "layout_clocks" in want:
+        return {**got, "clocks": got["layout_clocks"]}, {**want, "clocks": want["layout_clocks"]}
+    if os.environ.get("LLRM_BENCH_EXCUSE_PAD") and 0 < got["clocks"] - want["clocks"] <= got.get("pad_nops", 0):
+        print(f"WARNING: clock rise {got['clocks'] - want['clocks']} excused: the base has no layout_clocks and the new side runs {got['pad_nops']} pad nops", file=sys.stderr)
+        return {**got, "clocks": want["clocks"]}, want
+    return got, want
+
+
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
     """A timed-only program has no count to gate: its own kernel time does, with the time tolerance, against the base's (worse only)."""
     if want is None or "kernel_ms" not in got or "kernel_ms" not in want:
@@ -851,7 +1026,9 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict,
     always moved it and no waiver on a row with references could pass."""
     problems = []
     got, want, ref = with_footprint(got), with_footprint(want), with_footprint(ref)
-    for counter in (*COUNTERS, *JUDGED_SIZES, "kernel_ms"):
+    if "clocks" in got and "clocks" in want and "clocks" not in ref:
+        problems.append(f"{label}: no stored clocks for {reference}: --bless --references --reason")
+    for counter in (*COUNTERS, "clocks", *JUDGED_SIZES, "kernel_ms"):
         if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
             continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
@@ -869,7 +1046,7 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
     if stored is None:
         return [f"{label}: not recorded; run --bless --references --reason"]
     problems = []
-    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+    for counter in (*COUNTERS, "clocks", *SIZES, "kernel_ms"):
         if counter in got and counter in stored:
             slack = max(TIME_TOLERANCE * abs(stored[counter]), TIME_SLACK_MS) if counter == "kernel_ms" else 0
             if abs(got[counter] - stored[counter]) > slack:
@@ -902,7 +1079,12 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
         for (one, language, opt), row in (base or {}).items():
             if one == name and (same is None or name in same):
                 baseline.setdefault(language, {})[opt] = row
+        stale = stale_corpus(directory)
+        if stale:
+            problems.append(stale)
         for variant in variants(directory):
+            if is_twin(variant):
+                continue
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
                 label = f"{name} {variant.language} -{opt}"
@@ -925,7 +1107,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                             problems += ratio_problems(label, reference, got, want, ref, waived)
             for reference in REFERENCES.get(variant.language, ()):
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
-                    if (name, reference, level) in measured:
+                    if (name, reference, level) in measured and not stale:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
         for opt in opts:  # the x86_64 row: no variant of its own, it runs the C source
             got = measured.get((name, native.OURS, opt))
@@ -952,6 +1134,16 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     return lines
 
 
+def fold_lines(measured: dict) -> list[str]:
+    """Warnings, not failures: a Nib cell that executed under half of its C twin's instructions. Same algorithm, so the kernel's work folded away
+    (lru read 39 against C's 133 once its helpers inlined: an internal kernel, constant argument, local cache)."""
+    return [
+        f"SUSPECT-FOLD {name} nib -{opt}: {got['instructions']} instructions against C's {twin['instructions']}"
+        for (name, language, opt), got in sorted(measured.items())
+        if language == "nib" and (twin := measured.get((name, "c", opt))) and got.get("instructions") is not None and twin.get("instructions") and got["instructions"] * 2 < twin["instructions"]
+    ]
+
+
 def align_lines(measured: dict) -> list[str]:
     """Warnings, not failures: how many cells count some code bytes whole because those did not decode to their end, naming the cells where most of the
     code is so (the padding there is not told), and padding in a size-optimised cell (no loop alignment is expected at -Os or -Oz)."""
@@ -965,6 +1157,12 @@ def align_lines(measured: dict) -> list[str]:
             lines.append(f"ALIGN {name} {language} -{opt}: {got['align_bytes']} bytes of alignment padding at a size level")
     summary = [f"ALIGN-UNREAD {len(unread)} cells count {sum(unread)} bytes whole (data inside code: not decoded for padding)"] if unread else []
     return summary + mostly + lines
+
+
+def helper_lines(measured: dict) -> list[str]:
+    """Notes, not failures: a cell whose object calls library functions (`externs`). Their bytes are in no `code_bytes`, so that column
+    reads smaller than the program is where a reference calls a helper (a long divide) that another build inlines."""
+    return [f"HELPERS {name} {language} -{opt}: code_bytes excludes {', '.join(got['externs'])}" for (name, language, opt), got in sorted(measured.items()) if got.get("externs")]
 
 
 def geomean(values: list[float]) -> float:
@@ -998,6 +1196,9 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                         parts.append(f"{title} {100 * (geomean(ratios) - 1):+.1f}% (n={len(ratios)})")
                 if skipped:
                     parts.append(f"folded, out of the geomeans: {', '.join(skipped)}")
+                broken = [f"{name}: {measured[(name, reference, opt)]['error']}" for name in map(directory_name, benchmarks(selected)) if "error" in measured.get((name, reference, opt), {})]
+                if broken:  # a reference that did not build is no column, not an empty one
+                    lines.append(f"REFERENCE BROKEN {reference} -{level}: {len(broken)} programs unmeasured, e.g. {broken[0][:200]}")
                 if parts:
                     lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference in BASIC_REFERENCES else '-' + level}: " + ", ".join(parts))
     return lines
@@ -1025,6 +1226,28 @@ def base_rows(args, names: list[str] | None = None) -> tuple[dict, set[str], str
     if unbuilt:
         print("edited programs the base compiler could not build, not judged: " + " ".join(unbuilt), flush=True)
     return base, same, base_sha
+
+
+def source_digests(names: list[str]) -> dict[str, str]:
+    """md5 of each program's sources (not its expected.toml or .out), so two runs say whether they measured the same programs."""
+    out = {}
+    for one in benchmarks(set(names)):
+        out[directory_name(one)] = corpus_digest(one)
+    return out
+
+
+def compare_runs(first: Path, second: Path, allow_source_diff: bool = False) -> int:
+    """Exit 1, naming the programs, when two --json runs measured different sources: an A/B across them compares the sources, not the compilers."""
+    sides = [json.loads(path.with_name(path.name + ".sources").read_text()) if path.with_name(path.name + ".sources").exists() else None for path in (first, second)]
+    if None in sides:
+        print("REFUSED: a run carries no .sources digest; measure it again")
+        return 1
+    differ = sorted(name for name in sides[0].keys() & sides[1].keys() if sides[0][name] != sides[1][name])
+    if differ and not allow_source_diff:
+        print(f"REFUSED: {len(differ)} programs measured from different sources: {' '.join(differ)}")
+        return 1
+    print(f"SAME SOURCES {len(sides[0].keys() & sides[1].keys()) - len(differ)} programs")
+    return 0
 
 
 def compare_baselines(first: Path, second: Path) -> int:
@@ -1130,6 +1353,8 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
 
 
 def main() -> int:
+    if (argv := guarded_argv()) and os.environ.get("LG_BENCH_UNGUARDED") != "1":
+        os.execv(argv[0], argv)
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
@@ -1142,12 +1367,16 @@ def main() -> int:
     parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
     parser.add_argument("--shard", metavar="I/N", help="only shard I of N of the benchmarks (shards.toml), judged alone; --json then writes shard-I.json for --merge. `base` or `base:I/N`: the base's counts, all or slice I, in base.json or base-I.json")
     parser.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: print the verdict of the N shard-*.json in DIR (add --record on a main push)")
+    parser.add_argument("--compare-runs", nargs=2, type=Path, metavar=("A", "B"), help="refuse (exit 1, programs named) when two --json runs measured different program sources, unless --allow-source-diff")
+    parser.add_argument("--allow-source-diff", action="store_true")
     parser.add_argument("--compare-baselines", nargs=2, type=Path, metavar=("A", "B"), help="judge nothing: refuse (exit 1, cells named) when two --json runs of one compiler differ in any count")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
     global ONLY
     ONLY = args.lang
+    if args.compare_runs:
+        return compare_runs(*args.compare_runs, args.allow_source_diff)
     if args.compare_baselines:
         return compare_baselines(*args.compare_baselines)
     if args.merge:
@@ -1171,11 +1400,23 @@ def main() -> int:
             (args.json / f"shard-{index}.json").write_text(json.dumps({"measured": {"/".join(key): value for key, value in measured.items()}, "programs": args.select}))
         return 0
     if args.references:
+        import flag_parity
+
+        flag_parity.check()  # a reference whose codegen flags differ from ours is refused before it is built, as tools/wasm_flag_check.py does for wasm
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
         args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
+        args.json.with_name(args.json.name + ".sources").write_text(json.dumps(source_digests(sorted({key[0] for key in measured})), indent=1) + "\n")
+        import stamp
+
+        # Each compiler's build commit and md5 beside the counts; with LLRM_EXPECT_SHA named, one built from a commit that is not its ancestor is refused.
+        expect = os.environ.get("LLRM_EXPECT_SHA")
+        recorded = stamp.require_ancestor(BIN, expect, ROOT) if expect else stamp.dist_stamps(BIN)
+        args.json.with_name(args.json.name + ".provenance").write_text(json.dumps({name: {"sha": sha, "md5": md5} for name, (sha, md5) in recorded.items()}, indent=1) + "\n")
     print("HARNESS", basecounts.harness_digest())
+    print(*skip_lines(measured), sep="\n")
+    print(*note_lines(measured), sep="\n")
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
         print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")
@@ -1197,6 +1438,7 @@ def main() -> int:
                 print(f"not blessing {name}: {broken}")
                 return 1
             changed += write_expected(directory, references, name, args.reason)
+        REFERENCE_STAMP.write_text(json.dumps(reference_stamp(), indent=1) + "\n")
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
@@ -1213,10 +1455,10 @@ def main() -> int:
         problems += uncovered
         print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
         print(*basecounts.coverage_detail(measured, base, same), sep="\n")
-    for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
-        print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
     print(*align_lines(measured), sep="\n")
+    print(*helper_lines(measured), sep="\n")
+    print(*fold_lines(measured), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused

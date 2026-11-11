@@ -25,11 +25,15 @@ static inline int sf_clz32(uint32_t x)
 #define sf_clz32 SF_CLZ32
 #endif
 
+#ifdef SF_CLZ64
+#define sf_clz64 SF_CLZ64
+#else
 static inline int sf_clz64(uint64_t x)
 {
     uint32_t hi = (uint32_t)(x >> 32);
     return hi ? sf_clz32(hi) : 32 + sf_clz32((uint32_t)x);
 }
+#endif
 
 /* x >> n, with every dropped bit folded into bit 0. */
 static inline uint32_t sf_shr_sticky32(uint32_t x, int n)
@@ -61,6 +65,30 @@ static inline uint64_t sf_shr_sticky64(uint64_t x, int n)
     if (n >= 64) return x != 0;
     return (x >> n) | ((x << (64 - n)) != 0);
 }
+
+#ifdef __SIZEOF_INT128__
+static inline int sf_clz128(unsigned __int128 x)
+{
+    uint64_t hi = (uint64_t)(x >> 64);
+    return hi ? sf_clz64(hi) : 64 + sf_clz64((uint64_t)x);
+}
+
+static inline unsigned __int128 sf_shr_sticky128(unsigned __int128 x, int n)
+{
+    if (n <= 0) return x;
+    if (n >= 128) return x != 0;
+    return (x >> n) | ((x << (128 - n)) != 0);
+}
+
+/* The same for a 116-bit working mantissa (binary128). */
+static inline unsigned __int128 sf_round3_128(unsigned __int128 m)
+{
+    unsigned r = (unsigned)m & 7;
+    m >>= 3;
+    if (r > 4 || (r == 4 && ((unsigned)m & 1))) m++;
+    return m;
+}
+#endif
 
 /* 32x32 -> 64 as hi:lo from 16x16 partial products: no 64-bit type needed. A target with a widening multiply defines SF_MUL32X32(a, b, &hi, &lo); per 400 calls a uint64 product cuts x86 m32 mul clocks 121.6k -> 92.7k (gcc) and x86 m16 mul 166k -> 128k. */
 #if defined(SF_MUL32X32_6502) && !defined(SF_MUL32X32)

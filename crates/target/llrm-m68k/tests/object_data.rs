@@ -16,7 +16,7 @@ fn fixture(name: &str) -> PathBuf {
 fn object_of(
     cpu: &str,
     ir: &str,
-) -> (PathBuf, std::process::Output) {
+) -> (support::Scratch, std::process::Output) {
     let path = support::unique_path("objdata-o");
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"))
         .args([&format!("-mcpu={cpu}"), "-O2", "-o"])
@@ -28,11 +28,7 @@ fn object_of(
 }
 
 fn binutils(tool: &str) -> Option<Command> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return None;
-    };
+    let root = support::oracle_root()?;
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{tool}"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     Some(command)
@@ -84,9 +80,6 @@ fn the_shapes_run_from_our_object() {
             .unwrap();
         assert!(status.success(), "{cpu}: link failed");
         let code = support::run(&qemu, &[], &exe);
-        for path in [object, exe] {
-            std::fs::remove_file(path).ok();
-        }
         assert_eq!(code, Some(0), "{cpu}: exit code names the first failing shape (11 bss .. 16 statics)");
     }
 }

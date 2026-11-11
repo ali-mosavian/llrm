@@ -87,7 +87,7 @@ fn evaluate_extended(module: &mut Module) {
                 .attrs
                 .push(
                     Attribute::Str(
-                        llrm_mir::constantfolding::FP_EVAL.to_owned(),
+                        llrm_mir::constantfolding::FP_EVAL.into(),
                         Some(llrm_mir::constantfolding::FP_EVAL_EXTENDED.to_owned()),
                     ),
                 );
@@ -445,6 +445,19 @@ fn class_tags(
     Ok(tags)
 }
 
+/// The `!prof` nodes `branch_weights` for a conditional branch whose first
+/// target never runs, and for one whose second does not.
+fn never_taken(module: &mut Module) -> [MetadataId; 2] {
+    let word = module.context.types.int(32);
+    let mut node = |weights: [u32; 2]| {
+        let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
+        operands.extend(weights.map(|one| MetadataOperand::Constant(module.context.int(word, i128::from(one)))));
+        module.metadata.push(MetadataNode { distinct: false, operands });
+        MetadataId(module.metadata.len() as u32 - 1)
+    };
+    [node([1, NEVER_TAKEN_WEIGHT]), node([NEVER_TAKEN_WEIGHT, 1])]
+}
+
 struct Tables<'h> {
     /// The target's address spaces: what the HIR's near, far, segment, huge and
     /// fixed addresses are.
@@ -507,7 +520,19 @@ struct Tables<'h> {
     field_facts: HashMap<(i64, i64), Vec<Fact>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
+    /// `!prof` for a branch whose first target never runs, and whose second.
+    never_taken: [MetadataId; 2],
 }
+
+/// The weight of an edge a program practically never takes, against 1 for the
+/// other: a panic path ending `unreachable` (a failed bounds, shift, conversion,
+/// division or key check). Clang's `EmitCheck` states `(1 << 20) - 1` for a
+/// check (`CGExpr.cpp:4367` `createLikelyBranchWeights`, `MDBuilder.h:46`
+/// `kLikelyBranchWeight`), the same ratio the pin's unreachable heuristic gives
+/// the edge without a `!prof`. Branch odds are 2^31sts (pin
+/// `BranchProbability.h:37`), so the edge keeps 2048 units. A larger ratio is a
+/// DEVIATE (see the 2^26-1 change).
+pub const NEVER_TAKEN_WEIGHT: u32 = (1 << 20) - 1;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
@@ -718,6 +743,7 @@ fn emit_module<'h>(
         place_facts,
         field_facts,
         variables: HashMap::default(),
+        never_taken: [MetadataId(0); 2],
     };
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
@@ -730,6 +756,8 @@ fn emit_module<'h>(
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
     }
+    // After the nodes the language states, so theirs keep their numbers.
+    tables.never_taken = never_taken(&mut module);
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
@@ -829,7 +857,7 @@ fn emit_module<'h>(
         let Some(&reference) = tables.callees.get(&callable.name) else { continue };
         let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
         if let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind {
-            function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
+            function.attrs.push(Attribute::Flag(RETURNS_TWICE.into()));
         }
     }
     // Initialized once every function its data addresses is declared: one only
@@ -1317,7 +1345,7 @@ fn argument_classes(
     memory: &[i64],
     result_pointer: Option<i64>,
 ) -> Vec<(usize, Attribute)> {
-    let attribute = |value: &str| Attribute::Str(llrm_mir::opcode::ARGUMENT.to_owned(), Some(value.to_owned()));
+    let attribute = |value: &str| Attribute::Str(llrm_mir::opcode::ARGUMENT.into(), Some(value.to_owned()));
     memory
         .iter()
         .map(|&at| (at as usize, attribute(llrm_mir::opcode::MEMORY)))
@@ -1356,7 +1384,7 @@ fn byval_attributes(
         .map(|(&at, &count)| {
             (
                 at as usize,
-                Attribute::Type("byval".to_owned(), types.intern(Type::Array { element: byte, count: count as u64 })),
+                Attribute::Type("byval".into(), types.intern(Type::Array { element: byte, count: count as u64 })),
             )
         })
         .collect()
@@ -1441,7 +1469,7 @@ fn declare(
     }
     if function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Any) {
         if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
-            placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+            placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.into()));
         }
     }
     Ok((global, abi.0))
@@ -2675,6 +2703,24 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     self.b.function.annotate(inst, kind, node);
                 }
             }
+            if let TerminatorKind::Branch = block.terminator.kind
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                let ends = |target: &i64| {
+                    self.function
+                        .blocks
+                        .iter()
+                        .any(|one| one.id == *target && matches!(one.terminator.kind, TerminatorKind::Unreachable))
+                };
+                if let [first, second] = block.terminator.targets[..] {
+                    // Both targets unreachable states nothing.
+                    match (ends(&first), ends(&second)) {
+                        (true, false) => self.b.function.annotate(inst, "prof", self.tables.never_taken[0]),
+                        (false, true) => self.b.function.annotate(inst, "prof", self.tables.never_taken[1]),
+                        _ => {}
+                    }
+                }
+            }
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
@@ -2788,7 +2834,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for (group, object) in groups.iter().zip(self.objects.clone()) {
             let kind = match self.b.context.types.get(group.ty) {
                 Type::Int(_) => ConstantKind::Int(0),
-                Type::Float(_) => ConstantKind::Float(0),
+                Type::Float(kind) => ConstantKind::float_zero(*kind),
                 Type::Pointer(_) => ConstantKind::Null,
                 _ => {
                     let callee = Value::Constant(self.tables.callees[MEMSET]);
@@ -3048,6 +3094,36 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// The inclusive signed bounds `value` is known to have: its own, if a
+    /// constant, or its defining instruction's `!range`.
+    fn signed_bounds(
+        &self,
+        value: Value,
+    ) -> Option<(i128, i128)> {
+        let signed = |constant: ConstantId| -> Option<i128> {
+            let constant = self.b.context.get(constant);
+            let width = self.b.context.types.int_bits(constant.ty)?;
+            let llrm_mir::ConstantKind::Int(bits) = constant.kind else { return None };
+            let shift = 128 - width;
+            Some(((bits << shift) as i128) >> shift)
+        };
+        match value {
+            Value::Constant(constant) => signed(constant).map(|one| (one, one)),
+            Value::Value(id) => {
+                let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(id).def else { return None };
+                let (_, node) = self.b.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "range")?;
+                let [MetadataOperand::Constant(low), MetadataOperand::Constant(high)] =
+                    self.b.metadata[node.0 as usize].operands[..]
+                else {
+                    return None;
+                };
+                let (low, high) = (signed(low)?, signed(high)?);
+                (low < high).then_some((low, high - 1))
+            }
+            _ => None,
         }
     }
 
@@ -3688,6 +3764,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     // spec states, `(a << fraction) / b` in 64 bits, is
                     // truncating by itself, where `sdiv.fix` took a floor
                     // and a correction (115 bytes a divide at m16 -Os).
+                    //
+                    // DEVIATE FD-1 (the pin's -O1 has no CVP; frontend side;
+                    // exit: CVP at -O1 or isel narrows; owner m16, review
+                    // 2026-11-20): where the dividend's known bounds (a
+                    // constant, or the language's range fact) shifted by the
+                    // fraction stay inside i32 without INT_MIN, the quotient
+                    // fits 32 bits and `/ -1` cannot overflow, so the divide
+                    // is `sdiv i32`; a 64-bit divide at m16 is ~170 B inline.
+                    if let Some((low, high)) = self.signed_bounds(a)
+                        && (0..32).contains(&fraction)
+                        && (low << fraction) > i128::from(i32::MIN)
+                        && (high << fraction) <= i128::from(i32::MAX)
+                    {
+                        let shift = self.b.int(32, fraction);
+                        let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                        let quotient = self.b.binary(BinaryOp::SDiv, scaled, b, Flags::default(), "");
+                        self.define(instruction, quotient);
+                        return Ok(());
+                    }
                     let wide = self.b.context.types.int(64);
                     let shift = self.b.int(64, fraction);
                     let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
@@ -3875,7 +3970,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let signed = ty.signed.filter(|_| {
                     ty.kind == model::TypeKind::Integer && ty.width * 8 < i64::from(self.tables.layout.pointer(0).bits)
                 })?;
-                Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
+                Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.into())))
             })
             .chain(classes)
             .collect()

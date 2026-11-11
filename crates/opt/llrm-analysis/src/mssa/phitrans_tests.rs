@@ -206,3 +206,22 @@ fn test_insertion_makes_the_missing_gep_at_the_end_of_the_predecessor_or_nothing
     assert!(function.terminator(b0).is_some_and(|t| function.instruction(t).opcode.is_terminator()));
     assert_eq!(function.block(b0).len(), 2, "the GEP and the branch");
 }
+
+/// The look for an available GEP off a global read every instruction of every
+/// dominating block (a constant had no use list): 9450 translations cost 662 M
+/// Ir in memory_expansion's GVN. It looks at the users of the global alone.
+#[test]
+fn a_gep_off_a_global_base_is_looked_for_among_its_users_only() {
+    const GEPS: usize = 8;
+    let filler: String = (0..300).map(|i| format!("  %t{i} = add i16 %n, {i}\n")).collect();
+    let geps: String = (0..GEPS).map(|i| format!("  %a{i} = getelementptr i32, ptr @g, i16 {}\n", i + 3)).collect();
+    let text = diamond(
+        &format!("{filler}{geps}"),
+        "",
+        "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = getelementptr i32, ptr @g, i16 %p",
+    );
+    super::GEPS_SCANNED.with(|n| n.set(0));
+    translated(&text, "q", "b0", true);
+    let scanned = super::GEPS_SCANNED.with(std::cell::Cell::get);
+    assert!(scanned <= GEPS + 1, "{scanned} instructions looked at for {GEPS} GEPs off the global");
+}
