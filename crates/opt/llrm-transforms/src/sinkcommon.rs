@@ -44,6 +44,9 @@
 //!   attribute; the intrinsic cases for variadic parameters, `gcroot` and
 //!   `threadlocal_address` are not in the MIR.
 //! - D4. No `llvm.experimental.deoptimize`.
+//! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
+//!   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
+//!   (`displacement_sink_pays`), not sunk always as the pin does.
 
 use llrm_mir::context::Context;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -101,26 +104,58 @@ fn replacing_operand_is_cheap(
 ) -> bool {
     match &function.instruction(inst).opcode {
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => index != 1,
-        Opcode::GetElementPtr { .. }
-            if index >= 1
-                && matches!(
-                    function.instruction(inst).operands[index],
-                    Operand::Constant(_)
-                )
-                && !spec.tti.constant_offset_phi_is_cheap() =>
-        {
-            false
-        }
         Opcode::Binary(_)
-            if matches!(function.instruction(inst).operands[index], Operand::Constant(_))
-                && !spec.tti.constant_arith_phi_is_cheap(function.attrs.iter().any(
-                    |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
-                )) =>
+            if matches!(
+                function.instruction(inst).operands[index],
+                Operand::Constant(_)
+            )
+                && !spec.tti.constant_arith_phi_is_cheap(function.attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                    )
+                })) =>
         {
             false
         }
         _ => !calls_intrinsic(context, spec, function, inst),
     }
+}
+
+/// Whether making operand `index` of `inst` a phi gives up a displacement:
+/// a constant offset of an address, on a target whose accesses fold it
+/// (`constant_offset_phi_is_cheap` false). DEVIATE M16-KEEPDISP-1: the pin
+/// sinks regardless; here the sink is priced (`displacement_sink_pays`).
+fn unfolds_displacement(
+    spec: &Speculation,
+    function: &Function,
+    inst: InstId,
+    index: usize,
+) -> bool {
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::GetElementPtr { .. }
+    )
+        && index >= 1
+        && matches!(
+            function.instruction(inst).operands[index],
+            Operand::Constant(_)
+        )
+        && !spec.tti.constant_offset_phi_is_cheap()
+}
+
+/// Whether sinking `columns` (instructions per predecessor, `arms`
+/// predecessors) pays where `unfolding` of them turn a folded displacement
+/// into a phi. Each arm runs `columns - unfolding` instructions today (the
+/// address folds into its access); after the sink one copy runs those, plus an
+/// add and a phi for each address that no longer folds. Counted in
+/// instructions: the sink wins when `(arms - 1) * kept > 2 * unfolding`.
+fn displacement_sink_pays(
+    columns: usize,
+    unfolding: usize,
+    arms: usize,
+) -> bool {
+    (arms - 1) * (columns - unfolding) > 2 * unfolding
 }
 
 /// `canReplaceOperandWithVariable`: the operand `index` of `inst` may be a phi
@@ -184,13 +219,15 @@ pub(crate) fn can_replace_operand_with_variable(
 
 /// `canSinkInstructions`: the instructions `insts`, one of each predecessor,
 /// can be one instruction with phis for the operands that differ, which are
-/// recorded in `phi_operands`.
+/// recorded in `phi_operands`; `unfolds` is set where one of the phis gives up
+/// a displacement (`unfolds_displacement`), which the caller prices.
 fn can_sink(
     context: &Context,
     spec: &Speculation,
     function: &Function,
     insts: &[InstId],
     phi_operands: &mut PhiOperands,
+    unfolds: &mut bool,
 ) -> bool {
     let mut uses = None;
     for &inst in insts {
@@ -263,6 +300,7 @@ fn can_sink(
         {
             return false;
         }
+        *unfolds |= unfolds_displacement(spec, function, first, index);
         phi_operands
             .insert((first, index), insts.iter().map(|&inst| function.instruction(inst).operands[index]).collect());
     }
@@ -363,6 +401,80 @@ fn followed_by_unreachable(
     }
 }
 
+/// How many of `columns` (from the end) stay once those whose sinking would
+/// need more than one new phi are left out, from the first that does. The
+/// operands of a column that another column sinks do not count.
+fn profitable_prefix(
+    function: &Function,
+    phi_operands: &PhiOperands,
+    columns: &[Vec<InstId>],
+) -> usize {
+    let mut to_sink: IdSet<InstId> = IdSet::new();
+    for column in columns {
+        for &inst in column {
+            to_sink.insert(inst);
+        }
+    }
+    let profitable = |column: &[InstId], to_sink: &IdSet<InstId>| {
+        let mut phis = 0;
+        for (index, _) in function.instruction(column[0]).operands.iter().enumerate() {
+            let Some(operands) = phi_operands.get(&(column[0], index)) else { continue };
+            let all_sunk =
+                operands.iter().all(|&operand| defined_by(function, operand).is_some_and(|def| to_sink.contains(&def)));
+            if all_sunk {
+                continue;
+            }
+            phis += 1;
+            let memory_operand = match &function.instruction(column[0]).opcode {
+                Opcode::Load { .. } => index == 0,
+                Opcode::Store { .. } => index == 1,
+                _ => false,
+            };
+            if memory_operand
+                && operands.iter().any(|&operand| {
+                    defined_by(function, operand)
+                        .is_some_and(|def| matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }))
+                })
+            {
+                return false;
+            }
+        }
+        phis <= 1
+    };
+    let mut scan = columns.len();
+    let mut kept: IdSet<InstId> = IdSet::new();
+    let mut at = 0;
+    while at < scan {
+        if !profitable(&columns[at], &to_sink) {
+            break;
+        }
+        for &inst in &columns[at] {
+            kept.insert(inst);
+        }
+        at += 1;
+    }
+    if at == 0 {
+        return 0;
+    }
+    if at < scan {
+        scan = at;
+        to_sink = kept.clone();
+        // Earlier columns may stop being profitable once these stay.
+        let mut index = at as isize - 1;
+        while index >= 0 {
+            for &inst in &columns[index as usize] {
+                kept.remove(&inst);
+            }
+            if !profitable(&columns[index as usize], &to_sink) {
+                scan = index as usize;
+                to_sink = kept.clone();
+            }
+            index -= 1;
+        }
+    }
+    scan
+}
+
 /// The code that ends every unconditional predecessor of `block` the same way
 /// runs in `block`. Whether it did.
 pub fn sunk(
@@ -419,85 +531,37 @@ pub fn sunk(
         })
         .collect();
     let mut columns: Vec<Vec<InstId>> = Vec::new();
-    let mut to_sink: IdSet<InstId> = IdSet::new();
+    let mut unfolding: Vec<bool> = Vec::new();
     while bodies.iter().all(|body| body.len() > columns.len()) {
         let column: Vec<InstId> = bodies.iter().map(|body| body[body.len() - 1 - columns.len()]).collect();
-        if !can_sink(context, spec, function, &column, &mut phi_operands) {
+        let mut unfolds = false;
+        if !can_sink(context, spec, function, &column, &mut phi_operands, &mut unfolds) {
             break;
         }
-        for &inst in &column {
-            to_sink.insert(inst);
-        }
         columns.push(column);
+        unfolding.push(unfolds);
     }
-    let mut scan = columns.len();
-    if scan == 0 {
+    if columns.is_empty() {
         return false;
     }
     let unreachable_follows = followed_by_unreachable(function, block);
-    if !unreachable_follows {
-        // One new phi at most for a column; the operands of a column that
-        // another column sinks do not count.
-        let profitable = |function: &Function, column: &[InstId], to_sink: &IdSet<InstId>| {
-            let mut phis = 0;
-            for (index, _) in function.instruction(column[0]).operands.iter().enumerate() {
-                let Some(operands) = phi_operands.get(&(column[0], index)) else { continue };
-                let all_sunk = operands
-                    .iter()
-                    .all(|&operand| defined_by(function, operand).is_some_and(|def| to_sink.contains(&def)));
-                if all_sunk {
-                    continue;
-                }
-                phis += 1;
-                let memory_operand = match &function.instruction(column[0]).opcode {
-                    Opcode::Load { .. } => index == 0,
-                    Opcode::Store { .. } => index == 1,
-                    _ => false,
-                };
-                if memory_operand
-                    && operands.iter().any(|&operand| {
-                        defined_by(function, operand)
-                            .is_some_and(|def| matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }))
-                    })
-                {
-                    return false;
-                }
-            }
-            phis <= 1
-        };
-        let mut kept: IdSet<InstId> = IdSet::new();
-        let mut at = 0;
-        while at < scan {
-            if !profitable(function, &columns[at], &to_sink) {
-                break;
-            }
-            for &inst in &columns[at] {
-                kept.insert(inst);
-            }
-            at += 1;
+    // The columns to sink: those the phi rule keeps, cut before the first
+    // that gives up a displacement unless the whole sink pays for them.
+    let mut limit = columns.len();
+    let scan = loop {
+        let scan =
+            if unreachable_follows { limit } else { profitable_prefix(function, &phi_operands, &columns[..limit]) };
+        let unfold = unfolding[..scan].iter().filter(|&&one| one).count();
+        if unfold == 0 || displacement_sink_pays(scan, unfold, jumps.len()) {
+            break scan;
         }
-        if at == 0 {
-            return false;
+        limit = unfolding[..scan].iter().position(|&one| one).expect("an unfolding column");
+        if limit == 0 {
+            break 0;
         }
-        if at < scan {
-            scan = at;
-            to_sink = kept.clone();
-            // Earlier columns may stop being profitable once these stay.
-            let mut index = at as isize - 1;
-            while index >= 0 {
-                for &inst in &columns[index as usize] {
-                    kept.remove(&inst);
-                }
-                if !profitable(function, &columns[index as usize], &to_sink) {
-                    scan = index as usize;
-                    to_sink = kept.clone();
-                }
-                index -= 1;
-            }
-        }
-        if scan == 0 {
-            return false;
-        }
+    };
+    if scan == 0 {
+        return false;
     }
 
     let mut changed = false;
