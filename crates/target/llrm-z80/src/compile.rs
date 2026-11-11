@@ -2431,6 +2431,14 @@ fn decomposed_functions(
         })
         .collect();
     let all_sized = (0..either.len()).filter(|at| either[*at].2.is_some()).all(|at| size_first[at]);
+    // The generic form of a function's carry ops (`Z80-CARRY-PRICE`) is taken where the level is strict on both
+    // axes (O1, Os, Oz) only when it is no worse on either: those levels allow no trade.
+    let strict = matches!(level, Level::O1 | Level::Os | Level::Oz);
+    let generic_carry: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| alternatives.iter().any(|(one, selection, _)| one == name && selection.as_ref().is_ok_and(|s| s.generic_carry)))
+        .collect();
+    let every: HashSet<usize> = every.into_iter().filter(|at| !(strict && generic_carry[*at])).collect();
     let descend = |start: HashSet<usize>| {
         let mut chosen = start;
         let mut best = total(&chosen);
@@ -2445,7 +2453,10 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] {
+                let better = if strict && generic_carry[at] {
+                    let (new, old) = (own_price(&variants, &other, at), own_price(&variants, &chosen, at));
+                    new != old && new.0 <= old.0 && new.1 <= old.1
+                } else if size_first[at] {
                     prefers(Level::Os, price, best)
                 } else if level == Level::O1 {
                     prefers(level, own_price(&variants, &other, at), own_price(&variants, &chosen, at))

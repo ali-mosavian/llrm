@@ -795,6 +795,7 @@ fn lower_carry_op(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> SDValue {
+    super::pipeline::CARRY_OPS.with(|count| count.set(count.get() + 1));
     if let Some(generic) = generic_carry_op(dag, node) {
         return generic;
     }
