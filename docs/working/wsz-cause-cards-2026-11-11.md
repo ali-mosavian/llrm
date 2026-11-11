@@ -4,6 +4,18 @@ TL;DR: re-measured on head 0bc8a1390b (#8983) at all four levels: WSZ-31 x87rota
 
 Instrument: `tools/wasm_corpus.sh` (bytes vs the pin), then per program the function and opcode diff (`wasm-objdump -d`), then the same-IR check: the pin's `-emit-llvm` IR through `llrm-wasm-llc -filetype=obj`. Same-IR bytes equal to ours = backend; equal to the pin = mid-end. Traps: our last dump is after LSR/CGP and the pin's `-emit-llvm` is before, so `getelementptr`/`phi`/`add` deltas are not evidence; `llrm-wasm-llc` reruns loop passes, so the check is invalid for loop-heavy programs (idioms, memfuncs_runtime, loop_interchange, pattern_fill).
 
+## Status 2026-11-11 (after the cards)
+
+| row | state |
+|---|---|
+| WSZ-10 | fixed, #8992 (volatile FP constant stores, hook on for wasm) |
+| WSZ-12 | fixed, #9005 (ext-of-load after legalization, SD205) |
+| WSZ-15 | fixed, #9032; cause was the chain read counted as a second use of the load, not `srl` |
+| WSZ-17 | fixed, #8998 |
+| WSZ-21 | fixed, #9049 (huffman_decode O3 -64 B): globals carried no IR pointer, so a load stayed above a global store |
+| WSZ-22 | cause named: InstCombine `visitAdd` never infers `nsw`/`nuw` (pin L1977), so IndVars keeps the i16 exit test; fix on `wasm/instcombine-add-wrap-flags` |
+| WSZ-28 | follows WSZ-12; re-measure after #9005 |
+
 ## Named causes
 
 | row | cell (B vs pin) | layer | cause | pin source | next |
