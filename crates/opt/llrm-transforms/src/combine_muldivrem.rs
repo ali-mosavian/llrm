@@ -700,7 +700,7 @@ fn fold_mul_of_exact_div(
 
 /// `dyn_castNegVal`: `x` of `sub 0, x`, or the negation of an integer
 /// constant.
-fn dyn_cast_neg_val(
+pub(crate) fn dyn_cast_neg_val(
     c: &Combiner,
     v: Operand,
 ) -> Option<Operand> {

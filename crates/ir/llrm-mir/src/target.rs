@@ -704,6 +704,13 @@ pub trait Machine {
         self.size_costs()
     }
 
+    /// The prices of the Os inline trial's byte estimate (`function_bytes`),
+    /// which may be calibrated against the bytes written where `size_costs`
+    /// is not. By default `size_costs`.
+    fn trial_costs(&self) -> OperationCosts {
+        self.size_costs()
+    }
+
     /// Whether a division by a constant stays a divide instruction on
     /// `bits`-bit values, `size` saying the build is for size
     /// (`isIntDivCheap`, read the other way): the remainder is then the
@@ -1063,6 +1070,21 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// Whether `function_bytes` scales the prices by [`OperationCosts::words`] (an `i32` add on an 8-bit machine is
+    /// four byte adds). False: one price per operation, the table the other byte decisions read.
+    pub width_scaled: bool,
+    /// Whether a GEP with only constant indices costs nothing: the displacement is part of the load or store that
+    /// reads the address (`ldy #offset`, an absolute address plus a constant). False: priced as `address`.
+    pub constant_offsets_fold: bool,
+    /// Whether the branch is priced with its compare (the `branch` snippet is a compare and a jump, which `ICmp`
+    /// already prices): a `br` costs nothing, as an unconditional jump is mostly a fall-through. False: `branch`
+    /// each.
+    pub branch_in_compare: bool,
+    /// What a load from a global or a stack slot costs per native word (an absolute address, no pointer to
+    /// form); 0: what any load does.
+    pub direct_load: i64,
+    /// The same for a store.
+    pub direct_store: i64,
     /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
     /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
     /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
@@ -1236,6 +1258,11 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            width_scaled: false,
+            constant_offsets_fold: false,
+            branch_in_compare: false,
+            direct_load: 0,
+            direct_store: 0,
             free_intrinsics: false,
             expanded_intrinsics: false,
             cache_line: 0,

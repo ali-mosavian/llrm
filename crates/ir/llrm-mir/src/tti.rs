@@ -959,6 +959,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether an -Os caller's SZ2 trial is decided by the bytes alone: the copies stay when they leave the module
+    /// smaller, the dying callee counted once. Only where `function_bytes` is calibrated against objects and the
+    /// unit count (instructions of the pin's x86) means nothing: an 8-bit target's instruction is one to four
+    /// bytes of work.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
     }
