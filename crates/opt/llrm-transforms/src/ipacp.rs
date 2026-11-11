@@ -157,6 +157,10 @@ pub struct Cloning {
     grown: i64,
 }
 
+/// The clones made so far, shared by the cloning before the walk and the one
+/// after it: a function gets at most `MAX_CLONES` between them.
+pub type Shared = std::rc::Rc<std::cell::RefCell<Cloning>>;
+
 /// One kind of call: a callee and the constants it is called with.
 type Key = (GlobalId, Vec<Option<ConstantId>>);
 
@@ -243,7 +247,14 @@ pub fn cloned(
             continue;
         }
         let origin = state.origin.get(&name).copied().unwrap_or(name);
-        if let Some(&existing) = state.contexts.get(&(origin, known.clone())) {
+        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a call sent
+        // there never returns, and the context gets a new clone.
+        let existing = state
+            .contexts
+            .get(&(origin, known.clone()))
+            .copied()
+            .filter(|&clone| module.global(clone).function().is_some_and(|body| !body.is_deleted()));
+        if let Some(existing) = existing {
             if existing == name {
                 // A call of the clone, which still passes the constants it was
                 // made for.

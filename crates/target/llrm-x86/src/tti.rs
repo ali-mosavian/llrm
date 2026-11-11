@@ -821,6 +821,10 @@ impl Tti for X86 {
         self.tuning.divide_by_bytes
     }
 
+    fn immediate_forms_at_size(&self) -> bool {
+        self.tuning.immediate_forms_at_size
+    }
+
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
     }
@@ -1161,6 +1165,10 @@ impl Tti for X86 {
     ) -> Option<Cost> {
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L5818
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
+    }
+
+    fn splits_merged_conditions(&self) -> bool {
+        self.tuning.split_merged_conditions
     }
 
     /// X86's `getJumpConditionMergingParams`: `x86-br-merging-base-cost` 2,

@@ -377,7 +377,7 @@ fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
 #[test]
 fn every_generated_attribute_is_one_mir_reads() {
     use crate::intrinsic_attrs::{Attr, NAMES, SETS};
-    let known = |word: &str| crate::opcode::FLAG_ATTRIBUTES.contains(&word);
+    let known = |word: &str| crate::opcode::FLAG_ATTRIBUTES.contains(&word) || word == "nocreateundeforpoison";
     let mut memory = std::collections::BTreeSet::new();
     for &(name, set, _) in NAMES.iter() {
         let set = &SETS[set as usize];

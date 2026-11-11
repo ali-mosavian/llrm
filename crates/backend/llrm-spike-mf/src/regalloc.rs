@@ -226,11 +226,26 @@ pub trait Target {
         true
     }
 
+    /// A jump to the block with id `block`, for a block a shared phase made on
+    /// an edge (`PhiElimination`) or a jump it put where a branch fell through.
+    /// None: the target has no such form, and a function that needs one is
+    /// refused.
+    fn branch_to(_block: u32) -> Option<Inst> {
+        None
+    }
+
     /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
     /// register coalescer in the pin) orders the function before allocation.
     /// Here false: a target opts in once its numbers say so.
     fn schedules_before_allocation() -> bool {
         false
+    }
+
+    /// The processor the pre-RA scheduler schedules for
+    /// (`TargetSchedModel`). Here the generic one, as before; DEVIATE MS7
+    /// until a target states its own.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        std::rc::Rc::new(llrm_codegen::backend::schedmodel::GenericModel)
     }
 
     /// Whether the row `name`, loading an incoming stack argument (a frame slot

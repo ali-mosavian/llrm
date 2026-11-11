@@ -1063,7 +1063,7 @@ fn should_full_unroll(
     // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
     // cost more than the rolled loop: by size, or by the cost the analysis
     // finds once the trip's constants fold (gcc's size-neutral complete unroll).
-    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() {
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
         let rolled = u64::from(uce.rolled_loop_size());
         let fits = unrolled_size <= rolled
             || analyze_loop_unroll_cost(
@@ -1079,9 +1079,11 @@ fn should_full_unroll(
                 false,
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
-        return (fits
-            && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up))
-        .then_some(full_unroll_trip_count);
+        let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
+        if !unroll {
+            note_for_trial(run, unrolled_size);
+        }
+        return unroll.then_some(full_unroll_trip_count);
     }
     // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
     // size is unrolled; the function is priced whole afterwards.
@@ -1130,7 +1132,16 @@ fn should_full_unroll(
                 .then_some(full_unroll_trip_count);
         }
     }
-    // DEVIATE UNROLL-TRIAL: noted for the trial that follows the walk.
+    note_for_trial(run, unrolled_size);
+    None
+}
+
+/// DEVIATE UNROLL-TRIAL: a loop the walk refused is noted for the trial that
+/// follows it.
+fn note_for_trial(
+    run: &Run,
+    unrolled_size: u64,
+) {
     if trial::active().is_none()
         && let (Some(limit), Some(this)) = (run.tti.unroll_trial_threshold(), run.this)
         && unrolled_size < u64::from(limit)
@@ -1138,7 +1149,6 @@ fn should_full_unroll(
     {
         trial::note(name, unrolled_size);
     }
-    None
 }
 
 /// `shouldPragmaUnroll`.
@@ -1391,6 +1401,11 @@ pub(crate) fn compute_unroll_count(
         };
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
         crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
+        // DEVIATE UNROLL-O1: a target that cannot pay for the copy does not peel at -O1.
+        if run.options.opt_level == 1 && !run.options.opt_size && !run.tti.peels_at_o1() {
+            pp.peel_count = 0;
+            pp.allow_peeling = false;
+        }
         if pp.peel_count == 0
             && already == 0
             && pp.allow_peeling

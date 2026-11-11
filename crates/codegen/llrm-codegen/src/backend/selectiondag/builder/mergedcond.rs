@@ -219,6 +219,10 @@ impl Builder<'_> {
         // which always splits.
         let Some(tti) = self.target.tti.clone() else { return false };
         let tti = tti.0;
+        // The target's TTI asks the same at every level (m32; m16 has its table).
+        if tti.splits_merged_conditions() {
+            return false;
+        }
         let shared = |logic: Logic| match logic {
             Logic::And => llrm_mir::jumpmerge::Logic::And,
             Logic::Or => llrm_mir::jumpmerge::Logic::Or,

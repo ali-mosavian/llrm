@@ -104,17 +104,19 @@ def expected_output(source: Path, target: str) -> Path:
     return source.with_suffix(".out")
 
 
+def output_lines(text: str) -> list[str]:
+    """A program's output as the comparisons read it: line ends and trailing blanks do not count (a console writes CRLF where the .out has LF)."""
+    return [line.rstrip() for line in text.splitlines()]
+
+
 def oracle_verdict(want: str, base: str, head: str) -> str:
     """PASS where HEAD prints WANT, FAIL where only HEAD departs from it, STALE-ORACLE where neither BASE nor HEAD prints it: two
     compilers that disagree with the file say the file, or the harness (no input fed, CRLF kept), is wrong, not either compiler.
     Line ends and trailing blanks do not count: a DOS console writes CRLF where the .out has LF."""
 
-    def text(x: str) -> list[str]:
-        return [line.rstrip() for line in x.splitlines()]
-
-    if text(head) == text(want):
+    if output_lines(head) == output_lines(want):
         return "PASS"
-    return "FAIL" if text(base) == text(want) else "STALE-ORACLE"
+    return "FAIL" if output_lines(base) == output_lines(want) else "STALE-ORACLE"
 
 
 def main(argv: list[str]) -> int:

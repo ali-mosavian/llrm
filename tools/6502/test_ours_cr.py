@@ -4,7 +4,7 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, re, subprocess, sys, tempfile, unittest
+import os, re, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -273,6 +273,47 @@ class NoOut(unittest.TestCase):
         self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["helper", "NO-OUT"]])
         self.assertIn("NO-OUT", done.stdout)
 
+class WorkDir(unittest.TestCase):
+    """2026-11-10: every run left its /tmp/o6progs-* directory (516 of them, one per run of every session) and /tmp ran out of inodes."""
+    def test_a_run_leaves_no_work_directory_behind(self):
+        tmp = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, tmp, True)
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, out, True)
+        Path(corpus, "helper.c").write_text("int f(void) { return 1; }\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, TMPDIR=tmp)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", os.path.join(out, "o.tsv"), "helper"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([name for name in os.listdir(tmp) if name.startswith("o6progs-")], [])
+
+class NotForThisTarget(unittest.TestCase):
+    """2026-11-10: long_double_union_pun (`// targets: x86-m16 x86-m32 x86-m64`, its `.out` the x87 80-bit layout) read WRONG on the 6502 at O1/O2/Os
+    (got the shorts of a 64-bit double, which is right for this target) and went to the coordinator as a miscompile. A program whose targets line
+    excludes the 6502 is N/A: not compiled, not measured, not a failure."""
+    def test_a_program_tagged_for_other_targets_is_n_a_not_wrong(self):
+        import json
+        corpus = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "pun.c").write_text("// targets: x86-m16 x86-m32 x86-m64\nint main(void) { return 0; }\n")
+        Path(corpus, "pun.out").write_text("1\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O1", out, "pun"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        self.assertEqual([row[:2] for row in json.load(open(out + ".json"))], [["pun", "N/A"]])
+
+    def test_an_untagged_m32_program_is_still_measured(self):
+        """The shared `applies` calls 71 corpus programs n/a on the 6502 (every `-m32` one, DOS markers): the 6502 matrix measures memcpy_libcall and
+        mem_length_boundaries_m32 on purpose, so only an explicit targets line makes a program N/A."""
+        import json
+        corpus = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "m32.c").write_text("// flags: -O2 -m32\nint main(void) { return 0; }\n")
+        Path(corpus, "m32.out").write_text("1\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus)
+        cc = os.path.join(corpus, "cc"); Path(cc).write_text("#!/bin/sh\nexit 1\n"); os.chmod(cc, 0o755)
+        subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), cc, "O1", out, "m32"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        self.assertNotEqual(json.load(open(out + ".json"))[0][1], "N/A")
+
 class Runner(unittest.TestCase):
     """The corpus runner printed "done" after 12 runs that had all crashed: it reads every run's exit status and tsv first."""
     def go(self, stub_body):
@@ -305,3 +346,23 @@ class Runner(unittest.TestCase):
         self.assertIn("/nonexistent/mos_rt.s", done.stderr)
 
 if __name__ == "__main__": unittest.main()
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class PerTargetOut(unittest.TestCase):
+    """2026-11-11: spill_store_order (`-m32`, an LCG over 32-bit `unsigned`) read WRONG at the 6502 against its 32-bit `.out`; the answer is
+    right for a 16-bit int (llvm-mos agrees). ours_cr read only NAME.out: a NAME.6502.out / NAME.65c02.out was never looked at."""
+    def run_cpu(self, cpu):
+        import json
+        corpus = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, corpus, True)
+        out = os.path.join(tempfile.mkdtemp(), "o.tsv")
+        Path(corpus, "w.c").write_text("extern void report(long value);\nint main(void) { report(sizeof(int)); return 0; }\n")
+        Path(corpus, "w.out").write_text("4\n")
+        Path(corpus, f"w.{cpu}.out").write_text("2\n")
+        env = dict(os.environ, OURS_RT=RT, OURS_CORPUS=corpus, OURS_CPU=cpu, OURS_PADS="0", LLRM_CC=CC)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "w"], capture_output=True, text=True, env=env, timeout=600)
+        self.assertEqual(done.returncode, 0, done.stderr[-300:])
+        return [row[:2] for row in json.load(open(out + ".json"))]
+    def test_the_6502_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("6502"), [["w", "PASS"]])
+    def test_the_65c02_reads_its_own_expected_output(self):
+        self.assertEqual(self.run_cpu("65c02"), [["w", "PASS"]])

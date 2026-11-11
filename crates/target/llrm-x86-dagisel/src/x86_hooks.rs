@@ -79,6 +79,9 @@ impl Options {
 
 pub struct X86Hooks {
     pub options: Options,
+    /// `Tuning::register_form_for_shared_immediates`; the pin's behaviour
+    /// unless a target states otherwise.
+    pub shared_immediates_in_registers: bool,
 }
 
 impl X86Hooks {
@@ -147,7 +150,16 @@ fn bits(
 
 impl X86Hooks {
     pub fn new(options: Options) -> X86Hooks {
-        X86Hooks { options }
+        X86Hooks { options, shared_immediates_in_registers: true }
+    }
+
+    /// The target's `register_form_for_shared_immediates`.
+    pub fn with_shared_immediates_in_registers(
+        mut self,
+        on: bool,
+    ) -> X86Hooks {
+        self.shared_immediates_in_registers = on;
+        self
     }
 
     /// `X86DAGToDAGISel::IsProfitableToFold` ([L692][prof]).
@@ -594,6 +606,18 @@ impl<D: AddrDag> X86Predicates<D> for X86Hooks {
                 continue;
             }
             if constant.is_some_and(|c| i8::try_from(c).is_ok()) {
+                continue;
+            }
+            // DEVIATE SD610 (owner greedy-os-causes, exit 2026-11-20): the
+            // pin skips a sign-extended 8-bit immediate because the ALU
+            // opcode has a short encoding; `and r32, 0xffff` has one too,
+            // `movzx r32, r16` (3 bytes, every register has a word part),
+            // which the register form `mov r, 65535; and x, r` gives up. The
+            // byte mask is not skipped: only four registers have a byte part.
+            if dag.opcode(user) == isd::AND
+                && constant == Some(0xffff)
+                && dag.value_type(SDValue::new(user, 0)) == mvt::i32
+            {
                 continue;
             }
             use_count += 1;

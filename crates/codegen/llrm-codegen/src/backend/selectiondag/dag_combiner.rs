@@ -26,10 +26,11 @@
 //! sdag-b. Review 2026-11-13.
 //!
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
-//! simple, non-extending load before operations are legal, with the table
-//! given by `with_tli` (no table: only a load nothing else reads); every
-//! integer truncate is taken as free (`isTruncateFree`). Exit: the target's
-//! truncate query. Owner sdag-b. Review 2026-11-27.
+//! simple, non-extending load, before and after operations are legal (legal
+//! extending load only, as the pin), with the table given by `with_tli` (no
+//! table: only a load nothing else reads); every integer truncate is taken as
+//! free (`isTruncateFree`). Exit: the target's truncate query. Owner sdag-b.
+//! Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
@@ -53,8 +54,35 @@ pub enum CombineLevel {
     AfterLegalizeDag,
 }
 
+/// The machine opcodes of a target's multiply of two half-width operands into
+/// a full-width product (`mulu.w` / `muls.w`).
+#[derive(Clone, Copy)]
+pub struct HalfMul {
+    pub half: EVT,
+    pub unsigned: u32,
+    pub signed: u32,
+    /// The target has a full-width multiply instruction (`muls.l`). The half
+    /// multiply then needs the operand's extension and a copy of the source
+    /// (the tied destination), which the full-width one needs just the same
+    /// without the copy: it is used only for operands that are already full
+    /// width.
+    pub has_full_multiply: bool,
+}
+
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `(mul x, y)` of operands known to fit half the width is the target's
+    /// half-by-half multiply. The pin has no such rule: its M68k multiplies
+    /// two `i32` with `muls.l` (68020) or a libcall (68000), never `muls.w`.
+    /// DEVIATE: off by default; m68k opts in per CPU. Exit: none, while the
+    /// pin has no known-bits multiply selection.
+    fn mul_of_halves(
+        &self,
+        _vt: EVT,
+    ) -> Option<HalfMul> {
+        None
+    }
+
     /// `TLI.shouldNormalizeToSelectSequence`: `select (or c0, c1), x, y` is
     /// `select c0, x, (select c1, x, y)` (and the `and` form likewise). The
     /// pin's default asks whether the type is split; DEVIATE: false here (the
@@ -1916,7 +1944,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` of a load nothing else reads.
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
+    /// value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -1930,7 +1959,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // narrower than the result stays an extending load.
         let stored = if info.ext.is_some() { info.mem_vt } else { wide };
         if info.volatile
-            || !self.dag.has_one_use(load.node)
+            || self.dag.users(load).count() != 1
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
@@ -2071,7 +2100,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let load = self.dag.operand(node, 0);
-        if self.level >= CombineLevel::AfterLegalizeVectorOps || self.dag.opcode(load) != ISD::Load {
+        if self.dag.opcode(load) != ISD::Load {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
@@ -2097,9 +2126,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => false,
         };
-        // `tryToFoldExtOfLoad`: a volatile (not simple) load is widened only
-        // when the extending load is legal.
-        if info.volatile && !legal {
+        // `tryToFoldExtOfLoad`: `(!LegalOperations && !isVolatile) ||
+        // isLoadExtLegal`: after legalization, and for a volatile load, the
+        // extending load must be legal.
+        if (info.volatile || self.legal_operations()) && !legal {
             return None;
         }
         if !others.is_empty() {
@@ -2529,7 +2559,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // Y), X` is `sub X, (zext i1 Y)`.
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3534
         if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne
-            && !self.dag.config().sext_bool_add_preferred
+            && vt.size_in_bits() > self.dag.config().sext_bool_add_max_bits
         {
             for (sext, other) in [(n0, n1), (n1, n0)] {
                 if self.dag.opcode(sext) == ISD::SignExtend && self.dag.value_type(self.dag.operand(sext, 0)) == EVT::I1 {
@@ -4128,7 +4158,49 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
+        if let Some(half) = self.hooks.mul_of_halves(vt) {
+            if let Some(product) = self.mul_of_halves(n0, n1, vt, half) {
+                return Some(product);
+            }
+        }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The half-by-half multiply of `x * y`, where both are known to fit the
+    /// half type unsigned (high bits zero) or both signed (sign bits above
+    /// the half's width). A constant operand is left to the pin's folds.
+    fn mul_of_halves(
+        &mut self,
+        x: SDValue,
+        y: SDValue,
+        vt: EVT,
+        half: HalfMul,
+    ) -> Option<SDValue> {
+        if self.dag.constant(x).is_some() || self.dag.constant(y).is_some() {
+            return None;
+        }
+        // an extension of a half-width value, or a load that extends one
+        let extends_half = |dag: &SelectionDAG, v: SDValue| {
+            if dag.opcode(v) == ISD::Load {
+                return matches!(dag.node(v).data, NodeData::Mem(info) if info.ext.is_some() && info.mem_vt == half.half);
+            }
+            matches!(dag.opcode(v), ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend)
+                && dag.value_type(dag.operand(v, 0)) == half.half
+        };
+        if half.has_full_multiply && (extends_half(self.dag, x) || extends_half(self.dag, y)) {
+            return None;
+        }
+        let (width, narrow) = (vt.size_in_bits(), half.half.size_in_bits());
+        let high = super::fold::mask(width) & !super::fold::mask(narrow);
+        let opcode = if [x, y].iter().all(|&v| super::known_bits::masked_value_is_zero(self.dag, v, high)) {
+            half.unsigned
+        } else if [x, y].iter().all(|&v| super::known_bits::num_sign_bits(self.dag, v) > width - narrow) {
+            half.signed
+        } else {
+            return None;
+        };
+        let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
+        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
     }
 
     /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
