@@ -77,6 +77,12 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05): the unrolled size, in
+    /// the unroll units, up to which a loop the -O1 rule above refused is unrolled on
+    /// trial; the driver compiles the module again and keeps the unroll only if neither
+    /// its bytes nor its executed work grow (`Tti::unroll_trial_threshold`). `None`: no
+    /// trial.
+    pub unroll_trial_at_o1: Option<u32>,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -282,6 +288,14 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): the inliner's
+    /// cold-call-site test reads the site's frequency from a flow in which
+    /// edges into `unreachable`-ended failure blocks carry no mass, where the
+    /// block has another successor. The pin reads the full flow, in which
+    /// checks (`!prof` 2^-20 failure edges) in deep loop nests leak most of
+    /// the mass and make the code after them cold (threshold 45, no bonuses).
+    /// false: the pin's.
+    pub cold_site_ignores_sinks: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
@@ -457,6 +471,7 @@ impl Tuning {
         promote_va_list: false,
         branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
+        unroll_trial_at_o1: None,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -498,6 +513,7 @@ impl Tuning {
         unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
+        cold_site_ignores_sinks: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
         immediate_forms_at_size: false,

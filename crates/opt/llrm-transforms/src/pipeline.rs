@@ -468,6 +468,12 @@ impl Options {
         self.for_size
     }
 
+    /// Whether this is -O1: optimizing, with the unroller's -O1 level (`unroll_level`) and size not
+    /// preferred.
+    pub fn at_o1(&self) -> bool {
+        self.optimize && !self.for_size && unroll_level(self) == 1
+    }
+
     /// Whether the target's byte price at speed counts: -O2 and -O3.
     pub fn prices_bytes(&self) -> bool {
         self.speed_rate && !self.for_size

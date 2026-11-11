@@ -5134,3 +5134,38 @@ fn a_float_clamp_is_minss_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("minss") && !listing.contains("ucomiss"), "{listing}");
 }
+
+/// `x_life`'s 3x3 neighbour nest (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes) at -O1
+/// with `-funroll-loops`: the -O1 unroll rule counts the 3-trip inner loop one instruction too large and kept both
+/// loops, which spill their counters to the stack (416 B, 564,234 clk, gcc 368,623). The pin's threshold unrolls the
+/// nest to nine straight loads, and unrolled it is smaller (401 B, 214,872 clk), which only a second compile can see
+/// (DEVIATE UNROLL-O1-TRIAL): the nest is kept unrolled.
+#[test]
+fn a_nest_whose_unroll_is_no_larger_and_no_slower_is_unrolled_at_o1() {
+    let text = include_str!("tests_data/life_nest.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-funroll-loops", "-march=i486"]), text, "bench_x_life").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The eight neighbours of the centre are loaded in one straight run: no loop is left around them.
+    let mut loads = 0;
+    let mut most = 0;
+    for line in listing.lines().map(str::trim) {
+        if line.ends_with(':') {
+            loads = 0;
+        } else if line.contains(", byte ptr [") && !line.starts_with("cmp") {
+            loads += 1;
+            most = most.max(loads);
+        }
+    }
+    assert!(most >= 8, "the nest kept a loop: at most {most} neighbour loads in a block: {listing}");
+}
+
+/// `matmul` at -O1 with `-funroll-loops`: the pin's threshold unrolls it (303 -> 1904 B), which the trial prices
+/// and puts back: the code stays well under the unrolled size (about 100 instructions rolled, 600 unrolled).
+#[test]
+fn a_nest_whose_unroll_grows_the_code_stays_rolled_at_o1() {
+    let text = include_str!("tests_data/matmul_int.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-funroll-loops", "-march=i486"]), text, "bench_matmul").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let instructions = listing.lines().filter(|line| line.starts_with("    ") && !line.trim_end().ends_with(':')).count();
+    assert!(instructions < 250, "matmul unrolled to {instructions} instructions: {listing}");
+}

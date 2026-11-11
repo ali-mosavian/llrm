@@ -7,6 +7,7 @@ pub mod basic;
 mod data;
 pub mod flags;
 pub mod policy;
+pub mod trial;
 
 use std::path::PathBuf;
 

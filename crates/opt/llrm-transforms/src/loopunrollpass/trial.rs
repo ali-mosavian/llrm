@@ -57,3 +57,13 @@ pub(super) fn note(
 pub fn take() -> (Vec<String>, u64) {
     ELIGIBLE.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
+
+/// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no bytes (`added`
+/// <= 0) and costs no work (`saved` >= 0, work being what the code is expected to execute). The
+/// one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
+pub fn keeps_at_o1(
+    saved: i64,
+    added: i64,
+) -> bool {
+    added <= 0 && saved >= 0
+}
