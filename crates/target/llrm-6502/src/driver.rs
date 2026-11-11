@@ -228,11 +228,6 @@ pub fn assembly(
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
 }
 
-/// The most instructions a module may have for the inline trial to run: it compiles the mid-end
-/// twice, so a module the backend and mid-end take seconds on is not priced twice (div_constants_long
-/// -Os, 1395 instructions: 3.0 s, 13.0 s with the trial; every program that gained is under 60).
-const INLINE_TRIAL_INSTRUCTIONS: usize = 512;
-
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os byte model
 /// refused within its error, inlined in a second compile and kept per chain (caller and callees)
 /// if the backend writes those functions in fewer bytes. The model is within 25% of the written
@@ -249,7 +244,14 @@ fn trial_inlined(
 ) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    if request.level != Level::Os || sites.is_empty() || instructions(&built) > INLINE_TRIAL_INSTRUCTIONS {
+    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    if request.level != Level::Os || sites.is_empty() {
+        return Ok((built, Vec::new()));
+    }
+    if instructions(&built) > limit {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial inline: skipped, {} sites in {} instructions (limit {limit})", sites.len(), instructions(&built));
+        }
         return Ok((built, Vec::new()));
     }
     let kept_unroll = trial::take();

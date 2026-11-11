@@ -842,7 +842,7 @@ impl ProgramPass for Walk {
                                     if let Some(site) = site.filter(|_| {
                                         !crate::trial::inlining()
                                             && growth > 0
-                                            && growth * 4 <= kept_bytes
+                                            && tti.opt_size_inline_trial_limits().is_some_and(|(band, _)| growth * 100 <= kept_bytes * band)
                                     }) {
                                         crate::trial::note_refused(site);
                                     }
