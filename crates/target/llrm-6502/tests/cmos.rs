@@ -8,7 +8,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_text;
 
-const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     @g = global i8 7\n\
     define i8 @clr(i8 %x) {\nentry:\n  store i8 0, ptr @g\n  br label %next\nnext:\n  %v = load i8, ptr @g\n  %r = add i8 %v, %x\n  ret i8 %r\n}\n\
     define void @clrp(ptr %p) {\n  store i8 0, ptr %p\n  ret void\n}\n\
@@ -109,7 +109,7 @@ fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
 #[test]
 fn a_far_bra_in_a_function_becomes_jmp_and_runs() {
     let mut ir = String::from(
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
          define i8 @far(i8 %x) {\nentry:\n  %c = icmp eq i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  %t0 = add i8 %x, 1\n",
     );
     ir.push_str("  %t1 = add i8 %t0, %x\n");
@@ -159,7 +159,7 @@ fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
     }
 }
 
-const STEPS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+const STEPS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     define i8 @countdown(i8 %n) {\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %loop\n\
     loop:\n  %i = phi i8 [ %n, %entry ], [ %j, %loop ]\n  %steps = phi i8 [ 0, %entry ], [ %s2, %loop ]\n\
       %j = sub i8 %i, 1\n  %s2 = add i8 %steps, 3\n  %c = icmp ne i8 %j, 0\n  br i1 %c, label %loop, label %done\n\
@@ -193,8 +193,9 @@ fn a_step_of_one_is_done_in_place() {
     for (cpu, target) in [(Cpu::Mos6502, "sim6502"), (Cpu::W65c02, "sim65c02")] {
         let text = steps(cpu);
         // in a register or a cell a step is one instruction; a value in `a` on
-        // NMOS has no better than adc/sbc
-        let registers = text.split(".export bumpp").next().unwrap();
+        // NMOS has no better than adc/sbc; `wrap` and `drop` step the byte that
+        // arrives in `a`
+        let registers = text.split(".export wrap").next().unwrap();
         assert!(!registers.contains("adc #1") && !registers.contains("sbc #1"), "{target}:\n{text}");
         let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
         for (function, arg, want) in [
@@ -206,7 +207,7 @@ fn a_step_of_one_is_done_in_place() {
             ("drop", 0, 255),
             ("drop", 10, 73),
         ] {
-            let main = format!("  lda #{arg}\n  sta rc2\n  jsr {function}\n");
+            let main = format!("  lda #{arg}\n  jsr {function}\n");
             let got = common::run_on(target, &format!("step-{function}-{arg}"), &main, &text).0;
             assert_eq!(got, want, "{function}({arg}) on {target}");
         }
@@ -222,30 +223,40 @@ fn a_step_of_one_is_done_in_place() {
     assert!(!cmos.contains("adc #1") && !cmos.contains("sbc #1"), "{cmos}");
 }
 
-const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
-    define i8 @thrice(ptr %f, i8 %x) {\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}";
+    define i8 @thrice(ptr %f, i8 %x) {\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}\n\
+    define i8 @plus(i8 %x, i8 %y) {\n  %r = add i8 %x, %y\n  ret i8 %r\n}\n\
+    define i8 @both(ptr %f, i8 %x, i8 %y) {\n  %a = call i8 %f(i8 %x, i8 %y)\n  %b = call i8 %f(i8 %a, i8 %y)\n  ret i8 %b\n}";
 
 /// An indirect call pushes the callee's address minus one low byte last: the
-/// low byte went through `a` (`txa; pha`), and is `phx` on the 65C02. Three
-/// calls in a row, so three return labels: `thrice(&twice, 3)` is 3 * 8 = 24.
+/// low byte went through `a` (`txa; pha`), and is `phx` on the 65C02. The
+/// byte arguments wait in `a` and `x`: the push sequence keeps them (an
+/// argument in `a` waits in `y`, one in `x` leaves `x` out of the sequence).
+/// Three calls in a row, so three return labels: `thrice(&twice, 3)` is
+/// 3 * 8 = 24; `both(&plus, 5, 7)` is (5 + 7) + 7 = 19. It once returned
+/// 108: the sequence overwrote the argument in `a`.
 #[test]
 fn an_indirect_call_pushes_x_directly_on_the_65c02() {
     let module = llrm_mir::parse::module(THROUGH).expect("parses");
-    let text = |cpu| -> String {
-        ["twice", "thrice"]
+    // the return labels count from 1 in each function: one caller a program
+    let text = |cpu, names: &[&str]| -> String {
+        names
             .iter()
             .map(|name| {
                 function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits")
             })
             .collect()
     };
-    let (nmos, cmos) = (text(Cpu::Mos6502), text(Cpu::W65c02));
-    assert!(nmos.contains("  txa\n  pha\n  rts") && !nmos.contains("phx"), "{nmos}");
-    assert!(cmos.contains("  phx\n  rts") && !cmos.contains("  txa\n  pha\n  rts"), "{cmos}");
+    let (nmos, cmos) = (text(Cpu::Mos6502, &["twice", "thrice"]), text(Cpu::W65c02, &["twice", "thrice"]));
+    let (nmos2, cmos2) = (text(Cpu::Mos6502, &["plus", "both"]), text(Cpu::W65c02, &["plus", "both"]));
+    assert!(nmos.contains("  txa\n  pha\n  tya\n  rts") && !nmos.contains("phx"), "{nmos}");
+    assert!(cmos.contains("  phx\n  tya\n  rts") && !cmos.contains("  txa\n  pha\n  tya\n  rts"), "{cmos}");
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    let main = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #3\n  sta rc4\n  jsr thrice\n";
-    for (target, text) in [("sim6502", nmos), ("sim65c02", cmos)] {
+    let main = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #3\n  jsr thrice\n";
+    let two = "  lda #<plus\n  sta rc2\n  lda #>plus\n  sta rc3\n  ldx #7\n  lda #5\n  jsr both\n";
+    for (target, text, text2) in [("sim6502", nmos, nmos2), ("sim65c02", cmos, cmos2)] {
         assert_eq!(common::run_on(target, "cmos-thrice", main, &text).0, 24, "{target}");
+        assert_eq!(common::run_on(target, "cmos-both", two, &text2).0, 19, "{target}");
     }
 }

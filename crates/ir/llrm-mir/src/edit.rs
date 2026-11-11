@@ -578,6 +578,33 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// LLVM's `Op<a>().swap(Op<b>())` (`BinaryOperator::swapOperands`,
+    /// `Use::swap`): the operands trade places and each use keeps its place in
+    /// its value's list, which two `set_operand`s would not (they put both
+    /// uses first).
+    pub fn swap_operands(
+        &mut self,
+        inst: InstId,
+        a: usize,
+        b: usize,
+    ) {
+        let (x, y) = (self.instructions[inst.0 as usize].operands[a], self.instructions[inst.0 as usize].operands[b]);
+        if x == y {
+            return;
+        }
+        let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
+        self.instructions[inst.0 as usize].operands.swap(a, b);
+        let (at_a, at_b) = (Use { user: inst, index: a as u32 }, Use { user: inst, index: b as u32 });
+        if let (Some(hx), Some(hy)) = (Held::of(x, phi), Held::of(y, phi)) {
+            if hx != hy {
+                self.uses.swap(hx, at_a, hy, at_b);
+            }
+        }
+        self.log(Change::Operand { inst, index: a as u32, was: x });
+        self.log(Change::Operand { inst, index: b as u32, was: y });
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces all of an instruction's operands, as LLVM's
     /// `removeIncomingValue` and `addIncoming` change a phi's.
     pub fn set_operands(
@@ -1094,7 +1121,7 @@ impl Function {
         };
         let attrs = &mut info.argument_attrs[index];
         attrs.retain(|one| !matches!(one, crate::opcode::Attribute::Int(name, _) if name == "align"));
-        attrs.push(crate::opcode::Attribute::Int("align".to_owned(), align));
+        attrs.push(crate::opcode::Attribute::Int("align".into(), align));
         self.log(Change::Rewritten(inst));
     }
 
@@ -1331,8 +1358,9 @@ impl Function {
 
     /// `Instruction::dropPoisonGeneratingAnnotations`: the flags, metadata and
     /// call attributes of `inst` that make its result poison when the
-    /// operands it was proved for change. `ctlz`, `cttz` and `abs` have no
-    /// MIR spelling, so their poison-on-zero operand is not here.
+    /// operands it was proved for change. The poison-on-zero operand of a
+    /// `ctlz`, `cttz` or `abs` call needs a constant: the combiner's
+    /// `drop_poison_generating_annotations` sets it.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Instruction.h#L614>
     pub fn drop_poison_generating_annotations(
         &mut self,
@@ -1543,6 +1571,7 @@ impl Function {
                     + 1
             }
         };
+        self.places.invalidate();
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -1563,6 +1592,7 @@ impl Function {
             .iter()
             .position(|one| *one == before)
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.places.invalidate();
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -1583,12 +1613,14 @@ impl Function {
             .iter()
             .position(|one| *one == block)
             .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.places.invalidate();
         self.layout.remove(from);
         let at = self
             .layout
             .iter()
             .position(|one| *one == before)
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.places.invalidate();
         self.layout.insert(at, block);
         Ok(())
     }
@@ -1608,12 +1640,14 @@ impl Function {
             .iter()
             .position(|one| *one == block)
             .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.places.invalidate();
         self.layout.remove(from);
         let at = self
             .layout
             .iter()
             .position(|one| *one == after)
             .ok_or_else(|| format!("block {} is not placed", after.0))?;
+        self.places.invalidate();
         self.layout.insert(at + 1, block);
         Ok(())
     }
@@ -1631,6 +1665,7 @@ impl Function {
             self.log(Change::BlockErased(block));
         }
         self.names = NameIndex::default();
+        self.places.invalidate();
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
@@ -1756,12 +1791,23 @@ impl Function {
                 return Err(format!("block {} still has {users} users", block.0));
             }
         }
-        let mut gone = crate::dense::IdSet::<BlockId>::new();
-        for &block in blocks {
-            gone.insert(block);
-        }
         LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
-        self.layout.retain(|one| !gone.contains(one));
+        self.places.invalidate();
+        if let [only] = blocks {
+            // One block, the usual call: find it and shift the tail. A set
+            // lookup for every entry of the layout was 16 k Ir a call on
+            // memory_expansion (`empty_block_removed`, 1,550 calls).
+            if let Some(at) = self.layout.iter().position(|one| one == only) {
+                self.layout.remove(at);
+            }
+        } else {
+            let mut gone = crate::dense::IdSet::<BlockId>::new();
+            for &block in blocks {
+                gone.insert(block);
+            }
+            LAYOUT_TESTED.with(|tested| tested.set(tested.get() + self.layout.len()));
+            self.layout.retain(|one| !gone.contains(one));
+        }
         for &block in blocks {
             self.release_name(block);
             self.blocks[block.0 as usize].erased = true;
@@ -1775,6 +1821,14 @@ impl Function {
 thread_local! {
     /// Layout entries looked over to take blocks out of it.
     static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Layout entries tested against a set of blocks to erase.
+    static LAYOUT_TESTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has tested against a set of blocks, for
+/// a test that erasing one block tests none.
+pub fn layout_tested() -> usize {
+    LAYOUT_TESTED.with(std::cell::Cell::get)
 }
 
 /// How many layout entries this thread has looked over to erase blocks, for a

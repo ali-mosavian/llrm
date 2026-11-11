@@ -33,8 +33,18 @@ pub fn marked(
     body: &LirBody,
     cpu: &Profile,
 ) -> LirBody {
+    mark(body, cpu.size, cpu.bsf_rep_prefix)
+}
+
+/// `marked` for a function built for `size` on a target that does or does not
+/// give `bsf` the prefix.
+pub fn mark(
+    body: &LirBody,
+    size: bool,
+    target_prefix: bool,
+) -> LirBody {
     let is_bsf = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("bsf"));
-    if cpu.size || !body.blocks.iter().any(|block| block.insns.iter().any(|one| is_bsf(one))) {
+    if size || !target_prefix || !body.blocks.iter().any(|block| block.insns.iter().any(|one| is_bsf(one))) {
         return body.clone();
     }
     let flags_out = _flags_live_out(body);

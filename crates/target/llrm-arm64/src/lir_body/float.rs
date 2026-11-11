@@ -1,0 +1,350 @@
+//! Scalar floating-point and vector-register forms. A name is the mnemonic,
+//! the size letters (`S`, `D`, `H`; `W`, `X` for the general register of a
+//! conversion) and the form (`r` registers, `i` an immediate).
+
+use super::*;
+use crate::mc::inst::Cond;
+use crate::mc::inst::{Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, Rounding};
+
+const UNARY: [(FpUnary, &str); 11] = [
+    (FpUnary::Mov, "FMOV"),
+    (FpUnary::Abs, "FABS"),
+    (FpUnary::Neg, "FNEG"),
+    (FpUnary::Sqrt, "FSQRT"),
+    (FpUnary::Rint(Rounding::Nearest), "FRINTN"),
+    (FpUnary::Rint(Rounding::Up), "FRINTP"),
+    (FpUnary::Rint(Rounding::Down), "FRINTM"),
+    (FpUnary::Rint(Rounding::Zero), "FRINTZ"),
+    (FpUnary::Rint(Rounding::Away), "FRINTA"),
+    (FpUnary::Rint(Rounding::Exact), "FRINTX"),
+    (FpUnary::Rint(Rounding::Current), "FRINTI"),
+];
+const BINARY: [(FpBinary, &str); 9] = [
+    (FpBinary::Mul, "FMUL"),
+    (FpBinary::Div, "FDIV"),
+    (FpBinary::Add, "FADD"),
+    (FpBinary::Sub, "FSUB"),
+    (FpBinary::Max, "FMAX"),
+    (FpBinary::Min, "FMIN"),
+    (FpBinary::MaxNm, "FMAXNM"),
+    (FpBinary::MinNm, "FMINNM"),
+    (FpBinary::Nmul, "FNMUL"),
+];
+const FUSED: [(FpFused, &str); 4] =
+    [(FpFused::Madd, "FMADD"), (FpFused::Msub, "FMSUB"), (FpFused::Nmadd, "FNMADD"), (FpFused::Nmsub, "FNMSUB")];
+/// The conversions between a general and a float register (`FMOV` is by
+/// direction, the letter order tells it).
+const CONVERT: [(FpConvert, &str); 4] = [
+    (FpConvert::ToFp { signed: true }, "SCVTF"),
+    (FpConvert::ToFp { signed: false }, "UCVTF"),
+    (FpConvert::ToIntZero { signed: true }, "FCVTZS"),
+    (FpConvert::ToIntZero { signed: false }, "FCVTZU"),
+];
+
+fn bits(size: FpSize) -> u32 {
+    match size {
+        FpSize::S => 32,
+        FpSize::D => 64,
+        FpSize::H => 16,
+    }
+}
+
+fn size_letter(size: FpSize) -> char {
+    match size {
+        FpSize::S => 'S',
+        FpSize::D => 'D',
+        FpSize::H => 'H',
+    }
+}
+
+fn size_named(letter: char) -> FpSize {
+    match letter {
+        'S' => FpSize::S,
+        'D' => FpSize::D,
+        _ => FpSize::H,
+    }
+}
+
+fn f(
+    register: Vreg,
+    size: FpSize,
+) -> Loc {
+    vreg_loc(register, bits(size))
+}
+
+fn named<T: Copy + PartialEq>(
+    table: &[(T, &'static str)],
+    one: T,
+) -> &'static str {
+    table.iter().find(|(each, _)| *each == one).expect("a listed mnemonic").1
+}
+
+/// The entry of `table` whose mnemonic is the longest prefix of `name`
+/// (`FMAXNM` over `FMAX`), and what follows it.
+fn prefix<'a, T: Copy>(
+    table: &[(T, &'static str)],
+    name: &'a str,
+) -> Option<(T, &'a str)> {
+    table
+        .iter()
+        .filter(|(_, mnemonic)| name.starts_with(mnemonic))
+        .max_by_key(|(_, mnemonic)| mnemonic.len())
+        .map(|(one, mnemonic)| (*one, &name[mnemonic.len()..]))
+}
+
+/// `rest` as its size letters and form: `Dr` is ("D", "r").
+fn letters(rest: &str) -> (&str, &str) {
+    rest.split_at(rest.find(|c: char| c.is_ascii_lowercase()).unwrap_or(rest.len()))
+}
+
+fn to_fp(op: FpConvert) -> bool {
+    matches!(op, FpConvert::ToFp { .. } | FpConvert::Bits { to_fp: true })
+}
+
+pub(super) fn to(inst: &Inst) -> Option<Semantics> {
+    Some(match inst {
+        Inst::FpUnary { op, size, rd, rn } => semantics(
+            if *op == FpUnary::Mov { Operation::Move } else { Operation::Unary },
+            format!("{}{}r", named(&UNARY, *op), size_letter(*size)),
+            vec![f(*rd, *size)],
+            vec![f(*rn, *size)],
+            None,
+        ),
+        Inst::VectorMov { rd, rn } => {
+            semantics(Operation::Move, "ORRv16b", vec![vreg_loc(*rd, 128)], vec![vreg_loc(*rn, 128)], None)
+        }
+        Inst::FpBinary { op, size, rd, rn, rm } => semantics(
+            Operation::Binary,
+            format!("{}{}rr", named(&BINARY, *op), size_letter(*size)),
+            vec![f(*rd, *size)],
+            vec![f(*rn, *size), f(*rm, *size)],
+            None,
+        ),
+        Inst::FpFused { op, size, rd, rn, rm, ra } => semantics(
+            Operation::FloatMultiplyAdd,
+            format!("{}{}rrr", named(&FUSED, *op), size_letter(*size)),
+            vec![f(*rd, *size)],
+            vec![f(*rn, *size), f(*rm, *size), f(*ra, *size)],
+            None,
+        ),
+        Inst::FpCompare { signalling, size, rn, rm } => {
+            let mut sources = vec![f(*rn, *size)];
+            sources.extend(rm.map(|rm| f(rm, *size)));
+            semantics(
+                Operation::Compare,
+                format!(
+                    "{}{}{}",
+                    if *signalling { "FCMPE" } else { "FCMP" },
+                    size_letter(*size),
+                    if rm.is_some() { "rr" } else { "rz" }
+                ),
+                vec![],
+                sources,
+                None,
+            )
+        }
+        Inst::FpSelect { size, rd, rn, rm, cond } => semantics(
+            Operation::Select,
+            format!("FCSEL{}rrr", size_letter(*size)),
+            vec![f(*rd, *size)],
+            vec![f(*rn, *size), f(*rm, *size), imm(position(&super::integer::CONDS, *cond))],
+            None,
+        ),
+        Inst::FpMoveImm { size, rd, imm8 } => semantics(
+            Operation::Move,
+            format!("FMOV{}i", size_letter(*size)),
+            vec![f(*rd, *size)],
+            vec![imm(i64::from(*imm8))],
+            None,
+        ),
+        Inst::FpLaneToFp { signed, size, rd, rn } => semantics(
+            Operation::Unary,
+            format!("{}CVTFv1i{}", if *signed { 'S' } else { 'U' }, if *size == FpSize::D { 64 } else { 32 }),
+            vec![f(*rd, *size)],
+            vec![f(*rn, *size)],
+            None,
+        ),
+        Inst::FpToFp { to, from, rd, rn } => semantics(
+            Operation::Unary,
+            format!("FCVT{}{}r", size_letter(*to), size_letter(*from)),
+            vec![f(*rd, *to)],
+            vec![f(*rn, *from)],
+            None,
+        ),
+        Inst::FpInt { op, width, size, gpr, fpr } => {
+            let (mnemonic, letters) = convert_name(*op, *width, *size);
+            let (g, fp) = (gpr_loc(*gpr, *width), f(*fpr, *size));
+            let (dest, source) = if to_fp(*op) { (fp, g) } else { (g, fp) };
+            semantics(Operation::Unary, format!("{mnemonic}{letters}r"), vec![dest], vec![source], None)
+        }
+        Inst::FpFixed { op, width, size, gpr, fpr, fbits } => {
+            let (mnemonic, letters) = convert_name(*op, *width, *size);
+            let (g, fp) = (gpr_loc(*gpr, *width), f(*fpr, *size));
+            let (dest, source) = if to_fp(*op) { (fp, g) } else { (g, fp) };
+            semantics(
+                Operation::Unary,
+                format!("{mnemonic}{letters}ri"),
+                vec![dest],
+                vec![source, imm(i64::from(*fbits))],
+                None,
+            )
+        }
+        Inst::VectorFill { rd, fill } => {
+            let (name, sources) = match fill {
+                Fill::Zero => ("MOVIv2d".to_string(), vec![]),
+                Fill::Byte(byte) => ("MOVIv16b".to_string(), vec![imm(i64::from(*byte))]),
+                Fill::Dup(arrangement, register) => {
+                    let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
+                    (dup_name(*arrangement).to_string(), vec![gpr_loc(*register, width)])
+                }
+                Fill::Imm { invert, shape, imm8 } => {
+                    let (lanes, shift) = match shape {
+                        ImmShape::H8(shift) => ("8i16", shift),
+                        ImmShape::S4(shift) => ("4i32", shift),
+                        ImmShape::S2(shift) => ("2i32", shift),
+                        ImmShape::S4Msl(shift) => ("4s_msl", shift),
+                    };
+                    let stem = if *invert { "MVNI" } else { "MOVI" };
+                    (format!("{stem}v{lanes}"), vec![imm(i64::from(*imm8)), imm(i64::from(*shift))])
+                }
+                Fill::Mask(imm8) => ("MOVIv2d_ns".to_string(), vec![imm(i64::from(*imm8))]),
+                Fill::MaskD(imm8) => ("MOVID".to_string(), vec![imm(i64::from(*imm8))]),
+            };
+            let narrow = matches!(
+                fill,
+                Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. }
+            );
+            let width = if narrow { 64 } else { 128 };
+            semantics(Operation::Move, name, vec![vreg_loc(*rd, width)], sources, None)
+        }
+        _ => return None,
+    })
+}
+
+/// The mnemonic of a conversion and its size letters in the order its name
+/// states them: the destination's first for `FMOV`, else the general
+/// register's width then the float size.
+fn convert_name(
+    op: FpConvert,
+    width: Width,
+    size: FpSize,
+) -> (&'static str, String) {
+    let (w, s) = (width_letter(width), size_letter(size));
+    match op {
+        FpConvert::Bits { to_fp: true } => ("FMOV", format!("{s}{w}")),
+        FpConvert::Bits { to_fp: false } => ("FMOV", format!("{w}{s}")),
+        other => (named(&CONVERT, other), format!("{w}{s}")),
+    }
+}
+
+/// The form of `dup v.<arrangement>, w`: the pin's name for it (the
+/// sixteen-byte one is the producer's older spelling).
+fn dup_name(arrangement: Arrangement) -> &'static str {
+    match arrangement {
+        Arrangement::B16 => "DUPv16b",
+        Arrangement::H8 => "DUPv8i16gpr",
+        Arrangement::S4 => "DUPv4i32gpr",
+        Arrangement::D2 => "DUPv2i64gpr",
+    }
+}
+
+pub(super) fn back(what: &Semantics) -> Option<Inst> {
+    let name = what.name.as_deref()?;
+    let (dest, s) = (what.dests.first(), &what.sources);
+    match name {
+        "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
+        "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
+        "MOVIv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte(value_of(&s[0]) as u8) }),
+        "MOVIv2d_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Mask(value_of(&s[0]) as u8) }),
+        "MOVID" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::MaskD(value_of(&s[0]) as u8) }),
+        "SCVTFv1i32" | "UCVTFv1i32" | "SCVTFv1i64" | "UCVTFv1i64" => {
+            let size = if name.ends_with("64") { FpSize::D } else { FpSize::S };
+            return Some(Inst::FpLaneToFp {
+                signed: name.starts_with('S'),
+                size,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[0]),
+            });
+        }
+        _ => {}
+    }
+    if let Some(arrangement) = [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .find(|one| name == dup_name(*one))
+    {
+        return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Dup(arrangement, gpr_of(&s[0])) });
+    }
+    for (stem, invert) in [("MOVI", false), ("MVNI", true)] {
+        let Some(lanes) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('v')) else { continue };
+        let (imm8, shift) = (value_of(s.first()?) as u8, s.get(1).map_or(0, value_of) as u8);
+        let shape = match lanes {
+            "8i16" => ImmShape::H8(shift),
+            "4i32" => ImmShape::S4(shift),
+            "2i32" => ImmShape::S2(shift),
+            "4s_msl" => ImmShape::S4Msl(shift),
+            _ => continue,
+        };
+        return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Imm { invert, shape, imm8 } });
+    }
+    let at = |i: usize| vreg_of(&s[i]);
+    let first = |text: &str| size_named(text.chars().next().unwrap_or('H'));
+    if let Some((op, rest)) = prefix(&UNARY, name) {
+        let (size, form) = letters(rest);
+        return match (op, size.len(), form) {
+            (FpUnary::Mov, 1, "i") => {
+                Some(Inst::FpMoveImm { size: first(size), rd: vreg_of(dest?), imm8: value_of(&s[0]) as u8 })
+            }
+            (_, 1, "r") => Some(Inst::FpUnary { op, size: first(size), rd: vreg_of(dest?), rn: at(0) }),
+            (FpUnary::Mov, 2, form) => {
+                let op = FpConvert::Bits { to_fp: matches!(size.as_bytes()[0], b'S' | b'D' | b'H') };
+                let (width, size) = if to_fp(op) {
+                    (width_named(size.as_bytes()[1] as char), first(size))
+                } else {
+                    (width_named(size.as_bytes()[0] as char), size_named(size.as_bytes()[1] as char))
+                };
+                let (gpr, fpr) = if to_fp(op) { (gpr_of(&s[0]), vreg_of(dest?)) } else { (gpr_of(dest?), at(0)) };
+                (form == "r").then_some(Inst::FpInt { op, width, size, gpr, fpr })
+            }
+            _ => None,
+        };
+    }
+    if let Some((op, rest)) = prefix(&BINARY, name) {
+        let (size, _) = letters(rest);
+        return Some(Inst::FpBinary { op, size: first(size), rd: vreg_of(dest?), rn: at(0), rm: at(1) });
+    }
+    if let Some((op, rest)) = prefix(&FUSED, name) {
+        let (size, _) = letters(rest);
+        return Some(Inst::FpFused { op, size: first(size), rd: vreg_of(dest?), rn: at(0), rm: at(1), ra: at(2) });
+    }
+    if let Some((signalling, rest)) = prefix(&[(false, "FCMP"), (true, "FCMPE")], name) {
+        let (size, form) = letters(rest);
+        return Some(Inst::FpCompare { signalling, size: first(size), rn: at(0), rm: (form == "rr").then(|| at(1)) });
+    }
+    if let Some(rest) = name.strip_prefix("FCSEL") {
+        let (size, _) = letters(rest);
+        return Some(Inst::FpSelect {
+            size: first(size),
+            rd: vreg_of(dest?),
+            rn: at(0),
+            rm: at(1),
+            cond: member::<Cond>(&super::integer::CONDS, &s[2]),
+        });
+    }
+    if let Some((op, rest)) = prefix(&CONVERT, name) {
+        let (pair, form) = letters(rest);
+        let width = width_named(pair.as_bytes()[0] as char);
+        let size = size_named(pair.as_bytes()[1] as char);
+        let (gpr, fpr) = if to_fp(op) { (gpr_of(&s[0]), vreg_of(dest?)) } else { (gpr_of(dest?), at(0)) };
+        return Some(if form == "ri" {
+            Inst::FpFixed { op, width, size, gpr, fpr, fbits: value_of(&s[1]) as u8 }
+        } else {
+            Inst::FpInt { op, width, size, gpr, fpr }
+        });
+    }
+    if let Some(rest) = name.strip_prefix("FCVT") {
+        let (pair, _) = letters(rest);
+        let (to, from) = (size_named(pair.as_bytes()[0] as char), size_named(pair.as_bytes()[1] as char));
+        return Some(Inst::FpToFp { to, from, rd: vreg_of(dest?), rn: at(0) });
+    }
+    None
+}

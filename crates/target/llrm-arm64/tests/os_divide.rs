@@ -1,7 +1,7 @@
 //! A divide by a constant at `-Os`: the multiply-high sequence is seven
 //! instructions and 28 bytes against `sdiv` and `msub`, which gcc's `-Os`
 //! uses. The pin keeps the divide only at `minsize`; here `optsize` does too
-//! (DEVIATE SD534). Before, `recsum`, `recpow`, `recmany`, `switch`, `frames`
+//! (DEVIATE SD535). Before, `recsum`, `recpow`, `recmany`, `switch`, `frames`
 //! and `huge` at -Os were 25-60% above gcc on bytes.
 
 use std::process::Command;
@@ -21,7 +21,7 @@ fn assembly(
     )
     .unwrap();
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .args(["-S", "-O2", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -47,4 +47,19 @@ fn an_unsigned_divide_by_a_constant_is_udiv_at_optsize() {
 fn the_multiply_high_sequence_stays_at_the_default() {
     let text = assembly("", "%r = srem i32 %a, 11");
     assert!(text.contains("smaddl") && !text.contains("sdiv"), "{text}");
+}
+
+/// A signed divide by a power of two was `sbfm`, `add .. lsr`, `sbfm` at
+/// `optsize` while every other constant divide stayed a divide: nbody_fixed -Os
+/// ran 959160 instructions in 396 B against gcc's 867163 in 428 B.
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_sdiv_at_optsize() {
+    let text = assembly("optsize", "%r = sdiv i32 %a, 512");
+    assert!(text.contains("sdiv") && !text.contains("sbfm"), "{text}");
+}
+
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_shifts_at_the_default() {
+    let text = assembly("", "%r = sdiv i32 %a, 512");
+    assert!(text.contains("sbfm") && !text.contains("sdiv"), "{text}");
 }

@@ -25,11 +25,15 @@ static inline int sf_clz32(uint32_t x)
 #define sf_clz32 SF_CLZ32
 #endif
 
+#ifdef SF_CLZ64
+#define sf_clz64 SF_CLZ64
+#else
 static inline int sf_clz64(uint64_t x)
 {
     uint32_t hi = (uint32_t)(x >> 32);
     return hi ? sf_clz32(hi) : 32 + sf_clz32((uint32_t)x);
 }
+#endif
 
 /* x >> n, with every dropped bit folded into bit 0. */
 static inline uint32_t sf_shr_sticky32(uint32_t x, int n)

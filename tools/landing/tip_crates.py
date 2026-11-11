@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+ROOT_PACKAGE_DIRS = {"src", "tests", "examples", "benches", "build.rs"}  # a root package owns these; its relative dir "." matched no path (src/bin/llrm-mir.rs selected nothing)
 ROOT_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}
 
 
@@ -23,7 +24,7 @@ def selection(metadata: dict, changed: list[str]) -> str:
     for path in changed:
         if path in ROOT_FILES:
             return "--workspace"
-        owner = [n for n, d in packages.items() if path == d or path.startswith(d + "/")]
+        owner = [n for n, d in packages.items() if path == d or path.startswith(d + "/") or (d == "." and path.split("/")[0] in ROOT_PACKAGE_DIRS)]
         if owner:
             hit.add(max(owner, key=lambda n: len(packages[n])))
         elif path.startswith(("crates/", "runtime/")) and path.endswith((".rs", ".toml")):

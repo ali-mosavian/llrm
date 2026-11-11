@@ -1,7 +1,9 @@
-//! The epilog remainder of `UnrollRuntimeLoopRemainder`
+//! The remainder of `UnrollRuntimeLoopRemainder`
 //! (`LoopUnrollRuntime.cpp` at `d1106deb71cc`): before a loop of a run-time
 //! trip count is unrolled by `count`, a copy of the loop runs the `trip count %
-//! count` iterations the unrolled loop leaves.
+//! count` iterations the unrolled loop leaves, after it (epilog) or before it
+//! (prolog). The caller picks the form as `isEpilogProfitable` does: the epilog
+//! where a header phi starts at an integer constant, else the prolog.
 //!
 //! # How it works
 //! The preheader computes the trip count `TC = BECount + 1` (SCEV expanded),
@@ -17,8 +19,6 @@
 //! merged into its exit.
 //!
 //! # Deviations from LLVM
-//! - D1: only the epilog form: the prolog is for `-unroll-allow-remainder`
-//!   loops the unroller's runtime mode makes, which llrm has no pass for.
 //! - D2: only a loop with one exiting block and one exit block. The pin's
 //!   multi-exit mode needs `UnrollRuntimeMultiExit` or a target that says it
 //!   pays; the jam refuses such loops before it gets here.
@@ -33,11 +33,14 @@
 //! # Example
 //! A loop `for (i = 0; i < n; i++) body` unrolled by 4 becomes, in the
 //! preheader, `xtraiter = (n) & 3`; the unrolled loop runs `n - xtraiter`
-//! iterations; the epilog `body.epil` runs `xtraiter` times.
+//! iterations; the epilog `body.epil` runs `xtraiter` times. As a prolog,
+//! `body.prol` runs `xtraiter` times first, the unrolled loop starts from what
+//! it left (`.unr` phis in `body.prol.loopexit`) and is skipped when the
+//! prolog ran every iteration.
 //!
 //! # See also
-//! `UnrollRuntimeLoopRemainder` (L672), `ConnectEpilog` (L255),
-//! `CloneLoopBlocks` (L404), `CreateTripRemainder` (L607).
+//! `UnrollRuntimeLoopRemainder` (L672), `ConnectProlog` (L82), `ConnectEpilog`
+//! (L255), `CloneLoopBlocks` (L404), `CreateTripRemainder` (L607).
 
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::backedge::ExitCountKind;
@@ -52,7 +55,7 @@ use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Declared, Outer};
 use llrm_mir::types::TypeId;
 
-use crate::edges::{phis, retarget, split_block_at, split_block_predecessors_of};
+use crate::edges::{phis, retarget, split_block_at, split_block_predecessors_of, split_edge};
 
 /// `SCEVCheapExpansionBudget`: its `cl::opt` default.
 const CHEAP_EXPANSION_BUDGET: u32 = 4;
@@ -226,6 +229,7 @@ pub fn unroll_runtime_loop_remainder(
     header: BlockId,
     count: u32,
     allow_expensive_trip_count: bool,
+    use_epilog: bool,
 ) -> Option<Option<BlockId>> {
     let outer = env.outer;
     // What is true of the loop before anything changes.
@@ -308,6 +312,9 @@ pub fn unroll_runtime_loop_remainder(
     let (preheader, latch, latch_exit) = (facts.preheader, facts.latch, facts.latch_exit);
     let loop_blocks = facts.blocks.clone();
     let in_loop_set = |block: BlockId| loop_blocks.contains(&block);
+    if !use_epilog {
+        return Some(prolog_remainder(env, session, &facts, header, count));
+    }
 
     // The loop is: PreHeader, Header ... Latch, LatchExit.
     // Split PreHeader to insert a branch around the loop for unrolling.
@@ -350,104 +357,21 @@ pub fn unroll_runtime_loop_remainder(
     env.function.erase(pre_br).expect("the old branch has no users");
 
     // Clone the loop's blocks for the epilog: they run `xtraiter` times.
-    let mut map = ValueMap::default();
-    let mut new_blocks: Vec<BlockId> = Vec::new();
-    let suffix = "epil";
-    let latch_clone;
-    {
-        let mut latch_copy = None;
-        for &block in &loop_blocks {
-            let copy = env.function.clone_block(block, &mut map);
-            let name = format!("{}.{suffix}", env.function.block(block).name.clone().unwrap_or_default());
-            env.function.set_block_name(copy, &name);
-            for inst in env.function.iter_block(block).collect::<Vec<_>>() {
-                if let Some(from) = env.function.instruction(inst).result
-                    && let Some(&Operand::Value(to)) = map.values.get(&from)
-                    && let Some(original) = env.function.value(from).name.clone()
-                {
-                    env.function.set_name(to, &format!("{original}.{suffix}"));
-                }
-            }
-            new_blocks.push(copy);
-            if block == latch {
-                latch_copy = Some(copy);
-            }
-        }
-        latch_clone = latch_copy.expect("the latch is a loop block");
-    }
-    let header_clone = *map.blocks.get(&header).expect("the header was cloned");
-
-    // Connect the top of the epilog to the cloned header.
-    let epilog_top = env.function.terminator(epilog_preheader).expect("a terminated block");
-    env.function.set_operand(epilog_top, 0, Operand::Block(header_clone));
-
-    // The cloned latch counts `epil.iter` up to `ModVal`.
-    {
-        let latch_br = env.function.terminator(latch_clone).expect("a terminated latch");
-        let iter_ty = type_of(env, mod_val);
-        let zero = int_constant(env.context, iter_ty, 0);
-        let one = int_constant(env.context, iter_ty, 1);
-        let first = env.function.iter_block(header_clone).find(|&i| env.function.instruction(i).opcode != Opcode::Phi);
-        let idx =
-            env.function.create_instruction(Opcode::Phi, iter_ty, Vec::new(), Flags::default(), Some("epil.iter"));
-        env.function.insert(idx, Position::Before(first.expect("a terminated header"))).expect("a placed block");
-        let idx_value = value_of(env.function, idx);
-        let next = create_binary(env, latch_br, BinaryOp::Add, idx_value, one, "epil.iter.next");
-        let cmp = create_icmp(env, latch_br, IntPredicate::Ne, next, mod_val, "epil.iter.cmp");
-        let latch_exit_operand = Operand::Block(latch_exit);
-        let cond = env
-            .function
-            .create_instruction(
-                Opcode::Br,
-                void,
-                vec![cmp, Operand::Block(header_clone), latch_exit_operand],
-                Flags::default(),
-                None,
-            );
-        env.function.insert(cond, Position::Before(latch_br)).expect("a placed branch");
-        env.function.erase(latch_br).expect("the old latch branch has no users");
-        env.function.set_operands(idx, vec![zero, Operand::Block(epilog_preheader), next, Operand::Block(latch_clone)]);
-    }
-
-    // The cloned header phis read the preheader's and the cloned latch's
-    // values.
-    for phi in phis(env.function, header_clone) {
-        let operands = env.function.instruction(phi).operands.clone();
-        if env.function.value(env.function.instruction(phi).result.expect("a phi")).name.as_deref() == Some("epil.iter")
-        {
-            continue;
-        }
-        let mut updated = operands.clone();
-        for pair in 0..operands.len() / 2 {
-            let (value, from) = (operands[2 * pair], operands[2 * pair + 1]);
-            if from == Operand::Block(preheader_or_new(preheader, new_preheader))
-                || from == Operand::Block(new_preheader)
-            {
-                updated[2 * pair + 1] = Operand::Block(epilog_preheader);
-            } else if from == Operand::Block(latch) {
-                updated[2 * pair + 1] = Operand::Block(latch_clone);
-                if let Operand::Value(v) = value
-                    && let Some(&Operand::Value(mapped)) = map.values.get(&v)
-                {
-                    updated[2 * pair] = Operand::Value(mapped);
-                }
-            }
-        }
-        env.function.set_operands(phi, updated);
-    }
-
-    // Insert the cloned blocks into the function before the exit.
-    for &block in &new_blocks {
-        env.function.insert_block_before(block, latch_exit).expect("a new block");
-    }
-
-    // Rewrite the cloned instruction operands to use the values created when
-    // the clone was.
-    for &block in &new_blocks {
-        for inst in env.function.iter_block(block).collect::<Vec<_>>() {
-            env.function.remap_instruction(inst, &map);
-        }
-    }
+    let copy = clone_loop_blocks(
+        env,
+        &CloneArgs {
+            blocks: &loop_blocks,
+            header,
+            latch,
+            suffix: "epil",
+            mod_val,
+            insert_top: epilog_preheader,
+            insert_bot: latch_exit,
+            preheader,
+            new_preheader,
+        },
+    );
+    let CloneResult { map, blocks: new_blocks, header: header_clone, latch: latch_clone } = copy;
 
     // Connect the epilog code to the original loop and update the phis.
     connect_epilog(
@@ -495,6 +419,131 @@ pub fn unroll_runtime_loop_remainder(
         break_epilog_backedge(env, &new_blocks, header_clone, latch_clone);
     }
     Some(epilog_header)
+}
+
+/// What `CloneLoopBlocks` reads.
+struct CloneArgs<'a> {
+    blocks: &'a [BlockId],
+    header: BlockId,
+    latch: BlockId,
+    /// `epil` or `prol`: the names of the copies and of their counter.
+    suffix: &'a str,
+    mod_val: Operand,
+    /// The block that runs into the copy.
+    insert_top: BlockId,
+    /// The block the copy leaves for; the copies are placed before it.
+    insert_bot: BlockId,
+    preheader: BlockId,
+    new_preheader: BlockId,
+}
+
+/// What `CloneLoopBlocks` made.
+struct CloneResult {
+    map: ValueMap,
+    blocks: Vec<BlockId>,
+    header: BlockId,
+    latch: BlockId,
+}
+
+/// `CloneLoopBlocks`: a copy of the loop that runs `ModVal` times, from
+/// `insert_top` to `insert_bot`, its operands remapped.
+fn clone_loop_blocks(
+    env: &mut Env,
+    args: &CloneArgs,
+) -> CloneResult {
+    let CloneArgs { blocks, header, latch, suffix, mod_val, insert_top, insert_bot, preheader, new_preheader } = *args;
+    let mut map = ValueMap::default();
+    let mut new_blocks: Vec<BlockId> = Vec::new();
+    let mut latch_copy = None;
+    for &block in blocks {
+        let copy = env.function.clone_block(block, &mut map);
+        let name = format!("{}.{suffix}", env.function.block(block).name.clone().unwrap_or_default());
+        env.function.set_block_name(copy, &name);
+        for inst in env.function.iter_block(block).collect::<Vec<_>>() {
+            if let Some(from) = env.function.instruction(inst).result
+                && let Some(&Operand::Value(to)) = map.values.get(&from)
+                && let Some(original) = env.function.value(from).name.clone()
+            {
+                env.function.set_name(to, &format!("{original}.{suffix}"));
+            }
+        }
+        new_blocks.push(copy);
+        if block == latch {
+            latch_copy = Some(copy);
+        }
+    }
+    let latch_clone = latch_copy.expect("the latch is a loop block");
+    let header_clone = *map.blocks.get(&header).expect("the header was cloned");
+
+    // Connect the top to the cloned header.
+    let top = env.function.terminator(insert_top).expect("a terminated block");
+    env.function.set_operand(top, 0, Operand::Block(header_clone));
+
+    // The cloned latch counts `{suffix}.iter` up to `ModVal`.
+    let counter = format!("{suffix}.iter");
+    {
+        let latch_br = env.function.terminator(latch_clone).expect("a terminated latch");
+        let void = env.function.instruction(latch_br).ty;
+        let iter_ty = type_of(env, mod_val);
+        let zero = int_constant(env.context, iter_ty, 0);
+        let one = int_constant(env.context, iter_ty, 1);
+        let first = env.function.iter_block(header_clone).find(|&i| env.function.instruction(i).opcode != Opcode::Phi);
+        let idx = env.function.create_instruction(Opcode::Phi, iter_ty, Vec::new(), Flags::default(), Some(&counter));
+        env.function.insert(idx, Position::Before(first.expect("a terminated header"))).expect("a placed block");
+        let idx_value = value_of(env.function, idx);
+        let next = create_binary(env, latch_br, BinaryOp::Add, idx_value, one, &format!("{counter}.next"));
+        let cmp = create_icmp(env, latch_br, IntPredicate::Ne, next, mod_val, &format!("{counter}.cmp"));
+        let cond = env
+            .function
+            .create_instruction(
+                Opcode::Br,
+                void,
+                vec![cmp, Operand::Block(header_clone), Operand::Block(insert_bot)],
+                Flags::default(),
+                None,
+            );
+        env.function.insert(cond, Position::Before(latch_br)).expect("a placed branch");
+        env.function.erase(latch_br).expect("the old latch branch has no users");
+        env.function.set_operands(idx, vec![zero, Operand::Block(insert_top), next, Operand::Block(latch_clone)]);
+    }
+
+    // The cloned header phis read the preheader's and the cloned latch's
+    // values.
+    for phi in phis(env.function, header_clone) {
+        let operands = env.function.instruction(phi).operands.clone();
+        if env.function.value(env.function.instruction(phi).result.expect("a phi")).name.as_deref() == Some(&counter) {
+            continue;
+        }
+        let mut updated = operands.clone();
+        for pair in 0..operands.len() / 2 {
+            let (value, from) = (operands[2 * pair], operands[2 * pair + 1]);
+            if from == Operand::Block(preheader) || from == Operand::Block(new_preheader) {
+                updated[2 * pair + 1] = Operand::Block(insert_top);
+            } else if from == Operand::Block(latch) {
+                updated[2 * pair + 1] = Operand::Block(latch_clone);
+                if let Operand::Value(v) = value
+                    && let Some(&Operand::Value(mapped)) = map.values.get(&v)
+                {
+                    updated[2 * pair] = Operand::Value(mapped);
+                }
+            }
+        }
+        env.function.set_operands(phi, updated);
+    }
+
+    // Insert the cloned blocks into the function before `insert_bot`.
+    for &block in &new_blocks {
+        env.function.insert_block_before(block, insert_bot).expect("a new block");
+    }
+
+    // Rewrite the cloned instruction operands to use the values created when
+    // the clone was.
+    for &block in &new_blocks {
+        for inst in env.function.iter_block(block).collect::<Vec<_>>() {
+            env.function.remap_instruction(inst, &map);
+        }
+    }
+    CloneResult { map, blocks: new_blocks, header: header_clone, latch: latch_clone }
 }
 
 /// The trip count and the backedge count as values, before the preheader's
@@ -550,13 +599,6 @@ fn expanded(
         )
     };
     (trip_count, be_count)
-}
-
-fn preheader_or_new(
-    preheader: BlockId,
-    _new: BlockId,
-) -> BlockId {
-    preheader
 }
 
 fn in_loop_set_ref<'a>(f: &'a dyn Fn(BlockId) -> bool) -> &'a dyn Fn(BlockId) -> bool {
@@ -758,6 +800,247 @@ fn connect_epilog(
         .function
         .create_instruction(Opcode::Call(Box::new(info)), void_ty, vec![not_null2, target], Flags::default(), None);
     env.function.insert(call, Position::Before(at)).expect("a placed call");
+}
+
+/// `isEpilogProfitable` (LoopUnroll.cpp#L1058 of the pin): the epilog form
+/// pays where a header phi starts at an integer constant, which the unrolled
+/// loop then keeps in a register; else the prolog runs the extra iterations
+/// first.
+pub fn is_epilog_profitable(
+    context: &Context,
+    function: &Function,
+    header: BlockId,
+    preheader: BlockId,
+) -> bool {
+    phis(function, header)
+        .into_iter()
+        .any(
+            |phi| function
+                .instruction(phi)
+                .operands
+                .chunks(2)
+                .any(
+                    |pair| pair[1] == Operand::Block(preheader)
+                        && matches!(
+                            pair[0],
+                            Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_))
+                        ),
+                ),
+        )
+}
+
+/// The prolog case of `UnrollRuntimeLoopRemainder`
+/// ([L672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnrollRuntime.cpp#L672)):
+/// `PreHeader` runs a copy of the loop `TripCount % Count` times
+/// (`.prol`), then the loop for unrolling.
+fn prolog_remainder(
+    env: &mut Env,
+    session: &mut ScevSession,
+    facts: &Facts,
+    header: BlockId,
+    count: u32,
+) -> Option<BlockId> {
+    let (preheader, latch, latch_exit) = (facts.preheader, facts.latch, facts.latch_exit);
+    let header_name = env.function.block(header).name.clone().unwrap_or_default();
+    // Split the original preheader twice to insert the prolog loop.
+    let prolog_preheader = split_edge(env.function, preheader, header);
+    env.function.set_block_name(prolog_preheader, &format!("{header_name}.prol.preheader"));
+    let prolog_term = env.function.terminator(prolog_preheader).expect("a terminated block");
+    let prolog_exit = split_block_at(env.function, prolog_preheader, prolog_term);
+    env.function.set_block_name(prolog_exit, &format!("{header_name}.prol.loopexit"));
+    // Split PrologExit to get NewPreHeader.
+    let exit_term = env.function.terminator(prolog_exit).expect("a terminated block");
+    let new_preheader = split_block_at(env.function, prolog_exit, exit_term);
+    let new_name = format!("{}.new", env.function.block(preheader).name.clone().unwrap_or_default());
+    env.function.set_block_name(new_preheader, &new_name);
+
+    // The extra iterations: `TripCount % Count`; the guard runs the prolog
+    // when there are some.
+    let pre_br = env.function.terminator(preheader).expect("a terminated preheader");
+    let (trip_count, be_count) = expanded(env, session, facts, pre_br);
+    let mod_val = create_trip_remainder(env, pre_br, be_count, trip_count, count);
+    let mod_ty = type_of(env, mod_val);
+    let zero = int_constant(env.context, mod_ty, 0);
+    let branch_val = create_icmp(env, pre_br, IntPredicate::Ne, mod_val, zero, "lcmp.mod");
+    let void = env.function.instruction(pre_br).ty;
+    let guard = env
+        .function
+        .create_instruction(
+            Opcode::Br,
+            void,
+            vec![branch_val, Operand::Block(prolog_preheader), Operand::Block(prolog_exit)],
+            Flags::default(),
+            None,
+        );
+    env.function.insert(guard, Position::Before(pre_br)).expect("a placed branch");
+    env.function.erase(pre_br).expect("the old branch has no users");
+
+    let copy = clone_loop_blocks(
+        env,
+        &CloneArgs {
+            blocks: &facts.blocks,
+            header,
+            latch,
+            suffix: "prol",
+            mod_val,
+            insert_top: prolog_preheader,
+            insert_bot: prolog_exit,
+            preheader,
+            new_preheader,
+        },
+    );
+    let CloneResult { map, blocks: new_blocks, header: header_clone, latch: latch_clone } = copy;
+    let in_loop = |block: BlockId| facts.blocks.contains(&block);
+    connect_prolog(
+        env,
+        &map,
+        &in_loop,
+        &PrologArgs { header, latch, latch_clone, be_count, count, prolog_exit, latch_exit, preheader, new_preheader },
+    );
+
+    // For unroll factor 2 the prolog loop has one iteration.
+    if count == 2 {
+        break_epilog_backedge(env, &new_blocks, header_clone, latch_clone);
+        return None;
+    }
+    Some(header_clone)
+}
+
+/// What `ConnectProlog` reads.
+struct PrologArgs {
+    header: BlockId,
+    latch: BlockId,
+    latch_clone: BlockId,
+    be_count: Operand,
+    count: u32,
+    prolog_exit: BlockId,
+    latch_exit: BlockId,
+    preheader: BlockId,
+    new_preheader: BlockId,
+}
+
+/// `ConnectProlog`
+/// ([L82](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnrollRuntime.cpp#L82)):
+/// a phi at the prolog's end joins what the prolog leaves with what skips it,
+/// for each phi the latch leads to; the prolog's end branches around the loop
+/// when the prolog ran every iteration.
+fn connect_prolog(
+    env: &mut Env,
+    map: &ValueMap,
+    in_loop: &dyn Fn(BlockId) -> bool,
+    args: &PrologArgs,
+) {
+    let PrologArgs { header, latch, latch_clone, be_count, count, prolog_exit, latch_exit, preheader, new_preheader } =
+        *args;
+    let latch_term = env.function.terminator(latch).expect("a terminated latch");
+    let successors: Vec<BlockId> = env
+        .function
+        .instruction(latch_term)
+        .operands
+        .iter()
+        .filter_map(|operand| if let Operand::Block(block) = operand { Some(*block) } else { None })
+        .collect();
+    for succ in successors {
+        for pn in phis(env.function, succ) {
+            let ty = env.function.instruction(pn).ty;
+            let name = env
+                .function
+                .value(env.function.instruction(pn).result.expect("a phi"))
+                .name
+                .clone()
+                .unwrap_or_default();
+            let incoming = |env: &Env, from: BlockId| {
+                env.function
+                    .instruction(pn)
+                    .operands
+                    .chunks(2)
+                    .find(|pair| pair[1] == Operand::Block(from))
+                    .map(|pair| pair[0])
+                    .expect("an input from the block")
+            };
+            // What skips the prolog: the header phi's own start, or poison at
+            // the exit.
+            let skipping = if succ == header {
+                incoming(env, new_preheader)
+            } else {
+                Operand::Constant(env.context.constant(Constant { ty, kind: ConstantKind::Poison }))
+            };
+            // What the prolog's last iteration leaves.
+            let mut leaving = incoming(env, latch);
+            if let Operand::Value(v) = leaving
+                && let ValueDef::Instruction(def) = env.function.value(v).def
+                && env.function.parent(def).is_some_and(|block| in_loop(block))
+                && let Some(&copy) = map.values.get(&v)
+            {
+                leaving = copy;
+            }
+            let joined = env
+                .function
+                .create_instruction(
+                    Opcode::Phi,
+                    ty,
+                    vec![skipping, Operand::Block(preheader), leaving, Operand::Block(latch_clone)],
+                    Flags::default(),
+                    Some(&format!("{name}.unr")),
+                );
+            let at = env
+                .function
+                .iter_block(prolog_exit)
+                .find(|&i| env.function.instruction(i).opcode != Opcode::Phi)
+                .expect("a terminated block");
+            env.function.insert(joined, Position::Before(at)).expect("a placed block");
+            let joined_value = value_of(env.function, joined);
+            // The loop's phi starts from it; an exit phi takes it from the
+            // prolog's end.
+            let mut operands = env.function.instruction(pn).operands.clone();
+            if succ == header {
+                for pair in 0..operands.len() / 2 {
+                    if operands[2 * pair + 1] == Operand::Block(new_preheader) {
+                        operands[2 * pair] = joined_value;
+                    }
+                }
+            } else {
+                operands.push(joined_value);
+                operands.push(Operand::Block(prolog_exit));
+            }
+            env.function.set_operands(pn, operands);
+        }
+    }
+
+    // Keep the prolog loop in simplified form: its values leave through a
+    // block of their own.
+    let prolog_preds: Vec<BlockId> =
+        env.function.edge_predecessors(prolog_exit).into_iter().filter(|&p| p == latch_clone).collect();
+    let lcssa = split_block_predecessors_of(env.function, prolog_exit, &prolog_preds, true);
+    env.function.set_block_name(
+        lcssa,
+        &format!("{}.unr-lcssa", env.function.block(prolog_exit).name.clone().unwrap_or_default()),
+    );
+
+    // Branch around the loop when the prolog ran every iteration: with
+    // `BECount <u Count - 1`, `(BECount + 1) % Count == BECount + 1`.
+    let term = env.function.terminator(prolog_exit).expect("a terminated block");
+    let be_ty = type_of(env, be_count);
+    let limit = int_constant(env.context, be_ty, u128::from(count - 1));
+    let done = create_icmp(env, term, IntPredicate::Ult, be_count, limit, "");
+    let preds: Vec<BlockId> = env.function.edge_predecessors(latch_exit);
+    let exit_lcssa = split_block_predecessors_of(env.function, latch_exit, &preds, true);
+    env.function.set_block_name(
+        exit_lcssa,
+        &format!("{}.unr-lcssa", env.function.block(latch_exit).name.clone().unwrap_or_default()),
+    );
+    let void = env.function.instruction(term).ty;
+    let branch = env
+        .function
+        .create_instruction(
+            Opcode::Br,
+            void,
+            vec![done, Operand::Block(latch_exit), Operand::Block(new_preheader)],
+            Flags::default(),
+            None,
+        );
+    env.function.insert(branch, Position::Before(term)).expect("a placed branch");
+    env.function.erase(term).expect("the old branch has no users");
 }
 
 /// The epilog of a count of two runs once: its backedge goes, its values

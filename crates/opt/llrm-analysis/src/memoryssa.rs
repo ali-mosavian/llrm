@@ -689,6 +689,46 @@ impl Accesses {
         self.writes(inst).map(Cow::Borrowed)
     }
 
+    /// Whether `inst` may read (`reads_in` is not empty), asked of the unit
+    /// where these accesses are lazy: the answer without the list
+    /// (`Instruction::mayReadFromMemory`).
+    pub fn reads_any_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> bool {
+        if !self.lazy {
+            return self.reads(inst).is_none_or(|list| !list.is_empty());
+        }
+        let opcode = &unit.function.instruction(inst).opcode;
+        match opcode {
+            Opcode::Call(info) | Opcode::Invoke(info) if own_bytes(opcode).is_none() => {
+                let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+                    .and_then(|one| unit.globals.get(one.0 as usize))
+                    .and_then(GlobalValue::function);
+                stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads)
+            }
+            _ => self.touched_in(unit, inst).is_some_and(|(reads, _)| reads.is_none_or(|list| !list.is_empty())),
+        }
+    }
+
+    /// Whether `inst` may write (`writes_in` is not empty), asked of the unit
+    /// where these accesses are lazy (`Instruction::mayWriteToMemory`).
+    pub fn writes_any_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> bool {
+        if !self.lazy {
+            return self.writes(inst).is_none_or(|list| !list.is_empty());
+        }
+        let opcode = &unit.function.instruction(inst).opcode;
+        match opcode {
+            Opcode::Call(_) | Opcode::Invoke(_) if own_bytes(opcode).is_none() => unmodeled_write(unit, inst),
+            _ => self.touched_in(unit, inst).is_some_and(|(_, writes)| writes.is_none_or(|list| !list.is_empty())),
+        }
+    }
+
     /// These accesses with the stores `absolute` names writing nothing a
     /// program object holds: a far store through a selector taken to be an
     /// absolute segment (`consts::_selector`).
@@ -1413,6 +1453,7 @@ impl MemorySSA<'_> {
         let location = MemoryLocation::new(pointer, LocationSize::Precise(u64::from(cell.width)));
         let mut aggregate = crate::aggregate::AggregateAA::new();
         aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
+        aggregate.add_aa_result(crate::scopednoaliasaa::ScopedNoAliasAA::new(&self.unit));
         aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
         if let Some(info) = self.unit.globals_mr {
             aggregate.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&self.unit, info));

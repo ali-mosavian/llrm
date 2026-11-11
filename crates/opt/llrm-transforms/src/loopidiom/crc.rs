@@ -23,122 +23,16 @@
 //! - Hexagon (`optimizeCRCLoop`'s first test) is not a target here.
 //! - Optimization remarks and MemorySSA updates have no counterpart.
 
-use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::module::{Function, InstId, Operand, UnnamedAddr};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::tti::{ArithOp, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty};
-use llrm_mir::types::{Type, TypeId};
+use llrm_mir::types::Type;
 
+use super::common::{delete_dead_cascade, emit, int, uses_outside, zext_or_trunc};
 use super::hashrecognize::{PolynomialInfo, gen_sarwate_table};
 use super::process::Run;
 use super::{CrcStrategy, LoopIdiomRecognize};
-
-fn int(
-    context: &Context,
-    ty: TypeId,
-    value: u128,
-) -> Operand {
-    Operand::Constant(context.int(ty, value as i128))
-}
-
-fn width_of(
-    context: &Context,
-    function: &Function,
-    operand: Operand,
-) -> u32 {
-    let ty = function.operand_type(context, operand).expect("a typed operand");
-    context.types.int_bits(ty).expect("an integer")
-}
-
-/// An instruction made and placed before `at`.
-fn emit(
-    function: &mut Function,
-    at: InstId,
-    opcode: Opcode,
-    ty: TypeId,
-    operands: Vec<Operand>,
-    flags: Flags,
-    name: &str,
-) -> Operand {
-    let inst = function.create_instruction(opcode, ty, operands, flags, Some(name));
-    function.insert(inst, Position::Before(at)).expect("a placed instruction");
-    Operand::Value(function.instruction(inst).result.expect("a value"))
-}
-
-/// `CreateZExtOrTrunc`.
-fn zext_or_trunc(
-    context: &Context,
-    function: &mut Function,
-    at: InstId,
-    value: Operand,
-    to: TypeId,
-    name: &str,
-) -> Operand {
-    let from = width_of(context, function, value);
-    let target = context.types.int_bits(to).expect("an integer");
-    if from == target {
-        return value;
-    }
-    let cast = if from < target { CastOp::ZExt } else { CastOp::Trunc };
-    emit(function, at, Opcode::Cast(cast), to, vec![value], Flags::default(), name)
-}
-
-/// The users of `value` outside `block`, as (instruction, operand index).
-fn uses_outside(
-    function: &Function,
-    value: llrm_mir::module::ValueId,
-    block: llrm_mir::module::BlockId,
-) -> Vec<(InstId, usize)> {
-    function
-        .users(value)
-        .into_iter()
-        .filter(|one| function.parent(one.user) != Some(block))
-        .map(|one| (one.user, one.index as usize))
-        .collect()
-}
-
-/// `RecursivelyDeleteDeadPHINode` for the dead recurrences here: the phi, and
-/// each pure instruction that nothing else reads once it is gone.
-fn delete_dead_cascade(
-    function: &mut Function,
-    first: InstId,
-) {
-    let mut worklist = vec![first];
-    let mut erased: llrm_mir::dense::IdSet<InstId> = Default::default();
-    while let Some(inst) = worklist.pop() {
-        if erased.contains(&inst) {
-            continue;
-        }
-        let instruction = function.instruction(inst);
-        let pure = match instruction.opcode {
-            Opcode::Phi | Opcode::Select | Opcode::Cast(_) | Opcode::ICmp(_) => true,
-            Opcode::Binary(op) => !matches!(
-                op,
-                BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
-            ),
-            _ => false,
-        };
-        let unused = instruction.result.is_none_or(|result| function.users(result).is_empty());
-        if !pure || !unused {
-            continue;
-        }
-        let operands: Vec<InstId> = instruction
-            .operands
-            .iter()
-            .filter_map(|operand| match operand {
-                Operand::Value(value) => match function.value(*value).def {
-                    llrm_mir::module::ValueDef::Instruction(def) => Some(def),
-                    llrm_mir::module::ValueDef::Argument(_) => None,
-                },
-                _ => None,
-            })
-            .collect();
-        function.erase(inst).expect("a dead instruction");
-        erased.insert(inst);
-        worklist.extend(operands);
-    }
-}
 
 impl LoopIdiomRecognize {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1596
@@ -228,7 +122,7 @@ impl LoopIdiomRecognize {
             ty: array,
             kind: llrm_mir::context::ConstantKind::Aggregate(cells),
         });
-        let table = run.declared.table(".crctable", array, initial);
+        let table = run.declared.table(".crctable", array, initial, UnnamedAddr::None);
 
         let iv_phi = l.get_canonical_induction_variable(context, &*function).expect("a canonical induction variable");
         let iv = Operand::Value(function.instruction(iv_phi).result.expect("a value"));

@@ -41,10 +41,14 @@ use std::sync::Arc;
 use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::classes::RegisterClasses;
+use crate::backend::genericdriver::{RegionPolicy, Scheduler, ZonePressure};
+use crate::backend::genericsched::Reason;
 use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
-use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Region, Tracker, try_pressure};
+use crate::backend::regpressure::{Delta, Model, PressureChange, Region, TopTracker, Tracker};
+use crate::backend::schedboundary::Unit;
+use crate::backend::schedmodel::{MemBase, MemOp, SchedulingModel};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -162,8 +166,10 @@ fn memory(one: &Insn) -> (bool, bool) {
     (reads, writes)
 }
 
-/// CF, PF, AF, ZF, SF, OF of rflags.
-const ARITHMETIC_FLAGS: u32 = 0x8d5;
+/// CF, PF, AF, ZF, SF, OF, in the lane numbering of `Lanes::flags`
+/// (`llrm_lir::flag`, the decoder's bits: the mask 0x8d5 of rflags positions
+/// named other lanes).
+const ARITHMETIC_FLAGS: u32 = llrm_lir::flag::ALL.bits();
 
 /// What an instruction does that its decoded effect leaves out, because a later
 /// pass adds it: an x87 compare writes the arithmetic flags (the stackifier
@@ -217,7 +223,7 @@ fn fpu_word(one: &Insn) -> bool {
 }
 
 /// A move of the constant zero into a value.
-fn zero_move(one: &Insn) -> bool {
+pub(crate) fn zero_move(one: &Insn) -> bool {
     one.what
         .as_ref()
         .is_some_and(
@@ -238,14 +244,21 @@ pub struct Graph {
     pub succs: Vec<Vec<usize>>,
     /// The latency of each edge in `preds`, in the same order: what the
     /// earlier instruction takes to produce what the later one reads
-    /// ([`def_latency`]), one for an output dependence, none for an anti
-    /// dependence or a memory order.
+    /// ([`SchedulingModel::def_latency`]), one for an output dependence, none
+    /// for an anti dependence or a memory order.
     pub latencies: Vec<Vec<u32>>,
     /// For each instruction, the ones weakly ordered before it
     /// ([`copy_constrain`]): they never hold a node back, `Weak` of
     /// `tryCandidate` only prefers the one with fewer left.
     pub weak_preds: Vec<Vec<usize>>,
     pub weak_succs: Vec<Vec<usize>>,
+    /// For each instruction, the cluster of memory accesses it belongs to
+    /// (`SUnit::ParentClusterIdx`, [`cluster_mem_ops`]).
+    pub parent_cluster: Vec<Option<u32>>,
+    /// For each instruction, the latency of its artificial edge to the region
+    /// end (`ExitSU`): a def nothing in the region reads, held for its
+    /// latency less one. Zero for the others.
+    pub exit_latency: Vec<u32>,
     topo: Topo,
 }
 
@@ -282,6 +295,31 @@ impl PartialEq for Topo {
 impl Eq for Topo {}
 
 impl Graph {
+    /// A graph of `n` instructions with the given `(earlier, later, latency)`
+    /// edges, for a scheduler test.
+    #[cfg(test)]
+    pub(crate) fn from_edges(
+        n: usize,
+        edges: &[(usize, usize, u32)],
+    ) -> Graph {
+        let mut graph = Graph {
+            preds: vec![Vec::new(); n],
+            succs: vec![Vec::new(); n],
+            latencies: vec![Vec::new(); n],
+            weak_preds: vec![Vec::new(); n],
+            weak_succs: vec![Vec::new(); n],
+            parent_cluster: vec![None; n],
+            exit_latency: vec![0; n],
+            topo: Topo::new(n),
+        };
+        for &(from, to, latency) in edges {
+            graph.preds[to].push(from);
+            graph.latencies[to].push(latency);
+            graph.succs[from].push(to);
+        }
+        graph
+    }
+
     /// Whether `to` follows `from` through the edges, weak ones too
     /// (`ScheduleDAGTopologicalSort::IsReachable`).
     fn reaches(
@@ -370,13 +408,38 @@ impl Graph {
             self.reorder(before, after);
         }
     }
+
+    /// An `Artificial` edge `before -> after` (`ScheduleDAGMI::addEdge`): it
+    /// holds `after` back like a data edge, with no latency. False, and no
+    /// edge, where `before` already follows `after`.
+    fn add_artificial(
+        &mut self,
+        before: usize,
+        after: usize,
+    ) -> bool {
+        if self.reaches(after, before) {
+            return false;
+        }
+        if let Some(at) = self.preds[after].iter().position(|&earlier| earlier == before)
+            && self.latencies[after][at] == 0
+        {
+            return true;
+        }
+        self.preds[after].push(before);
+        self.latencies[after].push(0);
+        self.succs[before].push(after);
+        self.reorder(before, after);
+        true
+    }
 }
 
-/// The latency of what `one` defines for the default scheduling model of a
-/// target with none (i486): `TargetInstrInfo::defaultDefLatency` is zero for
-/// a transient instruction (a copy), `getLoadLatency` (4) for a load, one for
-/// the rest.
-fn def_latency(one: &Insn) -> u32 {
+/// The latency of what `one` defines when the model states none:
+/// `TargetInstrInfo::defaultDefLatency` is zero for a transient instruction
+/// (a copy), the model's `LoadLatency` for a load, one for the rest.
+pub fn default_def_latency(
+    one: &Insn,
+    load_latency: u32,
+) -> u32 {
     let Some(what) = &one.what else { return 1 };
     let copy = what.op == Operation::Move
         && matches!(
@@ -386,7 +449,7 @@ fn def_latency(one: &Insn) -> u32 {
     if copy || (what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty)) {
         0
     } else if memory(one).0 {
-        4
+        load_latency
     } else {
         1
     }
@@ -419,9 +482,12 @@ pub fn graph(
     insns: &[Arc<Insn>],
     regs: Regs,
     bits: u32,
+    model: &dyn SchedulingModel,
+    exit: Option<&Insn>,
 ) -> Graph {
     let n = insns.len();
     let mut effects: Vec<_> = insns.iter().map(|one| liveness::effect(regs, bits, one)).collect();
+    let decoded = effects.clone();
     // `MOV32r0` writes EFLAGS (it becomes `xor`): a zero made between a flag
     // writer and its reader would break `add; adc` (the pin's scheduler
     // sees the def).
@@ -438,6 +504,9 @@ pub fn graph(
     // readers; the rest follows by chains. One pass, tables by value and lane.
     let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut latencies: Vec<Vec<u32>> = vec![Vec::new(); n];
+    // Whether a later instruction depends on it through a register (data,
+    // output or anti): `NumSuccs` where the pin looks, before the chains.
+    let mut register_succ = vec![false; n];
     let mut by_value: HashMap<u32, (Option<usize>, Vec<usize>)> = HashMap::default();
     // Per lane: the defs still standing (a live def replaces them, a dead one
     // joins them, as the pin's `Defs`) and the readers since.
@@ -452,7 +521,11 @@ pub fn graph(
             Some(effect) => {
                 let writes = effect.writes.mask();
                 dead[later] = writes & !live;
-                live = (live & !writes) | effect.all_reads().mask();
+                // A write a later pass adds (a zero's `xor`) does not end the
+                // life of the flags it sits between: `add; mov 0; adc` keeps
+                // the add's carry for the `adc`.
+                let kept = decoded[later].as_ref().map_or(writes, |decoded| decoded.writes.mask());
+                live = (live & !kept) | effect.all_reads().mask();
             }
             None => live = u128::MAX,
         }
@@ -461,16 +534,33 @@ pub fn graph(
     // effect and everything since it.
     let (mut store, mut loads): (Option<usize>, Vec<usize>) = (None, Vec::new());
     let (mut unknown, mut since): (Option<usize>, Vec<usize>) = (None, Vec::new());
+    // Where an instruction states what its access reaches (`Insn::memory`), the
+    // memory lane no longer orders it: each earlier store and load is kept and
+    // an edge made where `Insn::may_alias` says they may overlap
+    // (`addChainDependencies`). A body with none keeps the one chain above.
+    let aliasing = insns.iter().any(|one| one.memory.is_some());
+    let memory_lane = crate::backend::peephole::Lanes::flags(crate::backend::peephole::Lanes::MEMORY).mask();
+    let (mut stores_before, mut loads_before): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
     for later in 0..n {
         let mut edges: Vec<(usize, u32)> = Vec::new();
         let one = &insns[later];
         let (reads_memory, writes_memory) = memory(one);
-        let masks = effects[later].as_ref().map(|effect| (effect.all_reads().mask(), effect.writes.mask()));
+        let mut masks = effects[later].as_ref().map(|effect| (effect.all_reads().mask(), effect.writes.mask()));
+        let (mut reads_memory, mut writes_memory) = (reads_memory, writes_memory);
+        if aliasing {
+            if let Some((reads, writes)) = &mut masks {
+                reads_memory |= *reads & memory_lane != 0;
+                writes_memory |= *writes & memory_lane != 0;
+                *reads &= !memory_lane;
+                *writes &= !memory_lane;
+            }
+        }
         // What every instruction after one of unknown effect keeps behind it.
         edges.extend(unknown.map(|earlier| (earlier, 0)));
+        let register_from = edges.len();
         for value in &one.uses {
             if let Some((Some(def), _)) = by_value.get(value) {
-                edges.push((*def, def_latency(&insns[*def])));
+                edges.push((*def, model.def_latency(&insns[*def])));
             }
         }
         for value in &one.defines {
@@ -479,11 +569,12 @@ pub fn graph(
                 edges.extend(readers.iter().map(|&earlier| (earlier, 0)));
             }
         }
+        let value_end = edges.len();
         match masks {
             Some((reads, writes)) => {
                 for bit in bits_of(reads) {
                     if let Some(&def) = by_lane[bit].defs.last() {
-                        edges.push((def, def_latency(&insns[def])));
+                        edges.push((def, model.def_latency(&insns[def])));
                     }
                 }
                 for bit in bits_of(writes) {
@@ -502,11 +593,27 @@ pub fn graph(
             // An unknown effect is ordered with everything before it.
             None => edges.extend(since.iter().map(|&earlier| (earlier, 0))),
         }
-        if reads_memory || writes_memory {
-            edges.extend(store.map(|earlier| (earlier, 0)));
+        // The register edges are in: the unknown-effect chain and the memory
+        // ones come next, and the pin counts neither.
+        let register_to = if masks.is_some() { edges.len() } else { value_end };
+        for &(earlier, _) in &edges[register_from..register_to] {
+            register_succ[earlier] = true;
         }
-        if writes_memory {
-            edges.extend(loads.iter().map(|&earlier| (earlier, 0)));
+        if aliasing {
+            let apart = |earlier: usize| !insns[earlier].may_alias(one) && one.memory.is_some() && insns[earlier].memory.is_some();
+            if reads_memory || writes_memory {
+                edges.extend(stores_before.iter().filter(|&&earlier| !apart(earlier)).map(|&earlier| (earlier, 0)));
+            }
+            if writes_memory {
+                edges.extend(loads_before.iter().filter(|&&earlier| !apart(earlier)).map(|&earlier| (earlier, 0)));
+            }
+        } else {
+            if reads_memory || writes_memory {
+                edges.extend(store.map(|earlier| (earlier, 0)));
+            }
+            if writes_memory {
+                edges.extend(loads.iter().map(|&earlier| (earlier, 0)));
+            }
         }
         // One edge to each earlier instruction, the longest latency.
         edges.sort_unstable();
@@ -554,12 +661,54 @@ pub fn graph(
             store = None;
             loads.clear();
         }
-        if writes_memory {
+        if aliasing {
+            if writes_memory {
+                if one.memory.is_some() {
+                    stores_before.push(later);
+                } else {
+                    // An access of unknown reach is ordered with everything
+                    // before it: the earlier ones are behind it now.
+                    (stores_before, loads_before) = (vec![later], Vec::new());
+                }
+            } else if reads_memory {
+                loads_before.push(later);
+            }
+        } else if writes_memory {
             (store, loads) = (Some(later), Vec::new());
         } else if reads_memory {
             loads.push(later);
         }
         since.push(later);
+    }
+    // `ExitSU` is the instruction that ends the region: what it reads is held
+    // for the latency of its def (`addVRegUseDeps`, `addPhysRegDeps`).
+    let mut exit_latency = vec![0u32; n];
+    if let (true, Some(exit)) = (model.exit_edges(), exit) {
+        let mut read = |def: usize| {
+            register_succ[def] = true;
+            exit_latency[def] = exit_latency[def].max(model.def_latency(&insns[def]));
+        };
+        for value in &exit.uses {
+            if let Some((Some(def), _)) = by_value.get(value) {
+                read(*def);
+            }
+        }
+        if let Some(effect) = liveness::effect(regs, bits, exit) {
+            for bit in bits_of(effect.all_reads().mask() & !memory_lane) {
+                if let Some(&def) = by_lane[bit].defs.last() {
+                    read(def);
+                }
+            }
+        }
+    }
+    // `buildSchedGraph`: a def with no reader in the region, slower than one
+    // cycle, holds `latency - 1` to the region end.
+    for node in 0..n {
+        let one = &insns[node];
+        let latency = model.def_latency(one);
+        if model.exit_edges() && !register_succ[node] && latency > 1 && (!one.defines.is_empty() || memory(one).0) {
+            exit_latency[node] = latency - 1;
+        }
     }
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (later, before) in preds.iter().enumerate() {
@@ -573,6 +722,8 @@ pub fn graph(
         latencies,
         weak_preds: vec![Vec::new(); n],
         weak_succs: vec![Vec::new(); n],
+        parent_cluster: vec![None; n],
+        exit_latency,
         topo: Topo::new(n),
     }
 }
@@ -780,6 +931,117 @@ fn constrain_local_copy(
     }
 }
 
+/// `-fast-cluster-threshold`: a region whose accesses times instructions pass
+/// this per thousand is clustered by chain predecessor in the pin. DEVIATE SB5b:
+/// such a region is not clustered at all.
+const FAST_CLUSTER_THRESHOLD: usize = 1000;
+
+/// `MemOpInfo::operator<`: by base operand (registers before frame indices; a
+/// frame index of a stack that grows down, highest first), then offset, then
+/// instruction number.
+fn memop_order(
+    a: &(usize, MemOp),
+    b: &(usize, MemOp),
+) -> std::cmp::Ordering {
+    let base = match (a.1.base, b.1.base) {
+        (MemBase::Frame(x), MemBase::Frame(y)) => y.cmp(&x),
+        (x, y) => x.cmp(&y),
+    };
+    base.then(a.1.offset.cmp(&b.1.offset)).then(a.0.cmp(&b.0))
+}
+
+/// `BaseMemOpClusterMutation::apply` (MachineScheduler.cpp#L2264), run for the
+/// loads and then the stores of the region: neighbouring accesses the model
+/// would `should_cluster` get a weak edge, so the scheduler keeps them
+/// together for the load/store optimizer, and the pin's artificial edges that
+/// keep other work from separating them.
+pub fn cluster_mem_ops(
+    insns: &[Arc<Insn>],
+    graph: &mut Graph,
+    model: &dyn SchedulingModel,
+) {
+    let ops: Vec<Option<MemOp>> = insns.iter().map(|one| model.mem_op(one)).collect();
+    let mut next_cluster = graph.parent_cluster.iter().flatten().max().map_or(0, |last| last + 1);
+    for loads in [true, false] {
+        let mut records: Vec<(usize, MemOp)> = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(node, op)| op.filter(|op| op.load == loads).map(|op| (node, op)))
+            .collect();
+        if records.len() < 2 || records.len() * insns.len() / 1000 > FAST_CLUSTER_THRESHOLD {
+            continue;
+        }
+        records.sort_by(memop_order);
+        // The length and bytes of the cluster each second member ends.
+        let mut ending: HashMap<usize, (u32, u32)> = HashMap::default();
+        let mut leader: Vec<usize> = (0..insns.len()).collect();
+        let mut members: Vec<usize> = Vec::new();
+        for at in 0..records.len() - 1 {
+            let (a_node, a_op) = records[at];
+            let Some(&(b_node, b_op)) = records[at + 1..].iter().find(|(node, _)| {
+                !ending.contains_key(node) && !graph.reaches(*node, a_node) && !graph.reaches(a_node, *node)
+            }) else {
+                continue;
+            };
+            let (mut length, mut bytes) = (2, a_op.width + b_op.width);
+            if let Some(&(len, so_far)) = ending.get(&a_node) {
+                (length, bytes) = (len + 1, so_far + b_op.width);
+            }
+            if !model.should_cluster((&insns[a_node], &a_op), (&insns[b_node], &b_op), length, bytes) {
+                continue;
+            }
+            let (first, second) = if a_node > b_node { (b_node, a_node) } else { (a_node, b_node) };
+            // `addEdge` refuses where the first already follows the second.
+            if graph.reaches(second, first) {
+                continue;
+            }
+            graph.add_weak(first, second);
+            let (x, y) = (find(&mut leader, first), find(&mut leader, second));
+            leader[x] = y;
+            members.extend([first, second]);
+            if loads {
+                // Work that reads the first access's value would otherwise
+                // run between the two: it follows the second as well.
+                let after: Vec<usize> = graph.succs[first].iter().chain(&graph.weak_succs[first]).copied().collect();
+                for succ in after.into_iter().filter(|&succ| succ != second) {
+                    graph.add_artificial(second, succ);
+                }
+            } else {
+                // What the second store waits for comes before the first.
+                let before: Vec<usize> =
+                    graph.preds[second].iter().chain(&graph.weak_preds[second]).copied().collect();
+                for pred in before.into_iter().filter(|&pred| pred != first) {
+                    graph.add_artificial(pred, first);
+                }
+            }
+            ending.insert(b_node, (length, bytes));
+        }
+        members.sort_unstable();
+        members.dedup();
+        let mut ids: HashMap<usize, u32> = HashMap::default();
+        for node in members {
+            let top = find(&mut leader, node);
+            let id = *ids.entry(top).or_insert_with(|| {
+                next_cluster += 1;
+                next_cluster - 1
+            });
+            graph.parent_cluster[node] = Some(id);
+        }
+    }
+}
+
+/// The root of `node` in the union-find `leader`.
+fn find(
+    leader: &mut [usize],
+    mut node: usize,
+) -> usize {
+    while leader[node] != node {
+        leader[node] = leader[leader[node]];
+        node = leader[node];
+    }
+    node
+}
+
 /// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
 /// a line-by-line reading against `llc -debug-only=machine-scheduler`.
 fn trace() -> bool {
@@ -795,45 +1057,58 @@ pub struct Tracking<'a> {
     pub live_thru: Vec<u32>,
 }
 
-/// `tryCandidate` (MachineScheduler.cpp#L3965) of `GenericScheduler` for a
-/// bottom-up region of a target with no schedule model: `RegExcess`,
-/// `RegCritical` where pressure is tracked, `Weak`, `RegMax` where it is, then
-/// `NodeOrder` (the
-/// later one first). Left out: `tryBiasPhysRegs` (no physical-register copy is
-/// in a region, MS4), stalls, clusters and resources (no model),
-/// and latency, which only `ReduceLatency` turns on and `pickNode` of a
-/// bottom-up region never sets (`NoPolicy`).
-fn try_candidate(
-    try_node: usize,
-    try_delta: &Delta,
-    try_weak: usize,
-    cand_node: usize,
-    cand_delta: &Delta,
-    cand_weak: usize,
-    tracked: bool,
-) -> Option<&'static str> {
-    let pressure = |name, try_p, cand_p| match try_pressure(try_p, cand_p) {
-        Pick::Try => Some(Some(name)),
-        Pick::Cand => Some(None),
-        Pick::Neither => None,
-    };
-    if tracked {
-        for (name, try_p, cand_p) in [
-            ("REG-EXCESS", try_delta.excess, cand_delta.excess),
-            ("REG-CRIT", try_delta.critical_max, cand_delta.critical_max),
-        ] {
-            if let Some(picked) = pressure(name, try_p, cand_p) {
-                return picked;
+/// The bottom zone's pressure, for the driver: the tracker, the region's
+/// critical sets and the maximum of the program order (`RegionCriticalPSets`,
+/// `RegionPressure`).
+struct Followed<'a> {
+    bottom: Tracker<'a>,
+    /// Only in a region that schedules from the top too.
+    top: Option<TopTracker<'a>>,
+    critical: Vec<PressureChange>,
+    region_max: Vec<u32>,
+}
+
+impl ZonePressure for Followed<'_> {
+    fn delta(
+        &self,
+        node: usize,
+        at_top: bool,
+    ) -> Delta {
+        match &self.top {
+            Some(top) if at_top => top.delta(node, &self.critical, &self.region_max),
+            _ => self.bottom.delta(node, &self.critical, &self.region_max),
+        }
+    }
+
+    fn place(
+        &mut self,
+        node: usize,
+        at_top: bool,
+    ) {
+        let most = match &mut self.top {
+            Some(top) if at_top => {
+                top.place(node);
+                if trace() {
+                    eprintln!("machinesched pressure top {node} cur={:?}", top.current());
+                }
+                top.max().to_vec()
+            }
+            _ => {
+                self.bottom.place(node);
+                if trace() {
+                    eprintln!("machinesched pressure bot {node} cur={:?}", self.bottom.current());
+                }
+                self.bottom.max().to_vec()
+            }
+        };
+        // `updateScheduledPressure`.
+        for entry in &mut self.critical {
+            let most = most[entry.set] as i32;
+            if most > entry.inc {
+                entry.inc = most;
             }
         }
     }
-    if try_weak != cand_weak {
-        return (try_weak < cand_weak).then_some("WEAK");
-    }
-    if tracked && let Some(picked) = pressure("REG-MAX", try_delta.current_max, cand_delta.current_max) {
-        return picked;
-    }
-    (try_node > cand_node).then_some("ORDER")
 }
 
 /// The order of a region scheduled bottom-up as `GenericScheduler` does for
@@ -842,28 +1117,34 @@ fn try_candidate(
 /// `SchedBoundary::releaseNode` never defers a node (`IsBuffered`, and one
 /// micro-op never overfills a cycle) and the latency of an edge does not
 /// order anything: an instruction is available once every reader is placed,
-/// and [`try_candidate`] picks among those. With `tracking` (a region of more
-/// than half the allocatable registers' worth of instructions, `initPolicy`
-/// #L3688) pressure is followed per set.
+/// and [`genericsched::try_candidate`] picks among those. With `tracking` (a
+/// region of more than half the allocatable registers' worth of instructions,
+/// `initPolicy` #L3688) pressure is followed per set.
 ///
-/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited`, which turns on the
-/// height and depth heuristic in a loop whose in-flight micro-ops pass the
-/// buffer (32).
-pub fn bottom_up(
+/// Not translated (MS6): `Rem.IsAcyclicLatencyLimited` (SB4 of
+/// [`genericdriver`]), which turns on the height and depth heuristic in a loop
+/// whose in-flight micro-ops pass the buffer (32).
+pub fn order_region(
     insns: &[Arc<Insn>],
     graph: &Graph,
     tracking: Option<&Tracking>,
+    model: &dyn SchedulingModel,
 ) -> Vec<usize> {
+    picks(insns, graph, tracking, model).0
+}
+
+/// [`order_region`] with each pick in the order made: the node, whether from
+/// the top, and the reason.
+pub(crate) fn picks(
+    insns: &[Arc<Insn>],
+    graph: &Graph,
+    tracking: Option<&Tracking>,
+    model: &dyn SchedulingModel,
+) -> (Vec<usize>, Vec<(usize, bool, Reason)>) {
     let n = insns.len();
-    let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
-    let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
-    let mut placed = Vec::with_capacity(n);
-    let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
-    // `RegionPressure` (program order) and `RegionCriticalPSets`.
-    let mut region_max: Vec<u32> = Vec::new();
-    let mut critical: Vec<PressureChange> = Vec::new();
+    let policy = model.policy();
     let region = tracking.map(|_| Region::of(insns));
-    let mut tracker = tracking
+    let mut followed = tracking
         .zip(region.as_ref())
         .map(
             |(tracking, region)| {
@@ -871,77 +1152,80 @@ pub fn bottom_up(
                 for node in (0..n).rev() {
                     program.place(node);
                 }
-                region_max = program.max().to_vec();
-                critical = Tracker::critical_sets(tracking.model, &region_max);
-                Tracker::over(
-                    tracking.model,
-                    region,
-                    tracking.live_out.iter().copied(),
-                    tracking.live_thru.iter().copied(),
-                    true,
-                )
+                let region_max = program.max().to_vec();
+                let critical = Tracker::critical_sets(tracking.model, &region_max);
+                if trace() {
+                    eprintln!(
+                        "machinesched region n={n} limits={:?} max={region_max:?} critical={critical:?}",
+                        tracking.model.limits
+                    );
+                }
+                Followed {
+                    bottom: Tracker::over(
+                        tracking.model,
+                        region,
+                        tracking.live_out.iter().copied(),
+                        tracking.live_thru.iter().copied(),
+                        true,
+                    ),
+                    top: (!policy.only_bottom_up).then(|| {
+                        TopTracker::over(
+                            tracking.model,
+                            region,
+                            tracking.live_out.iter().copied(),
+                            tracking.live_thru.iter().copied(),
+                        )
+                    }),
+                    critical,
+                    region_max,
+                }
             },
         );
-    while placed.len() < n {
-        let mut best = 0;
-        let mut why = "ONLY1";
-        // `pickOnlyChoice` when only one is available.
-        if available.len() > 1 {
-            why = "FIRST";
-            let deltas: Vec<Delta> = match &tracker {
-                Some(tracker) => available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect(),
-                None => vec![Delta::default(); available.len()],
-            };
-            for candidate in 1..available.len() {
-                if let Some(reason) = try_candidate(
-                    available[candidate],
-                    &deltas[candidate],
-                    weak_left[available[candidate]],
-                    available[best],
-                    &deltas[best],
-                    weak_left[available[best]],
-                    tracker.is_some(),
-                ) {
-                    best = candidate;
-                    why = reason;
-                }
-            }
-        }
-        let node = available.swap_remove(best);
-        if trace() {
-            eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
-        }
-        if let Some(tracker) = &mut tracker {
-            tracker.place(node);
-            // `updateScheduledPressure`.
-            for entry in &mut critical {
-                let most = tracker.max()[entry.set] as i32;
-                if most > entry.inc {
-                    entry.inc = most;
-                }
-            }
-        }
-        placed.push(node);
-        for &before in &graph.weak_preds[node] {
-            weak_left[before] -= 1;
-        }
-        for &before in &graph.preds[node] {
-            waiting[before] -= 1;
-            if waiting[before] == 0 {
-                available.push(before);
-            }
+    let machine = model.machine();
+    let units: Vec<Unit> = insns.iter().map(|one| model.unit(one)).collect();
+    if trace() {
+        for (node, one) in insns.iter().enumerate() {
+            let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("-");
+            eprintln!(
+                "machinesched node {node} {name} lat={} uops={} res={:?}",
+                model.def_latency(one),
+                units[node].micro_ops,
+                units[node].writes.iter().map(|write| (write.idx, write.release_at_cycle)).collect::<Vec<_>>()
+            );
         }
     }
-    placed.reverse();
-    placed
+    let pressure = followed.as_mut().map(|one| one as &mut dyn ZonePressure);
+    let (order, reasons) = Scheduler::new(graph, &machine, units, policy, pressure).schedule();
+    if trace()
+        && let (Some(tracking), Some(region)) = (tracking, region.as_ref())
+    {
+        let mut after = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+        for &node in order.iter().rev() {
+            after.place(node);
+        }
+        eprintln!("machinesched region n={n} scheduled max={:?}", after.max());
+    }
+    if trace() {
+        for (node, at_top, reason) in &reasons {
+            eprintln!(
+                "machinesched pick {node} {:?} {} tracked={} {}",
+                insns[*node].defines,
+                reason.name(),
+                tracking.is_some(),
+                if *at_top { "top" } else { "bottom" }
+            );
+        }
+    }
+    (order, reasons)
 }
 
 /// The pre-RA machine scheduler: every region of a block ordered by
-/// [`bottom_up`]. DEVIATE MS4: regions end at more instructions than the
+/// [`order_region`]. DEVIATE MS4: regions end at more instructions than the
 /// pin's. DEVIATE RP1/RP2 are `regpressure.rs`'s.
 pub struct MachineScheduler {
     pub classes: Rc<RegisterClasses>,
     pub segments: Segments,
+    pub model: Rc<dyn SchedulingModel>,
 }
 
 impl LIRTransform for MachineScheduler {
@@ -959,7 +1243,7 @@ impl LIRTransform for MachineScheduler {
     ) -> Result<LirBody, String> {
         let registers = &self.classes;
         let segments = &self.segments;
-        Ok(scheduled(&body, registers.available.len(), |body, counted| {
+        Ok(scheduled(&body, registers.available.len(), &*self.model, |body, counted| {
             let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
             let mut widths: IndexMap<u32, i64> = IndexMap::default();
             for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
@@ -1038,13 +1322,18 @@ const X87_STACK_LIMIT: u32 = 7;
 pub fn scheduled(
     body: &LirBody,
     limit: usize,
+    sched: &dyn SchedulingModel,
     model: impl FnOnce(&LirBody, &dyn Fn(u32) -> bool) -> Model,
 ) -> LirBody {
     let (regs, bits) = (body.regs(), body.bits);
     // The x87 stack is its own register set with its own limit: its values
     // (those of the float operations) are not counted against the general
     // registers.
-    let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
+    let stack = if sched.x87_stack() {
+        x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()))
+    } else {
+        HashSet::default()
+    };
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
     let mut model = Some(model);
@@ -1063,6 +1352,7 @@ pub fn scheduled(
             // What is live below a region is asked for a region of more than
             // half the allocatable registers only.
             let mut now: HashSet<u32> = HashSet::default();
+            let mut now87: HashSet<u32> = HashSet::default();
             let copies = regions.iter().any(|region| insns[region.clone()].iter().any(|one| copy_of(one).is_some()));
             if copies || regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
@@ -1070,7 +1360,14 @@ pub fn scheduled(
                     insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
                 values.sort_unstable();
                 values.dedup();
-                now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+                now = values
+                    .iter()
+                    .copied()
+                    .filter(|&value| counted(value) && live.live_out(block.at, value))
+                    .collect();
+                // The x87 values live below the block count in the stack's set
+                // (the pin: every live-out register is in the bottom pressure).
+                now87 = values.iter().copied().filter(|&value| stack.contains(&value) && live.live_out(block.at, value)).collect();
                 if regions.iter().any(|region| region.len() > limit / 2)
                     && let Some(make) = model.take()
                 {
@@ -1078,10 +1375,12 @@ pub fn scheduled(
                     // The x87 stack is the pin's `RFP` register class: a set of
                     // its own with the seven registers
                     // `FP0`-`FP6`.
-                    let set: Rc<[usize]> = Rc::from(vec![model.limits.len()]);
-                    model.limits.push(X87_STACK_LIMIT);
-                    for &value in &stack {
-                        model.count(value, 1, set.clone());
+                    if sched.x87_stack() {
+                        let set: Rc<[usize]> = Rc::from(vec![model.limits.len()]);
+                        model.limits.push(X87_STACK_LIMIT);
+                        for &value in &stack {
+                            model.count(value, 1, set.clone());
+                        }
                     }
                     made = Some(model);
                 }
@@ -1092,30 +1391,50 @@ pub fn scheduled(
                 }
                 now.extend(one.uses.iter().copied().filter(|&value| counted(value)));
             };
+            let step87 = |now: &mut HashSet<u32>, one: &Insn| {
+                for value in &one.defines {
+                    now.remove(value);
+                }
+                now.extend(one.uses.iter().copied().filter(|value| stack.contains(value)));
+            };
             let mut out = insns.clone();
             let mut end = insns.len();
             for region in regions.iter().rev() {
                 for one in insns[region.end..end].iter().rev() {
                     step(&mut now, one);
+                    step87(&mut now87, one);
                 }
                 let slice = &insns[region.clone()];
                 if slice.len() >= 2 {
                     let tracking = made.as_ref().filter(|_| slice.len() > limit / 2).map(|model| {
-                        let mut live_out: Vec<u32> = now.iter().copied().collect();
+                        // `discoverLiveOut`: the pin finds a live-out value
+                        // only where the region defines
+                        // or reads it, so a value that
+                        // crosses the region untouched is no part of its
+                        // pressure.
+                        let touched: HashSet<u32> =
+                            slice.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
+                        let mut live_out: Vec<u32> =
+                            now.iter().chain(&now87).copied().filter(|value| touched.contains(value)).collect();
                         live_out.sort_unstable();
                         // `initLiveThru`: a live-out value counts unless a def
                         // in the region ties it (two-address).
                         let tied: HashSet<u32> = slice
                             .iter()
-                            .filter(|one| one.what.as_ref().is_some_and(twoaddr::ties))
+                            .filter(|one| one.what.as_ref().is_some_and(|what| twoaddr::ties_in(body.registers, what)))
                             .flat_map(|one| one.defines.iter().copied())
                             .collect();
                         let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
                         Tracking { model, live_out, live_thru }
                     });
-                    let mut deps = graph(slice, regs, bits);
+                    let mut deps = graph(slice, regs, bits, sched, insns.get(region.end).map(|one| &**one));
+                    if trace() {
+                        let held: Vec<_> = deps.exit_latency.iter().enumerate().filter(|(_, l)| **l > 0).collect();
+                        eprintln!("machinesched exit edges {held:?}");
+                    }
                     copy_constrain(slice, &mut deps, &|value| now.contains(&value));
-                    let order = bottom_up(slice, &deps, tracking.as_ref());
+                    cluster_mem_ops(slice, &mut deps, sched);
+                    let order = order_region(slice, &deps, tracking.as_ref(), sched);
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
                         for (place, &node) in order.iter().enumerate() {
                             out[region.start + place] = Arc::clone(&slice[node]);
@@ -1125,6 +1444,7 @@ pub fn scheduled(
                 }
                 for one in slice.iter().rev() {
                     step(&mut now, one);
+                    step87(&mut now87, one);
                 }
                 end = region.start;
             }
@@ -1139,6 +1459,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{graph, regions};
+    use crate::backend::schedmodel::{GenericModel, SchedulingModel};
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
 
@@ -1217,7 +1538,7 @@ mod tests {
             .collect();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let started = std::time::Instant::now();
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(found.preds.len(), insns.len());
         assert!(started.elapsed().as_millis() < 1000, "{:?} for 40,000 adds", started.elapsed());
     }
@@ -1244,7 +1565,7 @@ mod tests {
             ));
         }
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16);
+        let mut found = graph(&insns, regs, 16, &GenericModel, None);
         let started = std::time::Instant::now();
         copy_constrain(&insns, &mut found, &|_| false);
         assert!(started.elapsed().as_millis() < 1000, "{:?} to constrain 6,000 copies", started.elapsed());
@@ -1258,7 +1579,7 @@ mod tests {
     /// `mov` more was left in the loop.
     #[test]
     fn test_the_use_of_a_copy_stays_before_the_next_def_of_the_copied_value() {
-        use super::{bottom_up, copy_constrain};
+        use super::{copy_constrain, order_region};
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
             insn(0, semantics(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
@@ -1267,11 +1588,15 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16);
-        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3], "premise: program order without the edge");
+        let mut found = graph(&insns, regs, 16, &GenericModel, None);
+        assert_eq!(
+            order_region(&insns, &found, None, &GenericModel),
+            [0, 1, 2, 3],
+            "premise: program order without the edge"
+        );
         copy_constrain(&insns, &mut found, &|value| value == 1);
         assert_eq!(found.weak_preds[1], [2]);
-        assert_eq!(bottom_up(&insns, &found, None), [0, 2, 1, 3]);
+        assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 2, 1, 3]);
     }
 
     /// `l = g; g = g + 1; t = l * 3; out = t + g`: the pin returns at "two
@@ -1289,7 +1614,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16);
+        let mut found = graph(&insns, regs, 16, &GenericModel, None);
         copy_constrain(&insns, &mut found, &|value| value == 1);
         assert!(found.weak_preds.iter().all(Vec::is_empty), "{:?}", found.weak_preds);
     }
@@ -1301,10 +1626,62 @@ mod tests {
     fn test_the_graph_orders_data_and_a_load_before_a_store_and_nothing_else() {
         let insns = body();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(found.preds[1], [0], "the add reads the first load");
         assert!(found.preds[2].is_empty(), "the second load is ordered with nothing before it: {:?}", found.preds);
         assert_eq!(found.preds[3], [0, 1, 2], "the store follows both loads and the add");
+    }
+
+    /// A load or store as arm64 states it: the memory lane and, when `object`
+    /// is given, what it reaches (`Insn::memory`).
+    fn access(
+        at: i64,
+        store: bool,
+        object: Option<(i64, u64, u64)>,
+    ) -> Arc<Insn> {
+        use crate::backend::peephole::Lanes;
+        use crate::model::memref::MemRef;
+        let memory = Lanes::flags(Lanes::MEMORY);
+        let name = if store { "str" } else { "ldr" };
+        let mut one = Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, name, vec![], vec![])), vec![], vec![]);
+        one.declared = Some((memory, if store { memory } else { Lanes::new() }));
+        one.memory = object.map(|(slot, offset, bytes)| MemRef {
+            object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+            offset: Some(offset as i64),
+            bytes: Some(bytes),
+            store,
+        });
+        Arc::new(one)
+    }
+
+    /// The memory lane ordered every store before every later access, so a load
+    /// from one frame slot stayed behind a store to another: the scheduler could
+    /// not move it above the store (`addChainDependencies` asks
+    /// `MachineInstr::mayAlias`). A load of the stored bytes stays behind; an
+    /// access that says nothing is ordered with everything before it.
+    #[test]
+    fn test_accesses_to_different_slots_are_not_ordered_by_the_memory_lane() {
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let order = |insns: Vec<Arc<Insn>>| graph(&insns, regs, 16, &GenericModel, None).preds;
+        // No operand: the lane alone, a store then a load are ordered.
+        assert_eq!(order(vec![access(0, true, None), access(1, false, None)])[1], [0]);
+        // The operand says another slot: no edge.
+        let apart = order(vec![access(0, true, Some((1, 0, 8))), access(1, false, Some((2, 0, 8)))]);
+        assert!(apart[1].is_empty(), "{apart:?}");
+        // The same bytes: ordered.
+        assert_eq!(order(vec![access(0, true, Some((1, 0, 8))), access(1, false, Some((1, 4, 8)))])[1], [0]);
+        // A load of the first slot after stores to two: behind the first only.
+        let after = order(vec![
+            access(0, true, Some((1, 0, 8))),
+            access(1, true, Some((2, 0, 8))),
+            access(2, false, Some((1, 0, 8))),
+            access(3, true, None),
+        ]);
+        assert_eq!(after[2], [0], "{after:?}");
+        assert_eq!(after[3], [0, 1, 2], "an access of unknown reach follows everything: {after:?}");
+        // A store after a load of another slot is not ordered after it.
+        let war = order(vec![access(0, false, Some((1, 0, 8))), access(1, true, Some((2, 0, 8)))]);
+        assert!(war[1].is_empty(), "{war:?}");
     }
 
     /// A call, a terminator and a volatile access are in no region; the runs
@@ -1336,7 +1713,7 @@ mod tests {
     /// live.
     #[test]
     fn test_bottom_up_places_a_load_by_its_reader_when_the_limit_is_two() {
-        use super::bottom_up;
+        use super::order_region;
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
             insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
@@ -1347,12 +1724,12 @@ mod tests {
             insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         let model = one_set(2);
         let tracking = super::Tracking { model: &model, live_out: vec![6], live_thru: vec![] };
-        assert_eq!(bottom_up(&insns, &found, Some(&tracking)), [0, 1, 3, 2, 4, 5]);
+        assert_eq!(order_region(&insns, &found, Some(&tracking), &GenericModel), [0, 1, 3, 2, 4, 5]);
         // Pressure not followed (a small region) leaves the order alone.
-        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 1, 2, 3, 4, 5]);
     }
 
     /// The long region of a block was kept in source order whatever the
@@ -1380,10 +1757,13 @@ mod tests {
             crate::support::hash::IndexMap::default(),
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-        let defined: Vec<u32> =
-            scheduled(&body, 2, |_, _| one_set(2)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        let defined: Vec<u32> = scheduled(&body, 2, &GenericModel, |_, _| one_set(2)).blocks[0]
+            .insns
+            .iter()
+            .flat_map(|one| one.defines.clone())
+            .collect();
         assert_eq!(defined, [1, 2, 4, 3, 5, 6]);
-        let kept: Vec<u32> = scheduled(&body, 16, |_, _| one_set(2)).blocks[0]
+        let kept: Vec<u32> = scheduled(&body, 16, &GenericModel, |_, _| one_set(2)).blocks[0]
             .insns
             .iter()
             .flat_map(|one| one.defines.clone())
@@ -1417,7 +1797,7 @@ mod tests {
             crate::support::hash::IndexMap::default(),
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-        let after = scheduled(&body, 2, |_, _| one_set(2));
+        let after = scheduled(&body, 2, &GenericModel, |_, _| one_set(2));
         let order: Vec<u32> = after.blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
         assert_ne!(order, [1, 2, 3, 4, 5, 6], "the load of 3 moved");
         for one in after.blocks[0].insns.iter() {
@@ -1433,7 +1813,7 @@ mod tests {
     /// the order is the source's.
     #[test]
     fn test_a_load_stays_next_to_its_reader() {
-        use super::bottom_up;
+        use super::order_region;
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let insns = vec![
             insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(1)]), vec![1], vec![]),
@@ -1442,9 +1822,9 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(3), imm(1)]), vec![4], vec![3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(found.latencies[3], [4], "the reader still waits four cycles for the load");
-        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3]);
+        assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 1, 2, 3]);
     }
 
     /// A zero made before `add` was scheduled between `add` and `adc` (i64
@@ -1459,7 +1839,7 @@ mod tests {
             insn(1, semantics(Operation::Binary, "add", vec![held(3)], vec![held(2), held(2)]), vec![3], vec![2]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the zero stays before the add");
+        assert_eq!(graph(&insns, regs, 16, &GenericModel, None).preds[1], [0], "the zero stays before the add");
     }
 
     /// Flags no one reads before the next flag writer are a dead def, and the
@@ -1476,7 +1856,7 @@ mod tests {
             insn(2, semantics(Operation::Binary, "add", vec![held(4)], vec![held(2), held(3)]), vec![4], vec![2, 3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 32);
+        let found = graph(&insns, regs, 32, &GenericModel, None);
         assert!(found.preds[1].is_empty(), "the second add waits for the first only through flags: {:?}", found.preds);
         assert_eq!(found.preds[2], [0, 1], "the third reads both");
     }
@@ -1500,7 +1880,7 @@ mod tests {
         let carry =
             insn(1, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(6)]), vec![5], vec![5, 6]);
         let insns = vec![compare, carry, add(2, 10, 11, 12), add(3, 13, 14, 15), add(4, 16, 17, 18)];
-        let g = graph(&insns, regs, 32);
+        let g = graph(&insns, regs, 32, &GenericModel, None);
         assert!(g.preds[3].contains(&1), "the second dead write stays after the adc: {g:?}");
     }
 
@@ -1583,7 +1963,7 @@ mod tests {
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![wide(1), wide(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Binary, "adc", vec![held(3)], vec![held(3), held(4)]), vec![3], vec![3, 4]),
         ];
-        assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the adc stays after the fcom");
+        assert_eq!(graph(&insns, regs, 16, &GenericModel, None).preds[1], [0], "the adc stays after the fcom");
         for name in ["fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "ftst", "fxam"] {
             let one = insn(0, semantics(Operation::Compare, name, vec![], vec![]), vec![], vec![]);
             assert!(x87_compare(&one), "{name}");
@@ -1616,7 +1996,7 @@ mod tests {
             insn(1, semantics(Operation::Unary, "seta", vec![byte], vec![]), vec![3], vec![]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
-        assert_eq!(graph(&insns, regs, 32).preds[1], [0], "the set stays after the fcom");
+        assert_eq!(graph(&insns, regs, 32, &GenericModel, None).preds[1], [0], "the set stays after the fcom");
     }
 
     /// The audit of the two effects the re-land left unchecked. A shift by `cl`
@@ -1635,7 +2015,7 @@ mod tests {
         let flags = crate::backend::peephole::Lanes::flags(ARITHMETIC_FLAGS);
         let shift_effect = liveness::effect(regs, 32, &shift).expect("a shift by cl has a decoded effect");
         assert!(!shift_effect.writes.is_disjoint(&flags), "the shl writes the flags");
-        let g = graph(&[compare.clone(), shift, carry], regs, 32);
+        let g = graph(&[compare.clone(), shift, carry], regs, 32, &GenericModel, None);
         assert!(g.preds[2].contains(&1), "adc stays after the shl: {g:?}");
         let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let fcmov = insn(1, semantics(Operation::Move, "fcmove", vec![wide(7)], vec![wide(8)]), vec![7], vec![7, 8]);
@@ -1643,8 +2023,27 @@ mod tests {
         // compare set.
         let known = liveness::effect(regs, 32, &fcmov).map(|effect| !effect.all_reads().is_disjoint(&flags));
         assert!(known.is_none_or(|reads| reads), "an fcmov with a known effect reads the flags");
-        let g = graph(&[compare, fcmov], regs, 32);
+        let g = graph(&[compare, fcmov], regs, 32, &GenericModel, None);
         assert_eq!(g.preds[1], [0], "the fcmov stays after the cmp: {g:?}");
+    }
+
+    /// A zero made between an `add` and the `adc` that takes its carry wrote
+    /// the flags in the graph, so the add's carry read as dead and the add
+    /// kept no edge to the flag writes before it: the machine scheduler hoisted
+    /// the add above an `or` and two `mul`s, and the `adc` read their carry
+    /// (x_m64 and softfloat -O2 lost carries of a 128-bit product).
+    #[test]
+    fn test_an_add_keeps_its_place_after_flag_writes_when_a_zero_sits_before_its_adc() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Binary, "or", vec![held(1)], vec![held(1), imm(1)]), vec![1], vec![1]),
+            insn(1, semantics(Operation::Binary, "add", vec![held(2)], vec![held(2), held(3)]), vec![2], vec![2, 3]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(4)], vec![imm(0)]), vec![4], vec![]),
+            insn(3, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(4)]), vec![5], vec![5, 4]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
+        let found = graph(&insns, regs, 32, &GenericModel, None);
+        assert!(found.preds[1].contains(&0), "the add stays after the or: {found:?}");
     }
 
     #[test]
@@ -1652,5 +2051,445 @@ mod tests {
         // std's `HashSet<u32>` hashed every pressure query with SipHash.
         let none: [Arc<Insn>; 0] = [];
         let _: crate::support::hash::HashSet<u32> = super::x87_values(none.iter());
+    }
+
+    /// The order `bottom_up` gave before it ran on the `GenericScheduler`
+    /// driver (release/next c682533d86), untracked path: the later node wins a
+    /// tie once fewer weak successors wait, and nothing else decides.
+    fn old_untracked_order(graph: &super::Graph) -> Vec<usize> {
+        let n = graph.succs.len();
+        let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
+        let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+        let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
+        let mut placed = Vec::with_capacity(n);
+        while placed.len() < n {
+            let mut best = 0;
+            for candidate in 1..available.len() {
+                let (try_node, cand_node) = (available[candidate], available[best]);
+                let (try_weak, cand_weak) = (weak_left[try_node], weak_left[cand_node]);
+                let wins = if try_weak != cand_weak { try_weak < cand_weak } else { try_node > cand_node };
+                if wins {
+                    best = candidate;
+                }
+            }
+            let node = available.swap_remove(best);
+            placed.push(node);
+            for &before in &graph.weak_preds[node] {
+                weak_left[before] -= 1;
+            }
+            for &before in &graph.preds[node] {
+                waiting[before] -= 1;
+                if waiting[before] == 0 {
+                    available.push(before);
+                }
+            }
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// The refactor onto the driver must not move an x86 schedule: on random
+    /// dependence graphs with weak edges the i486 machine orders exactly as
+    /// the hand-written loop it replaced (0 of 300 graphs differ).
+    #[test]
+    fn test_bottom_up_on_the_driver_orders_as_the_loop_it_replaced() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for _ in 0..300 {
+            let n = 2 + next(24);
+            let mut edges = Vec::new();
+            for to in 1..n {
+                for from in 0..to {
+                    if next(5) == 0 {
+                        edges.push((from, to, 1 + next(3) as u32));
+                    }
+                }
+            }
+            let mut graph = super::Graph::from_edges(n, &edges);
+            for to in 1..n {
+                for from in 0..to {
+                    if next(9) == 0 && !graph.weak_preds[to].contains(&from) {
+                        graph.weak_preds[to].push(from);
+                        graph.weak_succs[from].push(to);
+                    }
+                }
+            }
+            let insns: Vec<Arc<Insn>> = (0..n)
+                .map(|at| insn(at as i64, semantics(Operation::Move, "x", vec![], vec![]), vec![], vec![]))
+                .collect();
+            assert_eq!(
+                super::order_region(&insns, &graph, None, &GenericModel),
+                old_untracked_order(&graph),
+                "{edges:?}"
+            );
+        }
+    }
+
+    /// The old loop with pressure followed (release/next c682533d86): register
+    /// excess, register critical, weak, register max, then the later node.
+    fn old_tracked_order(
+        insns: &[Arc<Insn>],
+        graph: &super::Graph,
+        tracking: &super::Tracking,
+    ) -> Vec<usize> {
+        use crate::backend::regpressure::{Pick, Region, Tracker, try_pressure};
+        let n = insns.len();
+        let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
+        let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
+        let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
+        let region = Region::of(insns);
+        let mut program = Tracker::over(tracking.model, &region, tracking.live_out.iter().copied(), [], false);
+        for node in (0..n).rev() {
+            program.place(node);
+        }
+        let region_max = program.max().to_vec();
+        let mut critical = Tracker::critical_sets(tracking.model, &region_max);
+        let mut tracker = Tracker::over(
+            tracking.model,
+            &region,
+            tracking.live_out.iter().copied(),
+            tracking.live_thru.iter().copied(),
+            true,
+        );
+        let mut placed = Vec::with_capacity(n);
+        while placed.len() < n {
+            let mut best = 0;
+            let deltas: Vec<_> = available.iter().map(|&node| tracker.delta(node, &critical, &region_max)).collect();
+            for candidate in 1..available.len() {
+                let (try_node, cand_node) = (available[candidate], available[best]);
+                let (try_delta, cand_delta) = (&deltas[candidate], &deltas[best]);
+                let pressure = |try_p, cand_p| match try_pressure(try_p, cand_p, true) {
+                    Pick::Try => Some(true),
+                    Pick::Cand => Some(false),
+                    Pick::Neither => None,
+                };
+                let wins = pressure(try_delta.excess, cand_delta.excess)
+                    .or_else(|| pressure(try_delta.critical_max, cand_delta.critical_max))
+                    .or_else(|| {
+                        let (try_weak, cand_weak) = (weak_left[try_node], weak_left[cand_node]);
+                        (try_weak != cand_weak).then_some(try_weak < cand_weak)
+                    })
+                    .or_else(|| pressure(try_delta.current_max, cand_delta.current_max))
+                    .unwrap_or(try_node > cand_node);
+                if wins {
+                    best = candidate;
+                }
+            }
+            let node = available.swap_remove(best);
+            tracker.place(node);
+            for entry in &mut critical {
+                let most = tracker.max()[entry.set] as i32;
+                if most > entry.inc {
+                    entry.inc = most;
+                }
+            }
+            placed.push(node);
+            for &before in &graph.weak_preds[node] {
+                weak_left[before] -= 1;
+            }
+            for &before in &graph.preds[node] {
+                waiting[before] -= 1;
+                if waiting[before] == 0 {
+                    available.push(before);
+                }
+            }
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// Same as the untracked oracle with pressure followed: on 300 random
+    /// value graphs and limits of 1 to 4 the driver orders as the loop it
+    /// replaced (0 differ, and the limit does split the picks: some graphs
+    /// order differently from the untracked order).
+    #[test]
+    fn test_bottom_up_with_pressure_orders_as_the_loop_it_replaced() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let mut moved_by_pressure = 0;
+        for _ in 0..300 {
+            let n = 3 + next(6);
+            let insns: Vec<Arc<Insn>> = (0..n)
+                .map(|k| {
+                    let value = k as u32 + 1;
+                    let uses: Vec<u32> = if k == 0 {
+                        vec![]
+                    } else {
+                        (0..1 + next(2))
+                            .map(|_| 1 + next(k) as u32)
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .into_iter()
+                            .collect()
+                    };
+                    let sources =
+                        if uses.is_empty() { vec![imm(k as i64)] } else { uses.iter().map(|&u| held(u)).collect() };
+                    insn(k as i64, semantics(Operation::Binary, "add", vec![held(value)], sources), vec![value], uses)
+                })
+                .collect();
+            let found = super::graph(&insns, regs, 16, &GenericModel, None);
+            let model = one_set(1 + next(4) as u32);
+            let tracking = super::Tracking { model: &model, live_out: vec![n as u32], live_thru: vec![] };
+            let order = super::order_region(&insns, &found, Some(&tracking), &GenericModel);
+            assert_eq!(order, old_tracked_order(&insns, &found, &tracking), "{insns:?}");
+            moved_by_pressure += usize::from(order != super::order_region(&insns, &found, None, &GenericModel));
+        }
+        assert!(moved_by_pressure > 0, "pressure never decided a pick: the oracle compares nothing");
+    }
+
+    /// The model of a processor like the generic one that schedules from both
+    /// ends (AArch64's `overrideSchedPolicy`).
+    struct Both;
+
+    impl crate::backend::schedmodel::SchedulingModel for Both {
+        fn machine(&self) -> crate::backend::schedboundary::Machine {
+            GenericModel.machine()
+        }
+
+        fn policy(&self) -> crate::backend::genericdriver::RegionPolicy {
+            crate::backend::genericdriver::RegionPolicy::bidirectional(false)
+        }
+
+        fn unit(
+            &self,
+            insn: &Insn,
+        ) -> crate::backend::schedboundary::Unit {
+            GenericModel.unit(insn)
+        }
+
+        fn def_latency(
+            &self,
+            insn: &Insn,
+        ) -> u32 {
+            GenericModel.def_latency(insn)
+        }
+    }
+
+    /// Limit 2; `v1`-`v3` live in, `v4` and `v5` live out; two independent
+    /// nodes, an add and a copy. Hand derived from `pickNodeBidirectional`, as
+    /// the pin's `tryCandidate` orders it: neither zone has a single
+    /// choice. At the bottom (pressure 2) node 0 would take it to 3, an
+    /// excess, and node 1 leaves it as it is: node 1 wins `RegExcess`. At
+    /// the top (pressure 3, over the limit) node 0 ends `v1` and `v2` and
+    /// starts `v4`: a drop of one, which beats node 1's no change, so node
+    /// 0 is the top candidate. Comparing the two, a drop beats no change:
+    /// the first pick is node 0 from the top. A region whose top zone
+    /// follows no pressure sees two equal candidates and keeps the bottom
+    /// one, node 1.
+    #[test]
+    fn test_a_bidirectional_region_compares_the_pressure_of_both_zones() {
+        let insns = vec![
+            insn(0, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(5)], vec![held(3)]), vec![5], vec![3]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let found = graph(&insns, regs, 16, &Both, None);
+        // Only the add writes flags: the nodes are independent.
+        assert_eq!((&found.preds[0][..], &found.preds[1][..]), (&[][..], &[][..]));
+        let model = one_set(2);
+        let tracking = super::Tracking { model: &model, live_out: vec![4, 5], live_thru: vec![] };
+        let (order, made) = super::picks(&insns, &found, Some(&tracking), &Both);
+        assert_eq!(made[0], (0, true, super::Reason::RegExcess));
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, [0, 1], "every node once");
+    }
+
+    /// A value live across a region that neither reads nor writes it was
+    /// counted in the region's pressure when another region of the block
+    /// touched it: the pin finds live-outs only where the region defines or
+    /// reads them (`discoverLiveOut`). `v7` is made before a call and read
+    /// after the block: the region behind the call peaks at its limit (3) and
+    /// is in no excess. Counting `v7` made the peak 4, a critical set, and the
+    /// third constant moved down to its reader.
+    #[test]
+    fn test_a_value_live_across_a_region_untouched_adds_no_pressure() {
+        use super::scheduled;
+        use crate::model::lir::{LirBlock, LirBody};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = vec![
+            insn(10, semantics(Operation::Move, "mov", vec![held(7)], vec![imm(99)]), vec![7], vec![]),
+            insn(11, semantics(Operation::Call, "call", vec![], vec![]), vec![], vec![]),
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
+            insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
+        ];
+        let after =
+            vec![insn(20, semantics(Operation::Return, "ret", vec![], vec![held(6), held(7)]), vec![], vec![6, 7])];
+        let mut first = LirBlock::new(0, std::mem::take(&mut insns));
+        first.succ = vec![1].into();
+        let mut body = LirBody::new(
+            "across",
+            0,
+            vec![first.into(), LirBlock::new(1, after).into()],
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let defined: Vec<u32> =
+            scheduled(&body, 2, &GenericModel, |_, _| one_set(3)).blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_eq!(defined, [7, 1, 2, 3, 4, 5, 6], "the region peaks at 3 of 3: no critical set, source order");
+    }
+
+    /// Two loads of neighbouring words: the model clusters them.
+    struct Pairs;
+
+    use crate::backend::genericdriver::RegionPolicy;
+    use crate::backend::schedmodel::{MemBase, MemOp};
+
+    impl crate::backend::schedmodel::SchedulingModel for Pairs {
+        fn machine(&self) -> crate::backend::schedboundary::Machine {
+            GenericModel.machine()
+        }
+
+        fn policy(&self) -> RegionPolicy {
+            GenericModel.policy()
+        }
+
+        fn unit(
+            &self,
+            insn: &Insn,
+        ) -> crate::backend::schedboundary::Unit {
+            GenericModel.unit(insn)
+        }
+
+        fn def_latency(
+            &self,
+            insn: &Insn,
+        ) -> u32 {
+            GenericModel.def_latency(insn)
+        }
+
+        fn mem_op(
+            &self,
+            insn: &Insn,
+        ) -> Option<MemOp> {
+            let what = insn.what.as_ref()?;
+            match what.sources.as_slice() {
+                [Loc::Mem(cell)] if what.name.as_deref() == Some("mov") => {
+                    Some(MemOp { base: MemBase::Virtual(100), offset: cell.offset, width: 4, load: true })
+                }
+                _ => None,
+            }
+        }
+
+        fn should_cluster(
+            &self,
+            (_, a): (&Insn, &MemOp),
+            (_, b): (&Insn, &MemOp),
+            cluster_size: u32,
+            _: u32,
+        ) -> bool {
+            cluster_size <= 2 && a.base == b.base && a.offset + 4 == b.offset
+        }
+    }
+
+    /// `BaseMemOpClusterMutation` (MachineScheduler.cpp#L2264): two loads of
+    /// neighbouring words get a cluster edge and stay side by side, which
+    /// the load/store optimizer needs to make a pair. Without the mutation
+    /// the scheduler (a pick by height and then order) put the first load's
+    /// reader between them, and the AArch64 pairs of `matmul` and `nbody`
+    /// (16 `ldp` of 30) were lost.
+    #[test]
+    fn test_neighbouring_loads_are_scheduled_together() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(3)], vec![held(1)]), vec![3], vec![1]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+            insn(3, semantics(Operation::Move, "mov", vec![held(4)], vec![held(2)]), vec![4], vec![2]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16, &Pairs, None);
+        let apart = super::order_region(&insns, &found, None, &Pairs);
+        let distance = |order: &[usize]| {
+            let at = |node: usize| order.iter().position(|&each| each == node).unwrap();
+            at(0).abs_diff(at(2))
+        };
+        assert!(distance(&apart) > 1, "the premise: without clustering the loads are apart, {apart:?}");
+        super::cluster_mem_ops(&insns, &mut found, &Pairs);
+        let together = super::order_region(&insns, &found, None, &Pairs);
+        assert_eq!(distance(&together), 1, "the loads are adjacent, {together:?}");
+    }
+
+    /// A model with the region-end edges and a four-cycle def.
+    struct Exiting;
+
+    impl crate::backend::schedmodel::SchedulingModel for Exiting {
+        fn machine(&self) -> crate::backend::schedboundary::Machine {
+            GenericModel.machine()
+        }
+
+        fn policy(&self) -> RegionPolicy {
+            GenericModel.policy()
+        }
+
+        fn unit(
+            &self,
+            insn: &Insn,
+        ) -> crate::backend::schedboundary::Unit {
+            GenericModel.unit(insn)
+        }
+
+        fn def_latency(
+            &self,
+            _: &Insn,
+        ) -> u32 {
+            4
+        }
+
+        fn exit_edges(&self) -> bool {
+            true
+        }
+    }
+
+    /// pin: what the instruction that ends the region reads is held for the
+    /// latency of its def (`ExitSU`'s data edges), so the compare that feeds a
+    /// branch is not ready the moment the bottom zone starts. Without the
+    /// edge arm64 `mandel` placed the counter's `add` before the `cmp` and
+    /// copied the counter back (5 copies; the pin has the `cmp` first).
+    /// A def nothing reads holds one cycle less; a def the end reads, the
+    /// whole latency.
+    #[test]
+    fn test_what_the_region_end_reads_is_held_for_its_defs_latency() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+        ];
+        let end = insn(2, semantics(Operation::Move, "mov", vec![cell(8)], vec![held(1)]), vec![], vec![1]);
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let none = graph(&insns, regs, 16, &Exiting, None);
+        assert_eq!(none.exit_latency, [3, 3], "no end: both unread defs hold latency less one");
+        let read = graph(&insns, regs, 16, &Exiting, Some(&*end));
+        assert_eq!(read.exit_latency, [4, 3], "the end reads the first: it holds the whole latency");
+    }
+
+    /// Every target but arm64 keeps `exit_edges()` off: the region end must not
+    /// change its graph (x86, m68k, 6502, z80 and wasm are bit-identical).
+    #[test]
+    fn test_a_model_without_exit_edges_ignores_the_region_end() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+        ];
+        let end = insn(2, semantics(Operation::Move, "mov", vec![cell(8)], vec![held(1)]), vec![], vec![1]);
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let none = graph(&insns, regs, 16, &GenericModel, None);
+        let read = graph(&insns, regs, 16, &GenericModel, Some(&*end));
+        assert_eq!(read.exit_latency, none.exit_latency, "the end's reads are not held");
+        assert_eq!(read.preds, none.preds);
     }
 }

@@ -133,13 +133,20 @@ fn an_fcmp_of_constants_is_left_alone() {
     assert_eq!(run(text), llrm_mir::print::module(&parsed(text)));
 }
 
-/// MIR has no operand bundles or lane operations: the `deopt` loop of
-/// `processCallSite` and the vector arms have nothing to read. A test fails
-/// the day MIR gains one. (`undef` arrived: its CVP/LVI states are owed,
-/// #2260.)
+/// MIR has no operand bundles: the `deopt` loop of `processCallSite` has
+/// nothing to read. A test fails the day MIR gains one. (`undef` arrived: its
+/// CVP/LVI states are owed, #2260.)
 #[test]
 fn mir_lacks_what_cvp_leaves_out() {
     let rejects = |text: &str| llrm_mir::parse::module(text).is_err();
     assert!(rejects("declare void @g()\ndefine void @f() {\n  call void @g() [ \"deopt\"(i32 1) ]\n  ret void\n}\n"));
-    assert!(rejects("define i32 @f(<2 x i32> %a) {\n  %x = extractelement <2 x i32> %a, i32 0\n  ret i32 %x\n}\n"));
+}
+
+/// MIR parses `extractelement` since #7658 (the vector arms of CVP had no
+/// lanes to read before); `cvp.rs` has no vector arm, so a lane extract of an
+/// argument stays as written.
+#[test]
+fn a_lane_extract_is_left_alone() {
+    let text = "define i32 @f(<2 x i32> %a) {\n  %x = extractelement <2 x i32> %a, i32 0\n  ret i32 %x\n}\n";
+    assert_eq!(run(text), llrm_mir::print::module(&parsed(text)));
 }

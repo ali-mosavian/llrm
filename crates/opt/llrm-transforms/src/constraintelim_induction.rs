@@ -613,7 +613,7 @@ impl Inductions {
         if scev.is_could_not_compute(b_minus_start) {
             return false;
         }
-        let step = Ap { width: step_offset.width, bits: step_offset.bits };
+        let step = Ap { width: step_offset.width, bits: step_offset.bits, hi: 0 };
         scev.get_constant_multiple(&cx, b_minus_start, None).urem(step).is_zero()
     }
 }

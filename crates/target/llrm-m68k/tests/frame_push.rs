@@ -99,7 +99,7 @@ fn one_saved_register_is_pushed_and_popped() {
 fn a_frame_with_a_local_pushes_first_and_still_finds_the_local() {
     let text = asm(WITH_LOCAL, Cpu::M68000);
     let push = text.find("-(%sp)").unwrap_or(usize::MAX);
-    let open = text.find("suba.l").unwrap_or(0);
+    let open = text.find("suba.l").or(text.find("lea\t(-")).unwrap_or(0);
     assert!(push < open, "{text}");
     if let Some(code) = status(WITH_LOCAL, &[0xFF]) {
         assert_eq!(code, 13, "{text}");

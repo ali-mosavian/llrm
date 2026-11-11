@@ -1,0 +1,6 @@
+== variable
+i32.const	0
+return
+== literal
+i32.const	1
+return

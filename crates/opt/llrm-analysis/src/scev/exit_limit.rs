@@ -16,7 +16,8 @@
 //! `br i1 (icmp slt i32 %i, %n), loop, exit` with `%i = {0,+,1}` exits after
 //! `(-1 + %n)` backedges.
 
-use llrm_mir::constantrange::ConstantRange;
+use llrm_mir::apint::Word;
+use super::ConstantRange;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
@@ -296,17 +297,17 @@ impl ScalarEvolution {
             IntrinsicId::UmulWithOverflow => (llrm_mir::opcode::BinaryOp::Mul, 1),
             _ => return None,
         };
-        let nwr = ConstantRange::make_exact_no_wrap_region(op, c_width, c_bits, no_wrap_kind);
+        let nwr = ConstantRange::make_exact_no_wrap_region(op, c_width, llrm_mir::apint::U256::from_u128(c_bits), no_wrap_kind);
         let (mut pred, new_rhs_c, offset) = nwr.get_equivalent_icmp_offset();
         if !exit_if_true {
             pred = pred.inverse();
         }
         let mut lhs = self.get_scev(cx, lhs_value);
-        if offset != 0 {
-            let offset = self.get_constant(super::ap::Ap::new(c_width, offset));
+        if offset != llrm_mir::apint::U256::ZERO {
+            let offset = self.get_constant(super::ap::Ap::from_word(c_width, offset));
             lhs = self.get_add_expr(cx, vec![Use::of(lhs), Use::of(offset)], Default::default(), 0).scev;
         }
-        let rhs = self.get_constant(super::ap::Ap::new(c_width, new_rhs_c));
+        let rhs = self.get_constant(super::ap::Ap::from_word(c_width, new_rhs_c));
         let limit =
             self.compute_exit_limit_from_icmp_pred(cx, header, pred, lhs, rhs, controls_only_exit, allow_predicates);
         limit.has_any_info(self).then_some(limit)
@@ -481,7 +482,7 @@ impl ScalarEvolution {
             && self.is_add_rec_of(lhs, header)
         {
             // Form the constant range.
-            let comp_range = ConstantRange::make_exact_icmp_region(pred, rhs_c.width, rhs_c.bits);
+            let comp_range = ConstantRange::make_exact_icmp_region(pred, rhs_c.width, rhs_c.word());
             let ret = self.get_num_iterations_in_range(cx, lhs, &comp_range);
             if ret != self.get_could_not_compute() {
                 return ExitLimit::exact(self, ret);

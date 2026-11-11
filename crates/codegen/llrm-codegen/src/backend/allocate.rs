@@ -303,14 +303,25 @@ pub fn greedy_rewritten(
         order: &|value| target::order(confined.get(&value), segments, classes),
         pins,
         unspillable: &unspill,
-        data: Some(segments.data),
+        data: segments.data,
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
-        tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
+        tii: &crate::greedy::tii::X86InstrInfo {
+            bits: current.bits,
+            classes,
+            basic_semantics,
+            address_reference_milliweight: targets::profile(cpu)
+                .map_or(1000, |profile| profile.target().tuning().address_reference_milliweight),
+        },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
         lane_pins: false,
+        carry_slot_indexes: targets::profile(cpu).map_or(true, |profile| {
+            // m16 states its table on the machine, m32 and m64 on the TTI.
+            let machine = profile.target();
+            machine.tuning().carry_slot_indexes && machine.tti().map_or(true, |tti| tti.carries_slot_indexes())
+        }),
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);
@@ -568,6 +579,10 @@ impl RegAlloc {
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrain::hoisted(&constrained_body, &fixed);
+        // A copy of an undefined value the constraints made is undefined too.
+        if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
+            body = crate::processimpdefs::processed_before_allocation(&body);
+        }
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()
@@ -596,6 +611,18 @@ impl RegAlloc {
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
         pins.extend(required);
+        if !cpu.optimized {
+            // -O0: the pin's RegAllocFast.
+            match crate::backend::regallocfast::allocate(&body, &pins, &segments, &self.classes, &mut frame.borrow_mut())
+            {
+                Ok(placed) => {
+                    drop(base);
+                    llrm_support::debug!("regalloc", "{}: fast", body.name);
+                    return Ok(datagroup::restored(&placed, data_free, &segments));
+                }
+                Err(why) => llrm_support::debug!("regalloc", "{}: fast fell back: {}", body.name, why.0),
+            }
+        }
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
@@ -617,7 +644,11 @@ impl RegAlloc {
         drop(base);
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled", body.name, out.insns().len(), spilled.len());
         let colored = llrm_support::debug::timed("spill slots shared", || {
-            crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
+            crate::backend::slots::slots_colored(
+                &out,
+                &mut frame.borrow_mut(),
+                cpu.target().tuning().slots_loop_width_rule,
+            )
         });
         let _apply = llrm_support::debug::span("regalloc apply");
         crate::backend::rewriter::rewrite(&colored, &got, &self.classes)

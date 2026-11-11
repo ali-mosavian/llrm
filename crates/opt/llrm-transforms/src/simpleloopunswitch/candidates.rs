@@ -21,15 +21,11 @@ use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::tti::CostKind;
 
+use super::partial::{PartialIv, has_partial_iv_condition, result_of};
 use super::{Analyzed, Run, collect_homogenous_inst_graph_loop_invariants, def_of, logical, skip_trivial_select};
 
 /// `-unswitch-threshold`.
 const UNSWITCH_THRESHOLD: i64 = 50;
-
-/// The threshold the target's tuning table asks for, else the pin's.
-fn unswitch_threshold(run: &Run) -> i64 {
-    run.tti.unswitch_threshold_override().unwrap_or(UNSWITCH_THRESHOLD)
-}
 /// `-unswitch-siblings-toplevel-div`.
 const UNSWITCH_SIBLINGS_TOPLEVEL_DIV: i64 = 2;
 /// `-unswitch-parent-blocks-div`.
@@ -42,6 +38,9 @@ const UNSWITCH_NUM_INITIAL_UNSCALED_CANDIDATES: i64 = 8;
 pub(super) struct Candidate {
     pub terminator: InstId,
     pub invariants: Vec<Operand>,
+    /// `PartialIVInfo`, for the candidate that is the header's branch on a
+    /// condition of loads the loop leaves unchanged on a path.
+    pub partial: Option<PartialIv>,
 }
 
 /// The unique successors of `block`'s terminator, in operand order.
@@ -52,8 +51,7 @@ pub(super) fn successors(
     run.function.successors(block).into_iter().collect()
 }
 
-/// `collectUnswitchCandidates`, without guards (MIR has none), partially
-/// invariant conditions (no MemorySSA) or injected conditions (SU9).
+/// `collectUnswitchCandidates`, without guards (MIR has none).
 pub(super) fn collect(
     run: &Run,
     analyzed: &Analyzed,
@@ -66,14 +64,14 @@ pub(super) fn collect(
             return;
         }
         if lp.is_loop_invariant(run.function, cond) {
-            candidates.push(Candidate { terminator: inst, invariants: vec![cond] });
+            candidates.push(Candidate { terminator: inst, invariants: vec![cond], partial: None });
             return;
         }
         let Some(root) = def_of(run, cond) else { return };
         if logical(run, root, true).is_some() || logical(run, root, false).is_some() {
             let invariants = collect_homogenous_inst_graph_loop_invariants(run, lp, root);
             if !invariants.is_empty() {
-                candidates.push(Candidate { terminator: inst, invariants });
+                candidates.push(Candidate { terminator: inst, invariants, partial: None });
             }
         }
     };
@@ -101,7 +99,7 @@ pub(super) fn collect(
                 && lp.is_loop_invariant(run.function, cond)
                 && successors(run, block).len() != 1
             {
-                candidates.push(Candidate { terminator: term, invariants: vec![cond] });
+                candidates.push(Candidate { terminator: term, invariants: vec![cond], partial: None });
             }
             continue;
         }
@@ -109,6 +107,20 @@ pub(super) fn collect(
             continue;
         }
         add_for(run, term, end.operands[0], &mut candidates);
+    }
+    // The header's branch on loads nothing on a path from it writes: its
+    // condition is copied before the loop. The header must reach its branch
+    // (`isGuaranteedToTransferExecutionToSuccessor`) and the loop not have been
+    // unswitched this way already.
+    let header = lp.get_header();
+    if !run.partial_done.contains(&header)
+        && let Some(term) = run.function.terminator(header)
+        && !candidates.iter().any(|one| one.terminator == term)
+        && super::nontrivial::header_reaches_branch(run, analyzed, header, term)
+        && let Some(info) = has_partial_iv_condition(run, lp)
+    {
+        let invariants = info.to_duplicate.iter().map(|&inst| result_of(run, inst)).collect();
+        candidates.push(Candidate { terminator: term, invariants, partial: Some(info) });
     }
     candidates
 }
@@ -214,11 +226,13 @@ fn cost_multiplier(
     let siblings_multiplier =
         (if parent.is_some() { siblings_count } else { siblings_count / UNSWITCH_SIBLINGS_TOPLEVEL_DIV }).max(1);
     // Saturating at the threshold keeps the product from overflowing.
-    let threshold = unswitch_threshold(run);
-    if clones_power > log2(threshold) || siblings_multiplier > threshold || parent_loop_size_multiplier > threshold {
-        threshold
+    if clones_power > log2(UNSWITCH_THRESHOLD)
+        || siblings_multiplier > UNSWITCH_THRESHOLD
+        || parent_loop_size_multiplier > UNSWITCH_THRESHOLD
+    {
+        UNSWITCH_THRESHOLD
     } else {
-        (siblings_multiplier * (1 << clones_power)).min(threshold)
+        (siblings_multiplier * (1 << clones_power)).min(UNSWITCH_THRESHOLD)
     }
 }
 
@@ -287,7 +301,13 @@ pub(super) fn best(
             // conditional branch with a condition of either `or` or `and`,
             // their select forms. In that case, one of the successors is
             // necessarily duplicated, so don't even try to remove its cost.
-            if !full_unswitch {
+            if let Some(info) = &candidate.partial {
+                let Operand::Block(on_true) = operands[1] else { unreachable!("a branch's target") };
+                let Operand::Block(on_false) = operands[2] else { unreachable!("a branch's target") };
+                if (info.known_value && succ == on_true) || (!info.known_value && succ == on_false) {
+                    continue;
+                }
+            } else if !full_unswitch {
                 let cond = skip_trivial_select(run, operands[0]);
                 let root = def_of(run, cond).expect("a partial candidate's condition is an instruction");
                 let Operand::Block(on_true) = operands[1] else { unreachable!("a branch's target") };
@@ -318,7 +338,8 @@ pub(super) fn best(
     for candidate in candidates {
         let term = run.function.instruction(candidate.terminator);
         let full_unswitch = term.opcode != Opcode::Br
-            || (candidate.invariants.len() == 1
+            || (candidate.partial.is_none()
+                && candidate.invariants.len() == 1
                 && candidate.invariants[0] == skip_trivial_select(run, term.operands[0]));
         let multiplier = cost_multiplier(run, analyzed, lp, candidate, candidates);
         let cost = unswitched_cost(candidate, full_unswitch) * multiplier;
@@ -333,5 +354,5 @@ pub(super) fn best(
     }
     let (cost, candidate) = best?;
     llrm_support::debug!("simpleloopunswitch", "lowest cost found: {cost}");
-    (cost < unswitch_threshold(run)).then(|| candidate.clone())
+    (cost < UNSWITCH_THRESHOLD).then(|| candidate.clone())
 }

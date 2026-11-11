@@ -129,13 +129,45 @@ pub enum Intrinsic {
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
+    /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
+    /// continue.
+    Trap,
+    /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
+    DebugTrap,
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
+    /// `llvm.experimental.noalias.scope.decl`: a scope of `!alias.scope` and
+    /// `!noalias` starts here and lives for one run of the code around it; a
+    /// pass that copies the code gives the copy its own. MIR has no metadata
+    /// call operand, so the call has none and its scope list is the
+    /// `!noalias.scope.decl` attachment. No code runs it.
+    NoAliasScopeDecl,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
     Expect,
+    /// `llvm.set.loop.iterations`: the loop that follows runs its argument's
+    /// count of iterations (HardwareLoops.cpp); a target that has no counter
+    /// register lowers it to nothing.
+    SetLoopIterations,
+    /// `llvm.test.set.loop.iterations`: as `set.loop.iterations`, and whether
+    /// the count is not zero, which lets it guard a loop that may run no
+    /// iteration.
+    TestSetLoopIterations,
+    /// `llvm.start.loop.iterations`: as `set.loop.iterations`, and its
+    /// argument again, to be carried round the loop by a phi.
+    StartLoopIterations,
+    /// `llvm.loop.decrement.reg`: its first argument, the iterations still to
+    /// run, less its second: the next value of the phi that carries them.
+    LoopDecrementReg,
+    /// `llvm.loop.decrement`: takes its argument off the loop counter and
+    /// says whether the loop goes on. Only a target that opts in to hardware
+    /// loops has one.
+    LoopDecrement,
     /// `llrm.noalias`: its argument, which it, and what is based on it, is
     /// reached by no pointer that is not, while anything based on it is used:
     /// C's `restrict`, said of a loop's pointers by the pass that tested that
@@ -155,6 +187,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llrm.vararg.address`: the address of the calling function's first
+    /// variadic argument, the value `va_start` writes into a list that is one
+    /// pointer (DEVIATE VASTART-PROMOTE).
+    VarargAddress,
     /// `llvm.va_end`: the list its argument points to is no longer read. It
     /// does nothing where the list owns no resource.
     VaEnd,
@@ -532,7 +568,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 76] = [
+const TABLE: [Spec; 86] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -660,6 +696,46 @@ const TABLE: [Spec; 76] = [
         own: None,
     },
     Spec {
+        name: "llvm.set.loop.iterations",
+        intrinsic: Intrinsic::SetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.test.set.loop.iterations",
+        intrinsic: Intrinsic::TestSetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.start.loop.iterations",
+        intrinsic: Intrinsic::StartLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement.reg",
+        intrinsic: Intrinsic::LoopDecrementReg,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: INTS,
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement",
+        intrinsic: Intrinsic::LoopDecrement,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
         name: "llvm.is.constant",
         intrinsic: Intrinsic::IsConstant,
         overloads: &[Kind::Int],
@@ -684,11 +760,43 @@ const TABLE: [Spec; 76] = [
         own: None,
     },
     Spec {
+        name: "llvm.trap",
+        intrinsic: Intrinsic::Trap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.debugtrap",
+        intrinsic: Intrinsic::DebugTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.ubsantrap",
+        intrinsic: Intrinsic::UbsanTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[Slot::Int(8)],
+        own: None,
+    },
+    Spec {
         name: "llvm.prefetch",
         intrinsic: Intrinsic::Prefetch,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0), Slot::Int(32), Slot::Int(32), Slot::Int(32)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.experimental.noalias.scope.decl",
+        intrinsic: Intrinsic::NoAliasScopeDecl,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
         own: None,
     },
     Spec {
@@ -758,6 +866,14 @@ const TABLE: [Spec; 76] = [
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
         own: None,
+    },
+    Spec {
+        name: "llrm.vararg.address",
+        intrinsic: Intrinsic::VarargAddress,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llvm.va_end",
@@ -846,7 +962,14 @@ fn from_intrinsics_td(
 ) {
     let Some(set) = table_set(name) else { return };
     let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
-    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).to_owned())).collect();
+    // DEVIATE: the declaration does not carry `nocreateundeforpoison`; see
+    // `never_creates_undef_or_poison`.
+    function.attrs = set
+        .function
+        .iter()
+        .filter(|&&one| one != "nocreateundeforpoison")
+        .map(|one| Attribute::Flag((*one).into()))
+        .collect();
     if !set.memory.is_empty() {
         function.attrs.push(Attribute::Memory(
             set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -858,8 +981,8 @@ fn from_intrinsics_td(
         let ty = if at == 0 { Some(returns) } else { parameters.get(at as usize - 1).copied() };
         let Some(ty) = ty else { continue };
         let attrs = attrs.iter().filter_map(|attr| match *attr {
-            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.to_owned())),
-            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.to_owned(), value)),
+            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.into())),
+            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.into(), value)),
             // At the argument's own width; `lower == upper` is no range.
             intrinsic_attrs::Attr::Range(lower, upper) => {
                 let bits = types.int_bits(ty)?;
@@ -892,6 +1015,12 @@ pub(crate) fn table_set(name: &str) -> Option<&'static intrinsic_attrs::Set> {
     }
 }
 
+/// `IntrNoCreateUndefOrPoison`: whether `Intrinsics.td` says the intrinsic
+/// `name` names never creates undef or poison from defined operands.
+pub fn never_creates_undef_or_poison(name: &str) -> bool {
+    table_set(name).is_some_and(|set| set.function.contains(&"nocreateundeforpoison"))
+}
+
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for
 /// its target's intrinsics.
 /// `Intrinsic::Window`'s name, from `huge` pointers to `far` ones.
@@ -903,8 +1032,20 @@ pub fn window_name(
     format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
 }
 
+/// DEVIATE DV1: the 64 by 32 bit unsigned divides a target lowers by name
+/// (`unsigned long long f(unsigned hi, unsigned lo, unsigned d)`, the
+/// remainder in the high half of the result, the quotient in the low half):
+/// a plain declaration to every pass, a target's divide instruction in the
+/// backend. One table: a target adds its name as data.
+pub const WIDE_DIVIDES: &[&str] = &["llrm.x86.udiv64by32"];
+
+/// Whether `name` is one of [`WIDE_DIVIDES`].
+pub fn is_wide_divide(name: &str) -> bool {
+    WIDE_DIVIDES.contains(&name)
+}
+
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
@@ -974,7 +1115,7 @@ impl Intrinsic {
             return Some((vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new()));
         }
         let own = self.spec().own?;
-        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
+        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).into())).collect::<Vec<_>>();
         let mut attrs = flags(own.attrs);
         attrs.push(Attribute::Memory(
             own.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),

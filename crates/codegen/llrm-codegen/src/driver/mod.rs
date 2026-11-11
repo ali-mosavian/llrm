@@ -6,6 +6,7 @@
 pub mod basic;
 mod data;
 pub mod flags;
+pub mod policy;
 
 use std::path::PathBuf;
 
@@ -71,7 +72,7 @@ pub struct Options {
     /// rounds to its type.
     pub float_store: bool,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
-    /// `rounds_float_spills`): set by llrm-c, which follows the pin.
+    /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
     /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
     /// `spills_extended`): set by llrm-qb, which follows real BC.
@@ -255,7 +256,7 @@ fn without_jump_tables(program: &mut Program) {
             if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
                 && !function.is_declaration()
             {
-                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".to_owned(), Some("true".to_owned())));
+                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".into(), Some("true".to_owned())));
             }
         }
     }
@@ -366,7 +367,7 @@ pub fn compiled_module(
         None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
     }
     let cpu = options.cpu()?;
-    let mut program = Program::new(vec![module], cpu.target())?;
+    let mut program = Program::new(vec![module], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
@@ -565,11 +566,14 @@ pub fn optimized(
         program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
+        let inline_variable = !options.cpu()?.bytes_strict()
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
+        let rep_movsb = options.cpu()?.min_size
+            || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         timed("mir memcpy calls", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable, rep_movsb)
+            })
         })?;
     }
     timed("mir constant intrinsics", || {
@@ -652,7 +656,19 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is bytes.
+                let trees = |ty: &str| {
+                    options.pipeline.prefers_size()
+                        && tti.branch_compare_trees_at_size()
+                        && layout.expands_for("select", ty)
+                };
+                crate::backend::selects::priced_with_trees(
+                    module,
+                    &*tti,
+                    &wanted,
+                    &|name| profile.cost(name).ok(),
+                    &trees,
+                )
             })
         })?;
     }
@@ -744,6 +760,7 @@ pub fn statement_table(
     registers: llrm_target::FrameRegisters,
     word: usize,
     regs: Regs,
+    listed: bool,
 ) -> masm::Procedure {
     // A row is two words: where the statement is, and its line; the table ends
     // with a word of 0. The word is the target's near pointer.
@@ -753,6 +770,12 @@ pub fn statement_table(
         code.push(masm::InlinePart::Bytes((*line as u32).to_le_bytes()[..word].to_vec()));
     }
     code.push(masm::InlinePart::Bytes(vec![0; word]));
+    // BC /O leaves OF_STA 0 for a module with no row; BC /D (here
+    // -fsanitize=stack) points it at a table all the same. An empty part ahead
+    // of the end word marks a table the header names (`written_basic_inner`).
+    if listed && rows.is_empty() {
+        code.insert(0, masm::InlinePart::Bytes(Vec::new()));
+    }
     let what = Semantics { name: Some("statement-table".into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     let mut body = lir::LirBody::new(
@@ -818,6 +841,7 @@ mod location_ranges_tests {
             llrm_x86_m16::M16.frame_registers(),
             2,
             llrm_lir::registers::Regs(llrm_x86_m32::M32.registers()),
+            false,
         );
         // m32's file, which a body made with no target (m16's, in tests) is
         // not.

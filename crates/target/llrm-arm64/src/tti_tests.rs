@@ -445,3 +445,87 @@ fn the_machine_returns_its_platforms_cost_model() {
     };
     assert_eq!((latency(Platform::Darwin), latency(Platform::Linux)), (Cost::of(5), Cost::of(7)));
 }
+
+/// DEVIATE LFTR1: following the pin's step-one rule left byte-loops of
+/// stride 2..8 unreduced and cost bytes; the knob must stay on here.
+#[test]
+fn lftr_counts_any_constant_stride() {
+    use llrm_mir::tti::Tti;
+    assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
+}
+
+/// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class says no,
+/// TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a pin line that does not exist.
+#[test]
+fn sign_extension_is_not_cheaper_than_zero_extension() {
+    for (from, to) in [(8, 32), (16, 32), (32, 64), (8, 64)] {
+        assert!(!AArch64Lowering.is_sext_cheaper_than_zext(from, to), "{from} -> {to}");
+    }
+}
+
+/// The pin expands a sign-extending load from i1 on AArch64 (AArch64ISelLowering.cpp#L1141); the hook said
+/// legal, as the base class does.
+#[test]
+fn a_sign_extending_load_of_a_bit_is_not_legal() {
+    use llrm_mir::lowering::LoadExt;
+    let arm64 = AArch64Lowering;
+    assert!(!arm64.is_load_ext_legal(LoadExt::Sign, 32, 1) && !arm64.is_load_ext_legal(LoadExt::Sign, 64, 1));
+    assert!(arm64.is_load_ext_legal(LoadExt::Zero, 32, 1) && arm64.is_load_ext_legal(LoadExt::Any, 32, 1));
+    assert!(arm64.is_load_ext_legal(LoadExt::Sign, 32, 8) && arm64.is_load_ext_legal(LoadExt::Sign, 64, 32));
+    assert!(!arm64.is_load_ext_legal(LoadExt::Zero, 32, 24));
+}
+
+/// The IR-level ext promotion asks `isOperationLegalOrCustom` of the promoted operation; the hook said
+/// no to everything (the base class has no registers), so no promotion could pass its legality check.
+#[test]
+fn arithmetic_is_legal_on_the_registers_and_the_remainders_are_expanded() {
+    use llrm_mir::lowering::Isd::*;
+    let arm64 = AArch64Lowering;
+    for bits in [32, 64] {
+        for op in [Add, Sub, Mul, UDiv, SDiv, Shl, Srl, Sra, And, Or, Xor, Select, SetCc, Truncate, ZeroExtend, SignExtend] {
+            assert!(arm64.is_operation_legal_or_custom(op, bits), "{op:?} i{bits}");
+        }
+        assert!(!arm64.is_operation_legal_or_custom(URem, bits) && !arm64.is_operation_legal_or_custom(SRem, bits));
+    }
+    assert!(!arm64.is_operation_legal_or_custom(Add, 8) && !arm64.is_operation_legal_or_custom(Add, 16));
+}
+
+/// The vector costs of `opt -passes='print<cost-model>' -cost-kind=throughput` on aarch64 (the pin,
+/// both cpus): before the vector hooks existed `Tti` priced no vector at all, so no loop could be
+/// weighed against its scalar form.
+#[test]
+fn vector_memory_and_arithmetic_costs_are_the_pins() {
+    use llrm_mir::tti::{ArithOp::*, MemoryOp::*};
+    for cpu in ["generic", "apple-m1"] {
+        let tti = AArch64::of_cpu(cpu).unwrap();
+        let v = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+        let mem = |op, ty, align| tti.vector_memory_op_cost(op, ty, align, CostKind::RecipThroughput).map(|c| c.value);
+        let alu = |op, ty| tti.vector_arithmetic_cost(op, ty, CostKind::RecipThroughput).map(|c| c.value);
+        // load <8 x i16> align 2 / <16 x i16> / <4 x i16> align 1 / <16 x i8> align 1 / align 16
+        assert_eq!(mem(Load, v(16, 8), 2), Some(1), "{cpu}");
+        assert_eq!(mem(Load, v(16, 16), 2), Some(2), "{cpu}");
+        assert_eq!(mem(Load, v(16, 4), 1), Some(1), "{cpu}");
+        assert_eq!(mem(Load, v(8, 16), 1), Some(1), "{cpu}");
+        assert_eq!(mem(Load, v(16, 8), 16), Some(1), "{cpu}");
+        assert_eq!(mem(Store, v(16, 8), 2), Some(1), "{cpu}");
+        assert_eq!(mem(Store, v(16, 16), 2), Some(2), "{cpu}");
+        assert_eq!(alu(Add, v(16, 8)), Some(1), "{cpu}");
+        assert_eq!(alu(Add, v(32, 16)), Some(4), "{cpu}");
+        assert_eq!(alu(Mul, v(32, 4)), Some(1), "{cpu}");
+        assert_eq!(alu(And, v(8, 16)), Some(1), "{cpu}");
+        assert_eq!(alu(Shl, v(32, 4)), Some(1), "{cpu}");
+        assert_eq!(alu(Sub, v(64, 2)), Some(1), "{cpu}");
+        // The pin prices `mul <2 x i64>` 14; this port does not price it (DEVIATE VT3).
+        assert_eq!(alu(Mul, v(64, 2)), None, "{cpu}");
+    }
+}
+
+#[test]
+fn the_interleave_factor_and_register_counts_follow_the_cpu() {
+    let (generic, m1) = (AArch64::of_cpu("generic").unwrap(), AArch64::of_cpu("apple-m1").unwrap());
+    // getMaxInterleaveFactor: 4 for a scalar loop, else the subtarget's (2, 4 on the A14 tuning).
+    assert_eq!((generic.max_interleave_factor(1, false), generic.max_interleave_factor(8, false)), (4, 2));
+    assert_eq!((m1.max_interleave_factor(1, false), m1.max_interleave_factor(8, false)), (4, 4));
+    assert_eq!(generic.max_interleave_factor(4, true), 4);
+    assert_eq!((generic.number_of_registers(RegisterClass::Vector), generic.number_of_registers(RegisterClass::Scalar)), (32, 31));
+}

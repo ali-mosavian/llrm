@@ -57,12 +57,25 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 
 /// The location of each argument and the bytes the stack ones take; a word's
 /// two bytes are named as their pair.
+///
+/// DEVIATE A-X-ARGS (beyond the pin; owner 6502, exit 2026-11-15): a byte
+/// argument arrives in `a`, then `x`, as in llvm-mos's CC_MOS. The 2026-11-08
+/// corpus A/B (mean clocks over 4 pads, base ca092f05a2) lowers bytes in every
+/// changed program. Clocks worse, each by one page-crossing cliff on one pad
+/// (the change is a byte shorter, so code after it moves across a page; the
+/// instruction counts are equal or lower): O2 rep_tails +235, word_compares
+/// +40, int_compared_with_float +54, huffman_decode +36; O1 word_compares +40,
+/// huffman_decode +1; Os huffman_decode +5, memory_expansion +47437 for -214 B.
+/// A counted loop whose bound arrives in `a` keeps its index in `a` (`tax; sta
+/// buf,x; clc; adc #1; cmp rc2`): the allocator does not price `inx` against
+/// `adc #1`, as for a bound loaded from a global.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
-    let placement = convention.place(&kinds);
+    let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
         .iter()
@@ -122,7 +135,8 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
+    let (targets, bytes) = locations(&convention, &vts, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     // `LowerMemOpCallTo`: the stack arguments are stored at `rs0 + offset`.
     let mut stores = Vec::new();
@@ -148,15 +162,31 @@ pub fn lower_call(
         chain = dag.get_token_factor(&stores);
     }
     let mut glue = None;
-    for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target else { continue };
-        let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
+    // `a` and `x` last: moving a constant or a byte into a cell goes through `a`
+    let (a, x) = (abi::register("a"), abi::register("x"));
+    let late = |register: llrm_lir::registers::RegId| u8::from(register == x) + 2 * u8::from(register == a);
+    let mut copies: Vec<_> = outs
+        .iter()
+        .zip(&targets)
+        .filter_map(|(out, &target)| match target {
+            Location::Register(register) => Some((register, out.value)),
+            Location::Stack(_) => None,
+        })
+        .collect();
+    copies.sort_by_key(|&(register, _)| late(register));
+    for (register, value) in copies {
+        let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
     }
     let callee = match (dag.opcode(callee), dag.node(callee).data) {
         (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
             dag.get_target_global_address(EVT::I16, symbol, offset)
+        }
+        // a routine the builder names itself (the copy of a `byval` argument)
+        (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+            let name = dag.symbol_names[id as usize].clone();
+            dag.get_target_external_symbol(EVT::I16, &name)
         }
         _ => callee,
     };
@@ -166,7 +196,8 @@ pub fn lower_call(
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
-    operands.push(dag.get_register_mask());
+    // the scheduler's live-register check reads the mask: a call clobbers the flags
+    operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::P]));
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
     let end =
@@ -191,7 +222,7 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let (sources, _) = locations(&convention, &vts, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -276,6 +307,14 @@ impl TargetCalling for MosCalling {
         true
     }
 
+    // The runtime has no routine named `llvm.*`: a call left would bind to nothing.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
+    ) -> bool {
+        false
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
@@ -305,5 +344,15 @@ impl TargetCalling for MosCalling {
         outs: &[Out],
     ) -> SDValue {
         lower_return(dag, chain, outs).expect("legal parts")
+    }
+
+    /// The unnamed arguments follow the named ones' stack bytes (llvm-mos's `VarArgsStackIndex` at
+    /// `Assigner.StackSize`).
+    fn variadic_frame_offset(
+        &self,
+        named: &[In],
+    ) -> Option<i64> {
+        let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
+        locations(&abi::mos(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
     }
 }

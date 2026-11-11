@@ -5,4 +5,5 @@ set -e
 cd "$(dirname "$0")/.."; T=$(mktemp -d); trap 'rm -r $T' EXIT
 [ -n "$CTL" ] && sed 's/return finish(sign, e + 1, s);/return finish(sign ^ SIGN, e + 1, s);/' config/6502/sf32_6502.c > $T/t.c || cp config/6502/sf32_6502.c $T/t.c
 cc -O2 -ffp-contract=off -fno-builtin -Iinclude -I config/6502 '-DSF_NAME(n)=sfb_##n' -include stdint.h -include config/6502/config.h tests/host_f32.c $(tests/fp_sources.sh f32 f32_64) $T/t.c -o $T/hf
-$T/hf | tail -1
+$T/hf > $T/out || { tail -1 $T/out; exit 1; } # a pipe to tail hid the oracle's status: CTL=1 printed fails=17700604 and exited 0
+tail -1 $T/out

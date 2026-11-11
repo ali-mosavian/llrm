@@ -15,11 +15,11 @@
 //! DEVIATE: `PerformSinkAndFold`, `SinkInstsIntoCycle` and debug values are
 //! not translated (off by default or no debug info in the spike). Reason: the
 //! pin leaves them off for this target. Exit: when a target turns them on.
-//! DEVIATE: successors are ordered by cycle depth alone and an edge's
-//! probability is `1 / successors`. Reason: no `MachineBlockFrequencyInfo` or
-//! `MachineBranchProbabilityInfo` here. Exit: the neutral-LIR task. The pin
-//! sorts by cycle depth when both frequencies are 0 and when optimizing for
-//! size.
+//! DEVIATE: successors are ordered by cycle depth alone, and an edge without
+//! an entry in `MFunction::odds` has probability `1 / successors`. Reason: no
+//! `MachineBlockFrequencyInfo` here, and a target may not compute edge odds.
+//! Exit: the neutral-LIR task. The pin sorts by cycle depth when both
+//! frequencies are 0 and when optimizing for size.
 //! DEVIATE: register pressure is the most virtual registers of a class live at
 //! once in a block, against the number of registers the class allows; the pin
 //! counts per pressure set. Reason: no `RegisterClassInfo` here. Exit: the
@@ -30,6 +30,7 @@
 
 use std::collections::BTreeMap;
 
+use llrm_mir::blockfrequency::BranchProbability;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
@@ -39,8 +40,10 @@ use crate::regalloc::Target;
 /// `SinkLoadInstsPerBlockThreshold` and `SinkLoadBlocksThreshold`.
 const LOAD_INSTS_PER_BLOCK: usize = 30;
 const LOAD_BLOCKS: usize = 20;
-/// `SplitEdgeProbabilityThreshold`, percent.
-const SPLIT_EDGE_PROBABILITY: usize = 40;
+/// `SplitEdgeProbabilityThreshold`, 40 percent
+/// ([MachineSink.cpp#L82](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L82)).
+// 0.4 * 2^31, rounded
+const SPLIT_EDGE_PROBABILITY: BranchProbability = BranchProbability::get_raw(858_993_459);
 
 /// How a target spells a jump to a block.
 pub trait Jump {
@@ -114,6 +117,9 @@ struct Sink<'a, T: Target> {
     cfg: Cfg,
     def_block: Vec<Option<usize>>,
     def_is_copy: Vec<bool>,
+    /// How many instructions and phis define each register: 1 on the SSA the
+    /// pin's pass runs on, more where phi copies were made before this pass.
+    def_count: Vec<u32>,
     copy_source: Vec<Option<u32>>,
     uses: Vec<Vec<Use>>,
     /// `CEBCandidates`, `CEMergeCandidates` and `ToSplit`, by block id.
@@ -172,6 +178,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             function,
             def_block: Vec::new(),
             def_is_copy: Vec::new(),
+            def_count: Vec::new(),
             copy_source: Vec::new(),
             uses: Vec::new(),
             considered: HashSet::default(),
@@ -191,6 +198,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         self.cfg = Cfg::new(self.function);
         self.def_block = vec![None; count];
         self.def_is_copy = vec![false; count];
+        self.def_count = vec![0; count];
         self.copy_source = vec![None; count];
         self.uses = vec![Vec::new(); count];
         self.live_out = None;
@@ -198,6 +206,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             for phi in &block.phis {
                 if let Some(v) = virt(phi.result) {
                     self.def_block[v as usize] = Some(at);
+                    self.def_count[v as usize] += 1;
                 }
                 for (pred, reg) in &phi.incoming {
                     if let Some(v) = virt(*reg) {
@@ -210,6 +219,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                     if let Some(v) = virt(reg) {
                         self.def_block[v as usize] = Some(at);
                         self.def_is_copy[v as usize] = inst.kind == Kind::Copy;
+                        self.def_count[v as usize] += 1;
                         if let (Kind::Copy, Some(Reg::Virt(src))) = (inst.kind, uses_of(inst).next()) {
                             self.copy_source[v as usize] = Some(src);
                         }
@@ -599,7 +609,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                 }
             }
         }
-        if self.cfg.succs[from].contains(&to) && 100 / self.cfg.succs[from].len() <= SPLIT_EDGE_PROBABILITY {
+        if self.cfg.succs[from].contains(&to) && self.edge_probability(from, to) <= SPLIT_EDGE_PROBABILITY {
             return true;
         }
         for reg in uses_of(inst) {
@@ -609,6 +619,20 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             }
         }
         false
+    }
+
+    /// `MBPI->getEdgeProbability`: the target's odds for the edge, else an
+    /// even share among the successors.
+    fn edge_probability(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> BranchProbability {
+        let key = (self.function.blocks[from].id, self.function.blocks[to].id);
+        match self.function.odds.as_ref().and_then(|odds| odds.get(&key)) {
+            Some(&(probability, _)) => probability,
+            None => BranchProbability::new(1, self.cfg.succs[from].len() as u32),
+        }
     }
 
     /// `PostponeSplitCriticalEdge`.
@@ -651,6 +675,14 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
     }
 
     /// `PerformTrivialForwardCoalescing`.
+    ///
+    /// DEVIATE SINK-SSA-1: both registers must have one definition. Reason: the
+    /// pin runs this on SSA, where `replaceRegWith` of the copy's
+    /// destination by its source is the whole meaning of the destination;
+    /// with a second definition of the destination (a select's other arm)
+    /// the reads of it are rewritten to a value only one path made. Exit: a
+    /// target that gives this pass SSA (row SINK-SSA-1,
+    /// above-main-rows.md).
     fn forward_coalesce(
         &mut self,
         block: usize,
@@ -667,6 +699,8 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         };
         let (dst, src) = (*dst, *src);
         if self.uses[src as usize].len() != 1
+            || self.def_count[src as usize] != 1
+            || self.def_count[dst as usize] != 1
             || self.function.classes[src as usize] != self.function.classes[dst as usize]
             || self.def_block[src as usize].is_none()
             || self.def_is_copy[src as usize]
@@ -847,6 +881,8 @@ pub fn split_critical_edge<C>(
         return None;
     }
     let new_id = function.fresh_block_id();
+    let from_id = function.blocks[from].id;
+    function.split_odds(from_id, to_id, new_id);
     for inst in function.blocks[from].insts.iter_mut().rev().take_while(|inst| inst.terminator) {
         for operand in &mut inst.operands {
             if matches!(operand, Operand::Block(id) if *id == to_id) {

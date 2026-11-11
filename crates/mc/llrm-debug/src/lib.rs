@@ -893,6 +893,7 @@ mod writer_tests {
             symbols: Vec::new(),
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames: Vec::new(),
         };
         let with = expanded(&object, Some(&Info::default()), &Marks).unwrap();

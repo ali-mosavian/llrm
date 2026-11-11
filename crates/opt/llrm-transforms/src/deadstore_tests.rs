@@ -517,3 +517,22 @@ fn a_walk_past_intrinsics_does_not_ask_each_as_a_read_clobber() {
     let asked = super::clobbers_asked() - before;
     assert!(asked <= COPIES * (COPIES + 1) / 2, "{asked} read clobbers asked for {COPIES} memcpys");
 }
+
+/// `may_write` and `may_read` of a call derived its read and write lists and
+/// copied one to learn it is not empty (6.5 K Ir a call, 387 calls in LICM,
+/// 9.2 K `unmodeled_write` in DSE on memory_expansion): stores walking past
+/// calls derive no list.
+#[test]
+fn asking_whether_a_call_writes_derives_no_list() {
+    const CALLS: usize = 12;
+    let mut body = String::new();
+    for i in 0..CALLS {
+        body.push_str(&format!("  store i16 {i}, ptr @g\n  call void @h(ptr @o)\n"));
+    }
+    let text = format!(
+        "@g = global i16 0\n@o = global i16 0\n\ndeclare void @h(ptr)\n\ndefine void @f() {{\nb0:\n{body}  store i16 99, ptr @g\n  ret void\n}}\n"
+    );
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    eliminated(&text, &[]);
+    assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for calls");
+}

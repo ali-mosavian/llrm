@@ -18,10 +18,8 @@ fn run(
     l: u8,
     callee: &str,
 ) -> u8 {
-    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("z80-frame-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("makes a directory");
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let body = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     let asm = format!(
         "\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tld a,#{a}\n\tld l,#{l}\n\tcall _f\n\tld (0x8f00),a\n\thalt\n\
@@ -58,7 +56,7 @@ const OFFSET: &str = "_ext::\n\tpush ix\n\tpop de\n\tor a\n\tsbc hl,de\n\tld a,l
 
 /// Both cells are in the frame; the array is the second, 4 bytes below the
 /// first, so 5 below `ix`.
-const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
     declare i8 @ext(ptr)\n\
     define i8 @f(i8 %a, i8 %b) {\n  %cell = alloca i8\n  %buf = alloca [4 x i8]\n  store volatile i8 %a, ptr %cell\n  \
     %r = call i8 @ext(ptr %buf)\n  %c = load volatile i8, ptr %cell\n  %s = add i8 %r, %c\n  ret i8 %s\n}\n";
@@ -80,7 +78,7 @@ const SUM3: &str = "_ext::\n\tinc hl\n\tld a,(hl)\n\tinc hl\n\tadd a,(hl)\n\tinc
 /// address `LEAFI` makes: the two must agree.
 #[test]
 fn a_local_written_in_place_is_where_its_address_says() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
         declare i8 @ext(ptr)\n\
         define i8 @f(i8 %a, i8 %b) {\n  %buf = alloca [8 x i8]\n  %p1 = getelementptr i8, ptr %buf, i8 1\n  \
         %p2 = getelementptr i8, ptr %buf, i8 2\n  %p3 = getelementptr i8, ptr %buf, i8 3\n  store i8 77, ptr %p1\n  \
@@ -100,7 +98,7 @@ const AT4: &str = "_ext::\n\tinc hl\n\tinc hl\n\tinc hl\n\tinc hl\n\tld a,(hl)\n
 /// byte at 5.
 #[test]
 fn a_word_local_is_its_two_bytes_in_order() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
         declare i8 @ext(ptr)\n\
         define i8 @f(i8 %a, i8 %b) {\n  %buf = alloca [8 x i8]\n  %p = getelementptr i8, ptr %buf, i8 4\n  \
         %ha = zext i8 %a to i16\n  %hb = zext i8 %b to i16\n  %hi = shl i16 %ha, 8\n  %w = or i16 %hi, %hb\n  \
@@ -110,4 +108,25 @@ fn a_word_local_is_its_two_bytes_in_order() {
         return;
     }
     assert_eq!(run(ir, 10, 20, AT4), 30);
+}
+
+/// A local array of 8 KB came first in the frame, so the spill slots lay past
+/// it and every access to one was `ld iy, #n; add iy, sp` (tests/run/c
+/// fill_nest: 1894 B against SDCC's 444). The small objects lie nearest IX.
+#[test]
+fn spill_slots_lie_nearer_ix_than_a_large_local_array() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+         declare i16 @h(i16)\n\
+         define i16 @f(i16 %n) {\n\
+           %t = alloca [4096 x i16]\n\
+           %p = getelementptr [4096 x i16], ptr %t, i16 0, i16 %n\n\
+           store volatile i16 %n, ptr %p\n\
+           %a = call i16 @h(i16 %n)\n\
+           %b = call i16 @h(i16 %a)\n\
+           %c = add i16 %a, %n\n\
+           %d = add i16 %c, %b\n\
+           ret i16 %d\n}\n";
+    let body = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    // the prologue's `ld iy, #-n; add iy, sp` is the one use of iy
+    assert_eq!(body.matches("add iy, sp").count(), 1, "a spill slot is addressed past the array:\n{body}");
 }

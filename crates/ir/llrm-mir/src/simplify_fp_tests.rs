@@ -5,7 +5,7 @@ use crate::parse;
 /// What `simplify_instruction` makes of `%r` in `@f(float %x, float %y)`:
 /// `%x` for a value, the float, `poison`, `NaN`; None where it finds nothing.
 fn simplified(body: &str) -> Option<String> {
-    let text = format!("define float @f(float %x, float %y) {{\nb0:\n{body}  ret float %x\n}}\n");
+    let text = format!("define float @f(float %x, float %y, i32 %k) {{\nb0:\n{body}  ret float %x\n}}\n");
     let mut module: Module = parse::module(&text).unwrap_or_else(|why| panic!("{why:?}\n{text}"));
     let id = module.named("f").expect("@f");
     let crate::module::GlobalKind::Function(function) = &module.globals[id.0 as usize].kind else {
@@ -141,6 +141,18 @@ fn a_compare_of_constants_folds() {
     check("  %r = fcmp olt float %x, %y\n", None);
 }
 
+/// `fcmp uno (sitofp n), (sitofp n)` stayed a compare: an integer converted
+/// to a float is never a NaN, so `uno` is false and `ord` true (sfm16_float_i2f
+/// ran an fcom/fnstsw/sahf on every canon test, 18026 vs 11615 clk).
+#[test]
+fn ord_and_uno_of_values_known_never_nan_fold() {
+    let conv = "  %c = sitofp i32 %k to float\n";
+    check(&format!("{conv}  %r = fcmp uno float %c, %c\n"), Some("Int(0)"));
+    check(&format!("{conv}  %r = fcmp ord float %c, %c\n"), Some("Int(1)"));
+    check(&format!("{conv}  %r = fcmp uno float %c, %x\n"), None);
+    check("  %r = fcmp uno float %x, 0x7FF8000000000000\n", Some("Int(1)"));
+}
+
 /// `fcmp ole x, x` and the like stayed compares at run time: the fold of a
 /// value against itself, a NaN on the right, `nnan ord`/`uno`, and a constant
 /// on the left moving right were all missing. A NaN is unordered, so `x ord x`
@@ -224,4 +236,11 @@ fn an_x87_literal_round_trips() {
     let module: Module = parse::module(&text).unwrap_or_else(|why| panic!("{why:?}"));
     assert!(crate::print::module(&module).contains(half_plus));
     assert!(parse::module(&text.replace(half_plus, "0xK3FFF8000000000000000")).is_ok());
+}
+
+/// `(x + 0.0) + 0.0`: a sum with a +0.0 operand is never -0.0, so the second
+/// add is the first. The fold answered for constants alone.
+#[test]
+fn a_sum_with_positive_zero_plus_positive_zero_is_that_sum() {
+    check("  %t = fadd float %x, 0.0\n  %r = fadd float %t, 0.0\n", Some("%t"));
 }

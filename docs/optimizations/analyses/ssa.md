@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:649d1756042017e210b664d943c27b4b1df5dd7ef99ebc761c1526f11affe636 -->
+<!-- src: crates/opt/llrm-analysis/src/ssa.rs sha256:a002ed0071762a2c0633aa2ec51d7ecc771f90f1299c86001a850a1bc3e9057f -->
 
 # ssa
 
@@ -80,7 +80,7 @@ From unit test
 
 ## Provides
 The helpers above. Consumers in llrm-transforms: `dead`, `promote`
-(`pruned_phis`); `gvn`, `lcssamerges`, `transform`, `loadjoins`
+(`pruned_phis`); `gvn`, `transform`, `loadjoins`
 (`substituted`, `provider`); `rotate`, `floatloop`
 (`SsaUpdater`).
 

@@ -60,7 +60,7 @@ The NF variants (`hasNF` is APX) and the x87 `fcmov` forms have no
 counterpart: N/A.
 
 DEVIATE R2 (no number yet): no isel producer of `flags_copy`/`flags_restore`
-exists, so tests hand-build LIR; owner w-5, review 2026-11-19, exit an isel
+exists, so tests hand-build LIR; owner anyisa, review 2026-11-19, exit an isel
 producer.
 
 ## Example

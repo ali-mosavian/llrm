@@ -11,7 +11,8 @@
 //! - The block's exact exit count is known, is not zero, is cheap to expand
 //!   (`isHighCostExpansion`, budget 4) and is safe to expand.
 //! - `FindLoopCounter` picks a header phi that is a counter (a unit stride, or
-//!   a constant one that cannot wrap: DEVIATE LFTR1) at least as wide as the
+//!   a constant one that cannot wrap where the target sets
+//!   `Tuning::lftr_any_stride`: DEVIATE LFTR1) at least as wide as the
 //!   count, with a concrete start, preferring one that counts from zero or is
 //!   wider, and not one that only this test keeps alive.
 //! - `genLoopLimit` writes the counter's value after the count (a post-inc
@@ -22,14 +23,19 @@
 //!
 //! The test it replaces is left to `dead`.
 //!
-//! DEVIATE LFTR1 (owner llrm-w12-lsr; exit: the pin's `isLoopCounter`
-//! (IndVarSimplify.cpp#L913, `m_scev_One`) takes any constant step): a loop
-//! that steps by two, `for (o = 0; o <= 3998; o += 2)`, kept `ult` for the
-//! pin's LSR, which turns only equality tests into zero-ending counters; main's
-//! earlier LSR made it `ne`. A step that cannot wrap reaches `start + count *
-//! step` exactly, so `!=` holds on the trip the original test ended (gcc's
-//! `iv_elimination_compare` relies on the same). Fail-first tests: strides
-//! 2, 3, 4, 8 and -2 in `lftr_tests.rs`.
+//! DEVIATE LFTR1 (owner w12; review 2026-12-20; `Tuning::lftr_any_stride`, x86
+//! m16/m32/m64 only; the pin's `isLoopCounter` (IndVarSimplify.cpp#L913,
+//! `m_scev_One`) takes a step of one): a loop that steps by two, `for (o = 0;
+//! o <= 3998; o += 2)`, kept `ult` for the pin's LSR, which turns only equality
+//! tests into zero-ending counters. A step that cannot wrap reaches `start +
+//! count * step` exactly, so `!=` holds on the trip the original test ended
+//! (gcc's `iv_elimination_compare` relies on the same). Removing it was tried
+//! 2026-11-09 and is worse on x86: m64 jpeg_single +16 B (O1, O2, O3), m16
+//! jpeg_fixed/single +4 B (all four levels), m32 heapsort +1.8% clk,
+//! ld_horner +2.7%, with idioms -16 B and x_idioms -455 clk the only gains;
+//! other targets get the pin (wasm `scroll_down` -29 B). Fail-first tests:
+//! strides 2, 3, 4, 8 and -2 in `lftr_tests.rs` with the knob on, and the
+//! pin's refusal with it off.
 //!
 //! # Example
 //! `for (i = 0; i < n; i++)` with `n` an `i32`: the test `i slt n` becomes
@@ -60,9 +66,6 @@ use llrm_mir::passes::{Declared, Outer};
 use llrm_mir::types::{Type as MirType, TypeId};
 use llrm_support::hash::HashSet;
 
-/// `SCEVCheapExpansionBudget`: its `cl::opt` default.
-const CHEAP_EXPANSION_BUDGET: u32 = 4;
-
 /// What one run reads and edits.
 struct Lftr<'a> {
     context: &'a mut Context,
@@ -74,6 +77,10 @@ struct Lftr<'a> {
     env: Env<'a>,
     rewriter: &'a mut Expander,
     tti: &'a dyn ExpansionTti,
+    /// `SCEVCheapExpansionBudget`, the target's for this function.
+    budget: u32,
+    /// `Tuning::lftr_any_stride`: DEVIATE LFTR1.
+    any_stride: bool,
 }
 
 /// `LLRM_NO_SCEV_LFTR`, read once; set, the step is skipped.
@@ -105,16 +112,22 @@ pub fn replaced_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
+        let mut headers: Vec<BlockId> =
+            env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
+    let optsize =
+        minimum_size || function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optsize"));
     let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
+    let budget = outer.target().tti().map_or(4, |tti| tti.lftr_expansion_budget(optsize));
+    let any_stride = outer.target().tti().is_some_and(|tti| tti.lftr_any_stride());
     // `Rewriter.disableCanonicalMode()`.
     let mut rewriter = Expander::new("indvars");
     rewriter.set_canonical_mode(false);
-    let mut run = Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti };
+    let mut run =
+        Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti, budget, any_stride };
     let mut changed = false;
     for header in headers {
         // `IndVarSimplify::run`: stay out of trouble without LoopSimplify
@@ -150,6 +163,26 @@ pub(crate) fn def_of(
         ValueDef::Instruction(inst) => Some(inst),
         ValueDef::Argument(_) => None,
     }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopUtils.cpp#L507
+/// `isAlmostDeadIV`: the phi is read only by its increment and `cond`, and
+/// the increment only by the phi and `cond`.
+pub(crate) fn is_almost_dead_iv(
+    function: &Function,
+    phi: InstId,
+    latch: BlockId,
+    cond: Operand,
+) -> bool {
+    let cond = def_of(function, cond);
+    let inc = arms(function, phi).into_iter().find(|(_, from)| *from == latch).expect("a latch case").0;
+    let phi_value = function.instruction(phi).result.expect("a phi value");
+    let inc_inst = def_of(function, inc);
+    let Operand::Value(inc_value) = inc else { return false };
+    if function.users(phi_value).iter().any(|u| Some(u.user) != cond && Some(u.user) != inc_inst) {
+        return false;
+    }
+    !function.users(inc_value).iter().any(|u| Some(u.user) != cond && u.user != phi)
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L770
@@ -326,7 +359,7 @@ impl Lftr<'_> {
             // that costs one operation at most; a unit stride keeps the pin's
             // budget (shellsort's `at / gap` trips took four more per entry).
             let ind_value = Operand::Value(self.function.instruction(ind_var).result.expect("a phi value"));
-            let budget = if self.has_unit_step(ind_value) { CHEAP_EXPANSION_BUDGET } else { 1 };
+            let budget = if self.has_unit_step(ind_value) { self.budget } else { 1 };
             let (high_cost, safe) = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 (
@@ -375,15 +408,16 @@ impl Lftr<'_> {
         if !is_counter {
             return false;
         }
-        // DEVIATE LFTR1: the pin wants a step of one. A constant step that
-        // cannot wrap reaches the limit `start + count * step` exactly,
-        // as gcc's `iv_elimination_compare` relies on.
+        // The pin wants a step of one (`m_scev_One`). DEVIATE LFTR1 (a target
+        // that sets `Tuning::lftr_any_stride`): a constant step that cannot
+        // wrap reaches the limit `start + count * step` exactly, as gcc's
+        // `iv_elimination_compare` relies on.
         let unit = matches!(
             self.se.node(s).kind.clone(),
             Kind::AddRec(ops, _) if self.se.as_constant(ops[1].scev).is_some_and(|step| step.is_one())
         );
         let wrap = llrm_analysis::scev::expr::flags::NUW | llrm_analysis::scev::expr::flags::NSW;
-        if !unit && self.se.get_no_wrap_flags(s, wrap) == 0 {
+        if !unit && !(self.any_stride && self.se.get_no_wrap_flags(s, wrap) != 0) {
             return false;
         }
         let Some(&(inc, _)) = arms(cx.function, phi).iter().find(|(_, from)| *from == latch) else { return false };
@@ -460,24 +494,14 @@ impl Lftr<'_> {
         self.has_concrete_def_impl(v, &mut visited, 0)
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopUtils.cpp#L507
-    /// `isAlmostDeadIV`: the phi is read only by its increment and `cond`, and
-    /// the increment only by the phi and `cond`.
+    /// `isAlmostDeadIV` over this run's function.
     fn is_almost_dead_iv(
         &self,
         phi: InstId,
         latch: BlockId,
         cond: Operand,
     ) -> bool {
-        let cond = def_of(self.function, cond);
-        let inc = arms(self.function, phi).into_iter().find(|(_, from)| *from == latch).expect("a latch case").0;
-        let phi_value = self.function.instruction(phi).result.expect("a phi value");
-        let inc_inst = def_of(self.function, inc);
-        let Operand::Value(inc_value) = inc else { return false };
-        if self.function.users(phi_value).iter().any(|u| Some(u.user) != cond && Some(u.user) != inc_inst) {
-            return false;
-        }
-        !self.function.users(inc_value).iter().any(|u| Some(u.user) != cond && u.user != phi)
+        is_almost_dead_iv(self.function, phi, latch, cond)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L938

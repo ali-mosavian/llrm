@@ -309,7 +309,7 @@ fn adjacent_stores_of_one_byte_are_one_memset() {
     let stores = "  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i8 0, ptr %p6\n  store i8 0, ptr %p7\n";
     let before = parsed(&format!("{DOS}{}", local(stores)));
     let mut module = before.clone();
-    let text = managed(&mut module, Merge { size: false });
+    let text = managed(&mut module, Merge { size: false, widen: true });
     assert!(
         text.contains("call void @llvm.memset.p0.i16(ptr align 2 %a, i8 0, i16 8, i1 false)")
             && !text.contains("store"),
@@ -326,7 +326,7 @@ fn stores_a_memset_would_not_reduce_are_kept() {
     let stores = "  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i16 0, ptr %p6\n";
     let before = parsed(&format!("{DOS}{}", local(stores)));
     let mut module = before.clone();
-    let text = managed(&mut module, Merge { size: false });
+    let text = managed(&mut module, Merge { size: false, widen: true });
     assert!(!text.contains("call void @llvm.memset"), "{text}");
 }
 
@@ -336,7 +336,7 @@ fn stores_that_are_not_one_fill_are_kept() {
     let unchanged = |stores: &str| {
         let before = parsed(&format!("{DOS}{}", local(stores)));
         let mut module = before.clone();
-        let text = managed(&mut module, Merge { size: false });
+        let text = managed(&mut module, Merge { size: false, widen: true });
         assert!(!text.contains("call void @llvm.memset"), "{text}");
         assert_eq!(results(&module, BYTES), results(&before, BYTES));
     };
@@ -760,7 +760,7 @@ fn adjacent_constants_are_stores_of_the_widest_integer() {
     let stores = |text: &str| {
         let before = parsed(&format!("{DOS}{}", local(text)));
         let mut module = before.clone();
-        let after = managed(&mut module, Merge { size: false });
+        let after = managed(&mut module, Merge { size: false, widen: true });
         assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
         after
     };
@@ -778,7 +778,7 @@ fn constants_that_cannot_be_one_wider_store_are_kept() {
     let kept = |text: &str, count: usize| {
         let before = parsed(&format!("{DOS}{}", local(text)));
         let mut module = before.clone();
-        let after = managed(&mut module, Merge { size: false });
+        let after = managed(&mut module, Merge { size: false, widen: true });
         assert_eq!(after.matches("store").count(), count, "{after}");
         assert_eq!(results(&module, BYTES), results(&before, BYTES));
     };
@@ -1116,6 +1116,21 @@ b2:
     assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
 }
 
+/// A target whose backend merges stores (`widen: false`) keeps the stores the
+/// pin's IR has: wasm `scroll` -O3 inlined `bench_scroll` into `main` because
+/// 80 word stores had become 20 qword stores by the time the inliner priced
+/// them (cost under 250 where the pin's is 525), 2150 B for the pin's 1152.
+#[test]
+fn a_target_that_merges_stores_in_the_backend_keeps_adjacent_constants_apart() {
+    let text = "  store i8 18, ptr %a\n  store i8 52, ptr %p1\n";
+    let mut module = parsed(&format!("{DOS}{}", local(text)));
+    let kept = managed(&mut module, Merge { size: false, widen: false });
+    assert_eq!(kept.matches("store i8").count(), 2, "{kept}");
+    let mut module = parsed(&format!("{DOS}{}", local(text)));
+    let merged = managed(&mut module, Merge { size: false, widen: true });
+    assert_eq!(merged.matches("store i8").count(), 0, "{merged}");
+}
+
 const TWO_BYTE_ARRAYS: &str = "@a = global [8 x i8] zeroinitializer
 @b = global [8 x i8] zeroinitializer
 
@@ -1312,9 +1327,22 @@ fn a_priced_fill_with_no_rate_is_taken_only_if_neither_metric_grows() {
             branch: 3,
             ..Default::default()
         };
-        let bytes =
-            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 6, store_immediate: 6, add: 4, branch: 2, ..Default::default() };
-        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, rep_fills: true, ..Default::default() };
+        let bytes = crate::profit::OperationCosts {
+            fill: 8,
+            fill_cell: 0,
+            store: 6,
+            store_immediate: 6,
+            add: 4,
+            branch: 2,
+            ..Default::default()
+        };
+        let machine = crate::testing::Tuned {
+            costs: clocks,
+            sizes: bytes,
+            price_fills: true,
+            rep_fills: true,
+            ..Default::default()
+        };
         let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{TWO_BYTE_ARRAYS}"));
         let mut pass = crate::loopidiom::pass::LoopIdiom::new();
         pass.for_size = sized;
@@ -1340,9 +1368,22 @@ fn the_memset_a_loop_promotes_is_priced_as_one_fill() {
             branch: 3,
             ..Default::default()
         };
-        let bytes =
-            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, store_immediate: 2, add: 4, branch: 2, ..Default::default() };
-        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, rep_fills: true, ..Default::default() };
+        let bytes = crate::profit::OperationCosts {
+            fill: 8,
+            fill_cell: 0,
+            store: 2,
+            store_immediate: 2,
+            add: 4,
+            branch: 2,
+            ..Default::default()
+        };
+        let machine = crate::testing::Tuned {
+            costs: clocks,
+            sizes: bytes,
+            price_fills: true,
+            rep_fills: true,
+            ..Default::default()
+        };
         let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(crate::loopidiom::pass::LoopIdiom::new());
@@ -1375,8 +1416,15 @@ fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
             branch: 3,
             ..Default::default()
         };
-        let bytes =
-            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, store_immediate: 2, add: 4, branch: 2, ..Default::default() };
+        let bytes = crate::profit::OperationCosts {
+            fill: 8,
+            fill_cell: 0,
+            store: 2,
+            store_immediate: 2,
+            add: 4,
+            branch: 2,
+            ..Default::default()
+        };
         let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
         let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
         let mut manager = llrm_mir::passes::PassManager::default();
@@ -1403,3 +1451,117 @@ fn inline_fill_stores_are_priced_as_immediate_stores() {
     assert_eq!(fill.price(&prices), 2 * (10 + 1));
 }
 
+/// A loop of a known count that zeroes one array and numbers another.
+fn mixed_loop() -> String {
+    format!(
+        "@zero = global [64 x i16] zeroinitializer
+@seq = global [64 x i16] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %q) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, 6
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds [64 x i16], ptr @zero, i16 0, i16 %i
+  store i16 0, ptr %p
+  %s = getelementptr inbounds [64 x i16], ptr @seq, i16 0, i16 %i
+  store i16 %i, ptr %s
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = getelementptr [64 x i16], ptr @seq, i16 0, i16 %q
+  %v = load i16, ptr %r
+  %z = getelementptr [64 x i16], ptr @zero, i16 0, i16 %q
+  %w = load i16, ptr %z
+  %x = add i16 %v, %w
+  ret i16 %x
+}}
+"
+    )
+}
+
+/// The same loop reading the cells it zeroes.
+fn reading_loop() -> String {
+    format!(
+        "@zero = global [64 x i16] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %q) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %a = phi i16 [ 0, %b0 ], [ %b, %b2 ]
+  %c = icmp slt i16 %i, 6
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds [64 x i16], ptr @zero, i16 0, i16 %i
+  store i16 0, ptr %p
+  %t = getelementptr inbounds [64 x i16], ptr @zero, i16 0, i16 %q
+  %l = load i16, ptr %t
+  %b = add i16 %a, %l
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %a
+}}
+"
+    )
+}
+
+/// `fill`, on a machine that prices memsets in `memset_store` bytes of store.
+fn fill_priced(
+    memset_store: i64,
+    text: &str,
+    inputs: &[&[i128]],
+) -> (String, bool) {
+    let clocks = crate::profit::OperationCosts { store: 1, fill: 10, fill_cell: 1, memset_store, ..Default::default() };
+    let bytes =
+        crate::profit::OperationCosts { store: 6, store_immediate: 6, fill: 20, fill_cell: 1, ..Default::default() };
+    let machine = std::rc::Rc::new(crate::testing::Tuned { costs: clocks, sizes: bytes, ..Default::default() });
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    let (layout, outer) = (layout(&module), Outer::of(&module, Some(machine)));
+    let callees = llrm_mir::memory::callees(&module);
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = filled(context, &layout, &callees, function, &outer, &mut declared, false);
+    let after = printed(&module);
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    (after, changed)
+}
+
+/// Where the loop stays rolled, a memset replaces one store: x86-16 nbody_fixed
+/// -O2 took two `rep stosd` setups for two stores and grew 7 bytes.
+#[test]
+fn a_fill_that_would_not_shrink_the_loop_that_stays_is_kept() {
+    let (after, changed) = fill_priced(0, &mixed_loop(), &[&[0], &[3], &[5], &[9]]);
+    assert!(!changed && !after.contains("call void @llvm.memset"), "{after}");
+}
+
+/// Where a few trips are unrolled and a memset is wide stores, it replaces
+/// them all.
+#[test]
+fn a_fill_of_a_target_that_unrolls_its_trips_is_a_memset_ahead_of_the_loop() {
+    let (after, changed) = fill_priced(16, &mixed_loop(), &[&[0], &[3], &[5], &[9]]);
+    assert!(
+        changed && after.contains("call void @llvm.memset.p0.i16(ptr align 2 @zero, i8 0, i16 12, i1 false)"),
+        "{after}"
+    );
+}
+
+/// The fill and the other access share an object: hoisting the memset would
+/// change what the loop's load reads.
+#[test]
+fn a_fill_in_a_loop_that_reads_its_object_is_kept() {
+    let (after, changed) = fill_priced(16, &reading_loop(), &[&[0], &[3], &[5]]);
+    assert!(!changed, "{after}");
+}

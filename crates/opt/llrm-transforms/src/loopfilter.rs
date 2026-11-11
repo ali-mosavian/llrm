@@ -40,6 +40,12 @@ pub fn only(headers: &[BlockId]) -> Scope {
     Scope(ONLY.with(|only| only.borrow_mut().replace(headers.to_vec())))
 }
 
+/// Whether a scope narrows the loops now: a run for one loop of a loop pass
+/// manager, not for the function.
+pub fn scoped() -> bool {
+    ONLY.with(|only| only.borrow().is_some())
+}
+
 /// `headers` less the loops outside the scope; all of them without one.
 pub fn retain(headers: &mut Vec<BlockId>) {
     ONLY.with(|only| {

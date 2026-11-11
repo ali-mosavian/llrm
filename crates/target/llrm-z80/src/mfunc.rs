@@ -22,13 +22,12 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`.
 
-use llrm_support::hash::{HashMap, HashSet};
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::instr::OperandDesc;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::dagisel::function::Selection;
 use crate::dagisel::generated::ids::reg as pin;
@@ -45,6 +44,8 @@ impl Class {
             pin::ACCRegClassID => Class::Acc,
             pin::GR16RegClassID => Class::Gr16,
             pin::HLRRegClassID => Class::Hlr,
+            pin::DERRegClassID => Class::Der,
+            pin::BCRRegClassID => Class::Bcr,
             _ => return None,
         })
     }
@@ -58,7 +59,8 @@ impl Class {
     }
 }
 
-/// The register of a class that has only one: `ACC` is `a`, `HLR` is `hl`.
+/// The register of a class that has only one: `ACC` is `a`, `HLR` is `hl`,
+/// `DER` is `de`, `BCR` is `bc`.
 ///
 /// An operand in such a class is that physical register, with a copy in or out
 /// around the instruction, as x86's fixed-register operands are. Left as a
@@ -69,6 +71,8 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     match u16::try_from(id).ok()? {
         pin::ACCRegClassID => Some(crate::reg::A),
         pin::HLRRegClassID => Some(crate::reg::HL),
+        pin::DERRegClassID => Some(crate::reg::DE),
+        pin::BCRRegClassID => Some(crate::reg::BC),
         pin::IYRRegClassID => Some(crate::reg::IY),
         _ => None,
     }
@@ -140,6 +144,8 @@ struct Emitter<'a> {
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
     in_acc: llrm_support::hash::HashSet<(u32, u8)>,
+    /// The jump tables: the block of each entry.
+    tables: &'a [Vec<u32>],
 }
 
 impl Emitter<'_> {
@@ -233,6 +239,8 @@ impl Emitter<'_> {
                 Operand::Symbol(name.clone(), 0)
             }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
+            // named for the printer, which numbers it with the function
+            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => Operand::Symbol(format!("$JT{index}"), 0),
             _ => match self.values.get(&(value.node, value.res)) {
                 Some(reg) => Operand::Use(*reg),
                 None => return Err(format!("operand {:?} before its definition", node.opcode)),
@@ -319,9 +327,14 @@ impl Emitter<'_> {
                 }
                 let mut reads_flags = false;
                 // flags another instruction overwrote since their compare:
-                // compare again
+                // compare again. A compare that takes the carry of another
+                // is compared again with it.
+                let mut carried: Vec<Inst> = Vec::new();
                 for op in &n.ops {
                     let key = (op.node, op.res);
+                    if let Some(group) = self.flag_groups.get(&key) {
+                        carried.extend(group.clone());
+                    }
                     if self.flags_now != Some(key) {
                         if let Some(group) = self.flag_groups.get(&key) {
                             into.extend(group.clone());
@@ -384,6 +397,21 @@ impl Emitter<'_> {
                     .filter(|(_, one)| one.tied_to >= 0)
                     .map(|(at, one)| (one.tied_to as usize, at))
                     .collect();
+                // a jump through a table: the table's index and its blocks, which make them this block's
+                // successors
+                if name == "JPHL" {
+                    let index = into
+                        .iter()
+                        .flat_map(|inst| &inst.operands)
+                        .filter_map(|operand| match operand {
+                            Operand::Symbol(symbol, 0) => symbol.strip_prefix("$JT")?.parse::<usize>().ok(),
+                            _ => None,
+                        })
+                        .next_back()
+                        .ok_or("a jump through no table")?;
+                    operands.push(Operand::Imm(index as i64));
+                    operands.extend(self.tables[index].iter().map(|&block| Operand::Block(block)));
+                }
                 into.push(Inst {
                     call: desc.has(flag::CALL),
                     ties,
@@ -393,7 +421,7 @@ impl Emitter<'_> {
                     reads_flags: reads_flags || desc.implicit_uses.contains(&pin::F),
                     may_load: desc.has(flag::MAY_LOAD),
                     may_store: desc.has(flag::MAY_STORE),
-                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS) || self.dag.volatile_accesses.contains(&node),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
                     commutable: desc.has(flag::COMMUTABLE),
                     rematerializable: desc.has(flag::REMATERIALIZABLE),
@@ -401,7 +429,8 @@ impl Emitter<'_> {
                 });
                 match flags_key {
                     Some(key) => {
-                        self.flag_groups.insert(key, into[group_start..].to_vec());
+                        self.flag_groups
+                            .insert(key, carried.into_iter().chain(into[group_start..].iter().cloned()).collect());
                         self.flags_now = Some(key);
                     }
                     None if desc.implicit_defs.contains(&pin::F) || desc.has(flag::CALL) => self.flags_now = None,
@@ -626,6 +655,7 @@ pub fn emit(
         flags_now: None,
         users: HashMap::default(),
         in_acc: Default::default(),
+        tables: &selection.tables,
     };
     // the frame objects the selector made; the allocas came first, at their
     // index
@@ -679,6 +709,12 @@ pub fn emit(
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        if selection.unreachable.contains(&one.block) {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
         let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
         block.place_unlocated();
         emitter.function.blocks.push(block);
@@ -706,7 +742,7 @@ fn phis(
             };
             let at = emitter.function.blocks.iter().position(|block| block.id == to).ok_or("a phi in no block")?;
             for &(input, result) in &edge.copies {
-                let class = width_class(selection.widths.get(&result).copied().unwrap_or(16));
+                let class = width_class(selection.widths.get(result as usize).copied().filter(|width| *width != 0).unwrap_or(16));
                 let result = emitter.numbered(result, class);
                 let incoming = emitter.numbered(input, class);
                 let phis = &mut emitter.function.blocks[at].phis;

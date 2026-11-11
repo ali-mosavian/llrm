@@ -184,6 +184,21 @@ rule restored_copy
     rewrite anchor @0 ; anchor @1
 
 
+// DEVIATE XCHG-SWAP-OS (owner x86-m64, exit 2026-11-23): `mov t,a; mov a,b; mov b,t` with t dead
+// is `xchg a,b` where the code is for size: 3 bytes for 9 at m64 (gcc -Os does it; the pin does not).
+// A register `xchg` costs more clocks than the three moves, so only where the profile is for size.
+group swapped_registers
+    walk window skip nothing
+
+rule swapped_registers
+    match   mov t:reg, a:reg ; mov a, b:reg ; mov b, t
+    when    for_size(), free(@0, synthetic_tied), free(@1, synthetic_tied), free(@2, synthetic_tied),
+            same_width(t, a), same_width(a, b), width_in(t, [16, 32, 64]),
+            !same_root(t, a), !same_root(a, b), !same_root(t, b), dead(@2, lanes(t)), encodable($1)
+    rewrite anchor @0 ; @1: xchg a, b, b, a {defines: joined_defines(@1, @2), uses: joined_uses(@1, @2)} ;
+            anchor @2 {defines: [], uses: []}
+
+
 // A reload of the cell a store just filled, into the register that filled it,
 // reads what the register still holds: nothing between writes the register,
 // the cell or what addresses it, and no call, volatile access or barrier
@@ -196,7 +211,7 @@ group forwarded_reloads
 
 rule forwarded_reload
     match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov r, c
-    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32])
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32, 64])
     rewrite @0 ; anchor @1
 
 

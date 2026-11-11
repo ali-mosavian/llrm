@@ -58,3 +58,17 @@ fn a_masked_i64_shift_count_needs_no_fixup_for_counts_from_32() {
     );
     assert!(free.contains("shld") && free.contains(", 32") && free.contains("je "), "{free}");
 }
+
+/// `x > C` on an i64 at m32 swapped the operands and kept `C` in registers
+/// (`neg; mov r, C.hi; sbb; setb`, `__cmpdf2` +156 B); against a constant it is
+/// `x >= C + 1`: `cmp lo, imm; sbb hi, imm; setae`.
+#[test]
+fn an_i64_compare_with_a_constant_keeps_its_operands_and_immediates() {
+    let text = listing(
+        "int f(unsigned long long x) { return x > 0x7ff0000000000000ULL; }\n\
+         int g(long long x) { return x <= 5; }\n",
+        &["-m32", "-O2"],
+    );
+    assert!(text.contains("cmp eax, 1") && text.contains("sbb edx, 2146435072") && text.contains("setae"), "{text}");
+    assert!(text.contains("cmp eax, 6") && !text.contains("neg "), "{text}");
+}

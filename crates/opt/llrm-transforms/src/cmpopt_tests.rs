@@ -26,8 +26,11 @@ fn run(
     let mut module = parsed(&format!("declare i16 @llvm.ctpop.i16(i16)\n\n{text}"));
     let layout = DataLayout::default();
     let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = compares_optimized(context, &globals, &layout, lowering, function);
+    let changed = compares_optimized(context, &metadata, &mut declared, &globals, &layout, lowering, function);
+    declared.place(&mut module).unwrap();
     (changed, printed(&module))
 }
 
@@ -146,4 +149,37 @@ more:
     let (changed, after) = run(&SignedFree, text);
     assert!(changed && after.contains("icmp sgt i16 %a, %b"), "{after}");
     assert!(after.contains("br i1 %eq, label %more, label %same"), "{after}");
+}
+
+/// The opposite compare swaps the arms; their weights went unswapped, so a
+/// check's failure edge kept the hot weight.
+#[test]
+fn test_swapping_the_arms_of_an_equality_swaps_their_weights() {
+    let text = "define i16 @f(i16 %a, i16 %b) {
+b0:
+  %lt = icmp slt i16 %a, %b
+  br i1 %lt, label %less, label %b1
+
+b1:
+  %eq = icmp eq i16 %a, %b
+  br i1 %eq, label %same, label %more, !prof !0
+
+less:
+  ret i16 1
+
+same:
+  ret i16 2
+
+more:
+  ret i16 3
+}
+
+!0 = !{!\"branch_weights\", i32 7, i32 1}
+";
+    let (changed, after) = run(&SignedFree, text);
+    assert!(changed, "{after}");
+    let line = after.lines().find(|l| l.contains("br i1 %eq")).expect("the branch");
+    assert!(line.contains("label %more, label %same"), "{after}");
+    let node = line.rsplit("!prof !").next().expect("a !prof").trim();
+    assert!(after.contains(&format!("!{node} = !{{!\"branch_weights\", i32 1, i32 7}}")), "{after}");
 }

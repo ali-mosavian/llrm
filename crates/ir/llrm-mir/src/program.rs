@@ -119,6 +119,9 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
+        if let Some(tti) = target.tti() {
+            tti.set_position_independent(modules.iter().all(Module::position_independent));
+        }
         Ok(Self { modules, layout, target, segments, exports: Exports::default(), runtime: Rc::default() })
     }
 

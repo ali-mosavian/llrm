@@ -7,7 +7,10 @@
 //! operand (`pushFreezeToPreventPoisonFromPropagating`, L5210); a freeze of
 //! `undef` or `poison` becomes the one constant its users prefer: all ones
 //! for an `or`, true for a select condition with a constant arm, the common
-//! constant of a phi, else zero.
+//! constant of a phi, else zero. A freeze of a recurrence's phi moves to its
+//! start value, dropping the flags that could make the steps poison
+//! (`foldFreezeIntoRecurrence`, L5271); the uses a freeze dominates read the
+//! freeze (`freezeOtherUses`, L5339).
 //!
 //! # Example
 //! ```text
@@ -17,23 +20,26 @@
 //!
 //! MIRROR: the order of the folds and each guard.
 //!
-//! DEVIATE 1: `foldFreezeIntoRecurrence` (L5271) and `freezeOtherUses`
-//! (L5339) are not translated. Exit 2026-11-12.
-//!
-//! DEVIATE 2: no vectors, so `getFreezeVectorReplacement` and the shuffle
+//! DEVIATE 1: no vectors, so `getFreezeVectorReplacement` and the shuffle
 //! guard are not here.
 //!
 //! # Used by
 //! `combine` (its dispatch on `Opcode::Freeze`).
 
+use std::collections::BTreeSet;
+
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::edit::Position;
+use llrm_mir::module::{BlockId, InstId, Operand, Use, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
-use llrm_mir::valuetracking::guarantee::{Operator, can_create_undef_or_poison, is_guaranteed_not_to_be_undef_or_poison};
+use llrm_mir::valuetracking::guarantee::{
+    Operator, can_create_undef_or_poison, is_guaranteed_not_to_be_undef_or_poison,
+};
 use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{query, simplify_visited};
+use crate::local::dominates_instruction_use;
 
 impl Combiner<'_> {
     /// `visitFreeze`.
@@ -53,6 +59,9 @@ impl Combiner<'_> {
             if !matches!(found, Visit::None) {
                 return found;
             }
+            if let Some(recurrence) = self.fold_freeze_into_recurrence(freeze, phi) {
+                return Visit::Replace(recurrence);
+            }
         }
         if let Some(pushed) = self.push_freeze_to_prevent_poison_from_propagating(freeze) {
             return Visit::Replace(pushed);
@@ -61,14 +70,174 @@ impl Combiner<'_> {
             let replacement = self.undef_replacement(freeze);
             return Visit::Replace(replacement);
         }
+        // Replace uses of Op with freeze(Op).
+        if self.freeze_other_uses(freeze) {
+            return Visit::Changed;
+        }
         Visit::None
+    }
+
+    /// `foldFreezeIntoRecurrence` (L5271): `freeze (phi start, step...)` where
+    /// every step reaches the phi again through instructions that cannot make
+    /// poison without their flags is the phi itself, the flags dropped and the
+    /// start frozen if it may be poison.
+    fn fold_freeze_into_recurrence(
+        &mut self,
+        freeze: InstId,
+        phi: InstId,
+    ) -> Option<Operand> {
+        let phi_block = self.function.parent(phi)?;
+        let phi_value = self.value_of(phi);
+        let incoming: Vec<(Operand, BlockId)> = pattern::phi_incoming(self.function.instruction(phi)).collect();
+        let mut start: Option<(usize, Operand, BlockId)> = None;
+        let mut worklist: Vec<Operand> = Vec::new();
+        {
+            let tree = self.env.analyses.dominator_tree();
+            for (at, &(value, block)) in incoming.iter().enumerate() {
+                if tree.dominates(phi_block, block) {
+                    // Add backedge value to worklist.
+                    worklist.push(value);
+                    continue;
+                }
+                // Don't bother handling multiple start values.
+                if start.is_some() {
+                    return None;
+                }
+                start = Some((at, value, block));
+            }
+        }
+        let (start_at, start_value, start_block) = start?;
+        if worklist.is_empty() {
+            return None; // Not a recurrence.
+        }
+        let q = query(self, None);
+        let start_needs_freeze = !is_guaranteed_not_to_be_undef_or_poison(&q, start_value, 0);
+        // We can't insert freeze if the start value is the result of the
+        // terminator (e.g. an invoke).
+        if start_needs_freeze
+            && q.instruction_of(start_value).is_some_and(|(def, _)| self.function.terminator(start_block) == Some(def))
+        {
+            return None;
+        }
+        let mut visited: BTreeSet<Operand> = BTreeSet::new();
+        let mut drop_flags: Vec<InstId> = Vec::new();
+        while let Some(value) = worklist.pop() {
+            if !visited.insert(value) {
+                continue;
+            }
+            if visited.len() > 32 {
+                return None; // Limit the total number of values we inspect.
+            }
+            // Assume that PN is non-poison, because it will be after the
+            // transform.
+            if value == phi_value || is_guaranteed_not_to_be_undef_or_poison(&q, value, 0) {
+                continue;
+            }
+            let (def, instruction) = q.instruction_of(value)?;
+            if can_create_undef_or_poison(&q, Operator::Instruction(def), false) {
+                return None;
+            }
+            drop_flags.push(def);
+            worklist
+                .extend(instruction.operands.iter().copied().filter(|operand| !matches!(operand, Operand::Block(_))));
+        }
+        for def in drop_flags {
+            self.function.drop_poison_generating_annotations(def);
+        }
+        if start_needs_freeze {
+            let terminator = self.function.terminator(start_block).expect("a terminated block");
+            let ty = self.type_of(start_value);
+            let frozen = self.insert_before(terminator, Opcode::Freeze, ty, vec![start_value], Flags::default());
+            let frozen = self.value_of(frozen);
+            self.function.set_operand(phi, 2 * start_at, frozen);
+        }
+        Some(phi_value)
+    }
+
+    /// `freezeOtherUses` (L5339): the freeze moves right after the definition
+    /// of its operand, and every use it dominates reads the freeze, so all of
+    /// them see one value.
+    fn freeze_other_uses(
+        &mut self,
+        freeze: InstId,
+    ) -> bool {
+        let operand = self.function.instruction(freeze).operands[0];
+        let Operand::Value(value) = operand else { return false };
+        if self.has_one_use(operand) {
+            return false;
+        }
+        // Move the freeze directly after the definition of its operand, so
+        // that it dominates the maximum number of uses.
+        let position = match self.function.value(value).def {
+            ValueDef::Argument(_) => {
+                let entry = self.function.entry().expect("a body");
+                let first = self
+                    .function
+                    .iter_block(entry)
+                    .find(|&one| !matches!(
+                        self.function.instruction(one).opcode,
+                        Opcode::Phi | Opcode::Alloca { .. }
+                    ))
+                    .expect("a terminated block");
+                Position::Before(first)
+            }
+            ValueDef::Instruction(def) => match self.function.instruction(def).opcode {
+                // `getInsertionPointAfterDef`: after the phis for a phi, none
+                // for a terminator.
+                Opcode::Phi => Position::Before(self.first_insertion_point(self.function.parent(def).expect("placed"))),
+                ref opcode if opcode.is_terminator() => return false,
+                _ => Position::After(def),
+            },
+            _ => return false,
+        };
+        let mut changed = false;
+        let already = match position {
+            Position::Before(at) => at == freeze,
+            Position::After(def) => self.function.next_in_block(def) == Some(freeze),
+            Position::End(_) => false,
+        };
+        if !already {
+            self.function.move_to(freeze, position).expect("a placed freeze");
+            changed = true;
+        }
+        let frozen = self.value_of(freeze);
+        let uses: Vec<Use> = self.function.users(value).iter().copied().collect();
+        let mut users: Vec<InstId> = Vec::new();
+        for at in uses {
+            if at.user == freeze {
+                continue;
+            }
+            let tree = self.env.analyses.dominator_tree();
+            if !dominates_instruction_use(tree, self.function, freeze, at) {
+                continue;
+            }
+            users.push(at.user);
+            self.function.set_operand(at.user, at.index as usize, frozen);
+            changed = true;
+        }
+        for user in users {
+            // Re-queue U and its users: freezing U's operand can expose a fold
+            // on a user of U (e.g. a freeze of U can now be pushed
+            // through it).
+            if let Some(result) = self.function.instruction(user).result {
+                let readers: Vec<InstId> = self.function.users(result).iter().map(|used| used.user).collect();
+                for reader in readers {
+                    self.add_to_worklist(reader);
+                }
+            }
+            self.add_to_worklist(user);
+        }
+        changed
     }
 
     fn is_undef_or_poison(
         &self,
         v: Operand,
     ) -> bool {
-        matches!(v, Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Undef | ConstantKind::Poison))
+        matches!(
+            v,
+            Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Undef | ConstantKind::Poison)
+        )
     }
 
     /// `pushFreezeToPreventPoisonFromPropagating` (L5210).
@@ -130,7 +299,7 @@ impl Combiner<'_> {
         let ty = self.function.instruction(freeze).ty;
         let result = self.function.instruction(freeze).result.expect("a value");
         let null = self.int(ty, 0);
-        let users: Vec<InstId> = self.function.users(result).snapshot().into_iter().map(|used| used.user).collect();
+        let users: Vec<InstId> = self.function.users(result).iter().map(|used| used.user).collect();
         let mut best: Option<Operand> = None;
         for user in users {
             let instruction = self.function.instruction(user);
@@ -143,7 +312,8 @@ impl Combiner<'_> {
             {
                 chosen = self.int(ty, 1);
             } else if instruction.opcode == Opcode::Select && instruction.operands[0] == Operand::Value(result) {
-                // select (freeze undef), a, b: a guaranteed-defined arm decides.
+                // select (freeze undef), a, b: a guaranteed-defined arm
+                // decides.
                 let q = query(self, Some(freeze));
                 let (a, b) = (instruction.operands[1], instruction.operands[2]);
                 chosen = null;

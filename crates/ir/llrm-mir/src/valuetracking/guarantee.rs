@@ -18,8 +18,8 @@
 //!   8224-8229) and a constant expression splat (8162-8167).
 //! * `nofpclass` and `addrspacecast nonnull`
 //!   (`hasPoisonGeneratingAnnotations`): MIR cannot state them.
-//!   `nocreateundeforpoison` (8025) is read but no MIR declaration carries it,
-//!   intrinsics included.
+//!   `nocreateundeforpoison` (8025) is read from the intrinsic table, not the
+//!   declaration.
 //! * Operand bundles: `getKnowledgeValidInContext` (8287) finds none.
 //! * Atomics, `catchpad` and the other funclet instructions (8387-8398,
 //!   8571-8579, `mayThrow`), `GlobalAlias` and `MetadataAsValue` (8140).
@@ -295,7 +295,7 @@ fn is_null_pointer(
 /// `Operator::hasPoisonGeneratingFlags()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L23>
-fn has_poison_generating_flags(
+pub fn has_poison_generating_flags(
     q: &Query,
     op: Operator,
 ) -> bool {
@@ -384,7 +384,7 @@ fn has_poison_generating_metadata(instruction: &Instruction) -> bool {
 /// `Operator::hasPoisonGeneratingAnnotations()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L78>
-fn has_poison_generating_annotations(
+pub fn has_poison_generating_annotations(
     q: &Query,
     op: Operator,
 ) -> bool {
@@ -422,7 +422,13 @@ fn can_create_undef_or_poison_kind(
         Operator::Instruction(inst) => inst,
     };
     let instruction = q.function.instruction(inst);
-    let call_base = |q: &Query| !has_ret_attr(q, inst, "noundef") && !has_fn_attr(q, inst, "nocreateundeforpoison");
+    // The declaration of an intrinsic does not carry the attribute
+    // `Intrinsics.td` gives it, so the table is asked.
+    let call_base = |q: &Query| {
+        !has_ret_attr(q, inst, "noundef")
+            && !has_fn_attr(q, inst, "nocreateundeforpoison")
+            && !q.callee_name(inst).is_some_and(crate::intrinsics::never_creates_undef_or_poison)
+    };
     match &instruction.opcode {
         Opcode::Binary(BinaryOp::Shl | BinaryOp::AShr | BinaryOp::LShr) => {
             includes_poison(kind) && !shift_amount_known_in_range(q, instruction.operands[1])
@@ -936,12 +942,33 @@ pub fn is_guaranteed_to_transfer_execution_to_successor(
     q: &Query,
     inst: InstId,
 ) -> bool {
-    if matches!(
-        q.function.instruction(inst).opcode,
-        Opcode::Ret | Opcode::Unreachable
-    ) {
+    let opcode = &q.function.instruction(inst).opcode;
+    if matches!(opcode, Opcode::Ret | Opcode::Unreachable) {
         return false;
     }
+    // Only these can throw, not return or be volatile: the rest transfer.
+    if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume | Opcode::Load { .. } | Opcode::Store { .. })
+    {
+        return true;
+    }
+    transfers_by_effects(q, inst)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions that reached an attribute-reading path, by test.
+    pub(crate) static EFFECT_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `!mayThrow() && willReturn()` of an instruction whose opcode can do either.
+/// Kept out of line: the callers' scan loops are hot and almost never get here.
+#[inline(never)]
+fn transfers_by_effects(
+    q: &Query,
+    inst: InstId,
+) -> bool {
+    #[cfg(test)]
+    EFFECT_CHECKS.with(|one| one.set(one.get() + 1));
     !may_throw(q, inst) && will_return(q, inst)
 }
 
@@ -1114,6 +1141,31 @@ fn handle_guaranteed_well_defined_ops(
     inst: InstId,
     handle: &mut dyn FnMut(Operand) -> bool,
 ) -> bool {
+    if !matches!(
+        q.function.instruction(inst).opcode,
+        Opcode::Store { .. }
+            | Opcode::Load { .. }
+            | Opcode::Call(_)
+            | Opcode::Invoke(_)
+            | Opcode::Ret
+            | Opcode::Switch
+            | Opcode::Br
+    ) {
+        return false;
+    }
+    well_defined_ops_of(q, inst, handle)
+}
+
+/// The opcodes `handleGuaranteedWellDefinedOps` reads operands of; out of
+/// line for the same reason as [`transfers_by_effects`].
+#[inline(never)]
+fn well_defined_ops_of(
+    q: &Query,
+    inst: InstId,
+    handle: &mut dyn FnMut(Operand) -> bool,
+) -> bool {
+    #[cfg(test)]
+    EFFECT_CHECKS.with(|one| one.set(one.get() + 1));
     let instruction = q.function.instruction(inst);
     match &instruction.opcode {
         Opcode::Store { .. } => {

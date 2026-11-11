@@ -1,5 +1,11 @@
 # Results, 2026-10-31 18:49Z (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
+> **Stage of the `llc` columns.** They are the pin's `llc -O2` on the committed `bench/*.ll`, not on the pin
+> clang's IR for the source: `kernels/*.ll` are hand-written, `library/hex.ll` is tool-printed. The same 68000
+> `llc -O2` on the committed IR and on `clang -O2 -emit-llvm` IR differs in text bytes in 23 of 23 programs
+> (arrsum 124 vs 70, hex 202 vs 112, copy 90 vs 230). These columns mean "the backend on the same IR" only;
+> the pin's result for a program is the `clang` column of `examples/matrix`.
+
 gcc is m68k-linux-gnu-gcc 15.2.0 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. "insns" are
 executed instructions inside `k`; the clock columns of the last table price them from Motorola's tables
 (`src/timing.rs`). The default output is the pin's own: `ours` is the pin's selection and allocation over the
