@@ -8,7 +8,7 @@
 use std::fmt;
 
 /// The register width of an integer instruction: the `sf` bit.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Width {
     W,
     X,
@@ -32,7 +32,7 @@ use llrm_analysis::placealias::{Object, alias_of};
 
 /// The object an access is relative to, as far as telling two accesses apart:
 /// what `MachinePointerInfo` names.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub enum MemObject {
     #[default]
     Unknown,
@@ -46,7 +46,7 @@ pub enum MemObject {
 
 /// What a load or store reaches (`MachineMemOperand`): its object and the byte
 /// offset in it, where both are known.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct MemOperand {
     pub object: MemObject,
     pub offset: Option<i64>,
@@ -115,7 +115,7 @@ impl Vreg {
 }
 
 /// The size of a scalar floating-point operand: the `type` field.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FpSize {
     S,
     D,
@@ -140,7 +140,7 @@ impl FpSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Shift {
     Lsl,
     Lsr,
@@ -154,7 +154,7 @@ impl Shift {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Extend {
     Uxtb,
     Uxth,
@@ -173,7 +173,7 @@ impl Extend {
 }
 
 /// A condition code, in the order of its 4-bit field.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Cond {
     Eq,
     Ne,
@@ -222,7 +222,7 @@ impl Cond {
 }
 
 /// What a branch, an `adr` or a page offset is aimed at.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Target {
     /// Bytes from the instruction itself.
     Offset(i64),
@@ -233,13 +233,13 @@ pub enum Target {
 }
 
 /// `add`/`sub` and their flag-setting forms.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct AddSub {
     pub subtract: bool,
     pub set_flags: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Logic {
     And,
     Orr,
@@ -247,7 +247,7 @@ pub enum Logic {
     Ands,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Wide {
     /// `movn`
     Not,
@@ -257,14 +257,14 @@ pub enum Wide {
     Keep,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Bitfield {
     Sbfm,
     Bfm,
     Ubfm,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Div {
     Udiv,
     Sdiv,
@@ -274,7 +274,7 @@ pub enum Div {
     Rorv,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Unary {
     Rbit,
     Rev16,
@@ -284,7 +284,7 @@ pub enum Unary {
     Cls,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Mul3 {
     Madd,
     Msub,
@@ -296,7 +296,7 @@ pub enum Mul3 {
     Umulh,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Select {
     Csel,
     Csinc,
@@ -305,7 +305,7 @@ pub enum Select {
 }
 
 /// How a load or store forms its address.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Addr {
     /// `[base, #imm]`: scaled by the access size when `imm` is a multiple of it
     /// and in range, otherwise the unscaled form (`ldur`).
@@ -326,7 +326,7 @@ pub enum Addr {
 }
 
 /// The register a load or store moves and how much of it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Memory {
     /// An integer register: `bytes` 1, 2, 4 or 8; `sign` extends a narrower
     /// load to `width`.
@@ -337,7 +337,7 @@ pub enum Memory {
 
 /// What an [`Inst::Atomic`] does: `ldar`, `ldapr`, `stlr`, `swp`, `ldadd`,
 /// `ldclr`, `ldeor`, `ldset`, `ldsmax`, `ldsmin`, `ldumax`, `ldumin`, `cas`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Atomic {
     Ldar,
     Ldapr,
@@ -355,22 +355,96 @@ pub enum Atomic {
 }
 
 /// The domain and kind of a `dmb`: `ish`, `ishld`, `ishst`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Barrier {
     Ish,
     IshLd,
     IshSt,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The lane layout of a 128-bit vector: `16b`, `8h`, `4s`, `2d`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Arrangement {
+    B16,
+    H8,
+    S4,
+    D2,
+}
+
+impl Arrangement {
+    /// `imm5` of `dup` (general): the lane size as the position of its lowest
+    /// set bit.
+    pub(super) fn imm5(self) -> u32 {
+        match self {
+            Arrangement::B16 => 0b00001,
+            Arrangement::H8 => 0b00010,
+            Arrangement::S4 => 0b00100,
+            Arrangement::D2 => 0b01000,
+        }
+    }
+
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Arrangement::B16 => "16b",
+            Arrangement::H8 => "8h",
+            Arrangement::S4 => "4s",
+            Arrangement::D2 => "2d",
+        }
+    }
+}
+
+/// How a `movi`/`mvni` places its byte: `lsl` into a halfword or word lane, or
+/// `msl` (shifting ones in).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ImmShape {
+    /// `.8h`, `lsl #0` or `#8`.
+    H8(u8),
+    /// `.4s`, `lsl #0`, `#8`, `#16` or `#24`.
+    S4(u8),
+    /// `.2s`, the same shifts: a 64-bit register (`Q` clear).
+    S2(u8),
+    /// `.4s`, `msl #8` or `#16`.
+    S4Msl(u8),
+}
+
+impl ImmShape {
+    /// `cmode` of the modified-immediate encoding.
+    pub(super) fn cmode(self) -> u32 {
+        match self {
+            ImmShape::H8(shift) => 0b1000 | u32::from(shift / 8) << 1,
+            ImmShape::S4(shift) | ImmShape::S2(shift) => u32::from(shift / 8) << 1,
+            ImmShape::S4Msl(shift) => 0b1100 | u32::from(shift == 16),
+        }
+    }
+}
+
+impl Fill {
+    /// Whether it writes all 128 bits; `movi d` and the `.2s` forms write 64.
+    pub fn is_quad(&self) -> bool {
+        !matches!(self, Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Fill {
     Zero,
     Byte(u8),
-    /// The low byte of a general register.
-    Gpr(Gpr),
+    /// `dup`: the low lane bits of a general register in every lane.
+    Dup(Arrangement, Gpr),
+    /// `movi`/`mvni v.<shape>, #imm8`: the byte placed by the shape, inverted
+    /// by `mvni`.
+    Imm {
+        invert: bool,
+        shape: ImmShape,
+        imm8: u8,
+    },
+    /// `movi v.2d, #mask`: each bit of `imm8` is a whole byte of ones or zeros.
+    Mask(u8),
+    /// `movi d, #mask`: the same, into a double register.
+    MaskD(u8),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FpUnary {
     Mov,
     Abs,
@@ -380,7 +454,7 @@ pub enum FpUnary {
     Rint(Rounding),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Rounding {
     Nearest,
     Up,
@@ -391,7 +465,7 @@ pub enum Rounding {
     Current,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FpBinary {
     Mul,
     Div,
@@ -404,7 +478,7 @@ pub enum FpBinary {
     Nmul,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FpFused {
     Madd,
     Msub,
@@ -413,7 +487,7 @@ pub enum FpFused {
 }
 
 /// A conversion between a general-purpose register and a floating-point one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FpConvert {
     /// `scvtf` / `ucvtf` from an integer.
     ToFp { signed: bool },
@@ -423,13 +497,16 @@ pub enum FpConvert {
     Bits { to_fp: bool },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FrameMark {
     PrologueEnd,
     EpilogueBegin,
     /// From here the source variable is the value in `reg`, or in none
     /// (`DBG_VALUE`): no code.
-    Value { variable: llrm_mir::MetadataId, reg: Option<Gpr> },
+    Value {
+        variable: llrm_mir::MetadataId,
+        reg: Option<Gpr>,
+    },
 }
 
 impl Inst {
@@ -439,7 +516,7 @@ impl Inst {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Inst {
     /// Where the prologue ends or an epilogue begins: no bytes, it tells the
     /// line table (`prologue_end`, `epilogue_begin`).
@@ -548,6 +625,14 @@ pub enum Inst {
         rn: Gpr,
         rm: Gpr,
         cond: Cond,
+    },
+    /// `adc`, `adcs`, `sbc`, `sbcs`: `rn +/- rm` and the carry flag.
+    AddCarry {
+        op: AddSub,
+        width: Width,
+        rd: Gpr,
+        rn: Gpr,
+        rm: Gpr,
     },
     CondCompare {
         negate: bool,
@@ -663,6 +748,14 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
     },
+    /// `scvtf`/`ucvtf s, s` (`d, d`): the integer in a vector register's low
+    /// lane to a float of the same size.
+    FpLaneToFp {
+        signed: bool,
+        size: FpSize,
+        rd: Vreg,
+        rn: Vreg,
+    },
     FpInt {
         op: FpConvert,
         width: Width,
@@ -681,8 +774,8 @@ pub enum Inst {
         fpr: Vreg,
         fbits: u8,
     },
-    /// A 16-byte vector with every byte `fill`: `movi v.2d, #0`, `movi v.16b,
-    /// #imm`, `dup v.16b, w`.
+    /// A 16-byte vector from an immediate or a general register: `movi v.2d,
+    /// #0`, `movi v.16b, #imm`, `dup v.8h, w`, `movi v.8h, #imm, lsl #8`.
     VectorFill {
         rd: Vreg,
         fill: Fill,
@@ -723,7 +816,7 @@ pub enum Inst {
 }
 
 /// The second operand of a conditional compare.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CcOperand {
     Reg(Gpr),
     Imm5(u8),

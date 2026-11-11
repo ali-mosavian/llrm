@@ -171,6 +171,10 @@ pub struct X86Lowering<'a> {
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
+    /// The target's `mul` reads the length of its r/m operand (the 486's
+    /// early-out): `Some(flat)`, `flat` for the 32- and 64-bit address modes.
+    /// DEVIATE SD444 ([`CombineHooks::multiply_high_magic_first`]).
+    pub multiply_early_out: Option<bool>,
 }
 
 /// The sheet, the target and the block a constant multiply is priced against.
@@ -314,6 +318,29 @@ impl CombineHooks for X86Lowering<'_> {
     /// (m16, m32) `can_do(Mul, i64)` refuses it.
     fn widen_multiply_high_any_width(&self) -> bool {
         true
+    }
+
+    /// DEVIATE SD444: a division's full-width magic goes to `EAX`, so the
+    /// dividend is the r/m operand whose length the 486 reads (the rule of
+    /// `x86_mul::magic_is_wider`, asked here where the dividend still has its
+    /// known bits). The pin's order, magic as the r/m operand, is kept where
+    /// the multiply has no early-out.
+    fn multiply_high_magic_first(
+        &self,
+        dag: &SelectionDAG,
+        signed: bool,
+        dividend: SDValue,
+        magic: SDValue,
+    ) -> bool {
+        let Some(flat) = self.multiply_early_out else { return false };
+        let Some(value) = dag.constant(magic) else { return false };
+        if dag.constant(dividend).is_some() {
+            return false;
+        }
+        let width = dag.value_type(dividend).size_in_bits();
+        let all = u64::MAX.checked_shr(u64::BITS - width.min(u64::BITS)).unwrap_or(0);
+        let known_zero = llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, dividend).zero as u64 & all;
+        llrm_x86_dagisel::x86_mul::magic_is_wider(value as i64, width, signed, flat, known_zero)
     }
 
     /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 +
@@ -1952,20 +1979,52 @@ fn combine_sub_carry(
     None
 }
 
-/// `combineSub`: the `SUB(X, ADC(Y,0,W))`, `SUB(X, SBB(Y,Z,W))` and `~A - ~B`
-/// folds ([`combine_sub_carry`]), `combineAddOrSubToADCOrSBB`
-/// ([`super::x86_carry`]), then `combineSubSetcc`.
+/// `combineSub` ([L60916][pin]): `sub C1, (xor X, C2)` is `add (xor X, ~C2),
+/// C1 + 1` ([`combine_sub_xor_constant`]), the `SUB(X, ADC(Y,0,W))`,
+/// `SUB(X, SBB(Y,Z,W))` and `~A - ~B` folds ([`combine_sub_carry`]),
+/// `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then `combineSubSetcc`.
 ///
-/// DEVIATE SD448: then, where `lea_adds`, [`combine_masked_xor_difference`].
+/// DEVIATE SD448: where `lea_adds`, [`combine_masked_xor_difference`] runs
+/// before the pin's first fold, not after it as the pin has no such fold: for a
+/// low-bit mask the pin's `xor`+`add` is two instructions where it is one.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60916
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
     lea_adds: bool,
 ) -> Option<SDValue> {
-    combine_sub_carry(dag, node)
+    lea_adds
+        .then(|| combine_masked_xor_difference(dag, node))
+        .flatten()
+        .or_else(|| combine_sub_xor_constant(dag, node))
+        .or_else(|| combine_sub_carry(dag, node))
         .or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node))
         .or_else(|| combine_sub_setcc(dag, node))
-        .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
+}
+
+/// The first fold of `combineSub`: x86 cannot encode an immediate left side of
+/// a `sub`, so `sub C1, (xor X, C2)` (the `xor` used once, `C1` not zero: that
+/// is a `neg`) becomes `add (xor X, ~C2), C1 + 1`, which saves a register.
+/// `100 - (n ^ 0xF0)` is then `(n ^ -241) + 101`.
+fn combine_sub_xor_constant(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (minuend, xor) = (dag.operand(node, 0), dag.operand(node, 1));
+    let c1 = dag.constant(minuend).filter(|&c| c != 0 && !dag.is_opaque(minuend))?;
+    if dag.opcode(xor) != ISD::Xor || !dag.has_one_use(xor.node) {
+        return None;
+    }
+    let mask = dag.operand(xor, 1);
+    let c2 = dag.constant(mask).filter(|_| !dag.is_opaque(mask))?;
+    let bits = llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
+    let inverted = dag.get_constant(!c2 & bits, vt);
+    let new_xor = dag.get_node(ISD::Xor, vt, &[dag.operand(xor, 0), inverted]);
+    let bumped = dag.get_constant(c1.wrapping_add(1) & bits, vt);
+    Some(dag.get_node(ISD::Add, vt, &[new_xor, bumped]))
 }
 
 /// DEVIATE SD448 (owner x87; recheck 2026-11-20 and at every pin bump,
@@ -2897,9 +2956,7 @@ fn combine_mul(
 /// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
 /// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
 /// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
-/// GCC's `synth_mult`
-/// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
-/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
 /// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
 /// frequency is the IR `BlockFrequencies` (the machine one does not exist at
 /// DAG time). Exit: none while the clocks decide. Owner sdag-d.

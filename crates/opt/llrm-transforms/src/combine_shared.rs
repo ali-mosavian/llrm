@@ -72,6 +72,7 @@ pub fn query<'a>(
         assumptions: Some(c.env.analyses.assumption_cache()),
         dom_conditions: if c.without_dom_conditions { None } else { c.env.analyses.dom_conditions() },
         cxt,
+        pending_intrinsics: &c.pending_intrinsics,
         ..Query::bare(c.context, c.function, c.env.layout)
     }
 }
@@ -646,3 +647,27 @@ pub fn inst_def(
 #[cfg(test)]
 #[path = "combine_shared_tests.rs"]
 mod tests;
+
+/// `Instruction::dropPoisonGeneratingAnnotations` on `inst` as the pin has it
+/// ([Instruction.cpp#L427](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L427)):
+/// the flags, metadata and attributes, and for a `ctlz`, `cttz` or `abs` call
+/// the poison-on-zero operand set to false. `Function`'s spelling has no
+/// constant to put there, so the operand is set here.
+pub(crate) fn drop_poison_generating_annotations(
+    c: &mut Combiner,
+    inst: InstId,
+) {
+    c.function.drop_poison_generating_annotations(inst);
+    let q = query(c, Some(inst));
+    let has_zero_poison_operand = q
+        .callee_name(inst)
+        .is_some_and(
+            |name| ["llvm.ctlz", "llvm.cttz", "llvm.abs"]
+                .into_iter()
+                .any(|base| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))),
+        );
+    if has_zero_poison_operand {
+        let false_ = c.int(c.context.types.int(1), 0);
+        replace_operand(c, inst, 1, false_);
+    }
+}

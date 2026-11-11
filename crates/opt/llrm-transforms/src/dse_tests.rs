@@ -637,8 +637,17 @@ b3:
 
 /// `text` through Dse alone: @f printed. The interpreter does not run it.
 fn ran(text: &str) -> String {
+    ran_on("", text)
+}
+
+/// `ran` over a module of the given `target datalayout` ("" for the default).
+fn ran_on(
+    layout: &str,
+    text: &str,
+) -> String {
+    let layout = if layout.is_empty() { String::new() } else { format!("target datalayout = \"{layout}\"\n") };
     let mut module = parsed(&format!(
-        "@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
+        "{layout}@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
     ));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -751,4 +760,64 @@ b0:
         ));
         assert_eq!(after.matches("@w(").count(), kept, "{attrs} {ret}: {after}");
     }
+}
+
+/// A byte stored over the first byte of an `i16` constant is its high byte on a
+/// big-endian target: merged little-endian, m68k -O2 wrote 0x07060504 for
+/// 0x04050607 (tests/run/c/memmove_overlap printed 142037926, not 96854020).
+#[test]
+fn test_a_merged_partial_overlap_store_follows_the_byte_order() {
+    for (layout, merged) in [("E", 0x0902), ("e", 0x0109)] {
+        let after = ran_on(
+            layout,
+            &format!(
+                "define void @f() {{\nb0:\n  store i16 258, ptr {CELL}\n  store i8 9, ptr {CELL}\n  ret void\n}}\n"
+            ),
+        );
+        assert!(after.contains(&format!("store i16 {merged},")), "{layout}: {after}");
+    }
+}
+
+/// `text` through Dse alone, not run: @f printed.
+fn dropped_unrun(text: &str) -> String {
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    after[after.find("@f(").unwrap()..].to_owned()
+}
+
+/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's `createNewAccess`
+/// gives it none), so the load of other bytes before it read as a clobber and the
+/// byte store a later `i64` store covers survived: bitfield_long_long wasm32 +12 B
+/// (`i32.const 12; i32.store8` beside the covering `i64.store`).
+#[test]
+fn a_noalias_scope_declaration_does_not_keep_a_covered_store() {
+    let text = dropped_unrun(
+        "@g = global i64 0
+
+declare void @llvm.experimental.noalias.scope.decl()
+
+define void @f() {
+b0:
+  store i8 12, ptr @g
+  %p = getelementptr inbounds nuw i8, ptr @g, i32 5
+  %l = load i24, ptr %p, align 1
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  %e = zext i24 %l to i64
+  %s = shl nuw i64 %e, 40
+  %o = or disjoint i64 %s, 884479243276
+  store i64 %o, ptr @g
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(!text.contains("store i8 12"), "{text}");
 }

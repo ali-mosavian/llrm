@@ -27,7 +27,6 @@ use llrm_lir::registers::RegId;
 use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
 use super::globals::Globals;
-use super::ids::Aarch64Ids;
 
 /// Combine hooks and legalizer hooks of arm64: none. A Custom operation the
 /// table asks for is recorded, and the block refused after legalization.
@@ -272,17 +271,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul
-                | ISD::Add
-                | ISD::Sub
-                | ISD::And
-                | ISD::Or
-                | ISD::SetCC
-                | ISD::GlobalAddress
-                | ISD::Shl
-                | ISD::Srl
-                | ISD::Sra
-                | ISD::Rotr
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress
         )
     }
 
@@ -308,9 +297,6 @@ impl CombineHooks for Aarch64Lowering {
             ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
             ISD::SetCC => super::combine::or_xor_chain(dag, node),
-            ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
-                super::combine::shift_amount_mod(dag, node)
-            }
             ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => {
                 super::ccmp::combine_and_or_csel(dag, node)
             }
@@ -337,25 +323,50 @@ impl LegalizeHooks for Aarch64Lowering {
     ) -> Option<SDValue> {
         use llrm_codegen::backend::selectiondag::target_calling::{Ext, In, Out, TargetCalling};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
-        let outs: Vec<Out> = args
-            .iter()
-            .map(|&value| Out {
+        // `getCopyToParts` of an `i128`: its two halves, which AAPCS64 passes
+        // in a register pair, low half first (`split`).
+        let quad = EVT::integer(128);
+        let mut outs: Vec<Out> = Vec::new();
+        for &value in args {
+            let arg_vt = dag.value_type(value);
+            let pieces = if arg_vt == quad {
+                let (zero, one) = (dag.get_constant(0, EVT::I64), dag.get_constant(1, EVT::I64));
+                vec![
+                    dag.get_node(ISD::ExtractElement, EVT::I64, &[value, zero]),
+                    dag.get_node(ISD::ExtractElement, EVT::I64, &[value, one]),
+                ]
+            } else {
+                vec![value]
+            };
+            let split = pieces.len() > 1;
+            outs.extend(pieces.into_iter().map(|value| Out {
                 value,
                 ext,
                 pointer: false,
-                arg_vt: dag.value_type(value),
-                split: false,
+                arg_vt,
+                split,
                 variadic: false,
                 sret: false,
                 byval: None,
-            })
-            .collect();
-        let ins = [In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None }];
+            }));
+        }
+        let ins: Vec<In> = if ret == quad {
+            vec![
+                In { vt: EVT::I64, pointer: false, arg_vt: ret, split: true, sret: false, ext: Ext::Any, byval: None };
+                2
+            ]
+        } else {
+            vec![In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None }]
+        };
         let calling = super::call::Aarch64Calling { linux: self.linux };
         calling.accepts(dag, llrm_codegen::backend::selectiondag::target_calling::Site::Call, &outs, &ins).ok()?;
         let callee = dag.get_external_symbol(EVT::I64, name);
         let root = dag.entry_node();
         let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
+        if ret == quad {
+            // `getCopyFromParts`: the halves joined.
+            return Some(dag.get_node(ISD::BuildPair, quad, &[*values.first()?, *values.get(1)?]));
+        }
         values.first().copied()
     }
 
@@ -392,7 +403,30 @@ impl LegalizeHooks for Aarch64Lowering {
                 super::lowering::lower_xalu(dag, node)
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
+            // Declined for a type the pin's lowering does not take.
+            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => {
+                return super::lowering::lower_add_sub_carry(dag, node);
+            }
+            ISD::SetCCCarry => return super::lowering::lower_setcc_carry(dag, node),
+            // `LowerShiftParts`
+            // ([L13980](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L13980)).
+            ISD::ShlParts | ISD::SrlParts | ISD::SraParts => {
+                let (lo, hi) =
+                    llrm_codegen::backend::selectiondag::expand_funnel::expand_shift_parts(dag, node, EVT::I32);
+                let vt = dag.value_type(lo);
+                Some(dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi]))
+            }
+            // `LowerLOAD` and `LowerSTORE`: an `i128` access is the pin's own
+            // only when it is volatile or atomic
+            // (`ldxp`/`stxp`, `LowerStore128`); every other is declined, and
+            // the legalizer splits it.
+            ISD::Load | ISD::Store => match dag.node(node).data {
+                NodeData::Mem(info) if info.volatile || info.ordering.is_some() => None,
+                _ => return None,
+            },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
+            ISD::BuildVector => super::vector::lower_build_vector(dag, node),
+            ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
@@ -484,7 +518,7 @@ impl SchedInfo for Aarch64Sched {
         &self,
         id: RegId,
     ) -> Option<u16> {
-        llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters::pin_register(&Aarch64Ids::new(), id)
+        llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters::pin_register(&*super::ids::IDS, id)
     }
 
     fn num_defs(
@@ -533,6 +567,42 @@ impl SchedInfo for Aarch64Sched {
 /// (`dagisel.toml` `cpus`).
 const APPLE_M1: Aarch64Features = Aarch64Features { cssc: false, lse: true, outline_atomics: false, lse2: true };
 
+thread_local! {
+    /// The action tables built so far, by the subtarget features and
+    /// `shouldOptForSize` they were built for: the pin builds
+    /// `AArch64TargetLowering` once per subtarget, not per block (2.3 M of
+    /// rectwo's isel in 17 blocks). Two subtargets in one process get two.
+    static ACTIONS: std::cell::RefCell<Vec<(([bool; 4], bool), std::rc::Rc<TargetLowering>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The action table of `features`, built on first ask on this thread.
+fn actions(
+    features: Aarch64Features,
+    opt_for_size: bool,
+) -> std::rc::Rc<TargetLowering> {
+    let key = ([features.cssc, features.lse, features.outline_atomics, features.lse2], opt_for_size);
+    if let Some(found) =
+        ACTIONS.with(|all| all.borrow().iter().find(|(one, _)| *one == key).map(|(_, tli)| tli.clone()))
+    {
+        return found;
+    }
+    let mut tli = TargetLowering::aarch64(features);
+    tli.set_opt_for_size(opt_for_size);
+    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
+    BUILT.with(|built| built.set(built.get() + 1));
+    let tli = std::rc::Rc::new(tli);
+    ACTIONS.with(|all| all.borrow_mut().push((key, tli.clone())));
+    tli
+}
+
+/// How many action tables this thread has built: one per subtarget and size
+/// setting, however many blocks were selected.
+pub fn action_tables_built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
 pub fn select_block(
     dag: &mut SelectionDAG,
@@ -541,23 +611,27 @@ pub fn select_block(
     opt_for_size: bool,
     linux: bool,
 ) -> Result<Vec<Unit>, Refusal> {
-    let mut tli = TargetLowering::aarch64(APPLE_M1);
-    tli.set_opt_for_size(opt_for_size);
-    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
-    let legal = legalized_with(dag, &tli, &mut lowering, None, false);
+    // The scratch objects the legalizer asks for (a float's sign byte through
+    // memory) are frame objects numbered after the function's.
+    dag.first_temporary = info.next_stack_object();
+    let legal = legalized_with(dag, &actions(APPLE_M1, opt_for_size), &mut lowering, None, false);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
     if let Some(why) = lowering.custom {
         return Err(Refusal::Legalize(why));
     }
     legal?;
+    for (size, align) in std::mem::take(&mut dag.temporaries) {
+        info.new_stack_object(size, align);
+    }
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
+    super::combine::shift_amounts_mod(dag);
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
-    do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
+    do_instruction_selection_with(dag, &*super::ids::IDS, |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))

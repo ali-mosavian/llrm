@@ -17,7 +17,8 @@ define i32 @f(i32 %a) {
 ";
 
 fn llc(flags: &[&str]) -> Output {
-    let dir = std::env::temp_dir().join("llrm-llc-flags-m68k");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("f.ll"), IR).unwrap();
     Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"))

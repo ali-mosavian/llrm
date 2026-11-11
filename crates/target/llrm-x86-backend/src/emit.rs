@@ -1042,7 +1042,13 @@ impl Emitter<'_, '_> {
                 let NodeData::PhysReg(register) = self.dag.node(node.ops[1]).data else {
                     return Err(EmitError::Unsupported("a virtual register in a division sequence".to_owned()));
                 };
+                // A constant read by an earlier divide, multiply, shift count or
+                // string operation is made again for this one (SD440): the pin's
+                // `$edx = COPY %zero` per use is a `xor edx, edx` each, and one
+                // value shared by all would live across every clobber of the
+                // register.
                 let value = self.held_operand(node.ops[2])?;
+                let value = self.made_again_for_fixed_use(value);
                 self.accumulator.insert(register, value);
                 self.origins.insert(register, node.ops[2]);
                 Ok(())
@@ -3244,7 +3250,7 @@ impl Emitter<'_, '_> {
                 self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Held(target)], ..what });
                 Ok(Some(()))
             }
-            "MOV32ImmSExti8" => {
+            "MOV32ImmSExti8" | "MOV64ImmSExti8" => {
                 let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 let source = self.operand(node.ops[0])?;
@@ -4197,8 +4203,9 @@ impl Emitter<'_, '_> {
         self.exported_register(result).unwrap_or_else(|| self.fresh(width))
     }
 
-    /// DEVIATE SD440 (cites C1, C2 of the coalescer): a constant that a call or
-    /// a return needs in a fixed register, once something read it, is made
+    /// DEVIATE SD440 (cites C1, C2 of the coalescer): a constant that a call, a
+    /// return or an instruction's implicit register (`div`'s `EDX`, a shift count in
+    /// `CL`) needs in a fixed register, once something read it, is made
     /// again for that use. The pin
     /// copies it to the physical register (`$rdi = COPY %0`), which cannot join
     /// where the call clobbers the register, so `reMaterializeDef` turns the

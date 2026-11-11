@@ -25,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
+import oracle_qcport  # noqa: E402
 import stamp  # noqa: E402
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
@@ -59,16 +60,37 @@ def kind(message: str) -> str:
     return re.sub(r"\d+", "N", last)[:160]
 
 
+def cc_env() -> dict[str, str]:
+    """llrm-cc's target for QCport, with every pass checked (`LLRM_VERIFY`): its default is x86_64-linux, where QCport's Borland sources (`far`, `interrupt`) do not parse and the link step runs."""
+    return {**os.environ, "LLRM_CC_TARGET": oracle_qcport.ROW, "LLRM_VERIFY": "1"}  # the gate's setting (qcport-compile.sh): render/sc.c -O2/-O3 compile only without it
+
+
+def mirror_includes(source: Path, into: Path) -> Path:
+    """`source` as clang reads it, by tools/lowercase-includes.sh: lower-case names, no DOS end-of-file byte (the raw dos.h ends in 0x1A: dbg and mdl_ai failed on it)."""
+    subprocess.run([str(HERE / "lowercase-includes.sh"), str(source), str(into)], check=True, capture_output=True)
+    return into
+
+
+class NothingCompiled(SystemExit):
+    """Every compile failed: the sweep's premise (some module compiles) is false, so its table would say nothing about the compiler."""
+
+
+def need_some_compiled(total: int, failed: int) -> None:
+    if total and failed >= total:
+        raise NothingCompiled(f"qcport_sweep: 0 of {total} compiles succeeded: the invocation is wrong (target {oracle_qcport.ROW}), not the compiler")
+
+
 def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int = 8) -> list[tuple[str, str, str]]:
-    """(module, level, kind) of every failed compile."""
-    flags = [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    """(module, level, kind) of every failed compile; exits (NothingCompiled) when none succeeded."""
+    flags = oracle_qcport.flags(qcport, include)
+    env = cc_env()
     todo = [(s, level) for part in MODULES for s in sorted((qcport / part).glob("*.c")) for level in levels]
 
     def one(job):
         source, level = job
         try:
             with object_file() as out:
-                done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", out], 300, capture_output=True, text=True)
+                done = cpulimit.run([str(compiler), level, *flags, str(source), "-o", out], 300, capture_output=True, text=True, env=env)
         except cpulimit.MemoryLimit as error:
             return (source.stem, level, f"memory limit: {error}")
         except subprocess.TimeoutExpired:
@@ -76,7 +98,9 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
         return None if done.returncode == 0 else (source.stem, level, kind(done.stderr or done.stdout))
 
     with ThreadPoolExecutor(jobs) as pool:
-        return [r for r in pool.map(one, todo) if r]
+        failed = [r for r in pool.map(one, todo) if r]
+    need_some_compiled(len(todo), len(failed))
+    return failed
 
 
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "STALE")
@@ -130,21 +154,33 @@ def program_flags(source: Path) -> list[str]:
     return run_tests.compiler_arguments(source) if source.suffix == ".bas" and "tests/run" in source.as_posix() else []
 
 
+def borland_line(include: Path) -> list[str]:
+    """llrm-cc's line for Borland-dialect C (the fixtures, QCport): the m16 row comes from `cc_env`, `-m16` names no target to llrm-cc."""
+    return ["-c", "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", str(include)]
+
+
 def sweep_extra(bins: Path, jobs: int = 8, root: Path = ROOT, include: Path | None = None) -> list[tuple[str, str, str]]:
-    """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on."""
+    """(program, 'machine level', kind) of every failed compile of `extra_jobs`, oracles on; exits (NothingCompiled) when no C job compiled."""
     env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in ORACLES}}
+    cc_environment = {**cc_env(), **{k: v for k, v in env.items() if k.startswith("LLRM_CHECK_")}}
 
     def one(job):
         tool, source, machine, level = job
-        headers = ["-I", str(include)] if include and source.suffix == ".c" else []
         with object_file() as out:
-            done = subprocess.run([str(bins / tool), str(source), *program_flags(source), *headers, level, machine, "-o", out], capture_output=True, text=True, env=env)
+            if tool == "llrm-cc":
+                done = subprocess.run([str(bins / tool), level, *borland_line(include or Path("/nonexistent")), str(source), "-o", out], capture_output=True, text=True, env=cc_environment)
+            else:
+                done = subprocess.run([str(bins / tool), str(source), *program_flags(source), level, machine, "-o", out], capture_output=True, text=True, env=env)
         if done.returncode == 0 or (machine == "-m32" and BY_DESIGN.search(done.stderr + done.stdout)):
             return None
         return (source.name, f"{machine} {level}", kind(done.stderr or done.stdout))
 
+    todo = extra_jobs(root)
     with ThreadPoolExecutor(jobs) as pool:
-        return [r for r in pool.map(one, extra_jobs(root)) if r]
+        results = list(pool.map(one, todo))
+    c_total = [i for i, job in enumerate(todo) if job[0] == "llrm-cc"]
+    need_some_compiled(len(c_total), sum(results[i] is not None for i in c_total))
+    return [r for r in results if r]
 
 
 def grouped(failures: list[tuple[str, str, str]]) -> dict[str, list[tuple[str, str]]]:
@@ -181,7 +217,7 @@ def first_bad(commits: list[str], is_bad) -> str:
     return commits[hi]
 
 
-def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
+def bisect_one(good: str, repro: list[str], build, env: dict[str, str] | None = None) -> tuple[str, str]:
     """(sha, subject) of the first first-parent squash after `good` on which `repro` (a compile of the failing module) fails; `build(sha)` returns the llrm-cc path."""
     shas = subprocess.run(["git", "log", "--first-parent", "--reverse", "--format=%H", f"{good}..origin/{BRANCH}"], cwd=ROOT, capture_output=True, text=True).stdout.split()
 
@@ -190,7 +226,7 @@ def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
             binary = build(sha)
         except subprocess.CalledProcessError:
             return None
-        return subprocess.run([str(binary), *repro], capture_output=True).returncode != 0
+        return subprocess.run([str(binary), *repro], capture_output=True, env=env).returncode != 0
 
     found = first_bad(shas, bad)
     subject = subprocess.run(["git", "log", "-1", "--format=%s", found], cwd=ROOT, capture_output=True, text=True).stdout.strip()
@@ -230,11 +266,14 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "8")))
     args = parser.parse_args()
     qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
-    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    include = Path(os.environ.get("LLRM_BORLAND_INC") or os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()  # the mirror of tools/lowercase-includes.sh: the raw headers end in 0x1A, which clang reads as a stray token (dbg, mdl_ai)
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-cc"
     # The binary names what was swept: origin/release/next moves during a run, and a report must not name a sha it did not test.
     head, dirty = stamp.read(compiler)
-    failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
+    with tempfile.TemporaryDirectory(prefix="sweep-inc-") as mirror:
+        if not os.environ.get("LLRM_BORLAND_INC"):  # that variable already names a mirror
+            include = mirror_includes(include, Path(mirror) / "inc")
+        failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
     groups = grouped(failures)
     known = tomllib.loads(KNOWN.read_text()).get("known", []) if KNOWN.exists() else []
     fresh = new_kinds(groups, known)
@@ -248,8 +287,8 @@ def main() -> int:
         if args.bisect:
             module, level = where[0]
             src = next((qcport / p / f"{module}.c" for p in MODULES if (qcport / p / f"{module}.c").exists()), None)
-            flags = [level] + [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include), str(src), "-o", str(Path(tempfile.gettempdir()) / "sweep-bisect.obj")]
-            first = bisect_one(args.bisect, flags, worktree_build)
+            flags = [level, *oracle_qcport.flags(qcport, include), str(src), "-o", str(Path(tempfile.gettempdir()) / "sweep-bisect.obj")]
+            first = bisect_one(args.bisect, flags, worktree_build, cc_env())
             print(f"  first bad squash of '{why[:60]}': {first[0][:9]} {first[1]}")
         if args.issue:
             title, body = issue_text(why, where, head, first)

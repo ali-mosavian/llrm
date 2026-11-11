@@ -58,6 +58,7 @@ const FOLDS: &[Fold] = &[
     disjoint_mul,
     not_or_decrement,
     mask_merge,
+    low_bit_mask_through_bit,
     fold_bitwise_logic_with_intrinsics,
 ];
 
@@ -259,6 +260,38 @@ fn mask_merge(
     None
 }
 
+/// `(1 << X) | ((1 << X) + -1)`, the mask up to and including bit `X`, is
+/// `-1 >>u (bitwidth - 1 - X)` (:4681).
+fn low_bit_mask_through_bit(
+    c: &mut Combiner,
+    inst: InstId,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let x = {
+        let q = query(c, Some(inst));
+        let shl_of_one = |v: Operand| binop(&q, v, BinaryOp::Shl).filter(|&(one, _, _)| pattern::one(&q, one));
+        [(op0, op1), (op1, op0)]
+            .into_iter()
+            .find_map(
+                |(add, shl)| {
+                    let (sum, minus_one, _) = binop(&q, add, BinaryOp::Add)?;
+                    let (_, x, _) = shl_of_one(sum)?;
+                    let (_, y, _) = shl_of_one(shl)?;
+                    (pattern::all_ones(&q, minus_one) && x == y).then_some(x)
+                },
+            )?
+    };
+    if !has_one_use(c, op0) && !has_one_use(c, op1) {
+        return None;
+    }
+    let ty = c.type_of(x);
+    let top = c.int(ty, u128::from(width(c, x) - 1));
+    let distance = c.create_binop(inst, BinaryOp::Sub, top, x, Flags::default());
+    let ones = c.all_ones(ty);
+    Some(c.replace_with_binop(inst, BinaryOp::LShr, ones, distance, Flags::default()))
+}
+
 /// `InstCombinerImpl::visitOr` (:4196).
 pub fn visit_or(
     c: &mut Combiner,
@@ -286,6 +319,9 @@ pub fn visit_or(
     // foldIntegerPackFromVector, foldOrOfInversions, and the i1 select folds.
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
+    }
+    if let Some(found) = crate::combine_and::fold_idempotent_recurrence(c, inst, BinaryOp::Or) {
+        return found;
     }
     let (op0, op1, _) = parts(c, inst);
     if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {

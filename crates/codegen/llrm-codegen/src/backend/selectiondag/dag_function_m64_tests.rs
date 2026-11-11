@@ -180,6 +180,40 @@ entry:
     }
 }
 
+/// Three unsigned divides read one zero for their high half (`v12 := mov v11`
+/// shared), so the zero lived across all three `EDX` clobbers and greedy gave
+/// it a callee-saved register: recmany m64 -Os, `push rbp` + `xor ebp, ebp` +
+/// 3 `mov edx, ebp`, 10 B where the pin's `$rdx = COPY %22` x3, each made again
+/// as `xor edx, edx`, is 6 B. Each divide reads a zero of its own.
+#[test]
+fn each_m64_divide_reads_its_own_zero_high_half() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %a, i64 %b, i64 %c, i64 %x, i64 %y, i64 %z) {
+entry:
+  %p = udiv i64 %a, %x
+  %q = udiv i64 %b, %y
+  %r = udiv i64 %c, %z
+  %s = add i64 %p, %q
+  %t = add i64 %s, %r
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let highs: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref().filter(|w| w.name.as_deref() == Some("div")))
+        .map(|w| w.sources[0].clone())
+        .collect();
+    assert_eq!(highs.len(), 3, "the premise: three divides: {highs:?}");
+    for (at, high) in highs.iter().enumerate() {
+        assert!(!highs[..at].contains(high), "divide {at} reads a zero an earlier one read: {highs:?}");
+    }
+}
+
 /// A signed divide by a constant at m64 stopped at `CannotSelect("SMulLoHi")`
 /// (the multiply by the magic number): `MUL64r`/`IMUL64r` had no case.
 #[test]
@@ -1407,4 +1441,25 @@ entry:
     let names: Vec<_> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
     assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
+}
+
+/// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
+/// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
+/// compiled to `add; adc` and `xor eax, eax` (u128 max + 1 reported no overflow).
+#[test]
+fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)
+define i1 @f(i128 %a, i128 %b) {
+  %r = call {i128, i1} @llvm.uadd.with.overflow.i128(i128 %a, i128 %b)
+  %o = extractvalue {i128, i1} %r, 1
+  ret i1 %o
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "adc"), "the high halves are added with the carry of the low: {names:?}");
 }

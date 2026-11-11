@@ -105,6 +105,8 @@ pub enum NodeData {
     Src(u32),
     /// `RegisterMaskSDNode`: an index into [`SelectionDAG::register_masks`].
     RegMask(u32),
+    /// `ShuffleVectorSDNode`: an index into [`SelectionDAG::shuffle_masks`].
+    Shuffle(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -252,11 +254,14 @@ pub struct DagConfig {
     /// own where one is installed.
     pub nodes: super::builder::LoweringNodes,
     pub boolean_contents: BooleanContents,
-    /// A boolean sign-extends cheaper than it zero-extends (z80: the carry flag is `sbc a, a`, a zero extension is a
-    /// branch or a shift), so `add (sext i1 c), x` stays an add where the pin makes it `sub x, (zext i1 c)`
-    /// (`visitADDLikeCommutative`, which x86 prices with `sbb`). DEVIATE Z80-SEXT-BOOL: a target fact the pin has no
-    /// hook for. Owner z80. Exit 2026-12-15.
-    pub sext_bool_add_preferred: bool,
+    /// A boolean sign-extends cheaper than it zero-extends (z80: the carry flag
+    /// is `sbc a, a`, a zero extension is a branch or a shift), so `add
+    /// (sext i1 c), x` stays an add where the pin makes it `sub x, (zext i1 c)`
+    /// (`visitADDLikeCommutative`, which x86 prices with `sbb`), for types up
+    /// to this many bits; 0 is the pin. DEVIATE Z80-SEXT-BOOL /
+    /// 6502-SEXT-BOOL-ADD: a target fact the pin has no hook for. Exit
+    /// 2026-12-15.
+    pub sext_bool_add_max_bits: u32,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
     /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
@@ -272,6 +277,10 @@ pub struct DagConfig {
     /// definitions, not declarations) although `dso_local_symbols` is off.
     /// Set for the 64-bit PIE only.
     pub defined_dso_local: bool,
+    /// The 128-bit integer vector types have a register class (m64 with SSE2):
+    /// the builder lowers a vector IR type only then; elsewhere it is
+    /// refused as before.
+    pub vectors: bool,
     /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
     /// index in its address at 64 bits, as an absolute `disp32`, where
     /// position-independent code reaches it from `%rip` alone.
@@ -347,11 +356,12 @@ impl Default for DagConfig {
         DagConfig {
             nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
-            sext_bool_add_preferred: false,
+            sext_bool_add_max_bits: 0,
             offset_folding: false,
             global_addresses_constant: false,
             dso_local_symbols: false,
             defined_dso_local: false,
+            vectors: false,
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
@@ -482,6 +492,9 @@ pub struct SelectionDAG {
     /// The registers each `RegisterMask` node says its call clobbers, as the
     /// pin's register numbers (`getNodeRegMask`); entry 0 is the empty list.
     pub register_masks: Vec<Vec<u16>>,
+    /// The masks of the `VectorShuffle` nodes (`ShuffleVectorSDNode::getMask`),
+    /// each once.
+    pub shuffle_masks: Vec<Vec<i32>>,
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
@@ -589,6 +602,7 @@ impl SelectionDAG {
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             register_masks: vec![Vec::new()],
+            shuffle_masks: Vec::new(),
             first_temporary: 0,
             frame_alignments: Vec::new(),
             frame_object_bytes: Vec::new(),
@@ -1291,6 +1305,103 @@ impl SelectionDAG {
         self.intern(ISD::Poison, &[vt], &[], SDNodeFlags::default(), NodeData::None)
     }
 
+    /// `getBuildVector`: `ops` are the lanes.
+    pub fn get_build_vector(
+        &mut self,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> SDValue {
+        debug_assert!(
+            vt.is_vector() && ops.len() as u32 == vt.lanes(),
+            "a build_vector of {vt:?} from {} lanes",
+            ops.len()
+        );
+        self.get_node(ISD::BuildVector, vt, ops)
+    }
+
+    /// `getSplatBuildVector`.
+    pub fn get_splat_build_vector(
+        &mut self,
+        vt: EVT,
+        op: SDValue,
+    ) -> SDValue {
+        let lanes = vec![op; vt.lanes() as usize];
+        self.get_build_vector(vt, &lanes)
+    }
+
+    /// `ShuffleVectorSDNode::getMask`.
+    pub fn shuffle_mask(
+        &self,
+        node: SDValue,
+    ) -> &[i32] {
+        let NodeData::Shuffle(at) = self.node(node).data else { panic!("a shuffle mask of a {:?}", self.opcode(node)) };
+        &self.shuffle_masks[at as usize]
+    }
+
+    /// `getVectorShuffle`
+    /// ([L2187](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2187)),
+    /// as far as the canonical forms: both inputs undefined is undefined;
+    /// `shuffle v, v` and `shuffle undef, v` become `shuffle v, undef`; a lane
+    /// that picks an undefined input is undefined; the identity is its input.
+    pub fn get_vector_shuffle(
+        &mut self,
+        vt: EVT,
+        mut n1: SDValue,
+        mut n2: SDValue,
+        mask: &[i32],
+    ) -> SDValue {
+        let lanes = vt.lanes() as i32;
+        assert_eq!(mask.len() as i32, lanes, "a shuffle mask of the vector's lanes");
+        let mut mask = mask.to_vec();
+        if self.is_undef(n1) && self.is_undef(n2) {
+            return self.get_undef(vt);
+        }
+        // "Canonicalize shuffle v, v -> v, undef"
+        if n1 == n2 {
+            n2 = self.get_undef(vt);
+            for lane in &mut mask {
+                if *lane >= lanes {
+                    *lane -= lanes;
+                }
+            }
+        }
+        // "Canonicalize shuffle undef, v -> v, undef. Commute the shuffle
+        // mask."
+        if self.is_undef(n1) {
+            std::mem::swap(&mut n1, &mut n2);
+            for lane in &mut mask {
+                if *lane >= 0 {
+                    *lane = if *lane < lanes { *lane + lanes } else { *lane - lanes };
+                }
+            }
+        }
+        // "If shuffling a splat..." and the lanes that read an undefined input.
+        if self.is_undef(n2) {
+            for lane in &mut mask {
+                if *lane >= lanes {
+                    *lane = -1;
+                }
+            }
+        }
+        // "If the shuffle only uses the first vector and is the identity,
+        // return it."
+        if self.is_undef(n2) && mask.iter().enumerate().all(|(at, &lane)| lane < 0 || lane == at as i32) {
+            return n1;
+        }
+        // A shuffle of nothing but undefined lanes.
+        if mask.iter().all(|&lane| lane < 0) {
+            return self.get_undef(vt);
+        }
+        let index = match self.shuffle_masks.iter().position(|one| *one == mask) {
+            Some(at) => at,
+            None => {
+                self.shuffle_masks.push(mask);
+                self.shuffle_masks.len() - 1
+            }
+        };
+        self.intern(ISD::VectorShuffle, &[vt], &[n1, n2], SDNodeFlags::default(), NodeData::Shuffle(index as u32))
+    }
+
     pub fn get_constant(
         &mut self,
         bits: u128,
@@ -1307,6 +1418,12 @@ impl SelectionDAG {
         target: bool,
         opaque: bool,
     ) -> SDValue {
+        if vt.is_vector() {
+            // `getConstant` of a vector type: the element's constant in every
+            // lane.
+            let element = self.get_constant_with(bits, vt.element(), target, opaque);
+            return self.get_splat_build_vector(vt, element);
+        }
         assert!(vt.is_integer(), "integer constant of {vt:?}");
         let bits = bits & super::fold::mask(vt.size_in_bits());
         let opcode = if target { ISD::TargetConstant } else { ISD::Constant };

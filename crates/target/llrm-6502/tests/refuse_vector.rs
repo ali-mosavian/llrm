@@ -8,12 +8,12 @@ use std::process::Command;
 /// type with no registers, exit 1.
 #[test]
 fn a_vector_value_is_refused_not_a_panic() {
-    let dir = std::env::temp_dir().join("llrm-refuse-vector-6502");
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\ntarget triple = \"mos-unknown-none\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\ntarget triple = \"mos-unknown-none\"\n\
          define <4 x i32> @g(<4 x i32> %a, <4 x i32> %b) {\n  %r = add <4 x i32> %a, %b\n  ret <4 x i32> %r\n}\n",
     )
     .unwrap();

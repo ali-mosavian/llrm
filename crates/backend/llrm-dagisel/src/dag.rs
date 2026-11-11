@@ -268,6 +268,20 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `ISD::isBuildVectorAllZeros` / `isBuildVectorAllOnes`: a `BUILD_VECTOR`
+    /// whose defined lanes are all zero (all ones), at least one defined.
+    fn is_build_vector_all(
+        &self,
+        _value: SDValue,
+        _ones: bool,
+    ) -> bool {
+        false
+    }
+    /// `SDNodeFlags::hasExact`.
+    fn has_exact_flag(
+        &self,
+        node: u32,
+    ) -> bool;
     /// `AtomicSDNode::getMergedOrdering`, as LLVM's `AtomicOrdering` number
     /// (monotonic 2, acquire 4, release 5, acq_rel 6, seq_cst 7); none for a
     /// node that is not atomic.
@@ -444,6 +458,15 @@ pub trait Hooks<D: Dag> {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool;
+    /// How many nodes used `node` when selection began, if the target keeps
+    /// that (a user selected since no longer names it, so the live count
+    /// depends on the order selection visits them).
+    fn uses_at_selection_start(
+        &self,
+        _node: u32,
+    ) -> Option<usize> {
+        None
+    }
     /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the
     /// 8-bit code of an `fmov` immediate, `None` if there is none. A target
     /// without the form never has one.
@@ -507,6 +530,10 @@ pub trait PatternContext {
     fn has_min_size(&self) -> bool;
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     fn has_frame_pointer(&self) -> bool;
+    /// `Subtarget->isNeonAvailable()`: false unless the target takes vectors.
+    fn neon_available(&self) -> bool {
+        false
+    }
     /// `Subtarget->isLegalToCallImmediateAddr()`.
     fn is_legal_to_call_immediate_addr(&self) -> bool;
     /// `Subtarget->hasX()` for a target whose features differ per function.

@@ -185,12 +185,32 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether a caller with a `byval` parameter makes no tail call (the pin's `isEligibleForTailCallOptimization`:
+    /// the parameter is a pointer into the argument area a tail call would reuse).
+    fn byval_parameter_blocks_tail_call(&self) -> bool {
+        false
+    }
+
     /// Whether the hook places a call in calling convention `cc` (LLVM's
     /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
     /// as the pin's `CCAssignFnForCall` rejects what it has no table for.
     fn supports_convention(
         &self,
         _cc: u32,
+    ) -> bool {
+        true
+    }
+
+    /// Whether a direct call of an `llvm.*` function that no intrinsic, atomic
+    /// or target hook lowered is emitted as a call to a symbol of that name
+    /// (a runtime routine of the target's own). A target with none says no and
+    /// the call is refused by name: the symbol would fail only at link, or
+    /// bind to nothing meant. The same refusal, with the same wording, as
+    /// `BuilderTarget::refuse_unknown_intrinsics` (#8452) for a flow without
+    /// this hook; 6502 converges on that field with the shared flow.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
     ) -> bool {
         true
     }

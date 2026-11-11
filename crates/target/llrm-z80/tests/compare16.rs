@@ -6,11 +6,14 @@ fn assembly(
     name: &str,
     ir: &str,
 ) -> String {
-    let dir = std::env::temp_dir().join(format!("llrm-compare16-z80-{name}"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
-    std::fs::write(&source, format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n{ir}"))
-        .unwrap();
+    std::fs::write(
+        &source,
+        format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n{ir}"),
+    )
+    .unwrap();
     let out = dir.join("g.s");
     let done = Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
         .args(["-S", "-Os", "-o", out.to_str().unwrap(), source.to_str().unwrap()])
@@ -20,8 +23,8 @@ fn assembly(
     std::fs::read_to_string(out).unwrap()
 }
 
-/// `a != b` on two words was `ld a, l; sub a, e; jr nz; ld a, h; sub a, d` (6 B):
-/// `or a, a; sbc hl, de` is 3.
+/// `a != b` on two words was `ld a, l; sub a, e; jr nz; ld a, h; sub a, d` (6
+/// B): `or a, a; sbc hl, de` is 3.
 #[test]
 fn two_words_are_compared_for_equality_with_sbc_hl() {
     let text = assembly(
@@ -34,8 +37,9 @@ fn two_words_are_compared_for_equality_with_sbc_hl() {
     assert!(text.contains("sbc hl, de") && !text.contains("sub a, e"), "{text}");
 }
 
-/// The biased copy a signed compare builds (`ld c, e; ld a, d; xor a, #128; ld b, a`) was read by nothing once the
-/// compare tested the high byte alone, and `bc` was rebuilt below (`ld c, e; ld b, d`): two dead loads in
+/// The biased copy a signed compare builds (`ld c, e; ld a, d; xor a, #128; ld
+/// b, a`) was read by nothing once the compare tested the high byte alone, and
+/// `bc` was rebuilt below (`ld c, e; ld b, d`): two dead loads in
 /// switch_peeled_table's loop at -Os.
 #[test]
 fn a_biased_copy_the_compare_no_longer_reads_is_not_loaded() {
@@ -45,8 +49,9 @@ fn a_biased_copy_the_compare_no_longer_reads_is_not_loaded() {
     assert!(!out.contains("xor a, #128\n\tld b, a"), "{out}");
 }
 
-/// `x < 256` on a signed word compared the low byte against 0 first (`ld a, c; sub a, #0; ld a, b; sbc a, #129`):
-/// subtracting 0 changes nothing and leaves the carry clear, so the high bytes alone are `ld a, b; sub a, #129`
+/// `x < 256` on a signed word compared the low byte against 0 first (`ld a, c;
+/// sub a, #0; ld a, b; sbc a, #129`): subtracting 0 changes nothing and leaves
+/// the carry clear, so the high bytes alone are `ld a, b; sub a, #129`
 /// (switch_peeled_table's loop, 3 B and 7 T per test).
 #[test]
 fn a_word_compared_with_a_constant_of_a_zero_low_byte_tests_the_high_byte_only() {
@@ -59,4 +64,28 @@ fn a_word_compared_with_a_constant_of_a_zero_low_byte_tests_the_high_byte_only()
     );
     assert!(!text.contains("sub a, #0"), "{text}");
     assert!(text.contains("sub a, #129") || text.contains("sub a, #1\n"), "{text}");
+}
+
+/// A word compared for equality with a constant that has a byte 1 or 255
+/// subtracted that byte (`sub a, #1`, 2 B and 7 T) where only the zero flag is
+/// read: sibling_call_callees' `g` was 1 B over SDCC's `dec a`.
+#[test]
+fn an_equality_test_steps_a_byte_by_one_instead_of_subtracting_it() {
+    let one = |constant: &str| {
+        assembly(
+            "step",
+            &format!(
+                "declare void @f()\n\
+                 define void @g(i16 %a) {{\n  %c = icmp eq i16 %a, {constant}\n  br i1 %c, label %t, label %e\n\
+                 t:\n  call void @f()\n  ret void\n\
+                 e:\n  ret void\n}}\n"
+            ),
+        )
+    };
+    let low = one("1");
+    assert!(low.contains("dec a") && !low.contains("sub a, #1"), "{low}");
+    let high = one("256");
+    assert!(high.contains("dec a") && !high.contains("sub a, #1"), "{high}");
+    let ones = one("-1");
+    assert!(ones.contains("inc a") && !ones.contains("sub a, #255"), "{ones}");
 }

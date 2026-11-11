@@ -88,8 +88,9 @@ pub struct BuilderTarget {
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
     pub preselection_blocks: Option<&'static str>,
-    /// A call of an `llvm.` name nothing lowered is refused by name; where unset it stays a call of that
-    /// symbol (a target that names its own intrinsics by call).
+    /// A call of an `llvm.` name nothing lowered is refused by name; where
+    /// unset it stays a call of that symbol (a target that names its own
+    /// intrinsics by call).
     pub refuse_unknown_intrinsics: bool,
     /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
     pub variable_shift_legal: bool,
@@ -114,6 +115,9 @@ pub struct BuilderTarget {
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
+    /// The largest `alloca` alignment the target keeps; none: it realigns
+    /// the stack. A larger one is a named refusal, never a misaligned object.
+    pub max_alloca_align: Option<u64>,
     /// The largest alignment the platform ABI gives a variadic argument's
     /// stack slot; `VAARG` rounds its list pointer to the type's ABI alignment
     /// capped at this. None: the type's own, as the pin's `expandVAArg` does.
@@ -143,6 +147,9 @@ pub struct BuilderTarget {
     /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
     /// `hasOptSize`): a jump table needs 40% density.
     pub opt_size: bool,
+    /// Bytes decide over clocks (`Profile::bytes_strict`: -O1, -Os): a
+    /// deviation that trades bytes for clocks at speed stays off.
+    pub bytes_strict: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
     /// The store limits a memset, memcpy or memmove is inlined for: the
@@ -374,6 +381,14 @@ impl BuilderTarget {
     /// beat the multiply-high sequence's.
     /// This target with a signed divide by a negative constant made from the
     /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_pow2_stays(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_pow2_stays = on;
+        self
+    }
+
     pub fn with_sdiv_by_magnitude(
         mut self,
         on: bool,
@@ -387,6 +402,15 @@ impl BuilderTarget {
         prices: Option<super::dag::DivPrices>,
     ) -> BuilderTarget {
         self.dag.div_prices = prices;
+        self
+    }
+
+    /// This target with `getMinimumJumpTableDensity` stated at every level.
+    pub fn with_min_jump_table_density(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.min_jump_table_density = percent;
         self
     }
 
@@ -405,6 +429,15 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.opt_size = on;
+        self
+    }
+
+    /// This target's bytes decide over clocks (-O1, -Os) or not.
+    pub fn with_bytes_strict(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.bytes_strict = on;
         self
     }
 
@@ -485,10 +518,12 @@ impl BuilderTarget {
             soft_float: false,
             libcalls: None,
             stack_align: None,
+            max_alloca_align: None,
             va_arg_align_cap: None,
             float_store: false,
             jump_tables: true,
             opt_size: false,
+            bytes_strict: false,
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
@@ -908,6 +943,16 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
                 llrm_mir::types::FloatKind::F128 => MVT::F128,
             })),
+            Type::Vector { element, count } if self.target.dag.vectors => {
+                // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
+                match self.module.context.types.get(*element) {
+                    Type::Int(bits) => MVT::integer(*bits)
+                        .and_then(|lane| MVT::vector(lane, *count))
+                        .map(EVT::Simple)
+                        .ok_or(Refused("vector with no register class")),
+                    _ => Err(Refused("vector with no register class")),
+                }
+            }
             _ => Err(Refused("aggregate or vector value")),
         }
     }
@@ -918,7 +963,7 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<EVT, Refused> {
-        if vt.is_floating_point() || vt == MVT::Far.into() {
+        if vt.is_floating_point() || vt == MVT::Far.into() || vt.is_vector() {
             return Ok(vt);
         }
         let bits = vt.size_in_bits();
@@ -1159,6 +1204,7 @@ impl Builder<'_> {
             return self.lower_arguments_with(calling, &outside);
         }
         let mut fixed = 0;
+        let mut elided_chains: Vec<SDValue> = Vec::new();
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let declared = self.type_of(self.function.value(arg).ty)?;
             // No FPU: a float in registers arrives as the integer of its width.
@@ -1232,7 +1278,14 @@ impl Builder<'_> {
                         // it is byval
                         // (`isImmutableObjectIndex`): the load is
                         // `isDereferenceableInvariantLoad`.
-                        self.dag.invariant_loads.insert(load.node);
+                        if self.info.elided_args.contains(&arg) {
+                            // `tryToElideArgumentCopy`: the slot is the local
+                            // now, written
+                            // by the stores after this load, which orders them
+                            elided_chains.push(SDValue { node: load.node, res: 1 });
+                        } else {
+                            self.dag.invariant_loads.insert(load.node);
+                        }
                         pieces.push(load);
                     }
                 }
@@ -1297,6 +1350,14 @@ impl Builder<'_> {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
             }
+        }
+        if !elided_chains.is_empty() {
+            // `Chains.push_back(NewRoot)`: a TokenFactor of the loads and the
+            // root
+            let root = self.dag.get_root();
+            elided_chains.push(root);
+            let joined = self.dag.get_node(ISD::TokenFactor, EVT::OTHER, &elided_chains);
+            self.dag.set_root(joined);
         }
         // `LowerFormalArguments`: the first variadic argument is the next
         // fixed object, which `va_start` stores the address of
@@ -1484,6 +1545,9 @@ impl Builder<'_> {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
+            // `llrm.vararg.address` (DEVIATE VASTART-PROMOTE) names the same
+            // first variadic argument
+            self.info.vararg_frame_index = Some(index);
         }
         Ok(())
     }
@@ -1911,6 +1975,12 @@ impl Builder<'_> {
             && !calling.supports_convention(info.calling_convention)
         {
             return Err(Refused("a calling convention the target's hook does not place"));
+        }
+        if let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+            && self.calling().is_some_and(|calling| !calling.calls_unlowered_intrinsic(&name))
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
         }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
@@ -2371,6 +2441,13 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
+        // This call's own state, taken before the byval copies below: a copy
+        // that is a library call is itself a `lower_call_with` and
+        // would otherwise take it (a variadic call's unnamed-argument state
+        // sent the `memcpy` count and source to the stack, and left the
+        // call it was for a fixed one).
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2402,8 +2479,6 @@ impl Builder<'_> {
             *value = copy_to;
         }
         let mut outs = Vec::new();
-        let variadic = std::mem::take(&mut self.variadic_call);
-        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
@@ -2499,6 +2574,8 @@ impl Builder<'_> {
         // `IsTailCall`: the call in tail position, if the target takes it, ends
         // the block
         if let Some(tail) = self.tail_candidate.take()
+            && !(calling.byval_parameter_blocks_tail_call()
+                && self.function.parameter_attrs.iter().any(|attrs| self.byval_of(attrs).is_some()))
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
             self.tail_calls.push(tail);
@@ -3195,6 +3272,42 @@ impl Builder<'_> {
         }
     }
 
+    /// `getValueImpl` of a `ConstantVector`, `ConstantDataVector` or
+    /// `ConstantAggregateZero`: a `BUILD_VECTOR` of its lanes, each made as the
+    /// scalar constant it is. `undef` and `poison` are the vector's own.
+    fn vector_constant(
+        &mut self,
+        vt: EVT,
+        id: ConstantId,
+    ) -> Result<SDValue, Refused> {
+        let lane_vt = vt.element();
+        match self.module.context.get(id).kind.clone() {
+            ConstantKind::Undef => Ok(self.dag.get_undef(vt)),
+            ConstantKind::Poison => Ok(self.dag.get_poison(vt)),
+            ConstantKind::Null | ConstantKind::Zero => {
+                let zero = self.dag.get_constant(0, lane_vt);
+                Ok(self.dag.get_splat_build_vector(vt, zero))
+            }
+            ConstantKind::Aggregate(lanes) => {
+                if lanes.len() as u32 != vt.lanes() {
+                    return Err(Refused("a vector constant of the wrong lane count"));
+                }
+                let ops = lanes
+                    .iter()
+                    .map(|lane| match self.module.context.get(*lane).kind {
+                        ConstantKind::Int(bits) => Ok(self.dag.get_constant(bits, lane_vt)),
+                        ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, lane_vt)),
+                        ConstantKind::Undef => Ok(self.dag.get_undef(lane_vt)),
+                        ConstantKind::Poison => Ok(self.dag.get_poison(lane_vt)),
+                        _ => Err(Refused("a vector constant lane that is not an integer")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.dag.get_build_vector(vt, &ops))
+            }
+            _ => Err(Refused("a vector constant that is not a list of integers")),
+        }
+    }
+
     fn constant_value(
         &mut self,
         id: ConstantId,
@@ -3204,6 +3317,9 @@ impl Builder<'_> {
             return self.aggregate_constant(constant.ty, id);
         }
         let vt = self.type_of(constant.ty)?;
+        if vt.is_vector() {
+            return self.vector_constant(vt, id);
+        }
         match &constant.kind {
             // A far constant is its offset and its selector (a null pointer is
             // two zero words): `get_constant` of the pair's type panicked
@@ -3425,7 +3541,10 @@ impl Builder<'_> {
         }
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
         self.dag.inst_order.push((inst, self.dag.cur_order));
-        if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
+        if self.prelowered.contains(&inst)
+            || self.info.prezeroed.contains(&inst)
+            || self.info.elided_stores.contains(&inst)
+        {
             // a compare settled with its call's flags is read in other blocks
             // through its register all the same
             if self.prelowered.contains(&inst)
@@ -3447,6 +3566,8 @@ impl Builder<'_> {
             Opcode::FCmp(predicate) => self.visit_fcmp(&instruction, *predicate)?,
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
+            Opcode::InsertElement => self.visit_insert_element(&instruction)?,
+            Opcode::ShuffleVector(mask) => self.visit_shuffle_vector(&instruction, mask)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::VaArg => self.visit_va_arg(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
@@ -3455,9 +3576,12 @@ impl Builder<'_> {
             Opcode::Store { align, volatile } => self.visit_store(inst, &instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
-            Opcode::Alloca { .. }
-                if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
-            Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
+            Opcode::Alloca { allocated, align, .. } => {
+                self.refuse_unkeepable_alignment(*allocated, *align)?;
+                if !instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) {
+                    self.visit_alloca(&instruction, *allocated, *align)?
+                }
+            }
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
@@ -3881,6 +4005,24 @@ impl Builder<'_> {
     /// `visitAlloca` for a dynamic one: the size scaled by the element size,
     /// rounded up to the stack alignment, and `DYNAMIC_STACKALLOC` on the
     /// root.
+    /// A target that cannot realign its stack (`max_alloca_align`) refuses an
+    /// object aligned past what it keeps: the object would land misaligned
+    /// and `ptr & (align - 1)` fold to zero. The pin realigns (`hasFP`).
+    fn refuse_unkeepable_alignment(
+        &self,
+        allocated: TypeId,
+        align: Option<u64>,
+    ) -> Result<(), Refused> {
+        let wanted = self.layout.pref_align(&self.module.context.types, allocated).max(align.unwrap_or(1));
+        match self.target.max_alloca_align {
+            Some(kept) if wanted > kept => Err(Refused(Box::leak(
+                format!("an object aligned to {wanted} needs stack realignment, not supported yet (keeps {kept})")
+                    .into_boxed_str(),
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     fn visit_alloca(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -3924,6 +4066,43 @@ impl Builder<'_> {
         let vt = self.dag.value_type(value);
         let node = self.dag.get_node(ISD::Freeze, vt, &[value]);
         self.set_value(instruction.result.expect("a freeze has a result"), node);
+        Ok(())
+    }
+
+    /// `visitInsertElement`: `INSERT_VECTOR_ELT` of the vector, the element and
+    /// the index, which is a constant here (a variable index is refused).
+    fn visit_insert_element(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let vector = self.get_value(instruction.operands[0])?;
+        let element = self.get_value(instruction.operands[1])?;
+        let index = self.get_value(instruction.operands[2])?;
+        let Some(at) = self.dag.constant(index) else { return Err(Refused("an insertelement at a variable index")) };
+        // `getVectorIdxTy`: the pointer-sized integer.
+        let index = self.dag.get_constant(at, self.target.dag.pointer);
+        let vt = self.dag.value_type(vector);
+        let node = self.dag.get_node(ISD::InsertVectorElt, vt, &[vector, element, index]);
+        self.set_value(instruction.result.expect("an insertelement has a result"), node);
+        Ok(())
+    }
+
+    /// `visitShuffleVector`: `getVectorShuffle` of the two inputs with the
+    /// IR's mask (a lane of `-1` is undefined).
+    fn visit_shuffle_vector(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        mask: &[i32],
+    ) -> Result<(), Refused> {
+        let first = self.get_value(instruction.operands[0])?;
+        let second = self.get_value(instruction.operands[1])?;
+        let result = self.type_of(instruction.ty)?;
+        let input = self.dag.value_type(first);
+        if result != input {
+            return Err(Refused("a shufflevector that changes the lane count"));
+        }
+        let node = self.dag.get_vector_shuffle(result, first, second, mask);
+        self.set_value(instruction.result.expect("a shufflevector has a result"), node);
         Ok(())
     }
 
@@ -3986,7 +4165,10 @@ impl Builder<'_> {
         inst: llrm_mir::module::InstId,
         pointer: Operand,
     ) -> MemInfo {
-        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+        // A global is recorded too: the pin's pointer info always carries `V`,
+        // and alias analysis needs it to compare a global with a pointer
+        // computed from another.
+        if !self.dag.config().use_aa || !matches!(info.base, MemBase::Unknown | MemBase::Global(_)) {
             return info;
         }
         let location = super::dag::MemLocation {

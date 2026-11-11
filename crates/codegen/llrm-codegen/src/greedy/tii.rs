@@ -192,6 +192,16 @@ pub trait TargetInstrInfo {
         Vec::new()
     }
 
+    /// `getInstrCost(COPY, {to, from})`: see `GreedyEnv::copy_register_cost`.
+    fn copy_register_cost(
+        &self,
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
+
     /// `foldMemoryOperand`.
     fn fold_memory_operand(
         &self,
@@ -241,15 +251,13 @@ pub trait TargetInstrInfo {
 }
 
 /// `X86InstrInfo` at the width and register classes of one compile.
-/// DEVIATE RA-CLK: see `X86InstrInfo::reference_weight`. Weights 3, 4 and 6
-/// give the same m16 code on the 14-program sample; 2.5 and below differ.
-const ADDRESS_REFERENCE_WEIGHT: f32 = 3.0;
-
 pub struct X86InstrInfo<'a> {
     pub bits: u32,
     pub classes: &'a RegisterClasses,
     /// The module is BASIC's (`Target::basic`).
     pub basic_semantics: bool,
+    /// `Tuning::address_reference_milliweight`.
+    pub address_reference_milliweight: u32,
 }
 
 impl TargetInstrInfo for X86InstrInfo<'_> {
@@ -302,10 +310,10 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         entering || !address
     }
 
-    /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that
-    /// is an address component (the base, index or selector of a memory
-    /// operand) weighs `ADDRESS_REFERENCE_WEIGHT` times a reference in the
-    /// spill weight. Spilled, it must be reloaded into one of the few
+    /// DEVIATE RA-CLK (owner x86-m16, exit 2026-11-29; the A/B is on
+    /// `Tuning::address_reference_milliweight`): a value that is an address
+    /// component (the base, index or selector of a memory operand) weighs that
+    /// many thousandths of a reference in the spill weight. Spilled, it must be reloaded into one of the few
     /// registers 16-bit addressing allows (bx, bp, si, di) before the access,
     /// where any other value is folded (`add r, [slot]`) or moves through
     /// any register: eviction leaves the others in memory first. The pin
@@ -331,7 +339,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
                     Loc::Mem(m) if held(&m.base) || held(&m.index) || held(&m.selector)
                 ),
             );
-        if component { ADDRESS_REFERENCE_WEIGHT } else { 1.0 }
+        if component { self.address_reference_milliweight as f32 / 1000.0 } else { 1.0 }
     }
 
     fn encoding_bytes(
@@ -432,7 +440,11 @@ pub fn fold_memory_operand(
     bits: u32,
     classes: &RegisterClasses,
 ) -> Option<Arc<Insn>> {
-    let what = one.what.as_ref()?;
+    let original = one.what.as_ref()?;
+    // X86InstrInfo::foldMemoryOperandImpl, Ops = {0, 1}: `test r, r` becomes
+    // `cmp r, 0` first, and that folds.
+    let zero_compare = test_as_compare_with_zero(original, reg);
+    let what = zero_compare.as_ref().unwrap_or(original);
     // A register a fixed place requires, a register inside an address, and a
     // second memory operand all refuse the fold.
     if one.requires.iter().chain(&one.delivers).any(|(held, _)| held.value == reg) {
@@ -544,6 +556,31 @@ pub fn fold_memory_operand(
     out.uses.retain(|value| *value != reg);
     out.undefs.retain(|value| *value != reg);
     Some(Arc::new(out))
+}
+
+/// `TEST16rr r, r` -> `CMP16ri r, 0` (and the other widths): the form the
+/// fold takes when both operands are the spilled register.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L8004>
+fn test_as_compare_with_zero(
+    what: &Semantics,
+    reg: u32,
+) -> Option<Semantics> {
+    let [Loc::Held(first), Loc::Held(second)] = what.sources.as_slice() else {
+        return None;
+    };
+    if what.op != Operation::Compare
+        || what.name.as_deref() != Some("test")
+        || !what.dests.is_empty()
+        || first != second
+        || first.value != reg
+    {
+        return None;
+    }
+    Some(Semantics {
+        name: Some("cmp".into()),
+        sources: vec![Loc::Held(first.clone()), Loc::Imm(Imm { value: 0, width: first.width as u32, address: None })],
+        ..what.clone()
+    })
 }
 
 pub(crate) fn _with<F: FnOnce(&mut Insn)>(
@@ -817,6 +854,30 @@ mod tests {
         assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
     }
 
+    /// rectwo -O1 m16 (88 B against main's 79): the loop's `test v, v` of a
+    /// spilled word stayed `mov bx, [bp-6]; test bx, bx`. The pin folds the
+    /// reload as `cmp word ptr [bp-6], 0` (`TEST16rr` is rewritten to `CMP16ri
+    /// r, 0` first).
+    #[test]
+    fn test_a_test_of_a_spilled_register_folds_into_a_compare_with_zero() {
+        let held = Loc::Held(Held { value: 1, width: 2, offset: 0 });
+        let what = Semantics {
+            name: Some("test".into()),
+            sources: vec![held.clone(), held],
+            ..Semantics::new(Operation::Compare)
+        };
+        let test = Insn::new(0, None, Some(what), vec![], vec![1]);
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -6)), 2);
+        let folded = fold_memory_operand(&Arc::new(test), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
+        let what = folded.what.as_ref().unwrap();
+        assert_eq!(what.name.as_deref(), Some("cmp"), "{folded:?}");
+        assert!(
+            matches!(what.sources.as_slice(), [Loc::Mem(_), Loc::Imm(imm)] if imm.value == 0 && imm.width == 2),
+            "{folded:?}"
+        );
+        assert!(folded.uses.is_empty(), "the folded compare still reads v1: {folded:?}");
+    }
+
     /// nbody -O3 m64: the probe placed every operand in an integer register, so
     /// no float arithmetic priced and a spilled double was reloaded with a
     /// `movsd` of its own (146 instructions a trip against the pin's 132 on the
@@ -852,13 +913,44 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
-        let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
-        let flat = X86InstrInfo { bits: 32, classes: &RegisterClasses::of(&llrm_x86_m32::M32), basic_semantics: false };
+        let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
+        let flat = X86InstrInfo {
+            bits: 32,
+            classes: &RegisterClasses::of(&llrm_x86_m32::M32),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
         assert!(m16.reference_weight(&insn, 7) > 1.0, "the base of the cell");
         assert_eq!(m16.reference_weight(&insn, 8), 1.0, "the loaded value");
         assert_eq!(flat.reference_weight(&insn, 7), 1.0, "flat code weighs the pin's way");
-        let long = X86InstrInfo { bits: 64, classes: &RegisterClasses::of(&llrm_x86_m64::M64), basic_semantics: false };
+        let long = X86InstrInfo {
+            bits: 64,
+            classes: &RegisterClasses::of(&llrm_x86_m64::M64),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
         assert_eq!(long.reference_weight(&insn, 7), 1.0, "long mode weighs the pin's way");
+    }
+
+    /// The m16 weight of an address component was a literal in this file; it
+    /// is the target table's `address_reference_milliweight`. With the pin's
+    /// 1000 every reference weighs alike, whatever a literal says.
+    #[test]
+    fn test_an_address_component_weighs_the_tables_milliweight() {
+        let held = |value: u32| Held { value, width: 2, offset: 0 };
+        let cell = Mem { base: Some(held(7)), ..Mem::new(Some(Addr::new(Space::Frame, 0)), 2) };
+        let load = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(held(8))],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
+        let weight = |milli| {
+            X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: milli }
+                .reference_weight(&insn, 7)
+        };
+        assert_eq!((weight(1000), weight(3000), weight(4500)), (1.0, 3.0, 4.5));
     }
 
     fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
@@ -916,7 +1008,7 @@ mod tests {
     /// lives is a load the allocator makes again.
     #[test]
     fn test_an_x87_load_of_a_global_nothing_writes_is_made_again() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -930,7 +1022,7 @@ mod tests {
     /// value: the load stays.
     #[test]
     fn test_an_x87_load_of_a_global_written_while_it_lives_is_kept() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false, address_reference_milliweight: 3000 };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -945,7 +1037,12 @@ mod tests {
     #[test]
     fn test_a_basic_module_keeps_its_x87_loads() {
         let body = x87_body(vec![fld(0, 1, global(0, 0)), fstp(2, 1, frame(-4))]);
-        let plain = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let plain = X86InstrInfo {
+            bits: 16,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
         let basic = X86InstrInfo { basic_semantics: true, ..plain };
         assert_eq!(plain.argument_loads(&body), BTreeSet::from([1]));
         assert!(basic.argument_loads(&body).is_empty());

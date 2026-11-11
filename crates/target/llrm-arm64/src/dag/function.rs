@@ -37,12 +37,14 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             boolean_contents: BooleanContents::ZeroOrOne,
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
+            vectors: crate::machine::vectors_enabled(),
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         soft_float: false,
         stack_align: Some(16),
+        max_alloca_align: Some(16),
         // The inline expansion has no `q` type (SD13): the calling hook makes
         // every constant copy and fill within the pin's limits.
         tuning: llrm_mir::target::Tuning {

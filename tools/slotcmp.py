@@ -6,12 +6,14 @@ The same IR both sides: ours counts the instructions of the body the allocator g
 histogram of ours minus the pin's, and the totals. Needs the pin's llc (`tools/pairs/pin.py`).
 ABI-matched: at m32 llrm-cc's convention is regcall (registers) and the pin's llc has sysv; a size or count compared across them is void
 (rectwo -O2 read +6 B above the pin, -8 B below it ABI-matched). Both sides here take the same IR with `x86_regcallcc` stripped, ours at `-mabi=sysv`.
-Env: LLRM_CC (default target/release/llrm-cc), LLRM_LLC (default target/release/llrm-llc), WORK (a directory on disk, default ~/scratch).
+Env: LLRM_CC (default target/release/llrm-cc), LLRM_LLC (default target/release/llrm-llc), WORK (a directory on disk, default ~/scratch),
+SLOTCMP_KEEP=1 (keep the work dir; otherwise it is removed when the run ends).
 Example: tools/slotcmp.py bench/jpeg_fixed/jpeg_fixed.c O2 x86_64-linux m64 -Ibench
 """
 import collections
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -79,14 +81,34 @@ def theirs(level: str, mode: str, work: Path) -> dict[str, int]:
     return counts
 
 
+def drop_symbol_prefix(counts: dict[str, int]) -> dict[str, int]:
+    """Ours names symbols with the target's one-underscore prefix (`_add_bits`, `___mulsf3`), the pin's llc without; when every name has it, drop it."""
+    if counts and all(name.startswith("_") for name in counts):
+        return {name[1:]: count for name, count in counts.items()}
+    return counts
+
+
+def common(mine: dict[str, int], pins: dict[str, int]) -> list[str]:
+    """The functions both sides counted. Refuses when there are none: a join of nothing printed `DELTAS {}` and read as 'no difference'."""
+    both = sorted(set(mine) & set(pins))
+    if not both:
+        sys.exit(f"slotcmp: no function in common; ours {sorted(mine)[:5]} pin {sorted(pins)[:5]}")
+    return both
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 4:
         print(__doc__)
         return 2
     src, level, target, mode, *args = argv
     work = Path(tempfile.mkdtemp(prefix="slotcmp-", dir=os.environ.get("WORK", str(Path.home() / "scratch"))))  # a dump is not for tmpfs
-    mine, pins = ours(src, level, target, mode, args, work), theirs(level, mode, work)
-    both = sorted(set(mine) & set(pins))
+    try:
+        mine, pins = drop_symbol_prefix(ours(src, level, target, mode, args, work)), theirs(level, mode, work)
+    finally:
+        # Each run left its dumps behind: 107 dirs, 756 MB under ~/scratch by 2026-11-10.
+        if not os.environ.get("SLOTCMP_KEEP"):
+            shutil.rmtree(work, ignore_errors=True)
+    both = common(mine, pins)
     for name in both:
         if mine[name] != pins[name]:
             print(f"{name} ours {mine[name]} pin {pins[name]}")

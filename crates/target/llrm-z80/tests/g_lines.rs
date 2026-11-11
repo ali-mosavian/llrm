@@ -154,8 +154,8 @@ fn the_adb_names_a_parameter_and_a_local_with_the_sign_of_its_type() {
 /// at the end of the name.
 #[test]
 fn the_adb_writes_a_parameter_as_sdcc_does() {
-    let dir = std::env::temp_dir().join(format!("z80-adb-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     std::fs::write(dir.join("f.c"), "int g(int);\nint f(int a, unsigned b){int x=g(a);return x+b;}\n").unwrap();
     let Ok(status) =
         std::process::Command::new("sdcc").current_dir(&dir).args(["-mz80", "--debug", "-c", "f.c"]).status()

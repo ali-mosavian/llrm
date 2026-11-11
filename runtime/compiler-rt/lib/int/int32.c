@@ -2,6 +2,7 @@
 #include "sf_int.h"
 #include "sf_helpers.h"
 
+#ifndef SF_MULSI3_EXTERNAL /* config/m68k/mulsi3.s is the member */
 /* Shift-add, not 16-bit partial products: those fold back into a*b, which is a call to this routine where
  * there is no 32-bit multiply. */
 uint32_t SFB_NAME(mulsi3)(uint32_t a, uint32_t b)
@@ -11,6 +12,7 @@ uint32_t SFB_NAME(mulsi3)(uint32_t a, uint32_t b)
         if (b & 1) r += a;
     return r;
 }
+#endif
 
 /* Shift-subtract on operands aligned by clz; 16-bit operands take the short path. */
 static uint32_t udivmod(uint32_t n, uint32_t d, uint32_t *r)

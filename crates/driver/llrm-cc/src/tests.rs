@@ -46,6 +46,16 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// `-fpeel-loops` was refused by name once `Options::peel` was deleted, which
+/// broke a command line that gcc and clang take: it is the backend's, accepted
+/// and ignored, like `-fno-peel-loops`.
+#[test]
+fn fpeel_loops_and_fno_peel_loops_compile() {
+    for flag in ["-fpeel-loops", "-fno-peel-loops"] {
+        assert_eq!(built(&format!("{flag} -O2 -c x.c")).llc, words(flag), "{flag}");
+    }
+}
+
 /// `-fsanitize=stack` and `bounds` were refused with "not translated yet",
 /// so stackover.c, stackdeep.c, es_across_copy.c and idioms.c (8 configs)
 /// could not compile under llrm-cc; the backend takes them.
@@ -191,7 +201,8 @@ fn a_pass_switch_stays_away_from_a_backend_that_takes_none() {
     for name in ["wasm32", "z80-sdcc"] {
         assert!(args(name).iter().all(|flag| !flag.starts_with("-fno-")), "{name}: {:?}", args(name));
     }
-    // m68k's llc takes them (its program headers' `-fno-inline-functions` made 19 programs fail)
+    // m68k's llc takes them (its program headers' `-fno-inline-functions` made
+    // 19 programs fail)
     for name in ["x86_32-linux", "m68k-68000", "m68k-68020"] {
         let kept = args(name);
         assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{name}: {kept:?}");
@@ -440,6 +451,44 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
 
+/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do (6502-UNROLL-O1): float_in_place_update
+/// kept a two-trip float loop at -O1, 9441 B against 19 B at -Os. Other levels are as before, and
+/// a command line that names either spelling is obeyed.
+#[test]
+fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let clang = |row: &str, line: &str| clang_flags(&table[row], &built(line));
+    for row in ["6502-sim65", "65c02-sim65", "6502-cc65", "65c02-cc65"] {
+        assert!(clang(row, "-O1 -S x.c").iter().any(|f| f == "-funroll-loops"), "{row}");
+        for line in ["-O2 -S x.c", "-Os -S x.c", "-O1 -fno-unroll-loops -S x.c"] {
+            assert!(!clang(row, line).iter().any(|f| f == "-funroll-loops"), "{row} {line}");
+        }
+    }
+}
+
+/// The pin's -O1 pipeline has no JumpThreadingPass (JUMPTHREAD-O1), so clang's
+/// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
+/// clk against gcc's 614; shift_int32_variable m32 -O1: 8942 clk against gcc's
+/// 7784). The m68k and m32 rows give their backend `-fthread-jumps` at -O1,
+/// unless the command line states either spelling; no other row, and no other
+/// level, does.
+#[test]
+fn m68k_and_m32_rows_thread_jumps_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
+    let threads = |row: &str| row.starts_with("m68k-") || row.starts_with("x86_32-");
+    for row in table.keys().filter(|row| threads(row)) {
+        assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
+    }
+    for row in table.keys().filter(|row| !threads(row)) {
+        assert!(!has(&llc(row, "-O1 -c x.c")), "{row} as before");
+    }
+}
+
 /// A dist read the description files from the checkout it was built in, so
 /// deleting or moving the checkout failed every compile (2345 of 3911 cells of
 /// a post-merge A/B). Every description targets.toml names is embedded: the
@@ -482,8 +531,10 @@ fn every_toolchain_header_a_recipe_includes_is_embedded() {
     assert!(TOOLCHAIN_FILES.iter().all(|(_, bytes)| !bytes.is_empty()));
 }
 
-/// An m16 compile on a box with only `LLRM_PIN_CLANG` died with "clang's datalayout `e-m:e-p:32:32...` lays types out differently" and
-/// no word of the variable that picks the fork's clang. The message names it when it is unset, and only then.
+/// An m16 compile on a box with only `LLRM_PIN_CLANG` died with "clang's
+/// datalayout `e-m:e-p:32:32...` lays types out differently" and no word of the
+/// variable that picks the fork's clang. The message names it when it is unset,
+/// and only then.
 #[test]
 fn a_layout_mismatch_names_the_variable_of_the_forks_clang_when_it_is_unset() {
     let table = targets(TARGETS).unwrap();
@@ -493,4 +544,49 @@ fn a_layout_mismatch_names_the_variable_of_the_forks_clang_when_it_is_unset() {
     assert!(unset.contains(name), "{unset}");
     let set = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| Some("clang".into()));
     assert!(!set.contains(name), "{set}");
+}
+
+/// Every `-nostdinc` compile spawned `clang -print-resource-dir` (~1 process
+/// per compile) although the dir follows from the binary's path.
+#[test]
+fn resource_dir_comes_from_the_clang_path_without_a_spawn() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib/clang/24/include")).unwrap();
+    std::fs::write(root.join("bin/clang"), "").unwrap();
+    let spawns = std::cell::Cell::new(0);
+    let found = resource_include(&root.join("bin/clang"), || {
+        spawns.set(spawns.get() + 1);
+        None
+    });
+    assert_eq!((found, spawns.get()), (Some(root.canonicalize().unwrap().join("lib/clang/24")), 0));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn resource_dir_spawns_only_when_the_layout_is_missing() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-fallback-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/clang"), "").unwrap();
+    let found = resource_include(&root.join("bin/clang"), || Some(PathBuf::from("/spawned")));
+    assert_eq!(found, Some(PathBuf::from("/spawned")));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Several versions under `lib/clang` leave the pick to clang (the spawn); a
+/// symlinked `clang` resolves to its real install, as clang itself does.
+#[test]
+fn resource_dir_defers_to_clang_when_ambiguous_and_follows_symlinks() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-multi-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("real/bin")).unwrap();
+    std::fs::create_dir_all(root.join("link")).unwrap();
+    std::fs::create_dir_all(root.join("real/lib/clang/23/include")).unwrap();
+    std::fs::write(root.join("real/bin/clang"), "").unwrap();
+    std::os::unix::fs::symlink(root.join("real/bin/clang"), root.join("link/clang")).unwrap();
+    let one = resource_include(&root.join("link/clang"), || None);
+    assert_eq!(one, Some(root.canonicalize().unwrap().join("real/lib/clang/23")));
+    std::fs::create_dir_all(root.join("real/lib/clang/24/include")).unwrap();
+    let many = resource_include(&root.join("link/clang"), || Some(PathBuf::from("/spawned")));
+    assert_eq!(many, Some(PathBuf::from("/spawned")));
+    std::fs::remove_dir_all(&root).unwrap();
 }

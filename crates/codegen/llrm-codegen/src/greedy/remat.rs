@@ -57,8 +57,10 @@ pub fn is_trivially_re_materializable(
         return false;
     }
     match (what.op, what.name.as_deref(), what.sources.as_slice()) {
-        // `MOV32ri`: a literal and nothing else.
-        (Operation::Move, Some("mov"), [Loc::Imm(imm)]) => def.uses.is_empty() && into.width == imm.width,
+        // `MOV32ri`, `MOVi32imm`: a literal and nothing else. Any name: the
+        // pin flags each target's literal move `isReMaterializable` in its
+        // own .td, and arm64 names it `MOVImm`.
+        (Operation::Move, _, [Loc::Imm(imm)]) => def.uses.is_empty() && into.width == imm.width,
         // `LEA32r` of a frame index or a global, no register in it.
         // `LEA32r` of registers: the
         // generic `isReallyTriviallyReMaterializable` takes a virtual-register
@@ -361,6 +363,16 @@ mod tests {
         assert!(is_trivially_re_materializable(&load, true));
     }
 
+    /// arm64 names its literal move `MOVImm`: the predicate asked for the
+    /// name `mov`, so the shared MachineLICM never hoisted a constant out of a
+    /// loop on arm64 (nbody_fixed's `movz #512` stayed in the innermost loop
+    /// with the sink stage on, +29995 instructions at -O2).
+    #[test]
+    fn test_a_literal_move_is_made_again_under_any_name() {
+        let literal = def(vec![Loc::Imm(Imm { value: 512, width: 4, address: None })], Operation::Move, "MOVImm");
+        assert!(is_trivially_re_materializable(&literal, false));
+    }
+
     /// nbody_single -Os: a hoisted `fld1` with the x87 stack full was stored
     /// to a frame cell and reloaded in the loop (+18 B); the pin remakes
     /// `LD_Fp164` where it is read.
@@ -423,7 +435,12 @@ mod tests {
             values(
                 &body,
                 &BTreeSet::new(),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             ),
             BTreeSet::from([1])
         );
@@ -560,7 +577,12 @@ mod tests {
             values(
                 &body,
                 &flagged_loads(&body),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             ),
             BTreeSet::from([1])
         );
@@ -568,7 +590,12 @@ mod tests {
             values(
                 &body,
                 &BTreeSet::new(),
-                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+                &super::super::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                    address_reference_milliweight: 3000,
+                }
             )
             .is_empty(),
             "the flag is what takes the load"

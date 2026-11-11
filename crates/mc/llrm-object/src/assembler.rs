@@ -76,7 +76,7 @@ pub trait AsmBackend {
 /// A call frame instruction (`MCCFIInstruction`), the operations a prologue
 /// states: the register and offset the canonical frame address is, and where a
 /// register is saved.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Cfi {
     DefCfa {
         register: u16,

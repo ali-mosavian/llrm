@@ -76,6 +76,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         y: SDValue,
     ) -> Option<SDValue> {
         let (high, lohi) = if signed { (ISD::MulHS, ISD::SMulLoHi) } else { (ISD::MulHU, ISD::UMulLoHi) };
+        let (x, y) = if self.hooks.multiply_high_magic_first(&*self.dag, signed, x, y) { (y, x) } else { (x, y) };
         if self.can_do(high, vt) {
             return Some(self.dag.get_node(high, vt, &[x, y]));
         }
@@ -147,13 +148,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         super::known_bits::known_bits(self.dag, value).zero >> (bits - 1) & 1 == 1
     }
 
-    /// `isIntDivCheap(VT)`. DEVIATE SD206: never for `i8`, whose `DIV8r` the
-    /// selector does not translate (SD302): the divide would be unselectable.
+    /// `isIntDivCheap(VT)`: the configured flag, for every type (`i8` selects
+    /// `DIV8r`/`IDIV8r`, SD302).
     fn int_div_cheap(
         &self,
-        vt: EVT,
+        _vt: EVT,
     ) -> bool {
-        self.dag.config().int_div_cheap && vt != EVT::I8
+        self.dag.config().int_div_cheap
     }
 
     /// DEVIATE DIV-LIVE: the divide stays (`isIntDivCheap`) unless a narrow
