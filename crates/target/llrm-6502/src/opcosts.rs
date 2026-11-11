@@ -78,5 +78,38 @@ pub fn clocks(cpu: Cpu) -> OperationCosts {
 
 /// Prices in code bytes.
 pub fn bytes(cpu: Cpu) -> OperationCosts {
-    table(cpu, |(_, bytes)| bytes)
+    let mut costs = table(cpu, |(_, bytes)| bytes);
+    calibrate(&mut costs);
+    costs
+}
+
+/// What the snippets do not say, fit to the bytes the backend writes: a
+/// non-negative least squares of each function's operation counts
+/// (width-weighted) against its written size, over the 86 programs of
+/// `tests/data_size` at -Os (`tools/6502/size_fit.py`, 182 functions; the fit
+/// is within 25% for 68% of them, the snippets alone for 39%).
+///
+/// DEVIATE (6502-OPCOSTS): measured here, the pin has no byte model for the
+/// 6502. Exit: a generated scheduling description of the instruction tables
+/// (2026-11-20).
+fn calibrate(costs: &mut OperationCosts) {
+    // A load or store from a global or a stack slot is an absolute address;
+    // through a pointer it is `(zp),y`.
+    costs.direct_load = 2;
+    costs.direct_store = 5;
+    costs.load = 5;
+    costs.store = 6;
+    // A compare and its branch are one `cmp`/`sbc` chain and a jump; a constant
+    // offset is the access's own `ldy`.
+    costs.branch_in_compare = true;
+    costs.constant_offsets_fold = true;
+    // A constant shift is a few `asl`/`rol` per byte; a call keeps what it
+    // needs across it.
+    costs.shift = 5;
+    costs.call = 12;
+    costs.argument = 2;
+    costs.multiply = 9;
+    costs.divide = 22;
+    // `llvm.lifetime.*` writes nothing.
+    costs.free_intrinsics = true;
 }

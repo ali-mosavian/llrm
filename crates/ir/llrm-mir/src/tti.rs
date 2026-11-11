@@ -130,7 +130,8 @@ pub struct OperandInfo {
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
+    pub const ANY: OperandInfo =
+        OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -600,17 +601,17 @@ pub trait Tti {
         0
     }
 
-    /// Whether a speed caller's inline that gives a loop of the callee a constant
-    /// trip count is exempt from the byte rate: the copy unrolls and folds, which
-    /// the call's latency does not show. No pin counterpart (the pin's InlineCost
-    /// only adds `LoopPenalty` per loop).
+    /// Whether a speed caller's inline that gives a loop of the callee a
+    /// constant trip count is exempt from the byte rate: the copy unrolls
+    /// and folds, which the call's latency does not show. No pin
+    /// counterpart (the pin's InlineCost only adds `LoopPenalty` per loop).
     fn inline_hints_known_loop_bound(&self) -> bool {
         false
     }
 
-    /// DEVIATE OB1 (`unrollbound.rs`): the most trips the unroller takes from the
-    /// size of the object a loop's accesses run through, as a bound it unrolls
-    /// completely by; none: the pin's bound alone.
+    /// DEVIATE OB1 (`unrollbound.rs`): the most trips the unroller takes from
+    /// the size of the object a loop's accesses run through, as a bound it
+    /// unrolls completely by; none: the pin's bound alone.
     fn unroll_object_bound(&self) -> Option<u32> {
         None
     }
@@ -623,35 +624,39 @@ pub trait Tti {
         false
     }
 
-    /// The largest caller, in instructions, whose refused sites SZ2 tries inline: a trial
-    /// runs the simplifier over the whole caller once per callee tried.
+    /// The largest caller, in instructions, whose refused sites SZ2 tries
+    /// inline: a trial runs the simplifier over the whole caller once per
+    /// callee tried.
     fn inline_trial_caller_limit(&self) -> usize {
         300
     }
 
-    /// Whether SZ2 trials simplify their copy with the cleanup list, not the whole one: a trial
-    /// only counts instructions. False: the whole list.
+    /// Whether SZ2 trials simplify their copy with the cleanup list, not the
+    /// whole one: a trial only counts instructions. False: the whole list.
     fn inline_trial_light_simplify(&self) -> bool {
         false
     }
 
-    /// Whether SZ2 tries all the sites of a callee that stays in one caller as one unit, not one
-    /// site at a time: the pin inlines each site on its cost and lets later passes merge the
-    /// copies (three `report(const)` calls sink into one), which a trial of one site cannot see.
-    /// False: a site alone. Part of DEVIATE SZ1 (the pin has no SZ2 trial): wasm, exit 2026-11-20.
+    /// Whether SZ2 tries all the sites of a callee that stays in one caller as
+    /// one unit, not one site at a time: the pin inlines each site on its
+    /// cost and lets later passes merge the copies (three `report(const)`
+    /// calls sink into one), which a trial of one site cannot see. False: a
+    /// site alone. Part of DEVIATE SZ1 (the pin has no SZ2 trial): wasm, exit
+    /// 2026-11-20.
     fn inline_trial_groups_sites(&self) -> bool {
         false
     }
 
-    /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
-    /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
+    /// Whether a later round of the inliner over one caller skips a callee SZ2
+    /// rejected in an earlier round: a round costs the simplifier over the
+    /// caller per callee. False: tried again.
     fn inline_trial_skips_rejected(&self) -> bool {
         false
     }
 
-    /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
-    /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
-    /// bound's verdict stands.
+    /// Whether a callee the -O1 size bound refused is tried inline as at -Os
+    /// (SZ2: the copy stays if the caller comes out smaller), where -O1
+    /// prices no byte in clocks. False: the bound's verdict stands.
     fn inline_trials_at_o1(&self) -> bool {
         false
     }
@@ -672,14 +677,18 @@ pub trait Tti {
     /// costs in clocks to save and restore the registers it must preserve (a
     /// register the callee takes beyond the scratch ones is pushed and popped
     /// once per call). Inlining removes it; the trial prices it. 0: not priced.
-    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+    fn callee_saved_clocks(
+        &self,
+        peak: usize,
+    ) -> i64 {
         let _ = peak;
         0
     }
 
     /// INL-HOT: the least site frequency (over the caller's entry) at which a
     /// call the pin's threshold alone refused is tried inlined at -O2/-O3 and
-    /// kept where the rate pays. Whole units of relative frequency. None: the threshold is final.
+    /// kept where the rate pays. Whole units of relative frequency. None: the
+    /// threshold is final.
     fn inline_hot_trial_frequency(&self) -> Option<i64> {
         None
     }
@@ -742,7 +751,8 @@ pub trait Tti {
     /// of the loops around it, not 32 each. False: the nest bypass holds for
     /// every such loop, the pin's threshold alone, and 32 a loop. A load's
     /// address does not count as a counter read (2026-11-07, owner w15, exit
-    /// 2026-11-30: tile -O2 364 B and 2,155 instructions, rolled 68 B and 4,181).
+    /// 2026-11-30: tile -O2 364 B and 2,155 instructions, rolled 68 B and
+    /// 4,181).
     fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
         false
     }
@@ -764,8 +774,9 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds away in
-    /// the preheader, the pin's no-copy limit notwithstanding. False: the pin.
+    /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds
+    /// away in the preheader, the pin's no-copy limit notwithstanding.
+    /// False: the pin.
     fn rotation_free_guard_at_minsize(&self) -> bool {
         false
     }
@@ -774,17 +785,27 @@ pub trait Tti {
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
-    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice brings
-    /// (`Tuning::inline_chain_trial`).
+    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice
+    /// brings (`Tuning::inline_chain_trial`).
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }
 
-    /// Whether an -Os caller's SZ2 trial prices the dying callee once and refuses copies that grow the
-    /// bytes where the callee's credit alone made the count accept. Only where `function_bytes` is
-    /// calibrated against objects (m68k, `size_calibration.rs`); the x86 model is not, and a truthful
-    /// credit refuses trials that shrink the build there.
+    /// Whether an -Os caller's SZ2 trial prices the dying callee once and
+    /// refuses copies that grow the bytes where the callee's credit alone
+    /// made the count accept. Only where `function_bytes` is calibrated
+    /// against objects (m68k, `size_calibration.rs`); the x86 model is not, and
+    /// a truthful credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// Whether an -Os caller's SZ2 trial is decided by the bytes alone: the
+    /// copies stay when they leave the module smaller, the dying callee
+    /// counted once. Only where `function_bytes` is calibrated against objects
+    /// and the unit count (instructions of the pin's x86) means nothing: an
+    /// 8-bit target's instruction is one to four bytes of work.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
         false
     }
 
@@ -945,7 +966,8 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24):
+    /// `Tuning::narrow_divide_live_limit`.
     fn narrow_divide_live_limit(&self) -> u32 {
         0
     }
@@ -970,16 +992,19 @@ pub trait Tti {
         0
     }
 
-    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4):
-    /// `Tuning::promote_va_list`.
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+    /// m68k with `va_arg_slot` = 4): `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
         false
     }
 
-    /// DEVIATE VASTART-PROMOTE: the slot every stack argument takes where `va_arg` is left in the IR as an instruction
-    /// (clang writes it for targets without a `va_arg` lowering of its own) and `va_list` is one pointer: each read
-    /// loads the pointer, loads the value, steps the pointer by the type's size (alignment capped to the slot) and
-    /// stores it back, so SROA can keep the pointer in a register. `None`: `va_arg` stays an instruction.
+    /// DEVIATE VASTART-PROMOTE: the slot every stack argument takes where
+    /// `va_arg` is left in the IR as an instruction (clang writes it for
+    /// targets without a `va_arg` lowering of its own) and `va_list` is one
+    /// pointer: each read loads the pointer, loads the value, steps the
+    /// pointer by the type's size (alignment capped to the slot) and stores
+    /// it back, so SROA can keep the pointer in a register. `None`: `va_arg`
+    /// stays an instruction.
     fn va_arg_slot(&self) -> Option<u32> {
         None
     }
@@ -989,7 +1014,8 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24):
+    /// `Tuning::sink_spares_ranges`.
     fn sink_spares_ranges(&self) -> bool {
         false
     }
@@ -1145,8 +1171,10 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-9: whether a linear recursion (one call of itself) called from another function is copied into the caller and peeled
-    /// there, as gcc does, without the pin's `recursive` refusal or the bytes-against-clocks rule (gcc prices no clocks; the peeling's
+    /// DEVIATE REC-9: whether a linear recursion (one call of itself) called
+    /// from another function is copied into the caller and peeled there, as
+    /// gcc does, without the pin's `recursive` refusal or the
+    /// bytes-against-clocks rule (gcc prices no clocks; the peeling's
     /// own caps bound it). false: REC-1's bounds and the price, as for a tree.
     fn peels_linear_recursion(&self) -> bool {
         false
@@ -1601,13 +1629,14 @@ pub trait Tti {
     /// maps each wide counter's truncation to the type of the header's last
     /// phi (`Phis.back()`, ScalarEvolutionExpander.cpp#L1965), which is a
     /// pointer phi when the loop has one (pointers sort to the back), and
-    /// `isTruncateFree` to a pointer is false: a loop that steps a pointer keeps
-    /// a narrow counter beside the wide one it truncates to. True takes the
-    /// narrowest integer phi. The divergence is our real-mode `huge_space`
-    /// addressing mode (a bare base register only), which the pin has no
-    /// counterpart for: under the pin's ordinary p3 modes LSR shares the wide
-    /// counter (GenerateTruncates) and `llc -print-after=loop-reduce` leaves no
-    /// duplicate i16 phi. m16 huge bq16 -O1: 357 -> 339 B.
+    /// `isTruncateFree` to a pointer is false: a loop that steps a pointer
+    /// keeps a narrow counter beside the wide one it truncates to. True
+    /// takes the narrowest integer phi. The divergence is our real-mode
+    /// `huge_space` addressing mode (a bare base register only), which the
+    /// pin has no counterpart for: under the pin's ordinary p3 modes LSR
+    /// shares the wide counter (GenerateTruncates) and `llc
+    /// -print-after=loop-reduce` leaves no duplicate i16 phi. m16 huge bq16
+    /// -O1: 357 -> 339 B.
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1965
     fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
         false
@@ -1842,9 +1871,10 @@ pub trait Tti {
     }
 
     /// Whether a one-register formula of the first use makes its register a
-    /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the pin's
-    /// rule. DEVIATE LS1 turns it off where the target has too few registers
-    /// for the narrower search to hide a counter that serves two uses.
+    /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the
+    /// pin's rule. DEVIATE LS1 turns it off where the target has too few
+    /// registers for the narrower search to hide a counter that serves two
+    /// uses.
     fn lsr_visited_registers_lose(&self) -> bool {
         true
     }

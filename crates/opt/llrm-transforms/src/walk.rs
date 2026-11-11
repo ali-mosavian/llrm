@@ -143,7 +143,11 @@ impl ProgramPass for ModuleIpo {
                         &mut cloning,
                     )
                 });
-                vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
+                vouched(
+                    &program.modules[at],
+                    made.edited.iter().copied().filter(|id| !made.unsound.contains(id)),
+                    &before,
+                );
                 for &id in &made.added {
                     procedures[at].push(id);
                     private[at].insert(id);
@@ -318,10 +322,12 @@ impl ProgramPass for Walk {
                     // made direct is inlined by another run
                     // of the inliner over the body.
                     let mut repeats = 0;
-                    // SZ2: the callees a trial rejected in this caller, with the credit
-                    // that trial had; a later trial of the callee is skipped unless it
-                    // has more (the group of all a callee's sites, which takes the
-                    // callee with them, is not another try of one site).
+                    // SZ2: the callees a trial rejected in this caller, with
+                    // the credit that trial had; a later
+                    // trial of the callee is skipped unless it
+                    // has more (the group of all a callee's sites, which takes
+                    // the callee with them, is not another
+                    // try of one site).
                     let mut rejected: BTreeMap<GlobalId, i64> = BTreeMap::new();
                     loop {
                         let mut decided = remarks.then(Vec::new);
@@ -442,18 +448,17 @@ impl ProgramPass for Walk {
                                 let share = tti.as_deref().and_then(|tti| tti.recursive_inlining_call_share());
                                 let calls_dominate = share.is_none_or(|(num, den)| {
                                     tti.as_deref()
-                                        .and_then(|tti| self_call_share(module, &*program.target, tti, &program.layout, id))
+                                        .and_then(|tti| {
+                                            self_call_share(module, &*program.target, tti, &program.layout, id)
+                                        })
                                         .is_some_and(|(calls, total)| calls * den >= total * num)
                                 });
                                 calls_dominate
-                                    && module
-                                    .global(id)
-                                    .function()
-                                    .is_some_and(
-                                        |body| crate::inline::gcc_work(body) <= one.callee
+                                    && module.global(id).function().is_some_and(|body| {
+                                        crate::inline::gcc_work(body) <= one.callee
                                             && crate::inline::recursive_edge_growth(body)
-                                                <= edge_growth_bar(tti.as_deref(), self.inline.limit >= 250),
-                                    )
+                                                <= edge_growth_bar(tti.as_deref(), self.inline.limit >= 250)
+                                    })
                             }),
                         };
                         if fits && recursion.is_some() && tree.is_some() {
@@ -461,7 +466,9 @@ impl ProgramPass for Walk {
                                 .1
                                 .attrs
                                 .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.into()));
-                            // The flag is part of its declaration: the analyses that list declarations patch only what is told changed.
+                            // The flag is part of its declaration: the analyses
+                            // that list declarations patch only what is told
+                            // changed.
                             modules[at].changed(id);
                         }
                         for (call, callee, cost) in decided.iter().flatten() {
@@ -481,8 +488,9 @@ impl ProgramPass for Walk {
                         // a caller of
                         // at most `TRIAL_CALLER` instructions.
                         let spliced_body = (!trials.is_empty()
-                            && function_mut(module, id).1.walk().count() <= tti.as_deref().map_or(TRIAL_CALLER, |tti| tti.inline_trial_caller_limit()))
-                            .then(|| function_mut(module, id).1.clone());
+                            && function_mut(module, id).1.walk().count()
+                                <= tti.as_deref().map_or(TRIAL_CALLER, |tti| tti.inline_trial_caller_limit()))
+                        .then(|| function_mut(module, id).1.clone());
                         let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         // The calls the splice brought go to the inliner's
                         // worklist, priced and spliced before the function
@@ -497,7 +505,9 @@ impl ProgramPass for Walk {
                         // each callee spliced here are the brought ones.
                         let brought: Vec<GlobalId> = constant
                             .iter()
-                            .filter(|(call, _)| module.global(id).function().is_some_and(|one| one.parent(**call).is_none()))
+                            .filter(|(call, _)| {
+                                module.global(id).function().is_some_and(|one| one.parent(**call).is_none())
+                            })
                             .filter_map(|(_, one)| module.global(one.callee?).function())
                             .flat_map(|body| calls_of(&module.context, body))
                             .map(|(callee, _)| callee)
@@ -578,8 +588,10 @@ impl ProgramPass for Walk {
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
                             let mut hot_tried = 0;
                             for (calls, credit) in units {
-                                // INL-HOT: a unit of sites the pin's threshold alone refused; a trial costs the
-                                // Simplify list over the caller, so a caller tries at most HOT_TRIALS of them.
+                                // INL-HOT: a unit of sites the pin's threshold
+                                // alone refused; a trial costs the
+                                // Simplify list over the caller, so a caller
+                                // tries at most HOT_TRIALS of them.
                                 let hot = calls.iter().all(|one| trials[one].hot);
                                 if hot && self.inline.limit >= 250 && !tti.inline_hot_trial_at_o3() {
                                     continue;
@@ -591,7 +603,13 @@ impl ProgramPass for Walk {
                                     hot_tried += 1;
                                 }
                                 if tti.inline_trial_skips_rejected()
-                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.get(&callee).is_some_and(|&tried| tried >= credit)))
+                                    && calls.iter().any(|one| {
+                                        trials[one]
+                                            .callee
+                                            .is_some_and(
+                                                |callee| rejected.get(&callee).is_some_and(|&tried| tried >= credit),
+                                            )
+                                    })
                                 {
                                     continue;
                                 }
@@ -620,11 +638,15 @@ impl ProgramPass for Walk {
                                 modules[at].changed(id);
                                 modules[at]
                                     .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                                // POC chain: the sites the trial's splice brought, priced by the
-                                // ordinary rules, are inlined into the trial too (the pin inlines
-                                // callee-first, so `foo` into `main` and `bar` into that copy meet
+                                // POC chain: the sites the trial's splice
+                                // brought, priced by the
+                                // ordinary rules, are inlined into the trial
+                                // too (the pin inlines
+                                // callee-first, so `foo` into `main` and `bar`
+                                // into that copy meet
                                 // the constants together); one round, so O(n).
-                                if (size != crate::inlinecost::CallerSize::Speed || (!self.speed_rate && tti.inline_trials_at_o1()))
+                                if (size != crate::inlinecost::CallerSize::Speed
+                                    || (!self.speed_rate && tti.inline_trials_at_o1()))
                                     && tti.opt_size_inline_chain_trial()
                                 {
                                     let mut seen = Vec::new();
@@ -646,7 +668,10 @@ impl ProgramPass for Walk {
                                     if remarks {
                                         for (call, callee, cost) in &seen {
                                             let name = |g: GlobalId| module.global(g).name.as_deref().unwrap_or("?");
-                                            eprintln!("chain: {}", crate::inlinecost::remark(name(id), name(*callee), cost, false));
+                                            eprintln!(
+                                                "chain: {}",
+                                                crate::inlinecost::remark(name(id), name(*callee), cost, false)
+                                            );
                                             let _ = call;
                                         }
                                     }
@@ -664,23 +689,38 @@ impl ProgramPass for Walk {
                                             metadata,
                                         )?;
                                         if declared.place(module)? > 0 {
-                                            modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                            modules[at]
+                                                .invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                         }
                                         modules[at].changed(id);
-                                        modules[at]
-                                            .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
-                                                                            }
+                                        modules[at].invalidate_bodies(
+                                            &PreservedAnalyses::none().preserve_module::<GlobalsAA>(),
+                                        );
+                                    }
                                 }
-                                // The cleanup list has no loop passes: at speed a copy of a callee
-                                // with a loop meets constants that unroll and forward away, which
-                                // only the whole list prices (vla -O2: 8 sites, 644 B against -40).
-                                // At size the unroll keeps only what shrinks the code: jpeg -Os
+                                // The cleanup list has no loop passes: at speed
+                                // a copy of a callee
+                                // with a loop meets constants that unroll and
+                                // forward away, which
+                                // only the whole list prices (vla -O2: 8 sites,
+                                // 644 B against -40).
+                                // At size the unroll keeps only what shrinks
+                                // the code: jpeg -Os
                                 // measured +32 B with the whole list.
                                 let light = tti.inline_trial_light_simplify()
-                                    && !(size == crate::inlinecost::CallerSize::Speed && calls.iter().filter_map(|one| trials[one].callee).any(|callee| {
-                                        module.global(callee).function().is_some_and(|body| !crate::inlinecost::loop_headers(body).is_empty())
-                                    }));
-                                (self.simplify)(module, &mut modules[at], id, if light { TRIAL_LIGHT } else { "walk.trial." });
+                                    && !(size == crate::inlinecost::CallerSize::Speed
+                                        && calls.iter().filter_map(|one| trials[one].callee).any(|callee| {
+                                            module
+                                                .global(callee)
+                                                .function()
+                                                .is_some_and(|body| !crate::inlinecost::loop_headers(body).is_empty())
+                                        }));
+                                (self.simplify)(
+                                    module,
+                                    &mut modules[at],
+                                    id,
+                                    if light { TRIAL_LIGHT } else { "walk.trial." },
+                                );
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
@@ -721,9 +761,12 @@ impl ProgramPass for Walk {
                                         / calls.len() as f64;
                                     let saves: i64 = callees
                                         .iter()
-                                        .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
+                                        .map(|body| {
+                                            tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None))
+                                        })
                                         .sum();
-                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
+                                    let once =
+                                        kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
                                     (
                                         (once as f64 * trips) as i64,
                                         function_bytes(module, &program.layout, &costs, now)
@@ -746,9 +789,14 @@ impl ProgramPass for Walk {
                                     // -Os).
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
-                                    // DEVIATE (owner softfloat, exit 2026-11-20): the callee's bytes are summed per
-                                    // site off the byte gate's targets, as the x86 model was fit with.
-                                    let gone: i64 = if credit > 0 && tti.opt_size_inline_byte_gate() {
+                                    // DEVIATE (owner softfloat, exit
+                                    // 2026-11-20): the callee's bytes are
+                                    // summed per
+                                    // site off the byte gate's targets, as the
+                                    // x86 model was fit with.
+                                    let gone: i64 = if credit > 0
+                                        && (tti.opt_size_inline_byte_gate() || tti.opt_size_inline_trial_by_bytes())
+                                    {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
                                         dying_callees_bytes(module, &sites, |body| {
@@ -806,8 +854,22 @@ impl ProgramPass for Walk {
                                 // pairs saved on every call, +441k
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
-                                let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
-                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                let kept_bytes =
+                                    function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
+                                if trial_accepted(
+                                    tti.opt_size_inline_byte_gate(),
+                                    tti.opt_size_inline_trial_by_bytes(),
+                                    tti.inline_trial_keeps_shrinking_copy(),
+                                    priced,
+                                    hot,
+                                    tried,
+                                    best,
+                                    credit,
+                                    saved,
+                                    growth,
+                                    rate,
+                                    kept_bytes,
+                                ) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -819,7 +881,11 @@ impl ProgramPass for Walk {
                                         eprintln!(
                                             "{} SZ2 trial rejected '{}'",
                                             module.global(id).name.as_deref().unwrap_or("?"),
-                                            module.global(trials[&calls[0]].callee.expect("a callee")).name.as_deref().unwrap_or("?"),
+                                            module
+                                                .global(trials[&calls[0]].callee.expect("a callee"))
+                                                .name
+                                                .as_deref()
+                                                .unwrap_or("?"),
                                         );
                                     }
                                     *function_mut(module, id).1 = kept;
@@ -940,8 +1006,8 @@ pub(crate) fn self_calls(
     self_calls_from(module, layout, id, for_size, 2)
 }
 
-/// `self_calls` with `fewest` distinct self calls: one for a body whose tail-call
-/// elimination has already left a single call in a loop.
+/// `self_calls` with `fewest` distinct self calls: one for a body whose
+/// tail-call elimination has already left a single call in a loop.
 pub(crate) fn self_calls_from(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -1018,8 +1084,8 @@ pub(crate) fn self_call_share(
     );
     let total: i64 = body
         .walk()
-        .map(
-            |(_, inst)| llrm_mir::instructioncost::instruction_cost(
+        .map(|(_, inst)| {
+            llrm_mir::instructioncost::instruction_cost(
                 tti,
                 &module.context,
                 layout,
@@ -1028,8 +1094,8 @@ pub(crate) fn self_call_share(
                 inst,
                 llrm_mir::tti::CostKind::Latency,
             )
-            .value,
-        )
+            .value
+        })
         .sum();
     Some((price.clocks * sites.len() as i64, total))
 }
@@ -1116,10 +1182,18 @@ pub(crate) fn take_walk_promotions(
         for (index, global) in module.globals.iter_mut().enumerate() {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
                 let before = function.attrs.len();
-                function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK));
+                function
+                    .attrs
+                    .retain(
+                        |attr| !matches!(
+                            attr,
+                            llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK
+                        ),
+                    );
                 if function.attrs.len() != before {
                     found = true;
-                    // The mark is part of the declaration the analyses list; the second IPSCCP restates only some bodies.
+                    // The mark is part of the declaration the analyses list;
+                    // the second IPSCCP restates only some bodies.
                     modules[at].changed(GlobalId(index as u32));
                 }
             }
@@ -1137,13 +1211,13 @@ pub(crate) fn take_walk_promotions(
 /// 6368 clocks against 6209) and the copies are of the tree (fib: 132006
 /// clocks, 294986 copied after tail-call elimination made it a loop).
 ///
-/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner w10-instcombine, review
-/// 2026-11-30. The rule is cost-based: the target's `gcc_insns` (150 here,
-/// 450 for peeling), the call frequency over the entry's (10%), depth 3; no
-/// shape of a program. Depth 3 and cap 450 kept. The priced row is recpow -O1:
-/// compile 49 to 461 M, bytes 5547 against main's 293, clocks 454246 against
-/// main's 504509. The rows still above main are open rows with owners
-/// (docs/architecture/recursion-rows.md).
+/// Ruling 2026-10-22 (oversight): stays a numbered DEVIATE, owner
+/// w10-instcombine, review 2026-11-30. The rule is cost-based: the target's
+/// `gcc_insns` (150 here, 450 for peeling), the call frequency over the entry's
+/// (10%), depth 3; no shape of a program. Depth 3 and cap 450 kept. The priced
+/// row is recpow -O1: compile 49 to 461 M, bytes 5547 against main's 293,
+/// clocks 454246 against main's 504509. The rows still above main are open rows
+/// with owners (docs/architecture/recursion-rows.md).
 pub struct SelfInline {
     /// The Simplify list over one body.
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
@@ -1177,9 +1251,13 @@ impl SelfInline {
                     ),
                 )
         };
-        let Some(recursion) =
-            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, self.o3, program.target.tti().as_deref())
-        else {
+        let Some(recursion) = Recursion::of(
+            self.flag,
+            self.for_size,
+            self.inlining && self.speed_rate,
+            self.o3,
+            program.target.tti().as_deref(),
+        ) else {
             return Ok(());
         };
         for at in 0..program.modules.len() {
@@ -1188,27 +1266,37 @@ impl SelfInline {
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
                 let mut copies = 0;
-                // DEVIATE REC-2: where the target says so, the tail-call elimination comes first and
-                // the copies are made of the loop it leaves (gcc's order).
+                // DEVIATE REC-2: where the target says so, the tail-call
+                // elimination comes first and the copies are
+                // made of the loop it leaves (gcc's order).
                 let tre_first = {
                     let (o2, o3) = program.target.tti().map_or((false, false), |tti| tti.recursive_tre_first());
                     if self.o3 { o3 } else { o2 }
                 };
                 if tre_first {
-                    function_mut(module, id).1.attrs.retain(
-                        |one| !matches!(one, llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED),
-                    );
+                    function_mut(module, id)
+                        .1
+                        .attrs
+                        .retain(
+                            |one| !matches!(
+                                one,
+                                llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED
+                            ),
+                        );
                     modules[at].changed(id);
                     modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     (self.simplify)(module, &mut modules[at], id, "tre-first.");
                 }
-                let frequencies = self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(|_| {
-                    let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
-                    let body = module.global(id).function().expect("a marked function");
-                    // The bar was fitted on the body as marked; the
-                    // elimination's loop is larger (queens 22 -> 27).
-                    tre_first || crate::inline::recursive_edge_growth(body) <= bar
-                });
+                let frequencies =
+                    self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(
+                        |_| {
+                            let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
+                            let body = module.global(id).function().expect("a marked function");
+                            // The bar was fitted on the body as marked; the
+                            // elimination's loop is larger (queens 22 -> 27).
+                            tre_first || crate::inline::recursive_edge_growth(body) <= bar
+                        },
+                    );
                 if let Some(frequencies) = frequencies {
                     let tti = program.target.tti();
                     let (depth, callee) = match (
@@ -1305,12 +1393,113 @@ impl SelfInline {
 #[path = "walk_tests.rs"]
 mod tests;
 
-/// The stage name of a SZ2 trial's simplification when the target asks for the cleanup list.
+/// The stage name of a SZ2 trial's simplification when the target asks for the
+/// cleanup list.
 pub const TRIAL_LIGHT: &str = "walk.trial.light.";
 
 /// SZ2: the largest caller, in instructions, whose refused sites are tried
 /// (`Tti::inline_trial_caller_limit` where a target states one).
 const TRIAL_CALLER: usize = 300;
+
+/// The operations of `function` by class, width-weighted, as `name=count,...`:
+/// what `function_bytes` prices, for the fit of a target's byte table against
+/// the bytes written (`tools/6502/size_fit.py`).
+pub fn operation_counts(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &llrm_mir::module::Function,
+    costs: &llrm_mir::target::OperationCosts,
+) -> String {
+    use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+    use llrm_mir::tti::Ty;
+    let words = |ty: Option<llrm_mir::types::TypeId>| match ty.and_then(|ty| Ty::of(&module.context.types, ty)) {
+        Some(Ty::Int(bits)) => costs.words(bits),
+        _ => 1,
+    };
+    let mut c = std::collections::BTreeMap::<&str, i64>::new();
+    for (_, inst) in function.walk() {
+        let operation = function.instruction(inst);
+        let first = operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand));
+        let result = operation.result.map(|value| function.value(value).ty);
+        let constant_second = matches!(
+            operation.operands.get(1),
+            Some(llrm_mir::module::Operand::Constant(_))
+        );
+        let (class, n): (&str, i64) = match &operation.opcode {
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) if constant_second => ("addc", words(first)),
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => ("add", words(first)),
+            Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => ("logic", words(first)),
+            Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) if constant_second => {
+                ("shiftc", words(first))
+            }
+            Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => ("shiftv", words(first)),
+            Opcode::Binary(BinaryOp::Mul) => ("mul", words(first)),
+            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => ("div", words(first)),
+            Opcode::Binary(_) => ("fp", 1),
+            Opcode::Cast(
+                CastOp::Trunc | CastOp::BitCast | CastOp::PtrToInt | CastOp::IntToPtr | CastOp::AddrSpaceCast,
+            ) => ("castfree", 1),
+            Opcode::Cast(CastOp::ZExt | CastOp::SExt) => ("ext", words(result)),
+            Opcode::Cast(_) => ("castfp", 1),
+            Opcode::Load { .. } | Opcode::Store { .. } => {
+                let pointer = match operation.opcode {
+                    Opcode::Load { .. } => operation.operands[0],
+                    _ => operation.operands[1],
+                };
+                let (base, _) = llrm_mir::valuetracking::pointer_base_with_constant_offset(
+                    &module.context,
+                    layout,
+                    function,
+                    pointer,
+                );
+                let direct = match base {
+                    llrm_mir::module::Operand::Constant(_) => true,
+                    llrm_mir::module::Operand::Value(value) => {
+                        matches!(
+                            function.value(value).def,
+                            llrm_mir::module::ValueDef::Instruction(i) if matches!(function.instruction(i).opcode, Opcode::Alloca { .. })
+                        )
+                    }
+                    _ => false,
+                };
+                match (&operation.opcode, direct) {
+                    (Opcode::Load { .. }, true) => ("loadd", words(result)),
+                    (Opcode::Load { .. }, false) => ("loadi", words(result)),
+                    (_, true) => ("stored", words(first)),
+                    (_, false) => ("storei", words(first)),
+                }
+            }
+            Opcode::GetElementPtr { .. }
+                if operation.operands[1..].iter().all(|o| matches!(o, llrm_mir::module::Operand::Constant(_))) =>
+            {
+                ("gepc", 1)
+            }
+            Opcode::GetElementPtr { .. } => ("gep", 1),
+            Opcode::ICmp(_) if constant_second => ("icmpc", words(first)),
+            Opcode::ICmp(_) => ("icmp", words(first)),
+            Opcode::FCmp(_) => ("fcmp", 1),
+            Opcode::Select => ("select", words(result)),
+            Opcode::Br => ("br", 1),
+            Opcode::Switch => ("switch", (operation.operands.len() as i64 - 2) / 2 + 1),
+            Opcode::Phi => ("phi", words(result)),
+            Opcode::Call(_) | Opcode::Invoke(_) => {
+                for &argument in operation.operands.iter().skip(1) {
+                    let kind = if matches!(argument, llrm_mir::module::Operand::Constant(_)) {
+                        "callargc"
+                    } else {
+                        "callargv"
+                    };
+                    *c.entry(kind).or_default() += words(function.operand_type(&module.context, argument));
+                }
+                ("call", 1)
+            }
+            Opcode::Ret => ("ret", 1),
+            _ => ("other", 0),
+        };
+        *c.entry(class).or_default() += n;
+    }
+    c.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(",")
+}
 
 /// SZ2: the bytes `function` becomes, by the target's byte prices
 /// (`Machine::size_costs`, the opcode table's encodings): each operation is
@@ -1327,6 +1516,27 @@ pub fn function_bytes(
     use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
     use llrm_mir::tti::Ty;
     let word = layout.pointer(0).bits.max(16);
+    // A target with a native width states its prices per native word
+    // (`OperationCosts::words`): an `i32` add on an 8-bit machine is four
+    // byte adds. 1 where it states none.
+    let words = |ty: Option<llrm_mir::types::TypeId>| match ty.and_then(|ty| Ty::of(&module.context.types, ty)) {
+        Some(Ty::Int(bits)) => costs.words(bits),
+        _ => 1,
+    };
+    // The access names its object: a global, or a stack slot, through constant
+    // offsets only.
+    let direct = |pointer| {
+        let (base, _) =
+            llrm_mir::valuetracking::pointer_base_with_constant_offset(&module.context, layout, function, pointer);
+        match base {
+            llrm_mir::module::Operand::Constant(_) => true,
+            llrm_mir::module::Operand::Value(value) => matches!(
+                function.value(value).def,
+                llrm_mir::module::ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. })
+            ),
+            _ => false,
+        }
+    };
     function
         .walk()
         .map(|(_, inst)| {
@@ -1350,7 +1560,7 @@ pub fn function_bytes(
                     BinaryOp::FAdd | BinaryOp::FSub => costs.float_add,
                     BinaryOp::FMul => costs.float_multiply,
                     BinaryOp::FDiv | BinaryOp::FRem => costs.float_divide,
-                    BinaryOp::Mul => (if wide { costs.multiply_long } else { costs.multiply }) + prefix,
+                    BinaryOp::Mul => (if wide { costs.multiply_long } else { costs.multiply }) * words(ty) + prefix,
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if constant_divisor => {
                         // The multiply-high sequence: the constant, the high
                         // multiply, two shifts and two adds (a remainder
@@ -1364,10 +1574,10 @@ pub fn function_bytes(
                             + 4 * costs.prefix
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem => {
-                        (if wide { costs.divide_long } else { costs.divide }) + prefix
+                        (if wide { costs.divide_long } else { costs.divide }) * words(ty) + prefix
                     }
-                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift + prefix,
-                    _ => costs.add + prefix,
+                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift * words(ty) + prefix,
+                    _ => costs.add * words(ty) + prefix,
                 },
                 Opcode::Cast(cast) => match cast {
                     CastOp::Trunc | CastOp::BitCast | CastOp::AddrSpaceCast | CastOp::PtrToInt | CastOp::IntToPtr => 0,
@@ -1377,7 +1587,11 @@ pub fn function_bytes(
                     CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound => costs.float_store + costs.float_load,
                     CastOp::ZExt | CastOp::SExt => costs.extend,
                 },
-                Opcode::Load { .. } => (if float { costs.float_load } else { costs.load }) + prefix,
+                Opcode::Load { .. } => {
+                    let price = if costs.direct_load > 0 && direct(operation.operands[0]) { costs.direct_load } else { costs.load };
+                    (if float { costs.float_load } else { price * words(operation.result.map(|value| function.value(value).ty)) })
+                        + prefix
+                }
                 Opcode::Store { .. } => {
                     let stored =
                         operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand));
@@ -1386,20 +1600,30 @@ pub fn function_bytes(
                     (if matches!(stored, Some(Ty::Float | Ty::Double | Ty::X87)) {
                         costs.float_store
                     } else {
-                        costs.store
+                        (if costs.direct_store > 0 && direct(operation.operands[1]) { costs.direct_store } else { costs.store })
+                            * words(operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand)))
                     }) + if wide { costs.prefix } else { 0 }
                 }
+                Opcode::GetElementPtr { .. }
+                    if costs.constant_offsets_fold
+                        && operation.operands[1..].iter().all(|operand| matches!(operand, llrm_mir::module::Operand::Constant(_))) =>
+                {
+                    0
+                }
                 Opcode::GetElementPtr { .. } => costs.address,
-                // A float compare is the target's own: fcom and the status word on x87, a libcall where the FPU is
-                // software.
+                // A float compare is the target's own: fcom and the status word
+                // on x87, a libcall where the FPU is software.
                 Opcode::FCmp(_) => costs.add + costs.float_compare,
-                Opcode::ICmp(_) => costs.add + prefix,
+                Opcode::ICmp(_) => costs.add * words(ty) + prefix,
                 Opcode::Select => costs.branch + costs.r#move,
+                Opcode::Br if costs.branch_in_compare => 0,
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
-                // `llvm.lifetime.*`, `llvm.assume` and the rest the cost model calls free emit no instruction: priced as
-                // calls they were 60 B of 267 in stack_arrays_copy (object 94). A target opts in (`free_intrinsics`):
-                // the others' inlining bars were fit with the markers priced as calls.
+                // `llvm.lifetime.*`, `llvm.assume` and the rest the cost model
+                // calls free emit no instruction: priced as calls they were 60
+                // B of 267 in stack_arrays_copy (object 94). A target opts in
+                // (`free_intrinsics`): the others' inlining bars were fit with
+                // the markers priced as calls.
                 Opcode::Call(_) | Opcode::Invoke(_)
                     if costs.free_intrinsics
                         && llrm_mir::memory::callee(&module.context, function, inst)
@@ -1409,10 +1633,17 @@ pub fn function_bytes(
                     0
                 }
                 Opcode::Call(_) | Opcode::Invoke(_) => {
-                    costs.call + costs.argument * operation.operands.len().saturating_sub(1) as i64
+                    costs.call
+                        + costs.argument
+                            * operation
+                                .operands
+                                .iter()
+                                .skip(1)
+                                .map(|&argument| words(function.operand_type(&module.context, argument)))
+                                .sum::<i64>()
                 }
                 Opcode::Ret => costs.return_,
-                Opcode::Phi => costs.r#move,
+                Opcode::Phi => costs.r#move * words(operation.result.map(|value| function.value(value).ty)),
                 Opcode::Alloca { .. } | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => 0,
                 _ => costs.add,
             }
@@ -1426,13 +1657,17 @@ pub fn function_bytes(
 /// INL-HOT: the most trials of hot sites a caller tries.
 const HOT_TRIALS: usize = 4;
 
-/// SZ2: whether a trial's copies are kept. Priced (speed, a byte rate): the callee must go with them and the growth
-/// must be worth the clocks saved. At size the instruction count decides (`tried <= best + credit`), but a callee that
-/// goes with its last calls, accepted only by the credit for the callee (the copies alone count more), must also leave the bytes no larger: the count priced a float compare as an add, and
-/// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
+/// SZ2: whether a trial's copies are kept. Priced (speed, a byte rate): the
+/// callee must go with them and the growth must be worth the clocks saved. At
+/// size the instruction count decides (`tried <= best + credit`), but a callee
+/// that goes with its last calls, accepted only by the credit for the callee
+/// (the copies alone count more), must also leave the bytes no larger: the
+/// count priced a float compare as an add, and `canon` (a libcall per site on
+/// m68k) was inlined five times for +28 B at -Os.
 #[allow(clippy::too_many_arguments)]
 fn trial_accepted(
     byte_gate: bool,
+    by_bytes: bool,
     keeps_shrinking: bool,
     priced: bool,
     hot: bool,
@@ -1445,9 +1680,13 @@ fn trial_accepted(
     kept_bytes: i64,
 ) -> bool {
     if priced {
-        // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
-        // INL-HOT: a hot site needs no callee going with the copy; the rate alone decides.
+        // A copy that leaves the module no larger and runs in fewer clocks
+        // needs no callee to go with it. INL-HOT: a hot site needs no
+        // callee going with the copy; the rate alone decides.
         return (credit > 0 || hot || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
+    }
+    if by_bytes {
+        return growth < 0;
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)

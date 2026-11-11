@@ -193,6 +193,12 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// `function_bytes` is calibrated against the objects
+    /// (tests/size_calibration.rs).
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
