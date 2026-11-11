@@ -20,8 +20,7 @@
 //! register, so the pin's unroll stands. Exit 2026-12-20: vector MIR, which folds what this model cannot
 //! (`dot` -O3 m64: 817 B here, clang 26 B).
 
-use std::collections::HashMap;
-
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::ValueDef;
 use llrm_mir::target::{OperationCosts, Throughput};
 
@@ -91,7 +90,7 @@ fn chain(
     tp: &Throughput,
 ) -> i64 {
     let function = &*run.function;
-    let mut costs: HashMap<InstId, i64> = HashMap::new();
+    let mut costs: IdMap<InstId, i64> = IdMap::new();
     let mut longest = [0_i64; 2];
     for longest in &mut longest {
         for &block in blocks {

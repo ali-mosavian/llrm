@@ -602,6 +602,19 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER: whether reducing a multiply of the outer loop's
+    /// counter (by `multiplier`, none: not a constant) to a counter stepped by
+    /// it pays: the clocks of the cheaper of the multiply and its shift-and-add
+    /// chain against what a counter held across the inner loop costs each trip.
+    /// false: the pin's, which leaves a loop with a subloop alone.
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let _ = multiplier;
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
@@ -628,6 +641,14 @@ pub trait Tti {
                 ),
             by_rate: self.speed_inline_milliclocks_per_byte(),
         }
+    }
+
+    /// Whether isel selects a load or store of an integer whose byte size is no register or
+    /// power of two (an `i24`: SROA cuts a three-byte slice into one, as the pin does). DEVIATE
+    /// (default no): SROA keeps such a slice whole, where a target's isel has no lowering for
+    /// the width (the x87 `long double` slices). Exit: every target that lowers odd widths says yes.
+    fn selects_odd_sized_integers(&self) -> bool {
+        false
     }
 
     /// Whether a callee that allocates may be copied into a recursive caller,
@@ -908,10 +929,28 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): a phi of constants is
+    /// folded into the users that fold, in a loop, and through a phi of
+    /// constants behind a diamond. A move per edge the fold adds is paid by
+    /// the operation it removes, which pays only where a byte is cheap against
+    /// a clock: x86 m32 (x_cordic -O3 -800 clk); m16 grew 5 to 11 B (rate 2 B
+    /// a clock).
+    fn folds_phi_constant_chains(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
     fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE ROTATION-TRIAL (beyond the pin, owner greedy-os-causes, exit 2026-12-05): at a
+    /// size build a counted loop RS1 still rotates is also tried unrotated in a second
+    /// compile, and the smaller object is kept. Needs
+    /// [`Self::rotation_guard_must_fold_at_size`]. False: no trial.
+    fn rotation_trial_at_size(&self) -> bool {
         false
     }
 
@@ -946,6 +985,14 @@ pub trait Tti {
     /// calibrated against objects (m68k, `size_calibration.rs`); the x86 model is not, and a truthful
     /// credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// Whether an -Os caller's SZ2 trial is decided by the bytes alone: the copies stay when they leave the module
+    /// smaller, the dying callee counted once. Only where `function_bytes` is calibrated against objects and the
+    /// unit count (instructions of the pin's x86) means nothing: an 8-bit target's instruction is one to four
+    /// bytes of work.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
         false
     }
 
@@ -1079,6 +1126,19 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE OS-INLINE-TRIAL: the limits of the Os inline trial, which prices a copy the byte model refuses
+    /// by the finished code. `(band, instructions)`: a refusal is tried if it is within `band` percent of the
+    /// caller's bytes, in a module of at most `instructions` instructions (it compiles the mid-end twice). None:
+    /// no trial, as on every target but the 6502.
+    fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
+        None
+    }
+
+    /// `Tuning::unroll_trial_nests_only`.
+    fn unroll_trial_nests_only(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
@@ -1123,6 +1183,11 @@ pub trait Tti {
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
+    fn cold_site_ignores_sinks(&self) -> bool {
         false
     }
 
@@ -2175,6 +2240,19 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// Whether the loop as written keeps the bound of its exit test live next
+    /// to the counter. LSR rates an exit test against a variable bound as one
+    /// add-recurrence, `{-bound,+,1}` compared with zero (`getUse`, ICmpZero:
+    /// `N - other`), so the baseline holds one register where the written
+    /// loop holds two (`i` and `bound`) and any rewrite that keeps the bound
+    /// in a register looks one register dearer; with `should_drop_lsr_
+    /// solution_if_less_profitable` the tie then drops the rewrite. The rating
+    /// of the baseline adds a register for it. DEVIATE LU20 (`lsr_use.rs`);
+    /// false where a register is not the scarce thing.
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        false
     }
 
     /// Multiplies the loop as written does to form an induction variable that

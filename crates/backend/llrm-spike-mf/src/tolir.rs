@@ -59,6 +59,23 @@ const COPY: &str = "COPY";
 /// A flag-setting instruction and the one that reads its flags, as one.
 const BUNDLE: &str = "BUNDLE";
 
+/// The number the converter gave the instruction `one` was made from: the key
+/// into [`Converted::origin`] and the target's per-instruction answers. It is
+/// `numbered`, which a pass that moves an instruction keeps, and `at / 2` for
+/// one nothing numbered. `at` is not it: `MachineSink` sets the `at` of an
+/// instruction it moves to its new neighbour's.
+pub fn ordinal_of(one: &Insn) -> usize {
+    one.numbered.map_or((one.at / 2) as usize, |n| n as usize)
+}
+
+fn numbered(
+    mut one: Insn,
+    ordinal: i64,
+) -> Insn {
+    one.numbered = Some(ordinal as u32);
+    one
+}
+
 /// A converted function and what greedy asks of the target around it.
 pub struct Converted<T: Target> {
     pub body: LirBody,
@@ -183,7 +200,7 @@ impl<T: Target> Converted<T> {
                 // which of the instruction's operand slots name the value: the
                 // same instruction shape and slots are one kind, however many
                 // instructions have them
-                let shape = (one.at / 2) as usize;
+                let shape = ordinal_of(one);
                 let (_, slots) = kind_infos.get(shape)?;
                 let what = one.what.as_ref()?;
                 if what.name.as_deref() != Some(kind_infos[shape].0) {
@@ -309,12 +326,13 @@ impl<T: Target> Converted<T> {
                             return Arc::clone(one);
                         }
                         let ordinal = self.origin.len() as i64;
-                        let beside = self.origin.get((one.at / 2) as usize).copied().unwrap_or((0, 0));
+                        let beside = self.origin.get(ordinal_of(one)).copied().unwrap_or((0, 0));
                         self.origin.push(beside);
                         self.tii.foldable.push(None);
                         self.tii.infos.push(("", Vec::new()));
                         let mut made = (**one).clone();
                         made.at = 2 * ordinal;
+                        made.numbered = Some(ordinal as u32);
                         Arc::new(made)
                     })
                     .collect();
@@ -374,7 +392,7 @@ impl<T: Target> Converted<T> {
                     .insns
                     .iter()
                     .map(|one| {
-                        let Some(&(from, at)) = self.origin.get((one.at / 2) as usize) else { return Arc::clone(one) };
+                        let Some(&(from, at)) = self.origin.get(ordinal_of(one)) else { return Arc::clone(one) };
                         if is_shared_copy(one) {
                             return Arc::clone(one);
                         }
@@ -606,7 +624,7 @@ fn convert<T: Target>(
                         .map(|info| OperandInfo { index: 0, lane: Some((lane.bytes, lane.offset)), ..info })
                         .collect();
                     infos.push((COPY, part));
-                    insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
+                    insns.push(Arc::new(numbered(made.lane_copy(lane, 2 * ordinal), ordinal)));
                 }
                 position += 1;
                 continue;
@@ -649,11 +667,11 @@ fn convert<T: Target>(
                             }),
                         );
                     infos.push(("", Vec::new()));
-                    insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
+                    insns.push(Arc::new(numbered(made.bundle(inst, next, 2 * ordinal), ordinal)));
                     position += 2;
                 }
                 _ => {
-                    insns.push(Arc::new(made.insn(inst, 2 * ordinal)));
+                    insns.push(Arc::new(numbered(made.insn(inst, 2 * ordinal), ordinal)));
                     position += 1;
                 }
             }
@@ -1370,7 +1388,7 @@ fn operands_in<'a>(
     one: &Insn,
 ) -> Vec<(u32, &'a OperandInfo)> {
     OPERAND_VISITS.with(|visits| visits.set(visits.get() + 1));
-    let Some((name, infos)) = infos.get((one.at / 2) as usize) else { return Vec::new() };
+    let Some((name, infos)) = infos.get(ordinal_of(one)) else { return Vec::new() };
     let Some(what) = one.what.as_ref() else { return Vec::new() };
     if what.name.as_deref() != Some(name) {
         return Vec::new();
@@ -2094,7 +2112,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
             out.rematerialized = false;
             return Some(Arc::new(out));
         }
-        let (name, at) = self.foldable.get((one.at / 2) as usize).copied().flatten()?;
+        let (name, at) = self.foldable.get(ordinal_of(one)).copied().flatten()?;
         if what.name.as_deref() != Some(name) || one.group.is_some() {
             return None;
         }
@@ -2425,7 +2443,7 @@ pub fn from_ssa<T: Target>(
     let known = original.classes.len() as u32;
     // what each instruction read before the stage, by its place
     let before: llrm_support::hash::HashMap<i64, &Insn> =
-        converted.body.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (insn.at, &**insn)).collect();
+        converted.body.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (ordinal_of(insn) as i64, &**insn)).collect();
     // a value another replaces, found from the readers the stage rewrote
     let mut renamed: IndexMap<u32, u32> = IndexMap::default();
     let mut note = |from: u32, to: u32| -> Result<(), String> {
@@ -2436,7 +2454,7 @@ pub fn from_ssa<T: Target>(
     };
     for block in body.blocks.iter() {
         for insn in block.insns.iter() {
-            let Some(old) = before.get(&insn.at) else {
+            let Some(old) = before.get(&(ordinal_of(insn) as i64)) else {
                 return Err(format!("{name}: a stage made an instruction"));
             };
             if old.uses.len() != insn.uses.len() {
@@ -2474,7 +2492,7 @@ pub fn from_ssa<T: Target>(
             for k in 0..places {
                 let (b, i) = *converted
                     .origin
-                    .get((insn.at / 2) as usize + k)
+                    .get(ordinal_of(insn) + k)
                     .ok_or_else(|| format!("{name}: an instruction with no origin"))?;
                 let mut inst = original.blocks[b].insts[i].clone();
                 for operand in &mut inst.operands {
@@ -2648,7 +2666,7 @@ pub fn from_lir<T: Target>(
     let mut definitions: IndexMap<String, (usize, usize)> = IndexMap::default();
     for block in &converted.body.blocks {
         for insn in block.insns.iter() {
-            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
+            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get(ordinal_of(insn))) else {
                 continue;
             };
             // A definition the target marks rematerializable may read a value
@@ -2750,7 +2768,7 @@ pub fn from_lir<T: Target>(
             }
             if what.name.as_deref() == Some(BUNDLE) {
                 let (mut dests, mut sources) = (what.dests.iter(), what.sources.iter());
-                for ordinal in [(insn.at / 2) as usize, (insn.at / 2) as usize + 1] {
+                for ordinal in [ordinal_of(insn), ordinal_of(insn) + 1] {
                     let (from, inst) = *converted.origin.get(ordinal).ok_or("a bundle from nowhere")?;
                     let source = &original.blocks[from].insts[inst];
                     let mut folds = Vec::new();
@@ -2788,7 +2806,7 @@ pub fn from_lir<T: Target>(
             }
             // a literal made on an edge stands at the edge's label: it is
             // found by what it sets, as a rematerialized one is
-            let (mut from, mut inst) = match converted.origin.get((insn.at / 2) as usize).filter(|_| insn.at < floor) {
+            let (mut from, mut inst) = match converted.origin.get(ordinal_of(insn)).filter(|_| insn.at < floor) {
                 Some(&place) => place,
                 None => *definitions.get(&format!("{:?}{:?}", what.name, what.sources)).ok_or_else(|| {
                     format!(

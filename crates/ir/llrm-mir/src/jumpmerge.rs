@@ -54,6 +54,46 @@ pub struct JumpMergeQuery<'a> {
     pub rhs: Operand,
 }
 
+/// Whether the DAG joins the two compares into one: `foldLogicOfSetCCs`'s
+/// first family, `(X op 0) and/or (Y op 0)` with equal compares against 0 or
+/// -1 becoming one compare of `X | Y` or `X & Y`
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L6798).
+/// Merged, such a pair costs a logic op, not a `setcc` pair.
+pub fn folds_logic_of_setccs(
+    context: &crate::context::Context,
+    function: &Function,
+    logic: Logic,
+    (lhs, rhs): (Operand, Operand),
+) -> bool {
+    use crate::context::ConstantKind;
+    use crate::opcode::IntPredicate::{Eq, Ne, Sgt, Slt};
+    // (predicate, constant bits, width) of `icmp pred X, constant`
+    let compare = |operand: Operand| {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(inst) = function.value(value).def else { return None };
+        let inst = function.instruction(inst);
+        let Opcode::ICmp(predicate) = inst.opcode else { return None };
+        let Some(&Operand::Constant(constant)) = inst.operands.get(1) else { return None };
+        let bits = match context.get(constant).kind {
+            ConstantKind::Int(bits) => bits,
+            ConstantKind::Null | ConstantKind::Zero => 0,
+            _ => return None,
+        };
+        let width = context.types.int_bits(context.get(constant).ty)?;
+        Some((predicate, bits & (u128::MAX >> (128 - width)), width))
+    };
+    let (Some(left), Some(right)) = (compare(lhs), compare(rhs)) else { return false };
+    if left != right {
+        return false;
+    }
+    let (predicate, bits, width) = left;
+    let (zero, ones) = (bits == 0, bits == u128::MAX >> (128 - width));
+    match logic {
+        Logic::And => (predicate == Eq && (zero || ones)) || (predicate == Sgt && ones) || (predicate == Slt && zero),
+        Logic::Or => (predicate == Ne && (zero || ones)) || (predicate == Slt && zero) || (predicate == Sgt && ones),
+    }
+}
+
 /// `collectInstructionDeps`: the instructions `operand` depends on, in the
 /// order found, to the pin's recursion depth. False where the count is
 /// incomplete.

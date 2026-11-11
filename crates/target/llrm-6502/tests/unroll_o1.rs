@@ -50,3 +50,12 @@ fn an_o1_loop_is_not_peeled() {
     let stores = text.lines().filter(|l| l.trim().starts_with("sta (rc")).count();
     assert_eq!(stores, 1, "the first iteration was peeled\n{text}");
 }
+
+/// #9101 made every target's -O1 trial nest-only: float_in_place_update's lone loop stayed rolled,
+/// 19 B -> 9441 B. The 6502 trial takes any loop under its size.
+#[test]
+fn the_6502_unroll_trial_is_not_limited_to_nests() {
+    let tti = llrm_6502::driver::machine().tti().expect("a Tti");
+    assert!(tti.unroll_trial_threshold().is_some());
+    assert!(!tti.unroll_trial_nests_only());
+}

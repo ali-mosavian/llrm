@@ -152,7 +152,7 @@ pub fn match_symmetric_pair(
 }
 
 /// A `MinMaxIntrinsic`: its comparison predicate and operands.
-fn min_max(
+pub(crate) fn min_max(
     q: &Query,
     v: Operand,
 ) -> Option<(llrm_mir::opcode::IntPredicate, Operand, Operand)> {

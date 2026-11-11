@@ -2,7 +2,7 @@
 //! by this compiler twice (`ours`: `llrm-cc` over the C source, as a user runs
 //! it; `ours-ir`: the backend alone on the kernel's IR), m68k gcc (`$GCC_M68K`)
 //! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O1, O2, O3 and Os
-//! for the 68000, 68020, 68040 and 68060, run under `qemu-m68k` and priced as
+//! for the 68000, 68010, 68020, 68030, 68040 and 68060, run under `qemu-m68k` and priced as
 //! `cycles` does. Prints the competitor-matrix rows: `target prog level
 //! compiler code_bytes clocks instrs note`, tab separated. An empty field means
 //! the instrument has no number; `note` says why.
@@ -294,12 +294,21 @@ fn main() {
     };
     let cpus = [
         ("68000", Cpu::M68000, Model::M68000),
+        ("68010", Cpu::M68010, Model::M68010),
         ("68020", Cpu::M68020, Model::M68020),
+        ("68030", Cpu::M68030, Model::M68030),
         ("68040", Cpu::M68040, Model::M68040),
         ("68060", Cpu::M68060, Model::M68060),
     ];
-    // `MATRIX_CPUS=68040,68060` keeps the named columns
+    // `MATRIX_CPUS=68040,68060` keeps the named columns; an unknown name
+    // stops the run (68010 and 68030 once produced an empty table, rc 0)
     let only = std::env::var("MATRIX_CPUS").ok();
+    if let Some(only) = &only {
+        if let Some(bad) = only.split(',').find(|one| !cpus.iter().any(|column| column.0 == *one)) {
+            let names: Vec<_> = cpus.iter().map(|column| column.0).collect();
+            panic!("MATRIX_CPUS: no column {bad:?}; the columns are {}", names.join(", "));
+        }
+    }
     for (cpu_name, cpu, model) in cpus {
         if only.as_ref().is_some_and(|only| !only.split(',').any(|one| one == cpu_name)) {
             continue;

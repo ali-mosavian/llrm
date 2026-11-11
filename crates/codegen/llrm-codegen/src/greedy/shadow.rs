@@ -130,6 +130,26 @@ impl SpillWeightEnv for BodyEnv<'_> {
         instr.copy_of()
     }
 
+    fn sub_register(
+        &self,
+        instr: &Insn,
+        reg: u32,
+    ) -> Option<(u32, u32)> {
+        use crate::model::ir::Loc;
+        let what = instr.what.as_ref()?;
+        let held = what.dests.iter().chain(&what.sources).find_map(|place| match place {
+            Loc::Held(held) if held.value == reg => Some(*held),
+            _ => None,
+        })?;
+        // The whole of a value is as wide as its instructions read it; a value
+        // none reads is as wide as its widest access.
+        let whole = match self.orders.natural.borrow().get(&reg) {
+            Some(&natural) => natural,
+            None => self.orders.widths.borrow().get(&reg).copied()?,
+        };
+        (held.offset != 0 || held.width < whole).then_some((held.offset, held.width))
+    }
+
     fn pinned(
         &self,
         reg: u32,
@@ -1310,6 +1330,12 @@ pub fn decide_with_split(
     // A value named only as a byte is of the GR8 class, whose order names the
     // high bytes too (X86RegisterInfo.td); the others hold their root.
     let widest = crate::backend::widths::_widest(body);
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()).filter(|one| one.copy_of().is_none()) {
+        for (value, width) in crate::backend::widths::_read_widths(one) {
+            let natural = tables.natural.borrow().get(&value).copied().unwrap_or(0);
+            tables.natural.borrow_mut().insert(value, natural.max(width));
+        }
+    }
     let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
         // A caller that orders byte registers itself (a target whose classes
@@ -1844,6 +1870,89 @@ mod tests {
         assert_eq!(place(&priced), (Some(RegId::EAX), Some(RegId::ECX)));
     }
 
+    /// `%1126:gr8 = COPY %1158.sub_8bit:gr64_nosp` of known_loads_walks `f`
+    /// (m64 -Os): the pin's `copyHint` gives a virtual partner only when both
+    /// ends name the same sub-register (CalcSpillWeights.cpp#L72-73), so
+    /// `%1126` had no hint. Ours hinted it to the register of the wider
+    /// value, which evicted that value, and a chain of evictions ended in an
+    /// 8-way split of another (+53 B).
+    ///
+    /// And the m16 `fcmp_all` loop counter (-Os, +16 B after #9119): zeroed and
+    /// copied at 4 bytes (`xor esi, esi`, `mov edx, esi`: the lowering's
+    /// widening) but only ever read at 2, it is a 2-byte value; counting the
+    /// widening as the value's width made its 2-byte copy a "part" and dropped
+    /// a hint the pin keeps (`MOV16r0` is a `GR16` pseudo, and a `COPY` asks
+    /// no class).
+    #[test]
+    fn test_a_copy_hints_unless_it_names_a_part_of_what_instructions_read() {
+        use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
+        let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
+        let mov = |to: Loc, from: Loc| Semantics {
+            name: Some("mov".into()),
+            dests: vec![to],
+            sources: vec![from],
+            ..Semantics::new(Operation::Move)
+        };
+        let imm = |width| Loc::Imm(Imm { value: 0, width, address: None });
+        // v1 is defined at 4 bytes, read by a compare at `read` bytes, and
+        // copied at `copied` bytes into v2, which it ends.
+        let place = |copied: u32, read: u32| {
+            let compare = Semantics {
+                name: Some("cmp".into()),
+                sources: vec![held(1, read), imm(read)],
+                ..Semantics::new(Operation::Compare)
+            };
+            let mut insns = vec![Arc::new(Insn::new(0, None, Some(mov(held(1, 4), imm(4))), vec![1], vec![]))];
+            insns.push(Arc::new(Insn::new(1, None, Some(compare), vec![], vec![1])));
+            for at in 2..6 {
+                insns.push(Arc::new(Insn::new(at, None, None, vec![], vec![1])));
+            }
+            insns.push(Arc::new(Insn::new(6, None, Some(mov(held(2, copied), held(1, copied))), vec![2], vec![1])));
+            insns.push(Arc::new(Insn::new(7, None, None, vec![], vec![2])));
+            let body = LirBody::new(
+                "sub_register_copy",
+                0,
+                vec![Block::from(LirBlock::new(0, insns))],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            let order = |value: u32| {
+                if value == 2 {
+                    vec![RegId::EBX, RegId::EAX, RegId::ECX]
+                } else {
+                    vec![RegId::EAX, RegId::EBX, RegId::ECX]
+                }
+            };
+            let inputs = ShadowInputs {
+                body: &body,
+                registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+                order: &order,
+                pins: &IndexMap::default(),
+                unspillable: &BTreeSet::new(),
+                data: None,
+                sets: None,
+                stable_loads: true,
+                saved: &[],
+                tii: &tii,
+                tri: &crate::greedy::targetinfo::X86RegisterInfo,
+                size: false,
+                lane_pins: false,
+                carry_slot_indexes: true,
+            };
+            let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+            decided.placed.iter().find(|(v, _)| *v == 2).map(|(_, reg)| *reg)
+        };
+        assert_eq!(place(4, 4), Some(RegId::EAX), "premise: a copy of the whole value hints its register");
+        assert_eq!(place(2, 4), Some(RegId::EBX), "a copy of the low half of a value read whole hints nothing");
+        assert_eq!(place(2, 2), Some(RegId::EAX), "a value read at 2 bytes is 2 bytes: its definition is a widening");
+        assert_eq!(place(4, 2), Some(RegId::EAX), "a copy as wide as the lowering made it is a copy of the whole");
+    }
 
     /// The interference cache searched the regmask slots twice (two binary
     /// searches over `SlotIndex`es, 364 instructions) for every block it

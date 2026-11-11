@@ -217,7 +217,7 @@ impl FloatLoop {
         let function = &*unit.function;
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, function);
         let memory = Unit::within(unit.context, unit.layout, function, analyses.outer()).with_shape(&shape);
-        shape.loops.iter().any(|loop_| {
+        shape.loops.iter().filter(|loop_| crate::loopfilter::allows(cfg::block(loop_.header))).any(|loop_| {
             let (header, Some(&latch)) = (cfg::block(loop_.header), loop_.latches.first()) else { return false };
             let latch = cfg::block(latch);
             let [exit] = function

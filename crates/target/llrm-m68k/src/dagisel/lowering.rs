@@ -268,6 +268,24 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         self.mul.allows(super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c))
     }
 
+    /// DEVIATE G2: the cheapest shift/add chain for any constant, priced
+    /// ([`super::synth`]).
+    fn synth_mul_chain(
+        &self,
+        vt: EVT,
+        c: u128,
+    ) -> Option<llrm_codegen::backend::selectiondag::dag_combiner::MulPlan> {
+        if !self.mul.allows_beyond_pin() {
+            return None;
+        }
+        let plan = super::synth::plan(self.cpu, self.price, vt.size_in_bits(), c)?;
+        let taken = self.mul.allows(true).then_some(plan);
+        if taken.is_some() {
+            self.mul.note_synthesized();
+        }
+        taken
+    }
+
     fn sub_of_sign_extended_bool(&self) -> bool {
         self.short
     }
@@ -380,14 +398,6 @@ impl Hooks for M68kLowering {
         signed: bool,
     ) -> Option<Vec<SDValue>> {
         use super::call::{Ext, In, Out};
-        // DEVIATE: a result wider than a long (`RetCC_M68k_C` has i32 in D0,
-        // D1:
-        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kCallingConv.td#L26-L32)
-        // is not modeled, so the caller expands the operation inline. Exit: a
-        // two-register result in `lower_call`, by 2026-11-14.
-        if rets.iter().any(|ret| ret.size_in_bits() > 32) {
-            return None;
-        }
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let out = |value: SDValue, dag: &SelectionDAG| Out {
             value,

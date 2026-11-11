@@ -14,7 +14,7 @@ use super::generated::{instrinfo, m68k_m68000, m68k_m68020};
 /// The CPUs of the family. The pin selects on three gates only (`IsM68000`,
 /// `AtLeastM68010`, `AtLeastM68020`), so the tables are generated for two:
 /// the 68010 selects from the 68000's, the 68030 and up from the 68020's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Cpu {
     M68000,
     M68010,
