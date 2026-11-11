@@ -993,6 +993,8 @@ struct Unswitched {
     siblings: Vec<BlockId>,
     /// `revisitCurrentLoop`: a non-trivial unswitch that is not a partial one.
     revisit: bool,
+    /// The step was a non-trivial unswitch: the loop pass manager takes it from here.
+    non_trivial: bool,
 }
 
 /// `unswitchBestCondition`: the cheapest non-trivial candidate, if its cost is
@@ -1059,7 +1061,7 @@ fn unswitch_loop(
     }
     // Try trivial unswitch first before looking at other blocks in the loop.
     if unswitch_all_trivial_conditions(run, analyzed, header) {
-        return Unswitched { changed: true, siblings: Vec::new(), revisit: false };
+        return Unswitched { changed: true, siblings: Vec::new(), revisit: false, non_trivial: false };
     }
     // Skip non-trivial unswitching for optsize functions.
     let optsize = run
@@ -1077,7 +1079,7 @@ fn unswitch_loop(
         return Unswitched::default();
     }
     match unswitch_best_condition(run, analyzed, header) {
-        Some((siblings, partial)) => Unswitched { changed: true, siblings, revisit: !partial },
+        Some((siblings, partial)) => Unswitched { changed: true, siblings, revisit: !partial, non_trivial: true },
         None => Unswitched::default(),
     }
 }
@@ -1111,7 +1113,7 @@ pub fn unswitch_loops(
                 break;
             }
             changed = true;
-            if scoped {
+            if scoped && step.non_trivial {
                 crate::loopfilter::note_unswitched(step.revisit, step.siblings);
                 break;
             }

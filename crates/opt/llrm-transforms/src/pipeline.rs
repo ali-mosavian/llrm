@@ -788,37 +788,36 @@ impl FunctionPass for PerLoop {
     }
 }
 
-/// LPM1 (loop-instsimplify, loop-simplifycfg, licm, loop-rotate, licm,
-/// simple-loop-unswitch) as `LoopPassManager::run` runs it: a worklist of
-/// loops, each through every pass before the next is looked at. A non-trivial
-/// unswitch hands the manager the sibling loops it cloned
-/// (`LPMUpdater::addSiblingLoops`) and asks for the loop again
-/// (`revisitCurrentLoop`), so the clone is simplified, hoisted into and
-/// unswitched again before the pass looks further. The slot is the first of
-/// them and runs all of `parts`; the slots after it are [`AfterGroup`].
+/// The unswitch slot of LPM1 at -O3, where the pin's `SimpleLoopUnswitchPass`
+/// is non-trivial. A non-trivial unswitch hands the loop pass manager the
+/// sibling loops it cloned (`LPMUpdater::addSiblingLoops`) and asks for the
+/// loop again (`revisitCurrentLoop`); the manager then runs the whole of LPM1
+/// on each of them: instsimplify, simplifycfg, licm, rotate, licm, unswitch.
+/// The first visit of each loop is the flat slots before this one (`preamble`
+/// ran on every loop already), so only the revisits and the clones run the
+/// preamble again, then the unswitch.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L270>
-struct Lpm1 {
-    head: Box<dyn FunctionPass>,
-    parts: Vec<Box<dyn FunctionPass>>,
-    fused: Fused,
+struct UnswitchRevisit {
+    preamble: Vec<Box<dyn FunctionPass>>,
+    unswitch: Box<dyn FunctionPass>,
 }
 
-impl FunctionPass for Lpm1 {
+impl FunctionPass for UnswitchRevisit {
     fn name(&self) -> &'static str {
-        self.head.name()
+        self.unswitch.name()
     }
 
     fn translations(&self) -> Vec<&'static str> {
-        self.head.translations()
+        self.unswitch.translations()
     }
 
     fn adds_memory_operations(&self) -> bool {
-        self.head.adds_memory_operations() || self.parts.iter().any(|part| part.adds_memory_operations())
+        self.unswitch.adds_memory_operations() || self.preamble.iter().any(|part| part.adds_memory_operations())
     }
 
     fn reads(&self) -> llrm_mir::footprint::Footprint {
-        self.parts.iter().fold(self.head.reads(), |all, part| all.with(part.reads()))
+        self.preamble.iter().fold(self.unswitch.reads(), |all, part| all.with(part.reads()))
     }
 
     fn run(
@@ -833,17 +832,20 @@ impl FunctionPass for Lpm1 {
             .rev()
             .map(|one| one.get_header())
             .collect();
-        let mut work: std::collections::VecDeque<llrm_mir::module::BlockId> = headers.into();
+        // (loop, whether LPM1's preamble has run on it since it was made or revisited)
+        let mut work: std::collections::VecDeque<(llrm_mir::module::BlockId, bool)> =
+            headers.into_iter().map(|header| (header, true)).collect();
         let mut changed = false;
         let _ = crate::loopfilter::take_unswitched();
-        while let Some(header) = work.pop_front() {
+        while let Some((header, preamble_ran)) = work.pop_front() {
             let found = analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function);
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
             {
                 let _scope = crate::loopfilter::only(&[header]);
-                for part in std::iter::once(&mut self.head).chain(self.parts.iter_mut()) {
+                let preamble = if preamble_ran { &mut self.preamble[..0] } else { &mut self.preamble[..] };
+                for part in preamble.iter_mut().chain(std::iter::once(&mut self.unswitch)) {
                     let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
                     if !preserved.are_all_preserved() {
                         changed = true;
@@ -851,17 +853,16 @@ impl FunctionPass for Lpm1 {
                     }
                 }
             }
-            // The siblings are popped after the loop itself.
+            // The loop itself is popped first, then its siblings in order.
             let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
             siblings.reverse();
             for one in siblings {
-                work.push_front(one);
+                work.push_front((one, false));
             }
             if revisit {
-                work.push_front(header);
+                work.push_front((header, false));
             }
         }
-        self.fused.set(Some(unit.function.mark()));
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -1180,70 +1181,67 @@ pub(crate) fn llvm_order(
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
             let rotating = applied.options.rotate_slot;
-            // LPM1 runs loop by loop (`Lpm1`): the slot of loop-instsimplify
-            // runs the passes of the slots after it too, each of which then
-            // finds its work done.
-            //
-            // licm<no-allowspeculation> L724, loop-rotate L728,
-            // licm<allowspeculation> L730. The first hoists only what the
-            // loop certainly runs; the rotate puts a guard before a loop not
-            // proven to run, so that the second hoists into a preheader behind
-            // it (#2194). The pin's `SimpleLoopUnswitchPass(NonTrivial = Level
-            // == O3)`: the options say -O3 and -Omax.
-            let lpm1: Fused = Default::default();
-            let licm_raw = |name: &'static str, speculate: bool| -> Box<dyn FunctionPass> {
-                if applied.options.licm {
-                    Box::new(crate::licm::Licm { apply: true, speculate })
-                } else {
-                    Box::new(Together { name, parts: Vec::new() })
+            // Non-trivial unswitching (-O3) revisits the loops it made and the
+            // loop it unswitched (`UnswitchRevisit`); the trivial one, at every
+            // other level, never does.
+            let unswitch_slot = || -> Box<dyn FunctionPass> {
+                let unswitch = Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch });
+                if !applied.options.unswitch {
+                    return unswitch;
                 }
-            };
-            let rotate_raw = || -> Box<dyn FunctionPass> {
-                // The header is copied at every level but -Oz (`hasMinSize`).
-                Box::new(looprotate::LoopRotate {
-                    duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
-                    size: applied.options.prefers_size(),
-                    check_exit_count: false,
-                    free_guard: false,
-                })
-            };
-            let lpm1_passes = || -> Vec<(&'static str, Box<dyn FunctionPass>)> {
-                let mut passes: Vec<(&'static str, Box<dyn FunctionPass>)> = vec![
-                    // LPM1's second pass, PassBuilderPipelines.cpp#L716.
-                    ("loop-simplifycfg@716", Box::new(crate::loopsimplifycfg::LoopSimplifyCfg)),
-                    ("floatloop@724", Box::new(floatloop::FloatLoop)),
-                    ("licm@724", licm_raw("licm@724", !rotating)),
+                let mut preamble: Vec<Box<dyn FunctionPass>> = vec![
+                    Box::new(crate::loopinstsimplify::LoopInstSimplify),
+                    Box::new(crate::loopsimplifycfg::LoopSimplifyCfg),
+                    Box::new(floatloop::FloatLoop),
                 ];
-                if rotating {
-                    passes.push(("rotate@728", rotate_raw()));
+                if applied.options.licm {
+                    preamble.push(Box::new(crate::licm::Licm { apply: true, speculate: !rotating }));
                 }
-                passes.push(("licm@730", licm_raw("licm@730", true)));
-                passes.push((
-                    "trivialunswitch@732",
-                    Box::new(simpleloopunswitch::SimpleLoopUnswitch { non_trivial: applied.options.unswitch }),
-                ));
-                passes
+                if rotating {
+                    preamble.push(Box::new(looprotate::LoopRotate {
+                        duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                        size: applied.options.prefers_size(),
+                        check_exit_count: false,
+                        free_guard: false,
+                    }));
+                }
+                if applied.options.licm {
+                    preamble.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
+                }
+                Box::new(UnswitchRevisit { preamble, unswitch })
             };
-            let parts: Vec<Box<dyn FunctionPass>> = lpm1_passes()
-                .into_iter()
-                .filter(|(name, _)| applied.options.wanted(name))
-                .map(|(_, pass)| pass)
-                .collect();
-            list.push(
+            list.extend([
                 // LPM1's first pass, PassBuilderPipelines.cpp#L715.
-                slot(
-                    "loop-instsimplify@715",
-                    Box::new(Lpm1 {
-                        head: Box::new(crate::loopinstsimplify::LoopInstSimplify),
-                        parts,
-                        fused: std::rc::Rc::clone(&lpm1),
+                slot("loop-instsimplify@715", Box::new(crate::loopinstsimplify::LoopInstSimplify)),
+                // LPM1's second pass, PassBuilderPipelines.cpp#L716.
+                slot("loop-simplifycfg@716", Box::new(crate::loopsimplifycfg::LoopSimplifyCfg)),
+                slot("floatloop@724", Box::new(floatloop::FloatLoop)),
+                // LPM1
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:
+                // licm<no-allowspeculation> L724, loop-rotate L728,
+                // licm<allowspeculation> L730. The first hoists only what the
+                // loop certainly runs; the rotate puts a guard before a loop
+                // not proven to run, so that the second hoists into a preheader
+                // behind it (#2194).
+                licm("licm@724", !rotating),
+            ]);
+            if rotating {
+                // The header is copied at every level but -Oz (`hasMinSize`).
+                list.push(slot(
+                    "rotate@728",
+                    Box::new(looprotate::LoopRotate {
+                        duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                        size: applied.options.prefers_size(),
+                        check_exit_count: false,
+                        free_guard: false,
                     }),
-                ),
-            );
-            for (name, pass) in lpm1_passes() {
-                list.push(slot(name, Box::new(AfterGroup { inner: pass, fused: std::rc::Rc::clone(&lpm1) })));
+                ));
             }
             list.extend([
+                licm("licm@730", true),
+                // The pin's `SimpleLoopUnswitchPass(NonTrivial = Level == O3)`:
+                // the options say -O3 and -Omax.
+                slot("trivialunswitch@732", unswitch_slot()),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L766:
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@766"),
