@@ -25,6 +25,9 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// A jump table: the absolute address of each label, as 32-bit words
+    /// (`EK_BlockAddress`).
+    Table(Vec<String>),
     /// The source place of the instructions that follow (`.loc`): printed only
     /// for `-g`.
     Loc(crate::expand::Row),
@@ -137,7 +140,8 @@ pub struct Options {
     /// Off: the private passes are what the corpus was tuned on.
     pub shared_prelude: bool,
     /// A small conditional block is copied into the predecessors that jump to
-    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build, and
+    /// kept only where the build with the copies beats the build without.
     pub tail_duplicate: bool,
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
@@ -304,7 +308,8 @@ pub fn items_with(
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            touched.tail_dup,
             touched.return_dup,
             touched.class_split,
             touched.compare_destinations,
@@ -334,6 +339,14 @@ pub fn items_with(
     }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.tail_dup {
+        let without = Options { tail_duplicate: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
@@ -421,6 +434,9 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
+    /// A block was copied into the arms that jump to it
+    /// ([`llrm_spike_mf::taildup::tail_duplicate`]).
+    tail_dup: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -437,7 +453,8 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.return_dup
+        self.tail_dup
+            || self.return_dup
             || self.class_split
             || self.compare_destinations
             || self.carry_chain
@@ -453,6 +470,7 @@ pub fn items_bytes(items: &[Item]) -> usize {
         .map(|item| match item {
             Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
             Item::Bytes(bytes) => bytes.len(),
+            Item::Table(labels) => 4 * labels.len(),
             _ => 0,
         })
         .sum()
@@ -651,8 +669,11 @@ fn items_once(
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
     branch_fold(&mut function, &assignment);
-    if options.tail_duplicate && !wants_size {
-        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+    if !wants_size {
+        if options.tail_duplicate {
+            touched.tail_dup =
+                llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+        }
         if options.return_dup {
             touched.return_dup = llrm_spike_mf::taildup::duplicate_returns(&mut function, 2);
         }
@@ -696,7 +717,47 @@ fn items_once(
             Line::Loc(place) => Item::Loc(place),
         });
     }
+    out.extend(jump_tables(&function, number));
     Ok((out, touched))
+}
+
+/// Each jump table the function dispatches through: its label, then the
+/// address of each block it goes to (`EK_BlockAddress`).
+///
+/// DEVIATE: the table follows the function in the code section; the pin puts
+/// it in `.rodata`. The bytes are the same and the object writers place one
+/// section. Exit: the data sections of the object writers take code labels.
+fn jump_tables(
+    function: &crate::mfunc::MFunction,
+    number: usize,
+) -> Vec<Item> {
+    let mut out = Vec::new();
+    let mut seen = llrm_support::hash::HashSet::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if inst.kind != crate::mfunc::Kind::Op("JMP32j") {
+            continue;
+        }
+        let Some(crate::mfunc::Operand::Symbol(table, _)) =
+            inst.operands.iter().find(|operand| matches!(operand, crate::mfunc::Operand::Symbol(..)))
+        else {
+            continue;
+        };
+        if !seen.insert(table.clone()) {
+            continue;
+        }
+        let labels = inst
+            .operands
+            .iter()
+            .filter_map(|operand| match operand {
+                crate::mfunc::Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+                _ => None,
+            })
+            .map(|at| format!(".LBB{number}_{at}"))
+            .collect();
+        out.push(Item::Label(table.clone()));
+        out.push(Item::Table(labels));
+    }
+    out
 }
 
 /// Whether `callee` is a function `module` defines that no other definition
@@ -783,6 +844,7 @@ pub fn printed(
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Table(labels) => labels.iter().for_each(|label| out.push_str(&format!("\t.long\t{label}\n"))),
             Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.

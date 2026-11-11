@@ -14,8 +14,7 @@
 //! compare and `trunc nuw` cases are not found (it finds less).
 //!
 //! DEVIATE 2 (temporary): the folds that need another family's helper are left
-//! out, named where they stood: the factorization of `(A && B) || (C && B)`,
-//! `~(A & B) & (A | B)`, the `select (~a | c)`, `(c & b)`, `(a | c)` and
+//! out, named where they stood: `~(A & B) & (A | B)`, the `select (~a | c)`, `(c & b)`, `(a | c)` and
 //! `(c & ~b)` forms (`getFreelyInverted`), `isCheckForZeroAndMulWithOverflow`,
 //! the implied-condition simplifications and `FoldOrOfLogicalAnds`.
 //!
@@ -28,7 +27,7 @@
 
 use llrm_mir::module::InstId;
 use llrm_mir::module::Operand;
-use llrm_mir::opcode::{BinaryOp, Flags};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::valuetracking::guarantee::implies_poison;
 use llrm_mir::valuetracking::pattern;
 
@@ -41,8 +40,10 @@ use crate::combine_visit_select::{Fold, Sel};
 const FOLDS: &[Fold] = &[
     or_of_condition,
     logical_or_reassociated,
+    logical_ands_factored,
     and_of_condition,
     logical_and_reassociated,
+    logical_ors_factored,
     false_true_arm_negated,
     true_false_arm_negated,
     de_morgan_and,
@@ -124,6 +125,81 @@ fn logical_or_reassociated(
     }
     let either = c.create_binop(inst, BinaryOp::Or, b, sel.if_false, Flags::default());
     Some(Visit::Replace(c.create_logical_or(inst, inst, a, either)))
+}
+
+/// `(A && B) || (C && B)` is `(A || C) && B`.
+fn logical_ands_factored(
+    c: &mut Combiner,
+    inst: InstId,
+    sel: &Sel,
+) -> Option<Visit> {
+    if !c.is_true(sel.if_true) {
+        return None;
+    }
+    factored(c, inst, sel, sel.if_false, true)
+}
+
+/// `(A || B) && (C || B)` is `(A && C) || B`.
+fn logical_ors_factored(
+    c: &mut Combiner,
+    inst: InstId,
+    sel: &Sel,
+) -> Option<Visit> {
+    if !c.is_false(sel.if_false) {
+        return None;
+    }
+    factored(c, inst, sel, sel.if_true, false)
+}
+
+/// The two factorizations of `foldSelectOfBools` (`AndFactorization`,
+/// `OrFactorization`): the condition and `other` are both logical ands
+/// (`and_form`, in a true-armed select) or both logical ors, one of them with a
+/// single use, and share an operand.
+fn factored(
+    c: &mut Combiner,
+    inst: InstId,
+    sel: &Sel,
+    other: Operand,
+    and_form: bool,
+) -> Option<Visit> {
+    let (a, b, cc, d) = {
+        let q = query(c, Some(inst));
+        let logical = if and_form { pattern::logical_and } else { pattern::logical_or };
+        let (a, b) = logical(&q, sel.cond)?;
+        let (cc, d) = logical(&q, other)?;
+        (a, b, cc, d)
+    };
+    if !(has_one_use(c, sel.cond) || has_one_use(c, other)) {
+        return None;
+    }
+    let cond_logic = c.select_of(sel.cond).is_some();
+    let other_logic = c.select_of(other).is_some();
+    let (common, inner_cond, inner_val, sel_first) = if a == cc {
+        (a, b, d, false)
+    } else if a == d {
+        (a, b, cc, false)
+    } else if b == cc {
+        (b, a, d, false)
+    } else if b == d {
+        (b, a, cc, cond_logic && other_logic)
+    } else {
+        return None;
+    };
+    let ty = sel.ty;
+    let (one, zero) = (c.int(ty, 1), c.int(ty, 0));
+    let inner = if and_form {
+        c.create_select(inst, inner_cond, one, inner_val)
+    } else {
+        c.create_select(inst, inner_cond, inner_val, zero)
+    };
+    let (first, second) = if sel_first { (inner, common) } else { (common, inner) };
+    if other_logic || (cond_logic && first == a) {
+        let (arm_true, arm_false) = if and_form { (second, zero) } else { (one, second) };
+        Some(c.replace_with_new(inst, Opcode::Select, ty, vec![first, arm_true, arm_false], Flags::default()))
+    } else {
+        let op = if and_form { BinaryOp::And } else { BinaryOp::Or };
+        Some(c.replace_with_binop(inst, op, first, second, Flags::default()))
+    }
 }
 
 /// `select c, x, false` is `and c, x`.
