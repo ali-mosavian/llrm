@@ -9,10 +9,10 @@
 //! on by default).
 //!
 //! # How it works
-//! Machine form, virtual registers in SSA (before phi elimination, as the
-//! pin), before allocation. A `cbz`, `cbnz`,
+//! Machine form, virtual registers, before allocation, after the combiner and
+//! the compare passes (as the pin). A `cbz`, `cbnz`,
 //! `tbz` or `tbnz` (the last two only on the sign bit) that ends a block tests
-//! a register defined once, earlier in the same block, by an add, subtract,
+//! a register last defined earlier in the same block by an add, subtract,
 //! `and` or `bic` (or their flag-setting forms). Nothing between the two may
 //! read or write the flags. The maker becomes its flag-setting form (its
 //! result goes to the zero register when the branch was its only reader) and
@@ -98,7 +98,6 @@ fn touches_flags(op: &Op) -> bool {
 }
 
 pub fn run(function: &mut MFunc) {
-    let defined_once = crate::prepass::definitions(function);
     let mut reads: rustc_hash::FxHashMap<Reg, usize> = Default::default();
     for block in &function.blocks {
         for op in &block.ops {
@@ -127,7 +126,7 @@ pub fn run(function: &mut MFunc) {
         for at in first_terminator..ops.len() {
             let Some((cond, tested, width)) = branch_to_condition(&ops[at]) else { continue };
             let register = Reg::Gpr(tested);
-            if !register.is_virtual() || defined_once.get(&register) != Some(&1) {
+            if !register.is_virtual() {
                 continue;
             }
             let Some(maker) = ops[..at].iter().rposition(|op| op.defs_and_uses().0.contains(&register)) else {
