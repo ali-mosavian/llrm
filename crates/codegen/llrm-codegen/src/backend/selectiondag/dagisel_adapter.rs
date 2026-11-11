@@ -19,10 +19,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_dagisel::addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 use llrm_dagisel::dag::{Dag, FpClass, LoadExt, MemRef, SDValue as PinValue};
 use llrm_dagisel::generated::ids::{isd as pin, mvt};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 
 use super::SelectionDAG;
 use super::dag::{NodeData, SDNodeFlags, SDValue};
@@ -81,7 +81,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMulO => pin::SMULO,
         UAddOCarry => pin::UADDO_CARRY,
         USubOCarry => pin::USUBO_CARRY,
-        SetCCCarry => u16::MAX,
+        SAddOCarry | SSubOCarry | SetCCCarry => u16::MAX,
         SAddSat => pin::SADDSAT,
         UAddSat => pin::UADDSAT,
         SSubSat => pin::SSUBSAT,
@@ -90,6 +90,10 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMax => pin::SMAX,
         UMin => pin::UMIN,
         UMax => pin::UMAX,
+        AvgFloorS => pin::AVGFLOORS,
+        AvgFloorU => pin::AVGFLOORU,
+        AvgCeilS => pin::AVGCEILS,
+        AvgCeilU => pin::AVGCEILU,
         Abs => pin::ABS,
         PtrAdd => pin::PTRADD,
         And => pin::AND,
@@ -194,6 +198,11 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         IntrinsicWoChain => pin::INTRINSIC_WO_CHAIN,
         IntrinsicWChain => pin::INTRINSIC_W_CHAIN,
         IntrinsicVoid => pin::INTRINSIC_VOID,
+        BuildVector => pin::BUILD_VECTOR,
+        ScalarToVector => pin::SCALAR_TO_VECTOR,
+        InsertVectorElt => pin::INSERT_VECTOR_ELT,
+        // No pattern names it: a target lowers every shuffle first.
+        VectorShuffle => u16::MAX,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
@@ -205,13 +214,9 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // `ISD::VAARG` is 335, one below `VACOPY`; no pattern names it.
         VAArg => 335,
         SrcValue => pin::SRCVALUE,
-        // sdag-a's codes are private and named (`x86isd::name`), the pin's
-        // number comes from the name; sdag-b's lowering writes the pin's
-        // numbers, which `name` does not know.
-        Target(code) => match super::x86isd::private_name(code).and_then(|name| name.strip_prefix("X86ISD::")) {
-            Some(name) => llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX),
-            None => code,
-        },
+        // A target's private codes are named; the pin's number comes from
+        // the name, and a code the target does not know is already the pin's.
+        Target(code) => llrm_sdag::target_names::installed().and_then(|names| names.pin_id(code)).unwrap_or(code),
         // A machine node reads as the pin's `~opcode`.
         Machine(code) => !(code as u16),
     }
@@ -228,17 +233,36 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        EVT::Simple(MVT::F128) => mvt::f128,
         // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
         // no pattern asks for it (SD540).
         EVT::Simple(MVT::I128) => mvt::v4i32,
+        EVT::Simple(MVT::V16I8) => mvt::v16i8,
+        EVT::Simple(MVT::V8I16) => mvt::v8i16,
+        EVT::Simple(MVT::V4I32) => mvt::v4i32,
+        EVT::Simple(MVT::V2I64) => mvt::v2i64,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
     }
 }
 
-/// The inverse of [`pin_vt`] for the types a pattern can ask for.
-fn our_vt(vt: Vt) -> EVT {
+/// The inverse of [`pin_vt`] for the types a pattern can ask for. Where the
+/// target has vectors (`DagConfig::vectors`) `v4i32` is the vector, not the x86
+/// opaque 16 bytes.
+fn our_vt(
+    vt: Vt,
+    vectors: bool,
+) -> EVT {
+    if vectors {
+        if let Some(found) =
+            [(mvt::v16i8, MVT::V16I8), (mvt::v8i16, MVT::V8I16), (mvt::v4i32, MVT::V4I32), (mvt::v2i64, MVT::V2I64)]
+                .into_iter()
+                .find(|(p, _)| *p == vt)
+        {
+            return EVT::Simple(found.1);
+        }
+    }
     [
         (mvt::i1, EVT::I1),
         (mvt::i8, EVT::I8),
@@ -248,6 +272,7 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::f128, EVT::Simple(MVT::F128)),
         (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
@@ -258,19 +283,21 @@ fn our_vt(vt: Vt) -> EVT {
     .unwrap_or_else(|| panic!("pin value type {vt:?} has no counterpart"))
 }
 
-/// The id the flags register has: iced numbers no EFLAGS, so it takes the last
-/// raw id.
-pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
+pub use llrm_x86::pinregs::{EFLAGS_ID, phys_reg, pin_register};
 
-/// The flags every x86 call clobbers, the one register a `RegisterMask` always names. A call lowered with a convention adds that
-/// convention's clobbered registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask` lists its caller-saved set.
-/// A call to a runtime routine, whose contract names what it disturbs, keeps the flags alone.
+/// The flags every x86 call clobbers, the one register a `RegisterMask` always
+/// names. A call lowered with a convention adds that convention's clobbered
+/// registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask`
+/// lists its caller-saved set. A call to a runtime routine, whose contract
+/// names what it disturbs, keeps the flags alone.
 pub fn call_clobbered_flags() -> Vec<u16> {
     pin_register(EFLAGS_ID).into_iter().collect()
 }
 
-/// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention does not preserve, in the pin's numbers (the flags
-/// are always in it). A register the pin has no number for cannot be a live physical definition, so it is left out.
+/// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention
+/// does not preserve, in the pin's numbers (the flags are always in it). A
+/// register the pin has no number for cannot be a live physical definition, so
+/// it is left out.
 pub fn clobbered_by(
     arch: &dyn llrm_target::Target,
     found: Option<&llrm_target::calling::Convention>,
@@ -285,83 +312,6 @@ pub fn clobbered_by(
     out.sort_unstable();
     out.dedup();
     out
-}
-
-/// The register of the pin's register number `register` that the builder names
-/// as a physical register (`NodeData::PhysReg`); `None` for `$noreg` (0) and
-/// the ones with no id.
-pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
-    use llrm_dagisel::generated::ids::x86;
-    use llrm_lir::registers::RegId;
-    // The pin's register numbers, in its X86 enum order (alphabetical: AH 1,
-    // AL 2, AX 3, ... EDX 27, ES 31); the ids module names the ones
-    // tools/dagisel/extra_symbols.txt asks for.
-    const AL: u16 = 2;
-    Some(match register {
-        AL => RegId::AL,
-        x86::AH => RegId::AH,
-        x86::AX => RegId::AX,
-        x86::CL => RegId::CL,
-        x86::CX => RegId::CX,
-        x86::DX => RegId::DX,
-        x86::EAX => RegId::EAX,
-        x86::EDX => RegId::EDX,
-        x86::RAX => RegId::RAX,
-        x86::RIP => RegId::RIP,
-        x86::RDX => RegId::RDX,
-        x86::CS => RegId::CS,
-        x86::DS => RegId::DS,
-        x86::ES => RegId::ES,
-        x86::FS => RegId::FS,
-        x86::GS => RegId::GS,
-        x86::SS => RegId::SS,
-        x86::BH => RegId::BH,
-        x86::BL => RegId::BL,
-        x86::BP => RegId::BP,
-        x86::BX => RegId::BX,
-        x86::CH => RegId::CH,
-        x86::DH => RegId::DH,
-        x86::DI => RegId::DI,
-        x86::DL => RegId::DL,
-        x86::EBP => RegId::EBP,
-        x86::EBX => RegId::EBX,
-        x86::ECX => RegId::ECX,
-        x86::EDI => RegId::EDI,
-        x86::ESI => RegId::ESI,
-        x86::ESP => RegId::ESP,
-        x86::RBP => RegId::RBP,
-        x86::RBX => RegId::RBX,
-        x86::RCX => RegId::RCX,
-        x86::RDI => RegId::RDI,
-        x86::RSI => RegId::RSI,
-        x86::RSP => RegId::RSP,
-        x86::SI => RegId::SI,
-        x86::SP => RegId::SP,
-        x86::R8 => RegId::R8,
-        x86::R9 => RegId::R9,
-        x86::R10 => RegId::R10,
-        x86::R11 => RegId::R11,
-        x86::R12 => RegId::R12,
-        x86::R13 => RegId::R13,
-        x86::R14 => RegId::R14,
-        x86::R15 => RegId::R15,
-        x86::R8D => RegId::R8D,
-        x86::R9D => RegId::R9D,
-        x86::R10D => RegId::R10D,
-        x86::R11D => RegId::R11D,
-        x86::R12D => RegId::R12D,
-        x86::R13D => RegId::R13D,
-        x86::R14D => RegId::R14D,
-        x86::R15D => RegId::R15D,
-        x86::EFLAGS => EFLAGS_ID,
-        _ => return None,
-    })
-}
-
-/// The pin's register number of the register the builder names `id`
-/// (`phys_reg` inverted); `None` where it has none.
-pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
-    (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
 }
 
 /// A target's physical registers in the pin's numbering: the ids the builder
@@ -852,6 +802,26 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         self.dag.is_undef(ours(value))
     }
+    fn is_build_vector_all(
+        &self,
+        value: PinValue,
+        ones: bool,
+    ) -> bool {
+        let value = ours(value);
+        if self.dag.opcode(value) != ISD::BuildVector {
+            return false;
+        }
+        // `isBuildVectorAllZeros`/`AllOnes`: every defined lane is the constant
+        // (its low lane bits), and one is defined.
+        let lane_bits = self.dag.value_type(value).element().size_in_bits();
+        let mask = (1u128 << lane_bits) - 1;
+        let lanes = &self.dag.node(value).ops;
+        lanes.iter().any(|&lane| !self.dag.is_undef(lane))
+            && lanes.iter().all(|&lane| {
+                self.dag.is_undef(lane)
+                    || self.dag.constant(lane).is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
+            })
+    }
     fn mem_operands(
         &self,
         node: u32,
@@ -992,6 +962,12 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
     }
+    fn has_exact_flag(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::EXACT)
+    }
     fn atomic_ordering(
         &self,
         node: u32,
@@ -1050,6 +1026,14 @@ impl Dag for DagisAdapter<'_> {
         if mems.iter().any(|mem| self.dag.volatile_accesses.contains(mem)) {
             self.dag.volatile_accesses.insert(node);
         }
+        // So is one that folded only invariant loads
+        // (`isDereferenceableInvariantLoad` asks every memory operand).
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.invariant_loads.contains(mem)) {
+            self.dag.invariant_loads.insert(node);
+        }
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.got_loads.contains(mem)) {
+            self.dag.got_loads.insert(node);
+        }
         self.mem_refs.insert(node, mems.to_vec());
     }
 
@@ -1061,7 +1045,7 @@ impl Dag for DagisAdapter<'_> {
         value: i64,
         vt: Vt,
     ) -> PinValue {
-        theirs(self.dag.get_constant_with(value as u128, our_vt(vt), true, false))
+        theirs(self.dag.get_constant_with(value as u128, our_vt(vt, self.dag.config().vectors), true, false))
     }
     fn convert_to_target(
         &mut self,
@@ -1087,7 +1071,7 @@ impl Dag for DagisAdapter<'_> {
         register: u16,
         vt: Vt,
     ) -> PinValue {
-        let node = self.register_node(our_vt(vt), register);
+        let node = self.register_node(our_vt(vt, self.dag.config().vectors), register);
         theirs(node)
     }
     fn copy_to_reg(
@@ -1110,7 +1094,7 @@ impl Dag for DagisAdapter<'_> {
         vt: Vt,
         glue: PinValue,
     ) -> u32 {
-        let vt = our_vt(vt);
+        let vt = our_vt(vt, self.dag.config().vectors);
         let reg = self.register_node(vt, register);
         self.dag.get_node_multi(ISD::CopyFromReg, &[vt, EVT::OTHER, EVT::GLUE], &[ours(chain), reg, ours(glue)]).node
     }
@@ -1121,7 +1105,7 @@ impl Dag for DagisAdapter<'_> {
         vt: Vt,
         glue: Option<PinValue>,
     ) -> u32 {
-        let vt = our_vt(vt);
+        let vt = our_vt(vt, self.dag.config().vectors);
         let mut ops = vec![ours(chain), ours(register)];
         ops.extend(glue.map(ours));
         let vts: &[EVT] = if glue.is_some() { &[vt, EVT::OTHER, EVT::GLUE] } else { &[vt, EVT::OTHER] };
@@ -1140,7 +1124,8 @@ impl Dag for DagisAdapter<'_> {
         vts: &[Vt],
         operands: &[PinValue],
     ) -> u32 {
-        let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
+        let vectors = self.dag.config().vectors;
+        let vts: Vec<EVT> = vts.iter().copied().map(|v| our_vt(v, vectors)).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         self.dag.intern(ISD::Machine(u32::from(opcode)), &vts, &ops, SDNodeFlags::default(), NodeData::None).node
     }
@@ -1151,7 +1136,8 @@ impl Dag for DagisAdapter<'_> {
         vts: &[Vt],
         operands: &[PinValue],
     ) -> (u32, Vec<u32>) {
-        let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
+        let vectors = self.dag.config().vectors;
+        let vts: Vec<EVT> = vts.iter().copied().map(|v| our_vt(v, vectors)).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
@@ -1257,6 +1243,15 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn live_in_physical(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        match self.dag.nodes()[node as usize].data {
+            NodeData::Register(number) => self.registers.pin_register(*self.dag.live_in_phys.get(&number)?),
+            _ => None,
+        }
+    }
     fn known_zero_bits(
         &self,
         value: PinValue,
@@ -1383,14 +1378,14 @@ impl AddrDag for DagisAdapter<'_> {
             pin::ANY_EXTEND => ISD::AnyExtend,
             other => panic!("the address folds never make pin opcode {other}"),
         };
-        theirs(self.dag.get_node(isd, our_vt(vt), &ops))
+        theirs(self.dag.get_node(isd, our_vt(vt, self.dag.config().vectors), &ops))
     }
     fn get_constant(
         &mut self,
         value: i64,
         vt: Vt,
     ) -> PinValue {
-        theirs(self.dag.get_constant(value as u128, our_vt(vt)))
+        theirs(self.dag.get_constant(value as u128, our_vt(vt, self.dag.config().vectors)))
     }
     fn is_non_temporal(
         &self,
@@ -1405,7 +1400,7 @@ impl AddrDag for DagisAdapter<'_> {
     ) -> PinValue {
         theirs(self.dag.intern(
             ISD::TargetFrameIndex,
-            &[our_vt(vt)],
+            &[our_vt(vt, self.dag.config().vectors)],
             &[],
             SDNodeFlags::default(),
             NodeData::FrameIndex(index),

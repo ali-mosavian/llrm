@@ -13,13 +13,13 @@
 //! # Example
 //! Under `if (n != 0)` the preheader's guards rewrite `%n` to `umax(1, %n)`.
 
-use super::ConstantRange;
 use llrm_mir::constantrange::PreferredRangeType;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
 use llrm_support::hash::HashMap;
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Type, Use, flags};
 use super::{Cx, Flags, ScalarEvolution};
@@ -871,7 +871,7 @@ impl ScalarEvolution {
                 }
                 let mut rewritten = Vec::new();
                 let mut changed = false;
-                for op in &operands {
+                for op in operands.iter() {
                     let new_op = self.guard_rewrite(cx, guards, mask, op.scev);
                     changed |= op.scev != new_op;
                     rewritten.push(Use::of(new_op));
@@ -888,7 +888,7 @@ impl ScalarEvolution {
             Kind::Mul(operands) => {
                 let mut rewritten = Vec::new();
                 let mut changed = false;
-                for op in &operands {
+                for op in operands.iter() {
                     let new_op = self.guard_rewrite(cx, guards, mask, op.scev);
                     changed |= op.scev != new_op;
                     rewritten.push(Use::of(new_op));

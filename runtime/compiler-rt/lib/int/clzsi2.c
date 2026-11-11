@@ -3,6 +3,9 @@
 
 int SFB_NAME(clzsi2)(uint32_t x)
 {
+#ifdef SF_BFFFO /* config/m68k: one bfffo; x is not zero, so the zero-poison builtin */
+    return __builtin_clz(x);
+#else
     int n = 0;
     if (!(x & 0xFFFF0000u)) { n += 16; x <<= 16; }
     if (!(x & 0xFF000000u)) { n += 8; x <<= 8; }
@@ -10,4 +13,5 @@ int SFB_NAME(clzsi2)(uint32_t x)
     if (!(x & 0xC0000000u)) { n += 2; x <<= 2; }
     if (!(x & 0x80000000u)) { n += 1; }
     return n;
+#endif
 }

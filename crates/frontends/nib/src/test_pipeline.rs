@@ -22,9 +22,11 @@ fn _nib(
 
 #[test]
 fn test_a_dword_read_only_as_offset_and_selector_is_one_far_load() {
-    // Nib's sum split each far pointer through the stack.
+    // Nib's sum split each far pointer through the stack. Now its slice arrives
+    // as the data pointer itself (the length folded into the loop), so no far
+    // pointer is read from memory at all.
     let function = _nib("sum", "sum", "_sum");
-    assert_eq!(function.matches("les ").count(), 2);
+    assert_eq!(function.matches("les ").count(), 0);
     assert!(!function.contains("pop es"));
 }
 

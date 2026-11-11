@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/selectiondag.rs sha256:b15b29a5d898e600087fa5c2e2d6405a6e437155063fffb95310aadefc1f1e9c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/selectiondag.rs sha256:fb28c6dabe83bca90a27807d97c77f55b2eb11d7b060ade6f28319a44a540942 -->
 
 # selectiondag
 
@@ -54,7 +54,7 @@ Exit: sdag-d adds them if the emitter needs line info. Owner sdag-a.
 Review 2026-11-13.
 
 DEVIATE SD11: no floating-point constant folding (`foldConstantFPMath`,
-`FP_TO_SINT` of a constant, `FoldSetCC` on FP constants), no FP constant
+`FP_TO_SINT` of a constant), no FP constant
 bitcasts; `ConstFp` holds raw bits. Reason: needs an `APFloat` (f80
 included); not on the integer path A1 builds. Exit: with the FP builder
 piece. Owner sdag-a. Review 2026-11-13.
@@ -65,9 +65,13 @@ an undef arm, `FREEZE`) are not made: nothing is dropped, the combiner
 makes them. Exit: with `computeKnownBits` (sdag-b, B2). Owner sdag-a.
 Review 2026-11-13.
 
-DEVIATE SD13: no vector types or nodes (`BUILD_VECTOR`, `SPLAT_VECTOR`,
-`VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
-vector MIR. Owner sdag-a. Review 2026-11-13.
+DEVIATE SD13: no vector types or nodes (`SPLAT_VECTOR`, `VSCALE`,
+floating-point and 64-bit vectors, vector arithmetic), except the four
+128-bit integer vectors `v16i8`, `v8i16`, `v4i32`, `v2i64` of the arm64
+flag `LLRM_ARM64_VECTORS`: their `BUILD_VECTOR`, `INSERT_VECTOR_ELT`,
+`SCALAR_TO_VECTOR`, splat `VECTOR_SHUFFLE`, loads and stores exist since
+2026-11-10 (VEC1, VEC2). Exit: the rest, with the arm64 vectorizer's
+pieces. Owner llrm-arm64-vec. Review 2026-11-12.
 
 DEVIATE SD15: `FindMergedConditions` is ported (`builder/mergedcond.rs`)
 without the edge probabilities (`TProb`/`FProb`) the pin keeps on the blocks

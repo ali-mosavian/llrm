@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:3a0340bc15f155f82da23c1f6d08d7dbf946cbdcfc1823d30a80fb087fc3941d -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:e892da0de3096d09383ef6859b0fd95412e9eeb6ca70b98e14701681ce5c5879 -->
 
 # inline
 
@@ -59,7 +59,9 @@ A copy is allowed (`fits_with`) only where
 
 - the call's function type is the callee's and the callee is not variadic;
 - no body that allocates is copied into a recursive caller, except the last
-  call of a private callee;
+  call of a private callee, unless the target says
+  (`Tti::inline_frames_into_recursive_callers`, the pin's rule: the cost
+  model refuses above 1024 bytes; flat x86 says it);
 - a parameter the callee `releases` is passed an object the caller owns.
 
 Which sites are copied is `inlinecost::decide`'s (the walk's).
@@ -140,8 +142,8 @@ in `inline_tests.rs`.
 Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has
 reached its fixed point, then sends each changed body back through the
 pipeline (`inline<N>`, `ipa-inline<N>.`; `LLRM_DEBUG=inline` logs each
-verdict). Off at -O0; the threshold is 90 at -O1 and -Og, 225 at -O2, 250 at
--O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
+site: caller, callee, cost, threshold, verdict). Off at -O0; the threshold is the pin's
+225 at -O1 and -O2, 250 at -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
 
 ## Needs
 [`crate::profit`](profit.md) (operation prices, block frequencies),

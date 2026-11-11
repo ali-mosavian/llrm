@@ -458,3 +458,15 @@ fn a_disposition_lookup_costs_the_same_whatever_the_loops_before_it() {
     let (a, b) = (looked_at(32), looked_at(128));
     assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
 }
+
+/// Compile time: the table of expressions lent out while the pass worked was
+/// replaced by a fresh one with room for 256 nodes, 2,464 of them in a run of
+/// memexp -O2 against the pin's 651 for the whole of opt. Lending one out
+/// makes none.
+#[test]
+fn a_run_makes_no_table_of_expressions_but_the_one_it_is_given() {
+    let before = llrm_analysis::scev::made();
+    deleted(COUNTER, INPUTS);
+    let made = llrm_analysis::scev::made() - before;
+    assert!(made <= 1, "{made} tables of expressions made");
+}

@@ -28,7 +28,7 @@
 use llrm_spike_mf::{Kind, Operand, Reg};
 use llrm_support::hash::{HashMap, HashSet};
 
-use crate::dagisel::{indexed, local};
+use crate::dagisel::{bfffo, indexed, local};
 use crate::foldload::{commutes, swapped_readers};
 use crate::mfunc::{MFunction, op_inst};
 
@@ -202,7 +202,10 @@ fn fold_user(
         folded.origin = inst.origin;
         return Some((folded, Vec::new()));
     }
-    let twin = name.strip_suffix("32dr").map(|stem| format!("{stem}32dp"))?;
+    let twin = match bfffo::memory_twin(name) {
+        Some(twin) => twin.to_owned(),
+        None => name.strip_suffix("32dr").map(|stem| format!("{stem}32dp"))?,
+    };
     let twin = local::name_of(u32::from(local::code_of(&twin)?))?;
     let source = usize::from(local::text(name)?.2.first()?.at);
     let mut operands = inst.operands.clone();

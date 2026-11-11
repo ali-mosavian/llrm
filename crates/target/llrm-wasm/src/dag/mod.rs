@@ -154,7 +154,7 @@ impl ModuleFacts {
     ) -> llrm_codegen::backend::constpool::Symbols {
         self.tables
             .get_or_init(|| {
-                llrm_codegen::backend::selectiondag::function_lowering::module_tables(module, dso_local_symbols)
+                llrm_codegen::backend::selectiondag::function_lowering::module_tables(module, dso_local_symbols, false)
             })
             .clone()
     }

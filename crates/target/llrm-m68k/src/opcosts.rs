@@ -111,6 +111,9 @@ pub fn forms(cpu: Cpu) -> Vec<(&'static str, Vec<Inst>)> {
 pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("argument", "2: a register push, which is what the default says; also a form"),
     ("prefix", "m68k has no operand-size prefix"),
+    ("native_bits", "0: a price is for the operation as the type has it, as on every target but the 6502"),
+    ("address_dword", "m68k states no address-size prefix; the price is `address` alone"),
+    ("address_third", "same"),
     ("return_pops", "the caller pops its arguments"),
     ("carry", "no segmented or huge pointers"),
     ("carry_step", "no segmented or huge pointers"),
@@ -140,16 +143,39 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("line_fill_clocks", "set by the CPU table"),
 ];
 
-/// What the lowering adds that no IR operation names (spills, branch relaxation, copies the allocator leaves): the
-/// median over `tests/run/c` of the object function's bytes against this table's estimate was 1.46 at the 68000 and
-/// 1.50 at the 68020 (train split by symbol hash; hold-out median |error| 0.31 and 0.35 against 0.38 and 0.41 at 1.0,
-/// aggregate 0.92 and 0.89 of the objects). The aggregate alone would say 1.7 to 1.8; the many small functions the
-/// decisions are about set the median.
-const FUNCTION_SCALE_PERCENT: i64 = 150;
+/// What the lowering adds that no IR operation names (spills, branch relaxation, copies the allocator leaves), as a
+/// scale and a per-function constant: `(operations + function) * scale`. Fit (`tools/m68k_size_fit.py --corpus --dump`,
+/// 2026-11-09, -O2 and -Os) on the functions of `tests/run/c` WITHOUT the 22 fixtures of `tests/data_size`, graded on
+/// the 124 functions of those fixtures (disjoint): one median scale of 1.50 priced large functions 30% over. The fit
+/// surface is flat (1.20 + 3 B is within 0.005 of the best pair, median |error| 0.123 on 1826 functions); on the
+/// fixtures the median |error| is 0.25 (68000) and 0.24 (68020) against 0.41 and 0.32 at 1.50, aggregate 1.03 against
+/// 1.24.
+const FUNCTION_SCALE_PERCENT: i64 = 120;
+
+/// Bytes added to every function's estimate beyond the saved register (see `FUNCTION_SCALE_PERCENT`): the frame and
+/// returns the lowering emits that no operation names.
+pub const FUNCTION_RESIDUE_BYTES: i64 = 3;
+
+/// The bytes of an `i64` product and of the product of two `i32`s into an `i64`, the whole sequence: the object of
+/// `long long f(long long a, long long b) { return a * b; }` and of `(long long)a * b` at -Os (2026-11-09: 152 and 178
+/// B at the 68000, 44 and 14 B at the 68020) less the saved registers, `rts` and loads around the product
+/// (`tests/size_calibration.rs` holds them to the objects). The 68000 has no 32-bit multiply either: each is a run of
+/// `__mulsi3` calls on 16-bit halves; the 68020 has `muls.l`/`mulu.l`.
+fn products(cpu: Cpu) -> (i64, i64) {
+    if cpu.at_least(Cpu::M68020) { (34, 8) } else { (136, 160) }
+}
 
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
-    let mut costs = OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, ..OperationCosts::default() };
+    let (wide, widening) = products(cpu);
+    let mut costs = OperationCosts {
+        function_scale: FUNCTION_SCALE_PERCENT,
+        free_intrinsics: true,
+        expanded_intrinsics: true,
+        multiply_wide: wide,
+        multiply_widening: widening,
+        ..OperationCosts::default()
+    };
     for (class, form) in forms(cpu) {
         let size = bytes(&form)?;
         match class {
@@ -178,7 +204,7 @@ pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
             "float_to_int" => costs.float_to_int = size,
             "float_load" => costs.float_load = size,
             "float_store" => costs.float_store = size,
-            "function" => costs.function = size,
+            "function" => costs.function = size + FUNCTION_RESIDUE_BYTES,
             other => return Err(format!("no field for {other}")),
         }
     }

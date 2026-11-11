@@ -3,15 +3,21 @@
 pub mod abi;
 pub mod alloc;
 pub mod asm;
+pub mod cmpzero;
+pub mod copyprop;
 pub mod dagisel;
 pub mod driver;
 pub mod elf;
 pub mod emit;
 pub mod frame;
 pub mod hotdivision;
+pub mod ir_lowering;
+pub mod mulimage;
 pub mod opcosts;
 pub mod peephole;
+pub mod peephole_cells;
 pub mod platform;
+pub mod pointer_alu;
 pub mod prepare;
 pub mod relax;
 pub mod routines;
@@ -21,6 +27,7 @@ pub mod staticlocals;
 pub mod target;
 pub mod timing;
 pub mod tti;
+pub mod weights;
 
 use llrm_lir::registers::{RegId, Row};
 

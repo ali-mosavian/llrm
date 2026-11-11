@@ -1,0 +1,17 @@
+# The operations a size-built function may call a runtime routine for (compiler-rt, -Os, 68020 and later).
+# candidate KEY ROUTINE: the routine the operation calls. The inline and call bytes of a site are measured per function, not tabled.
+# member ROUTINE BYTES [NEEDS,...]: the routine as linked (ld map, 2026-11-09) and the routines it calls.
+candidate	Ctz64	__ctzdi2
+candidate	Clz64	__clzdi2
+candidate	Pop32	__popcountsi2
+candidate	Pop64	__popcountdi2
+candidate	Shl64	__ashldi3
+candidate	Shr64	__lshrdi3
+candidate	Sar64	__ashrdi3
+member	__ctzdi2	48
+member	__clzdi2	26
+member	__popcountsi2	70
+member	__popcountdi2	32	__popcountsi2
+member	__ashldi3	72
+member	__lshrdi3	72
+member	__ashrdi3	76

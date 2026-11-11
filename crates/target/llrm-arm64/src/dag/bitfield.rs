@@ -7,11 +7,11 @@
 //! # See also
 //! `isBitfieldPositioningOp`, `AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
 
+use llrm_dagisel::addr::AddrDag;
 use llrm_dagisel::dag::SDValue as PinValue;
 use llrm_dagisel::generated::aarch64::ids::opcode as aarch64_ids;
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::Outcome;
-use llrm_dagisel::x86_addr::AddrDag;
 
 fn is_shifted_mask(x: u64) -> bool {
     x != 0 && {
@@ -150,7 +150,8 @@ fn useful_bits_for_use<D: Dag>(
         return useful;
     }
     let me = Value::new(user, 0);
-    match dag.opcode(user) {
+    // A machine node's opcode is stored complemented.
+    match !dag.opcode(user) {
         op::ANDSWri | op::ANDSXri | op::ANDWri | op::ANDXri => {
             let imm = decode_logical(target_imm(dag, user, 1) as u32, bits);
             useful_bits(dag, me, useful & imm, bits, depth + 1)

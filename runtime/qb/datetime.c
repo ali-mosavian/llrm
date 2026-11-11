@@ -115,7 +115,7 @@ void B_SDAT(SD *text)
     }
     if (dev_date_set(year, month, day))
         qb_error(BE_ILLFUN);
-    str_tmp_free(text);
+    str_free_if_tmp(text);
 }
 
 /* B$STIM: TIME$ = "hh", "hh:mm" or "hh:mm:ss". */
@@ -137,7 +137,7 @@ void B_STIM(SD *text)
     }
     if (dev_time_set(hours, minutes, seconds))
         qb_error(BE_ILLFUN);
-    str_tmp_free(text);
+    str_free_if_tmp(text);
 }
 
 /* Days from 1970-01-01 to the first of `month` (1 to 12) of `year`: a civil date's day count, proleptic Gregorian. */

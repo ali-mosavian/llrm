@@ -26,7 +26,7 @@ use super::generated::ids::reg as pin;
 use super::generated::instrinfo::flag;
 use super::generated::{m68k_m68000, m68k_m68020};
 use super::hooks::{Cpu, M68kHooks};
-use super::lowering::{M68kLowering, target_lowering};
+use super::lowering::{M68kLowering, target_lowering_with};
 use crate::reg;
 use crate::target::M68k;
 
@@ -151,6 +151,20 @@ impl SchedInfo for M68kSched {
         Some(pin::CCR)
     }
 
+    /// `M68kRegisterInfo::getCrossCopyRegClass` ([L101-L105][pin]) gives
+    /// `CCR` the class `DR16`, so a flag live across a call cannot be copied
+    /// within its class: the scheduler clones the definition
+    /// (`CopyAndMoveSuccessors`) and the flags are recomputed after the call.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/M68k/M68kRegisterInfo.h#L101-L105
+    fn has_cross_copy_class(
+        &self,
+        register: u16,
+    ) -> bool {
+        register == pin::CCR
+    }
+
     /// M68k does not enable the machine scheduler: `createDefaultScheduler`
     /// gives it the ILP list scheduler.
     fn preference(&self) -> Preference {
@@ -170,7 +184,7 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, false, false, true, Default::default(), Default::default(), &[], &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
@@ -183,10 +197,15 @@ pub fn select_block_with(
     indexed: bool,
     short: bool,
     absolute_data: bool,
+    carry_chain: bool,
+    price: crate::timing::Price,
+    mul: super::mulprice::Chain,
+    libcalls: &[crate::libcalls::Kind],
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering { indexed, short, absolute_data };
+    let mut tli = target_lowering_with(cpu, carry_chain);
+    crate::libcalls::apply(&mut tli, libcalls);
+    let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu), cpu, price, mul };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,
@@ -221,7 +240,9 @@ impl Select for M68kChooser<'_> {
         adapter: &mut llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter<'_>,
         node: u32,
     ) -> llrm_dagisel::interp::Outcome {
-        super::indexed::select(adapter, node).unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
+        super::indexed::select(adapter, node)
+            .or_else(|| super::bfffo::select(adapter, node))
+            .unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }
 
@@ -229,7 +250,7 @@ impl DagTarget for M68kTarget<'_> {
     type Lowering = M68kLowering;
 
     fn phases(&mut self) -> Phases<'_, M68kLowering> {
-        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(&M68k) }
+        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(&M68k), opt_none: false }
     }
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
@@ -240,6 +261,7 @@ impl DagTarget for M68kTarget<'_> {
         &mut self,
         dag: &mut SelectionDAG,
     ) {
+        super::btst::immediate_bit_numbers(dag);
         if self.short {
             super::short::narrow(dag);
         }
@@ -262,7 +284,7 @@ impl Temporaries {
     }
 }
 
-impl llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects for Temporaries {
+impl llrm_codegen::backend::selectiondag::dag_target::FrameObjects for Temporaries {
     fn objects(&self) -> i32 {
         self.next
     }

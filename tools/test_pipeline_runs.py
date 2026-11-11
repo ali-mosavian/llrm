@@ -1,4 +1,4 @@
-"""pipeline-runs.py reads llrm-c's `runs`, `time` and `regalloc` lines: a reader that drops a line type reports a quiet compile."""
+"""pipeline-runs.py reads llrm-cc's `runs`, `time` and `regalloc` lines: a reader that drops a line type reports a quiet compile."""
 import importlib.util
 from pathlib import Path
 

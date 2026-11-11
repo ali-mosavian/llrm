@@ -159,6 +159,10 @@ pub struct Convention {
     /// return with the late path (the exit then jumps over the epilogue). Left
     /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
     pub frame_wrap_split_size: bool,
+    /// The locals' base takes the widest object's alignment and the call
+    /// alignment is met by a pad, as the pin's 64-bit `X86FrameLowering` lays
+    /// a frame out (`calculateFrameObjectOffsets`).
+    pub frame_object_aligned: bool,
     /// Bytes below the stack pointer the ABI keeps safe from signal handlers
     /// (the System V red zone): a leaf function's locals live there, with
     /// no `sub`.
@@ -195,6 +199,13 @@ pub struct Convention {
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
+    /// For an interrupt handler: the registers its entry pushes after the
+    /// general ones, in push order (the frame holds them in reverse).
+    pub interrupt_saves: Vec<String>,
+    /// For an interrupt handler: the registers its entry loads with the data
+    /// group's selector, the first from the group, each next from the one
+    /// before.
+    pub interrupt_data: Vec<String>,
 }
 
 /// A target's description of its conventions, by its address: one per target,
@@ -282,6 +293,7 @@ const KEYS: &[&str] = &[
     "frame_saved_first",
     "frame_enter",
     "frame_wrap_split_size",
+    "frame_object_aligned",
     "frame_red_zone",
     "frame_slot_push",
     "frame_slot_pop",
@@ -302,6 +314,8 @@ const KEYS: &[&str] = &[
     "va_list",
     "like",
     "interrupt_frame",
+    "interrupt_saves",
+    "interrupt_data",
 ];
 
 impl Calling {
@@ -763,6 +777,7 @@ impl Convention {
             frame_saved_first: flag("frame_saved_first")?,
             frame_enter: flag("frame_enter")?,
             frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_object_aligned: flag("frame_object_aligned")?,
             frame_red_zone: table
                 .contains_key("frame_red_zone")
                 .then(|| integer("frame_red_zone"))
@@ -786,6 +801,14 @@ impl Convention {
                 .then(|| text("variadic_vector_register"))
                 .transpose()?,
             va_list: table.contains_key("va_list").then(|| text("va_list")).transpose()?,
+            interrupt_saves: match table.get("interrupt_saves") {
+                Some(_) => names(table.get("interrupt_saves"), "interrupt_saves")?,
+                None => Vec::new(),
+            },
+            interrupt_data: match table.get("interrupt_data") {
+                Some(_) => names(table.get("interrupt_data"), "interrupt_data")?,
+                None => Vec::new(),
+            },
             interrupt_frame: match table.get("interrupt_frame") {
                 None => Vec::new(),
                 Some(rows) => rows
@@ -819,6 +842,17 @@ impl Convention {
             .map(|(_, registers)| registers.as_slice())
     }
 
+    /// The register a returned pointer (and the `sret` pointer a callee hands
+    /// back) leaves in: the `pointer` entry, else the first register of a
+    /// result `bytes` wide.
+    pub fn pointer_result_register(
+        &self,
+        bytes: i64,
+    ) -> Option<&str> {
+        let named = self.results.get("pointer").and_then(|registers| registers.first());
+        named.or_else(|| self.result_registers(bytes)?.first()).map(String::as_str)
+    }
+
     /// The vector register a `float` or `double` result leaves in, where the
     /// convention has one.
     pub fn float_result_register(&self) -> Option<&str> {
@@ -845,6 +879,18 @@ impl Convention {
         arguments: &[Kind],
         reserved: &[&str],
     ) -> Placement {
+        self.place_variadic(arguments, reserved, arguments.len())
+    }
+
+    /// `place_reserving` for a variadic call: the arguments from index `fixed`
+    /// on are the unnamed ones, which go on the stack after the named ones
+    /// even where registers are free, so the callee finds them in one run.
+    pub fn place_variadic(
+        &self,
+        arguments: &[Kind],
+        reserved: &[&str],
+        fixed: usize,
+    ) -> Placement {
         if self.positional {
             return self.place_positional(arguments, reserved);
         }
@@ -857,8 +903,8 @@ impl Convention {
         let mut places = Vec::new();
         let mut used = Vec::new();
         let (mut stack, mut spilled) = (0, false);
-        for &kind in arguments {
-            let found = if spilled {
+        for (index, &kind) in arguments.iter().enumerate() {
+            let found = if spilled || index >= fixed {
                 None
             } else {
                 match kind {
@@ -871,7 +917,7 @@ impl Convention {
                     Kind::Float(_) => None,
                 }
             };
-            if let (Kind::Float(_), Some(register)) = (kind, self.float_argument_registers.get(float_free)) {
+            if let (Kind::Float(_), Some(register), true) = (kind, self.float_argument_registers.get(float_free), index < fixed) {
                 float_free += 1;
                 used.push(register.clone());
                 places.push(Place::Registers(vec![register.clone()]));
@@ -1098,6 +1144,19 @@ mod tests {
             (six.places[4].clone(), six.places[5].clone(), six.stack_bytes),
             (Place::Stack(0), Place::Stack(4), 8)
         );
+    }
+
+    /// The unnamed arguments of a variadic call went to the registers the named ones left free, where a callee that
+    /// walks the stack for them found nothing. They go on the stack after the named ones: `(int, int)` with one
+    /// named is EAX and then stack offset 0, though EDX was free.
+    #[test]
+    fn the_unnamed_arguments_go_on_the_stack_after_the_named_ones() {
+        let calling = Calling::parse(WATCALL).unwrap();
+        let w = calling.native();
+        let placed = w.place_variadic(&[Kind::Word, Kind::Word, Kind::Wide], &[], 1);
+        assert_eq!(placed.places, [registers(&["eax"]), Place::Stack(0), Place::Stack(4)]);
+        assert_eq!(placed.stack_bytes, 12);
+        assert_eq!(w.place_variadic(&[Kind::Word, Kind::Word], &[], 2).places, w.place(&[Kind::Word, Kind::Word]).places);
     }
 
     const WIN64: &str = "default = \"w\"\n[abi.w]\nconvention = \"w\"\n[w]\nslot_bytes = 8\norder = \"right-to-left\"\ncleanup = \"caller\"\nargument_registers = [\"rcx\", \"rdx\", \"r8\", \"r9\"]\nfloat_argument_registers = [\"xmm0\", \"xmm1\", \"xmm2\", \"xmm3\"]\npositional = true\nshadow_bytes = 32\nreturn_address_bytes = 8\nfirst_argument_offset = 48\nframe = \"rbp\"\nstack = \"rsp\"\npreserved = [[\"ebx\", \"rbx\"]]\nclobbered = [\"rax\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 1\nvariadic_float = \"double\"\n[w.result]\n8 = [\"rax\"]\n";

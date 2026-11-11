@@ -34,7 +34,6 @@ use llrm_lir::registers::RegId;
 use super::dag::{MemBase, MemInfo, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
-use super::x86isd;
 
 /// Where an argument goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +54,8 @@ pub struct Returned {
 pub struct CallEnv<'a> {
     pub arch: &'a dyn llrm_target::Target,
     pub pointer: EVT,
+    /// The target's call node.
+    pub call: ISD,
 }
 
 /// The nodes of the call: the chain after it, and the value read from each
@@ -79,7 +80,7 @@ pub fn lib_call(
         match *place {
             Place::Stack(offset) => {
                 let sp = *stack_pointer.get_or_insert_with(|| {
-                    let sp = env.arch.register_named(super::builder::stack_pointer_name(env.pointer));
+                    let sp = env.arch.stack_pointer();
                     dag.get_copy_from_phys_reg_plain(chain, sp, env.pointer)
                 });
                 let offset = dag.get_constant(offset as u128, env.pointer);
@@ -115,7 +116,7 @@ pub fn lib_call(
     }
     ops.push(dag.get_register_mask_clobbering(clobbers));
     ops.extend(glue);
-    let call = dag.get_node_multi(x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
+    let call = dag.get_node_multi(env.call, &[EVT::OTHER, EVT::GLUE], &ops);
     let end = dag.get_callseq_end(
         SDValue { node: call.node, res: 0 },
         stack_bytes,
@@ -147,6 +148,24 @@ pub fn c_lib_call(
     args: &[SDValue],
     ret: EVT,
 ) -> Option<SDValue> {
+    let values = c_lib_call_parts(dag, env, name, convention, args, ret)?;
+    Some(match values[..] {
+        [one] => one,
+        [low, high] => dag.get_node(ISD::BuildPair, ret, &[low, high]),
+        _ => return None,
+    })
+}
+
+/// `c_lib_call`, the result as the registers it is read from (low first), not
+/// joined: for a caller that is itself expanding the wide result.
+pub fn c_lib_call_parts(
+    dag: &mut SelectionDAG,
+    env: &CallEnv<'_>,
+    name: &str,
+    convention: Option<u32>,
+    args: &[SDValue],
+    ret: EVT,
+) -> Option<Vec<SDValue>> {
     use llrm_target::calling::Place as Where;
     let calling = env.arch.calling();
     let native = convention.and_then(|number| calling.by_number(number)).unwrap_or_else(|| calling.native());
@@ -197,9 +216,5 @@ pub fn c_lib_call(
     let stack = placement.stack_bytes as u64;
     let clobbers = super::dagisel_adapter::clobbered_by(env.arch, Some(native));
     let (_chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns, &clobbers);
-    Some(match values[..] {
-        [one] => one,
-        [low, high] => dag.get_node(ISD::BuildPair, ret, &[low, high]),
-        _ => return None,
-    })
+    Some(values)
 }

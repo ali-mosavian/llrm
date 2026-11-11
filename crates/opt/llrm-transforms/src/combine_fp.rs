@@ -38,7 +38,7 @@ use llrm_mir::types::{FloatKind, Type};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_muldivrem::simplify_first;
-use crate::combine_shared::simplify_associative_or_commutative;
+use crate::combine_shared::{query, simplify_associative_or_commutative};
 
 /// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
 /// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
@@ -86,6 +86,10 @@ pub fn visit_fsub(
         if (negative_zero || nsz_zero) && kind != FloatKind::X86Fp80 {
             return c.replace_with_new(inst, Opcode::FNeg, instruction.ty, vec![op1], instruction.flags);
         }
+    } else if let Some(negative) = quad_zero(c, op0)
+        && (negative || instruction.flags.contains(Flags::NSZ))
+    {
+        return c.replace_with_new(inst, Opcode::FNeg, instruction.ty, vec![op1], instruction.flags);
     }
     // X - C --> X + (-C)
     if let Some(negated) = negated_constant(c, op1) {
@@ -155,7 +159,7 @@ pub(crate) fn fneg_operand(
     }
 }
 
-/// `ConstantFoldUnaryOpOperand(FNeg, C)` of a float or double constant.
+/// `ConstantFoldUnaryOpOperand(FNeg, C)` of a float, double or fp128 constant.
 pub(crate) fn negated_constant(
     c: &mut Combiner,
     v: Operand,
@@ -163,6 +167,11 @@ pub(crate) fn negated_constant(
     let Operand::Constant(id) = v else { return None };
     let constant = c.context.get(id).clone();
     let Type::Float(kind) = *c.context.types.get(constant.ty) else { return None };
+    // The sign bit of a binary128 flips exactly as a double's.
+    if let ConstantKind::Float128(bits) = constant.kind {
+        let negated = ConstantKind::Float128(bits ^ (1 << 127));
+        return Some(Operand::Constant(c.context.constant(Constant { ty: constant.ty, kind: negated })));
+    }
     let ConstantKind::Float(bits) = constant.kind else { return None };
     let flipped = match kind {
         FloatKind::Float => bits ^ (1 << 31),
@@ -187,6 +196,16 @@ pub fn visit_fdiv(
 /// `isa<Constant>` of an operand.
 pub(crate) fn is_constant(v: Operand) -> bool {
     matches!(v, Operand::Constant(_))
+}
+
+/// Whether an fp128 constant is a zero, and if so whether it is `-0.0`.
+fn quad_zero(
+    c: &Combiner,
+    v: Operand,
+) -> Option<bool> {
+    let Operand::Constant(id) = v else { return None };
+    let ConstantKind::Float128(bits) = c.context.get(id).kind else { return None };
+    (bits << 1 == 0).then_some(bits >> 127 == 1)
 }
 
 /// The value of a float constant operand, with its format and type.

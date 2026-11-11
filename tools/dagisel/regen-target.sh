@@ -68,10 +68,12 @@ if [ "$(uname)" = Darwin ]; then UNRESOLVED=(-Wl,-undefined,dynamic_lookup); els
 g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" "${HDR[@]}" "$WORK/ids.cpp" -o "$WORK/ids" "${UNRESOLVED[@]}"
 "$WORK/ids" | sed 's/^SelectionDAGISel:://' > "$WORK/ids.txt"
 cat "$OWN" >> "$WORK/ids.txt"
+# Every value type by number (the table prints most as bare numbers): Other is 1, in GenVT.inc's order.
+sed -n '/^#ifdef GET_VT_ATTR/,/^#endif/p' "$LLVM_BUILD/include/llvm/CodeGen/GenVT.inc" | sed -n 's/^ *GET_VT_ATTR(\([A-Za-z0-9_]*\),.*/\1/p' | awk '{print "MVT::" $1 " " NR}' > "$WORK/vts.txt"
 
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
 mkdir -p "$OUT"
-"${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
+"${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --vts "$WORK/vts.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
 # `asm = "<namespace>"` in the record: the instructions' asm strings and printer methods.
 ASM_NS=$(field asm)
 if [ -n "$ASM_NS" ]; then
@@ -83,4 +85,34 @@ ENC_NS=$(field enc)
 if [ -n "$ENC_NS" ]; then
   [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
   python3 -I "$ROOT/tools/dagisel/enctable.py" "$WORK/target.json" "$OUT/enc.rs" "${ENC_NS%::}"
+fi
+# `sched_cpus = [...]`: the pin's scheduling models of those CPUs and the class of each emitted opcode (sched.rs).
+SCHED_CPUS=$(field sched_cpus)
+if [ -n "$SCHED_CPUS" ]; then
+  # A record with `[dynamic]` atoms: a second generation with each of them false and no `live` types (the tables before the vectors),
+  # so sched.rs can tell the opcodes only the vectors reach.
+  BASELINE=()
+  if grep -q '^\[dynamic\]' "$REC"; then
+    BASEREC="$RECDIR/.baseline-$(basename "$REC")"
+    python3 -I - "$REC" "$BASEREC" <<'PY'
+import re, sys
+src, dst = sys.argv[1:]
+text = open(src).read()
+m = re.search(r"^\[dynamic\]\n((?:(?!\[).*\n)*)", text, re.M)
+atoms = re.findall(r'^("[^"]+") = ', m.group(1), re.M)
+text = text.replace(m.group(0), "")
+text = text.replace("[atom]\n", "[atom]\n" + "".join(f"{a} = false\n" for a in atoms), 1)
+text = re.sub(r"^live = \[[^\]]*\]", "live = []", text, flags=re.M)
+open(dst, "w").write(text)
+PY
+    mkdir -p "$WORK/baseline"
+    "${GEN[@]}" --target "$BASEREC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --vts "$WORK/vts.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$WORK/baseline"
+    rm -f "$BASEREC"
+    BASELINE=(--baseline "$WORK/baseline")
+  fi
+  [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  "${TBLGEN[@]}" -gen-subtarget "$T/$TD" -o "$WORK/GenSubtarget.inc"
+  # shellcheck disable=SC2086 # one word per CPU
+  python3 -I "$ROOT/tools/dagisel/schedtable.py" --subtarget "$WORK/GenSubtarget.inc" --instrinfo "$WORK/GenInstrInfo.inc" \
+    --json "$WORK/target.json" --mcschedule "$S/include/llvm/MC/MCSchedule.h" --dir "$OUT" --out "$OUT/sched.rs" "${BASELINE[@]}" $SCHED_CPUS
 fi

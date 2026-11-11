@@ -1,6 +1,6 @@
 //! Where the copies that carry phi values go.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 /// A loop carrying a double ran `fmov d3, d4; b loop` in an edge block of its
@@ -30,7 +30,6 @@ exit:
   ret double %r
 }
 "#;
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(ir, Platform::Darwin, true).expect("lowers");
     // Premise: the loop carries a value in a copy.
     assert!(asm.contains("fmov d"), "{asm}");
@@ -63,7 +62,6 @@ exit:
   ret double %r
 }
 "#;
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(ir, Platform::Darwin, true).expect("lowers");
     assert!(asm.contains("fmov d"), "{asm}");
     let jumps = asm.lines().filter(|l| l.trim_start().starts_with("b ")).count();

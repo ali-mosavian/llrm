@@ -67,6 +67,8 @@ pub enum ISD {
     SMulO,
     UAddOCarry,
     USubOCarry,
+    SAddOCarry,
+    SSubOCarry,
     SetCCCarry,
     SAddSat,
     UAddSat,
@@ -76,6 +78,12 @@ pub enum ISD {
     SMax,
     UMin,
     UMax,
+    /// `AVGFLOORS`, `AVGFLOORU`, `AVGCEILS`, `AVGCEILU`: the average of two
+    /// values, rounded down / up, computed without overflowing the type.
+    AvgFloorS,
+    AvgFloorU,
+    AvgCeilS,
+    AvgCeilU,
     Abs,
     /// `ASSERT_ZEXT` / `ASSERT_SEXT`: the value's bits above the type in
     /// operand 1 are zero / copies of its sign bit. Selection drops them.
@@ -212,6 +220,17 @@ pub enum ISD {
     IntrinsicWChain,
     IntrinsicVoid,
 
+    /// `BUILD_VECTOR`: one scalar per lane. An operand may be wider than the
+    /// lane (`PromoteIntOp_BUILD_VECTOR`): the extra bits are ignored.
+    BuildVector,
+    /// `SCALAR_TO_VECTOR`: the scalar in lane 0, the rest undefined.
+    ScalarToVector,
+    /// `INSERT_VECTOR_ELT`: `(vector, element, index)`.
+    InsertVectorElt,
+    /// `VECTOR_SHUFFLE`: `(v1, v2)` and a mask of `v1`'s lane count in
+    /// `NodeData::Shuffle`; -1 is an undefined lane, `n..2n` picks `v2`.
+    VectorShuffle,
+
     Target(u16),
     Machine(u32),
 }
@@ -279,6 +298,8 @@ impl ISD {
             SMulO => "smulo",
             UAddOCarry => "uaddo_carry",
             USubOCarry => "usubo_carry",
+            SAddOCarry => "saddo_carry",
+            SSubOCarry => "ssubo_carry",
             SetCCCarry => "setcccarry",
             SAddSat => "saddsat",
             UAddSat => "uaddsat",
@@ -288,6 +309,10 @@ impl ISD {
             SMax => "smax",
             UMin => "umin",
             UMax => "umax",
+            AvgFloorS => "avgfloors",
+            AvgFloorU => "avgflooru",
+            AvgCeilS => "avgceils",
+            AvgCeilU => "avgceilu",
             Abs => "abs",
             AssertZext => "assertzext",
             AssertSext => "assertsext",
@@ -393,7 +418,11 @@ impl ISD {
             IntrinsicWoChain => "intrinsic_wo_chain",
             IntrinsicWChain => "intrinsic_w_chain",
             IntrinsicVoid => "intrinsic_void",
-            Target(code) => return super::x86isd::name(code),
+            BuildVector => "BUILD_VECTOR",
+            ScalarToVector => "scalar_to_vector",
+            InsertVectorElt => "insert_vector_elt",
+            VectorShuffle => "vector_shuffle",
+            Target(code) => return super::target_names::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()
@@ -418,6 +447,10 @@ impl ISD {
                 | UMax
                 | SAddSat
                 | UAddSat
+                | AvgFloorS
+                | AvgFloorU
+                | AvgCeilS
+                | AvgCeilU
                 | FAdd
                 | FMul
                 | UAddO

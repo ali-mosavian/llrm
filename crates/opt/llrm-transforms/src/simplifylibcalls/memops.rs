@@ -104,7 +104,7 @@ fn emit_intrinsic(
     operands.push(Operand::Constant(
         unit.context.constant(llrm_mir::context::Constant { ty: pointer, kind: ConstantKind::Global(callee) }),
     ));
-    let aligned = vec![Attribute::Int("align".to_owned(), 1)];
+    let aligned = vec![Attribute::Int("align".into(), 1)];
     let argument_attrs = (0..count).map(|at| if at < pointers { aligned.clone() } else { Vec::new() }).collect();
     let info = CallInfo {
         function_type,

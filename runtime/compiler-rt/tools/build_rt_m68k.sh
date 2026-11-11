@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."; R=$PWD
 OUT=${1:?output directory}; CPU=${2:-68000}; OPT=${3:-Os}; CC=${LLRM_CC:?path of llrm-cc}; ROOT=${M68K_ROOT:-$HOME/scratch/gcc-m68k/root}
 export LD_LIBRARY_PATH=$ROOT/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}; AS=$ROOT/usr/bin/m68k-linux-gnu-as; AR=$ROOT/usr/bin/m68k-linux-gnu-ar
 mkdir -p "$OUT"; rm -f "$OUT"/*.o "$OUT"/libsf.a
-for f in lib/fp/f32/*.c lib/fp/f64/*.c lib/int/muldi3.c lib/int/ashldi3.c lib/int/lshrdi3.c lib/int/ashrdi3.c lib/int/clzsi2.c; do
+for f in lib/fp/f32/*.c lib/fp/f64/*.c lib/int/ashldi3.c lib/int/lshrdi3.c lib/int/ashrdi3.c lib/int/clzsi2.c; do
   n=$(echo "${f#lib/}" | tr / _ | sed 's/\.c$//')
   LLRM_CC_TARGET=m68k-$CPU "$CC" -$OPT -S -DSF_INTABI -include "$R/config/m68k/config.h" -I"$R/include" "$f" -o "$OUT/$n.s"
   "$AS" -m$CPU -o "$OUT/$n.o" "$OUT/$n.s"

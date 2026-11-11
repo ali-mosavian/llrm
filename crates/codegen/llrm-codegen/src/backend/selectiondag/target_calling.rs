@@ -18,7 +18,7 @@ use std::fmt::Debug;
 
 use llrm_lir::registers::RegId;
 
-use super::dag::{SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
 
@@ -140,6 +140,27 @@ pub struct TargetIntrinsic {
     pub chained: bool,
 }
 
+/// The target-independent `LowerVASTART` of the pin's stack-walking targets (M68k's `LowerVASTART`, AVR's, MSP430's):
+/// store the address of the first variadic argument's fixed object (`VarArgsFrameIndex`) through the list.
+/// `pointer` is the target's pointer type, `align` the list's alignment in bytes. `None` where the function has no
+/// variadic frame index.
+pub fn lower_vastart_frame_index(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    pointer: EVT,
+    align: u32,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let first = dag.get_frame_index(pointer, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: pointer, align, volatile: false, base, ext: None, space: 0, ordering: None };
+    Some(dag.get_store(chain, first, list, info))
+}
+
 pub trait TargetCalling: Debug + Sync {
     /// The intrinsic this name is for the target; none: an ordinary call.
     fn intrinsic(
@@ -164,12 +185,32 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether a caller with a `byval` parameter makes no tail call (the pin's `isEligibleForTailCallOptimization`:
+    /// the parameter is a pointer into the argument area a tail call would reuse).
+    fn byval_parameter_blocks_tail_call(&self) -> bool {
+        false
+    }
+
     /// Whether the hook places a call in calling convention `cc` (LLVM's
     /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
     /// as the pin's `CCAssignFnForCall` rejects what it has no table for.
     fn supports_convention(
         &self,
         _cc: u32,
+    ) -> bool {
+        true
+    }
+
+    /// Whether a direct call of an `llvm.*` function that no intrinsic, atomic
+    /// or target hook lowered is emitted as a call to a symbol of that name
+    /// (a runtime routine of the target's own). A target with none says no and
+    /// the call is refused by name: the symbol would fail only at link, or
+    /// bind to nothing meant. The same refusal, with the same wording, as
+    /// `BuilderTarget::refuse_unknown_intrinsics` (#8452) for a flow without
+    /// this hook; 6502 converges on that field with the shared flow.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
     ) -> bool {
         true
     }
