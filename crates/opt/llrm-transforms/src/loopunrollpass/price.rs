@@ -121,7 +121,19 @@ pub(super) fn full_unroll_pays(
         None,
         true,
     );
-    priced_verdict(&*run, se, analyzed, lp, up, trips, uce, analysis, None, prices_nest, prices_nest, rate)
+    // The loops inside run known trips and are unrolled in every copy of this
+    // one, unpriced (above: a copy of this run): price the nest that decision
+    // makes, not this loop with its inner loops rolled (fpbench -O3: the 6-trip
+    // `o` loop vetoed alone, then the `b` loop around it priced at 394 B and
+    // unrolled with six unpriced copies of `o`; the pin unrolls `o` and leaves
+    // `b`).
+    // The saving counts for every run of the loop around it, at -O3 too: the
+    // `o` loop saves 29 clocks once, 174 over the six runs of `b`, and the pin
+    // unrolls it.
+    let nest_target = run.tti.unroll_prices_nest_loops_without_outer_counter();
+    let projection = if lp.is_innermost() { None } else { project_nest(run, se, analyzed, lp) };
+    let analysis = if projection.is_some() { None } else { analysis };
+    priced_verdict(&*run, se, analyzed, lp, up, trips, uce, analysis, projection.as_ref(), nest_target, prices_nest, rate)
 }
 
 /// The copies of each block a nest's unroll makes: the product of the trip

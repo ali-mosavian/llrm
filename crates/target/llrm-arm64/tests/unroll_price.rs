@@ -113,3 +113,15 @@ fn a_loop_that_saves_ten_clocks_a_byte_is_unrolled() {
 fn a_loop_inside_unknown_loops_is_not_unrolled_for_runs_nobody_counted() {
     assert!(labels(include_str!("data/unroll_cold_nest.ll")) >= 6);
 }
+
+/// fpbench -O3: the 6-trip `o` loop was vetoed alone (its 29 clocks counted
+/// once, not for the six runs of `b`), then the `b` loop around it priced with
+/// `o` rolled (394 B) and unrolled with six unpriced copies of `o` (1,754 B):
+/// 573 instructions where the pin, which unrolls `o` and leaves `b` rolled,
+/// makes 322. Priced as the nest it makes, `b` stays rolled (172 with `o`
+/// rolled too, 351 with `o` unrolled).
+#[test]
+fn a_loop_is_priced_with_the_inner_loops_its_copies_unroll() {
+    let insns = instructions(include_str!("data/bench_fpbench.ll"), Level::O3);
+    assert!((250..400).contains(&insns), "{insns} instructions");
+}
