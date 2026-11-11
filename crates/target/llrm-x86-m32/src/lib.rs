@@ -100,7 +100,7 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// derived, never set. Owner llrm-target-x86-m32.
 fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning {
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
-    llrm_mir::target::Tuning {
+    let mut tuning = llrm_mir::target::Tuning {
         multiply_by_clocks: true,
         // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
         // at most 4 instructions, not the pin's 16 (the copy is a compare and a
@@ -278,7 +278,24 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // see `Tuning::ipsccp_widen_keeps_sign`.
         ipsccp_widen_keeps_sign: true,
         ..llrm_mir::target::Tuning::PIN
+    };
+    // TEMPORARY A/B toggles (not for merge): LLRM_M32_OFF=sz1,sz2,...
+    let off = std::env::var("LLRM_M32_OFF").unwrap_or_default();
+    for one in off.split(',') {
+        match one {
+            "sz1" => tuning.inline_size_guard_at_size = false,
+            "sz2" => tuning.inline_size_guard_single_site = false,
+            "sz3" => tuning.inline_chain_trial = false,
+            "mulos" => tuning.imul_at_size = false,
+            "up1" => tuning.unroll_milliclocks_per_byte = 0,
+            "rec51" => tuning.ipsccp_widen_keeps_sign = false,
+            "rec2growth" => tuning.recursive_inlining_growth = None,
+            "rec2tre" => tuning.recursive_tre_first = (true, true),
+            "sd443" => tuning.second_ipsccp = false,
+            _ => {}
+        }
     }
+    tuning
 }
 
 impl M32 {
@@ -327,7 +344,7 @@ impl llrm_target::Target for M32 {
     // leaf stays and costs a `jmp`); at -Os the constant is made in the
     // branching block and the branch goes to the join.
     fn leaf_fold_at_size(&self) -> bool {
-        true
+        !std::env::var("LLRM_M32_OFF").unwrap_or_default().split(',').any(|one| one == "leaf")
     }
 
     // DEVIATE CSE-CMP (owner x86-m32-bytes, exit 2026-12-20): the pin's MachineCSE
