@@ -19,6 +19,7 @@
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
+use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
@@ -65,6 +66,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
     );
     tl.init_actions();
+    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -208,6 +211,10 @@ impl Hooks for MosLowering {
 
     /// `makeLibCall` through `LowerCall`: the routine's address is a target
     /// external symbol; a long or a long long travels as words, low first.
+    ///
+    /// DEVIATE: a shift count goes as a word. Reason: the routines are libgcc's
+    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the count
+    /// at the target's shift type (a byte). Exit: none.
     fn make_lib_call(
         &mut self,
         dag: &mut SelectionDAG,
@@ -235,8 +242,14 @@ impl Hooks for MosLowering {
                 })
                 .collect()
         };
+        let shift = name.starts_with("__ashl") || name.starts_with("__lshr") || name.starts_with("__ashr");
         let mut outs = Vec::new();
-        for &value in args {
+        for (at, &value) in args.iter().enumerate() {
+            let value = if shift && at == 1 && dag.value_type(value).size_in_bits() < 16 {
+                dag.get_node(ISD::ZeroExtend, EVT::I16, &[value])
+            } else {
+                value
+            };
             let vt = dag.value_type(value);
             let parts = words(dag, value);
             let split = parts.len() > 1;
@@ -480,6 +493,18 @@ fn lower_extend(
     {
         let byte = condition_byte(dag, condition);
         return if vt == EVT::I8 { byte } else { dag.get_node(ISD::ZeroExtend, vt, &[byte]) };
+    }
+    // `zext (trunc x)` is `x` resized where the truncate drops only zero bits
+    // (`isTruncateOf` in `visitZERO_EXTEND`,
+    // <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16421>):
+    // the bit `lower_setcc_carry` leaves is a byte of 0 or 1 already. The
+    // combiner has this fold, but the truncate is made here, after it ran.
+    if dag.opcode(node) != ISD::SignExtend && dag.opcode(condition) == ISD::Truncate {
+        let byte = dag.operand(condition, 0);
+        let above = u128::MAX >> (128 - dag.value_type(byte).size_in_bits()) & !1;
+        if masked_value_is_zero(dag, byte, above) {
+            return dag.get_zext_or_trunc(byte, vt);
+        }
     }
     // a sign-extended bit is all ones (`select c, 1, 2` reaches here as
     // `sext(c) + 2`)

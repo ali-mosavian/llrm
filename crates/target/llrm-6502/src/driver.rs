@@ -201,7 +201,8 @@ fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer,
+        // not `base + i * size` every trip
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
@@ -223,7 +224,125 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let built = program(text, request)?;
-    trial_unrolled(built, text, request)
+    let (built, inlined) = trial_inlined(built, text, request)?;
+    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
+}
+
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os byte model
+/// refused within its error, inlined in a second compile and kept per chain (caller and callees)
+/// if the backend writes those functions in fewer bytes. The model is within 25% of the written
+/// bytes for two functions in three, so a refusal that close is the backend's to decide.
+///
+/// Compile time: a program with no such refusal compiles once. One with some runs the mid-end
+/// twice and the backend on the functions whose bodies differ twice (`trial::differing`),
+/// never on the whole program; a chain set that is only partly kept compiles the mid-end a third
+/// time.
+fn trial_inlined(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
+    use llrm_transforms::trial;
+    let sites = trial::take_refused();
+    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    if request.level != Level::Os || sites.is_empty() {
+        return Ok((built, Vec::new()));
+    }
+    if instructions(&built) > limit {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial inline: skipped, {} sites in {} instructions (limit {limit})", sites.len(), instructions(&built));
+        }
+        return Ok((built, Vec::new()));
+    }
+    let kept_unroll = trial::take();
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let chain = |program: &Program, cut: &std::collections::BTreeSet<String>| -> Option<std::collections::BTreeMap<String, i64>> {
+        let mut only = program.clone();
+        only.modules[0] = trial::only(&program.modules[0], cut);
+        let rows = tail(only, request, false, true).ok()?.functions;
+        Some(rows.into_iter().filter(|(name, _)| cut.contains(name)).collect())
+    };
+    let Ok(other) = trial::with_inlined(&sites, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let other_unroll = trial::take();
+    let cut = trial::differing(&built.modules[0], &other.modules[0]);
+    let (Some(kept_bytes), Some(other_bytes)) = (chain(&built, &cut), chain(&other, &cut)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
+    if debug {
+        eprintln!("trial inline: {} sites, {} kept; {} functions differ; {} instructions", sites.len(), flags.iter().filter(|one| **one).count(), cut.len(), instructions(&built));
+    }
+    if flags.iter().all(|one| !one) {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    }
+    if flags.iter().all(|one| *one) {
+        trial::restore(other_unroll);
+        return Ok((other, sites));
+    }
+    let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
+    let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let third_unroll = trial::take();
+    let cut = trial::differing(&built.modules[0], &third.modules[0]);
+    let pays = match (chain(&built, &cut), chain(&third, &cut)) {
+        (Some(kept), Some(third)) => third.values().sum::<i64>() < kept.values().sum::<i64>(),
+        _ => false,
+    };
+    if pays {
+        trial::restore(third_unroll);
+        Ok((third, chosen))
+    } else {
+        trial::restore(kept_unroll);
+        Ok((built, Vec::new()))
+    }
+}
+
+/// One function of [`size_audit`].
+pub struct SizeRow {
+    pub name: String,
+    /// `function_bytes` of the function the backend gets.
+    pub model: i64,
+    /// The bytes it is written as (`timing::estimate` of its text).
+    pub written: i64,
+    /// Its operations by class (`walk::operation_counts`), for the fit of
+    /// `opcosts::calibrate`.
+    pub counts: String,
+}
+
+/// The size audit of one program: per function, the bytes `function_bytes` says
+/// it will be against the bytes it is written as. The instrument
+/// `tests/size_calibration.rs` brackets: the SZ2 inline trial decides by the
+/// first.
+pub fn size_audit(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<SizeRow>, String> {
+    let built = program(text, request)?;
+    let costs = built.target.trial_costs();
+    let module = &built.modules[0];
+    let mut rows: Vec<SizeRow> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .map(|(_, global, function)| SizeRow {
+            name: global.name.as_deref().unwrap_or("?").to_owned(),
+            model: llrm_transforms::walk::function_bytes(module, &built.layout, &costs, function),
+            written: 0,
+            counts: llrm_transforms::walk::operation_counts(module, &built.layout, function, &costs),
+        })
+        .collect();
+    for (name, bytes) in tail(built, request, false, true)?.functions {
+        if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+            row.written = bytes;
+        }
+    }
+    Ok(rows)
 }
 
 thread_local! {
@@ -242,6 +361,8 @@ struct Assembled {
     text: String,
     clocks: i64,
     bytes: i64,
+    /// Each function's bytes, when asked for (`size_audit`).
+    functions: Vec<(String, i64)>,
 }
 
 /// The assembly of `program`: every function selected (the copies as loops and
@@ -250,6 +371,7 @@ fn tail(
     mut program: Program,
     request: &Request,
     price: bool,
+    audit: bool,
 ) -> Result<Assembled, String> {
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
@@ -334,6 +456,17 @@ fn tail(
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let pieces = module_text(module, &parts)?;
+    let functions = if audit {
+        names
+            .iter()
+            .zip(&pieces)
+            .filter_map(|(name, piece)| {
+                crate::timing::estimate(request.cpu, piece).ok().map(|priced| (name.clone(), i64::from(priced.bytes)))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let (mut clocks, mut bytes) = (0i64, 0i64);
     if price {
         let weights: Vec<Vec<u64>> = names
@@ -354,7 +487,7 @@ fn tail(
         text = text.replace(name.as_str(), label);
     }
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
-    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes })
+    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
 /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the program
@@ -377,11 +510,11 @@ fn trial_unrolled(
     use llrm_transforms::loopunrollpass::trial;
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
-        return Ok(tail(built, request, false)?.text);
+        return Ok(tail(built, request, false, false)?.text);
     };
     let (eligible, units) = trial::take();
     if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
-        return Ok(tail(built, request, false)?.text);
+        return Ok(tail(built, request, false, false)?.text);
     }
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
@@ -393,9 +526,9 @@ fn trial_unrolled(
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
             eprintln!("trial unroll: {growth} instructions more: put back unpriced");
         }
-        return Ok(tail(built, request, false)?.text);
+        return Ok(tail(built, request, false, false)?.text);
     }
-    let (kept, tried) = (tail(built, request, true)?, tail(other, request, true)?);
+    let (kept, tried) = (tail(built, request, true, false)?, tail(other, request, true, false)?);
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
     let pays = trial_pays(request.level, rate, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
@@ -441,7 +574,7 @@ pub fn trial_pays(
     match level {
         Level::Os => added < 0 || (added == 0 && saved >= 0),
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
-        Level::O1 => added <= 0 && saved >= 0,
+        Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added),
         _ => saved * 1000 >= added * rate,
     }
 }
@@ -497,6 +630,18 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
+    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the soft stack is not realigned and the
+    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is clamped to it at pipeline entry, so
+    /// `ptr & 1` is no longer folded to 0 for an object on an odd frame. The pin states what a frame keeps the same
+    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and argument areas, then 2.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::STACK_ALIGN as u64)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::frame::MAX_ALLOCA_ALIGN)
+    }
+
     /// `lda (zp),y`: the index is `y`.
     fn index_register_bits(&self) -> Option<u32> {
         Some(8)
@@ -527,6 +672,11 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
+    fn trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::trial_bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
     /// The bytes the allocator can put a value in on the smallest zero page
     /// (`a`, `x`, `y`, `rc2`..`rc15`). 0 left every pressure estimate off: no
     /// loop was ever too wide for the registers.
@@ -549,6 +699,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Mos6502::new()))
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::ir_lowering::MosIrLowering))
     }
 }
 

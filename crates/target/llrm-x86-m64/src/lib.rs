@@ -50,6 +50,21 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
 });
 
+/// DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): the x86-64 column's processor resources
+/// (`machine/tune/x86/x86-64.toml` `[schedule]`, the pin's SandyBridgeModel) and latencies, each operation the
+/// sum of its forms as the clock table is. A form the schedule does not list occupies no resource.
+static THROUGHPUT: LazyLock<llrm_mir::target::Throughput> = LazyLock::new(|| {
+    let table = TIMINGS.cpu("x86-64").expect("timings.times states the x86-64 column");
+    let find = |rows: &[(String, i64)], form: &str| rows.iter().find(|(one, _)| one == form).map(|(_, value)| *value);
+    let latency = |form: &str| 1000 * find(&table.latency, form).or_else(|| find(&table.clocks, form)).unwrap_or(1);
+    let text = llrm_target::tune::X86.iter().find(|(name, _)| *name == "x86-64").map(|(_, text)| *text).expect("the x86-64 tune file");
+    llrm_target::schedule::Schedule::parse(text).expect("x86-64.toml's [schedule] parses").throughput(
+        table.issue,
+        OPCOSTS.operations(&latency, 0),
+        &|price| OPCOSTS.operations(price, 0),
+    )
+});
+
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
     llrm_target::timings::Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86)
@@ -234,6 +249,11 @@ impl llrm_target::Target for M64 {
         Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
     }
 
+    /// `GR32_NOSP`/`GR64_NOSP`'s caller-saved registers, in the pin's order.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        vec![RegId::RAX, RegId::RCX, RegId::RDX, RegId::RSI, RegId::RDI, RegId::R8, RegId::R9, RegId::R10, RegId::R11]
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         CALLING.native().frame_wrap_split_size
     }
@@ -372,7 +392,7 @@ impl llrm_target::Target for M64 {
         prefix: i64,
     ) -> OperationCosts {
         // SSE2 is the baseline: a constant memset is stores of an xmm register.
-        OperationCosts { memset_store: 16, ..OPCOSTS.operations(price, prefix) }
+        OperationCosts { memset_store: 16, ext_tsp_for_size: true, ..OPCOSTS.operations(price, prefix) }
     }
 
     fn register_capacity(&self) -> i64 {
@@ -389,7 +409,7 @@ impl llrm_target::Target for M64 {
 
     fn cost_model(&self) -> CostModel {
         |prices| {
-            llrm_target::described_with(
+            llrm_target::described_throughput(
                 prices,
                 Some(OPCOSTS.size_costs()),
                 llrm_x86::tti::X86::of_cpu("x86-64")
@@ -422,7 +442,10 @@ impl llrm_target::Target for M64 {
                             // milliclocks a byte, the m64 net rate (fpbench -O2:
                             // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
                             unroll_milliclocks_per_byte: 312,
+                            unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
+                            // `mov m64, imm32`: sign-extended.
+                            unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
@@ -439,6 +462,9 @@ impl llrm_target::Target for M64 {
                             // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
                             // exit 2026-11-20.
                             recursive_inlining_growth: Some((450, 150)),
+                            // DEVIATE REC-7 (owner m64-clocks, exit 2026-11-30), as m32: copies
+                            // are 2 deep at -O2 and -O3, not gcc's 8.
+                            recursive_inlining_depth: Some((2, 2)),
                             // DEVIATE REC-2-LOSERS (owner m64, exit 2026-11-21): the copies cost
                             // net (clk + 0.312 B) against none on recchop -O3 +1020 (2194 B),
                             // bintree -O3 +134 (1160 B, 0 clk), recpow -O2 +4002 (peeled). Their
@@ -475,6 +501,7 @@ impl llrm_target::Target for M64 {
                     })
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: true })),
+                Some(THROUGHPUT.clone()),
             )
         }
     }
@@ -512,6 +539,30 @@ mod tests {
         };
         let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
         assert!(!tti.carries_slot_indexes());
+    }
+
+    /// REC-7 at m64: recursion copies went 8 deep (gcc's default), so rectwo -O2
+    /// ran 719563 instructions in 2120 B where depth 2 runs 161513 in 392 B.
+    #[test]
+    fn test_m64_copies_a_recursion_two_deep_at_o2_and_o3() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert_eq!(tti.recursive_inlining_depth(), Some((2, 2)));
     }
 
     /// The m64 sheet had a cache line and no line fill, so no byte rate was

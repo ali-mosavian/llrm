@@ -86,6 +86,7 @@ const UNOPTIMIZED: &[&str] = &[
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
+    "StatusWordTest",
     "CallFrameOpt",
     "TailDuplicate",
     // The pin's -O0 `addMachinePasses` has none of these (TargetPassConfig.cpp
@@ -109,6 +110,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
+    ("StatusWordTest", "statustest@5"),
     ("OptimizePHIs", "optimizephis@1"),
     ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
@@ -217,6 +219,7 @@ pub fn machine_with<'a>(
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm {
             classes: Rc::clone(classes),
+            segments: segments.clone(),
             size: target.size || target.min_size,
         }),
         // After the loop-invariant values are in the preheader: streams that
@@ -231,6 +234,7 @@ pub fn machine_with<'a>(
             // model) gets no pass, not a free one.
             clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
+            copy_clocks: target.cost("mov_rr").ok(),
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
@@ -345,6 +349,8 @@ pub fn machine_with<'a>(
         // After frame finalization, as the pin: a constant loaded again where
         // the allocator or rematerialization left it.
         Box::new(crate::backend::latecleanup::LateCleanup),
+        // DEVIATE X87-FCMP-AH: after the stackifier made the `sahf`.
+        Box::new(crate::backend::statustest::StatusWordTest),
         Box::new(peephole::Peephole::with_rules(
             frame.clone(),
             target,
@@ -403,6 +409,9 @@ pub fn machine_with<'a>(
     }
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");
+    }
+    if !target.tests_status_word() || classes.status_word().is_none() {
+        phases.retain(|phase| phase.class_name() != "StatusWordTest");
     }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {

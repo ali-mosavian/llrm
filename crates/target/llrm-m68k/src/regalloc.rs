@@ -65,6 +65,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
 
     type Class = Class;
 
+    fn schedules_before_allocation() -> bool {
+        llrm_support::env_flag!("LLRM_M68K_PRESCHED")
+    }
+
     fn meet(
         one: Class,
         other: Class,
@@ -159,6 +163,10 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
 
     fn reserved(root: RegId) -> bool {
         root == reg::SP || root == reg::A6
+    }
+
+    fn flags_register() -> Option<RegId> {
+        Some(reg::CCR)
     }
 
     fn hoist_window() -> usize {
@@ -375,7 +383,7 @@ pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_co
     )?;
     let mut body = body;
     for phase in phases.iter_mut() {
-        if matches!(phase.class_name(), "PhiElimination" | "TwoAddress") {
+        if matches!(phase.class_name(), "MachineSink" | "PhiElimination" | "TwoAddress") {
             body = phase.transform(body)?;
         }
     }
@@ -395,7 +403,16 @@ pub fn shared_licm(
     function: &MFunction,
     size: bool,
 ) -> Result<MFunction, String> {
-    shared_stage(function, |classes, _| Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, size }))
+    use llrm_target::Target as _;
+    let arch = crate::target::M68k;
+    let segments = llrm_codegen::backend::target::Segments::of(
+        &arch.machine(),
+        llrm_lir::registers::Regs(arch.registers()),
+        arch.operand_bytes(),
+    );
+    shared_stage(function, |classes, _| {
+        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size })
+    })
 }
 
 /// `BranchFolder` over the m68k function.

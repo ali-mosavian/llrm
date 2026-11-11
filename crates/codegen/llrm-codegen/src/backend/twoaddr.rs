@@ -575,12 +575,39 @@ pub fn commutative(what: &Semantics) -> bool {
         || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))
 }
 
+/// `SHLD B, C, I <-> SHRD C, B, (BitWidth - I)`: the immediate-count double
+/// shifts are commutable (`ShlrdOpRRI8U_R`, `isCommutable`;
+/// X86InstrShiftRotate.td#L350).
+fn funnel_commutable(what: &Semantics) -> bool {
+    what.op == Operation::Funnel
+        && matches!(what.name.as_deref(), Some("shld" | "shrd"))
+        && matches!(what.sources.get(2), Some(Loc::Imm(_)))
+}
+
+/// `commuteInstructionImpl` for the double shifts: the opposite shift of the
+/// swapped sources, by `Size - Amt`
+/// ([X86InstrInfo.cpp#L2327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L2327)).
+pub(crate) fn commute_funnel(
+    what: &Semantics,
+    first: &Held,
+) -> Semantics {
+    let size = i64::from(first.width) * 8;
+    let name = if what.name.as_deref() == Some("shld") { "shrd" } else { "shld" };
+    let mut sources = vec![what.sources[1].clone(), what.sources[0].clone()];
+    sources.push(match &what.sources[2] {
+        Loc::Imm(count) => Loc::Imm(ir::Imm { value: size - count.value, ..count.clone() }),
+        other => other.clone(),
+    });
+    Semantics { name: Some(name.into()), sources, ..what.clone() }
+}
+
 pub(crate) fn swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
     let cmov = what.op == Operation::Select && what.name.as_deref().and_then(super::flagscopy::opposite_cmov).is_some();
-    if !(commutative(what) || cmov)
+    let funnel = funnel_commutable(what);
+    if !(commutative(what) || cmov || funnel)
         || what.dests.len() != 1
-        || what.sources.len() != 2
+        || what.sources.len() != if funnel { 3 } else { 2 }
         || one.group.is_some()
         || !one.requires.is_empty()
         || !one.delivers.is_empty()
@@ -661,6 +688,9 @@ pub fn ties_in(
     what: &Semantics,
 ) -> bool {
     let Some(regs) = regs.filter(|regs| regs.ties_by_row) else { return ties(what) };
+    if let Some(pairs) = &what.tied {
+        return pairs.contains(&(0, 0));
+    }
     let name = what.name.as_deref().unwrap_or("");
     (regs.effects)(name, what.dests.len(), what.sources.len()).first().is_some_and(|row| row.ties.contains(&(0, 0)))
 }
@@ -676,13 +706,22 @@ fn tied_pairs(
         return if ties(what) { vec![(0, 0)] } else { Vec::new() };
     };
     let name = what.name.as_deref().unwrap_or("");
-    let mut pairs = (regs.effects)(name, what.dests.len(), what.sources.len())
-        .first()
-        .map_or_else(Vec::new, |row| row.ties.to_vec());
+    let mut pairs = what.tied.clone().unwrap_or_else(|| {
+        (regs.effects)(name, what.dests.len(), what.sources.len()).first().map_or_else(Vec::new, |row| row.ties.to_vec())
+    });
     // the first pair first: it is the one the commuter and the three-address
     // forms know
     pairs.sort_by_key(|&(source, dest)| (source, dest) != (0, 0));
     pairs
+}
+
+/// How many declared ties named an operand their instruction lacks, since the
+/// process began.
+static SKIPPED_TIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// [`SKIPPED_TIES`].
+pub fn skipped_ties() -> usize {
+    SKIPPED_TIES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The copy and the fixed instruction for the first tied pair that is not yet
@@ -707,7 +746,13 @@ fn _untied_pair(
     dest: usize,
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<Vec<Arc<Insn>>> {
-    let (into, first) = (what.dests.get(dest)?, what.sources.get(source)?);
+    let (Some(into), Some(first)) = (what.dests.get(dest), what.sources.get(source)) else {
+        // A declared tie that names an operand the instruction does not have
+        // went unnoticed once (a dropped reserved register moved the row's
+        // numbering): it is counted, and a test of a target asks for none.
+        SKIPPED_TIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    };
     if let Loc::Mem(cell) = into {
         if (source, dest) != (0, 0) {
             return None;
@@ -1299,6 +1344,29 @@ mod tests {
     fn test_noncommutative_or_implicit_arithmetic_is_not_swapped() {
         for name in ["sub", "sbb", "shl"] {
             assert!(commuted(dying_second(name, Operation::Binary), 2).is_none(), "{name}");
+        }
+    }
+
+    /// `shld a, b, k` with `b` dying and `a` live was left untied (copy of
+    /// `a`); the pin commutes it to `shrd b, a, Size - k`.
+    #[test]
+    fn test_a_double_shift_with_a_dying_second_source_swaps_to_the_opposite_shift() {
+        let count = |value| Loc::Imm(Imm { value, width: 1, address: None });
+        let shift = |name: &str, first: u32, second: u32, k: i64| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(3, 4)],
+                sources: vec![held(first, 4), held(second, 4), count(k)],
+                ..Semantics::new(Operation::Funnel)
+            };
+            Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![3], vec![first, second]))
+        };
+        for (name, swapped) in [("shld", "shrd"), ("shrd", "shld")] {
+            let insns = vec![imm_def(0, 1), imm_def(1, 2), shift(name, 1, 2, 9), read(3, 1), read(4, 3)];
+            let chosen = commuted(insns, 2).expect("swapped");
+            let what = chosen.what.as_ref().unwrap();
+            assert_eq!(what.name.as_deref(), Some(swapped));
+            assert_eq!(what.sources, vec![held(2, 4), held(1, 4), count(23)]);
         }
     }
 

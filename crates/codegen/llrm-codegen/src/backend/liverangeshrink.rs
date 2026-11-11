@@ -230,6 +230,10 @@ pub fn shrunk(
             };
             build(0, &ident, &insns, &mut order);
             let mut saw_store = false;
+            // Only the stretch before the first barrier has the phis in its
+            // order map (the pin clears the map there and rebuilds it from
+            // the instruction after).
+            let mut phis_ordered = true;
             let mut at = 0;
             while at < insns.len() {
                 let me = ident[at];
@@ -239,12 +243,24 @@ pub fn shrunk(
                     if code_motion_barrier(&one) && at + 1 < insns.len() {
                         build(at + 1, &ident, &insns, &mut order);
                         saw_store = false;
+                        phis_ordered = false;
                     }
                     at += 1;
                     continue;
                 }
-                let target =
-                    landing(&one, body, &position, &order, block_at, &def_site, &phi_site, &defined, &read, &class_of);
+                let target = landing(
+                    &one,
+                    body,
+                    &position,
+                    &order,
+                    block_at,
+                    phis_ordered,
+                    &def_site,
+                    &phi_site,
+                    &defined,
+                    &read,
+                    &class_of,
+                );
                 at += 1;
                 let Some(after) = target else { continue };
                 let place = if after == PHI { 0 } else { position[after] + 1 };
@@ -282,6 +298,7 @@ fn landing(
     position: &[usize],
     order: &[Option<u32>],
     block_at: usize,
+    phis_ordered: bool,
     def_site: &IndexMap<u32, (usize, usize)>,
     phi_site: &IndexMap<u32, usize>,
     defined: &IndexMap<u32, usize>,
@@ -298,10 +315,13 @@ fn landing(
         if read.get(value) != Some(&1) || defined.get(value) != Some(&1) || class_of(*value) != class_of(*result) {
             return None;
         }
-        // A phi of this block is the first thing in its order map.
+        // A phi of this block is the first thing in its order map, while the
+        // map reaches the block's start.
         if phi_site.get(value) == Some(&block_at) {
             eligible += 1;
-            insert = insert.or(Some(PHI));
+            if phis_ordered {
+                insert = insert.or(Some(PHI));
+            }
             continue;
         }
         // A value with no definition here (an input) is defined outside any
@@ -419,7 +439,7 @@ mod tests {
 
     use super::*;
     use crate::model::ir::{Held, Imm, Semantics};
-    use crate::model::lir::{Insn, LirBlock};
+    use crate::model::lir::{Insn, LirBlock, Phi};
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
@@ -562,5 +582,22 @@ mod tests {
             .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
             .collect();
         assert_eq!(names, ["mov", "mov", "cmp", "add", "je", "ret"]);
+    }
+
+    /// Past a barrier the block's phis are not in the order map: two sums of
+    /// phis and of each other went up to the block's start, the second above
+    /// the first it reads (a use before its only def; zerofill_spills.bas
+    /// panicked "a unique value" in the live-range calculation at -m32 -O1).
+    #[test]
+    fn test_phis_are_not_in_the_order_map_past_a_barrier() {
+        // A call frame's pseudo: a barrier that writes the flags, as the sums
+        // do.
+        let barrier = insn(1, Operation::Barrier, "call_frame_setup", vec![], vec![], vec![], vec![]);
+        let mut block =
+            LirBlock::new(0, vec![constant(0, 20), barrier, add(2, 13, 10, 11), add(3, 14, 13, 12), ret(4)]);
+        block.phis = [10, 11, 12].iter().map(|&result| Phi { result, incoming: vec![(-1, 20)] }).collect();
+        let mut before = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        before.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        assert_eq!(defines(&shrink(&before)), [20, 13, 14]);
     }
 }

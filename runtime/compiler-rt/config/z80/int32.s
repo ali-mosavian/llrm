@@ -1,6 +1,6 @@
 ; 32-bit multiply, divide and remainder for the Z80 (sdasz80), the llrm-z80 convention: first long in HL (low) and DE
 ; (high); second long's low word in BC, its high word on the stack above the return address, popped by the caller;
-; long result low word in DE, high word in HL. Changes A BC DE HL IY and the flags; keeps IX and SP.
+; long result low word in HL, high word in DE (the registers of the first argument). Changes A BC DE HL IY and the flags; keeps IX and SP.
 ; Division by zero gives the all-ones quotient and the dividend as remainder; signed division truncates toward zero
 ; and the remainder has the dividend's sign.
 	.module int32
@@ -62,6 +62,7 @@ __mulsi3:
 	pop	bc
 	ex	de,hl
 	add	hl,bc
+	ex	de,hl
 	pop	af
 	pop	af
 	pop	af
@@ -93,9 +94,9 @@ udm:
 	ld	hl,#0
 	call	d16
 	bit	0,-3(iy)
-	jr	z,5$
+	jr	nz,5$
 	ex	de,hl
-5$:	ld	hl,#0
+5$:	ld	de,#0
 	pop	af
 	ret
 6$:	push	hl		; a 16-bit divisor: two 16-bit steps, the high word first; -6(iy) holds the low word, then the quotient's high word
@@ -110,11 +111,11 @@ udm:
 	call	d16
 	bit	0,-3(iy)
 	jr	z,7$
-	ex	de,hl
-	ld	hl,#0
+	ld	de,#0
 	jr	8$
-7$:	ld	l,-6(iy)
-	ld	h,-5(iy)
+7$:	ex	de,hl
+	ld	e,-6(iy)
+	ld	d,-5(iy)
 8$:	pop	af
 	pop	af
 	ret
@@ -148,8 +149,7 @@ big32:	ld	a,b		; a zero divisor: all-ones quotient, the dividend as remainder
 	ld	de,#0xffff
 	pop	af
 	ret
-37$:	ex	de,hl
-	pop	af
+37$:	pop	af
 	ret
 36$:	ld	a,d		; a zero dividend gives 0 and 0
 	or	a,e
@@ -204,13 +204,11 @@ big32:	ld	a,b		; a zero divisor: all-ones quotient, the dividend as remainder
 	ld	-6(iy),a
 	jr	nc,44$
 fin:	bit	0,-3(iy)
-	jr	z,48$
-	ex	de,hl
-	jr	49$
-48$:	ld	e,-12(iy)
-	ld	d,-11(iy)
-	ld	l,-14(iy)
-	ld	h,-13(iy)
+	jr	nz,49$
+	ld	l,-12(iy)
+	ld	h,-11(iy)
+	ld	e,-14(iy)
+	ld	d,-13(iy)
 49$:	pop	af
 	pop	af
 	pop	af
@@ -262,7 +260,7 @@ shl32q:	sla	-12(iy)
 	ret
 
 ; signed: work on the magnitudes through the unsigned routine, then give the result its sign.
-; dividend negate (de:hl), result negate (de low, hl high)
+; negate de:hl (hl low): the dividend, and the result
 negdh:
 	xor	a,a
 	sub	a,l
@@ -277,21 +275,6 @@ negdh:
 	sbc	a,d
 	ld	d,a
 	ret
-negr:
-	xor	a,a
-	sub	a,e
-	ld	e,a
-	ld	a,#0
-	sbc	a,d
-	ld	d,a
-	ld	a,#0
-	sbc	a,l
-	ld	l,a
-	ld	a,#0
-	sbc	a,h
-	ld	h,a
-	ret
-
 ; the byte kept in the frame: bit 7 the sign to give the result (quotient: xor of the signs; remainder: the dividend's),
 ; bit 0 set for a remainder
 	.globl __divsi3
@@ -342,4 +325,4 @@ sdm:
 	pop	bc
 	bit	7,b
 	ret	z
-	jp	negr
+	jp	negdh

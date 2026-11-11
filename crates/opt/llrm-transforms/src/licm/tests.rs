@@ -432,6 +432,47 @@ fn test_a_global_stored_on_some_paths_keeps_its_store_in_a_single_threaded_modul
     assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["constant".to_owned()], false)]);
 }
 
+/// `isWritableObject` takes a `byval` argument and a `noalias` call's result,
+/// not only an alloca: with the object thread-local (single-threaded module)
+/// the store made on some paths is sunk. A plain pointer argument stays
+/// unwritable, so its store stayed in the loop and the other two did too.
+#[test]
+fn test_a_byval_argument_stored_on_some_paths_is_sunk_but_a_plain_pointer_is_not() {
+    let loop_over = |attrs: &str| {
+        format!(
+            "define i32 @f(i32 %n, ptr {attrs} %g) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %x = load i32, ptr %g
+  %t = icmp eq i32 %x, 3
+  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr %g
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}}
+"
+        )
+    };
+    let sunk = |attrs: &str| promoted_on(&loop_over(attrs), SingleThreaded(llrm_mir::target::Neutral));
+    assert_eq!(sunk("byval(i32) align 4 dereferenceable(4)"), [(vec!["g".to_owned()], true)]);
+    assert_eq!(sunk("dereferenceable(4) align 4"), [(vec!["g".to_owned()], false)]);
+}
+
 /// A call that is handed the slot's address may read or write it: no promotion.
 #[test]
 fn test_a_slot_a_call_may_touch_is_not_promoted() {
@@ -512,7 +553,8 @@ fn block_of(
     text: &str,
     name: &str,
 ) -> Vec<String> {
-    let f = &text[text.find("define i16 @f(").expect("@f")..];
+    // Any return type: the function is the one named `@f`.
+    let f = &text[text.find(" @f(").expect("@f")..];
     let start = f.find(&format!("\n{name}:\n")).unwrap_or_else(|| panic!("no {name} in\n{text}")) + name.len() + 3;
     f[start..].lines().take_while(|line| line.starts_with("  ")).map(|line| line.trim().to_owned()).collect()
 }
@@ -2265,6 +2307,55 @@ b2:
     assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
 }
 
+/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a chain of
+/// products of sums. The pin reassociates the instruction it has just made, in the
+/// same walk, until one multiply of `sum` is left (31, 961, 29791, 923521); llrm
+/// left alone whatever an earlier reassociation of the loop had replaced, so
+/// two `mul 31` of the chain stayed in the body (+931 B over the pin's whole file).
+#[test]
+fn test_a_chain_of_products_of_sums_is_reassociated_until_no_multiply_by_the_factor_is_left() {
+    let text = "define i64 @f() {
+b0:
+  br label %b1
+
+b1:
+  %p = phi i64 [ 2654435769, %b0 ], [ %x4, %b1 ]
+  %c = phi i64 [ 0, %b0 ], [ %n, %b1 ]
+  %s = phi i64 [ 47235554646, %b0 ], [ %s4, %b1 ]
+  %m1 = mul i64 %p, 1664525
+  %x1 = add i64 %m1, 1013904223
+  %t1 = mul i64 %s, 31
+  %u1 = mul i64 %x1, 7
+  %s1 = add i64 %u1, %t1
+  %m2 = mul i64 %x1, 1664525
+  %x2 = add i64 %m2, 1013904223
+  %t2 = mul i64 %s1, 31
+  %u2 = mul i64 %x2, 7
+  %s2 = add i64 %u2, %t2
+  %m3 = mul i64 %x2, 1664525
+  %x3 = add i64 %m3, 1013904223
+  %t3 = mul i64 %s2, 31
+  %u3 = mul i64 %x3, 7
+  %s3 = add i64 %u3, %t3
+  %m4 = mul i64 %x3, 1664525
+  %x4 = add i64 %m4, 1013904223
+  %t4 = mul i64 %s3, 31
+  %u4 = mul i64 %x4, 7
+  %s4 = add i64 %u4, %t4
+  %n = add nuw nsw i64 %c, 4
+  %e = icmp eq i64 %n, 200
+  br i1 %e, label %b2, label %b1
+
+b2:
+  ret i64 %s4
+}
+";
+    let after = licm_printed(text);
+    let body = block_of(&after, "b1");
+    let left: Vec<_> = body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
+    assert!(left.is_empty(), "{left:?}\n{after}");
+}
+
 /// `hoistMulAddAssociation` rewrites in place, so the next product of a
 /// 4x-unrolled `t = t * 31 + x * 6` chain sees the factor already folded in:
 /// `t * 923521 + ...`, no `* 31` left (pin LICM after the unroll,
@@ -2408,6 +2499,50 @@ fn safety_scans(
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
     DECIDED.with(|all| all.borrow().safety_scans)
+}
+
+/// How many predecessor lookups the loops' safety info made.
+fn safety_pred_lookups(text: &str) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_pred_lookups)
+}
+
+/// A loop of `n` diamonds, each arm holding a hoistable add.
+fn diamond_chain(n: usize) -> String {
+    let mut text = String::from(
+        "@g = global i16 0\n\ndefine void @f(i16 %n, i16 %m) {\nb0:\n  br label %h\n\nh:\n  %i = phi i16 [ 0, %b0 ], [ %i1, %latch ]\n  br label %t0\n\n",
+    );
+    for k in 0..n {
+        text += &format!(
+            "t{k}:\n  %c{k} = icmp slt i16 %i, %m\n  br i1 %c{k}, label %l{k}, label %r{k}\n\nl{k}:\n  %x{k} = add i16 %n, {}\n  store i16 %x{k}, ptr @g\n  br label %t{}\n\nr{k}:\n  br label %t{}\n\n",
+            k + 1,
+            k + 1,
+            k + 1
+        );
+    }
+    text += &format!(
+        "t{n}:\n  br label %latch\n\nlatch:\n  %i1 = add i16 %i, 1\n  %e = icmp slt i16 %i1, %m\n  br i1 %e, label %h, label %out\n\nout:\n  ret void\n}}\n"
+    );
+    text
+}
+
+/// A loop of 3n blocks asked for each arm whether it is guaranteed to execute
+/// looked a block's predecessors up in the function once for every block the
+/// walk back from each arm reached: 40 diamonds made 4,840 lookups, and
+/// queens at -O3 (360-block loop, 53 runs of LICM) spent 2.1 G Ir there. The
+/// lists of the loop's blocks are made once, so the lookups follow the blocks,
+/// not their product.
+#[test]
+fn test_the_walk_back_from_each_block_reads_the_loops_predecessors_once() {
+    let n = 40;
+    let lookups = safety_pred_lookups(&diamond_chain(n));
+    assert!(lookups <= 4 * 3 * n, "{lookups} predecessor lookups for a loop of {} blocks", 3 * n + 3);
 }
 
 /// The sinking, the hoisting and the promotion of one loop shared two

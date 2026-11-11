@@ -1547,7 +1547,7 @@ fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
         let hot = hot.map(|one| HotTailDup { clocks_per_byte: per_byte, ..one });
         _placed(&diamond_joined(0.9, join()), false, true, None, hot, 0).unwrap()
     };
-    let bound = Some(HotTailDup { size: 8, jump_clocks: 3.0, clocks_per_byte: 0.0 });
+    let bound = Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks: 0.0, clocks_per_byte: 0.0 });
     assert!(placed_with(None, 0.0).blocks.iter().any(|one| one.at == 30), "premise: the pin keeps seven instructions");
     assert!(placed_with(bound, 0.01).blocks.iter().all(|one| one.at != 30), "a cheap copy of a hot join is made");
     assert!(placed_with(bound, 0.312).blocks.iter().any(|one| one.at == 30), "run once, the jump does not pay for it");
@@ -1558,7 +1558,7 @@ fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
 #[test]
 fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
     use super::placement::HotTailDup;
-    let hot = Some(HotTailDup { size: 8, jump_clocks: 3.0, clocks_per_byte: 0.01 });
+    let hot = Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks: 0.0, clocks_per_byte: 0.01 });
     let looped = |latch_back: bool| {
         let to_header = if latch_back { 2 } else { 50 };
         let mut made = body(

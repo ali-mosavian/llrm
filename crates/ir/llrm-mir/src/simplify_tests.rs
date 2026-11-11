@@ -112,6 +112,45 @@ fn logic() {
     check("  %s = shl i16 %x, 8\n  %r = and i16 %s, 65280\n", "r", Some("%s"));
 }
 
+/// wasm32 known_loads_walks: `select n, (y|n), false` was not `n`, so
+/// FoldSelectWithAndOrCond found nothing to fold and the unrolled chain kept
+/// an or and a logical and per iteration (r3, a reduction of it: 312 B against the pin's 303). The i1 identities of
+/// `simplifySelectInst`, each.
+#[test]
+fn a_select_of_bools_that_is_one_of_its_operands_or_a_constant() {
+    let q = "  %q = icmp eq i16 %y, 0\n";
+    // Y && (X || Y) --> Y
+    check(&format!("{q}  %b = or i1 %q, %c\n  %r = select i1 %c, i1 %b, i1 false\n"), "r", Some("%c"));
+    // (X || Y) && Y --> Y
+    check(&format!("{q}  %b = or i1 %q, %c\n  %r = select i1 %b, i1 %c, i1 false\n"), "r", Some("%c"));
+    // Y || (X && Y) --> Y
+    check(&format!("{q}  %a = and i1 %q, %c\n  %r = select i1 %c, i1 true, i1 %a\n"), "r", Some("%c"));
+    // (X && Y) || Y --> Y
+    check(&format!("{q}  %a = and i1 %q, %c\n  %r = select i1 %a, i1 true, i1 %c\n"), "r", Some("%c"));
+    // (X || Y) && (X || !Y) --> X
+    check(
+        &format!(
+            "{q}  %ny = xor i1 %q, true\n  %o1 = or i1 %c, %ny\n  %o2 = or i1 %c, %q\n  %r = select i1 %o1, i1 %o2, i1 false\n"
+        ),
+        "r",
+        Some("%c"),
+    );
+    // !(X || Y) && X --> false
+    check(
+        &format!("{q}  %o = or i1 %c, %q\n  %n = xor i1 %o, true\n  %r = select i1 %n, i1 %c, i1 false\n"),
+        "r",
+        Some("0"),
+    );
+    // !(X && Y) || X --> true
+    check(
+        &format!("{q}  %a = and i1 %c, %q\n  %n = xor i1 %a, true\n  %r = select i1 %n, i1 true, i1 %c\n"),
+        "r",
+        Some("1"),
+    );
+    // Unrelated operands: nothing.
+    check(&format!("{q}  %p = icmp eq i16 %x, 0\n  %r = select i1 %q, i1 %p, i1 false\n"), "r", None);
+}
+
 #[test]
 fn select_phi_cast_and_compare() {
     check("  %r = select i1 true, i16 %x, i16 %y\n", "r", Some("%x"));
@@ -1282,4 +1321,22 @@ fn the_difference_of_two_offsets_from_one_global_is_their_distance() {
     let text = "@s = internal constant [13 x i8] zeroinitializer\n\
         define i64 @f() {\nb0:\n  %r = sub i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @s, i64 12) to i64), ptrtoint (ptr @s to i64)\n  ret i64 %r\n}\n";
     assert_eq!(simplified(text, "r").as_deref(), Some("12"));
+}
+
+/// `simplifySelectWithEquivalence` through a cast: `x == 0 ? 0 : trunc(ctpop x)`
+/// is the `trunc`. Guards the flag-free case: only the flagged one needed
+/// `foldSelectValueEquivalence` (wasm32 `ones64` +6 B).
+#[test]
+fn a_select_guarding_a_count_through_a_trunc_is_the_count() {
+    let text = "declare i64 @llvm.ctpop.i64(i64)
+define i32 @f(i64 %x) {
+b0:
+  %z = icmp eq i64 %x, 0
+  %c = call i64 @llvm.ctpop.i64(i64 %x)
+  %t = trunc i64 %c to i32
+  %r = select i1 %z, i32 0, i32 %t
+  ret i32 %r
+}
+";
+    assert_eq!(simplified(text, "r"), Some("%t".to_owned()));
 }

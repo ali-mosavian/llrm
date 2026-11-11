@@ -549,20 +549,25 @@ impl Declared {
 
     /// A private constant of type `ty`, `initializer` its value, `unnamed_addr`
     /// as the pass that makes it states, named `stem` and the first number
-    /// after it that no global has; a table already made with the same type,
-    /// value and `unnamed_addr` is that one.
+    /// after it that no global has, `align` its alignment in bytes where the
+    /// pass states one; a table already made with the same type, value,
+    /// alignment and `unnamed_addr` is that one.
     pub fn table(
         &mut self,
         stem: &str,
         ty: crate::types::TypeId,
         initializer: crate::context::ConstantId,
         unnamed_addr: crate::module::UnnamedAddr,
+        align: Option<u64>,
     ) -> GlobalId {
         let same = |one: &Pending| {
             matches!(
                 one,
                 Pending::Table(_, held, unnamed)
-                    if held.ty == ty && held.initializer == Some(initializer) && *unnamed == unnamed_addr
+                    if held.ty == ty
+                        && held.initializer == Some(initializer)
+                        && held.align == align
+                        && *unnamed == unnamed_addr
             )
         };
         if let Some(at) = self.pending.iter().position(same) {
@@ -580,7 +585,7 @@ impl Declared {
             ty,
             constant: true,
             initializer: Some(initializer),
-            align: None,
+            align,
         };
         self.pending.push(Pending::Table(name, variable, unnamed_addr));
         id

@@ -432,6 +432,16 @@ impl Profile {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
+    /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
+    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
+    /// register-immediate operation, and code is not tuned for size (the test
+    /// is two bytes longer).
+    pub fn tests_status_word(&self) -> bool {
+        !self.size
+            && !self.min_size
+            && matches!((self.cost("sahf"), self.cost("alu_ri")), (Ok(sahf), Ok(alu)) if alu < sahf)
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where code is tuned
     /// for size (the target's, none elsewhere).
     pub fn size_milliclocks_per_byte(&self) -> i64 {
@@ -478,9 +488,13 @@ impl Profile {
         let size = self.tail_dup_hot_size?;
         let per_byte = self.speed_milliclocks_per_byte();
         let jump = self.cost("jmp_short").ok()?;
+        // A copied loop latch ends in a branch back that is taken, where the
+        // tail's own branch out of the loop was not.
+        let back = self.cost("jcc").ok()? - self.cost("jcc_not_taken").ok()?;
         (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
             size,
             jump_clocks: jump as f64,
+            back_edge_clocks: back.max(0) as f64,
             clocks_per_byte: per_byte as f64 / 1000.0,
         })
     }
@@ -576,6 +590,28 @@ impl Profile {
         words: i64,
     ) -> Result<bool, String> {
         Ok(words <= 2 && (self.size || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
+    }
+
+    /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
+    /// of `sub`/`add` on the stack pointer: shorter, and where size is not
+    /// wanted, only if no slower.
+    ///
+    /// DEVIATE FRAMESLOT-PRICE (owner llrm-target-x86-m32, exit 2026-11-30):
+    /// the pin takes `push`/`pop` at every level
+    /// (`X86FrameLowering::emitSPUpdate`, `Offset == SlotSize`,
+    /// X86FrameLowering.cpp of the pin d1106deb71cc). A 486 pops in 4
+    /// clocks and adds in 1, so the pair costs +3 clocks for 4 bytes: more
+    /// than the speed rate pays (0.3125 clk/B at -O2/-O3), and a loss at -O1,
+    /// where neither axis may be worse (sfm16_dbg -O1 12,527 -> 12,530 clk).
+    /// Exit: re-measure 2026-11-30; none while a 486 pops in 4 clocks.
+    pub fn pops_frame_slot(&self) -> bool {
+        const SLOT_BYTES: i64 = 4;
+        self.size
+            || self
+                .cost("push_r")
+                .and_then(|push| Ok(push + self.cost("pop_r")? - 2 * self.cost("alu_rr")?))
+                .map(|extra| 1000 * extra <= SLOT_BYTES * self.speed_milliclocks_per_byte())
+                .unwrap_or(true)
     }
 
     /// Whether this profile has an explicit ranking for a form.

@@ -35,6 +35,12 @@ pub fn oracle_with(
     skip: Option<&str>,
 ) -> Result<Oracle, String> {
     if let Some(root) = root.filter(|root| !root.is_empty()) {
+        let assembler = format!("{root}/usr/bin/m68k-linux-gnu-as");
+        if !Path::new(&assembler).exists() {
+            return Err(format!(
+                "GCC_M68K={root} has no {assembler}: point it at the unpacked tree's root (the directory holding usr/)"
+            ));
+        }
         return Ok(Oracle::Root(root.to_owned()));
     }
     if skip == Some("1") {

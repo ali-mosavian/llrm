@@ -6,6 +6,12 @@ alignment padding."""
 import sys
 from pathlib import Path
 
+try:
+    import iced_x86  # noqa: F401  the code size decodes the code with it
+except ImportError:
+    # Without it every code delta is an exception a caller may read as "unread" or as no change.
+    raise SystemExit("INSTRUMENT: iced_x86 missing, so no code delta can be read; run under `uv run --project tools python`")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sizes  # noqa: E402
 

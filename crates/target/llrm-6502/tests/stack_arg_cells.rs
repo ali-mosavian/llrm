@@ -4,7 +4,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_text;
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8";
+const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8";
 
 /// `pass32` copied a register that the allocator numbers below `rc0` into a
 /// spill slot (`lda rc18446744073709551603`: a cell name from `register_name`

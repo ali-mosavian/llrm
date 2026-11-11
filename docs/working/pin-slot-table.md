@@ -16,10 +16,10 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 
 | level | MATCH | N/A | EXECUTED | DEVIATE | MISSING | ORDER | slots |
 |---|---|---|---|---|---|---|---|
-| -O1 | 38 | 20 | 10 | 11 | 24 | 1 | 104 |
-| -O2 | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
-| -O3 | 50 | 26 | 10 | 6 | 29 | 0 | 121 |
-| -Os | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
+| -O1 | 40 | 19 | 10 | 12 | 22 | 1 | 104 |
+| -O2 | 52 | 24 | 10 | 6 | 25 | 0 | 117 |
+| -O3 | 52 | 25 | 10 | 7 | 27 | 0 | 121 |
+| -Os | 52 | 24 | 10 | 6 | 25 | 0 | 117 |
 
 At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 2 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
@@ -93,8 +93,6 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 | Late | alignment-from-assumptions | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | loop-sink | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | div-rem-pairs | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
-| Late | mergeicmps | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
-| Late | expand-memcmp | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Module | called-value-propagation | -O1,-O2,-O3,-Os | indirect calls only; not measured |
 | Module | globaldce | -O1,-O2,-O3,-Os | globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner object-refactor) |
 | Module | rpo-function-attrs | -O1,-O2,-O3,-Os | no stage of ours is known to do it; unverified |
@@ -363,7 +361,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -O1 | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -O1 | Late | loop-vectorize<no-interleave-forced-only;vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -O1 | Late | loop-vectorize<no-interleave-forced-only;vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): no loop at -O1 (the hint-forced loops the pin still widens are not looked for: LV-F1, exit 2026-11-24); memory-only loops with a scalar remainder (constant or run-time trip count), no epilogue vectorization (VEC3), no `vector.memcheck` (a loop whose pointers may alias stays scalar: LV-M1, exit 2026-11-24), no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec; scalar remainder met 2026-11-11; exits: LV-X1 reverse 2026-11-14, LV-X2 widened binary operations 2026-11-17 (24 loops), LV-X3 reductions and VEC3 epilogue vectorization 2026-11-20 (42 loops); each its own PR off release/next after #8946 | llrm-arm64-vec, 2026-11-12 |
 | -O1 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O1 | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O1 | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -381,8 +379,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Late | loop-sink | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O1 | Late | instsimplify | function<eager-inv> | MATCH | instsimplify@1662:Translated |  |  |
 | -O1 | Late | div-rem-pairs | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -O1 | Late | mergeicmps | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -O1 | Late | expand-memcmp | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O1 | Late | mergeicmps | function<eager-inv> | MATCH | mergeicmps@1672:Translated |  |  |
+| -O1 | Late | expand-memcmp | function<eager-inv> | MATCH | expandmemcmp@1673:Translated |  |  |
 | -O1 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O1 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O1 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -477,7 +475,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -O2 | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -O2 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -O2 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops with a scalar remainder (constant or run-time trip count), no epilogue vectorization (VEC3), no `vector.memcheck` (a loop whose pointers may alias stays scalar: LV-M1, exit 2026-11-24), no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec; scalar remainder met 2026-11-11; exits: LV-X1 reverse 2026-11-14, LV-X2 widened binary operations 2026-11-17 (24 loops), LV-X3 reductions and VEC3 epilogue vectorization 2026-11-20 (42 loops); each its own PR off release/next after #8946 | llrm-arm64-vec, 2026-11-12 |
 | -O2 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O2 | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O2 | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -496,8 +494,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Late | loop-sink | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Late | instsimplify | function<eager-inv> | MATCH | instsimplify@1662:Translated |  |  |
 | -O2 | Late | div-rem-pairs | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -O2 | Late | mergeicmps | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -O2 | Late | expand-memcmp | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O2 | Late | mergeicmps | function<eager-inv> | MATCH | mergeicmps@1672:Translated |  |  |
+| -O2 | Late | expand-memcmp | function<eager-inv> | MATCH | expandmemcmp@1673:Translated |  |  |
 | -O2 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O2 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O2 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -595,7 +593,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -O3 | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -O3 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -O3 | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops with a scalar remainder (constant or run-time trip count), no epilogue vectorization (VEC3), no `vector.memcheck` (a loop whose pointers may alias stays scalar: LV-M1, exit 2026-11-24), no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec; scalar remainder met 2026-11-11; exits: LV-X1 reverse 2026-11-14, LV-X2 widened binary operations 2026-11-17 (24 loops), LV-X3 reductions and VEC3 epilogue vectorization 2026-11-20 (42 loops); each its own PR off release/next after #8946 | llrm-arm64-vec, 2026-11-12 |
 | -O3 | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -O3 | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -614,8 +612,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Late | loop-sink | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Late | instsimplify | function<eager-inv> | MATCH | instsimplify@1662:Translated |  |  |
 | -O3 | Late | div-rem-pairs | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -O3 | Late | mergeicmps | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -O3 | Late | expand-memcmp | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -O3 | Late | mergeicmps | function<eager-inv> | MATCH | mergeicmps@1672:Translated |  |  |
+| -O3 | Late | expand-memcmp | function<eager-inv> | MATCH | expandmemcmp@1673:Translated |  |  |
 | -O3 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O3 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O3 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
@@ -713,7 +711,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Late | loop-interchange | function<eager-inv>/loop | MATCH | loop-interchange@1631:Translated |  |  |
 | -Os | Late | loop-distribute | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | inject-tli-mappings | function<eager-inv> | N/A |  | maps scalar libcalls to vector ones; vectors deferred Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
-| -Os | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
+| -Os | Late | loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;> | function<eager-inv> | DEVIATE |  | loop-vectorize@1354 (loopvectorize.rs), arm64 only behind `LLRM_ARM64_VECTORS` (default off): memory-only loops with a scalar remainder (constant or run-time trip count), no epilogue vectorization (VEC3), no `vector.memcheck` (a loop whose pointers may alias stays scalar: LV-M1, exit 2026-11-24), no reductions; i486 N/A (user ruling 10-20). Owner llrm-arm64-vec; scalar remainder met 2026-11-11; exits: LV-X1 reverse 2026-11-14, LV-X2 widened binary operations 2026-11-17 (24 loops), LV-X3 reductions and VEC3 epilogue vectorization 2026-11-20 (42 loops); each its own PR off release/next after #8946 | llrm-arm64-vec, 2026-11-12 |
 | -Os | Late | drop-unnecessary-assumes<drop-deref> | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -Os | Late | infer-alignment | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-1, 11-09 |
 | -Os | Late | loop-load-elim | function<eager-inv> | MATCH | loop-load-elim@1400:Partial |  |  |
@@ -732,8 +730,8 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Late | loop-sink | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Late | instsimplify | function<eager-inv> | MATCH | instsimplify@1662:Translated |  |  |
 | -Os | Late | div-rem-pairs | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -Os | Late | mergeicmps | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
-| -Os | Late | expand-memcmp | function<eager-inv> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
+| -Os | Late | mergeicmps | function<eager-inv> | MATCH | mergeicmps@1672:Translated |  |  |
+| -Os | Late | expand-memcmp | function<eager-inv> | MATCH | expandmemcmp@1673:Translated |  |  |
 | -Os | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -Os | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -Os | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |

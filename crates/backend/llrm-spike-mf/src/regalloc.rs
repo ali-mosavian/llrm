@@ -342,6 +342,18 @@ pub trait Target {
         1
     }
 
+    /// `TII.getInstrCost(COPY, {to, from})`: what the copy of `from` into `to`
+    /// costs, in the unit of [`Target::operand_cost`]. Greedy hints a value the
+    /// register that makes the copies naming it cheapest (llvm-mos
+    /// `getRegAllocationHints`, `COPY`); all 0 is the pin's order.
+    fn copy_register_cost(
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
+
     /// What the instruction `inst` costs with its operand `operand` in
     /// `register` (clocks or bytes by the target's goal, from its instruction
     /// tables): the 6502's `dec` is one instruction on a zero-page cell and
@@ -380,6 +392,14 @@ pub trait Target {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CalcSpillWeights.cpp#L398
     fn spill_weight_scale(_order: &[RegId]) -> f32 {
         1.0
+    }
+
+    /// The status-flags register, which a machine instruction that `sets_flags`
+    /// writes without naming it (the pin's `implicit-def $ccr`). The SSA
+    /// converter gives such an instruction a pinned value for it where a later
+    /// instruction of the block reads the register by name.
+    fn flags_register() -> Option<RegId> {
+        None
     }
 
     /// Registers the code of a spill or a reload overwrites (the 6502's
