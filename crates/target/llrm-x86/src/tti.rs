@@ -837,6 +837,10 @@ impl Tti for X86 {
         self.tuning.push_imm_at_size
     }
 
+    fn merge_functions_at_size(&self) -> bool {
+        self.tuning.merge_functions_at_size
+    }
+
     fn sdiv_pow2_stays_at_size(&self) -> bool {
         self.tuning.sdiv_pow2_stays_at_size
     }

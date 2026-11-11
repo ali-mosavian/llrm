@@ -36,14 +36,55 @@ int input_read(char *buffer, int count)
     }
     return n;
 }
-int run(void)
+/* The libc and compiler-rt entry points a program leans on and a bare module lacks. Both sides link these same bytes; the loops are
+   plain byte and word steps (-fno-builtin keeps the compiler from turning them back into calls to themselves). */
+void *memcpy(void *d, const void *s, unsigned long n)
+{
+    unsigned char *a = d; const unsigned char *b = s;
+    while (n--) *a++ = *b++;
+    return d;
+}
+void *memmove(void *d, const void *s, unsigned long n)
+{
+    unsigned char *a = d; const unsigned char *b = s;
+    if (a < b) while (n--) *a++ = *b++;
+    else { a += n; b += n; while (n--) *--a = *--b; }
+    return d;
+}
+void *memset(void *d, int c, unsigned long n)
+{
+    unsigned char *a = d;
+    while (n--) *a++ = (unsigned char)c;
+    return d;
+}
+int memcmp(const void *x, const void *y, unsigned long n)
+{
+    const unsigned char *a = x, *b = y;
+    for (; n; --n, ++a, ++b) if (*a != *b) return *a - *b;
+    return 0;
+}
+/* __multi3: the low 128 bits of a 128-bit product, from 32-bit partial products (a 128-bit shift or multiply here would call the
+   routine being defined). */
+typedef union { __int128 v; unsigned long long w[2]; } wide;
+__int128 __multi3(__int128 a, __int128 b)
+{
+    wide x = {a}, y = {b}, r;
+    unsigned long long a0 = (unsigned)x.w[0], a1 = x.w[0] >> 32, b0 = (unsigned)y.w[0], b1 = y.w[0] >> 32;
+    unsigned long long p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    unsigned long long mid = (p00 >> 32) + (unsigned)p01 + (unsigned)p10;
+    r.w[0] = (p00 & 0xffffffffu) | (mid << 32);
+    r.w[1] = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32) + x.w[0] * y.w[1] + x.w[1] * y.w[0];
+    return r.v;
+}
+/* Named so that a program's own `run` is no clash (inlined_tail_call_keeps_frame_stores defines one). */
+int llrm_harness_run(void)
 {
     if (__main_void) __main_void();
     else __main_argc_argv(0, 0);
     return (int)state;
 }
 EOF
-"$clang" --target=wasm32 -O2 -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
+"$clang" --target=wasm32 -O2 -fno-builtin -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
 
 # The two sides must compile with the same codegen flags (arm64: 24/72 cells off to one side's -fomit-frame-pointer). Both command lines
 # are taken from what actually ran: ours through a wrapper around the same clang, the pin's from the one list used below.
@@ -72,7 +113,7 @@ for f in "$@"; do
   stub="$out/stub.o"
   if python3 "$root/tools/wasm_stub_os.py" "$f" > "$out/$n.os.c" 2> "$out/$n.os.err" && [ -s "$out/$n.os.c" ]; then
     cat "$out/stub.c" "$out/$n.os.c" > "$out/$n.stub.c"
-    "$clang" --target=wasm32 -O2 -c "$out/$n.stub.c" -o "$out/$n.stub.o" 2> /dev/null && stub="$out/$n.stub.o"
+    "$clang" --target=wasm32 -O2 -fno-builtin -c "$out/$n.stub.c" -o "$out/$n.stub.o" 2> /dev/null && stub="$out/$n.stub.o"
   fi
   read -r lv li lm <<< "$(count "$out/$n.l.o" "$stub")"
   read -r cv ci cm <<< "$(count "$out/$n.c.o" "$stub")"
@@ -81,7 +122,10 @@ for f in "$@"; do
   printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' "$n" "$(image "$out/$n.l.o")" "$(image "$out/$n.c.o")" "${li:-0}" "${ci:-0}" \
     "$(code "$out/$n.l.o")" "$(code "$out/$n.c.o")" "$ok"
   measured=$((measured + 1))
-  case $ok in n/a*) unjudged="$unjudged $n";; esac
+  # The first import nothing satisfied, from either side's run, rides on the name: a missing libc or compiler-rt routine is a gap in the
+  # harness, to be read in the failure and not mistaken for a program that does not run.
+  missing=$(cat "$out/$n.l.o.import" "$out/$n.c.o.import" 2> /dev/null | head -1)
+  case $ok in n/a*) unjudged="$unjudged $n${missing:+[$missing]}";; esac
 done
 [ "$measured" -gt 0 ] || { echo "wasm_corpus: no program was measured" >&2; exit 1; }
 # A program that did not run is not a pass: the run fails and names it.

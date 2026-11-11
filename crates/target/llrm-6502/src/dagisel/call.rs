@@ -72,9 +72,10 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
-    let placement = convention.place(&kinds);
+    let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
         .iter()
@@ -134,7 +135,8 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
+    let (targets, bytes) = locations(&convention, &vts, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     // `LowerMemOpCallTo`: the stack arguments are stored at `rs0 + offset`.
     let mut stores = Vec::new();
@@ -220,7 +222,7 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let (sources, _) = locations(&convention, &vts, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -305,6 +307,14 @@ impl TargetCalling for MosCalling {
         true
     }
 
+    // The runtime has no routine named `llvm.*`: a call left would bind to nothing.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
+    ) -> bool {
+        false
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
@@ -334,5 +344,15 @@ impl TargetCalling for MosCalling {
         outs: &[Out],
     ) -> SDValue {
         lower_return(dag, chain, outs).expect("legal parts")
+    }
+
+    /// The unnamed arguments follow the named ones' stack bytes (llvm-mos's `VarArgsStackIndex` at
+    /// `Assigner.StackSize`).
+    fn variadic_frame_offset(
+        &self,
+        named: &[In],
+    ) -> Option<i64> {
+        let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
+        locations(&abi::mos(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
     }
 }

@@ -154,7 +154,7 @@ fn same_as_llvm_mc_on(
     }
 }
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n";
+const LAYOUT: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n";
 
 /// A loop over a table, a call and a store through a pointer: zero-page
 /// operands, `abs,x`, `(zp),y`, `jsr` and a branch within the function.
