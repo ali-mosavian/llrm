@@ -318,6 +318,7 @@ pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
 pub mod loopvectorizeskeleton;
 pub mod looppeel;
+pub mod trial;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;

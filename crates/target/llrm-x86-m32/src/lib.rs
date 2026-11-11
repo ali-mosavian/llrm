@@ -115,6 +115,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // ROW M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz 84 -> 85 B (best 74),
         // an unrotated inner loop changes the outer loop's registers (cause card to the greedy owners).
         rotation_guard_must_fold_at_size: true,
+        // DEVIATE ROTATION-TRIAL (owner greedy-os-causes, exit 2026-12-05, with RS1): a counted loop
+        // RS1 rotates is also tried unrotated in a second compile, kept only if the object is
+        // smaller. Os, 98 cells, unrotated everywhere: 21 smaller (x_jpeg_fixed -213 B, x_radix -20,
+        // x_idioms -16, x_prefix -12), 64 larger (x_transpose +34, x_matmul_f +29, x_life +25).
+        rotation_trial_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.

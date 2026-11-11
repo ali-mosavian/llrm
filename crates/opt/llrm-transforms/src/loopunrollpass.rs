@@ -85,7 +85,7 @@ use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_bl
 mod price;
 mod throughput;
 mod recurrence;
-pub mod trial;
+pub use crate::trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
