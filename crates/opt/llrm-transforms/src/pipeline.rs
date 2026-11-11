@@ -295,6 +295,9 @@ pub struct Options {
     /// `licm` in the LICM slots and where `hoist` ran; on by default,
     /// `LLRM_NO_LICM` turns it off.
     pub licm: bool,
+    /// The `mergeicmps` slot (the pin's `-enable-mergeicmps`, on by default);
+    /// `LLRM_NO_MERGEICMPS` turns it off.
+    pub merge_icmps: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -360,6 +363,7 @@ impl Default for Options {
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
+            merge_icmps: !llrm_support::env_flag!("LLRM_NO_MERGEICMPS"),
             copy_headers: true,
             for_size: false,
             speed_rate: true,
@@ -412,10 +416,11 @@ impl Options {
         Self::default()
     }
 
-    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the copy budget is LLVM's -O3
-    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
-    /// clones: the pin makes none, and they grew recchop 1541 lines against
-    /// 171.
+    /// -O3: gcc's: -O2 with unswitching and the larger inline threshold; the
+    /// copy budget is LLVM's -O3 (`UnrollThresholdAggressive`, twice the
+    /// target's), not gcc's. No ipa-cp clones by default: the pin makes
+    /// none. A target that states `Tti::ipa_cp_clones_at_speed` takes gcc's
+    /// `-fipa-cp-clone` here (DEVIATE IPACP-O3, resolved in `recorded`).
     pub fn speed() -> Self {
         Self {
             inline: inline::Threshold::new(250),
@@ -431,7 +436,7 @@ impl Options {
     pub fn aggressive() -> Self {
         Self {
             limits: Limits { target_percent: 200, ..Limits::default() },
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold { cp_clone: Some(true), ..inline::Threshold::new(250) },
             unswitch: true,
             unroll_and_jam: true,
             search: true,
@@ -1145,10 +1150,14 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
-            slot(
-                "mergeicmps@1672",
-                Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
-            ),
+            if applied.options.merge_icmps {
+                slot(
+                    "mergeicmps@1672",
+                    Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
+                )
+            } else {
+                Box::new(Together { name: "mergeicmps@1672", parts: Vec::new() })
+            },
             slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
@@ -1586,7 +1595,26 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
-    // The clones of the step before the walk and of the one after it share a bound.
+    // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): gcc's
+    // `-fipa-cp-clone` is on at -O3, the pin has no such pass; the target
+    // states whether it copies at -O3. A flag given wins.
+    let resolved = Applied {
+        options: Options {
+            inline: inline::Threshold {
+                cp_clone: Some(applied.options.inline.cp_clone.unwrap_or_else(|| {
+                    unroll_level(&applied.options) == 3
+                        && !applied.options.prefers_size()
+                        && program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed())
+                })),
+                ..applied.options.inline
+            },
+            ..applied.options.clone()
+        },
+        ..applied.clone()
+    };
+    let applied = &resolved;
+    // The clones of the step before the walk and of the one after it share a
+    // bound.
     let cloning = crate::ipacp::Shared::default();
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
     // `RecomputeGlobalsAAPass` alone, read cached in between.

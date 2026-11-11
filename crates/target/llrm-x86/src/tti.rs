@@ -1040,6 +1040,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_depth
     }
 
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        self.tuning.ipa_cp_clones_at_speed
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }

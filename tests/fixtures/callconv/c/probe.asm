@@ -9,7 +9,7 @@ savedsp dw ?
 handler dd ?
 after dw ?
 .code PROBE_TEXT
-public _trash, _arm, _verify, _intcall
+public _trash, _arm, _verify, _verify_nosidi, _intcall
 
 _trash proc far
     mov ax, 0BAD0h
@@ -80,6 +80,46 @@ _verify proc far
 done:
     ret
 _verify endp
+; _verify_nosidi: _verify without the SI and DI bits, for a caller llrm compiled: its own code may use SI and DI between arm() and
+; verify() (a `rep movsd` copy of an argument), which is legal, so a "lost" SI or DI there is not the callee's. BP, SP, DS and DF stay checked.
+_verify_nosidi proc far
+    xor cx, cx
+    cmp si, 5A5Ah
+    je @F
+    or cx, 1
+@@: cmp di, 0A5A5h
+    je @F
+    or cx, 2
+@@: mov ax, ds
+    mov bx, DGROUP
+    mov ds, bx
+    cmp bp, savedbp
+    je @F
+    or cx, 4
+@@: mov dx, sp
+    add dx, 6
+    cmp dx, savedsp
+    je @F
+    or cx, 8
+@@: cmp ax, bx
+    je @F
+    or cx, 16
+@@: pushf
+    pop ax
+    test ax, 400h
+    jz @F
+    or cx, 32
+    cld
+@@: and cx, 0FFFCh
+    jcxz done_nosidi
+    mov bx, sp
+    push cx
+    push word ptr ss:[bx+4]
+    call _probe_failed
+    add sp, 4
+done_nosidi:
+    ret
+_verify_nosidi endp
 ; intcall(handler, before, after): each register set, `handler` entered
 ; as an interrupt, what each held on return. Order AX BX CX DX SI DI BP DS
 ; ES in both arrays; DS stays DGROUP.
