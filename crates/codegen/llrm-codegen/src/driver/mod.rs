@@ -420,7 +420,7 @@ pub fn assembled_module(
             &crate::abi::llvm::LlvmAbi {
                 stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
             },
-            &format!("{}_TEXT", name.to_uppercase()),
+            &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", name.to_uppercase())),
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
