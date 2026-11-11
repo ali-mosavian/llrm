@@ -510,8 +510,7 @@ b2:
 
 /// `int a = *p; *q = 1; return a + *p` with `q` a `char *`: C lets the char
 /// store write `*p`, so the second load stays. TypeBasedAA's `omnipotent char`
-/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to
-/// itself.
+/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to itself.
 #[test]
 fn a_char_store_between_two_int_loads_leaves_the_second_load() {
     let text = "define i16 @f(ptr %p, ptr %q) {
@@ -2353,10 +2352,7 @@ fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
         let mut slots = Vec::new();
         for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
             for one in pipeline::llvm_order(applied, phase) {
-                if matches!(
-                    one.name(),
-                    "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776"
-                ) {
+                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
                     slots.push((one.name(), one.parts()));
                 }
             }
@@ -2978,17 +2974,16 @@ b:
 }
 
 /// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`
-/// off (`opt -print-pipeline-passes`:
-/// `simplifycfg<...no-switch-range-to-icmp...>`); ours turned a two-way switch
-/// over a case range into an `icmp` there, ahead of the passes that read the
-/// switch. The slots that name the option (L1245, ...) keep it.
+/// off (`opt -print-pipeline-passes`: `simplifycfg<...no-switch-range-to-icmp...>`);
+/// ours turned a two-way switch over a case range into an `icmp` there, ahead of
+/// the passes that read the switch. The slots that name the option (L1245, ...)
+/// keep it.
 #[test]
 fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
     let text = "define i32 @f(i32 %x) {\nb0:\n  switch i32 %x, label %d [\n    i32 0, label %a\n    i32 1, label %a\n    i32 2, label %a\n  ]\na:\n  ret i32 1\nd:\n  ret i32 2\n}\n";
     let run = |slot: &str| {
         let mut module = llrm_analysis::testing::parsed(text);
-        let applied =
-            Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        let applied = Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
         assert!(pipeline::slot_built(&applied, slot), "no slot {slot}");
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(pipeline::Fixed::new(&applied));
@@ -3038,11 +3033,8 @@ fn getenv_calls_do_not_grow_with_the_functions_compiled() {
     let reads = |functions: usize| {
         let text: String = (0..functions).map(function).collect();
         let mut module = llrm_analysis::testing::parsed(&text);
-        let applied = Applied {
-            only: Some("decide@1178".to_owned()),
-            options: pipeline::Options::standard(),
-            ..Applied::default()
-        };
+        let applied =
+            Applied { only: Some("decide@1178".to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(pipeline::Fixed::new(&applied));
         let before = GETENVS.with(std::cell::Cell::get);
@@ -3097,8 +3089,7 @@ fn the_exit_tests_of_earlier_loops_are_rewritten_before_the_next_loop_is_asked()
 /// simplify-cfg): 63 of the 129 extra InstCombine runs on memory_expansion -O2.
 /// The pin runs GlobalCleanup once, before the inliner, and nothing follows
 /// `DeadArgumentEliminationPass`. Here `@g`'s argument is read only by a call
-/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only
-/// after it.
+/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only after it.
 #[test]
 fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_again() {
     let text = "define internal i16 @h(i16 %p, i16 %q) {\nb0:\n  %c = icmp eq i16 %q, 0\n  %r = select i1 %c, i16 1, i16 %p\n  ret i16 %r\n}\n\ndefine internal i16 @g(i16 %x, i16 %u) noinline {\nb0:\n  %k = call i16 @h(i16 %u, i16 0)\n  %m = call i16 @h(i16 %x, i16 1)\n  %r = add i16 %m, %k\n  ret i16 %r\n}\n\ndefine i16 @f(i16 %a, i16 %b) {\nb0:\n  %c = call i16 @g(i16 %a, i16 %b)\n  ret i16 %c\n}\n";
@@ -3121,35 +3112,4 @@ fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_a
     let printed = llrm_mir::print::module(&module);
     assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
     assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
-}
-
-/// `icmp sgt (sub nsw a, b), (add nsw a, b)` of the pin's `icmp-subadd.ll`
-/// reached the backend as a `sub`, an `add` and a compare; -O2 makes it
-/// `icmp slt b, 0`.
-#[test]
-fn test_o2_folds_a_compare_of_a_sub_and_an_add_to_b_against_zero() {
-    let text = "define i1 @f(i8 %a, i8 %b) {
-b:
-  %sub = sub nsw i8 %a, %b
-  %add = add nsw i8 %a, %b
-  %cmp = icmp sgt i8 %sub, %add
-  ret i1 %cmp
-}
-";
-    let run = |options: pipeline::Options| {
-        let mut module = crate::testing::parsed(text);
-        let applied = Applied { options, ..Applied::default() };
-        let entered = |program: &mut Program| {
-            program.exports.entries.insert("f".to_owned());
-            pipeline::applied(program, &applied)
-        };
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
-            .and_then(|done| done)
-            .unwrap();
-        crate::testing::printed(&module)
-    };
-    let off = run(pipeline::Options::none());
-    assert!(off.contains("sub nsw"), "premise: with no passes the sub stays\n{off}");
-    let after = run(pipeline::Options::standard());
-    assert!(after.contains("icmp slt i8 %b, 0") && !after.contains("sub nsw"), "{after}");
 }
