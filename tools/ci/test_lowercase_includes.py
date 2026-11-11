@@ -23,3 +23,13 @@ def test_a_source_with_files_is_mirrored_in_lower_case(tmp_path):
     (tmp_path / "inc/ALLOC.H").write_bytes(b"int a;\x1a")
     done = mirror(tmp_path / "inc", tmp_path / "out")
     assert done.returncode == 0 and (tmp_path / "out/alloc.h").read_bytes() == b"int a;"
+
+
+def test_a_tree_of_symlinks_is_mirrored_through_them(tmp_path):
+    """qctc/inc on a host that keeps Borland's headers once, linked: `find -type f` saw no files, so the mirror was refused as empty."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real/ALLOC.H").write_bytes(b"int a;\x1a")
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "inc/ALLOC.H").symlink_to(tmp_path / "real/ALLOC.H")
+    done = mirror(tmp_path / "inc", tmp_path / "out")
+    assert done.returncode == 0 and (tmp_path / "out/alloc.h").read_bytes() == b"int a;"

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/aliasdiff.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/aliasdiff.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/aliasdiff.rs sha256:53dcf8c74f408bec844535f08a67329b009017a5e9c50fdf7abacdbf5c0731c5 -->
+<!-- src: crates/opt/llrm-analysis/src/aliasdiff.rs sha256:29fd17c8c433462f160d956bb8a3fb08d12d8a15f6b5d0a165282cd651661acd -->
 
 # aliasdiff
 
@@ -15,7 +15,7 @@ location (`0` nothing, `R` read, `W` write, `B` both). A row is keyed by
 the function and the position of the access or call in the function's
 walk, which is the same for two builds fed one dump.
 
-[`compare`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/compare.rs) reads two such recordings. A pair that was `N` and is not, or
+`compare` reads two such recordings. A pair that was `N` and is not, or
 a call that touched a location and no longer does, is *lost* (precision;
 counted). A pair that was not `N` and is, or a call that read or wrote a
 location and now does not, is *gained* (a new proof): it fails, since a

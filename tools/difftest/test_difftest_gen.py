@@ -40,7 +40,7 @@ def test_ladder_336_keeps_a_jump_to_each_callee_in_order():
     """Before #6146 tailmerge treated sibling calls to different callees as identical: one `jmp c0`, the `c1` arms lost (265 of 500 ladder programs ran wrong)."""
     if not os.path.exists(LLRM_CC):
         return
-    env = dict(os.environ, LLRM_CC_TARGET="x86_64-linux", LLRM_OW=os.environ.get("LLRM_OW", os.path.expanduser("~/scratch/ow-src")))
+    env = dict(os.environ, LLRM_CC_TARGET="x86_64-linux")
     fixture = os.path.join(os.path.dirname(__file__), "fixtures", "ladder_336.c")
     done = subprocess.run([LLRM_CC, "-O2", "-S", fixture, "-o", "-"], env=env, text=True, capture_output=True)
     assert done.returncode == 0, done.stderr

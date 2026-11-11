@@ -45,6 +45,8 @@ frame_optional = true
 # The pin pushes the registers a function keeps before the space for its locals, call or none.
 frame_saved_first = true
 frame_wrap_split_size = true
+# The pin aligns each frame object to its own alignment and only the total to the stack (calculateFrameObjectOffsets).
+frame_object_aligned = true
 # System V: a leaf function keeps up to 128 bytes of locals below rsp (X86FrameLowering::has128ByteRedZone).
 frame_red_zone = 128
 # A one-slot frame is `push rax` / `pop rcx` (X86FrameLowering emitSPUpdate): rcx carries no result.
@@ -113,6 +115,8 @@ frame = "rbp"
 frame_optional = true
 frame_saved_first = true
 frame_wrap_split_size = true
+# The pin aligns each frame object to its own alignment and only the total to the stack (calculateFrameObjectOffsets).
+frame_object_aligned = true
 frame_slot_push = "rax"
 frame_slot_pop = "rcx"
 stack = "rsp"

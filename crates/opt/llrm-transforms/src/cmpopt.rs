@@ -64,6 +64,7 @@ pub(crate) fn query<'a>(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(cxt),
+        pending_intrinsics: &[],
     }
 }
 

@@ -26,6 +26,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
@@ -39,7 +40,7 @@ use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
 pub struct TargetEnv {
-    pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
+    pub palettes: RefCell<IndexMap<u32, Rc<BTreeSet<RegId>>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
     /// A join leaves a pinned value standing ([`CoalescerEnv::keeps`]): for a
@@ -55,6 +56,8 @@ pub struct TargetEnv {
     /// Whether a copy into or out of a lane above the low one is joined
     /// ([`CoalescerEnv::can_share_lane`]). Off: such a copy stays.
     pub joins_lanes: bool,
+    /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`).
+    pub joins_loop_carried_first: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
@@ -78,6 +81,10 @@ pub struct TargetEnv {
     /// `LLRM_CHECK_USE_SUMMARY`: each [`JoinSide`] also lists its instructions,
     /// for the target to check the summary against.
     pub check_kinds: bool,
+    /// A join that leaves both values the registers they had is taken without
+    /// building a [`Join`] (`Target::joins_unnarrowed_for_free`): the rule
+    /// prices only what a join takes away.
+    pub free_when_unnarrowed: bool,
     /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI)`: the
     /// target's own test of a definition worth making again. None: a move of
     /// an immediate or an address as x86 names them.
@@ -288,6 +295,10 @@ impl CoalescerEnv for TargetEnv {
         self.joins_global_copies
     }
 
+    fn joins_loop_carried_first(&self) -> bool {
+        self.joins_loop_carried_first
+    }
+
     fn joins_pinned_copies(&self) -> bool {
         self.joins_pinned_copies
     }
@@ -411,7 +422,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(small) = palettes.get(&narrow).cloned() else { return };
         if let Some(big) = palettes.get(&wide).cloned() {
-            palettes.insert(wide, self.hosts_at(&big, &small, offset));
+            palettes.insert(wide, Rc::new(self.hosts_at(&big, &small, offset)));
         }
     }
 
@@ -423,7 +434,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(small) = palettes.get(&narrow).cloned() else { return };
         if let Some(big) = palettes.get(&wide).cloned() {
-            palettes.insert(wide, self.hosts(&big, &small));
+            palettes.insert(wide, Rc::new(self.hosts(&big, &small)));
         }
     }
 
@@ -443,6 +454,13 @@ impl CoalescerEnv for TargetEnv {
             let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
             self.freq.get(block).copied().unwrap_or(1.0)
         };
+        // A join that narrows neither value takes nothing away: both sides
+        // price 0 and the target's rule says yes (the pin asks no price at all
+        // where the target has no opinion, TargetRegisterInfo.h:1031).
+        let same_width = super::pair::move_copy(lis.instr(copy)).is_none_or(|(d, s)| d.width == s.width);
+        if self.free_when_unnarrowed && same_width && (Rc::ptr_eq(x, y) || x == y) {
+            return true;
+        }
         self.catch_up(lis);
         let side = |value: u32, palette: &BTreeSet<RegId>| {
             let mut kinds = self.use_kinds(lis, value);
@@ -482,7 +500,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(from) = palettes.get(&src).cloned() else { return };
         match palettes.get_mut(&dst) {
-            Some(into) => into.retain(|register| from.contains(register)),
+            Some(into) => Rc::make_mut(into).retain(|register| from.contains(register)),
             None => {
                 palettes.insert(dst, from);
             }
@@ -566,19 +584,21 @@ pub fn joined_with_map(
 /// come back narrowed to what each surviving value may take.
 pub fn coalesce(
     body: &LirBody,
-    palettes: IndexMap<u32, BTreeSet<RegId>>,
+    palettes: IndexMap<u32, Rc<BTreeSet<RegId>>>,
     pins: IndexMap<u32, RegId>,
     size: bool,
     joins_global_copies: bool,
     joins_pinned_copies: bool,
     joins_sub_registers: bool,
     joins_lanes: bool,
+    joins_loop_carried_first: bool,
+    free_when_unnarrowed: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
     remat_wins: Option<RematWins>,
     kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,
-) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
+) -> (LirBody, IndexMap<u32, Rc<BTreeSet<RegId>>>, JoinMap) {
     let aliases = pins
         .iter()
         .map(|(value, register)| {
@@ -597,7 +617,7 @@ pub fn coalesce(
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
     let env = TargetEnv {
-        palettes: palettes.into(),
+        palettes: RefCell::new(palettes),
         pins,
         size,
         keep_pinned: true,
@@ -605,6 +625,7 @@ pub fn coalesce(
         joins_pinned_copies,
         joins_sub_registers,
         joins_lanes,
+        joins_loop_carried_first,
         aliases,
         should_join,
         freq,
@@ -614,6 +635,7 @@ pub fn coalesce(
         kind_of: Some(kind_of),
         kinds: RefCell::default(),
         check_kinds: llrm_support::env_flag!("LLRM_CHECK_USE_SUMMARY"),
+        free_when_unnarrowed,
     };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();

@@ -213,6 +213,7 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
     let root = dag.get_node(ISD::And, EVT::I64, &[shl, mask]);
     dag.set_root(root);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: true,
@@ -222,6 +223,7 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
         i16_mul_chains: false,
         sext_load: true,
         zext_free: true,
+        branch_constant_selects: false,
         profile: None,
     };
     let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
@@ -368,6 +370,7 @@ fn and_mask_under_a_shift(m16: bool) -> Option<u128> {
     let root = shift(&mut dag, ISD::Shl, and, 4);
     dag.set_root(root);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: true,
@@ -377,6 +380,7 @@ fn and_mask_under_a_shift(m16: bool) -> Option<u128> {
         i16_mul_chains: m16,
         sext_load: true,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

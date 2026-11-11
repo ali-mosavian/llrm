@@ -5,7 +5,7 @@
 #endif
 /* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
  * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
-#ifdef SF_CMP_SPLIT
+#if defined(SF_CMP_SPLIT) || defined(SF_CMP_ALIAS_ENTRIES)
 #define SF_STR_(x) #x
 #define SF_STR(x) SF_STR_(x)
 /* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */

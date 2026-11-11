@@ -19,4 +19,4 @@ Extends in the final code of the same 56 modules: the pin's asm has 2147 lines s
 
 ## Decision
 
-No code. The row is DEVIATE (numbered, no pin function to translate): LIR has no undef lanes; the widening is explicit and needed for the 67h forms. Exit: MIR undef reaching LIR (then `INSERT_SUBREG undef` has an analogue and the pass can be translated); owner mir-undef; review 2026-11-14.
+No code. The row is DEVIATE (numbered, no pin function to translate): LIR has no undef lanes; the widening is explicit and needed for the 67h forms. Exit: MIR undef reaching LIR (then `INSERT_SUBREG undef` has an analogue and the pass can be translated); owner anyisa; review 2026-11-14.

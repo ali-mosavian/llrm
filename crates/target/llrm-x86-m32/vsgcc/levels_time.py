@@ -108,7 +108,7 @@ def geomean(values: list[float]) -> float:
 
 def setup() -> None:
     """What a user's compile does: no check of each pass and phase (the cargo environment of a test run would turn it on), and llrm-cc
-    given its Open Watcom tree and pinned clang (without them the -O0 bench/bintree compile exited 1)."""
+    given its pinned clang (without it the -O0 bench/bintree compile exited 1)."""
     os.environ["LLRM_VERIFY"] = "0"
     os.environ.update(llrmbin.cc_environment())
 

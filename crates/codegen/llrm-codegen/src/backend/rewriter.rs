@@ -126,6 +126,7 @@ pub fn rewrite(
 #[cfg(test)]
 thread_local! {
     pub(crate) static INTERVALS_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static VALUES_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
@@ -170,7 +171,12 @@ fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
     #[cfg(test)]
     INTERVALS_WORKED.with(|n| n.set(n.get() + 1));
     let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
+    // Only the candidates' values are asked of: LLVM reads its `LiveIntervals`
+    // here, which are already there; ours would be worked out for every value.
+    let wanted: BTreeSet<u32> = candidates.iter().map(|(_, _, value)| *value).collect();
+    let live = ranges::intervals_among(body, &index, &crate::analysis::frequency::Frequency::of(body), &wanted);
+    #[cfg(test)]
+    VALUES_WORKED.with(|n| n.set(live.len()));
     for (at, position, value) in candidates {
         let block = &body.blocks[at];
         let one = &block.insns[position];
@@ -388,18 +394,14 @@ pub(crate) fn _placed(
             }
         }
     }
-    let mut made = (**one).clone();
     // A value now in an x87 register is named by the register: the stackifier
     // numbers it again (`fpregs`).
     let in_rfp = |value: &u32| held.get(value).is_some_and(|at| regs.in_class(*at, llrm_lir::registers::class::RFP));
+    // The copy's own operands are replaced: cloning `what` to drop them copied
+    // both lists twice.
+    let mut made = one.with_what(Some(what.with_operands(name, dests, sources)));
     made.uses.retain(|value| !in_rfp(value));
     made.defines.retain(|value| !in_rfp(value));
-    // The copy's own operands are replaced in place: building a `Semantics`
-    // from `what.clone()` copied both lists again to drop them.
-    let own = made.what.as_mut().expect("an instruction with semantics");
-    own.name = name;
-    own.dests = dests;
-    own.sources = sources;
     Ok(Arc::new(made))
 }
 
@@ -548,5 +550,20 @@ mod undef_tests {
         let found = _undef_supers(&narrow);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(INTERVALS_WORKED.with(|n| n.get()), 1);
+    }
+
+    /// Intervals were worked out for every value of the body to answer for
+    /// one narrow write: 39 M Ir over three bodies of memory_expansion.
+    #[test]
+    fn test_only_the_narrow_writes_values_get_intervals() {
+        VALUES_WORKED.with(|n| n.set(0));
+        let narrow = body(vec![
+            mov(1, held(1, 1), imm(5), 1, vec![]),
+            mov(2, held(2, 2), held(1, 2), 2, vec![1]),
+            mov(3, held(3, 2), held(2, 2), 3, vec![2]),
+            mov(4, held(4, 2), held(3, 2), 4, vec![3]),
+        ]);
+        assert_eq!(_undef_supers(&narrow).len(), 1);
+        assert_eq!(VALUES_WORKED.with(|n| n.get()), 1, "one candidate value, one interval");
     }
 }

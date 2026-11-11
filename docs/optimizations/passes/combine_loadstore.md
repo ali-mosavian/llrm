@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:de9588ffd78aa688dd0f9fdaf78b0836c26d3518828967c51fe0044dd04a691a -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:15588de9edf7a4eafec0b16a3f8f2012ec462031b926052e4c164be576f5cfef -->
 
 # combine_loadstore
 
@@ -29,6 +29,17 @@ store i16 %x, ptr %p
 ```
 
 MIRROR: every check and its order, the scan of 6 and what ends it.
+
+`mergeStoreIntoSuccessor` (:1639, called from `visitUncondBrInst`): a store
+before an unconditional branch whose successor has two edges, and the
+other predecessor stores the same address (last in an if/else arm, or in
+the block that branches to this one: the triangle), becomes a `storemerge`
+phi and one store in the successor.
+
+DEVIATE 9: only stores of one type merge (no `CreateBitOrPointerCast`
+between a stored `i32` and `float`); of the metadata only an equal `tbaa`
+is kept (`AAMDNodes::merge` and the access-group intersection are not
+translated). Exit 2026-11-20.
 
 DEVIATE 1: `combineStoreToValueType`, `unpackStoreToAggregate` and
 `replaceGEPIdxWithZero` are the next slices of this file, not yet

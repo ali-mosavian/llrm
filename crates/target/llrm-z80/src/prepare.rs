@@ -2,9 +2,17 @@
 //! branch (or a `switch`) to a block with phis puts the phi copies on its own
 //! edge, so that edge gets a block.
 
-use llrm_mir::module::{Module, Operand};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::module::{GlobalValue, Module, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::pattern::constant_int_u64;
 use llrm_transforms::edges::split_critical_edge;
+
+/// The name of a block split onto a phi edge: the pin lays these out only after
+/// selection, so the switch lowering looks past them.
+pub const PHI_EDGE: &str = "phi.edge";
 
 /// Splits every critical edge into a block with phis, in every function with a
 /// body. The selector refuses a block of several machine blocks (a split
@@ -31,8 +39,8 @@ pub fn split_phi_edges(module: &mut Module) {
                     .iter_block(to)
                     .next()
                     .is_some_and(|first| function.instruction(first).opcode == Opcode::Phi);
-                if phi {
-                    split_critical_edge(function, from, to);
+                if phi && let Some(bridge) = split_critical_edge(function, from, to) {
+                    function.set_block_name(bridge, PHI_EDGE);
                 }
             }
         }
@@ -43,7 +51,7 @@ pub fn split_phi_edges(module: &mut Module) {
 pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
 
 /// Marks every function with a body when the module multiplies longs often
-/// enough to pay for `__mulsi3` (57 B): a long multiply counts one, a long
+/// enough to pay for `__mulsi3` (58 B): a long multiply counts one, a long
 /// long three (its cross products). A lone small multiply is cheaper inline
 /// (copy_runs, switch_jump_table: +10 and +31 B at -Os with the call).
 pub fn mark_long_multiplies(module: &mut Module) {
@@ -76,6 +84,39 @@ pub fn mark_long_multiplies(module: &mut Module) {
     for name in names {
         if let Some((_, function)) = module.function_mut(&name) {
             function.attrs.push(Attribute::Flag(LONG_MULTIPLY.into()));
+        }
+    }
+}
+
+/// The attribute that marks a function with a `memset` of a constant count of two or more: it is also
+/// selected with each such fill an inline `ldir` fill (`driver::selections_with_alternatives`).
+pub const CONSTANT_FILL: &str = "llrm-fill";
+
+/// Marks every function with a body that calls `llvm.memset` with a constant count of two or more. The
+/// selection decides which of them reach `emit_memset` (a short fill is stored inline); one that does not
+/// leaves the two selections identical and the alternative is dropped.
+pub fn mark_constant_fills(module: &mut Module) {
+    let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+            function.walk().any(|(_, call)| {
+                let Some(callee) = llrm_mir::memory::callee(&module.context, function, call) else { return false };
+                let is_memset = module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic)
+                    == Some(Intrinsic::MemSet);
+                is_memset
+                    && function.instruction(call).operands.get(2).is_some_and(|&length| {
+                        constant_int_u64(&query, length).is_some_and(|bytes| bytes >= 2)
+                    })
+            })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(CONSTANT_FILL.into()));
         }
     }
 }

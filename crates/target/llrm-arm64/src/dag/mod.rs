@@ -13,4 +13,6 @@ pub mod globals;
 pub mod hooks;
 pub mod ids;
 pub mod lowering;
+pub mod memops;
 pub mod pipeline;
+pub mod vector;

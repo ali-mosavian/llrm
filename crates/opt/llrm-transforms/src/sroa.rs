@@ -19,7 +19,10 @@
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
 //! - Calls and invokes escape a pointer whatever their attributes
-//!   (`visitCallBase` L1402 looks at read-only, nocapture operands).
+//!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
+//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none with a
+//!   call-site nocapture, and `strlen(b)+b[0]` forwards the same as the pin at
+//!   -Os; exit when a cell shows a missed forward, review 2026-12-10.
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -29,7 +32,7 @@
 //!   the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
 //!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
 //!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
-//!   `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
+//!   `Declare` that carries a fragment; owner anyisa; review 2026-11-14.
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
@@ -106,8 +109,9 @@ impl FunctionPass for SroaModifyCfg {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let before = unit.function.mark();
         let changed = State::new(unit, analyses, false).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 
@@ -134,8 +138,9 @@ impl FunctionPass for Sroa {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let before = unit.function.mark();
         let changed = State::new(unit, analyses, true).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 
@@ -195,7 +200,10 @@ fn size_equals_store_size(
 }
 
 /// DEVIATE: whether isel selects an integer of `bytes` bytes (LLVM legalizes
-/// any width, so SROA makes i24 where a 3-byte slice is cut).
+/// any width, so SROA makes i24 where a 3-byte slice is cut). Owner softfloat,
+/// kept because: all 60 triggers in tests/run/c + bench are 10-byte x87
+/// `long double` slices, and an i80 lowering costs more than the alloca; exit
+/// when isel lowers odd widths, review 2026-12-10.
 fn supported_int_size(
     layout: &DataLayout,
     bytes: u64,

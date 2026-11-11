@@ -1,7 +1,7 @@
 //! `matrix [SET]`: the kernels of `bench/<SET>` (`kernels`, or `library`) built
 //! by this compiler twice (`ours`: `llrm-cc` over the C source, as a user runs
 //! it; `ours-ir`: the backend alone on the kernel's IR), m68k gcc (`$GCC_M68K`)
-//! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O2 and Os
+//! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O1, O2, O3 and Os
 //! for the 68000, 68020, 68040 and 68060, run under `qemu-m68k` and priced as
 //! `cycles` does. Prints the competitor-matrix rows: `target prog level
 //! compiler code_bytes clocks instrs note`, tab separated. An empty field means
@@ -18,12 +18,15 @@ use std::process::Command;
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::isa::Cpu as Model;
-use llrm_m68k::kernels::{Arg, data, extra_runs, library_data, library_table, program_with_data, source_in, table};
+use llrm_m68k::kernels::{
+    Arg, data, extra_runs, keep_named, library_data, library_table, program_with_data, source_in, table,
+};
 use llrm_m68k::object::{assemble, executable, write_executable};
 
 #[allow(dead_code)]
 #[path = "cycles.rs"]
 mod cycles;
+mod tempdir;
 
 /// The sections of an `objdump -h` listing that hold data a kernel could load
 /// (`.rodata*`, `.data*`, `.bss*`, literal pools) with a size above zero.
@@ -61,6 +64,20 @@ fn other_code_sections(listing: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The rewritten listing lost its final newline: gas warned "end of file not at end of a line" on every
+    /// `ours` cell (1056 stderr lines in the 11-09 run), and a warning on our output hides a mis-assembled line.
+    #[test]
+    fn rewritten_listing_ends_in_a_newline() {
+        assert_eq!(super::relaxing_branches("\tbne\tL1\n\trts\n"), "\tjne\tL1\n\trts\n");
+    }
+
+    /// The matrix measured O2 and Os only, so O1 (strict: bytes and clocks) and
+    /// O3 had no cells and counted as clean.
+    #[test]
+    fn every_level_is_measured_by_default() {
+        assert_eq!(super::levels(), ["O1", "O2", "O3", "Os"]);
+    }
+
     /// gcc puts `main` in `.text.startup` and cold parts in `.text.unlikely`;
     /// a column that read `.text` alone undercounted those bytes (softfloat's
     /// finding for the ELF feeds; this corpus had none, so no cell moved).
@@ -120,6 +137,18 @@ fn text_bytes(
 }
 
 /// The kernel's C source built by m68k gcc into an object's text.
+/// The shared external-bar flags (`tools/external_flags.py --target none`, hash cd1e12d510e4); `tools/m68k_column_probe.py`
+/// fails when this list and that file differ. Relocation is ours: none (static), asserted by the same probe.
+const EXTERNAL_FLAGS: [&str; 5] = [
+    "-fomit-frame-pointer",
+    "-fno-stack-protector",
+    "-fno-stack-clash-protection",
+    "-U_FORTIFY_SOURCE",
+    "-fno-asynchronous-unwind-tables",
+];
+/// gcc 15's upstream default, pinned (clang has no such option).
+const GCC_ZERO_INIT_PADDING: &str = "-fzero-init-padding-bits=standard";
+
 fn gcc_object(
     root: &Path,
     cpu: &str,
@@ -131,7 +160,9 @@ fn gcc_object(
         .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
         .arg(format!("-B{}/usr/lib/gcc-cross/m68k-linux-gnu/15/", root.display()))
         .arg(format!("-B{}/usr/m68k-linux-gnu/bin/", root.display()))
-        .args(["-ffreestanding", "-nostdlib", "-fno-asynchronous-unwind-tables"])
+        .args(["-ffreestanding", "-nostdlib"])
+        .args(EXTERNAL_FLAGS)
+        .arg(GCC_ZERO_INIT_PADDING)
         .arg(format!("-mcpu={cpu}"))
         .arg(format!("-{level}"))
         .arg("-c")
@@ -172,6 +203,7 @@ fn ours_object(
     std::fs::write(&asm, format!(".text\n{}", relaxing_branches(&text))).map_err(|e| e.to_string())?;
     let status = Command::new(root.join("usr/bin/m68k-linux-gnu-as"))
         .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
+        .arg("--fatal-warnings")
         .arg(format!("-m{cpu}"))
         .arg("-o")
         .arg(object)
@@ -197,8 +229,8 @@ fn relaxing_branches(text: &str) -> String {
                 _ => line.to_owned(),
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|line| line + "\n")
+        .collect()
 }
 
 /// The pin's clang (front end and `-O` pipeline, to IR) into the pin's `llc`:
@@ -214,7 +246,8 @@ fn clang_object(
 ) -> Result<(), String> {
     let ir = object.with_extension("ll");
     let status = Command::new(clang)
-        .args(["--target=m68k-linux-gnu", "-ffreestanding", "-fno-asynchronous-unwind-tables", "-fno-pic"])
+        .args(["--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic"])
+        .args(EXTERNAL_FLAGS)
         .arg(format!("-mcpu={cpu}"))
         .arg(format!("-{level}"))
         .args(["-S", "-emit-llvm"])
@@ -245,14 +278,19 @@ fn main() {
     let llc = PathBuf::from(std::env::var("LLVM_M68K").expect("LLVM_M68K: the pin's m68k build, its bin directory"))
         .join("llc");
     let objdump = gcc_root.join("usr/bin/m68k-linux-gnu-objdump");
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-matrix-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempdir::Scratch::new("matrix");
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
     let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench").join(&set);
     let (rows, block): (Vec<(&str, Vec<Arg>, i32, bool)>, Vec<u8>) = if set == "library" {
         (library_table(), library_data())
     } else {
         (table().into_iter().map(|(name, args, expected)| (name, args, expected, true)).collect(), data())
+    };
+    // `MATRIX_PROGS=partition,hex` keeps the named programs; an unknown name
+    // stops the run
+    let rows = match std::env::var("MATRIX_PROGS") {
+        Ok(only) => keep_named(rows, |row| row.0, &only).unwrap_or_else(|why| panic!("MATRIX_PROGS: {why}")),
+        Err(_) => rows,
     };
     let cpus = [
         ("68000", Cpu::M68000, Model::M68000),
@@ -281,7 +319,7 @@ fn main() {
             }
             let module = llrm_mir::parse::module(&text).unwrap();
             let runtime: Vec<Item> = runtime_names.iter().flat_map(|one| items(&module, one, cpu).unwrap()).collect();
-            for level in ["O2", "Os"] {
+            for level in levels() {
                 let row =
                     |compiler: &str, size: Option<usize>, clocks: Option<u64>, insns: Option<usize>, note: &str| {
                         let cell = |value: Option<String>| value.unwrap_or_default();
@@ -298,7 +336,8 @@ fn main() {
                     let mut code = code;
                     code.extend(helper.clone().unwrap_or_default());
                     code.extend(runtime.clone());
-                    // the first input, then the others that make the branches go the other way
+                    // the first input, then the others that make the branches
+                    // go the other way
                     let mut runs: Vec<(&[Arg], i32)> = vec![(args.as_slice(), *expected)];
                     let more = extra_runs(name);
                     runs.extend(more.iter().map(|(args, expected)| (args.as_slice(), *expected)));
@@ -316,12 +355,15 @@ fn main() {
                         if status != Some(*expected) {
                             return (None, None, format!("wrong result: {status:?}, want {expected}"));
                         }
-                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        let total = cycles::price(&gcc_root, &exe, &[model], false, &["k".to_owned()]);
+                        if total.truncated {
+                            return (None, None, "trace cut short: raise CYCLES_TIMEOUT".to_owned());
+                        }
                         if total.insns == 0 {
                             return (None, None, "priced no instruction".to_owned());
                         }
-                        if total.unknown > 0 {
-                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        if total.unknown_of(0) > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown_of(0));
                         } else if total.partial && notes.is_empty() {
                             notes = "data-dependent term at its bound".to_owned();
                         }
@@ -332,11 +374,12 @@ fn main() {
                     let n = runs.len() as u64;
                     let mean = |sum: u64| (sum + n / 2) / n;
                     let inputs = if n > 1 { format!("inputs {n}") } else { String::new() };
-                    let note = [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
+                    let note =
+                        [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
                     (Some(mean(clocks)), Some(mean(insns as u64) as usize), note)
                 };
 
-                let options = Options { size: level == "Os", ..Options::default() };
+                let options = Options { size: level == "Os", strict: level == "O1", ..Options::default() };
                 match items_with(&module, "k", cpu, options) {
                     Ok(code) => {
                         let size = {
@@ -366,7 +409,8 @@ fn main() {
                         clang_object(&clang, &llc, cpu_name, level_flag(level), &source, &object)
                     };
                     if !leaf {
-                        // the runtime is not linked into these objects: bytes only, from every column
+                        // the runtime is not linked into these objects: bytes
+                        // only, from every column
                         match built.and_then(|()| text_bytes(&objdump, &object, true)) {
                             Ok(bytes) => row(compiler, Some(bytes.len()), None, None, "calls the runtime: bytes only"),
                             Err(error) => row(compiler, None, None, None, &format!("n/a: {error}")),
@@ -386,10 +430,24 @@ fn main() {
             }
         }
     }
-    std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The `-O` flag of a level.
+/// The levels a matrix measures: `O1` is strict (bytes and clocks), `O2` and
+/// `O3` are priced by the CPU's byte rate, `Os` is bytes. `MATRIX_LEVELS=O1,Os`
+/// keeps the named ones; an unknown name stops the run.
+const LEVELS: [&str; 4] = ["O1", "O2", "O3", "Os"];
+
+fn levels() -> Vec<&'static str> {
+    match std::env::var("MATRIX_LEVELS") {
+        Ok(only) => only
+            .split(',')
+            .map(|one| LEVELS.iter().copied().find(|level| *level == one).unwrap_or_else(|| panic!("MATRIX_LEVELS: unknown level {one}")))
+            .collect(),
+        Err(_) => LEVELS.to_vec(),
+    }
+}
+
+/// The `-O` flag of a level: the level itself, for every column.
 fn level_flag(level: &str) -> &'static str {
-    if level == "Os" { "Os" } else { "O2" }
+    LEVELS.iter().copied().find(|one| *one == level).unwrap_or_else(|| panic!("unknown level {level}"))
 }

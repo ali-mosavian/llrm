@@ -17,7 +17,7 @@ fn expanded(
     length: &str,
 ) -> String {
     let mut module: Module = llrm_mir::parse::module(&text(align, length)).expect("parses");
-    super::memcpycall::expanded(&mut module, 0, "memcpy", false).expect("expands");
+    super::memcpycall::expanded(&mut module, 0, "memcpy", false, false).expect("expands");
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", llrm_mir::print::module(&module));
     llrm_mir::print::module(&module)
 }
@@ -29,7 +29,7 @@ fn expanded(
 #[test]
 fn test_a_variable_length_copy_is_a_call_of_memcpy() {
     let after = expanded(4, "%n");
-    assert!(after.contains("call ptr @memcpy(ptr %d, ptr %s, i32 %n)"), "{after}");
+    assert!(after.contains("call void @memcpy(ptr %d, ptr %s, i32 %n)"), "{after}");
     assert!(!after.contains("call void @llvm.memcpy"), "the intrinsic is gone: {after}");
 }
 
@@ -46,9 +46,9 @@ fn test_a_short_aligned_constant_copy_stays_for_the_selector() {
 /// call too, as the pin's `EmitTargetCodeForMemcpy` returns the generic path.
 #[test]
 fn test_a_long_or_misaligned_constant_copy_is_a_call() {
-    assert!(expanded(4, "129").contains("call ptr @memcpy("), "129 bytes");
+    assert!(expanded(4, "129").contains("call void @memcpy("), "129 bytes");
     assert!(expanded(4, "128").contains("call void @llvm.memcpy"), "128 bytes stay");
-    assert!(expanded(1, "64").contains("call ptr @memcpy("), "alignment 1, past the inline limit");
+    assert!(expanded(1, "64").contains("call void @memcpy("), "alignment 1, past the inline limit");
 }
 
 /// A length of another width than the call's `i32` (a copy of 200 bytes the
@@ -62,7 +62,7 @@ fn test_a_length_of_another_width_is_made_the_calls_i32() {
                 call void @llvm.memcpy.p0.p0.i16(ptr align 4 %d, ptr align 4 %s, i16 %n, i1 false)\n\
                 ret void\n}\n";
     let mut module: Module = llrm_mir::parse::module(text).expect("parses");
-    super::memcpycall::expanded(&mut module, 0, "memcpy", false).expect("expands");
+    super::memcpycall::expanded(&mut module, 0, "memcpy", false, false).expect("expands");
     let after = llrm_mir::print::module(&module);
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{after}");
     assert!(after.contains("zext i16 %n to i32"), "{after}");
@@ -74,9 +74,9 @@ fn test_a_length_of_another_width_is_made_the_calls_i32() {
 /// instructions at -Os).
 #[test]
 fn test_a_short_constant_copy_of_unaligned_pointers_stays_for_the_selector() {
-    assert!(!expanded(1, "12").contains("call ptr @memcpy("), "{}", expanded(1, "12"));
-    assert!(!expanded(1, "32").contains("call ptr @memcpy("), "eight 4-byte moves");
-    assert!(expanded(1, "36").contains("call ptr @memcpy("), "nine moves");
+    assert!(!expanded(1, "12").contains("call void @memcpy("), "{}", expanded(1, "12"));
+    assert!(!expanded(1, "32").contains("call void @memcpy("), "eight 4-byte moves");
+    assert!(expanded(1, "36").contains("call void @memcpy("), "nine moves");
 }
 
 /// x_mergesort -O3 at m32: the variable-length copies were `call _memcpy`
@@ -88,14 +88,31 @@ fn test_a_variable_copy_stays_inline_at_speed_where_the_tuning_says_so() {
     let source = text(4, "%n");
     let run = |source: &str, inline: bool| {
         let mut module: Module = llrm_mir::parse::module(source).expect("parses");
-        super::memcpycall::expanded(&mut module, 0, "memcpy", inline).expect("expands");
+        super::memcpycall::expanded(&mut module, 0, "memcpy", inline, false).expect("expands");
         llrm_mir::print::module(&module)
     };
-    assert!(run(&source, false).contains("call ptr @memcpy"), "premise: the pin's call");
+    assert!(run(&source, false).contains("call void @memcpy"), "premise: the pin's call");
     let kept = run(&source, true);
     assert!(kept.contains("call void @llvm.memcpy") && !kept.contains("@memcpy("), "{kept}");
     let sized =
         source.replace("define void @f(ptr %d, ptr %s, i32 %n) {", "define void @f(ptr %d, ptr %s, i32 %n) optsize {");
-    assert!(run(&sized, true).contains("call ptr @memcpy"), "-Os keeps the call");
-    assert!(run(&text(4, "4096"), true).contains("call ptr @memcpy"), "a constant length is untouched");
+    assert!(run(&sized, true).contains("call void @memcpy"), "-Os keeps the call");
+    assert!(run(&text(4, "4096"), true).contains("call void @memcpy"), "a constant length is untouched");
+}
+
+/// A 700-byte copy at m32 -Os was a call of `memcpy` (push x3, call, add) where
+/// the pin's llc at `minsize` writes `rep movsb`: memory_expansion +1110 B of
+/// the 2192 B by which 88 cells were worse. A target that takes `rep movsb` at
+/// -Os, or a function marked `minsize`, leaves a constant copy to the selector
+/// at any alignment and size.
+#[test]
+fn test_a_constant_copy_stays_for_rep_movsb_where_the_target_takes_it() {
+    let run = |rep_movsb: bool| {
+        let source = text(1, "700");
+        let mut module: Module = llrm_mir::parse::module(&source).expect("parses");
+        super::memcpycall::expanded(&mut module, 0, "memcpy", false, rep_movsb).expect("expands");
+        llrm_mir::print::module(&module)
+    };
+    assert!(run(false).contains("call void @memcpy("), "the pin's -Os: a call");
+    assert!(run(true).contains("call void @llvm.memcpy"), "rep movsb at -Os where the target says so");
 }

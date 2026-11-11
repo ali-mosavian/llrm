@@ -342,6 +342,29 @@ fn test_an_accumulator_immediate_takes_the_short_opcode() {
     }
 }
 
+/// `add al, 5` was `80 c0 05` (3 B) where the pin's `optimizeToFixedRegisterForm`
+/// makes `04 05`: select_of_constants -O1 was one byte over per function.
+#[test]
+fn test_a_byte_accumulator_immediate_takes_the_short_opcode() {
+    for (name, value, want) in
+        [("add", 5, "0405"), ("or", 4, "0c04"), ("and", 0xf, "240f"), ("xor", 0x55, "3455"), ("sub", 3, "2c03"), ("cmp", 7, "3c07")]
+    {
+        assert_eq!(hex(&made(arith_imm(name, RegId::AL, value, At::bits16(0), false)).code), want);
+    }
+    assert_eq!(hex(&made(arith_imm("add", RegId::BL, 5, At::bits16(0), false)).code), "80c305");
+}
+
+/// `test eax, imm32` was `f7 c0 id`; the accumulator form is `a9 id`.
+#[test]
+fn test_a_test_of_the_accumulator_takes_the_short_opcode() {
+    let test = |register: RegId, width: u32, value: i64| {
+        hex(&made(test_immediate(&rg(register, width), value, At::bits16(0))).code)
+    };
+    assert_eq!(test(RegId::AL, 1, 0x10), "a810");
+    assert_eq!(test(RegId::AX, 2, 0x1000), "a90010");
+    assert_eq!(test(RegId::CX, 2, 0x1000), "f7c10010");
+}
+
 #[test]
 fn test_a_byte_immediate_still_beats_the_accumulator_form() {
     assert_eq!(hex(&made(arith_imm("add", RegId::AX, 3, At::bits16(0), false)).code), "83c003");
@@ -1151,6 +1174,18 @@ fn test_bt_of_a_cell_and_an_immediate_encodes() {
     let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 2, ..frame(-4, 4) });
     let bt = sem(Operation::Compare, Some("bt"), vec![], vec![cell, imm(1, 1)], None, false);
     assert_eq!(hex(&made(emitted(&bt)).code), "660fba66fc01");
+}
+
+/// `test [bp-4], reg` (from `(p[i] & m) == 0`, TEST*mr) had no encoder: the
+/// text printed, `-c` stopped on `Unencodable` and the m16 BASIC runtime
+/// (`_big_shr`) did not build.
+#[test]
+fn test_test_of_a_cell_and_a_register_encodes() {
+    for (width, reg, bytes) in [(2_u32, RegId::CX, "854efc"), (1, RegId::CL, "844efc"), (4, RegId::ECX, "66854efc")] {
+        let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 1, ..frame(-4, width) });
+        let what = sem(Operation::Compare, Some("test"), vec![], vec![cell, rg(reg, width)], None, false);
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "width {width}");
+    }
 }
 
 /// `dec byte [bp-4]` was unprintable: the memory form took words only, so

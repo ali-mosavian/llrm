@@ -34,6 +34,14 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
+    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies; stated cost
+    /// x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
+    /// instructions a block may hold above the pin's bound and still be copied
+    /// when the clocks of the jump the copy saves, over the block's executions,
+    /// outweigh the bytes of the copy at the speed rate (gcc's `copy_bb_p`,
+    /// `max-grow-copy-bb-insns` 8, takes any block it optimises for speed);
+    /// `None`: the pin's bound alone.
+    pub tail_dup_hot_threshold: Option<i64>,
     /// Two-address commuting ties the operand the result goes back into (a
     /// loop's back-edge copy) even where the operand was read earlier in the
     /// block (DEVIATE TA-LC, owner anyisa, exit 2026-11-27): the pin's
@@ -41,6 +49,36 @@ pub struct CpuTable {
     /// reversed-copy-chain test, and keeps a copy per iteration. Off: the
     /// pin's order.
     pub commute_loop_carried: bool,
+    /// PHIElimination lowers phis of different blocks through one register
+    /// where they read the same value from every predecessor they share
+    /// (DEVIATE PHI-SHARE, owner x87, exit 2026-11-29): the pin shares only
+    /// identical phis, so a loop's header and its zero-trip exit join, whose
+    /// phis differ in the preheader alone, are carried twice through the
+    /// loop. Off: the pin's rule.
+    pub share_congruent_phis: bool,
+    /// The pin's stand-alone `TailDuplicator` runs after allocation, once this
+    /// target's A/B has been made (`TailDuplicate` slot). DEVIATE TD-M64 (owner
+    /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
+    /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
+    pub post_ra_tail_duplicate: bool,
+    /// Runs of equal literal stores outside loops share a register at -O2/-O3 too, where
+    /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
+    /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
+    /// `MOV32mi`s.
+    pub share_literal_stores: bool,
+    /// At `-Os` a register set to 1 is `xor r,r; inc r` (three bytes, the pin's
+    /// `MOV32r1`: `OptForSize, Not64BitMode`, [X86InstrCompiler.td#L335]).
+    ///
+    /// [X86InstrCompiler.td#L335]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L335
+    pub size_one_is_xor_inc: bool,
+    /// A select of two constants on a CPU with no `cmov` is a branch, not
+    /// `setcc` and arithmetic on its flag (DEVIATE SELB, owner x86-m32,
+    /// exit 2026-11-30): `xor r,r; cmp; setcc; lea` is 7-9 clocks on the 486
+    /// where `mov; jcc; mov` is 3-5. The scalar is the least block
+    /// frequency over the entry's (0: off, the pin's
+    /// `foldSelectOfConstants`/`combineCMov`): the branch is bigger, so only
+    /// code run at least that often pays it.
+    pub branch_constant_selects: u32,
     /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
     /// `None`: the target states none.
     pub mispredict_penalty: Option<i64>,
@@ -184,9 +222,15 @@ impl Timings {
                     ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
+                    ("scalars", "tail_dup_hot_threshold") => table.tail_dup_hot_threshold = Some(number()?),
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
+                    ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
+                    ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
+                    ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
+                    ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),

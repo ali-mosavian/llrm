@@ -7,6 +7,7 @@ description = "The one place that names targets: -m16 and -m32 pick one"
 
 [dependencies]
 llrm-codegen = { workspace = true }
+llrm-x86-backend = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-object = { workspace = true }

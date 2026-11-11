@@ -43,6 +43,7 @@ fn x86(
     DagCombiner::new(
         dag,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -52,6 +53,7 @@ fn x86(
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
         level,
@@ -161,6 +163,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
         let mut lowering = X86Lowering {
+            multiply_early_out: None,
             share_products: false,
             imul_if_smaller: false,
             cmov: false,
@@ -170,6 +173,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
             i16_mul_chains: chains,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
@@ -184,6 +188,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
         let mut lowering = X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -193,6 +198,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
             i16_mul_chains: true,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
@@ -237,10 +243,10 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             freq,
             milliclocks_per_byte: rate,
             by_clocks: false,
-            no_growth: false,
             price_pin: false,
         };
         let mut lowering = X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -250,6 +256,7 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: priced.then_some(pricing),
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
@@ -279,6 +286,7 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
         let y = dag.get_register(EVT::I16, 3);
         let sum = dag.get_node(ISD::Add, EVT::I16, &[x, y]);
         let lowering = X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -288,6 +296,7 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
             i16_mul_chains: !promotes_i16(&tli),
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         };
         assert_eq!(promotes_i16(&tli), promotes);
@@ -421,6 +430,7 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
     DagCombiner::new(
         &mut dag,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -430,6 +440,7 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
         CombineLevel::AfterLegalizeDag,

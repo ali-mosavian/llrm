@@ -586,6 +586,15 @@ impl PartialEq for NameIndex {
 }
 
 impl Function {
+    /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
+    /// MIR spells as a `!noalias.scope.decl` attachment.
+    pub fn is_noalias_scope_decl(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        self.instruction(inst).metadata.iter().any(|(kind, _)| kind == crate::print::SCOPE_DECL_KIND)
+    }
+
     pub(crate) fn new(
         ty: TypeId,
         void: TypeId,
@@ -1806,11 +1815,30 @@ impl Module {
         let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
             return true;
         };
-        let named = |id: &MetadataId| match self.metadata[id.0 as usize].operands.get(1) {
-            Some(MetadataOperand::String(name)) => name == "PIC Level",
-            _ => false,
+        flags.iter().any(|id| self.flag_named(id, "PIC Level"))
+    }
+
+    /// Whether the module is shared-library code whose default-visibility
+    /// definitions another module may interpose: it states "PIC Level" and no
+    /// "PIE Level" (clang `-fPIC`, not `-fPIE`), as `shouldAssumeDSOLocal`
+    /// reads them. A module with no flags (not clang's) is static here.
+    pub fn preempts_default_visibility(&self) -> bool {
+        let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
+            return false;
         };
-        flags.iter().any(named)
+        flags.iter().any(|id| self.flag_named(id, "PIC Level"))
+            && !flags.iter().any(|id| self.flag_named(id, "PIE Level"))
+    }
+
+    fn flag_named(
+        &self,
+        id: &MetadataId,
+        flag: &str,
+    ) -> bool {
+        matches!(
+            self.metadata[id.0 as usize].operands.get(1),
+            Some(MetadataOperand::String(name)) if name == flag
+        )
     }
 
     /// A function type's return type and parameters.

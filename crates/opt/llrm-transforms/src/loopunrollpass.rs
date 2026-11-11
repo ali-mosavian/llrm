@@ -83,6 +83,8 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod recurrence;
+pub mod trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
@@ -108,6 +110,9 @@ pub struct Options {
     /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
     /// `UpperBound` are the target's, not forced off.
     pub target_unrolling: bool,
+    /// The inliner still runs after this pass and may take an internal function (inlining is on and the
+    /// function is not `noinline`): its loops are then left to be priced in the context of each site.
+    pub inliner_follows: bool,
 }
 
 /// What the pass reads and changes.
@@ -135,12 +140,20 @@ pub struct Run<'a> {
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
+    /// The headers of loops earlier runs made by unrolling a loop around them:
+    /// part of a nest already decided, though no longer in `created` (the loop
+    /// pass manager runs the pass again for each loop).
+    pub decided: IdSet<BlockId>,
     /// The headers of the loops the run began with: a loop not among them is a
     /// copy an unroll made.
     pub first: IdSet<BlockId>,
     /// The expressions of the passes before (`Scevs`), current while the
     /// function is as they left it: dropped at the first change.
     pub scev: ScalarEvolution,
+    /// The manager's tree and nest of the function as it came in, used when
+    /// loop-simplify and LCSSA change nothing (the pin's pass gets both from
+    /// the analysis manager).
+    pub cached: Option<(std::rc::Rc<DomTree>, std::rc::Rc<LoopInfo>)>,
 }
 
 /// `TransformationMode`.
@@ -375,13 +388,14 @@ struct EstimatedUnrollCost {
 
 /// The analyses of one state of the function, made again after a change.
 pub(crate) struct Analyzed {
-    pub(crate) tree: DomTree,
-    pub(crate) loops: LoopInfo,
+    pub(crate) tree: std::rc::Rc<DomTree>,
+    pub(crate) loops: std::rc::Rc<LoopInfo>,
     pub(crate) assumptions: AssumptionCache,
 }
 
 impl Analyzed {
     pub(crate) fn of(run: &Run) -> Self {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LoopAnalyses);
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
         let assumptions = AssumptionCache::of_declared(
@@ -391,7 +405,23 @@ impl Analyzed {
             run.function,
             run.outer.assume_declared(),
         );
-        Self { tree, loops, assumptions }
+        Self { tree: tree.into(), loops: loops.into(), assumptions }
+    }
+
+    fn entry(run: &mut Run, unchanged: bool) -> Self {
+        match run.cached.take() {
+            Some((tree, loops)) if unchanged => {
+                let assumptions = AssumptionCache::of_declared(
+                    run.context,
+                    run.globals,
+                    run.metadata,
+                    run.function,
+                    run.outer.assume_declared(),
+                );
+                Self { tree, loops, assumptions }
+            }
+            _ => Self::of(run),
+        }
     }
 }
 
@@ -1032,7 +1062,7 @@ fn should_full_unroll(
     // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
     // cost more than the rolled loop: by size, or by the cost the analysis
     // finds once the trip's constants fold (gcc's size-neutral complete unroll).
-    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() {
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() && trial::active().is_none() {
         let rolled = u64::from(uce.rolled_loop_size());
         let fits = unrolled_size <= rolled
             || analyze_loop_unroll_cost(
@@ -1043,14 +1073,24 @@ fn should_full_unroll(
                 full_unroll_trip_count,
                 eph,
                 rolled.min(u64::from(u32::MAX)) as u32,
-                up.max_iterations_count_to_analyze,
+                run.tti.unroll_o1_analyzed_trips().map_or(up.max_iterations_count_to_analyze, |trips| trips.max(up.max_iterations_count_to_analyze)),
                 None,
                 false,
             )
             .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
-        return (fits
-            && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up))
-        .then_some(full_unroll_trip_count);
+        let unroll = fits && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up);
+        if !unroll {
+            note_for_trial(run, unrolled_size);
+        }
+        return unroll.then_some(full_unroll_trip_count);
+    }
+    // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
+    // size is unrolled; the function is priced whole afterwards.
+    if let Some(limit) = trial::active() {
+        if unrolled_size < u64::from(limit) {
+            why(run, lp, "trial unroll");
+            return Some(full_unroll_trip_count);
+        }
     }
     // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
     // (the pin's is `OptSizeThreshold`, 0 on x86).
@@ -1072,6 +1112,24 @@ fn should_full_unroll(
     // additional analysis on the loop.
     let max_unrolled_loop_size =
         (u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32;
+    // DEVIATE UNROLL-ANALYZE (owner m68k float_in_memory_loop, exit
+    // 2026-11-20): the pin unrolls a loop under its own bar without analysis,
+    // so its 10-trip cap never meets a loop that bar admits. Under a lower
+    // target bar the same loop reaches the analysis, which now covers every
+    // trip count the pin's bar would have unrolled. The same as the pin where
+    // the target keeps the bar.
+    let pin_threshold = if run.options.opt_size {
+        0
+    } else if run.options.opt_level > 2 {
+        UNROLL_THRESHOLD_AGGRESSIVE
+    } else {
+        UNROLL_THRESHOLD_DEFAULT
+    };
+    let trips_to_analyze = if unrolled_size < u64::from(pin_threshold) {
+        up.max_iterations_count_to_analyze.max(full_unroll_trip_count)
+    } else {
+        up.max_iterations_count_to_analyze
+    };
     if let Some(cost) = analyze_loop_unroll_cost(
         run,
         se,
@@ -1080,7 +1138,7 @@ fn should_full_unroll(
         full_unroll_trip_count,
         eph,
         max_unrolled_loop_size,
-        up.max_iterations_count_to_analyze,
+        trips_to_analyze,
         None,
         false,
     ) {
@@ -1091,7 +1149,23 @@ fn should_full_unroll(
                 .then_some(full_unroll_trip_count);
         }
     }
+    note_for_trial(run, unrolled_size);
     None
+}
+
+/// DEVIATE UNROLL-TRIAL: a loop the walk refused is noted for the trial that
+/// follows it.
+fn note_for_trial(
+    run: &Run,
+    unrolled_size: u64,
+) {
+    if trial::active().is_none()
+        && let (Some(limit), Some(this)) = (run.tti.unroll_trial_threshold(), run.this)
+        && unrolled_size < u64::from(limit)
+        && let Some(name) = run.globals[this.0 as usize].name.as_deref()
+    {
+        trial::note(name, unrolled_size);
+    }
 }
 
 /// `shouldPragmaUnroll`.
@@ -1344,6 +1418,11 @@ pub(crate) fn compute_unroll_count(
         };
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
         crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
+        // DEVIATE UNROLL-O1: a target that cannot pay for the copy does not peel at -O1.
+        if run.options.opt_level == 1 && !run.options.opt_size && !run.tti.peels_at_o1() {
+            pp.peel_count = 0;
+            pp.allow_peeling = false;
+        }
         if pp.peel_count == 0
             && already == 0
             && pp.allow_peeling
@@ -1364,6 +1443,13 @@ pub(crate) fn compute_unroll_count(
         up.partial |= pinfo.explicit_unroll;
     }
 
+    // DEVIATE RU-REC: the same veto as runtime unrolling, for a known trip
+    // count, unless the user asked for the unroll.
+    if trip_count != 0 && !up.force && !pinfo.explicit_unroll && recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "partial unroll: the loop-carried chain bounds a trip (RU-REC)");
+        return 0;
+    }
+
     // 6th priority is partial unrolling, when the trip count is known.
     if let Some(factor) = should_partial_unroll(loop_size, trip_count, uce, up) {
         return factor;
@@ -1381,6 +1467,10 @@ pub(crate) fn compute_unroll_count(
         return 0;
     }
     if !up.runtime {
+        return 0;
+    }
+    if recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "runtime unroll: the loop-carried chain bounds a trip (RU-REC)");
         return 0;
     }
 
@@ -1581,7 +1671,7 @@ fn try_to_unroll_loop(
     // on the loop trip count, but an exit at an earlier iteration is still
     // possible.
     let header = lp.get_header();
-    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::placeholder());
     let cx = llrm_analysis::scev::Cx {
         context: &*run.context,
         globals: run.globals,
@@ -1619,9 +1709,29 @@ fn try_to_unroll_loop(
 
     // Try to find the trip count upper bound if the exact one is not known.
     let (mut max_trip_count, mut max_or_zero) = (0, false);
+    let mut object_bounded: Option<u32> = None;
     if trip_count == 0 {
         max_trip_count = se.get_small_constant_max_trip_count(&cx, header);
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
+        // DEVIATE OB1: where the pin's bound is none or too large to unroll by, the object the loop's
+        // accesses run through gives one (its range-derived 2^31-1 for `i < n`).
+        if let Some(cap) = run.tti.unroll_object_bound()
+            && !opt_for_size
+            && run.options.opt_level >= 2
+            && let Some(bound) = crate::unrollbound::object_max_trip_count(&mut se, &cx, header)
+            && bound <= cap
+            // The pin's bound is none, or too large to unroll by.
+            && (max_trip_count == 0 || max_trip_count > cap)
+            // Not under a loop that unrolls whole: its constant counter makes the trips of this loop exact in
+            // the copies, where a bounded unroll leaves exit tests (nbody -O2/-O3: 20,604 more instructions).
+            && !lp.get_parent_loop().is_some_and(|parent| {
+                let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
+                trips != 0 && trips <= up.full_unroll_max_count
+            })
+        {
+            max_trip_count = bound;
+            object_bounded = Some(cap);
+        }
     }
 
     // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
@@ -1641,6 +1751,12 @@ fn try_to_unroll_loop(
             why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
             up.threshold = UNROLL_THRESHOLD_DEFAULT;
         }
+    }
+
+    // OB1: a bound the object gives is unrolled by in full, to the target's cap.
+    if let Some(cap) = object_bounded {
+        up.upper_bound = true;
+        up.max_upper_bound = up.max_upper_bound.max(cap);
     }
 
     let pinfo = UnrollPragmaInfo::of(run, &options);
@@ -1719,7 +1835,11 @@ fn try_to_unroll_loop(
     // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
     // loop, made again, is copied out `count` times.
     let mut remade = None;
-    if run.options.target_unrolling && trip_count == 0 {
+    // `UnrollLoop`: a count that reaches the max trip count unrolls the loop
+    // whole, and "there's no point in performing runtime unrolling" then
+    // ([LoopUnroll.cpp#L1019-L1026](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L1019-L1026)).
+    let completely = max_trip_count != 0 && count >= max_trip_count;
+    if run.options.target_unrolling && trip_count == 0 && !completely {
         if trip_multiple % count != 0 {
             // `EpilogProfitability` (LoopUnroll.cpp#L1058): the epilog only
             // where a header phi starts at an integer constant.
@@ -1729,6 +1849,10 @@ fn try_to_unroll_loop(
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
+            // was worked out in: an earlier loop's remainder guard, read while
+            // counting this loop, is a value its expansion reuses.
+            session.adopt(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             let mut env = crate::loopunrollruntime::Env {
                 context: &mut *run.context,
                 layout: run.layout,
@@ -1746,6 +1870,7 @@ fn try_to_unroll_loop(
                 use_epilog,
             );
             let Some(epilog) = done else {
+                run.scev = session.into_scev();
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
@@ -2047,6 +2172,122 @@ fn is_still_a_loop(
     run.function.predecessors(header).into_iter().any(|one| after.contains(&one))
 }
 
+/// The edges out of the blocks an unroll of the loop `body` can change: its
+/// own, its preheaders' and its exits'.
+fn unroll_edges(
+    function: &Function,
+    header: BlockId,
+    body: &[BlockId],
+) -> Vec<(BlockId, BlockId)> {
+    let inside: IdSet<BlockId> = body.iter().copied().collect();
+    let mut from: Vec<BlockId> = body.to_vec();
+    for pred in function.predecessors(header) {
+        if !inside.contains(&pred) {
+            from.push(pred);
+        }
+    }
+    for &one in body {
+        for next in function.successors(one) {
+            if !inside.contains(&next) && !from.contains(&next) {
+                from.push(next);
+            }
+        }
+    }
+    edges_from(function, &from)
+}
+
+fn edges_from(
+    function: &Function,
+    from: &[BlockId],
+) -> Vec<(BlockId, BlockId)> {
+    let mut edges = Vec::new();
+    for &one in from {
+        for next in function.successors(one) {
+            edges.push((one, next));
+        }
+    }
+    edges
+}
+
+/// `UnrollLoop`'s `DTU` updates: the edges the unroll made and removed, as
+/// `applyUpdates` takes them, from the edges before it of `before`'s blocks
+/// and the blocks made since the function had `capacity`.
+fn unroll_updates(
+    function: &Function,
+    capacity: usize,
+    before: &[(BlockId, BlockId)],
+) -> Vec<llrm_mir::domtree::Update> {
+    use llrm_mir::domtree::Update;
+    let mut from: Vec<BlockId> = before.iter().map(|&(one, _)| one).collect();
+    from.dedup();
+    from.extend(function.layout().iter().copied().filter(|one| one.0 as usize >= capacity));
+    let after = edges_from(function, &from);
+    let kept: std::collections::HashSet<(BlockId, BlockId)> = after.iter().copied().collect();
+    let was: std::collections::HashSet<(BlockId, BlockId)> = before.iter().copied().collect();
+    let mut updates = Vec::new();
+    for &(a, b) in before {
+        if !kept.contains(&(a, b)) {
+            updates.push(Update::delete(a, b));
+        }
+    }
+    for &(a, b) in &after {
+        if !was.contains(&(a, b)) {
+            updates.push(Update::insert(a, b));
+        }
+    }
+    updates
+}
+
+/// The blocks of the natural loop of `header` in the tree: those that reach a
+/// back edge without passing the header.
+fn natural_loop(
+    function: &Function,
+    tree: &DomTree,
+    header: BlockId,
+) -> IdSet<BlockId> {
+    let mut found: IdSet<BlockId> = IdSet::new();
+    found.insert(header);
+    let mut work: Vec<BlockId> = function.predecessors(header).into_iter().filter(|&p| tree.dominates(header, p)).collect();
+    while let Some(one) = work.pop() {
+        if found.insert(one) {
+            work.extend(function.predecessors(one));
+        }
+    }
+    found
+}
+
+/// The nest after an unroll that kept the loop headed by `header` and made no
+/// other loop (`UnrollLoop` updates `LI` in place): the blocks the unroll made
+/// join the loop and those it merged away leave it. `None` where the loop's
+/// blocks are not those, and the nest is made again.
+fn followed_nest(
+    run: &Run,
+    analyzed: &mut Analyzed,
+    header: BlockId,
+    body: &[BlockId],
+    capacity: usize,
+    merged: usize,
+) -> bool {
+    let gone: Vec<BlockId> = run.emptied[merged..].iter().copied().filter(|one| body.contains(one)).collect();
+    let made: Vec<BlockId> = run
+        .function
+        .layout()
+        .iter()
+        .copied()
+        .filter(|one| one.0 as usize >= capacity && !run.emptied.contains(one))
+        .collect();
+    let mut expected: IdSet<BlockId> = body.iter().copied().filter(|one| !gone.contains(one)).collect();
+    expected.extend(made.iter().copied());
+    if natural_loop(run.function, &analyzed.tree, header) != expected {
+        return false;
+    }
+    let loops = std::rc::Rc::make_mut(&mut analyzed.loops);
+    let Some(id) = loops.get_loop_for(header).map(|one| one.id()) else { return false };
+    loops.remove_blocks_from_loop(id, &gone);
+    loops.add_basic_blocks_to_loop(id, &made);
+    true
+}
+
 /// The `SimplifyIVs` half of `simplifyLoopAfterUnroll`
 /// ([LoopUnroll.cpp:350](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L350)),
 /// run when the unroll is partial (`!CompletelyUnroll && Count > 1`):
@@ -2065,6 +2306,7 @@ fn simplify_ivs_and_load_cse(
         tree: &analyzed.tree,
         assumptions: &analyzed.assumptions,
     };
+    let mark = run.function.mark();
     let _ = crate::simplifyindvar::simplified_loop_ivs(
         run.context,
         run.layout,
@@ -2076,7 +2318,62 @@ fn simplify_ivs_and_load_cse(
         header,
     );
     crate::loopunrollloadcse::load_cse(run, analyzed, header);
-    run.scev = ScalarEvolution::new();
+    forget_since(run, analyzed, mark);
+}
+
+/// `forgetTopmostLoop` and the deleted values (`SCEVCallbackVH`): the
+/// expressions the edits since `mark` made stale are dropped and the rest
+/// kept, where the pin's one `ScalarEvolution` lives on through the unroll.
+/// `before` are the loops of the function as it was at `mark`; a block made
+/// since has none, a block erased or rewritten drops the counts of its loops.
+/// The expressions are dropped whole where the log from `mark` is gone.
+fn forget_since(
+    run: &mut Run,
+    before: &Analyzed,
+    mark: llrm_mir::module::Mark,
+) {
+    let Some(touched) = run.function.touched_since(mark) else {
+        run.scev = ScalarEvolution::new();
+        return;
+    };
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &before.loops,
+        tree: &before.tree,
+        assumptions: &before.assumptions,
+    };
+    run.scev.forget_touched(&cx, &touched);
+}
+
+/// `forgetTopmostLoop(L)` of `UnrollLoop`, for a loop fully unrolled that held
+/// loops: what the expressions of its blocks and its loops' counts said of the
+/// nest is stale once the nest is straight-line code and copies.
+fn forget_nest(
+    run: &mut Run,
+    before: &Analyzed,
+    lp: Loop,
+) {
+    let mut top = lp;
+    while let Some(parent) = top.get_parent_loop() {
+        top = parent;
+    }
+    let headers: Vec<BlockId> =
+        before.loops.get_loops_in_preorder().iter().filter(|one| top.contains_loop(Some(**one))).map(|one| one.get_header()).collect();
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &before.loops,
+        tree: &before.tree,
+        assumptions: &before.assumptions,
+    };
+    run.scev.forget_loop_nest(&cx, top.get_blocks(), &headers);
 }
 
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
@@ -2095,18 +2392,48 @@ pub(crate) fn unrolled_blocks(
 /// loop was unrolled.
 pub fn unroll_loops(run: &mut Run) -> bool {
     // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
-    // LCSSA first, whether or not anything is unrolled.
-    let simplified = crate::loopsimplify::simplified(run.function);
-    let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
-    let mut analyzed = Analyzed::of(run);
+    // LCSSA first, whether or not anything is unrolled. `LoopFullUnrollPass`
+    // runs on one loop of a loop pass manager whose loops the slots before it
+    // left in both forms and does neither: a run narrowed to one loop
+    // (`loopfilter`) skips them.
+    let (simplified, closed) = if run.options.target_unrolling || !crate::loopfilter::scoped() {
+        // The manager's tree and loops stand for the function as it is: the
+        // first look at its loops asks them, not a tree made again.
+        let held = run.cached.as_ref().map(|(tree, loops)| llrm_analysis::cfg::Shape {
+            dominance: llrm_analysis::cfg::Dominance::new(std::rc::Rc::clone(tree)),
+            loops: llrm_analysis::cfg::natural(run.function, loops),
+        });
+        let simplified = crate::loopsimplify::simplified_given(run.function, held);
+        // Nothing was reshaped: the manager's tree and loops are the function's.
+        let closed = match &run.cached {
+            Some((tree, loops)) if !simplified => {
+                crate::lcssa::form_on_all_loops(run.context, run.layout, run.function, tree, loops)
+            }
+            _ => crate::lcssa::closed(run.context, run.layout, run.function),
+        }
+        .unwrap_or(false);
+        (simplified, closed)
+    } else {
+        (false, false)
+    };
+    let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     run.first = at_first.clone();
+    let mut kept = IdSet::new();
+    for header in run.decided.iter() {
+        if analyzed.loops.is_loop_header(header) {
+            kept.insert(header);
+        }
+    }
+    run.decided = kept;
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
     // holds.
-    let mut work: std::collections::VecDeque<BlockId> =
+    let mut work: Vec<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut work);
+    let mut work: std::collections::VecDeque<BlockId> = work.into();
     // `LoopFullUnrollPass` hands `addSiblingLoops` every sibling the unroll
     // left that was not there before, the unrolled loop's own first iteration
     // among them: they are new to the loop passes after it.
@@ -2137,6 +2464,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let capacity = run.function.block_capacity();
         let body = lp.get_blocks().to_vec();
         let holds_loops = lp.get_sub_loops().next().is_some();
+        let mark = run.function.mark();
         let inside: Vec<BlockId> = if holds_loops {
             analyzed
                 .loops
@@ -2148,6 +2476,8 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         } else {
             Vec::new()
         };
+        let edges_before = (parent_header.is_none() && !holds_loops).then(|| unroll_edges(run.function, header, &body));
+        let merged = run.emptied.len();
         let result = try_to_unroll_loop(run, &analyzed, lp);
         if result == Unrolled::Unmodified {
             continue;
@@ -2162,7 +2492,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         }
         let peeled = result == Unrolled::Peeled;
         changed = true;
-        run.scev = ScalarEvolution::new();
+        forget_since(run, &analyzed, mark);
+        if result == Unrolled::Fully && holds_loops {
+            forget_nest(run, &analyzed, lp);
+        }
         // The pin's loop pass manager runs LPM2's whole list on a loop,
         // children before parents ([`L270`][pop]): a parent's IndVars
         // sees its child already unrolled. Here each pass runs over
@@ -2205,24 +2538,55 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
-            // `LoopUnrollPass` does); the loops the peeled copy holds are
-            // new siblings, visited next.
-            let mut fresh: Vec<BlockId> =
-                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
-            fresh.reverse();
-            for one in fresh {
-                work.push_front(one);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled; the
+            // loops the peeled copy holds are new siblings, visited next
+            // (`addSiblingLoops`). `LoopUnrollPass` walks the loops it began
+            // with: it adds none.
+            if !run.options.target_unrolling {
+                let mut fresh: Vec<BlockId> =
+                    siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+                fresh.reverse();
+                for one in fresh {
+                    work.push_front(one);
+                }
             }
             continue;
         }
         // A top-level loop with no loops inside leaves the analyses of the
         // other loops as they were: they are made again only otherwise (made
         // after every loop they were `n^2` over `n` loops in a function).
-        if parent_header.is_none() && !holds_loops {
+        if let Some(edges) = edges_before {
             let after = unrolled_blocks(run, capacity, &body);
+            // The tree follows the unroll's edges (`DTU`), where the nest is
+            // made again.
+            let updates = unroll_updates(run.function, capacity, &edges);
+            std::rc::Rc::make_mut(&mut analyzed.tree).apply_updates(run.function, &updates);
+            if llrm_support::env_flag!("LLRM_CHECK_DOMTREE_MEMO") {
+                assert!(*analyzed.tree == DomTree::of(run.function), "the unroll's updates left the tree different");
+            }
             if is_still_a_loop(run, header, &after) {
-                let fresh = Analyzed::of(run);
+                if !followed_nest(run, &mut analyzed, header, &body, capacity, merged) {
+                    analyzed.loops = LoopInfo::analyze(run.function, || &*analyzed.tree).into();
+                    llrm_mir::counts::bump(llrm_mir::counts::Event::LoopAnalyses);
+                }
+                if llrm_support::env_flag!("LLRM_CHECK_DOMTREE_MEMO") {
+                    assert!(
+                        analyzed.loops.equivalent(&LoopInfo::analyze(run.function, || &*analyzed.tree), run.function),
+                        "the unroll's updates left the nest different"
+                    );
+                }
+                let assumptions = AssumptionCache::of_declared(
+                    run.context,
+                    run.globals,
+                    run.metadata,
+                    run.function,
+                    run.outer.assume_declared(),
+                );
+                let fresh = Analyzed {
+                    tree: std::rc::Rc::clone(&analyzed.tree),
+                    loops: std::rc::Rc::clone(&analyzed.loops),
+                    assumptions,
+                };
                 simplify_ivs_and_load_cse(run, &fresh, header);
                 simplify_loop_after_unroll(run, Some(&fresh.loops), &after);
             } else {
@@ -2241,20 +2605,25 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             simplify_ivs_and_load_cse(run, &analyzed, header);
         }
         simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
-        analyzed = Analyzed::of(run);
         // `UnrollLoop` puts the loops it cloned back in loop-simplify form
         // (`simplifyLoop` of the outer loop); here the whole function is, when
         // the unrolled loop had an outer loop or held loops (U6).
         if parent_header.is_some() || siblings_of(&analyzed.loops).iter().any(|one| !old.contains(one)) {
-            crate::loopsimplify::simplified(run.function);
+            // The blocks change only when loop-simplify changed them (LCSSA
+            // edits phis alone).
+            let reshaped = crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-            analyzed = Analyzed::of(run);
+            if reshaped {
+                analyzed = Analyzed::of(run);
+            }
         }
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for &one in &fresh {
-            work.push_front(one);
+        if !run.options.target_unrolling {
+            for &one in &fresh {
+                work.push_front(one);
+            }
         }
         revisited.extend(fresh);
     }
@@ -2289,6 +2658,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             created.push(header);
         }
     }
+    for header in &created {
+        run.decided.insert(*header);
+    }
     run.created = created;
     changed
 }
@@ -2303,9 +2675,13 @@ pub struct LoopFullUnroll {
     /// The pin's `LoopUnrollPass` (`AllowPartial`, `Runtime` and `UpperBound`
     /// from the target) where false is `LoopFullUnrollPass`.
     pub target_unrolling: bool,
+    /// `Options::inliner_follows`.
+    pub inliner_follows: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
+    /// Every loop an earlier run made, kept (unlike `created`) for the runs after it.
+    pub decided: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -2325,6 +2701,10 @@ impl FunctionPass for LoopFullUnroll {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
+        let cached = (
+            analyses.get::<llrm_mir::passes::Dominators>(unit.context, unit.layout, unit.function),
+            analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function),
+        );
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
@@ -2340,8 +2720,10 @@ impl FunctionPass for LoopFullUnroll {
             peeled: Default::default(),
             finished: IdSet::new(),
             created: Vec::new(),
+            decided: self.decided.borrow().iter().copied().collect(),
             first: Default::default(),
             scev: held.take(),
+            cached: Some(cached),
             options: Options {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -2349,14 +2731,16 @@ impl FunctionPass for LoopFullUnroll {
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
                 target_unrolling: self.target_unrolling,
+                inliner_follows: self.inliner_follows,
             },
         };
         let changed = unroll_loops(&mut run);
         *self.created.borrow_mut() = std::mem::take(&mut run.created);
+        *self.decided.borrow_mut() = run.decided.iter().collect();
         if changed {
             PreservedAnalyses::none()
         } else {
-            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             PreservedAnalyses::all()
         }
     }
@@ -2402,8 +2786,10 @@ pub fn unroll_function(
         peeled: Default::default(),
         finished: IdSet::new(),
         created: Vec::new(),
+        decided: IdSet::new(),
         first: Default::default(),
         scev: ScalarEvolution::new(),
+        cached: None,
     };
     let unrolled = unroll_loops(&mut run);
     declared.place(module)?;

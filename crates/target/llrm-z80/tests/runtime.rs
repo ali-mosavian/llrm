@@ -135,7 +135,8 @@ fn the_programs_harness_leaves_no_temporary_tree_behind() {
         return;
     }
     let dir = env!("CARGO_MANIFEST_DIR");
-    let scratch = std::env::temp_dir().join(format!("z80-harness-tmp-{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let scratch = tmp.path().join(format!("z80-harness-tmp-{}", std::process::id()));
     std::fs::create_dir_all(scratch.join("src")).expect("a scratch directory");
     let done = Command::new("python3")
         .args(["-I", &format!("{dir}/tests/programs/run.py"), "--src"])
@@ -179,8 +180,9 @@ fn the_programs_of_this_crate_run_and_print_what_c_does() {
     assert!(done.status.success() && all, "{text}");
 }
 
-/// The corpus byte counts charge a program for the runtime routines it reaches. The graph missed a fall-through
-/// (`__modsi3` into `__udivmodsi4`) and a jump into a local label (`__udivdi3` into `udivmoddi`, under `__moddi3`),
+/// The corpus byte counts charge a program for the runtime routines it reaches.
+/// The graph missed a fall-through (`__modsi3` into `__udivmodsi4`) and a jump
+/// into a local label (`__udivdi3` into `udivmoddi`, under `__moddi3`),
 /// so a program with a long `%` was counted without the divide.
 #[test]
 fn the_runtime_graph_reaches_a_routine_by_falling_or_jumping_into_it() {

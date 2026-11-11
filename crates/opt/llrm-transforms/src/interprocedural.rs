@@ -258,6 +258,8 @@ pub struct Interprocedural {
     /// The copies of a tree recursion in itself and its tail-call
     /// elimination, once the clones are made (D10).
     pub late: Option<crate::walk::SelfInline>,
+    /// The clones the step before the walk made (`walk::ModuleIpo`).
+    pub cloning: crate::ipacp::Shared,
 }
 
 thread_local! {
@@ -290,6 +292,7 @@ impl ProgramPass for Interprocedural {
             loose,
             rate,
             self.inline,
+            &mut self.cloning.borrow_mut(),
             &mut |module, analyses, id, stage| {
                 pipeline(module, analyses, id, stage);
                 Ok(())
@@ -629,6 +632,7 @@ pub fn optimized_with<E: From<String>>(
     loose: Option<&OperationCosts>,
     rate: i64,
     threshold: inline::Threshold,
+    cloning: &mut crate::ipacp::Cloning,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
     let count = program.modules.len();
@@ -708,7 +712,7 @@ pub fn optimized_with<E: From<String>>(
     // inlining, as gcc's IPA-CP) per target.
     // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
     let walk_promoted = crate::walk::take_walk_promotions(program, modules);
-    if (promoted_any || walk_promoted) && program.target.second_ipsccp() {
+    if (promoted_any || walk_promoted) && program.target.tti().is_some_and(|tti| tti.second_ipsccp()) {
         // Every body is told changed before the first runs again: the solver has
         // already restated the attributes of all of them, and a pipeline that
         // asks the declarations meanwhile must not find the others' standing.
@@ -781,7 +785,6 @@ pub fn optimized_with<E: From<String>>(
         };
 
     propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
-    let mut cloning = crate::ipacp::Cloning::default();
     loop {
         // A function called with a constant is copied for it (gcc's ipa-cp),
         // and the calls go to the copy.
@@ -795,7 +798,7 @@ pub fn optimized_with<E: From<String>>(
                     &private[at],
                     costs,
                     threshold.cp_clone,
-                    &mut cloning,
+                    cloning,
                 )
             });
             vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);

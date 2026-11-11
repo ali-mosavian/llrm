@@ -217,3 +217,31 @@ b0:
     // (x_collatz -O3 +1196 clocks with the false arm first).
     assert!(text.find("add i32 %m").unwrap() < text.find("lshr i32").unwrap(), "{text}");
 }
+
+/// x_fclip -O2 m32: InstCombine leaves the outer select of a clamp on the
+/// converted value, `select hi, 32767, fptosi (select lo, -32768.0, x)`; the
+/// conversion ran on the path that takes the upper limit too (753 of 2560
+/// samples, a `fist` and two control word loads each).
+#[test]
+fn test_a_clamp_whose_outer_select_is_on_the_converted_value_converts_where_neither_limit_is_taken() {
+    let (changed, text) = after(
+        "define i32 @f(double %x) {
+b0:
+  %hi = fcmp ogt double %x, 32767.0
+  %lo = fcmp olt double %x, -32768.0
+  %in = select i1 %lo, double -32768.0, double %x
+  %c = fptosi double %in to i32
+  %r = select i1 %hi, i32 32767, i32 %c
+  ret i32 %r
+}
+",
+        43,
+        3,
+    );
+    assert!(changed, "{text}");
+    let first = text.find("br i1 %hi").unwrap_or_else(|| panic!("a branch on the upper limit: {text}"));
+    let convert = text.find("fptosi").unwrap_or_else(|| panic!("a conversion: {text}"));
+    let lower = text.find("br i1 %lo").unwrap_or_else(|| panic!("a branch on the lower limit: {text}"));
+    assert!(first < lower && lower < convert, "the conversion follows both tests: {text}");
+    assert_eq!(text.matches("fptosi").count(), 1, "{text}");
+}

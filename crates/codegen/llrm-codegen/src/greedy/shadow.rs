@@ -77,6 +77,10 @@ pub struct ShadowInputs<'a> {
     /// register units say. x86 holds the whole root (`_whole`): its pins are
     /// roots, and its output depends on it.
     pub lane_pins: bool,
+    /// `Tuning::carry_slot_indexes`: the coalescer's slot indexes, with the
+    /// entries erased and moved instructions left empty, reach the allocator
+    /// through the scheduler, as the pin's do.
+    pub carry_slot_indexes: bool,
 }
 
 /// What the shadow allocator decided.
@@ -268,6 +272,34 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tii.encoding_bytes(insn, virt, phys)
     }
 
+    fn encoding_class(
+        &self,
+        phys: RegId,
+    ) -> Option<u8> {
+        self.tii.encoding_class(phys)
+    }
+
+    fn csr_spill_costs_less(
+        &self,
+        virt: u32,
+        phys: RegId,
+        reads: u32,
+        writes: u32,
+        def_reads_registers: bool,
+    ) -> Option<bool> {
+        let bytes = self.tri.size_bytes()?;
+        let hold = bytes.save_restore(phys);
+        // A rematerialized value is made again at each use but one, which
+        // takes the place of its definition; one whose definition reads a
+        // register is made again only where that register holds, which the
+        // spill cannot count on.
+        Some(if !def_reads_registers && self.orders.remat.borrow().contains(&virt) {
+            reads.saturating_sub(1) * bytes.constant < hold
+        } else {
+            reads * bytes.load + writes * bytes.store < hold
+        })
+    }
+
     fn reg_cost(
         &self,
         phys: RegId,
@@ -280,6 +312,15 @@ impl GreedyEnv for BodyEnv<'_> {
         insn: &crate::model::lir::Insn,
     ) -> Vec<(u32, RegId)> {
         self.tii.preferred_registers(insn)
+    }
+
+    fn copy_register_cost(
+        &self,
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        self.tii.copy_register_cost(to, from, size)
     }
 }
 
@@ -558,9 +599,13 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         to: u32,
         parent: u32,
         beside: Option<&Insn>,
+        entering: bool,
     ) -> Option<Arc<Insn>> {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         if !self.tii.remat_shape(def) || !def.uses.is_empty() {
+            return None;
+        }
+        if !self.tii.remake_at_split(def, entering) {
             return None;
         }
         let what = def.what.clone()?;
@@ -1185,10 +1230,33 @@ pub fn decide_with(
 /// copies leave gaps that inflate range sizes, and the dequeue priority is the
 /// size.
 /// https://github.com/llvm/llvm-project/blob/main/llvm/lib/CodeGen/RegAllocGreedy.cpp#L3074
-fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
+fn intervals_to_allocate(
+    body: &LirBody,
+    carry: bool,
+) -> LiveIntervals {
     let mut lis =
-        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
+        crate::liveness::liveintervals::take_handed_over_edited_to(body, carry).unwrap_or_else(|| LiveIntervals::new(body));
+    if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
+        // The premise: the intervals the edits left are the ones made afresh.
+        lis.assert_intervals_cover_afresh(body);
+    }
     lis.indexes.pack_indexes();
+    if llrm_support::env_flag!("LLRM_SLOT_COUNT") {
+        // `tools/slotcmp.py`: the instructions the pin's `-stop-before=greedy` MIR of the same IR has.
+        let slots: usize = body
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, one)| !(*at > 0 && one.group.is_some() && one.group == block.insns[at - 1].group))
+                    .count()
+            })
+            .sum();
+        eprintln!("SLOTS {} {slots}", body.name);
+    }
     lis
 }
 
@@ -1204,7 +1272,10 @@ pub fn decide_with_split(
     }
     crate::greedy::greedy::OPT_SIZE.with(|size| size.set(inputs.size));
     if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
-        match crate::backend::mirprint::mir(body, inputs.pins) {
+        match crate::backend::hooks::installed()
+            .ok_or_else(|| "no backend installed".to_owned())
+            .and_then(|hooks| hooks.mir_print(body, inputs.pins))
+        {
             Ok(text) => eprintln!("{text}"),
             Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
         }
@@ -1223,7 +1294,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let lis = intervals_to_allocate(body);
+    let lis = intervals_to_allocate(body, inputs.carry_slot_indexes);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -1318,6 +1389,9 @@ pub fn decide_with_split(
     let invariant: std::collections::BTreeSet<u32> =
         invariant.into_iter().chain(super::remat::flagged_loads(body)).collect();
     tables.remat.borrow_mut().extend(super::remat::values(body, &invariant, inputs.tii));
+    if !inputs.stable_loads {
+        tables.remat_cells.borrow_mut().extend(inputs.tii.argument_load_defs(body));
+    }
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let [value] = one.defines.as_slice()
             && tables.remat.borrow().contains(value)
@@ -1627,6 +1701,149 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+    /// X86's forms with `copy_register_cost` stated: copying into `cheap` costs
+    /// 0, into any other register 1.
+    struct CopyPriced<'a> {
+        inner: crate::greedy::tii::X86InstrInfo<'a>,
+        cheap: RegId,
+    }
+
+    impl crate::greedy::tii::TargetInstrInfo for CopyPriced<'_> {
+        fn is_plain_move(
+            &self,
+            what: &crate::model::ir::Semantics,
+        ) -> bool {
+            self.inner.is_plain_move(what)
+        }
+        fn copy_semantics(
+            &self,
+            to: u32,
+            from: u32,
+            width: u32,
+        ) -> crate::model::ir::Semantics {
+            self.inner.copy_semantics(to, from, width)
+        }
+        fn remat_shape(
+            &self,
+            one: &Insn,
+        ) -> bool {
+            self.inner.remat_shape(one)
+        }
+        fn is_trivially_re_materializable(
+            &self,
+            def: &Insn,
+            invariant: bool,
+        ) -> bool {
+            self.inner.is_trivially_re_materializable(def, invariant)
+        }
+        fn argument_loads(
+            &self,
+            body: &LirBody,
+        ) -> BTreeSet<u32> {
+            self.inner.argument_loads(body)
+        }
+        fn fold_memory_operand(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &crate::model::ir::Mem,
+        ) -> Option<Arc<Insn>> {
+            self.inner.fold_memory_operand(one, reg, cell)
+        }
+        fn fold_copy_member(
+            &self,
+            one: &Insn,
+            values: &BTreeSet<u32>,
+            frame: &mut dyn FrameInfo,
+            home: &dyn Fn(u32) -> u32,
+        ) -> Result<Option<Arc<Insn>>, crate::backend::allocresult::Error> {
+            self.inner.fold_copy_member(one, values, frame, home)
+        }
+        fn load_reg_from_stack_slot(
+            &self,
+            beside: &Insn,
+            into: u32,
+            cell: &crate::model::ir::Mem,
+        ) -> Arc<Insn> {
+            self.inner.load_reg_from_stack_slot(beside, into, cell)
+        }
+        fn store_reg_to_stack_slot(
+            &self,
+            beside: &Insn,
+            out_of: u32,
+            cell: &crate::model::ir::Mem,
+        ) -> Arc<Insn> {
+            self.inner.store_reg_to_stack_slot(beside, out_of, cell)
+        }
+        fn needs_data_group(
+            &self,
+            one: &Insn,
+        ) -> bool {
+            self.inner.needs_data_group(one)
+        }
+        fn copy_register_cost(
+            &self,
+            to: RegId,
+            _from: RegId,
+            _size: bool,
+        ) -> u32 {
+            u32::from(to != self.cheap)
+        }
+    }
+
+    /// llvm-mos `getRegAllocationHints`, `COPY` (MOSRegisterInfo.cpp#L753):
+    /// `v2 = copy v1` where `v1` holds eax and stays live past the copy, so
+    /// `v2` cannot share it. Without a stated copy cost `v2` takes the first
+    /// free register of its order (ebx); with it, the register that makes the
+    /// copy cheapest (ecx), though it comes last.
+    #[test]
+    fn test_a_copy_hints_the_register_that_makes_it_cheapest() {
+        use crate::greedy::tii::TargetInstrInfo as _;
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &RegisterClasses::m16(),
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
+        let plain = |at: i64, defines: &[u32], uses: &[u32]| {
+            Arc::new(Insn::new(at, None, None, defines.to_vec(), uses.to_vec()))
+        };
+        let copy = Arc::new(Insn::new(1, None, Some(tii.copy_semantics(2, 1, 2)), vec![2], vec![1]));
+        let insns = vec![plain(0, &[1], &[]), copy, plain(2, &[], &[1]), plain(3, &[], &[2]), plain(4, &[], &[1])];
+        let body = LirBody::new(
+            "copy_hint",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let order = |_: u32| vec![RegId::EAX, RegId::EBX, RegId::ECX];
+        let place = |tii: &dyn crate::greedy::tii::TargetInstrInfo| {
+            let inputs = ShadowInputs {
+                body: &body,
+                registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+                order: &order,
+                pins: &IndexMap::default(),
+                unspillable: &BTreeSet::new(),
+                data: None,
+                sets: None,
+                stable_loads: true,
+                saved: &[],
+                tii,
+                tri: &crate::greedy::targetinfo::X86RegisterInfo,
+                size: false,
+                lane_pins: false,
+                carry_slot_indexes: true,
+            };
+            let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
+            let at = |value: u32| decided.placed.iter().find(|(v, _)| *v == value).map(|(_, reg)| *reg);
+            (at(1), at(2))
+        };
+        assert_eq!(place(&tii), (Some(RegId::EAX), Some(RegId::EBX)), "premise: no stated cost, order decides");
+        let priced = CopyPriced { inner: tii, cheap: RegId::ECX };
+        assert_eq!(place(&priced), (Some(RegId::EAX), Some(RegId::ECX)));
+    }
+
 
     /// The interference cache searched the regmask slots twice (two binary
     /// searches over `SlotIndex`es, 364 instructions) for every block it
@@ -1691,10 +1908,12 @@ mod tests {
                 bits: 16,
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
+                address_reference_milliweight: 3000,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1727,11 +1946,44 @@ mod tests {
         grown.push(Arc::clone(&old[1]));
         let after = body_of(grown);
         crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
-        let lis = intervals_to_allocate(&after);
+        let lis = intervals_to_allocate(&after, true);
         let at: Vec<u32> =
             after.blocks[0].insns.iter().map(|one| lis.indexes.get_instruction_index(one.id()).get_index()).collect();
         let steps: Vec<u32> = at.windows(2).map(|pair| pair[1] - pair[0]).collect();
         assert!(steps.iter().all(|step| *step == SlotIndex::INSTR_DIST), "{steps:?}");
+    }
+
+    /// The pre-RA scheduler numbers a body of its own and reorders the
+    /// coalescer's, and the hand-over of the coalescer's intervals was refused:
+    /// the allocator numbered afresh, with none of the entries the erased
+    /// copies and the moved instructions leave empty in the pin's list.
+    /// Ranges ran 2.2x shorter than the pin's on idioms `main` -O1 (455 entries
+    /// against 992), and the spill weights, which divide by size, 2x higher.
+    #[test]
+    fn test_the_allocator_keeps_the_entries_the_coalescer_and_the_scheduler_left_empty() {
+        let make = |from: i64, n: i64| -> Vec<Arc<Insn>> {
+            (from..from + n).map(|k| Arc::new(Insn::new(k, None, None, vec![], vec![]))).collect()
+        };
+        let body_of = |list: Vec<Arc<Insn>>| {
+            LirBody::new("holes", 0, vec![Block::from(LirBlock::new(0, list))], IndexMap::default(), IndexMap::default())
+        };
+        let all = make(0, 4);
+        let before = body_of(all.clone());
+        crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
+        // The scheduler's own numbering of the function.
+        drop(LiveIntervals::new(&body_of(make(100, 3))));
+        // Erased `1`, and `2` moved to the front.
+        let after = body_of(vec![Arc::clone(&all[2]), Arc::clone(&all[0]), Arc::clone(&all[3])]);
+        let lis = intervals_to_allocate(&after, true);
+        let entries = lis.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1;
+        // Start, 4 instructions, the end of the block, and the move's new entry;
+        // numbered afresh the body has 5.
+        assert_eq!(entries, 7, "the entries of the coalescer's list, not a fresh one");
+        // A target that does not carry them (x86, until priced) numbers afresh.
+        crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
+        drop(LiveIntervals::new(&body_of(make(100, 3))));
+        let fresh = intervals_to_allocate(&after, false);
+        assert_eq!(fresh.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1, 5);
     }
 
     /// Greedy's spill weights read `MachineBlockFrequencyInfo`
@@ -1765,10 +2017,12 @@ mod tests {
                 bits: 16,
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
+                address_reference_milliweight: 3000,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1949,10 +2203,12 @@ mod tests {
                     bits: 16,
                     classes: &RegisterClasses::m16(),
                     basic_semantics: false,
+                    address_reference_milliweight: 3000,
                 },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
                 size: false,
                 lane_pins: false,
+                carry_slot_indexes: true,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -2016,10 +2272,12 @@ mod tests {
                 bits: 16,
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
+                address_reference_milliweight: 3000,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -2170,10 +2428,12 @@ mod tests {
                 bits: 16,
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
+                address_reference_milliweight: 3000,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2244,10 +2504,12 @@ mod tests {
                 bits: 16,
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
+                address_reference_milliweight: 3000,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let in_ecx = |decided: &Decided| decided.placed.iter().filter(|(v, reg)| *reg == RegId::ECX && *v > 4).count();
         // At -Os the pin skips the split: the premise, v1 whole in another
@@ -2294,10 +2556,12 @@ mod tests {
                 bits: 16,
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
+                address_reference_milliweight: 3000,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2333,7 +2597,12 @@ mod tests {
         // The parent (value 1) is in no table: a spill made it.
         let tables = Rc::new(Tables::default());
         let classes = RegisterClasses::m16();
-        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &classes,
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
         let env = BodySplitEnv::new(
             &body,
             Rc::clone(&tables),
@@ -2372,7 +2641,12 @@ mod tests {
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 4);
         let classes = RegisterClasses::m16();
-        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &classes,
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
         let env = BodySplitEnv::new(
             &body,
             Rc::clone(&tables),
@@ -2422,7 +2696,12 @@ mod tests {
         );
         let tables = Rc::new(Tables::default());
         let classes = RegisterClasses::m16();
-        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
+        let tii = crate::greedy::tii::X86InstrInfo {
+            bits: 16,
+            classes: &classes,
+            basic_semantics: false,
+            address_reference_milliweight: 3000,
+        };
         let env = BodySplitEnv::new(
             &body,
             Rc::clone(&tables),
@@ -2431,7 +2710,7 @@ mod tests {
             None,
             Default::default(),
         );
-        let made = env.rematerialize(&zero, 7, 1, None).expect("the literal is made again");
+        let made = env.rematerialize(&zero, 7, 1, None, true).expect("the literal is made again");
         assert_eq!(made.defines, [7]);
         assert!(matches!(made.what.as_ref().unwrap().sources[..], [Loc::Imm(Imm { value: 0, .. })]));
         // A load still needs the register's facts (D-I): nothing says the cell
@@ -2456,7 +2735,7 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         let load = Insn::new(0, None, Some(load), vec![1], vec![]);
-        assert!(env.rematerialize(&load, 8, 1, None).is_none());
+        assert!(env.rematerialize(&load, 8, 1, None, true).is_none());
     }
 
     /// A reload made for a stored word got its parent's order, {BX}
@@ -2502,7 +2781,7 @@ mod tests {
             &tables,
             &Default::default(),
             Some(&sets),
-            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes, basic_semantics: false },
+            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes, basic_semantics: false, address_reference_milliweight: 3000 },
             classes.registers,
             &lis,
             &[word, base],

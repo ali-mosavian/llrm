@@ -144,6 +144,8 @@ struct Emitter<'a> {
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
     in_acc: llrm_support::hash::HashSet<(u32, u8)>,
+    /// The jump tables: the block of each entry.
+    tables: &'a [Vec<u32>],
 }
 
 impl Emitter<'_> {
@@ -237,6 +239,8 @@ impl Emitter<'_> {
                 Operand::Symbol(name.clone(), 0)
             }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
+            // named for the printer, which numbers it with the function
+            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => Operand::Symbol(format!("$JT{index}"), 0),
             _ => match self.values.get(&(value.node, value.res)) {
                 Some(reg) => Operand::Use(*reg),
                 None => return Err(format!("operand {:?} before its definition", node.opcode)),
@@ -393,6 +397,21 @@ impl Emitter<'_> {
                     .filter(|(_, one)| one.tied_to >= 0)
                     .map(|(at, one)| (one.tied_to as usize, at))
                     .collect();
+                // a jump through a table: the table's index and its blocks, which make them this block's
+                // successors
+                if name == "JPHL" {
+                    let index = into
+                        .iter()
+                        .flat_map(|inst| &inst.operands)
+                        .filter_map(|operand| match operand {
+                            Operand::Symbol(symbol, 0) => symbol.strip_prefix("$JT")?.parse::<usize>().ok(),
+                            _ => None,
+                        })
+                        .next_back()
+                        .ok_or("a jump through no table")?;
+                    operands.push(Operand::Imm(index as i64));
+                    operands.extend(self.tables[index].iter().map(|&block| Operand::Block(block)));
+                }
                 into.push(Inst {
                     call: desc.has(flag::CALL),
                     ties,
@@ -636,6 +655,7 @@ pub fn emit(
         flags_now: None,
         users: HashMap::default(),
         in_acc: Default::default(),
+        tables: &selection.tables,
     };
     // the frame objects the selector made; the allocas came first, at their
     // index

@@ -18,8 +18,11 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
 
 /// `sized`: the function is tuned for size (`optsize`, `minsize`).
+/// `synthesize`: the module-level re-selection of `mulimage` is running, which
+/// may expand a multiply by three signed digits.
 pub struct MosCombines {
     pub sized: bool,
+    pub synthesize: bool,
 }
 
 /// The combines after legalization: only the shared-shift answer, which every
@@ -28,6 +31,25 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// `isTruncateFree` and `isZExtFree` for a word and its low byte: the
+    /// byte is a lane of the pair, and an any-extension leaves the high one
+    /// unwritten. `ShrinkDemandedOp` then does an add or a subtract whose
+    /// result is truncated (`p - s` returned as a byte) on the byte, not on the
+    /// word with its high half dropped after (`schr` -O2 47 B).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        wide == EVT::I16 && narrow == EVT::I8
+    }
+
+    /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
+    /// (`logical_value` 410 -> 402 B).
+    fn known_zero_narrowing(&self) -> bool {
+        true
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
     /// combiner must give alike.
     fn is_desirable_to_commute_with_shift(
@@ -77,6 +99,25 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// `isTruncateFree` and `isZExtFree` for a word and its low byte: the
+    /// byte is a lane of the pair, and an any-extension leaves the high one
+    /// unwritten. `ShrinkDemandedOp` then does an add or a subtract whose
+    /// result is truncated (`p - s` returned as a byte) on the byte, not on the
+    /// word with its high half dropped after (`schr` -O2 47 B).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        wide == EVT::I16 && narrow == EVT::I8
+    }
+
+    /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
+    /// (`logical_value` 410 -> 402 B).
+    fn known_zero_narrowing(&self) -> bool {
+        true
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
     /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
     /// through Y and X (bintree -O2 +20 B). The pin's default is true
@@ -95,7 +136,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -117,13 +158,56 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)).or_else(|| funnel_by_one(dag, node)),
-            ISD::Sub => borrow_of_ult(dag, node),
+            ISD::Add => borrow_of_ult(dag, node)
+                .or_else(|| widened_add_with_carry(dag, node))
+                .or_else(|| word_with_loaded_byte(dag, node))
+                .or_else(|| funnel_by_one(dag, node))
+                .or_else(|| low_bit_in_carry(dag, node)),
+            ISD::Sub => borrow_of_ult(dag, node).or_else(|| word_with_loaded_byte(dag, node)),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
-            _ => decompose_mul(dag, node, self.sized),
+            ISD::SetCC => range_on_low_byte(dag, node),
+            ISD::Mul => decompose_mul(dag, node, self.sized, self.synthesize),
+            // the combiner offers every target node to the hook
+            _ => None,
         }
     }
+}
+
+/// `(x - c) <u n` of a word, with `0 < c` and `c + n <= 256`: `x` lies in
+/// `[c, c + n)`, below 256, so its high byte is zero and the low byte moves to
+/// `lo - c`. The word is compared as `(lo(x) - c, hi(x)) <u n`: a byte subtract
+/// where the word subtract made both bytes (`isspace`'s `c >= 9 && c <= 13`,
+/// `adc #255` on the high byte and a borrow chain into the compare).
+///
+/// DEVIATE SD258 (owner llrm-target-6502, exit 2026-12-05): the pin keeps the
+/// word range check (`foldRangeTest`'s result) for the target to lower; a
+/// target with byte lanes gains the narrower subtract. Not a pin combine.
+fn range_on_low_byte(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (sum, bound) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(sum) != EVT::I16
+        || dag.opcode(sum) != ISD::Add
+        || !matches!(dag.node(dag.operand(node, 2)).data, NodeData::CondCode(CondCode::SetULt))
+    {
+        return None;
+    }
+    let (x, offset) = (dag.operand(sum, 0), dag.constant(dag.operand(sum, 1))?);
+    let (n, c) = (dag.constant(bound)?, (0x10000 - offset) & 0xFFFF);
+    if c == 0 || c > 255 || n == 0 || c + n > 256 {
+        return None;
+    }
+    let vt = dag.value_type(node);
+    let low = dag.get_node(ISD::Truncate, EVT::I8, &[x]);
+    let eight = dag.get_constant(8, EVT::I16);
+    let shifted = dag.get_node(ISD::Srl, EVT::I16, &[x, eight]);
+    let high = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+    let c_byte = dag.get_constant(c, EVT::I8);
+    let diff = dag.get_node(ISD::Sub, EVT::I8, &[low, c_byte]);
+    let pair = dag.get_node(ISD::BuildPair, EVT::I16, &[diff, high]);
+    Some(dag.get_setcc(vt, pair, bound, CondCode::SetULt))
 }
 
 /// `(a << 1) | (b >> 15)` and `(a << 15) | (b >> 1)` of a word: one bit crosses
@@ -155,6 +239,67 @@ fn funnel_by_one(
         }
     }
     None
+}
+
+/// `x + (y & 1)` of a byte: `y >> 1` and the bit that leaves, the carry of one
+/// `lsr`, added to `x` by an add with carry. A loop that counts the bits of a
+/// byte (`c += x & 1; x >>= 1`) was `txa; and #1; clc; adc c; sta c; txa; lsr
+/// a; tax`: the shift and the bit were two instructions on `x`. The plain shift
+/// of `y` by one, if the function has one, is the value of the same node.
+///
+/// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
+/// ([X86ISelLowering.cpp#L53776](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L53776),
+/// `X + (Y & 1)` to `ADC X, 0` on the flags `LowerAndToBT`
+/// ([L24380](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24380))
+/// makes of the bit). DEVIATE 6502-SRL1C: there the bit test is its own
+/// instruction (`BT`); here it is made by the shift, a node of two results
+/// merged with the shift that uses the same operand, as the pin merges a divide
+/// and a remainder into `UDIVREM` (`useDivRem`,
+/// [DAGCombiner.cpp#L5181](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5112)).
+/// Bytes only. Owner: llrm-6502-a. Exit: 2026-12-01, when a word shift by one
+/// reads the carry the same way (`FSHR1`).
+fn low_bit_in_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if dag.value_type(node) != EVT::I8 {
+        return None;
+    }
+    let low_bit = |dag: &SelectionDAG, v: SDValue| {
+        (dag.opcode(v) == ISD::And && dag.has_one_use(v.node))
+            .then(|| {
+                let (a, b) = (dag.operand(v, 0), dag.operand(v, 1));
+                if dag.constant(b) == Some(1) {
+                    Some(a)
+                } else if dag.constant(a) == Some(1) {
+                    Some(b)
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    };
+    let (x, y) = [(0, 1), (1, 0)]
+        .into_iter()
+        .find_map(|(x, b)| low_bit(dag, dag.operand(node, b)).map(|y| (dag.operand(node, x), y)))?;
+    if dag.value_type(y) != EVT::I8 {
+        return None;
+    }
+    let shifted = dag.get_node_multi(mosisd::SRL1C, &[EVT::I8, EVT::I1], &[y]);
+    let plain: Vec<u32> = dag
+        .users(y)
+        .filter(|&user| {
+            let v = SDValue { node: user, res: 0 };
+            dag.opcode(v) == ISD::Srl && dag.operand(v, 0) == y && dag.constant(dag.operand(v, 1)) == Some(1)
+        })
+        .collect();
+    for user in plain {
+        dag.replace_all_uses_with(SDValue { node: user, res: 0 }, SDValue { node: shifted.node, res: 0 });
+    }
+    let zero = dag.get_constant(0, EVT::I8);
+    let carry = SDValue { node: shifted.node, res: 1 };
+    let sum = dag.get_node_multi(ISD::UAddOCarry, &[EVT::I8, EVT::I1], &[x, zero, carry]);
+    Some(SDValue { node: sum.node, res: 0 })
 }
 
 /// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
@@ -289,6 +434,70 @@ fn is_any_extended_byte(
     }
 }
 
+/// `x + zext(*p)` and `x - zext(*p)` in a word, the byte loaded by nothing else:
+/// the low bytes add or subtract with the load as the operand, the high byte
+/// takes the carry (`adc #0`), as the pin's legalizer expands the word of an
+/// 8-bit target (`ExpandIntRes_ADDSUB`,
+/// [LegalizeIntegerTypes.cpp#L3725](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3725),
+/// the operand's half a zero). Left a word op, the byte was loaded into a cell
+/// for the word's second operand (`a - *p`: `lda (p); sta t; sec; lda a; sbc t`
+/// where `sec; lda a; sbc (p)` is the byte op: 17 B, 13 B).
+///
+/// DEVIATE 6502-ZBYTE: the word is legal here (a pair of byte cells), so the
+/// pin's legalizer never splits it. An address (`p + zext(*q)` read by a load or
+/// a store) stays a word add, which `MOSIdx` matches as `(p),y`. Owner:
+/// llrm-6502-a. Exit: 2026-12-01, when the word add and subtract expand as the
+/// pin's do.
+fn word_with_loaded_byte(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let sub = dag.opcode(node) == ISD::Sub;
+    if dag.value_type(node) != EVT::I16 || !matches!(dag.opcode(node), ISD::Add | ISD::Sub) {
+        return None;
+    }
+    let loaded = |dag: &SelectionDAG, term: SDValue| {
+        term.res == 0
+            && dag.opcode(term) == ISD::Load
+            && dag.users(term).take(2).count() == 1
+            && matches!(
+                dag.node(term).data,
+                NodeData::Mem(info) if info.ext == Some(LoadExt::ZExtLoad) && info.mem_vt == EVT::I8
+            )
+    };
+    let (x, b) = match (dag.operand(node, 0), dag.operand(node, 1)) {
+        (x, b) if loaded(dag, b) => (x, b),
+        (b, x) if !sub && loaded(dag, b) => (x, b),
+        _ => return None,
+    };
+    // `p + zext(*q)` that is a pointer stays a word: `(p),y` matches it
+    let is_address = |dag: &SelectionDAG, user: u32| {
+        let user = SDValue { node: user, res: 0 };
+        match dag.opcode(user) {
+            ISD::Load => dag.operand(user, 1) == node,
+            ISD::Store => dag.operand(user, 2) == node,
+            _ => false,
+        }
+    };
+    if dag.users(node).any(|user| is_address(dag, user)) {
+        return None;
+    }
+    let eight = dag.get_constant(8, EVT::I16);
+    let high = dag.get_node(ISD::Srl, EVT::I16, &[x, eight]);
+    let (x_low, x_high) = (dag.get_node(ISD::Truncate, EVT::I8, &[x]), dag.get_node(ISD::Truncate, EVT::I8, &[high]));
+    let low_byte = dag.get_node(ISD::Truncate, EVT::I8, &[b]);
+    let zero = dag.get_constant(0, EVT::I8);
+    let (first, next) = if sub { (ISD::USubO, ISD::USubOCarry) } else { (ISD::UAddO, ISD::UAddOCarry) };
+    let low = dag.get_node_multi(first, &[EVT::I8, EVT::I1], &[x_low, low_byte]);
+    let carry = SDValue { node: low.node, res: 1 };
+    let high = dag.get_node_multi(next, &[EVT::I8, EVT::I1], &[x_high, zero, carry]);
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I16,
+        &[SDValue { node: low.node, res: 0 }, SDValue { node: high.node, res: 0 }],
+    ))
+}
+
 /// One half of a `BuildPair`: `trunc` of it is the low piece, and `srl` of it
 /// by the width of a piece is the high piece, extended.
 fn half_of_pair(
@@ -360,6 +569,109 @@ fn carry_in(
     SDValue { node: sum.node, res: 1 }
 }
 
+/// The signed binary digits of an odd `m` with no two neighbours set (the
+/// non-adjacent form), lowest first: `(exponent, +1 or -1)`.
+fn non_adjacent_form(mut m: u128) -> Vec<(u32, bool)> {
+    let mut digits = Vec::new();
+    let mut exponent = 0;
+    while m != 0 {
+        if m & 1 == 1 {
+            let plus = m & 3 == 1;
+            digits.push((exponent, plus));
+            m = if plus { m - 1 } else { m + 1 };
+        }
+        m >>= 1;
+        exponent += 1;
+    }
+    digits
+}
+
+/// `x * m` for an odd `m` of three signed digits, as two adds in Horner form:
+/// `(((x << a) +- x) << b) +- x`, then `<< zeros`, negated for a negative
+/// constant. Fewer shifted bits of the two forms (binary `8 + 2 + 1`, or
+/// non-adjacent `16 - 4 - 1`).
+///
+/// DEVIATE 6502-MUL-SYNTH: the pin decomposes `2^N +- 2^M` only and leaves the
+/// general case as a TODO
+/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024):
+/// "a target set limit on number of ops and a callback to determine that
+/// sequence"). Here the limit is two adds, on a 32-bit value (`__mulsi3`, 2,200
+/// clocks a call; a byte or word multiply is a call of a few bytes and the
+/// steps cost 7 to 38). Source: gcc's `synth_mult` (expmed.cc), bounded. It
+/// runs only in `mulimage`'s re-selection, which keeps it when no multiply call
+/// is left in the module and the bytes and clocks of the level pay. Owner:
+/// llrm-target-6502. Exit: 2026-12-01, when the shared combine reads the
+/// sequence from a target hook.
+fn synthesized_mul(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    magnitude: u128,
+    zeros: u32,
+    negative: bool,
+    vt: EVT,
+    synthesize: bool,
+) -> Option<SDValue> {
+    if !synthesize || vt != EVT::I32 {
+        return None;
+    }
+    let binary: Vec<(u32, bool)> = (0..128).filter(|bit| magnitude >> bit & 1 == 1).map(|bit| (bit, true)).collect();
+    let signed_digits = non_adjacent_form(magnitude);
+    let mut digits = match (binary.len() == 3, signed_digits.len() == 3) {
+        (true, true) if binary[2].0 <= signed_digits[2].0 => binary,
+        (_, true) => signed_digits,
+        (true, false) => binary,
+        _ => return None,
+    };
+    digits.reverse(); // highest exponent first
+    let width = vt.size_in_bits();
+    if digits[0].0 + zeros >= width {
+        return None;
+    }
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
+        let by = dag.get_constant(u128::from(by), EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let op = |plus: bool| if plus { ISD::Add } else { ISD::Sub };
+    let first = shift(dag, x, digits[0].0 - digits[1].0);
+    let mut result = dag.get_node(op(digits[1].1), vt, &[first, x]);
+    result = shift(dag, result, digits[1].0 - digits[2].0);
+    result = dag.get_node(op(digits[2].1), vt, &[result, x]);
+    if zeros != 0 {
+        result = shift(dag, result, zeros);
+    }
+    if negative {
+        let zero = dag.get_constant(0, vt);
+        result = dag.get_node(ISD::Sub, vt, &[zero, result]);
+    }
+    Some(result)
+}
+
+/// Whether `x * c` of `width` bits is expanded in line by `decompose_mul`
+/// (a shift, or `(2^k +- 1) * 2^z`) and not left as a `__mulhi3` call. The
+/// synthesis of `mulimage` (32 bits, a re-selection) is not counted.
+pub fn mul_by_constant_stays_in_line(
+    width: u32,
+    c: i128,
+    sized: bool,
+) -> bool {
+    let mut magnitude = c.unsigned_abs();
+    if magnitude <= 1 || magnitude.is_power_of_two() {
+        return true;
+    }
+    let zeros = magnitude.trailing_zeros();
+    magnitude >>= zeros;
+    let bits = match (magnitude - 1, magnitude + 1) {
+        (below, _) if below.is_power_of_two() => below,
+        (_, above) if above.is_power_of_two() => above,
+        _ => return false,
+    };
+    let k = bits.trailing_zeros();
+    if k + zeros >= width {
+        return false;
+    }
+    !(width == 32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0))
+}
+
 /// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
 /// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
 /// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative
@@ -375,6 +687,7 @@ fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
     sized: bool,
+    synthesize: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I8 && vt != EVT::I16 && vt != EVT::I32 {
@@ -394,7 +707,7 @@ fn decompose_mul(
     let (add, bits) = match (magnitude - 1, magnitude + 1) {
         (below, _) if below.is_power_of_two() => (true, below),
         (_, above) if above.is_power_of_two() => (false, above),
-        _ => return None,
+        _ => return synthesized_mul(dag, x, magnitude, zeros, signed < 0, vt, synthesize),
     };
     let k = bits.trailing_zeros();
     if k + zeros >= width {

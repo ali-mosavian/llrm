@@ -33,6 +33,9 @@ use super::hooks::Cpu;
 use super::pipeline::select_block;
 use crate::target::Z80;
 
+/// The C library routines the runtime has, and the symbols it names them by.
+pub const LIBCALLS: [(&str, &str); 3] = [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")];
+
 /// The builder's view of the Z80: 16-bit pointers, `i8` and `i16` in
 /// registers, a byte shift count, and the `CALL`/`RET_GLUE` nodes of
 /// `own_ids.txt`.
@@ -41,16 +44,19 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
-        jump_tables: false,
+        jump_tables: true,
+        // An entry is 2 B, a 16-bit compare-and-branch about 6: a table pays
+        // from a third of its range filled, at speed as well as size.
+        min_jump_table_density: Some(40),
+        preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        refuse_unknown_intrinsics: true,
+        variable_shift_legal: false,
         string_instructions: false,
+        max_alloca_align: Some(crate::MAX_ALLOCA_ALIGN),
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
-        libcalls: Some(
-            [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")]
-                .map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned()))
-                .to_vec(),
-        ),
+        libcalls: Some(LIBCALLS.map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned())).to_vec()),
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
@@ -64,8 +70,14 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
         // the symbol's linkage (`isOffsetFoldingLegal`)
-        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::m16().dag },
-        ..BuilderTarget::m16()
+        dag: DagConfig {
+            dso_local_symbols: true,
+            sext_bool_add_max_bits: u32::MAX,
+            ..BuilderTarget::for_pointer_bits(16).dag
+        },
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
+        ..BuilderTarget::for_pointer_bits(16)
     }
 }
 
@@ -115,6 +127,13 @@ pub struct Selection {
     pub returns_twice: bool,
     /// `internal` or `private` linkage: the label is not exported.
     pub local: bool,
+    /// The function carries `optsize` or `minsize`: tuned for size at any level.
+    pub sized: bool,
+    /// Selected with each long shift and multiply site priced (`pipeline::PRICED_SITES`).
+    pub site_priced: bool,
+    /// The same function selected with its long adds as the generic expansion, not carry ops
+    /// (`pipeline::GENERIC_CARRY`); none where it has no carry ops.
+    pub generic: Option<Box<Selection>>,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
@@ -123,6 +142,8 @@ pub struct Selection {
     /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
     /// the prices that choose between variants of the function weigh by.
     pub frequencies: Vec<(u32, f64)>,
+    /// The jump tables: the block of each entry, by table.
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -158,7 +179,9 @@ pub fn select_function_with(
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
-    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY);
+    let tuned_for_size = sized;
+    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
+        && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -231,8 +254,9 @@ pub fn select_function_with(
             module.global(id).linkage,
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
+    let tables = info.jump_tables.clone();
     let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable, frequencies })
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, site_priced: super::pipeline::PRICED_SITES.with(std::cell::Cell::get), unreachable, frequencies, tables })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

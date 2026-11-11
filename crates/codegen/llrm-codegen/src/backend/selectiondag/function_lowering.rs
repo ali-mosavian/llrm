@@ -33,6 +33,11 @@ pub struct FunctionLoweringInfo {
     /// The entry block's writes of zero the runtime's zero-filled frame
     /// already holds (`prezeroed`): not lowered.
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
+    /// `ElidedArgCopyInstrs`: the stores that copy an argument into a local the
+    /// argument's own stack slot now stands for; not lowered.
+    pub elided_stores: llrm_mir::dense::IdSet<InstId>,
+    /// The arguments whose copy is elided: their slot is no longer immutable.
+    pub elided_args: llrm_mir::dense::IdSet<ValueId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
     /// The register holding the hidden result pointer of a function whose
@@ -41,6 +46,9 @@ pub struct FunctionLoweringInfo {
     /// The register a variadic function keeps the pointer to its variadic
     /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
     pub variadic_buffer: Option<u32>,
+    /// The fixed object of the first variadic argument on the stack
+    /// (`VarArgsFrameIndex`), for `llrm.vararg.address` in any block.
+    pub vararg_frame_index: Option<i32>,
     /// The words a target's `va_start` writes (`VarArgsFrameIndex` and the save
     /// areas' tops).
     pub variadic_area: Option<super::target_calling::VariadicArea>,
@@ -68,9 +76,9 @@ pub struct FunctionLoweringInfo {
     /// The names and locality of the module's globals and the function's
     /// blocks, made at the first block and shared by the DAGs of the rest
     /// (a table per block was a quadratic share of the compile).
-    pub(super) tables: Option<Tables>,
+    pub tables: Option<Tables>,
     /// The module's part of the tables, when an earlier function made it.
-    pub(super) module_tables: Option<crate::backend::constpool::Symbols>,
+    pub module_tables: Option<crate::backend::constpool::Symbols>,
 }
 
 /// How many times [`module_tables`] ran: a test hook.
@@ -82,6 +90,7 @@ pub static MODULE_TABLES_BUILT: std::sync::atomic::AtomicUsize = std::sync::atom
 pub fn module_tables(
     module: &llrm_mir::module::Module,
     dso_local_symbols: bool,
+    defined_dso_local: bool,
 ) -> crate::backend::constpool::Symbols {
     MODULE_TABLES_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     (
@@ -96,12 +105,15 @@ pub fn module_tables(
                 .iter()
                 .enumerate()
                 .map(|(at, global)| {
-                    // clang -fPIE marks what it defines `dso_local`, not what it declares.
+                    // clang -fPIE marks what it defines `dso_local`, not what
+                    // it declares.
                     matches!(
                         global.linkage,
                         llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                    ) || crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
-                        == crate::model::ir::Space::Segment
+                    )
+                        || (defined_dso_local
+                            && crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
+                                == crate::model::ir::Space::Segment)
                 })
                 .collect()
         }),
@@ -110,7 +122,7 @@ pub fn module_tables(
 
 /// What every block's DAG reads about the module and the function.
 #[derive(Clone)]
-pub(super) struct Tables {
+pub struct Tables {
     pub global_names: std::rc::Rc<Vec<String>>,
     pub local_symbols: std::rc::Rc<Vec<bool>>,
     pub block_names: std::rc::Rc<Vec<String>>,
@@ -160,9 +172,12 @@ impl FunctionLoweringInfo {
             static_allocas: IdMap::new(),
             variadic_save: None,
             prezeroed: Default::default(),
+            elided_stores: Default::default(),
+            elided_args: Default::default(),
             sret_reg: None,
             demote_reg: None,
             variadic_buffer: None,
+            vararg_frame_index: None,
             variadic_area: None,
             bpi: None,
             edge_probs: Vec::new(),
@@ -276,4 +291,126 @@ impl FunctionLoweringInfo {
         self.next_reg += 1;
         reg
     }
+}
+
+/// An argument the entry block stores whole into a static alloca
+/// (`ArgCopyElisionCandidates`).
+#[derive(Clone, Copy, Debug)]
+pub struct ArgumentCopy {
+    /// The argument's position.
+    pub position: usize,
+    pub arg: ValueId,
+    pub alloca: ValueId,
+    pub store: InstId,
+}
+
+/// `findArgumentCopyElisionCandidates`
+/// ([SelectionDAGBuilder.cpp:11860](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L11860)):
+/// the arguments the entry block stores to a static alloca that nothing
+/// touched before and that the store fills; any other use of an alloca in the
+/// entry block escapes it.
+pub fn argument_copy_candidates(
+    module: &llrm_mir::module::Module,
+    function: &Function,
+    layout: &llrm_mir::datalayout::DataLayout,
+    is_static_alloca: impl Fn(ValueId) -> bool,
+) -> Vec<ArgumentCopy> {
+    use llrm_mir::types::Type;
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Unknown,
+        Clobbered,
+        Elidable,
+    }
+    let Some(entry) = function.entry() else { return Vec::new() };
+    let types = &module.context.types;
+    let parameters = function.parameters();
+    let mut states: std::collections::HashMap<ValueId, State> = Default::default();
+    let mut found: Vec<ArgumentCopy> = Vec::new();
+    let static_alloca = |operand: &Operand| match operand {
+        Operand::Value(value) if is_static_alloca(*value) => Some(*value),
+        _ => None,
+    };
+    for inst in function.iter_block(entry) {
+        let instruction = function.instruction(inst);
+        let Opcode::Store { .. } = instruction.opcode else {
+            if matches!(instruction.opcode, Opcode::Cast(_)) {
+                continue;
+            }
+            for operand in &instruction.operands {
+                if let Some(alloca) = static_alloca(operand) {
+                    states.insert(alloca, State::Clobbered);
+                }
+            }
+            continue;
+        };
+        let (stored, destination) = (instruction.operands[0], instruction.operands[1]);
+        if let Some(alloca) = static_alloca(&stored) {
+            states.insert(alloca, State::Clobbered);
+        }
+        let Some(alloca) = static_alloca(&destination) else { continue };
+        if *states.entry(alloca).or_insert(State::Unknown) != State::Unknown {
+            continue;
+        }
+        let ValueDef::Instruction(def) = function.value(alloca).def else { continue };
+        let Opcode::Alloca { allocated, .. } = function.instruction(def).opcode else { continue };
+        let count = match function.instruction(def).operands.first() {
+            None => Some(1),
+            Some(Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => u64::try_from(count).ok(),
+                _ => None,
+            },
+            Some(_) => None,
+        };
+        let argument = match stored {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Argument(at) => Some((value, at as usize)),
+                _ => None,
+            },
+            _ => None,
+        };
+        // an argument that is a scalar the store fills whole, once
+        let elidable = argument.filter(|&(value, at)| {
+            let ty = function.value(value).ty;
+            let scalar = match types.get(ty) {
+                Type::Int(bits) => bits % 8 == 0,
+                Type::Float(_) | Type::Pointer(_) => true,
+                _ => false,
+            };
+            let by_copy = function
+                .parameter_attrs
+                .get(at)
+                .is_some_and(
+                    |attrs| attrs
+                        .iter()
+                        .any(
+                            |attr| matches!(
+                                attr,
+                                llrm_mir::opcode::Attribute::Type(name, _) if ["byval", "inalloca", "preallocated"].contains(&name.as_str())
+                            ),
+                        ),
+                );
+            scalar
+                && !by_copy
+                && count
+                    .is_some_and(|count| layout.store_size(types, ty) == layout.alloc_size(types, allocated) * count)
+                && layout.size_bits(types, ty) == layout.store_size(types, ty) * 8
+                && !found.iter().any(|one| one.arg == value)
+        });
+        match (elidable, argument) {
+            (Some(_), Some((arg, position))) => {
+                states.insert(alloca, State::Elidable);
+                found.push(ArgumentCopy { position, arg, alloca, store: inst });
+                // all of them seen: the scan stops (early at -O0, where the
+                // entry block is large)
+                if found.len() == parameters.len() {
+                    break;
+                }
+            }
+            _ => {
+                states.insert(alloca, State::Clobbered);
+            }
+        }
+    }
+    found
 }

@@ -125,9 +125,9 @@ def test_an_analysis_a_pass_builds_is_its_own_bucket_not_the_passes(tmp_path):
     get = "<llrm_mir::passes::Analyses>::get::<llrm_mir::passes::Dominators>"
     calling = tmp_path / "ours.calling"
     calling.write_text(
-        f"   400,000,000 (40.0%)  *  ???:{early} [/x/llrm-c]\n"
-        f"   100,000,000 (10.0%)  >  ???:{get} (22x) [/x/llrm-c]\n"
-        "    50,000,000 ( 5.0%)  >  ???:<alloc::vec::Vec<u8>>::grow_one (1x) [/x/llrm-c]\n"
+        f"   400,000,000 (40.0%)  *  ???:{early} [/x/llrm-cc]\n"
+        f"   100,000,000 (10.0%)  >  ???:{get} (22x) [/x/llrm-cc]\n"
+        "    50,000,000 ( 5.0%)  >  ???:<alloc::vec::Vec<u8>>::grow_one (1x) [/x/llrm-cc]\n"
     )
     done = profile(
         tmp_path,

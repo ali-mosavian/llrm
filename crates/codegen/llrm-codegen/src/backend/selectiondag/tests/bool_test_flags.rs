@@ -1,4 +1,4 @@
-use super::super::dag_select::legalized;
+use super::super::select::legalized;
 use super::super::x86_lowering::{X86Lowering, cond, x86isd};
 use super::*;
 
@@ -15,6 +15,7 @@ fn lowered(code: CondCode) -> (SelectionDAG, SDValue) {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -24,6 +25,7 @@ fn lowered(code: CondCode) -> (SelectionDAG, SDValue) {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
         &llrm_x86_m32::M32,

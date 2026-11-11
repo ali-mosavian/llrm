@@ -429,24 +429,31 @@ struct Machine {
 impl Machine {
     fn new(body: &LirBody) -> Self {
         let regs = body.regs();
-        let segments = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
-        // The long-mode roots are units in every body so a segment register
-        // keeps its unit; a body without them never names these lanes.
-        let roots64 = llrm_x86::registers::ROOTS64
-            .into_iter()
-            .flat_map(
-                |one| {
-                    let lanes: Vec<Lane> = _lanes(regs, one).into_iter().collect();
-                    if lanes.is_empty() { (0..4).map(|byte| (one, byte)).collect() } else { lanes }
-                },
-            );
-        let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
-            .into_iter()
-            .flat_map(|one| _lanes(regs, one))
-            .chain(roots64)
-            .chain(segments.into_iter().flat_map(|one| _lanes(regs, one)))
-            .collect();
-        assert_eq!(lanes.len(), UNITS, "the general registers' byte lanes");
+        // The target's segment registers, in the register file's order.
+        let segments: Vec<RegId> = RegId::values().filter(|one| regs.is_segment(*one)).collect();
+        let lanes: Vec<Lane> = if crate::backend::lanes::is_x86(regs) {
+            // The long-mode roots are units in every body so a segment register
+            // keeps its unit; a body without them never names these lanes.
+            let roots64 = llrm_x86::registers::ROOTS64.into_iter().flat_map(|one| {
+                let lanes: Vec<Lane> = _lanes(regs, one).into_iter().collect();
+                if lanes.is_empty() { (0..4).map(|byte| (one, byte)).collect() } else { lanes }
+            });
+            let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
+                .into_iter()
+                .flat_map(|one| _lanes(regs, one))
+                .chain(roots64)
+                .chain(segments.iter().copied().flat_map(|one| _lanes(regs, one)))
+                .collect();
+            assert_eq!(lanes.len(), UNITS, "the general registers' byte lanes");
+            lanes
+        } else {
+            // Another file: the lanes its table gives each general root, in
+            // the file's order (arm64: one per `x` register).
+            let roots = regs.entries().filter(|(id, one)| one.root == *id).map(|(id, _)| id);
+            let lanes: Vec<Lane> = roots.flat_map(|one| _lanes(regs, one)).chain(segments.iter().copied().flat_map(|one| _lanes(regs, one))).collect();
+            assert!(lanes.len() <= UNITS, "{} lanes of a register file are more than the {UNITS} units", lanes.len());
+            lanes
+        };
         let mut places = vec![[u8::MAX; 4]; 512];
         for (unit, (register, byte)) in lanes.iter().enumerate() {
             places[register.index()][*byte as usize] = unit as u8;

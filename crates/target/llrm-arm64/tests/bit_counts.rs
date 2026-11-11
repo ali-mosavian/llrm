@@ -16,7 +16,7 @@ fn assembly(body: &str) -> String {
     let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
     std::fs::write(&input, format!("{HEAD}{body}")).unwrap();
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .args(["-S", "-O2", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -84,4 +84,16 @@ fn a_population_count_is_the_scalar_expansion_until_vectors_land() {
         assert!(!text.contains("cnt"), "i{bits}: {text}");
         assert!(text.contains("and"), "i{bits}: {text}");
     }
+}
+
+/// `ctpop(x) & 1` becomes `ISD::PARITY` before legalization (the pin's
+/// `SimplifyDemandedBits`); the legalizer had no `ExpandPARITY`, so arm64
+/// refused `bitcount_idioms` ("convert node to libcall").
+#[test]
+fn the_low_bit_of_a_population_count_is_compiled_at_arm64() {
+    let text = assembly(
+        "declare i32 @llvm.ctpop.i32(i32)\n\
+         define i32 @f(i32 %a) {\n %c = call i32 @llvm.ctpop.i32(i32 %a)\n %r = and i32 %c, 1\n ret i32 %r\n}\n",
+    );
+    assert!(text.contains("ret") && !text.contains("bl "), "{text}");
 }

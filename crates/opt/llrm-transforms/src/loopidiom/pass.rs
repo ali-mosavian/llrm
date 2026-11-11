@@ -23,6 +23,7 @@
 
 use llrm_analysis::aa::AAResults;
 use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::scev::analysis::{ScevCache, Scevs};
 use llrm_analysis::scev::expander::Env;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -153,7 +154,7 @@ impl FunctionPass for LoopIdiom {
         };
         let tti = outer.target().tti();
         let mark = unit.function.mark();
-        let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
+        let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
         let mut se = held.take();
         // DEVIATE: a target that weighs bytes against clocks at speed (m16:
         // 1 clock = 2 B) prices a fill by the bytes it adds as `-Os` does, and
@@ -225,9 +226,30 @@ impl FunctionPass for LoopIdiom {
             outer = std::rc::Rc::clone(analyses.outer());
         }
         if changed && unit.function.mark() != mark {
-            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+            // The pin's pass keeps ScalarEvolution
+            // (`getLoopPassPreservedAnalyses`) and forgets the
+            // loops it edited: the other loops keep their counts.
+            // `loops` is the nest before the edit, whose loops the touched and
+            // erased blocks were in; the edits only remove paths.
+            let Some(touched) = unit.function.touched_since(mark) else {
+                return PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>();
+            };
+            let env = Env {
+                globals: &outer.globals,
+                metadata: unit.metadata,
+                layout: unit.layout,
+                loops: &loops,
+                tree: &tree,
+                assumptions: &assumptions,
+            };
+            let cx = env.cx(&*unit.context, &*unit.function);
+            se.forget_touched(&cx, &touched);
+            // `analyses.declared` dropped the entry (`llvm.memset` is a new
+            // declaration): the expressions go into a new one.
+            analyses.replace::<Scevs>(unit.function, ScevCache::of(se));
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve::<Scevs>()
         } else {
-            held.put(se);
+            analyses.replace::<Scevs>(unit.function, ScevCache::of(se));
             PreservedAnalyses::all()
         }
     }
@@ -268,7 +290,6 @@ impl FunctionPass for AfterDeletion {
             return deleted;
         }
         analyses.invalidate(unit.function, &deleted);
-        self.idiom.run(unit, analyses);
-        PreservedAnalyses::none()
+        self.idiom.run(unit, analyses)
     }
 }

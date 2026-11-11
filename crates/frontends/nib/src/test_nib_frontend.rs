@@ -264,11 +264,10 @@ fn os_calls_kept() -> Options {
     options
 }
 
-/// -O2 with neither unrolling nor peeling.
+/// -O2 with no unrolling.
 fn unrolled_or_peeled_none() -> Options {
     let mut options = level("O2");
     options.pipeline.unroll = false;
-    options.pipeline.peel = false;
     options
 }
 
@@ -805,7 +804,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let source = written(
         &directory,
         "array_borrow.nib",
-        "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    let mut values: u16[3] = [10, 20, 30]\n    bump(&mut values)\n    return 0\n",
+        "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    let mut values: u16[3] = [10, 20, 30]\n    bump(&mut values)\n    return i16(values[1])\n",
     );
 
     let program = parsed(&source);
@@ -2756,7 +2755,6 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     let pipeline = llrm_transforms::pipeline::Options {
         inline: llrm_transforms::inline::Threshold::none(),
         unroll: false,
-        peel: false,
         ..Default::default()
     };
     let options = llrm_codegen::driver::Options {

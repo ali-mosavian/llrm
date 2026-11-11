@@ -178,6 +178,13 @@ fn nearest_common_dominator(
 /// tests already edited to take the post-incremented value; none until the
 /// first look has found edits to make.
 #[allow(clippy::too_many_arguments)]
+/// Function flag: LSR chose end-biased formulae (DEVIATE LG3) that differ from
+/// the pin's solution somewhere in the function.
+pub const END_BIASED_FIRED: &str = "llrm-end-biased";
+/// Function flag, set by a driver that builds the function both ways: LSR makes
+/// no end-biased formulae for it.
+pub const NO_END_BIASED: &str = "llrm-no-end-biased";
+
 fn plan_loop(
     context: &Context,
     layout: &DataLayout,
@@ -313,8 +320,12 @@ fn plan_loop(
     let pin_counts = counts(&lsr);
     // DEVIATE LG3's formulae (beyond the pin) join the space before its
     // narrowing, as the formulae they share registers with do.
-    lsr.generate_end_biased(se);
+    // `llrm-no-end-biased`: the driver builds this function without them.
+    if !llrm_mir::memory::has(&function.attrs, NO_END_BIASED) {
+        lsr.generate_end_biased(se);
+    }
     let beyond = counts(&lsr) != pin_counts;
+    let mut differs = false;
     narrowed(se, &mut lsr);
     let (mut solution, cost) = lsr.solve_with_cost(se);
     if beyond {
@@ -325,7 +336,10 @@ fn plan_loop(
         // less than the one with them, or where theirs adds a base to the
         // counter in an address the pin's does not, on a target that
         // cannot fold it: they save a compare, which that add outweighs
-        // (wasm's copy epilog, jpeg_fixed `emit`).
+        // (wasm's copy epilog, jpeg_fixed `emit`), or where theirs saves
+        // neither a counter nor a register: the pin's formula already shares
+        // the exit test's, and a hoisted end base is only setup (wasm sieve,
+        // whose stores merge into one, -O2 507 B against the pin's 500).
         narrowed(se, &mut pin);
         let (pin_solution, pin_cost) = pin.solve_with_cost(se);
         // A target with no register-plus-register address (wasm) pays an add
@@ -341,17 +355,20 @@ fn plan_loop(
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
                         || spent > saved
-                        || (spent == saved && tti.lsr_bytes().is_some() && cost.bytes >= pin_cost.bytes))));
+                        || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
         llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;
             solution = pin_solution;
+        } else {
+            differs = !pin_solution.is_empty();
         }
     }
     if solution.is_empty() {
         return planned(None);
     }
     let mut plan = lsr.into_plan(solution);
+    plan.end_biased_differs = differs;
     plan.chains = chains.chains;
     planned(Some(plan))
 }
@@ -419,9 +436,8 @@ pub fn reduced_held(
     let mut mark = function.mark();
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
-        headers.reverse();
-        headers
+        // The order the code generator's legacy loop pass manager runs LSR in.
+        env.loops.get_loops_in_legacy_visit_order().iter().map(|one| one.get_header()).collect()
     };
     for header in headers {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);
@@ -483,6 +499,9 @@ pub fn reduced_held(
                     }
                     Outcome::Planned(Some(plan)) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSolutions);
+                        if plan.end_biased_differs && !llrm_mir::memory::has(&function.attrs, END_BIASED_FIRED) {
+                            function.attrs.push(llrm_mir::opcode::Attribute::Flag(END_BIASED_FIRED.into()));
+                        }
                         plan
                     }
                 };
