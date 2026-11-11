@@ -211,8 +211,9 @@ pub fn loop_instsimplify_declared(
     let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let analyses = FunctionAnalyses::of_declared(context, globals, metadata, layout, function, assume_declared);
-    let headers: Vec<_> =
+    let mut headers: Vec<_> =
         loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
     let mut changed = false;
     for header in headers {
         changed |= simplify_loop_inst(context, globals, layout, callees, function, &loops, &tree, &analyses, header);

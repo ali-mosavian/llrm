@@ -991,6 +991,8 @@ fn unswitch_all_trivial_conditions(
 struct Unswitched {
     changed: bool,
     siblings: Vec<BlockId>,
+    /// `revisitCurrentLoop`: a non-trivial unswitch that is not a partial one.
+    revisit: bool,
 }
 
 /// `unswitchBestCondition`: the cheapest non-trivial candidate, if its cost is
@@ -999,7 +1001,7 @@ fn unswitch_best_condition(
     run: &mut Run,
     analyzed: &mut Analyzed,
     header: BlockId,
-) -> Option<Vec<BlockId>> {
+) -> Option<(Vec<BlockId>, bool)> {
     let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
     // Collect all invariant conditions within this loop (as opposed to an
     // inner loop which would be handled when visiting that inner loop).
@@ -1032,7 +1034,8 @@ fn unswitch_best_condition(
         // `postUnswitch`: the loop is marked, not looked at again.
         run.partial_done.insert(header);
     }
-    Some(nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers)
+    let partial = best.partial.is_some();
+    Some((nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers, partial))
 }
 
 /// `unswitchLoop`: the trivial path, then, with `non_trivial`, the best
@@ -1056,7 +1059,7 @@ fn unswitch_loop(
     }
     // Try trivial unswitch first before looking at other blocks in the loop.
     if unswitch_all_trivial_conditions(run, analyzed, header) {
-        return Unswitched { changed: true, siblings: Vec::new() };
+        return Unswitched { changed: true, siblings: Vec::new(), revisit: false };
     }
     // Skip non-trivial unswitching for optsize functions.
     let optsize = run
@@ -1074,7 +1077,7 @@ fn unswitch_loop(
         return Unswitched::default();
     }
     match unswitch_best_condition(run, analyzed, header) {
-        Some(siblings) => Unswitched { changed: true, siblings },
+        Some((siblings, partial)) => Unswitched { changed: true, siblings, revisit: !partial },
         None => Unswitched::default(),
     }
 }
@@ -1087,8 +1090,15 @@ pub fn unswitch_loops(
     non_trivial: bool,
 ) -> bool {
     let mut analyzed = Analyzed::of(run);
-    let mut work: std::collections::VecDeque<BlockId> =
+    let mut headers: Vec<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
+    let mut work: std::collections::VecDeque<BlockId> = headers.into();
+    // Run for one loop of a loop pass manager (`pipeline::Lpm1`): the manager
+    // owns the worklist, so the loops this makes and the revisit are handed to
+    // it (`LPMUpdater::addSiblingLoops`, `revisitCurrentLoop`) and not looked
+    // at here.
+    let scoped = crate::loopfilter::scoped();
     let mut changed = false;
     while let Some(header) = work.pop_front() {
         if !run.function.is_placed(header) || !analyzed.loops.is_loop_header(header) {
@@ -1101,6 +1111,10 @@ pub fn unswitch_loops(
                 break;
             }
             changed = true;
+            if scoped {
+                crate::loopfilter::note_unswitched(step.revisit, step.siblings);
+                break;
+            }
             work.extend(step.siblings);
             // The loops around it may have changed: derive them again where
             // the nest is not a top-level loop, or the pass cloned blocks.
