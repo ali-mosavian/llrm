@@ -852,6 +852,8 @@ pub struct Commuter<'a> {
     leas: llrm_support::hash::HashSet<u32>,
     /// DEVIATE TA-LC on (`Profile::commute_loop_carried`).
     loop_carried: bool,
+    /// DEVIATE TA-LC2 on (`Profile::commutes_loop_carried_flow`).
+    loop_carried_flow: bool,
 }
 
 impl<'a> Commuter<'a> {
@@ -861,6 +863,15 @@ impl<'a> Commuter<'a> {
         on: bool,
     ) -> Self {
         self.loop_carried = on;
+        self
+    }
+
+    /// The walk with DEVIATE TA-LC2 on or off.
+    pub fn with_loop_carried_flow(
+        mut self,
+        on: bool,
+    ) -> Self {
+        self.loop_carried_flow = on;
         self
     }
 
@@ -889,6 +900,7 @@ impl<'a> Commuter<'a> {
             processed: Default::default(),
             leas: Default::default(),
             loop_carried: false,
+            loop_carried_flow: false,
         }
     }
 
@@ -1188,6 +1200,46 @@ impl<'a> Commuter<'a> {
             })
     }
 
+    /// DEVIATE TA-LC2: whether `to` is reached from `from` through copies,
+    /// whichever block each is in (at most `MAX_DATA_FLOW_EDGE` values are
+    /// followed): `m := copy from; ...; to := copy m`. `isRevCopyChain` only
+    /// sees definitions in this block.
+    fn is_copy_flow(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> bool {
+        let mut seen = vec![from];
+        let mut next = 0;
+        while next < seen.len() {
+            let value = seen[next];
+            next += 1;
+            for (key, is_def) in self.facts.refs(value) {
+                if is_def {
+                    continue;
+                }
+                let Some((_, into)) = self.copy_to_reg(key).filter(|&(source, _)| source == value) else { continue };
+                if into == to {
+                    return true;
+                }
+                if !seen.contains(&into) && seen.len() < MAX_DATA_FLOW_EDGE {
+                    seen.push(into);
+                }
+            }
+        }
+        false
+    }
+
+    /// The value `reg` is copied from, where its definition in this block is a
+    /// copy.
+    fn copied_from(
+        &self,
+        reg: u32,
+    ) -> Option<u32> {
+        let def = self.single_def(reg)?;
+        self.copy_to_reg(def).map(|(source, _)| source)
+    }
+
     /// `isRevCopyChain`: a reversed copy chain from `from` to `to`:
     /// `tmp1 = copy tmp2; from = copy tmp1; to = add from ...; tmp2 = copy to`.
     /// The walk goes up through copies and, as `AnalyzeRevCopyTied` (on by
@@ -1331,6 +1383,18 @@ impl<'a> Commuter<'a> {
         if self.loop_carried
             && self.is_rev_copy_chain(c, a, MAX_DATA_FLOW_EDGE)
             && !self.is_rev_copy_chain(b, a, MAX_DATA_FLOW_EDGE)
+        {
+            return true;
+        }
+        // DEVIATE TA-LC2 (owner x86-m32-bytes, exit 2026-11-27): TA-LC for a
+        // result that reaches C's source through copies in later blocks (the
+        // back-edge copy behind a conditional subtract: x_adler's `a += k; if
+        // (a >= 65521) a -= 65521`). The pin ties B and copies C every
+        // iteration; tying C leaves no copy once the coalescer joins the web.
+        if self.loop_carried_flow
+            && let Some(source) = self.copied_from(c)
+            && self.is_copy_flow(a, source)
+            && !self.copied_from(b).is_some_and(|other| self.is_copy_flow(a, other))
         {
             return true;
         }

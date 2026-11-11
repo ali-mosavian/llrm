@@ -3114,6 +3114,37 @@ fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_a
     assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
 }
 
+/// `icmp sgt (sub nsw a, b), (add nsw a, b)` of the pin's `icmp-subadd.ll`
+/// reached the backend as a `sub`, an `add` and a compare; -O2 makes it
+/// `icmp slt b, 0`.
+#[test]
+fn test_o2_folds_a_compare_of_a_sub_and_an_add_to_b_against_zero() {
+    let text = "define i1 @f(i8 %a, i8 %b) {
+b:
+  %sub = sub nsw i8 %a, %b
+  %add = add nsw i8 %a, %b
+  %cmp = icmp sgt i8 %sub, %add
+  ret i1 %cmp
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("sub nsw"), "premise: with no passes the sub stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("icmp slt i8 %b, 0") && !after.contains("sub nsw"), "{after}");
+}
+
 /// `icmp samesign uge i8 %x, 127` of the pin's
 /// `icmp-samesign-canonicalize.ll` reached the backend as an unsigned
 /// compare; -O2 makes it `icmp eq i8 %x, 127`.
