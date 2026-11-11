@@ -334,14 +334,17 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// `InlineParams::DefaultThreshold`, 50 where the pin's is 225: a call is
-    /// about 20 B (arguments, `jsr`, `addq`, `rts`) and 50 clk, so a copy of a
-    /// body pays for itself only up to a dozen instructions; a 30-operation
-    /// body at six sites was inlined six times. 300 seeds -O2 68020: 516950
-    /// -> 472526 B, the 24 programs unchanged. DEVIATE: the pin's target sets
-    /// none. Exit: review 2026-11-20.
-    fn inline_threshold_override(&self) -> Option<i64> {
-        Some(50)
+    /// DEVIATE M68K-INLINE-RATE (owner m68k, exit 2026-11-27): an inline into a
+    /// speed caller (-O2, -O3) that grows the code is refused when its bytes at
+    /// the CPU's `timings.times` rate cost more clocks than the call saves at
+    /// the site's frequency; the rate is the one the O2/O3 verdicts are judged
+    /// at (0.5 B per clk on the 68000, 1.33 on the 68020, 3.2 from the 68030).
+    /// The pin inlines to its threshold (225) alone; the flat 50 this replaces
+    /// kept a loop's call to a 100-instruction callee (a call per trip).
+    /// No exemption for a callee loop with a constant bound: it admitted
+    /// growth with no gain (`switch`, `sieve` 68020).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        crate::timing::byte_milliclocks(self.cpu)
     }
 
     /// A `select` is a branch: `M68kISD::CMOV` is expanded to a diamond (`EmitLoweredSelect`); the 68000 family has no conditional move. The
@@ -374,6 +377,16 @@ impl Tti for M68k {
     /// the code (SZ1): the callee's bytes against the call sequence's.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
+    }
+
+    /// A switch lowers to a compare and a branch a cluster (`cmpi.l #imm` 6 B,
+    /// `bcc.w` 4 B; the peeled `pick` of switch_peeled_table: 7 of them), or a
+    /// range check, the dispatch and a word a case.
+    fn switch_code_size(&self, clusters: u64, table: u64) -> i64 {
+        if !self.code_size_bytes {
+            return 0;
+        }
+        if table > 0 { 18 + 2 * table as i64 } else { 10 * clusters as i64 }
     }
 
     /// The inliner counts a callee in bytes of code (`sizes`).

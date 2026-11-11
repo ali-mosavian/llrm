@@ -2185,6 +2185,15 @@ pub trait Tti {
         basic_case_clusters(cases, index_bits, for_size)
     }
 
+    /// DEVIATE (owner m68k, exit 2026-11-27): the code size, in the unit of the
+    /// inliner's size view, of a switch's compares and jump table beyond its one
+    /// branch; `clusters` and `table` as [`Self::estimated_number_of_case_clusters`].
+    /// The pin counts a switch as one control-flow instruction in `CodeSize`, so a
+    /// callee with a 7-compare switch looked to SZ1 like a branch. 0: the branch alone.
+    fn switch_code_size(&self, _clusters: u64, _table: u64) -> i64 {
+        0
+    }
+
     /// `getIntrinsicInstrCost` of the call `name(args)` returning `ret`
     /// (none for `void`): invalid where the target has no answer (T7).
     fn intrinsic_cost(
