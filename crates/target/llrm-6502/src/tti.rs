@@ -193,6 +193,12 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// `function_bytes` is calibrated against the objects
+    /// (tests/size_calibration.rs).
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
@@ -224,6 +230,13 @@ impl Tti for Mos6502 {
     /// programs, 5 for the worse on both axes (div_constants_ulong +15,986 B).
     fn unroll_trial_threshold(&self) -> Option<u32> {
         Some(1100)
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the byte model is within 25% of the written
+    /// bytes for two functions in three; a module over 512 instructions takes seconds to compile once
+    /// (div_constants_long -Os: 3.0 s, 13.0 s with the trial).
+    fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
+        Some((25, 512))
     }
 
     /// A 32-bit counter or product is four byte adds; the datalayout's `n8`
@@ -282,6 +295,11 @@ impl Tti for Mos6502 {
         bits: u32,
     ) -> u32 {
         u32::from(!crate::dagisel::combine::mul_by_constant_stays_in_line(bits, i128::from(step), false))
+    }
+
+    /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        true
     }
 
     /// A constant offset in an address with one pointer cell is the `y` of

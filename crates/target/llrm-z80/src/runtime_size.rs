@@ -130,7 +130,8 @@ const INTERNAL: [&str; 9] =
 /// and exit date; a routine of `z80_rt.s` that is neither modeled, internal nor named here fails
 /// `every_runtime_routine_is_priced_internal_or_named`. The soft-float library (`__addsf3`, `__muldf3`, ...) comes
 /// from the C library, outside `z80_rt.s`, and is not priced either: owner z80, exit 2026-11-30.
-pub const UNPRICED: [(&str, &str); 11] = [
+pub const UNPRICED: [(&str, &str); 12] = [
+    ("__umulhisi3", "16 x 16 -> 32 multiply: z80, 2026-11-30"),
     ("__ashldi3", "64-bit shift: z80, 2026-11-30"),
     ("__lshrdi3", "64-bit shift: z80, 2026-11-30"),
     ("__ashrdi3", "64-bit shift: z80, 2026-11-30"),
@@ -147,20 +148,6 @@ pub const UNPRICED: [(&str, &str); 11] = [
 /// The dividend and divisor bit lengths assumed for a long divide whose operand is not a constant in sight.
 const TYPICAL_DIVIDEND_BITS: u32 = 24;
 const TYPICAL_DIVISOR_BITS: u32 = 8;
-
-/// The clocks of `call __ashlsi3`, `__lshrsi3` or `__ashrsi3` for a count of `amount`, the call instruction
-/// through the return.
-pub fn shift_routine_clocks(
-    op: llrm_codegen::backend::selectiondag::isd::ISD,
-    amount: u32,
-) -> u32 {
-    use llrm_codegen::backend::selectiondag::isd::ISD;
-    match op {
-        ISD::Shl => ASHLSI3_BASE + ASHLSI3_PER * amount,
-        ISD::Srl => LSHRSI3_BASE + LSHRSI3_PER * amount,
-        _ => ASHRSI3_BASE + ASHRSI3_PER * amount,
-    }
-}
 
 /// The clocks a `call` adds beyond the call instruction itself: the routine's body, where the runtime has a model
 /// for it. `before` are the instruction texts that precede the call in its function, nearest last. `__mulsi3`

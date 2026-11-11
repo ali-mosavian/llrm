@@ -19,6 +19,9 @@ const PROGRAMS: &[(&str, &str)] = &[
     // (An)+`
     ("overflow_loop", include_str!("fixtures/overflow_loop_raw.ll")),
     ("mandel", include_str!("fixtures/mandel_raw.ll")),
+    // `move.l sp, -(An)`: the stack pointer is dropped from the sources, and the
+    // row's source 1 (the address) was none: the write-back def went untied
+    ("nbody_single", include_str!("fixtures/nbody_single_raw.ll")),
 ];
 
 #[test]
@@ -43,4 +46,5 @@ fn programs_that_compile_with_the_private_passes_compile_with_the_shared_prelude
         }
     }
     assert!(refused.is_empty(), "{refused:#?}");
+    assert_eq!(llrm_codegen::backend::twoaddr::skipped_ties(), 0, "a declared tie named an operand its instruction lacks");
 }

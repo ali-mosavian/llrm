@@ -89,6 +89,22 @@ thread_local! {
     /// speed routine with the pin-structure wide path, and not the one with
     /// the small wide path (see [`with_fast_division`]).
     static FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether a long multiply calls `__mulsi3_fast` (see
+    /// [`with_fast_multiply`]).
+    static FAST_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the speed multiply called or not: 19 bytes linked once, a module
+/// asks for it only where its multiply sites run (`hotmultiply`,
+/// `select::module_text`).
+pub fn with_fast_multiply<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = FAST_MULTIPLY.with(|a| a.replace(allowed));
+    let result = f();
+    FAST_MULTIPLY.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the wide speed division allowed or not. Linked once, it costs
@@ -3892,7 +3908,10 @@ fn emit_with<const STACK: bool>(
                         "_fast_byte"
                     } else if division && !FAST_DIVISION.with(|f| f.get()) {
                         "_fast_small"
-                    } else if division || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3") {
+                    } else if division
+                        || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
+                        || (callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
+                    {
                         "_fast"
                     } else {
                         ""
@@ -3917,9 +3936,10 @@ fn emit_with<const STACK: bool>(
                         let push_low = if cmos { "phx" } else { "txa\n  pha" };
                         format!("  lda {lo}\n  sec\n  sbc #1\n  tax\n  lda {hi}\n  sbc #0\n  pha\n  {push_low}\n")
                     };
+                    let name = &function.name;
                     writeln!(
                         out,
-                        "{keep}  lda #>(_ci{made}-1)\n  pha\n  lda #<(_ci{made}-1)\n  pha\n{target}{restore}  rts\n_ci{made}:"
+                        "{keep}  lda #>(_ci_{name}_{made}-1)\n  pha\n  lda #<(_ci_{name}_{made}-1)\n  pha\n{target}{restore}  rts\n_ci_{name}_{made}:"
                     )
                     .unwrap();
                 }

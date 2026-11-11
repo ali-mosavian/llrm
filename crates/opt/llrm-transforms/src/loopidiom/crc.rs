@@ -122,7 +122,7 @@ impl LoopIdiomRecognize {
             ty: array,
             kind: llrm_mir::context::ConstantKind::Aggregate(cells),
         });
-        let table = run.declared.table(".crctable", array, initial, UnnamedAddr::None);
+        let table = run.declared.table(".crctable", array, initial, UnnamedAddr::None, None);
 
         let iv_phi = l.get_canonical_induction_variable(context, &*function).expect("a canonical induction variable");
         let iv = Operand::Value(function.instruction(iv_phi).result.expect("a value"));

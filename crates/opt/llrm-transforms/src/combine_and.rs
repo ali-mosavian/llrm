@@ -296,6 +296,18 @@ fn fold_and_with_constant(
     None
 }
 
+/// `foldBinOpIntoSelectOrPhi` (:2784), right after `narrowMaskedBinOp`: an
+/// `and` of a phi with a select or another phi of its block becomes the phi of
+/// the `and` per incoming value.
+fn into_select_or_phi(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    Some(c.fold_bin_op_into_select_or_phi(inst)).filter(|found| !matches!(found, Visit::None))
+}
+
 /// `and (bo (zext X), C1), C` and the masks of a `zext` operand: the `and` and
 /// the binop narrowed to `X`'s type (:2595).
 fn fold_narrowed_binop(
@@ -469,12 +481,13 @@ pub fn visit_and(
     if let Some(found) = fold_idempotent_recurrence(c, inst, BinaryOp::And) {
         return found;
     }
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 8] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
         fold_one_shifted_by,
         fold_negated_low_bit,
         fold_power_of_two_sum,
         fold_and_with_constant,
         fold_narrowed_binop,
+        into_select_or_phi,
         fold_mask_into_one_arm,
         fold_shifted_power_of_two,
         fold_bitwise_logic_with_intrinsics,

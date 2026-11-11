@@ -207,8 +207,9 @@ fn size_equals_store_size(
 fn supported_int_size(
     layout: &DataLayout,
     bytes: u64,
+    odd_sizes: bool,
 ) -> bool {
-    matches!(bytes, 1 | 2 | 4 | 8) || layout.legal_integer((bytes * 8) as u32)
+    odd_sizes || matches!(bytes, 1 | 2 | 4 | 8) || layout.legal_integer((bytes * 8) as u32)
 }
 
 /// `commonAlignment(A, Offset)`: the alignment `offset` bytes into something
@@ -1057,6 +1058,7 @@ fn is_integer_widening_viable_for_slice(
     alloc_begin_offset: u64,
     alloca_ty: TypeId,
     whole_alloca_op: &mut bool,
+    odd_sizes: bool,
 ) -> bool {
     let size = layout.store_size(&context.types, alloca_ty);
     // A split tail starts before the partition.
@@ -1072,7 +1074,7 @@ fn is_integer_widening_viable_for_slice(
         return false;
     }
     // DEVIATE: an odd-sized slice would be cut as an i24 or the like.
-    if !supported_int_size(layout, rel_end - rel_begin) {
+    if !supported_int_size(layout, rel_end - rel_begin, odd_sizes) {
         return false;
     }
     match user.opcode {
@@ -1136,6 +1138,7 @@ fn is_integer_widening_viable(
     slices: &[Slice],
     p: &Partition,
     alloca_ty: TypeId,
+    odd_sizes: bool,
 ) -> bool {
     let size_in_bits = layout.size_bits(&context.types, alloca_ty);
     // The widest integer MIR names.
@@ -1160,6 +1163,7 @@ fn is_integer_widening_viable(
             p.begin,
             alloca_ty,
             &mut whole_alloca_op,
+            odd_sizes,
         ) {
             return false;
         }
@@ -1173,6 +1177,7 @@ fn is_integer_widening_viable(
             p.begin,
             alloca_ty,
             &mut whole_alloca_op,
+            odd_sizes,
         ) {
             return false;
         }
@@ -1222,6 +1227,8 @@ struct State<'a, 'b, 'c> {
     selects_to_rewrite: Vec<(InstId, Vec<SelectOp>)>,
     /// `PreserveCFG` (L178): no block is made.
     preserve_cfg: bool,
+    /// `Tti::selects_odd_sized_integers`.
+    odd_sizes: bool,
 }
 
 /// A load or store through a select, with the hands (`SelectHandSpeculativity`,
@@ -1266,6 +1273,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         preserve_cfg: bool,
     ) -> Self {
         let globals = std::rc::Rc::clone(&analyses.outer().globals);
+        let odd_sizes = crate::looprotate::target_tti(analyses.outer().target()).selects_odd_sized_integers();
         Self {
             unit,
             analyses,
@@ -1278,6 +1286,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             phis_with_store_to_rewrite: Vec::new(),
             selects_to_rewrite: Vec::new(),
             preserve_cfg,
+            odd_sizes,
         }
     }
 
@@ -1674,7 +1683,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     }
                     let piece = slice.end.min(p.end) - slice.begin.max(p.begin);
                     let user = slice.used.expect("a live slice").user;
-                    if !supported_int_size(layout, piece)
+                    if !supported_int_size(layout, piece, self.odd_sizes)
                         && matches!(
                             self.unit.function.instruction(user).opcode,
                             Opcode::Load { .. } | Opcode::Store { .. }
@@ -1811,6 +1820,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         // DEVIATE: a candidate cut into a part isel has no integer for stays.
         let layout_for_parts = self.unit.layout;
+        let odd_sizes = self.odd_sizes;
         let unsupported: Vec<InstId> = split_offsets
             .iter()
             .filter(|(_, offsets)| {
@@ -1823,7 +1833,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     .chain(std::iter::once(slice.end - slice.begin))
                     .any(
                         |to| {
-                            let bad = !supported_int_size(layout_for_parts, to - from);
+                            let bad = !supported_int_size(layout_for_parts, to - from, odd_sizes);
                             from = to;
                             bad
                         },
@@ -2082,7 +2092,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let common_size = layout.alloc_size(&self.context().types, common);
             if common_size >= p.size() {
                 let widen =
-                    is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, common);
+                    is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, common, self.odd_sizes);
                 return (common, widen);
             }
         }
@@ -2094,12 +2104,12 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     partition_ty = self.unit.context.types.int((p.size() * 8) as u32);
                 }
             }
-            if is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, partition_ty) {
+            if is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, partition_ty, self.odd_sizes) {
                 return (partition_ty, true);
             }
             if let Some(largest) = largest_int {
                 if layout.alloc_size(&self.context().types, largest) >= p.size()
-                    && is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, largest)
+                    && is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, largest, self.odd_sizes)
                 {
                     return (largest, true);
                 }

@@ -36,7 +36,7 @@
 //!
 //! | # | DEVIATE |
 //! |---|---|
-//! | D1 | A table is a private constant from `Declared::table`, named `switch.table.N`, deduplicated, without the function's name or the preferred alignment of its cells; `shouldBuildLookupTablesForConstant` is not asked and a constant MIR cannot hold is not offered. |
+//! | D1 | A table is a private constant from `Declared::table`, named `switch.table.N`, deduplicated, without the function's name; `shouldBuildLookupTablesForConstant` is not asked and a constant MIR cannot hold is not offered. |
 //! | D2 | No branch weights on the range check (`setFittedBranchWeights`). |
 //! | D3 | No `DomTreeUpdater`: callers recompute the tree. |
 //! | D4 | A hole at index 0 of a table whose holes are poison takes the first result as the linear offset; the pin `cast<ConstantInt>`s the poison. |
@@ -881,7 +881,9 @@ impl Plan {
                     let array = context.types.intern(Type::Array { element: *cell, count: cells.len() as u64 });
                     let initial =
                         context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(cells.clone()) });
-                    let table = declared.table("switch.table", array, initial, UnnamedAddr::Global);
+                    // As the pin: the alignment of one cell, as only one cell is loaded.
+                    let align = Some(spec.layout.pref_align(&context.types, *cell));
+                    let table = declared.table("switch.table", array, initial, UnnamedAddr::Global, align);
                     let address = context.types.ptr(0);
                     let base = context.constant(Constant { ty: address, kind: ConstantKind::Global(table) });
                     let index_bits = spec.layout.pointer(0).index_bits;

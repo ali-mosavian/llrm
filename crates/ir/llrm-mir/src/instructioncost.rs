@@ -379,11 +379,31 @@ pub fn instruction_cost_with(
     operands: &[Operand],
     kind: CostKind,
 ) -> Cost {
+    instruction_cost_known(tti, context, layout, globals, function, inst, operands, kind, &|_| None)
+}
+
+/// [`instruction_cost_with`] where `known` says what an operand is worth at the
+/// call site being priced (`CallAnalyzer::isGEPFree` prices a GEP "respecting
+/// any simplified values known during the analysis of this callsite", with a
+/// constant in place of the callee's argument).
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InlineCost.cpp#L1560-L1572>
+#[allow(clippy::too_many_arguments)]
+pub fn instruction_cost_known(
+    tti: &dyn Tti,
+    context: &Context,
+    layout: &DataLayout,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+    operands: &[Operand],
+    kind: CostKind,
+    known: &dyn Fn(Operand) -> Option<OperandInfo>,
+) -> Cost {
     let operation = function.instruction(inst);
     let modelled =
         |operand: Operand| operand_type(context, function, operand).and_then(|ty| Ty::of(&context.types, ty));
     let result = Ty::of(&context.types, operation.ty);
-    let info = |at: usize| operand_info(context, operands[at]);
+    let info = |at: usize| known(operands[at]).unwrap_or_else(|| operand_info(context, operands[at]));
     // What the address adds to the bytes of a load or store (code size only).
     let address_cost = |pointer: Operand| {
         if kind == CostKind::CodeSize {
