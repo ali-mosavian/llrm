@@ -75,3 +75,8 @@ def test_the_bench_programs_run_by_default():
     default = [p.parent.parent.name + "/" + p.stem for p in sweep.sources([], False)]
     assert "bench/floats" in default
     assert not [p for p in sweep.sources([], True) if p.parent.parent.name == "bench"]
+
+
+def test_a_bench_program_whose_input_corpus_is_not_in_the_tree_is_not_a_cell():
+    """bench/grep reads `@dickens`, which the tree does not have: it printed differently at every level and CPU, four false `output` cells."""
+    assert "bench/grep" not in [p.parent.parent.name + "/" + p.stem for p in sweep.sources([], False)]

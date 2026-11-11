@@ -158,7 +158,11 @@ def sources(names: list[str], no_bench: bool) -> list[Path]:
     """The programs the sweep runs: tests/run/c, and bench/NAME/NAME.c unless `no_bench`; all of them with no `names`."""
     found = sorted((ROOT / "tests/run/c").glob("*.c"))
     if not no_bench:
-        found += sorted(p for p in (ROOT / "bench").glob("*/*.c") if p.stem == p.parent.name)
+        # a `// data: @corpus` input other than the generated signal is not in the tree: not a cell
+        needs_corpus = re.compile(r"^//\s*data:\s*@(?!signal\b)", re.M)
+        found += sorted(
+            p for p in (ROOT / "bench").glob("*/*.c") if p.stem == p.parent.name and not needs_corpus.search(p.read_text())
+        )
     return [p for p in found if not names or p.stem in names]
 
 
