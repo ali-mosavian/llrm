@@ -87,6 +87,11 @@ pub struct Tuning {
     /// did not pay on x86-m32: 1 of 46 programs). False: any refused loop under the threshold, which
     /// is what the 6502 and m68k trials were fit on (float_in_place_update: 9441 B at -O1 against 19 B).
     pub unroll_trial_nests_only: bool,
+    /// Whether the -Os inliner counts the saving of a callee that goes with its last call in
+    /// instruction units, as the pin does. False (D13): the saving is not taken, because a copy
+    /// carries more bytes than its units where an argument is several words (x86-m16:
+    /// QCport `pl_box_axis`, 21 units, ~70 B a copy, three copies +181 B).
+    pub inline_dying_credit_at_os: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -498,6 +503,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         unroll_trial_at_o1: None,
         unroll_trial_nests_only: false,
+        inline_dying_credit_at_os: true,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
