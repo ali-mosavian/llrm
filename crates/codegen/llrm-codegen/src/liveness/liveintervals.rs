@@ -62,6 +62,28 @@ thread_local! {
     static HANDED_OVER: std::cell::RefCell<Option<HandedOver>> = const { std::cell::RefCell::new(None) };
 }
 
+// The picks the pre-RA machine scheduler made, for the next `edited_to_moving`
+// of this thread: `ScheduleDAGMI::moveInstruction` is called once per pick that
+// is not already where it goes.
+thread_local! {
+    static PICKS: std::cell::RefCell<Vec<RegionPicks>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// One scheduled region: the block, and the instructions in the order the
+/// scheduler picked them, each with whether it came from the top zone.
+pub struct RegionPicks {
+    pub block: usize,
+    pub picks: Vec<(InstrKey, bool)>,
+}
+
+/// The picks of the scheduler run that just ended, for the allocator's
+/// `LiveIntervals` to follow (replacing any left over).
+pub fn note_scheduler_picks(picks: Vec<RegionPicks>) {
+    // POC switch for the A/B.
+    let picks = if std::env::var_os("LLRM_POC_PICKS").is_some() || cfg!(test) { picks } else { Vec::new() };
+    PICKS.with(|slot| *slot.borrow_mut() = picks);
+}
+
 /// What a pass leaves for the next. A set still held when its thread ends is
 /// leaked, not dropped: dropping a `LiveIntervals` reads the slot-index arena,
 /// a thread local that may be gone by then (a coalescer run with no allocator
@@ -496,6 +518,7 @@ impl LiveIntervals {
             return None;
         }
         let mut touched: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        let picks = if moving { PICKS.with(|slot| std::mem::take(&mut *slot.borrow_mut())) } else { Vec::new() };
         for (n, block) in body.blocks.iter().enumerate() {
             let wanted: HashSet<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
             let gone: Vec<InstrKey> =
@@ -533,6 +556,14 @@ impl LiveIntervals {
             if self.blocks[n].len() != target.len() {
                 return None;
             }
+            // `ScheduleDAGMI::scheduleMI`: a pick moves where it is not already
+            // at the zone's edge. What the picks leave out of place is moved
+            // below, as before.
+            for region in picks.iter().filter(|region| region.block == n) {
+                if self.replay_picks(n, &region.picks, &mut touched).is_none() {
+                    break;
+                }
+            }
             for (at, key) in target.iter().enumerate() {
                 if self.blocks[n][at].id() == *key {
                     continue;
@@ -561,6 +592,55 @@ impl LiveIntervals {
             self.next_vreg = self.next_vreg.max(reg + 1);
         }
         Some(self)
+    }
+
+    /// The scheduler's picks of one region as `ScheduleDAGMI::scheduleMI` makes
+    /// them: a top pick goes before `CurrentTop` and a bottom pick before
+    /// `CurrentBottom`, each only if it is not already there (an instruction
+    /// moved once, wherever the others end). None if the region's
+    /// instructions are not together in the block, or one is in a parallel
+    /// copy (they share an index).
+    fn replay_picks(
+        &mut self,
+        block: usize,
+        picks: &[(InstrKey, bool)],
+        touched: &mut std::collections::BTreeSet<u32>,
+    ) -> Option<()> {
+        let mut at: Vec<usize> = Vec::with_capacity(picks.len());
+        for (key, _) in picks {
+            at.push(self.blocks[block].iter().position(|one| one.id() == *key)?);
+        }
+        let start = *at.iter().min()?;
+        let end = *at.iter().max()? + 1;
+        if end - start != picks.len() {
+            return None;
+        }
+        let (mut top, mut bottom) = (start, end);
+        for (key, from_top) in picks {
+            let insn = Arc::clone(self.insns.get(key)?);
+            if insn.group.is_some() {
+                return None;
+            }
+            if *from_top {
+                if self.blocks[block][top].id() != *key {
+                    let before = self.blocks[block][top].id();
+                    touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                    self.remove_instr(block, *key);
+                    self.insert_instr_before(block, Some(before), insn);
+                }
+                top += 1;
+            } else {
+                if self.blocks[block][bottom - 1].id() != *key {
+                    touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                    self.remove_instr(block, *key);
+                    // `bottom - 1` now holds what followed the key: `CurrentBottom`.
+                    let before = self.blocks[block].get(bottom - 1).map(|one| one.id());
+                    self.insert_instr_before(block, before, insn);
+                }
+                bottom -= 1;
+            }
+        }
+        Some(())
     }
 
     /// The function as edited: the instructions of every block, in order.
@@ -1527,6 +1607,33 @@ mod tests {
         // A body whose shared instructions run in another order is refused.
         let swapped = body(&[Arc::clone(&def_b), Arc::clone(&def_a), Arc::clone(&copy), Arc::clone(&reader)]);
         assert!(LiveIntervals::new(&after).edited_to(&swapped).is_none());
+    }
+
+    /// The slot indexes after the scheduler moved `A` of `[A B C D]` to the end
+    /// (picked once, from the bottom), packed: the entries the moves leave.
+    fn entries_after_moving_a_to_the_end(picks: bool) -> u32 {
+        let keys: Vec<_> = (1..=4).map(|reg| insn(&[reg], &[])).collect();
+        let before = body(&keys);
+        let after = body(&[keys[1].clone(), keys[2].clone(), keys[3].clone(), keys[0].clone()]);
+        let lis = LiveIntervals::new(&before);
+        if picks {
+            let picked = [0, 3, 2, 1].map(|at| (keys[at].id(), false));
+            note_scheduler_picks(vec![RegionPicks { block: 0, picks: picked.to_vec() }]);
+        }
+        let mut edited = lis.edited_to_moving(&after).expect("the edit applies");
+        edited.indexes.pack_indexes();
+        edited.indexes.get_last_index().get_index() / 16
+    }
+
+    /// The pin moves the displaced instruction once (`moveInstruction` per
+    /// pick that is not in place); the replay of the final order moved the
+    /// three it passed, one empty entry each: fpbench O3 on arm64 had 783
+    /// entries at the pack where the pin had about 710.
+    #[test]
+    fn test_one_instruction_moved_down_leaves_one_empty_entry() {
+        let replayed = entries_after_moving_a_to_the_end(false);
+        let picked = entries_after_moving_a_to_the_end(true);
+        assert_eq!(replayed - picked, 2, "the replay moved B, C and D; the pick moved A: {replayed} against {picked}");
     }
 
     /// An instruction taken out of the maps took its undef operands with it:

@@ -51,6 +51,7 @@ use crate::backend::schedboundary::Unit;
 use crate::backend::schedmodel::{MemBase, MemOp, SchedulingModel};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
+use crate::liveness::liveintervals::RegionPicks;
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -1351,10 +1352,12 @@ pub fn scheduled(
     let mut model = Some(model);
     let mut made: Option<Model> = None;
     let mut changed = false;
+    let recorded = std::cell::RefCell::new(Vec::new());
     let blocks: Vec<_> = body
         .blocks
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(block_at, block)| {
             let insns = block.insns.to_vec();
             let regions = regions(&insns, regs, bits);
             // A region of fewer than two instructions has nothing to order.
@@ -1447,7 +1450,11 @@ pub fn scheduled(
                     }
                     copy_constrain(slice, &mut deps, &|value| now.contains(&value));
                     cluster_mem_ops(slice, &mut deps, sched);
-                    let order = order_region(slice, &deps, tracking.as_ref(), sched);
+                    let (order, made) = picks(slice, &deps, tracking.as_ref(), sched);
+                    recorded.borrow_mut().push(RegionPicks {
+                        block: block_at,
+                        picks: made.iter().map(|&(node, at_top, _)| (slice[node].id(), at_top)).collect(),
+                    });
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
                         for (place, &node) in order.iter().enumerate() {
                             out[region.start + place] = Arc::clone(&slice[node]);
@@ -1464,6 +1471,7 @@ pub fn scheduled(
             block.with_insns(out)
         })
         .collect();
+    crate::liveness::liveintervals::note_scheduler_picks(recorded.into_inner());
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
