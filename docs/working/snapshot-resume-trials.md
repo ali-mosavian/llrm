@@ -33,7 +33,7 @@ The two differ: unroll is late and body-local, so a resume point is cheap and cl
 - Dump directory: off for the second run, as today (`again.dump = None`).
 
 ## Callee-fact ripple
-- Unroll changes one body. Facts the tail reads from other bodies (attrs, `CalleePop`, nounwind, argmemonly) were fixed before the snapshot and the trial does not change them: `ReversePostOrderFunctionAttrs` and `CalleePop` run before Late. A body the trial changes can change its own derived facts only after the snapshot point, which the tail recomputes for it; callers read them in the tail only through summaries that are recomputed.
+- Unroll changes one body. Facts the tail reads from other bodies (attrs, `CalleePop`, nounwind, argmemonly) were fixed before the snapshot and the trial does not change them: `ReversePostOrderFunctionAttrs` and `CalleePop` run before Late. A body the trial changes can change its own derived facts only after the snapshot point, which the tail recomputes for it; whether callers in the tail read them other than through recomputed summaries is unverified: open question 2 covers it.
 - Rotation inside the walk (S3) does ripple: an inlined callee carries the rotation. Handled by S3's re-run of later bodies; before S3 exists, rotation uses S2 and keeps today's full second mid-end from the walk on, so there is no ripple to handle.
 - Fallback: if a tail pass reports that it read a fact the snapshot did not hold (a debug assertion on `Applied` version counters), or the tail errors, the compile falls back to today's two full compiles. The fallback is counted in `LLRM_DEBUG=trial`.
 
