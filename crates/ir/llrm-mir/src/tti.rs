@@ -1089,6 +1089,11 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::unroll_trial_nests_only`.
+    fn unroll_trial_nests_only(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
