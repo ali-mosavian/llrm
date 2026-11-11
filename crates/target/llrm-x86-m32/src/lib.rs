@@ -152,6 +152,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // `test`, less the branch saved. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb;
         // and; cmp 1; jne`, 20% more clocks; a pair the DAG folds to one compare stays merged.
         merged_condition_clocks: 2 * costs.set + 2 * costs.add - costs.branch,
+        // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27): see `Tuning::multiply_clocks`.
+        multiply_clocks: costs.multiply,
+        loop_carried_clocks: costs.store + costs.load,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
