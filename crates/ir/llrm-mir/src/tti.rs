@@ -1126,6 +1126,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
+    fn cold_site_ignores_sinks(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_o1_weighs_entry`.
     fn inline_o1_weighs_entry(&self) -> bool {
         false

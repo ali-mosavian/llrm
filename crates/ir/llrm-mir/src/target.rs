@@ -282,6 +282,14 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): the inliner's
+    /// cold-call-site test reads the site's frequency from a flow in which
+    /// edges into `unreachable`-ended failure blocks carry no mass, where the
+    /// block has another successor. The pin reads the full flow, in which
+    /// checks (`!prof` 2^-20 failure edges) in deep loop nests leak most of
+    /// the mass and make the code after them cold (threshold 45, no bonuses).
+    /// false: the pin's.
+    pub cold_site_ignores_sinks: bool,
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
@@ -496,6 +504,7 @@ impl Tuning {
         unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
+        cold_site_ignores_sinks: false,
         min_jump_table_density: None,
         split_merged_conditions: false,
         immediate_forms_at_size: false,

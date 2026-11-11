@@ -81,6 +81,7 @@ fn priced_params(
         callee_linear_recursive: false,
         caller_size: size,
         relative_frequency: None,
+        cold_frequency: None,
         entry_weight: None,
         planned: None,
         tti,
@@ -557,6 +558,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+        cold_frequency: None,
             entry_weight: None,
             planned: None,
             tti: None,
@@ -603,6 +605,7 @@ fn an_interposable_callee_is_not_inlined() {
             callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+        cold_frequency: None,
             entry_weight: None,
             planned: None,
             tti: None,
@@ -713,6 +716,86 @@ fn test_a_site_llvms_frequencies_keep_warm_is_not_held_to_the_cold_threshold() {
     );
     let [(_, _, InlineCost::Cost { threshold, .. })] = decided[..] else { panic!("one priced site: {decided:?}") };
     assert_eq!(threshold, 337);
+}
+
+/// Two successive nests of six loops, each with a bounds check in the
+/// innermost (`!prof {1048575, 1}` to a `noreturn` sink): the failure edges
+/// leak mass in every pass, so the call after them read 0.0011 of the entry
+/// (1.0 with no checks), cold, and a sole call to a local function was held to
+/// threshold 45 and not inlined (Nib `jpeg_single` -O1: 342 B).
+#[test]
+fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
+    let depth = 6;
+    let nests = 2;
+    let mut text = String::from(
+        "declare void @trap() noreturn\n\n\
+         define internal i16 @leaf(i16 %x) {\nentry:\n  %r = add i16 %x, 1\n  ret i16 %r\n}\n\n\
+         define i16 @main(i16 %n, i16 %x) {\nentry:\n  br label %a0.h0\n\n",
+    );
+    for a in 0..nests {
+        for k in 0..depth {
+            let last = k == depth - 1;
+            let pre = match (a, k) {
+                (0, 0) => "entry".to_string(),
+                (_, 0) => format!("a{}.out", a - 1),
+                _ => format!("a{a}.p{k}"),
+            };
+            let body = if last { format!("a{a}.chk") } else { format!("a{a}.p{}", k + 1) };
+            text += &format!(
+                "a{a}.h{k}:\n  %a{a}.i{k} = phi i16 [ 0, %{pre} ], [ %a{a}.j{k}, %a{a}.l{k} ]\n  %a{a}.c{k} = icmp slt i16 %a{a}.i{k}, %n\n  br i1 %a{a}.c{k}, label %{body}, label %a{a}.x{k}\n\n"
+            );
+            if !last {
+                text += &format!("a{a}.p{}:\n  br label %a{a}.h{}\n\n", k + 1, k + 1);
+            }
+            let next = if k == 0 { format!("a{a}.out") } else { format!("a{a}.l{}", k - 1) };
+            text += &format!(
+                "a{a}.x{k}:\n  br label %{next}\n\na{a}.l{k}:\n  %a{a}.j{k} = add i16 %a{a}.i{k}, 1\n  br label %a{a}.h{k}\n\n"
+            );
+        }
+        let onward = if a + 1 < nests { format!("a{}.h0", a + 1) } else { "call".to_string() };
+        let inner = depth - 1;
+        text += &format!(
+            "a{a}.chk:\n  %a{a}.ok = icmp ult i16 %a{a}.i{inner}, 64\n  br i1 %a{a}.ok, label %a{a}.l{inner}, label %a{a}.fail, !prof !0\n\n\
+             a{a}.fail:\n  call void @trap()\n  unreachable\n\na{a}.out:\n  br label %{onward}\n\n"
+        );
+    }
+    text += "call:\n  %v = call i16 @leaf(i16 %x)\n  ret i16 %v\n}\n\n!0 = !{!\"branch_weights\", i32 1048575, i32 1}\n";
+    let module = parsed(&text);
+    let main = module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap();
+    let mut decided = Vec::new();
+    crate::inlinecost::sites(
+        &module,
+        &DataLayout::default(),
+        llrm_mir::context::GlobalId(main as u32),
+        &crate::inline::call_counts(&module),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        InlineParams::from_level(1),
+        CallerSize::Speed,
+        false,
+        None,
+        Some(&mut decided),
+    );
+    let [(_, _, InlineCost::Cost { threshold, .. })] = decided[..] else { panic!("one priced site: {decided:?}") };
+    assert_eq!(threshold, 45, "the pin's verdict stays with the flag off");
+    let mut lifted = Vec::new();
+    crate::inlinecost::sites(
+        &module,
+        &DataLayout::default(),
+        llrm_mir::context::GlobalId(main as u32),
+        &crate::inline::call_counts(&module),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        InlineParams { cold_site_ignores_sinks: true, ..InlineParams::from_level(1) },
+        CallerSize::Speed,
+        false,
+        None,
+        Some(&mut lifted),
+    );
+    let [(_, _, InlineCost::Cost { threshold, .. })] = lifted[..] else { panic!("one priced site: {lifted:?}") };
+    assert!(threshold > 45, "held to the cold threshold: {threshold}");
 }
 
 /// `decide`, the walk's question of one site, is the verdict `sites` gives it,
@@ -846,6 +929,7 @@ b0:
         callee_linear_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
+        cold_frequency: None,
         entry_weight: None,
         planned: None,
         tti: None,
@@ -910,6 +994,7 @@ b0:
             callee_linear_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+        cold_frequency: None,
             entry_weight: None,
             planned: None,
             tti: None,
