@@ -29,9 +29,10 @@ use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
 use llrm_analysis::scev::expr::Scev;
-use llrm_mir::context::Context;
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Function, InstId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::tti::Tti;
 
@@ -39,6 +40,50 @@ use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
 use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
+
+/// Whether `operand` is computed with a multiply no shift, `lea` or short
+/// shift-and-add chain makes (`i * 300`, `i * n`), through adds, subtracts and
+/// casts to `depth` levels: the values an outer loop's multiply reduction is
+/// for. `i * 3` is one `lea`.
+fn computed_by_dear_multiply(
+    context: &Context,
+    function: &Function,
+    operand: Operand,
+    depth: u32,
+) -> bool {
+    let Operand::Value(value) = operand else { return false };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+    let inst = function.instruction(inst);
+    match inst.opcode {
+        Opcode::Binary(BinaryOp::Mul) => match inst.operands.get(1) {
+            Some(&Operand::Constant(constant)) => match context.get(constant).kind {
+                ConstantKind::Int(bits) => signed_digits(bits as i128) > 2,
+                _ => true,
+            },
+            _ => true,
+        },
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => inst
+            .operands
+            .iter()
+            .any(|&one| computed_by_dear_multiply(context, function, one, depth - 1)),
+        _ => false,
+    }
+}
+
+/// The nonzero digits of `n` in signed-digit (non-adjacent) form: a multiply by
+/// `n` is that many shifted terms added or subtracted.
+fn signed_digits(n: i128) -> u32 {
+    let (mut n, mut count) = (n.unsigned_abs(), 0);
+    while n > 0 {
+        if n & 1 == 1 {
+            // 1 mod 4 takes the digit +1, 3 mod 4 takes -1
+            n = if n & 3 == 1 { n - 1 } else { n + 1 };
+            count += 1;
+        }
+        n >>= 1;
+    }
+    count
+}
 
 #[cfg(test)]
 thread_local! {
@@ -263,7 +308,16 @@ fn plan_loop(
     // Skip nested loops until we can model them better with formulae: the
     // shadow variables and the exit tests above are made on every loop, as the
     // pin's constructor does before it looks at the nesting.
-    if !lp.is_innermost() {
+    // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop that
+    // has a subloop): where the target prices a multiply in clocks
+    // (`multiply_by_clocks`), an outer loop that computes an affine value with a
+    // multiply is reduced as an inner loop is, so `i * 300` feeding the inner
+    // loop becomes a counter stepped by 300. gcc's ivopts does this on every
+    // loop (its code is not translated). x_cordic -O1: 200 `imul` x 19 clocks.
+    // Not at -Os: the counter costs a register across the inner loop.
+    if !lp.is_innermost()
+        && !(!size && tti.multiply_by_clocks() && users.uses.iter().any(|one| computed_by_dear_multiply(context, function, one.operand, 3)))
+    {
         return planned(None);
     }
 

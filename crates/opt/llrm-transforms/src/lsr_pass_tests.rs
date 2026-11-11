@@ -1889,3 +1889,60 @@ exit:
     let _ = changed;
     assert!(!after.contains("-4"), "{after}");
 }
+
+/// A nested loop whose outer loop feeds the inner one `i * 300 - 30000`.
+const OUTER_MULTIPLY: &str = "define i32 @f(i32 %n) {
+entry:
+  br label %outer
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i1, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %latch ]
+  %m = mul nuw nsw i32 %i, 300
+  %z0 = add nsw i32 %m, -30000
+  br label %inner
+inner:
+  %k = phi i32 [ 0, %outer ], [ %k1, %inner ]
+  %z = phi i32 [ %z0, %outer ], [ %z1, %inner ]
+  %t = xor i32 %z, %k
+  %z1 = add i32 %t, 7
+  %k1 = add nuw nsw i32 %k, 1
+  %c = icmp eq i32 %k1, 4
+  br i1 %c, label %latch, label %inner
+latch:
+  %acc1 = add i32 %acc, %z1
+  %i1 = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %i1, %n
+  br i1 %e, label %exit, label %outer
+exit:
+  ret i32 %acc1
+}
+";
+
+/// DEVIATE LSR-OUTER. x_cordic -O1 kept `imul ebx, ecx, 300` in its outer
+/// loop (200 executions, 19 clocks each: 3,800 clocks, +7.5% over gcc) because
+/// the pin's LSR skips a loop with a subloop. Where the target prices a
+/// multiply in clocks the outer loop is reduced, the multiply gone; the pin's
+/// target keeps it.
+#[test]
+fn an_outer_loops_multiply_is_a_counter_where_the_target_prices_multiplies() {
+    let run = |tuning: llrm_mir::target::Tuning| {
+        let mut module = parsed(&format!("{FLAT}{OUTER_MULTIPLY}"));
+        let before = module.clone();
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let mut tti = X86::of_cpu("i486").unwrap();
+        tti.tuning = tuning;
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+        let after = printed(&module);
+        let inputs: &[&[i128]] = &[&[1], &[2], &[5]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        after
+    };
+    // a multiply left in the preheader runs once; one in the loop, every trip
+    let in_loop = |text: &str| text[text.find("outer:").expect("the outer loop")..].contains(" mul ");
+    let priced = run(llrm_mir::target::Tuning { multiply_by_clocks: true, ..llrm_mir::target::Tuning::PIN });
+    assert!(!in_loop(&priced), "{priced}");
+    let pin = run(llrm_mir::target::Tuning::PIN);
+    assert!(in_loop(&pin), "{pin}");
+}
