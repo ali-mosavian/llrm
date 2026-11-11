@@ -17,6 +17,19 @@ static unsigned char rev[N];
 static short block[2][HOP];
 static unsigned short row[BINS];
 
+/* The signal file is little-endian 16-bit samples; read into shorts it is byte-swapped per sample on a big-endian target. */
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+static int bench_samples(int handle, short *to)
+{
+    int n = bench_read(handle, to, 2 * HOP), i;
+    for (i = 0; i < HOP; ++i)
+        to[i] = (short)((((unsigned short)to[i] & 255) << 8) | ((unsigned short)to[i] >> 8));
+    return n;
+}
+#else
+#define bench_samples(handle, to) bench_read(handle, to, 2 * HOP)
+#endif
+
 long bench_stft_fixed(void)
 {
     long c = 32768L, s = 0, next, ar, ai, br, bi, tr, ti, pr, pi, sum = 0, index = 0, q;
@@ -42,9 +55,9 @@ long bench_stft_fixed(void)
     out = bench_create("SPECTRA");
     if (in < 0 || out < 0)
         return -1;
-    if (bench_read(in, block[now], 2 * HOP) != 2 * HOP)
+    if (bench_samples(in, block[now]) != 2 * HOP)
         return -1;
-    while (bench_read(in, block[1 - now], 2 * HOP) == 2 * HOP) {
+    while (bench_samples(in, block[1 - now]) == 2 * HOP) {
         for (n = 0; n < HOP; ++n) {
             re[rev[n]] = (block[now][n] / 4L) * window[n];
             re[rev[n + HOP]] = (block[1 - now][n] / 4L) * window[n + HOP];

@@ -16,7 +16,7 @@
 //! register), with a memory operand of the volatile flag and the global or
 //! frame object only (no offset); a machine
 //! opcode with no row is a named error (`machine opcode X has no arm64
-//! instruction yet`), which `--isel=shadow` falls back on. Rows added
+//! instruction yet`), a compile error. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
@@ -35,7 +35,7 @@ use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
-use crate::mc::inst::{Atomic, Barrier, Fill};
+use crate::mc::inst::{Arrangement, Atomic, Barrier, Fill, ImmShape};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
@@ -275,10 +275,13 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         }
     };
     let (width, bytes, sign) = match element {
-        // `LDRSui` and `LDRDui` move a float
-        "S" | "D" | "Q" => (
+        // `LDRSui` and `LDRDui` move a float; `LDRBui` and `LDRHui` a byte or
+        // halfword of a vector register
+        "B" | "H" | "S" | "D" | "Q" => (
             Width::W,
             match element {
+                "B" => 1,
+                "H" => 2,
                 "S" => 4,
                 "D" => 8,
                 _ => 16,
@@ -296,7 +299,7 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         "SW" => (Width::X, 4, true),
         _ => return None,
     };
-    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D" | "Q") })
+    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "B" | "H" | "S" | "D" | "Q") })
 }
 
 /// `CSELWr`, `CSINCXr` and the rest: the select and its width.
@@ -309,6 +312,25 @@ fn cond_select(name: &str) -> Option<(Select, Width)> {
         (Select::Csinv, rest)
     } else {
         (Select::Csneg, name.strip_prefix("CSNEG")?)
+    };
+    match rest {
+        "Wr" => Some((op, Width::W)),
+        "Xr" => Some((op, Width::X)),
+        _ => None,
+    }
+}
+
+/// `ADCXr`, `SBCSWr` and the rest: the add or subtract with carry and its
+/// width.
+fn add_carry(name: &str) -> Option<(AddSub, Width)> {
+    let (op, rest) = if let Some(rest) = name.strip_prefix("ADCS") {
+        (AddSub { subtract: false, set_flags: true }, rest)
+    } else if let Some(rest) = name.strip_prefix("ADC") {
+        (AddSub { subtract: false, set_flags: false }, rest)
+    } else if let Some(rest) = name.strip_prefix("SBCS") {
+        (AddSub { subtract: true, set_flags: true }, rest)
+    } else {
+        (AddSub { subtract: true, set_flags: false }, name.strip_prefix("SBC")?)
     };
     match rest {
         "Wr" => Some((op, Width::W)),
@@ -533,6 +555,65 @@ fn gpr_width(letter: &str) -> Option<Width> {
     }
 }
 
+/// The values the float register file holds across blocks: floats and the
+/// 128-bit integer vectors.
+fn in_float_file(ty: EVT) -> bool {
+    ty.is_floating_point() || is_quad(ty)
+}
+
+/// A value of 128 bits in a float register (`q`): `F128` and the vectors.
+fn is_quad(ty: EVT) -> bool {
+    matches!(ty, EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64))
+}
+
+/// `DUPv8i16gpr`, `MOVIv2d_ns`, `MOVIv8i16`, `MVNIv4s_msl`: a vector made from
+/// a general register or an immediate.
+fn vector_fill(
+    name: &str,
+    operands: &[Operand],
+) -> Option<Result<Fill, String>> {
+    let wrong = || Err(format!("{name}: operands are not those of its form"));
+    let arrangement = [
+        ("DUPv16i8gpr", Arrangement::B16),
+        ("DUPv8i16gpr", Arrangement::H8),
+        ("DUPv4i32gpr", Arrangement::S4),
+        ("DUPv2i64gpr", Arrangement::D2),
+    ]
+    .into_iter()
+    .find(|(one, _)| *one == name)
+    .map(|(_, arrangement)| arrangement);
+    if let Some(arrangement) = arrangement {
+        return Some(match operands {
+            [Operand::Reg(source)] => Ok(Fill::Dup(arrangement, *source)),
+            _ => wrong(),
+        });
+    }
+    match (name, operands) {
+        ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
+        ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
+        ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
+        _ => {}
+    }
+    for (stem, invert) in [("MOVI", false), ("MVNI", true)] {
+        let Some(lanes) = name.strip_prefix(stem) else { continue };
+        let shaped = |make: fn(u8) -> ImmShape, bias: u64| match operands {
+            [Operand::Imm(imm8), Operand::Imm(shift)] => {
+                Ok(Fill::Imm { invert, shape: make((*shift - bias) as u8), imm8: *imm8 as u8 })
+            }
+            _ => wrong(),
+        };
+        // An `msl` shift is the shifter operand `(MSL << 6) | amount`.
+        return match lanes {
+            "v8i16" => Some(shaped(ImmShape::H8, 0)),
+            "v4i32" => Some(shaped(ImmShape::S4, 0)),
+            "v2i32" => Some(shaped(ImmShape::S2, 0)),
+            "v4s_msl" => Some(shaped(ImmShape::S4Msl, 256)),
+            _ => continue,
+        };
+    }
+    None
+}
+
 /// A float machine node as an instruction: the float arithmetic, compare,
 /// select, conversion and move rows. `None` for any other opcode. The
 /// destination is a float register, or a general one for a conversion to an
@@ -544,6 +625,9 @@ fn float_inst(
     operands: &[Operand],
 ) -> Option<Result<Inst, String>> {
     let wrong = || Err(format!("{name}: operands are not those of its form"));
+    if let Some(fill) = vector_fill(name, operands) {
+        return Some(fill.map(|fill| Inst::VectorFill { rd, fill }));
+    }
     // The size letter sits before `rr`, `r`, `rrr` or `i`.
     let binary = [
         ("FADD", FpBinary::Add),
@@ -634,6 +718,18 @@ fn float_inst(
             });
         }
     }
+    // `UCVTFv1i32`: the integer in the low lane of a vector register.
+    if let Some(rest) = name.strip_prefix("SCVTFv1i").or_else(|| name.strip_prefix("UCVTFv1i")) {
+        let size = match rest {
+            "32" => FpSize::S,
+            "64" => FpSize::D,
+            _ => return None,
+        };
+        return Some(match operands {
+            [Operand::Fpr(rn)] => Ok(Inst::FpLaneToFp { signed: name.starts_with('S'), size, rd, rn: *rn }),
+            _ => wrong(),
+        });
+    }
     // `SCVTFUWDri`: unscaled, from a `W`, to a `D`.
     for (stem, signed) in [("SCVTFU", true), ("UCVTFU", false)] {
         if let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("ri")) {
@@ -699,6 +795,16 @@ fn float_inst(
     None
 }
 
+/// The register of the builder's virtual register `number`, in the float class
+/// where `float`.
+fn phi_register(
+    emitter: &mut Emitter,
+    number: u32,
+    float: bool,
+) -> Reg {
+    if float { Reg::Fpr(emitter.fvreg(number)) } else { Reg::Gpr(emitter.vreg(number)) }
+}
+
 struct Emitter<'a> {
     dag: &'a SelectionDAG,
     globals: &'a Globals,
@@ -706,8 +812,6 @@ struct Emitter<'a> {
     layout: &'a [u32],
     /// The blocks each jump table goes to, by table number.
     tables: &'a [Vec<u32>],
-    /// Blocks made for critical edges so far: their labels are numbered.
-    edges_made: usize,
     mf: MFunc,
     /// The virtual register each value is in.
     values: HashMap<(u32, u8), Gpr>,
@@ -719,9 +823,34 @@ struct Emitter<'a> {
     ops: Vec<Op>,
     /// The constant pool entries the function has used so far.
     pool: std::cell::RefCell<Vec<PoolEntry>>,
+    /// The label of the block segment `ops` ends: the selector's block, or the
+    /// join of the last split.
+    segment: String,
+    /// The splits (`F128CSEL`) in the block being emitted.
+    cuts: Vec<Cut>,
+    /// The splits so far in the function, for fresh labels.
+    splits: usize,
+    /// The registers that hold a copy of the stack pointer (`CopyFromReg SP`):
+    /// an address with one as its base uses the stack pointer itself, as
+    /// `InstrEmitter` uses a reserved register where it is read.
+    sp_copies: rustc_hash::FxHashSet<Gpr>,
+    /// Some block writes the stack pointer (a dynamic `alloca`,
+    /// `llvm.stackrestore`): the outgoing area is no longer reserved in the
+    /// frame (`hasReservedCallFrame`), each call makes room for it.
+    moves_sp: bool,
     /// The register each phi's edges copy into, by the phi's register
     /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
     incoming: HashMap<u32, Reg>,
+}
+
+/// A block split in two where a pseudo-instruction is expanded to control flow
+/// (`EmitF128CSEL`): the `ops` before `at` end the head, the rest begin the
+/// join `end`, after the empty block `taken` that falls into it.
+struct Cut {
+    at: usize,
+    taken: String,
+    end: String,
+    phi: Op,
 }
 
 impl Emitter<'_> {
@@ -734,19 +863,6 @@ impl Emitter<'_> {
         }
         let one = self.mf.gpr();
         self.vregs.insert(number, one);
-        one
-    }
-
-    /// The register the edges of `phi` copy into, made on first use.
-    fn incoming_of(
-        &mut self,
-        phi: &super::function::PhiCopy,
-    ) -> Reg {
-        if let Some(&one) = self.incoming.get(&phi.dst) {
-            return one;
-        }
-        let one = if phi.float { Reg::Fpr(self.mf.fpr()) } else { Reg::Gpr(self.mf.gpr()) };
-        self.incoming.insert(phi.dst, one);
         one
     }
 
@@ -924,7 +1040,14 @@ impl Emitter<'_> {
         let to = self.dag.value_type(SDValue { node: id, res: 0 });
         let bits = to.size_in_bits();
         let (width, size) = if bits == 64 { (Width::X, FpSize::D) } else { (Width::W, FpSize::S) };
-        match (operands.first(), to.is_floating_point()) {
+        // The class says it where the type cannot: a vector has no float type
+        // (`FPR8` 6, `FPR16` 7, `FPR32` 29, `FPR64` 43, `FPR128` 77). Scalars
+        // keep the type, so no scalar compile can change.
+        let to_float = match operands.get(1) {
+            Some(Operand::Imm(class)) if to.is_vector() => matches!(class, 6 | 7 | 29 | 43 | 77),
+            _ => to.is_floating_point(),
+        };
+        match (operands.first(), to_float) {
             (Some(Operand::Reg(gpr)), true) => {
                 let fpr = self.mf.fpr();
                 self.ops.push(Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: *gpr, fpr }));
@@ -958,86 +1081,6 @@ impl Emitter<'_> {
             self.dag.node(register).data,
             NodeData::PhysReg(id) if id == llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID
         )
-    }
-
-    /// The copies a phi takes from the edges of `block` (the block at `at`),
-    /// placed as phi elimination does: at the end of the block when one
-    /// successor has phis, else in a block of its own on each edge that has
-    /// them (a critical edge). Returns the edge blocks.
-    fn phi_edges(
-        &mut self,
-        block: &Selected,
-        ops: &mut Vec<Op>,
-    ) -> Result<Vec<MBlock>, String> {
-        let with_phis: Vec<u32> =
-            block.successors.iter().copied().filter(|to| block.phis.iter().any(|p| p.to == *to)).collect();
-        if with_phis.is_empty() {
-            return Ok(Vec::new());
-        }
-        let is_branch = |op: &Op| {
-            matches!(
-                op,
-                Op::I(
-                    Inst::Branch { .. }
-                        | Inst::BranchCond { .. }
-                        | Inst::CompareBranch { .. }
-                        | Inst::TestBranch { .. }
-                )
-            )
-        };
-        let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
-        let sequence = |this: &mut Self, to: u32| {
-            let moves = block
-                .phis
-                .iter()
-                .filter(|p| p.to == to)
-                .map(|p| {
-                    let src = if p.float { Reg::Fpr(this.fvreg(p.src)) } else { Reg::Gpr(this.vreg(p.src)) };
-                    (this.incoming_of(p), src)
-                })
-                .filter(|(dst, src)| dst != src)
-                .collect();
-            let mf = &mut this.mf;
-            crate::mfunc::sequence_copies(moves, |like| match like {
-                Reg::Fpr(_) => Reg::Fpr(mf.fpr()),
-                Reg::Gpr(_) => Reg::Gpr(mf.gpr()),
-            })
-        };
-        if block.successors.len() == 1 {
-            let copies = sequence(self, with_phis[0]);
-            ops.splice(first_branch..first_branch, copies);
-            return Ok(Vec::new());
-        }
-        let mut edges = Vec::new();
-        for to in with_phis {
-            let label = self.label(to)?;
-            let Target::Label(label) = label else { unreachable!("a block label") };
-            let edge = format!(".L{}.e{}", self.function, self.edges_made);
-            self.edges_made += 1;
-            let mut body: Vec<Op> = sequence(self, to);
-            body.push(crate::mfunc::branch_to(&label));
-            edges.push(MBlock { label: edge.clone(), ops: body.into() });
-            // Retarget the branches to `to`; a fall-through becomes a branch.
-            let mut retargeted = false;
-            for op in ops.iter_mut() {
-                if let Op::I(
-                    Inst::Branch { target, .. }
-                    | Inst::BranchCond { target, .. }
-                    | Inst::CompareBranch { target, .. }
-                    | Inst::TestBranch { target, .. },
-                ) = op
-                {
-                    if *target == Target::Label(label.clone()) {
-                        *target = Target::Label(edge.clone());
-                        retargeted = true;
-                    }
-                }
-            }
-            if !retargeted {
-                ops.push(crate::mfunc::branch_to(&edge));
-            }
-        }
-        Ok(edges)
     }
 
     /// The label of block `id`.
@@ -1129,7 +1172,9 @@ impl Emitter<'_> {
     ) -> Result<Addr, String> {
         let imm = offset as i64;
         match self.operand(value)? {
-            Operand::Reg(base) => Ok(Addr::Offset { base, imm }),
+            Operand::Reg(base) => {
+                Ok(Addr::Offset { base: if self.sp_copies.contains(&base) { Gpr::R31 } else { base }, imm })
+            }
             Operand::Slot(slot) => Ok(Addr::Slot { slot, offset: imm }),
             Operand::Fixed(at) => Ok(Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm }),
             _ => Err("a block of memory at something that is no pointer register or frame object".into()),
@@ -1212,7 +1257,7 @@ impl Emitter<'_> {
         id: u32,
         name: &str,
     ) -> Result<(), String> {
-        use crate::isel::memops::{BATCH, pieces, wide_pieces};
+        use crate::dag::memops::{BATCH, pieces, wide_pieces};
         let node = self.dag.node(SDValue { node: id, res: 0 });
         let operand = |at: usize| node.ops[at];
         let mmo = MemOperand { volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() };
@@ -1227,7 +1272,7 @@ impl Emitter<'_> {
                     Some(byte) => Fill::Byte(byte),
                     None => {
                         let Operand::Reg(reg) = self.operand(operand(2))? else { return Err("a fill byte".into()) };
-                        Fill::Gpr(reg)
+                        Fill::Dup(Arrangement::B16, reg)
                     }
                 };
                 self.ops.push(Op::I(Inst::VectorFill { rd, fill }));
@@ -1404,7 +1449,9 @@ impl Emitter<'_> {
             (form, [base, Operand::Imm(imm)]) => {
                 let imm = *imm as i64 * if form == AddressForm::Scaled { size } else { 1 };
                 match base {
-                    Operand::Reg(base) => Addr::Offset { base: *base, imm },
+                    Operand::Reg(base) => {
+                        Addr::Offset { base: if self.sp_copies.contains(base) { Gpr::R31 } else { *base }, imm }
+                    }
                     Operand::Slot(slot) => Addr::Slot { slot: *slot, offset: imm },
                     Operand::Fixed(at) => Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm },
                     _ => return Err(format!("{name}: a base that is neither register nor frame object")),
@@ -1450,6 +1497,62 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// `AArch64TargetLowering::EmitF128CSEL`: the block ends in `b.cc taken; b
+    /// end`, `taken` is empty and falls into `end`, which begins with `dest
+    /// = PHI [if_true, taken], [if_false, head]` and holds the rest of the
+    /// block.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L3276>
+    fn f128_select(
+        &mut self,
+        id: u32,
+        operands: &[Operand],
+    ) -> Result<(), String> {
+        let [Operand::Fpr(if_true), Operand::Fpr(if_false), Operand::Imm(cond), ..] = operands else {
+            return Err("F128CSEL: operands are not those of its form".into());
+        };
+        let (taken, end) =
+            (format!(".L{}.t{}", self.function, self.splits), format!(".L{}.j{}", self.function, self.splits));
+        self.splits += 1;
+        let dest = self.mf.fpr();
+        self.mf.wide.push(Reg::Fpr(dest));
+        self.ops.push(Op::I(Inst::BranchCond { cond: cond_of(*cond)?, target: Target::Label(taken.clone()) }));
+        self.ops.push(Op::I(Inst::Branch { link: false, target: Target::Label(end.clone()) }));
+        let phi = Op::Phi {
+            dst: Reg::Fpr(dest),
+            incoming: vec![(Reg::Fpr(*if_true), taken.clone()), (Reg::Fpr(*if_false), self.segment.clone())],
+        };
+        self.cuts.push(Cut { at: self.ops.len(), taken, end: end.clone(), phi });
+        self.segment = end;
+        self.fvalues.insert((id, 0), dest);
+        Ok(())
+    }
+
+    /// `AArch64FrameLowering::eliminateCallFramePseudoInstr` where the call
+    /// frame is not reserved: `sub sp, sp, #n` before the call's stores,
+    /// `add sp, sp, #n` after it, `n` the bytes aligned to 16
+    /// (`emitFrameOffset`: 12 bits, then the next 12 shifted).
+    fn adjust_stack(
+        &mut self,
+        bytes: u64,
+        subtract: bool,
+    ) {
+        let mut left = bytes.next_multiple_of(16);
+        for (shift12, unit) in [(true, 1u64 << 12), (false, 1)] {
+            let chunk = if shift12 { (left / unit) & 0xfff } else { left & 0xfff };
+            left -= chunk * unit;
+            if chunk > 0 {
+                self.ops.push(Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract, set_flags: false },
+                    width: Width::X,
+                    rd: Gpr::R31,
+                    rn: Gpr::R31,
+                    imm12: chunk as u16,
+                    shift12,
+                }));
+            }
+        }
+    }
+
     fn node(
         &mut self,
         id: u32,
@@ -1473,22 +1576,23 @@ impl Emitter<'_> {
                     imm12: 0,
                     shift12: false,
                 }));
+                self.sp_copies.insert(rd);
                 self.values.insert((id, 0), rd);
                 Ok(())
             }
-            ISD::CopyFromReg if node.values[0].is_floating_point() => {
+            ISD::CopyFromReg if in_float_file(node.values[0]) => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {
                         let (dst, src) = (self.mf.fpr(), fpr_of(id)?);
                         self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
-                        if node.values[0] == EVT::Simple(MVT::F128) {
+                        if is_quad(node.values[0]) {
                             self.mf.wide.push(Reg::Fpr(dst));
                         }
                         dst
                     }
                     NodeData::Register(number) => {
                         let one = self.fvreg(number);
-                        if node.values[0] == EVT::Simple(MVT::F128) {
+                        if is_quad(node.values[0]) {
                             self.mf.wide.push(Reg::Fpr(one));
                         }
                         one
@@ -1523,9 +1627,6 @@ impl Emitter<'_> {
                 ) =>
             {
                 let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
-                if self.mf.outgoing > 0 {
-                    return Err("a call with stack arguments in a function that moves the stack pointer".into());
-                }
                 self.mf.dynamic = true;
                 self.ops.push(Op::I(Inst::AddSubImm {
                     op: AddSub { subtract: false, set_flags: false },
@@ -1538,16 +1639,38 @@ impl Emitter<'_> {
                 Ok(())
             }
             ISD::CopyToReg if self.is_flags(node.ops[1]) => Ok(()),
-            ISD::CopyToReg if self.dag.value_type(node.ops[2]).is_floating_point() => {
+            ISD::CopyToReg if in_float_file(self.dag.value_type(node.ops[2])) => {
                 let dst = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => fpr_of(id)?,
                     NodeData::Register(number) => self.fvreg(number),
                     other => return Err(format!("a register operand that is {other:?}")),
                 };
+                // `EmitCopyToRegNode`: the copy of an undefined value is an
+                // `IMPLICIT_DEF` of the register, defined as zero here as the
+                // integer copy's is.
+                if matches!(
+                    self.dag.opcode(node.ops[2]),
+                    ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                ) {
+                    let size = match self.dag.value_type(node.ops[2]) {
+                        EVT::Simple(MVT::F32) => FpSize::S,
+                        EVT::Simple(MVT::F64) => FpSize::D,
+                        other => return Err(format!("a copy of an undefined {other:?}")),
+                    };
+                    let width = if size == FpSize::D { Width::X } else { Width::W };
+                    self.ops.push(Op::I(Inst::FpInt {
+                        op: FpConvert::Bits { to_fp: true },
+                        width,
+                        size,
+                        gpr: Gpr::R31,
+                        fpr: dst,
+                    }));
+                    return Ok(());
+                }
                 let Operand::Fpr(src) = self.operand(node.ops[2])? else {
                     return Err("a float copy of a constant".into());
                 };
-                if self.dag.value_type(node.ops[2]) == EVT::Simple(MVT::F128) {
+                if is_quad(self.dag.value_type(node.ops[2])) {
                     self.mf.wide.extend([Reg::Fpr(dst), Reg::Fpr(src)]);
                 }
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
@@ -1593,10 +1716,21 @@ impl Emitter<'_> {
                         let Some(bytes) = node.ops.first().and_then(|op| self.dag.constant(*op)) else {
                             return Err("a call sequence of no size".into());
                         };
-                        self.mf.outgoing = self.mf.outgoing.max(bytes as u64);
+                        if self.moves_sp {
+                            self.adjust_stack(bytes as u64, true);
+                        } else {
+                            self.mf.outgoing = self.mf.outgoing.max(bytes as u64);
+                        }
                         return Ok(());
                     }
-                    "ADJCALLSTACKUP" => return Ok(()),
+                    "ADJCALLSTACKUP" => {
+                        if self.moves_sp
+                            && let Some(bytes) = node.ops.first().and_then(|op| self.dag.constant(*op))
+                        {
+                            self.adjust_stack(bytes as u64, false);
+                        }
+                        return Ok(());
+                    }
                     "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
                     "LLRM_SAVE_Q" => return self.save_q(id),
                     // The jump through a table is one terminator, made at its
@@ -1666,8 +1800,15 @@ impl Emitter<'_> {
                 if name == "COPY_TO_REGCLASS" || name == "COPY" {
                     return self.copy_to_class(id, &operands);
                 }
+                if name == "F128CSEL" {
+                    return self.f128_select(id, &operands);
+                }
                 if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
-                    let float_result = node.values[0].is_floating_point();
+                    // A fill of a 64-bit vector (`MOVIv2i32`) has no type of
+                    // ours: it reads as an `i64`.
+                    let float_result = node.values[0].is_floating_point()
+                        || node.values[0].is_vector()
+                        || vector_fill(name, &operands).is_some();
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     self.ops.push(Op::I(inst));
@@ -1676,6 +1817,14 @@ impl Emitter<'_> {
                     } else {
                         self.values.insert((id, 0), gd);
                     }
+                    return Ok(());
+                }
+                if name == "BRK" {
+                    let [Operand::Imm(imm16)] = operands.as_slice() else {
+                        return Err("a BRK without an immediate".into());
+                    };
+                    let imm16 = u16::try_from(*imm16).map_err(|_| format!("a BRK immediate {imm16} over 16 bits"))?;
+                    self.ops.push(Op::I(Inst::Brk { imm16 }));
                     return Ok(());
                 }
                 if name == "DMB" {
@@ -1728,6 +1877,17 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), *rn);
                         return Ok(());
                     }
+                    // A scalar write to a vector register zeroes the rest of
+                    // it.
+                    ("SUBREG_TO_REG", [.., Operand::Fpr(rn), _]) => {
+                        self.fvalues.insert((id, 0), *rn);
+                        return Ok(());
+                    }
+                    // The low lane of a vector register is the scalar one.
+                    ("EXTRACT_SUBREG", [Operand::Fpr(rn), _]) => {
+                        self.fvalues.insert((id, 0), *rn);
+                        return Ok(());
+                    }
                     ("SUBREG_TO_REG", [.., Operand::Reg(rn), _]) => {
                         let dst = self.mf.gpr();
                         self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(*rn) });
@@ -1736,6 +1896,30 @@ impl Emitter<'_> {
                     }
                     // Into an undefined register there is no upper half to
                     // keep.
+                    // A general register into the low lane of a vector one:
+                    // `fmov d, x` (or `s, w`) into the undefined register.
+                    ("INSERT_SUBREG", [_, Operand::Reg(rn), _])
+                        if node.values[0].is_vector()
+                            && matches!(
+                                self.dag.opcode(node.ops[0]),
+                                ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                            ) =>
+                    {
+                        let (width, size) = match self.dag.value_type(node.ops[1]).size_in_bits() {
+                            64 => (Width::X, FpSize::D),
+                            _ => (Width::W, FpSize::S),
+                        };
+                        let fpr = self.mf.fpr();
+                        self.ops.push(Op::I(Inst::FpInt {
+                            op: FpConvert::Bits { to_fp: true },
+                            width,
+                            size,
+                            gpr: *rn,
+                            fpr,
+                        }));
+                        self.fvalues.insert((id, 0), fpr);
+                        return Ok(());
+                    }
                     ("INSERT_SUBREG", [_, Operand::Reg(rn), _])
                         if matches!(
                             self.dag.opcode(node.ops[0]),
@@ -1743,6 +1927,16 @@ impl Emitter<'_> {
                         ) =>
                     {
                         self.values.insert((id, 0), *rn);
+                        return Ok(());
+                    }
+                    // The same for a scalar float register into a vector one.
+                    ("INSERT_SUBREG", [_, Operand::Fpr(rn), _])
+                        if matches!(
+                            self.dag.opcode(node.ops[0]),
+                            ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                        ) =>
+                    {
+                        self.fvalues.insert((id, 0), *rn);
                         return Ok(());
                     }
                     // `BFMWri dst, src, immr, imms` inserts into a register it
@@ -1785,6 +1979,16 @@ impl Emitter<'_> {
                         return Err(format!("{name}: operands are not those of a conditional select"));
                     };
                     self.ops.push(Op::I(Inst::CondSelect { op, width, rd, rn: *rn, rm: *rm, cond: cond_of(*cond)? }));
+                    self.values.insert((id, 0), rd);
+                    return Ok(());
+                }
+                if let Some((op, width)) = add_carry(name) {
+                    // The carry arrives as the flags the instruction before
+                    // wrote.
+                    let [Operand::Reg(rn), Operand::Reg(rm), ..] = operands.as_slice() else {
+                        return Err(format!("{name}: operands are not those of an add with carry"));
+                    };
+                    self.ops.push(Op::I(Inst::AddCarry { op, width, rd, rn: *rn, rm: *rm }));
                     self.values.insert((id, 0), rd);
                     return Ok(());
                 }
@@ -1888,7 +2092,6 @@ pub fn emit(
         function: name,
         layout: &first.layout,
         tables: &first.tables,
-        edges_made: 0,
         mf: MFunc::new(name),
         values: HashMap::default(),
         vregs: HashMap::default(),
@@ -1896,38 +2099,91 @@ pub fn emit(
         fvalues: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
+        segment: String::new(),
+        cuts: Vec::new(),
+        splits: 0,
+        sp_copies: rustc_hash::FxHashSet::default(),
         incoming: HashMap::default(),
+        moves_sp: blocks
+            .iter()
+            .any(
+                |block| block
+                    .units
+                    .iter()
+                    .flat_map(|unit| &unit.nodes)
+                    .any(
+                        |&node| {
+                            let node = block.dag.node(SDValue { node, res: 0 });
+                            node.opcode == ISD::CopyToReg
+                                && matches!(
+                                    block.dag.node(node.ops[1]).data,
+                                    NodeData::PhysReg(id) if id == crate::reg::SP
+                                )
+                        },
+                    ),
+            ),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
     }
     emitter.mf.declared.clone_from(&first.declared);
-    let mut edges: Vec<MBlock> = Vec::new();
+    // The blocks `F128CSEL` splits make, after the selector's; and where each
+    // split block now ends.
+    let mut joined: Vec<MBlock> = Vec::new();
+    let mut tails: HashMap<String, String> = HashMap::default();
+    let mut phi_counts: Vec<usize> = Vec::new();
     for (at, block) in blocks.iter().enumerate() {
         emitter.dag = &block.dag;
         emitter.values.clear();
         emitter.fvalues.clear();
+        emitter.segment = block_label(name, at);
         for &(reg, vreg) in &block.live_ins {
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
         }
-        // `PHIElimination`: each phi of this block reads the register its edges
-        // copied into.
+        // `PHI`: the value each predecessor that branches here gives it; the
+        // phis come first in the block, as the pin's ISel puts them.
+        let mut phis: Vec<Op> = Vec::new();
         let mut headed: Vec<u32> = Vec::new();
         for phi in blocks.iter().flat_map(|one| one.phis.iter()).filter(|phi| Some(&phi.to) == block.layout.get(at)) {
             if headed.contains(&phi.dst) {
                 continue;
             }
             headed.push(phi.dst);
-            let src = emitter.incoming_of(phi);
-            let dst = if phi.float { Reg::Fpr(emitter.fvreg(phi.dst)) } else { Reg::Gpr(emitter.vreg(phi.dst)) };
-            emitter.ops.push(Op::Copy { dst, src });
+            let (dst, mut incoming) = (phi_register(&mut emitter, phi.dst, phi.float), Vec::new());
+            for (from, pred) in blocks.iter().enumerate() {
+                if !pred.successors.contains(&phi.to) {
+                    continue;
+                }
+                for one in pred.phis.iter().filter(|one| one.to == phi.to && one.dst == phi.dst) {
+                    let value = phi_register(&mut emitter, one.src, one.float);
+                    if !incoming.iter().any(|(_, label): &(Reg, String)| *label == block_label(name, from)) {
+                        incoming.push((value, block_label(name, from)));
+                    }
+                }
+            }
+            phis.push(Op::Phi { dst, incoming });
         }
+        phi_counts.push(phis.len());
+        emitter.ops.splice(0..0, phis);
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
+        // The notes of nothing: where they stand does not matter.
+        for &(variable, _) in block.dbg_values.iter().filter(|(_, value)| value.is_none()) {
+            emitter.ops.push(Op::DbgValue { variable, reg: None });
+        }
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
                 places.resize(emitter.ops.len(), None);
                 emitter.node(node)?;
+                // `InstrEmitter::EmitDbgValue`: after the node whose value a
+                // `llvm.dbg.value` names.
+                for &(variable, value) in
+                    block.dbg_values.iter().filter(|(_, value)| value.is_some_and(|v| v.node == node))
+                {
+                    let value = value.expect("filtered to a value");
+                    let reg = emitter.values.get(&(value.node, value.res)).map(|&gpr| Reg::Gpr(gpr));
+                    emitter.ops.push(Op::DbgValue { variable, reg });
+                }
                 if lines {
                     let order = block.dag.node(SDValue { node, res: 0 }).order as usize;
                     let place = block.dag.lines.get(order).copied().flatten();
@@ -1935,16 +2191,71 @@ pub fn emit(
                 }
             }
         }
-        let mut ops = std::mem::take(&mut emitter.ops);
-        edges.extend(emitter.phi_edges(block, &mut ops)?);
+        let ops = std::mem::take(&mut emitter.ops);
         places.resize(ops.len(), None);
-        let ops: OpList = ops.into_iter().zip(places).collect();
-        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
+        let mut pairs: Vec<(Op, Option<SrcLoc>)> = ops.into_iter().zip(places).collect();
+        let cuts = std::mem::take(&mut emitter.cuts);
+        if cuts.is_empty() {
+            let ops: OpList = pairs.into_iter().collect();
+            emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
+            continue;
+        }
+        // The head keeps the selector's label; each join follows its empty
+        // block, after the function's.
+        let mut head: Vec<(Op, Option<SrcLoc>)> = pairs.drain(..cuts[0].at).collect();
+        let mut rest = pairs;
+        let mut consumed = cuts[0].at;
+        let mut last = block_label(name, at);
+        for (k, cut) in cuts.iter().enumerate() {
+            let next = cuts.get(k + 1).map_or(consumed + rest.len(), |next| next.at);
+            let mut segment: Vec<(Op, Option<SrcLoc>)> = vec![(cut.phi.clone(), None)];
+            segment.extend(rest.drain(..next - consumed));
+            consumed = next;
+            joined.push(MBlock { label: cut.taken.clone(), ops: OpList::default() });
+            if k + 1 == cuts.len() {
+                // What fell through to the next block of the selector now has
+                // to jump.
+                if !matches!(
+                    segment.last().map(|(op, _)| op),
+                    Some(
+                        Op::Return { .. }
+                            | Op::JumpTable { .. }
+                            | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
+                    )
+                ) && at + 1 < blocks.len()
+                {
+                    segment.push((
+                        Op::I(Inst::Branch { link: false, target: Target::Label(block_label(name, at + 1)) }),
+                        None,
+                    ));
+                }
+                last.clone_from(&cut.end);
+            }
+            joined.push(MBlock { label: cut.end.clone(), ops: segment.into_iter().collect() });
+        }
+        emitter
+            .mf
+            .blocks
+            .push(MBlock { label: block_label(name, at), ops: std::mem::take(&mut head).into_iter().collect() });
+        tails.insert(block_label(name, at), last);
     }
-    // The blocks made for critical edges lie after the function's own.
-    emitter.mf.blocks.extend(edges);
+    // A phi of the selector's names the block its value comes from by the label
+    // it had.
+    for (block, &count) in emitter.mf.blocks.iter_mut().zip(&phi_counts) {
+        for op in (&mut block.ops).into_iter().take(count) {
+            if let Op::Phi { incoming, .. } = op {
+                for (_, from) in incoming.iter_mut() {
+                    if let Some(tail) = tails.get(from.as_str()) {
+                        from.clone_from(tail);
+                    }
+                }
+            }
+        }
+    }
+    emitter.mf.blocks.extend(joined);
     emitter.mf.pool = emitter.pool.take();
-    emitter.mf.block_ids = first.layout.clone();
+    emitter.mf.block_ids =
+        emitter.mf.blocks.iter().zip(&first.layout).map(|(block, &id)| (block.label.clone(), id)).collect();
     emitter.mf.edge_probs = first.edge_probs.clone();
     Ok(emitter.mf)
 }

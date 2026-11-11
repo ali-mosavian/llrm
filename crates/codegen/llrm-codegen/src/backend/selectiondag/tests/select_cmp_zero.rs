@@ -55,6 +55,7 @@ fn lowered(build: impl FnOnce(&mut SelectionDAG, [SDValue; 3]) -> (SDValue, SDVa
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -64,6 +65,7 @@ fn lowered(build: impl FnOnce(&mut SelectionDAG, [SDValue; 3]) -> (SDValue, SDVa
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -107,6 +109,7 @@ fn a_select_on_a_raw_low_bit_is_arithmetic_too() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -116,6 +119,7 @@ fn a_select_on_a_raw_low_bit_is_arithmetic_too() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )

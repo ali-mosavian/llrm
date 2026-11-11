@@ -455,3 +455,39 @@ fn memcpyopt_asks_no_points_to() {
     managed(&mut module, Watching(std::rc::Rc::clone(&asked)));
     assert!(!asked.get(), "memcpyopt solved the whole body's points-to");
 }
+
+/// Asks for the memory graph of the function and changes nothing.
+struct AsksForMemorySsa;
+
+impl llrm_mir::passes::FunctionPass for AsksForMemorySsa {
+    fn name(&self) -> &'static str {
+        "asks-for-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// MemCpyOpt keeps the graph its updater edited (`PA.preserve<MemorySSAAnalysis>()`);
+/// it was dropped, and the next pass built it again: memexp -O2 built 613
+/// memory graphs, 57 of them after a memcpyopt that had kept one right.
+#[test]
+fn test_a_memcpyopt_that_changed_the_body_keeps_the_memory_graph() {
+    let before = body(&[memcpy("@b", "@a", 16), memcpy("@c", "@b", 16)]);
+    let mut module = parsed(&format!("{DECLARES}\n{GLOBALS}\n{before}"));
+    let unchanged = llrm_mir::print::module(&module);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(AsksForMemorySsa);
+    manager.add(MemCpyOpt);
+    manager.add(AsksForMemorySsa);
+    let (_, built) = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    assert_ne!(llrm_mir::print::module(&module), unchanged, "memcpyopt changed nothing");
+    assert_eq!(llrm_mir::counts::analysed("mssa").1 - built, 1, "the graph was built again after memcpyopt");
+}

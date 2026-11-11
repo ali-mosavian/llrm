@@ -29,8 +29,10 @@
 //!
 //! DEVIATE TA-3 (exit: the translated pass owns the instruction list): the
 //! pin sees a tied use through `isRegTiedToUseOperand`; here only the
-//! commutative `Binary` `add`, `and`, `or`, `xor` and `Multiply` `imul`
-//! of three values of one width are candidates, as `_swappable` finds them.
+//! commutative `Binary` `add`, `adc`, `and`, `or`, `xor` and SSE ops,
+//! `Multiply` `imul`, `cmov` and the immediate `shld`/`shrd` (swapped as the
+//! other shift of `Size - Amt`) of values of one width are candidates, as
+//! `swappable_held` finds them.
 //!
 //! A tied `add` or `sub` of a dword, whose first source lives on past it and
 //! whose flags nothing reads, is made three-address: `d := lea [a + k]` or
@@ -95,6 +97,7 @@ pub const MAX_DATA_FLOW_EDGE: usize = 10;
 /// make them follow.
 pub struct BodyFacts {
     state: std::cell::RefCell<State>,
+    regs: Option<llrm_lir::registers::Regs>,
 }
 
 struct Slot {
@@ -322,7 +325,15 @@ impl BodyFacts {
             }
             state.blocks.push(kept);
         }
-        Self { state: std::cell::RefCell::new(state) }
+        Self { state: std::cell::RefCell::new(state), regs: body.registers }
+    }
+
+    /// Whether `what` is tied here: the rule of the body's target.
+    fn ties(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        crate::backend::twoaddr::ties_in(self.regs, what)
     }
 
     /// The instructions that define or read `value`, and whether each defines
@@ -843,6 +854,8 @@ pub struct Commuter<'a> {
     leas: llrm_support::hash::HashSet<u32>,
     /// DEVIATE TA-LC on (`Profile::commute_loop_carried`).
     loop_carried: bool,
+    /// DEVIATE TA-LC2 on (`Profile::commutes_loop_carried_flow`).
+    loop_carried_flow: bool,
 }
 
 impl<'a> Commuter<'a> {
@@ -852,6 +865,15 @@ impl<'a> Commuter<'a> {
         on: bool,
     ) -> Self {
         self.loop_carried = on;
+        self
+    }
+
+    /// The walk with DEVIATE TA-LC2 on or off.
+    pub fn with_loop_carried_flow(
+        mut self,
+        on: bool,
+    ) -> Self {
+        self.loop_carried_flow = on;
         self
     }
 
@@ -880,6 +902,7 @@ impl<'a> Commuter<'a> {
             processed: Default::default(),
             leas: Default::default(),
             loop_carried: false,
+            loop_carried_flow: false,
         }
     }
 
@@ -969,7 +992,7 @@ impl<'a> Commuter<'a> {
             return Some((one, true, Mapped::Value(dst.value)));
         }
         // A tied use: the result is the first source's register.
-        if let Some(what) = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))
+        if let Some(what) = one.what.as_ref().filter(|what| self.facts.ties(what))
             && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
             && first.value == reg
         {
@@ -1154,7 +1177,7 @@ impl<'a> Commuter<'a> {
         def: u32,
     ) -> Option<u32> {
         let one = self.facts.insn(key);
-        let what = one.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what))?;
+        let what = one.what.as_ref().filter(|what| self.facts.ties(what))?;
         match (&what.dests[0], &what.sources[0]) {
             (Loc::Held(dst), Loc::Held(src)) if dst.value == def => Some(src.value),
             _ => None,
@@ -1177,6 +1200,46 @@ impl<'a> Commuter<'a> {
                         ([Loc::Held(_)], [Loc::Mem(_)])
                     )
             })
+    }
+
+    /// DEVIATE TA-LC2: whether `to` is reached from `from` through copies,
+    /// whichever block each is in (at most `MAX_DATA_FLOW_EDGE` values are
+    /// followed): `m := copy from; ...; to := copy m`. `isRevCopyChain` only
+    /// sees definitions in this block.
+    fn is_copy_flow(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> bool {
+        let mut seen = vec![from];
+        let mut next = 0;
+        while next < seen.len() {
+            let value = seen[next];
+            next += 1;
+            for (key, is_def) in self.facts.refs(value) {
+                if is_def {
+                    continue;
+                }
+                let Some((_, into)) = self.copy_to_reg(key).filter(|&(source, _)| source == value) else { continue };
+                if into == to {
+                    return true;
+                }
+                if !seen.contains(&into) && seen.len() < MAX_DATA_FLOW_EDGE {
+                    seen.push(into);
+                }
+            }
+        }
+        false
+    }
+
+    /// The value `reg` is copied from, where its definition in this block is a
+    /// copy.
+    fn copied_from(
+        &self,
+        reg: u32,
+    ) -> Option<u32> {
+        let def = self.single_def(reg)?;
+        self.copy_to_reg(def).map(|(source, _)| source)
     }
 
     /// `isRevCopyChain`: a reversed copy chain from `from` to `to`:
@@ -1325,6 +1388,18 @@ impl<'a> Commuter<'a> {
         {
             return true;
         }
+        // DEVIATE TA-LC2 (owner x86-m32-bytes, exit 2026-11-27): TA-LC for a
+        // result that reaches C's source through copies in later blocks (the
+        // back-edge copy behind a conditional subtract: x_adler's `a += k; if
+        // (a >= 65521) a -= 65521`). The pin ties B and copies C every
+        // iteration; tying C leaves no copy once the coalescer joins the web.
+        if self.loop_carried_flow
+            && let Some(source) = self.copied_from(c)
+            && self.is_copy_flow(a, source)
+            && !self.copied_from(b).is_some_and(|other| self.is_copy_flow(a, other))
+        {
+            return true;
+        }
         // A use of C between its last definition and here: leave it.
         let (clear_c, last_def_c) = self.no_use_after_last_def(c, dist);
         if !clear_c {
@@ -1400,7 +1475,7 @@ impl<'a> Commuter<'a> {
         let mi = Arc::clone(&work[at]);
         // Only an instruction the pass would untie: tied, and writing another
         // value than it reads.
-        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let Some(what) = mi.what.as_ref().filter(|what| self.facts.ties(what)) else { return false };
         let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
             return false;
         };
@@ -1424,7 +1499,7 @@ impl<'a> Commuter<'a> {
         }
         // `isTwoAddrUse`: a kill that ties `reg` itself stays.
         if let Some(what) = kill.what.as_ref()
-            && crate::backend::twoaddr::ties(what)
+            && self.facts.ties(what)
             && matches!(
                 what.sources.first(),
                 Some(Loc::Held(held)) if held.value == reg
@@ -1562,7 +1637,7 @@ impl<'a> Commuter<'a> {
         only_x87_load: bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
-        let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
+        let Some(what) = mi.what.as_ref().filter(|what| self.facts.ties(what)) else { return false };
         let (Some(Loc::Held(into)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
             return false;
         };
@@ -1586,7 +1661,7 @@ impl<'a> Commuter<'a> {
             return false;
         }
         if let Some(what) = kill.what.as_ref()
-            && crate::backend::twoaddr::ties(what)
+            && self.facts.ties(what)
             && matches!(
                 what.sources.first(),
                 Some(Loc::Held(held)) if held.value == reg
@@ -1686,6 +1761,10 @@ impl<'a> Commuter<'a> {
         }
         // `commuteInstruction`: the sources swap.
         let mut made = (**one).clone();
+        if what.op == ir::Operation::Funnel {
+            made.what = Some(crate::backend::twoaddr::commute_funnel(what, first));
+            return Some(Arc::new(made));
+        }
         // A `cmov` also takes the opposite condition.
         let name = what.name.as_deref().and_then(|name| {
             (what.op == ir::Operation::Select).then(|| crate::backend::flagscopy::opposite_cmov(name)).flatten()

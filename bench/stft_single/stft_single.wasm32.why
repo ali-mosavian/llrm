@@ -1,0 +1,1 @@
+Float model: wasm32 evaluates in single precision with no FMA; llrm-cc and the pin clang at -O0/-O2 print 502187692 (node, signal_gen SIGNAL). The DOS .out is x87 excess precision (78803551).

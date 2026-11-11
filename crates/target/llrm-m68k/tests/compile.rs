@@ -189,13 +189,15 @@ fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
     let text =
         text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
+    assert!(text.contains("\tbra\t") || text.contains("\tb"), "no branch at all, nothing was tested:\n{text}");
     assert!(!text.contains(":\n\tbra"), "{text}");
 }
 
 /// Twenty live incoming arguments in a loop: the pin's M68k marks nothing
 /// rematerializable, so each is stored to a frame slot and reloaded
 /// (`movem.l %d0, (N,%sp)`). Running the load of its own slot again where the
-/// value is read was a deviation of ours.
+/// value is read is the named deviation M68K-ARGREMAT, off for `Options::PINNED`,
+/// which this test compiles with.
 #[test]
 fn spilled_incoming_arguments_go_through_frame_slots_as_the_pin_has_it() {
     let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
@@ -278,7 +280,8 @@ fn a_guard_over_a_loop_branches_forward_to_a_cold_return() {
 fn the_arms_of_an_expanded_select_keep_their_order() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "hex")).expect("parses");
     let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(text.contains("\tcmpi.l\t#10, %d") && text.contains("\tbcc\t.LBB0_3\n"), "{text}");
+    // the compare of the masked digit is a byte `cmpi` since `narrow_cmp`
+    assert!(text.contains("\tcmpi.b\t#10, %d") && text.contains("\tbcc\t.LBB0_3\n"), "{text}");
 }
 
 /// The ILP scheduler put the loop-carried copy between `hex`'s `cmpi` and
@@ -300,5 +303,6 @@ fn a_copy_is_not_scheduled_between_a_compare_and_its_branch() {
 fn a_stored_zero_extended_byte_is_not_a_long_move() {
     let ir = "@buf = external constant [16 x i8], align 1\ndefine void @f(ptr %p) {\n  %v = load i8, ptr @buf, align 1\n  %e = zext i8 %v to i32\n  store i32 %e, ptr %p, align 2\n  ret void\n}";
     let text = compiled(ir, "f");
+    assert!(text.contains("move.b\t(buf,%pc),"), "the byte load is not there, nothing was tested:\n{text}");
     assert!(!text.contains("move.l\t(buf,%pc), ("), "{text}");
 }

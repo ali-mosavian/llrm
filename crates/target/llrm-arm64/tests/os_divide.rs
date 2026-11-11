@@ -1,7 +1,7 @@
 //! A divide by a constant at `-Os`: the multiply-high sequence is seven
 //! instructions and 28 bytes against `sdiv` and `msub`, which gcc's `-Os`
 //! uses. The pin keeps the divide only at `minsize`; here `optsize` does too
-//! (DEVIATE SD534). Before, `recsum`, `recpow`, `recmany`, `switch`, `frames`
+//! (DEVIATE SD535). Before, `recsum`, `recpow`, `recmany`, `switch`, `frames`
 //! and `huge` at -Os were 25-60% above gcc on bytes.
 
 use std::process::Command;
@@ -21,7 +21,7 @@ fn assembly(
     )
     .unwrap();
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .args(["-S", "-O2", "-o"])
         .arg(&output)
         .arg(&input)
         .output()

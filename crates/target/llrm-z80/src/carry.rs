@@ -19,8 +19,83 @@
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::reg;
 
+/// A copy of one virtual register into another of a class the source's meets, each
+/// defined once, is read through its source: the high word of a long added to
+/// itself (`x + x`) is copied after the low word's add, and the matcher
+/// takes only operands made before it.
+fn read_through_copies(function: &mut MFunction) -> bool {
+    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            for operand in &inst.operands {
+                if let Operand::Def(Reg::Virt(v)) = operand {
+                    *defs.entry(*v).or_default() += 1;
+                }
+            }
+        }
+        for phi in &block.phis {
+            if let Reg::Virt(v) = phi.result {
+                *defs.entry(v).or_default() += 1;
+            }
+        }
+    }
+    let mut alias = std::collections::HashMap::<u32, u32>::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) = (inst.kind, &inst.operands[..])
+                && defs.get(to) == Some(&1)
+                && defs.get(from) == Some(&1)
+                && <crate::regalloc::Z80Registers as llrm_spike_mf::Target>::meet(
+                    function.classes[*to as usize],
+                    function.classes[*from as usize],
+                ) == Some(function.classes[*from as usize])
+            {
+                alias.insert(*to, *from);
+            }
+        }
+    }
+    if alias.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for block in &mut function.blocks {
+        for phi in &mut block.phis {
+            for (_, incoming) in &mut phi.incoming {
+                if let Reg::Virt(v) = incoming
+                    && let Some(&from) = alias.get(v)
+                {
+                    *v = from;
+                    changed = true;
+                }
+            }
+        }
+        for inst in &mut block.insts {
+            if inst.kind == Kind::Copy && matches!(inst.operands[..], [Operand::Def(Reg::Virt(to)), _] if alias.contains_key(&to)) {
+                continue;
+            }
+            for operand in &mut inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand
+                    && let Some(&from) = alias.get(v)
+                {
+                    *v = from;
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// Fuses the long adds and subtracts of `function` into `adc` / `sbc`.
 pub fn use_the_carry(function: &mut MFunction) -> bool {
+    let carries = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(|inst| inst.kind == Kind::Op("SETCC8") && matches!(inst.operands[..], [_, Operand::Imm(3), _]));
+    if carries {
+        read_through_copies(function);
+    }
     // every read of a virtual register in the function: the byte and the sums
     // go with the instructions only if nothing outside them reads them (a
     // condition byte is carried across blocks by a copy)
@@ -59,6 +134,8 @@ struct Found {
     added: Option<u32>,
     /// A copy made between the low op and the high add, moved up with the pair.
     hoist: Option<usize>,
+    /// Loads of the high words' operands made after the low op, moved up with the pair.
+    lifted: Vec<usize>,
     /// The compare, the condition byte and its widening.
     carry: [usize; 3],
     /// The final `Copy AH <- v` and the add of the carry; its result copy
@@ -191,6 +268,23 @@ fn recognised(
         // the high words' own sum (`Copy AH <- a; ADD16; Copy v <- AH`), or a
         // plain value: a long grown by a widened word has no high addend
         let wanted = if subtract { Kind::Op("SUB16") } else { Kind::Op("ADD16") };
+        // An operand made after the low op by a load of a constant or a frame
+        // slot moves up with the pair, if nothing between the two places stores,
+        // calls or has an effect: the pin's `MachineInstr::isSafeToMove` with
+        // `SawStore` over the range, and in the pin's DAG the operands of the
+        // high `UADDO_CARRY` are scheduled freely, not fixed before the low one.
+        let liftable = |v: u32| -> Option<usize> {
+            let at = insts.iter().position(|i| defines(i, Reg::Virt(v)))?;
+            let made = &insts[at];
+            let loads = made.operands.iter().all(|o| match o {
+                Operand::Def(r) => *r == Reg::Virt(v),
+                Operand::Use(_) | Operand::Block(_) => false,
+                Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => true,
+            });
+            let calm = |i: &Inst| !i.may_store && !i.call && !i.side_effects && !i.terminator;
+            (at > low_out && loads && calm(made) && !made.sets_flags && !made.reads_flags && insts[low_out + 1..at].iter().all(calm))
+                .then_some(at)
+        };
         let chain = (|| {
             if commuted {
                 return None;
@@ -208,8 +302,20 @@ fn recognised(
                 return None;
             };
             let [_, Operand::Use(Reg::Virt(high_lhs))] = insts[high_in].operands[..] else { return None };
-            (defined_before(high_lhs) && defined_before(high_rhs)).then_some([high_in, high_op, out])
+            let mut lifted = Vec::new();
+            for operand in [high_lhs, high_rhs] {
+                if !defined_before(operand) {
+                    lifted.push(liftable(operand).filter(|&at| at < high_in && reads.get(&operand) == Some(&1))?);
+                }
+            }
+            lifted.sort_unstable();
+            lifted.dedup();
+            Some(([high_in, high_op, out], lifted))
         })();
+        let (chain, lifted) = match chain {
+            Some((chain, lifted)) => (Some(chain), lifted),
+            None => (None, Vec::new()),
+        };
         // a plain value made after the low op by a copy of an earlier one moves
         // up with the pair
         let mut hoist = None;
@@ -242,6 +348,7 @@ fn recognised(
         }
         return Some(Found {
             high: chain,
+            lifted,
             added: commuted.then_some(high_sum),
             hoist,
             carry: [cp, set, zext],
@@ -260,7 +367,7 @@ fn apply(
     found: Found,
 ) {
     let flags = Reg::Phys(reg::FLAGS);
-    let Found { high, added: commuted, hoist, carry, last, low_out, subtract, chained } = found;
+    let Found { high, lifted, added: commuted, hoist, carry, last, low_out, subtract, chained } = found;
     let kept = chained.map(|at| (insts[carry[0]].clone(), insts[at].clone()));
     // the low op now leaves its carry for the pair behind it
     let low = low_out - 1;
@@ -269,6 +376,7 @@ fn apply(
     if let Some(at) = hoist {
         added.push(insts[at].clone());
     }
+    added.extend(lifted.iter().map(|&at| insts[at].clone()));
     let (mut high_in, mut wide) = match high {
         Some(high) => (insts[high[0]].clone(), insts[high[1]].clone()),
         None => {
@@ -297,6 +405,7 @@ fn apply(
     let mut gone: Vec<usize> = high.iter().flatten().chain(&carry).chain(&last).copied().collect();
     gone.push(last[1] + 1);
     gone.extend(hoist);
+    gone.extend(&lifted);
     gone.sort_unstable();
     let behind = low_out + 1 - gone.iter().filter(|&&at| at <= low_out).count();
     for &at in gone.iter().rev() {

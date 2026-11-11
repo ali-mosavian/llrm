@@ -98,10 +98,25 @@ impl Import {
                 let Some(r#type) = self.r#type(module, node(module, old, "type")) else { continue };
                 // `arg: N` counts from 1: the position among the parameters.
                 let argument = int(module, old, "arg").filter(|&one| one > 0).map(|one| one - 1);
+                // The subprogram the variable is declared in: another one's means
+                // it came in with an inlined call, and is not this function's.
+                let declared_in = {
+                    let mut scope = node(module, old, "scope");
+                    while let Some(one) = scope.filter(|&one| matches!(kind(module, one), "DILexicalBlock" | "DILexicalBlockFile")) {
+                        scope = node(module, one, "scope");
+                    }
+                    scope.filter(|&one| kind(module, one) == "DISubprogram" && one != subprogram)
+                };
+                let owner = match declared_in {
+                    Some(callee) => {
+                        format!("{} inlined into {name}", text(module, callee, "name").unwrap_or_default())
+                    }
+                    None => name.clone(),
+                };
                 let new = debuginfo::add_variable(
                     module,
                     &Variable {
-                        scope: name.clone(),
+                        scope: owner,
                         name: variable_name.clone(),
                         r#type,
                         offset: 0,

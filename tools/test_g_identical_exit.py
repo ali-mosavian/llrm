@@ -16,7 +16,7 @@ FAKE = {
 
 def run(kind):
     with tempfile.TemporaryDirectory() as d:
-        fake = os.path.join(d, "llrm-c")
+        fake = os.path.join(d, "llrm-cc")
         with open(fake, "w") as f:
             f.write("#!/bin/sh\n" + FAKE[kind])
         os.chmod(fake, 0o755)

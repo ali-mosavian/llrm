@@ -280,27 +280,38 @@ fn test_string_fre_emits_the_measured_vbdos_runtime_call() {
 /// values have no definition".
 #[test]
 fn test_a_masked_far_subscript_compiles() {
+    let body = masked_far_loop("(x + f) AND 511");
+    assert!(is_masked_16_bit(&body), "{body}");
+}
+
+/// Without the `AND 511` the loop has no 1022 cut: the shape check above
+/// does not pass on anything that merely compiles.
+#[test]
+fn test_an_unmasked_far_subscript_has_no_cut() {
+    let body = masked_far_loop("(x + f) MOD 512");
+    assert!(!is_masked_16_bit(&body), "{body}");
+}
+
+/// The `T` procedure of a loop reading `s(<index>)` of a far array.
+fn masked_far_loop(index: &str) -> String {
     let directory = tempfile::TempDir::new().unwrap();
-    let basic = written(
-        &directory,
-        "MASKED.BAS",
-        b"DEFINT A-Z\r\nDECLARE SUB t (f)\r\nt 3\r\nSUB t (f)\r\nDIM s(511), u(319)\r\nFOR x = 0 TO 319\r\nu(x) = s((x + f) AND 511)\r\nNEXT\r\nEND SUB\r\n",
+    let source = format!(
+        "DEFINT A-Z\r\nDECLARE SUB t (f)\r\nt 3\r\nSUB t (f)\r\nDIM s(511), u(319)\r\nFOR x = 0 TO 319\r\nu(x) = s({index})\r\nNEXT\r\nEND SUB\r\n"
     );
+    let basic = written(&directory, "MASKED.BAS", source.as_bytes());
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
-    // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
-    // `u(x)` addresses through a doubled 32-bit index whose upper half is
-    // zeroed once before the loop. DEVIATE LU2 (#3646): the lea that doubles
-    // the index (`lea bx, [eax+eax]`) carries the store's offset, so the loop
-    // counter runs to zero and no `movzx` widens it.
     let text = listing(&program);
-    let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
+    text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")].to_string()
+}
+
+/// The masked `s(i)` is a 16-bit offset cut to the array's 1022 and read
+/// through that same register, with no `shl` and no 32-bit index to widen.
+/// The unmasked `u(x)` addressing is left to the allocator (LU2 doubled the
+/// index with a `lea`; LU14 (#8350) strides a pointer instead).
+fn is_masked_16_bit(body: &str) -> bool {
     let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
-    let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
-    let index = regex::Regex::new(r"lea \w+, \[(e\w\w)\+(e\w\w)\]").unwrap();
-    let doubled = index.captures_iter(body).any(|one| one[1] == one[2]);
-    assert!(masked && doubled && !body.contains("shl"), "{body}");
+    mask.captures(body).is_some_and(|one| one[1] == one[2]) && !body.contains("shl")
 }
 
 /// The main body of `source`'s listing.
@@ -2393,8 +2404,12 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
         .find(|one| one.matches(", 1022").count() == 4)
         .unwrap_or_else(|| panic!("{procedure}"));
     // The pin's loop-reduce leaves this loop five counters too (steps 2, 6, 8,
-    // 18 and 22, ending at 642), on a machine of six: one of them is parked,
-    // in one slot, a store and the reloads that use it.
+    // 18 and 22, ending at 642), on a machine of six. "One of them is parked,
+    // in one slot" is an expectation, not a pin measurement: pin llc at code16
+    // parks two counters on this function and four on a loop of this shape
+    // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
+    // from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");
@@ -2739,7 +2754,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
         .expect("END")
         .1
         .attrs
-        .push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
+        .push(llrm_mir::Attribute::Flag("nounwind".into()));
     llrm_codegen::backend::ehprepare::prepared(&mut emitted.module, &llrm_x86_m16::layout()).expect("prepared");
     let text = llrm_mir::print::module(&emitted.module);
     let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];

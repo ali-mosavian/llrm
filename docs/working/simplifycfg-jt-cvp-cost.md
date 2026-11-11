@@ -25,7 +25,7 @@ LVI is inside the CVP and JT totals, so the three passes' excess is 64 M and abo
 
 ## Plan
 
-Each item is a code PR with Ir on both arms (callgrind d_faces -O2) and identical objects (`objsweep.py`, rows, QCport); owner w-4.
+Each item is a code PR with Ir on both arms (callgrind d_faces -O2) and identical objects (`objsweep.py`, rows, QCport); owner w10-instcombine.
 
 | item | change | target | date |
 |---|---|---|---|

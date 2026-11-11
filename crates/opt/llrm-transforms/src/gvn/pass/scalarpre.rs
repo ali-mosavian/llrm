@@ -241,8 +241,21 @@ impl GvnPass<'_> {
                     Operand::Value(self.function.instruction(inserted).result.expect("a value"))
                 }
             };
-            arms.push(incoming);
-            arms.push(Operand::Block(pred));
+            // `predecessors` of LLVM runs once per edge: a switch with two
+            // cases to the join is two inputs.
+            let edges = self.function.terminator(pred).map_or(1, |last| {
+                self.function
+                    .instruction(last)
+                    .operands
+                    .iter()
+                    .filter(|&&op| op == Operand::Block(current_block))
+                    .count()
+                    .max(1)
+            });
+            for _ in 0..edges {
+                arms.push(incoming);
+                arms.push(Operand::Block(pred));
+            }
         }
         let name = self.function.value(result).name.clone().map(|name| format!("{name}.pre-phi"));
         let phi = self.function.create_instruction(Opcode::Phi, ty, arms, Flags::default(), name.as_deref());

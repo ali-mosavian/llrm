@@ -49,7 +49,7 @@ SD *B_SCAT(SD *left, SD *right)
     joined = str_tmp(length, &data);
     copy_bytes(data, left->ptr, left->len);
     copy_bytes(data + left->len, right->ptr, right->len);
-    str_tmp_free(left);
-    str_tmp_free(right);
+    str_free_if_tmp(left);
+    str_free_if_tmp(right);
     return joined;
 }

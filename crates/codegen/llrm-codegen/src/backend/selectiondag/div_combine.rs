@@ -76,6 +76,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         y: SDValue,
     ) -> Option<SDValue> {
         let (high, lohi) = if signed { (ISD::MulHS, ISD::SMulLoHi) } else { (ISD::MulHU, ISD::UMulLoHi) };
+        let (x, y) = if self.hooks.multiply_high_magic_first(&*self.dag, signed, x, y) { (y, x) } else { (x, y) };
         if self.can_do(high, vt) {
             return Some(self.dag.get_node(high, vt, &[x, y]));
         }
@@ -147,13 +148,48 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         super::known_bits::known_bits(self.dag, value).zero >> (bits - 1) & 1 == 1
     }
 
-    /// `isIntDivCheap(VT)`. DEVIATE SD206: never for `i8`, whose `DIV8r` the
-    /// selector does not translate (SD302): the divide would be unselectable.
+    /// `isIntDivCheap(VT)`: the configured flag, for every type (`i8` selects
+    /// `DIV8r`/`IDIV8r`, SD302).
     fn int_div_cheap(
         &self,
-        vt: EVT,
+        _vt: EVT,
     ) -> bool {
-        self.dag.config().int_div_cheap && vt != EVT::I8
+        self.dag.config().int_div_cheap
+    }
+
+    /// DEVIATE DIV-LIVE: the divide stays (`isIntDivCheap`) unless a narrow
+    /// unsigned one has more values live across it than the registers it leaves
+    /// and its reciprocal is the plain multiply and shift: the `div` pins eax,
+    /// edx and a divisor register, the sequence none.
+    fn divide_stays(
+        &self,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+        signed: bool,
+    ) -> bool {
+        let config = self.dag.config();
+        if !self.int_div_cheap(vt) {
+            return false;
+        }
+        let bits = vt.size_in_bits();
+        if config.div_live_limit == 0 || bits > config.div_live_max_bits || config.div_live <= config.div_live_limit {
+            return true;
+        }
+        let Some(d) = self.dag.constant(n1).map(|c| c & super::fold::mask(bits)) else { return true };
+        if d <= 1 || signed && d == super::fold::mask(bits) {
+            return true;
+        }
+        // The plain unsigned reciprocal: one widening multiply and a shift,
+        // no add fixup and no pre-shift (the sheet's byte prices overstate
+        // the longer sequences, and a signed one carries a sign fixup).
+        if signed {
+            return true;
+        }
+        let known = super::known_bits::known_bits(self.dag, n0);
+        let zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
+        let found = unsigned_magic(d, bits, zeros.min(bits - (128 - d.leading_zeros())), true, false);
+        found.is_add || found.pre_shift != 0
     }
 
     /// `isIntDivCheap(VT)` priced per divisor: whether the target's
@@ -203,7 +239,31 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             p.product.as_ref().map(|price| (price.0)(d as i64)),
             (bits, d, signed, rem, zeros),
         );
-        clocks.0 + clocks.0 * p.margin / 100 < clocks.1
+        let Some(b) = &p.bytes else { return clocks.0 + clocks.0 * p.margin / 100 < clocks.1 };
+        // DEVIATE SD446: at speed on a target that trades bytes for clocks the
+        // choice is clocks plus bytes at the rate, the margin on the clocks
+        // alone (their spread; bytes are exact). The pin's `isIntDivCheap` is
+        // `minsize` alone.
+        let bytes = Self::sequence_price(
+            &DivSet {
+                prefix: b.prefix,
+                add: b.add,
+                shift: b.shift,
+                extend: b.extend,
+                multiply: b.multiply,
+                multiply_long: b.multiply_long,
+                multiply_high: b.multiply_high,
+                divide: b.divide,
+                divide_long: b.divide_long,
+            },
+            p.operand,
+            None,
+            (bits, d, signed, rem, zeros),
+        );
+        let rate = b.milliclocks_per_byte;
+        // The clocks recur with the block, the bytes are paid once.
+        let times = ((b.frequency * 1000.0).round() as i64).max(1);
+        (clocks.0 + clocks.0 * p.margin / 100) * times + bytes.0 * rate < clocks.1 * times + bytes.1 * rate
     }
 
     /// The divide's price and the multiply-high sequence's, in `set`'s unit:
@@ -296,9 +356,22 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         if self.dag.constant(n1).is_some()
-            && !self.int_div_cheap(vt)
+            && !self.divide_stays(vt, n0, n1, true)
             && !self.hardware_divide_wins(vt, n0, n1, true, false)
         {
+            // DEVIATE SD-DIVMAG: by a negative divisor the quotient is the
+            // negation of the one by its magnitude, which the remainder
+            // (`x % -c` is `x % c`) already multiplies by: one multiply-high.
+            if self.dag.config().sdiv_by_magnitude
+                && let Some(c) = self.dag.constant(n1)
+                && c >> (bits - 1) & 1 == 1
+                && !Self::is_signed_min(c, bits)
+                && !self.dag.is_opaque(n1)
+            {
+                let magnitude = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(bits), vt);
+                let quotient = self.dag.get_node(ISD::SDiv, vt, &[n0, magnitude]);
+                return Some(self.dag.get_negative(quotient, vt));
+            }
             return self.build_sdiv(n0, n1, node);
         }
         None
@@ -395,7 +468,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         if self.dag.constant(n1).is_some()
-            && !self.int_div_cheap(vt)
+            && !self.divide_stays(vt, n0, n1, false)
             && !self.hardware_divide_wins(vt, n0, n1, false, false)
         {
             return self.build_udiv(n0, n1, node);
@@ -502,7 +575,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         // "Checking cheapness here makes sense since the simplification
         // results in fatter code."
-        if self.int_div_cheap(vt) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
+        if self.divide_stays(vt, n0, n1, signed) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) };

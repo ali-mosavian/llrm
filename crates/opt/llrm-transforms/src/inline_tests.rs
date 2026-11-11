@@ -94,6 +94,7 @@ fn every_body(
                     callee: None,
                     self_calls: None,
                     self_sites: 0,
+                    hot: false,
                 },
             )
         })
@@ -620,6 +621,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
             callee: None,
             self_calls: None,
             self_sites: 0,
+            hot: false,
         }
     };
     let available = [(name, itself)].into_iter().collect();
@@ -1109,4 +1111,20 @@ b1:
         let calls = main.lines().filter(|line| line.contains("call i32 @pure") && line.contains("!noalias")).count();
         assert_eq!(calls, scoped_calls, "known={known}\n{after}");
     }
+}
+
+/// REC-9 asked `walk()` of the callee at every call site; the set is found once.
+/// Only a function with exactly one call of itself is linear: a tree (two) and a
+/// mutual recursion (none to itself) are not, and neither is a plain function.
+#[test]
+fn test_linear_recursive_holds_the_functions_with_one_self_call() {
+    let module = parsed(
+        "define i32 @line(i32 %n) {\nentry:\n  %r = call i32 @line(i32 %n)\n  ret i32 %r\n}\n\n\
+         define i32 @tree(i32 %n) {\nentry:\n  %a = call i32 @tree(i32 %n)\n  %b = call i32 @tree(i32 %a)\n  ret i32 %b\n}\n\n\
+         define i32 @ping(i32 %n) {\nentry:\n  %r = call i32 @pong(i32 %n)\n  ret i32 %r\n}\n\n\
+         define i32 @pong(i32 %n) {\nentry:\n  %r = call i32 @ping(i32 %n)\n  ret i32 %r\n}\n\n\
+         define i32 @flat(i32 %n) {\nentry:\n  ret i32 %n\n}\n",
+    );
+    let found = linear_recursive(&module, &recursive(&module));
+    assert_eq!(found, [id(&module, "line")].into_iter().collect());
 }

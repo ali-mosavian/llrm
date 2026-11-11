@@ -304,6 +304,14 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 | width.sf() << 31
                 | place(*rn, *rd)?
         }
+        Inst::AddCarry { op, width, rd, rn, rm } => {
+            width.sf() << 31
+                | u32::from(op.subtract) << 30
+                | u32::from(op.set_flags) << 29
+                | 0b11010000 << 21
+                | reg(*rm)? << 16
+                | place(*rn, *rd)?
+        }
         Inst::CondCompare { negate, width, rn, rm_or_imm, nzcv, cond } => {
             let (second, immediate) = match rm_or_imm {
                 CcOperand::Reg(rm) => (reg(*rm)?, 0),
@@ -419,9 +427,31 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
             Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
-            Fill::Gpr(source) => 0x4E01_0C00 | reg(*source)? << 5 | vreg(*rd)?,
+            Fill::Dup(arrangement, source) => 0x4E00_0C00 | arrangement.imm5() << 16 | reg(*source)? << 5 | vreg(*rd)?,
+            // `abc` is bits 18-16 of imm8 and `defgh` bits 9-5; `op`
+            // is `mvni`'s.
+            Fill::Imm { invert, shape, imm8 } => {
+                0x0F00_0400
+                    | u32::from(!matches!(shape, ImmShape::S2(_))) << 30
+                    | u32::from(*invert) << 29
+                    | shape.cmode() << 12
+                    | u32::from(imm8 >> 5) << 16
+                    | u32::from(imm8 & 31) << 5
+                    | vreg(*rd)?
+            }
+            Fill::Mask(imm8) => 0x6F00_E400 | u32::from(imm8 >> 5) << 16 | u32::from(imm8 & 31) << 5 | vreg(*rd)?,
+            Fill::MaskD(imm8) => 0x2F00_E400 | u32::from(imm8 >> 5) << 16 | u32::from(imm8 & 31) << 5 | vreg(*rd)?,
         },
         Inst::FpMoveImm { size, rd, imm8 } => 0x1E20_1000 | size.field() << 22 | u32::from(*imm8) << 13 | vreg(*rd)?,
+        Inst::FpLaneToFp { signed, size, rd, rn } => {
+            let base = if *signed { 0x5E21_D800 } else { 0x7E21_D800 };
+            let double = match size {
+                FpSize::S => 0,
+                FpSize::D => 1,
+                FpSize::H => return error("an integer lane converted to a half"),
+            };
+            base | double << 22 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::FpToFp { to, from, rd, rn } => {
             // `fcvt`: the source size is `type`, the destination's code `opc`.
             let opc = match to {

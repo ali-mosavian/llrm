@@ -22,7 +22,7 @@
 //!   here it is priced from the target's table, so a word fill is `rep stosw`
 //!   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
 //!   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
-//!   near 16 trips with the segment setup; owner w-5). A loop with several
+//!   near 16 trips with the segment setup; owner w12). A loop with several
 //!   fills to bytes no other reaches is a memset each; fills that tile adjacent
 //!   bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
@@ -869,7 +869,7 @@ fn _hoist(
             Operand::Constant(context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
         let mut argument_attrs = vec![Vec::new(); 4];
         if let Some(align) = align {
-            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".into(), align));
         }
         let info = CallInfo {
             function_type,
@@ -1478,7 +1478,7 @@ fn _filled(
         .filter(|align| *align != u64::MAX);
     let mut argument_attrs = vec![Vec::new(); 4];
     if let Some(align) = dest_align {
-        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".into(), align));
     }
     let info = CallInfo {
         function_type,

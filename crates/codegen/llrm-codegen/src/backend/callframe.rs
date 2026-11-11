@@ -21,10 +21,12 @@
 //! The producer is the call lowering of the SelectionDAG port: `LowerCall`
 //! stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
 //! `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
-//! `call_frame_destroy` at m32 only (`AddrMode::Flat32`, DEVIATE CF4); the
-//! pass is in the flow at every x86 width. At m16 (`Real16`) and m64 `emit.rs`
-//! makes `sub sp, N` / `add sp, N - M` itself, so the pass finds no setup and
-//! changes nothing there. The m16 steps left: emit the pseudos for `Real16`
+//! `call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
+//! zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
+//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none for
+//! a call of no bytes), so the pass finds no setup and changes nothing there. A
+//! zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14 cells,
+//! jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for `Real16`
 //! (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
 //! area out in the m16 prologue, and re-check the readers of the old
 //! `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
@@ -36,6 +38,13 @@
 //! instruction). DEVIATE CF2 (no number yet): `hasVarSizedObjects` is not in
 //! LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16,
 //! review 2026-11-20.
+//!
+//! DEVIATE CF3 (owner x86-m32, exit: never; upstream-report candidate): as
+//! `pushfold.rs`'s CF2, a volatile load is not folded into `push [m]`, nor is
+//! one moved past another volatile access. The pin's `canFoldIntoRegPush` asks
+//! only `isLoadFoldBarrier`, so it loads `p[0]`, `p[1]` (the IR's last reads)
+//! before `pushl 28(%esp)` six times (the first reads). Cost:
+//! os_locals_between_pushes -O2 m32 +29 B (226 vs 197).
 //!
 //! [L147]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
@@ -425,7 +434,13 @@ impl CallFrameOpt {
         let name = what.name.as_deref().unwrap_or_default();
         // The stores of the frame, and the constant stores written as `and` and
         // `or`.
-        if let [Loc::Mem(_)] = what.dests.as_slice() {
+        if let [Loc::Mem(cell)] = what.dests.as_slice() {
+            // `MOV32mi`/`MOV32mr` (and the 64-bit forms): a store narrower than
+            // the slot is no push (a one-byte struct passed by value stored a
+            // byte register, which `push` cannot take).
+            if i64::from(cell.width) != self.slot {
+                return Class::Exit;
+            }
             match (what.op, name) {
                 (Operation::Binary, "and") => {
                     return if imm_of(one, 1) == Some(0) { Class::Convert } else { Class::Exit };
@@ -785,6 +800,27 @@ mod tests {
         body.blocks[0].insns.iter().map(|one| name_of(one).unwrap().to_owned()).collect()
     }
 
+    /// A byte store into the frame (the copy of a one-byte struct passed by
+    /// value) became `push r8`, which does not encode: `struct T { char x; }`
+    /// passed uninitialised failed in the backend at -O1/-O2 (wc_mixed).
+    #[test]
+    fn a_store_narrower_than_a_slot_stays_a_store() {
+        let cell = Mem { through: RegId::SP, offset: 0, ..Mem::new(None, 1) };
+        let byte = insn(
+            1,
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(cell)],
+            vec![Loc::Held(Held { value: 1, width: 1, offset: 0 })],
+            vec![],
+            vec![1],
+        );
+        // Two slots, as one push alone is never worth the adjustments.
+        let before = body(vec![setup(8), store(4, imm(4), vec![]), byte, call(), destroy(8)]);
+        let after = pass().run(&before);
+        assert_eq!(names(&after), ["call_frame_setup", "mov", "mov", "call", "call_frame_destroy"]);
+    }
+
     /// The pinned `llc -run-pass=x86-cf-opt` on a frame of two stores, `mov
     /// [esp+4], 4` and `mov [esp], %1`: `PUSH32i 4` then `PUSH32r %1`, the
     /// setup kept with its adjustment 8, the stores gone.
@@ -836,6 +872,29 @@ mod tests {
         let push = &after.blocks[0].insns[2];
         assert!(matches!(push.what.as_ref().unwrap().sources.as_slice(), [Loc::Mem(_)]), "{push:?}");
         assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![8], vec![7]), "{push:?}");
+    }
+
+    /// `f(a, v)` with `v` volatile folded `mov eax,[v]` into `push [v]` and
+    /// moved the access past the other loads: the program's volatile order
+    /// changed (CF3). A volatile load, or any volatile access between the load
+    /// and the frame, keeps the load where it is.
+    #[test]
+    fn a_volatile_access_is_not_moved_into_a_push() {
+        let cell = Mem { through: RegId::DI, offset: 0, ..Mem::new(None, 4) };
+        let plain = || (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())], vec![1], vec![8])).clone();
+        let frame = |first: Arc<Insn>, between: Option<Arc<Insn>>| {
+            let mut insns = vec![first];
+            insns.extend(between);
+            insns.extend([setup(8), store(4, imm(4), vec![]), store(0, held(1), vec![1]), call(), destroy(8)]);
+            names(&pass().run(&body(insns)))
+        };
+        let kept = ["mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"];
+        let mut volatile_load = plain();
+        volatile_load.volatile = true;
+        assert_eq!(frame(Arc::new(volatile_load), None), kept);
+        let mut volatile_between = (*insn(5, Operation::Move, "mov", vec![held(2)], vec![Loc::Mem(cell.clone())], vec![2], vec![8])).clone();
+        volatile_between.volatile = true;
+        assert_eq!(frame(Arc::new(plain()), Some(Arc::new(volatile_between))), ["mov", "mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"]);
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.

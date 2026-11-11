@@ -34,6 +34,7 @@ fn a_mask_of_what_an_assert_zext_holds_is_dropped() {
     let and = dag.get_node(ISD::And, EVT::I32, &[zero, mask]);
     dag.set_root(and);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: true,
@@ -43,6 +44,7 @@ fn a_mask_of_what_an_assert_zext_holds_is_dropped() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

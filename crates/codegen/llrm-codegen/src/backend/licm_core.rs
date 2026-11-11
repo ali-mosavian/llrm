@@ -56,6 +56,12 @@ pub trait Inst: Clone {
         false
     }
 
+    /// A load that may read a different value later in the preheader than
+    /// where the loop reads it (not invariant): `EliminateCSE` leaves it.
+    fn is_plain_load(&self) -> bool {
+        false
+    }
+
     /// Every value `rename_use` may change.
     fn each_value(
         &self,
@@ -156,11 +162,15 @@ impl<'a, I> Facts<'a, I> {
     /// The loop's blocks, in the function's order.
     pub fn inside_blocks(&self) -> impl Iterator<Item = &'a Block<I>> + use<'a, I> {
         let blocks = self.blocks;
-        self.members.iter().map(move |&number| {
-            #[cfg(test)]
-            READ.with(|read| read.set(read.get() + 1));
-            &blocks[number]
-        })
+        self.members
+            .iter()
+            .map(
+                move |&number| {
+                    #[cfg(test)]
+                    READ.with(|read| read.set(read.get() + 1));
+                    &blocks[number]
+                },
+            )
     }
 }
 
@@ -261,6 +271,14 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             }
         }
     }
+    // How many loops each block is in: a header with 1 belongs to a loop no
+    // other loop holds, the `CurLoop` of the pin's worklist.
+    let mut nest: HashMap<i64, usize> = HashMap::default();
+    for lp in &found {
+        for at in &lp.body {
+            *nest.entry(*at).or_default() += 1;
+        }
+    }
     let mut order: Vec<&loopy::Loop> = found.iter().collect();
     order.sort_by_key(|one| one.body.to_set().len());
     let mut changed = false;
@@ -268,18 +286,14 @@ pub fn hoist<I: Inst, P: Policy<I>>(
         let inside = lp.body.to_set();
         let mut members: Vec<usize> = inside.iter().map(|at| place[at]).collect();
         members.sort_unstable();
-        let outside_entries: Vec<i64> = entries
-            .get(&lp.header)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(|at| !inside.contains(at))
-            .collect();
+        let outside_entries: Vec<i64> =
+            entries.get(&lp.header).into_iter().flatten().copied().filter(|at| !inside.contains(at)).collect();
         let [pre] = outside_entries[..] else { continue };
         let pre_at = place[&pre];
         if blocks[pre_at].succ.len() != 1 {
             continue;
         }
+        let top_level = nest.get(&lp.header) == Some(&1);
         let named = named_values(&blocks, &place, &inside, &defined);
         let copied = phi_values(&blocks, &place, &inside);
         let exiting: Vec<i64> =
@@ -321,17 +335,25 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                         any = true;
                         // `EliminateCSE`: the same computation hoisted before
                         // stands for this one.
-                        match moved.iter().find(|before| before.identical(one)) {
-                            Some(before) if before.defines().len() == one.defines().len() => {
+                        // `InitCSEMap(Preheader)`, on the first hoist out of a
+                        // loop no other loop holds: what the preheader
+                        // computes already stands for it too.
+                        let same = |before: &&I| before.identical(one) && before.defines().len() == one.defines().len();
+                        let there = if top_level {
+                            blocks[pre_at].insns.iter().find(|before| !before.is_plain_load() && same(before))
+                        } else {
+                            None
+                        };
+                        match there.or_else(|| moved.iter().find(same)) {
+                            Some(before) => {
                                 renames.extend(one.defines().iter().copied().zip(before.defines().iter().copied()));
                             }
-                            _ => moved.push(one.clone()),
+                            None => moved.push(one.clone()),
                         }
                     } else if let Some((load, rest)) = policy.unfold(one).filter(|(load, _)| {
-                        load.uses()
-                            .iter()
-                            .all(|used| hoisted_values.contains(used) || defined.get(used).is_none_or(|home| !inside.contains(home)))
-                            && policy.movable(&facts, at, std::slice::from_ref(load), 0)
+                        load.uses().iter().all(|used| {
+                            hoisted_values.contains(used) || defined.get(used).is_none_or(|home| !inside.contains(home))
+                        }) && policy.movable(&facts, at, std::slice::from_ref(load), 0)
                     }) {
                         hoisted_values.extend(load.defines().iter().copied());
                         any = true;
@@ -427,19 +449,15 @@ fn named_values<I: Inst>(
         .collect()
 }
 
-/// `HasLoopPHIUse`: the values a copy in the loop reads, a phi of the loop
-/// (or of an exit block) takes, and what feeds a copy of those.
+/// `HasLoopPHIUse`: the values a phi of the loop (or of an exit block) takes,
+/// and what feeds a copy of those. A copy that no phi takes is not one: the
+/// pin looks past copies only for a phi (MachineLICM.cpp#L1166).
 fn phi_values<I: Inst>(
     blocks: &[Block<I>],
     place: &HashMap<i64, usize>,
     inside: &BTreeSet<i64>,
 ) -> HashSet<u32> {
-    let mut taken: HashSet<u32> = inside
-        .iter()
-        .flat_map(|at| blocks[place[at]].insns.iter())
-        .filter(|one| one.is_copy())
-        .flat_map(|one| one.uses().iter().copied())
-        .collect();
+    let mut taken: HashSet<u32> = HashSet::default();
     let exits = inside
         .iter()
         .flat_map(|at| blocks[place[at]].succ.iter().copied())

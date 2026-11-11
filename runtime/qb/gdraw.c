@@ -280,5 +280,5 @@ void B_DRAW(SD *commands)
     macro_begin(&d.m, commands);
     d.flags = 0;
     execute(&d);
-    str_tmp_free(commands);
+    str_free_if_tmp(commands);
 }

@@ -133,6 +133,7 @@ mod tests {
             symbols: vec![symbol],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames: Vec::new(),
         };
         let bytes = llrm_macho::write(&object, &X8664MachO).unwrap();

@@ -94,6 +94,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
             &mut dag,
             &tli,
             &mut X86Lowering {
+                multiply_early_out: None,
                 imul_if_smaller: false,
                 share_products: false,
                 cmov: false,
@@ -103,6 +104,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
                 i16_mul_chains: false,
                 sext_load: false,
                 zext_free: false,
+                branch_constant_selects: false,
                 profile: None,
             },
         )

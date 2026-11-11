@@ -19,6 +19,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
             &mut dag,
             &tli,
             &mut X86Lowering {
+                multiply_early_out: None,
                 imul_if_smaller: false,
                 share_products: false,
                 cmov: false,
@@ -28,6 +29,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
                 i16_mul_chains: false,
                 sext_load: false,
                 zext_free: false,
+                branch_constant_selects: false,
                 profile: None,
             },
         )

@@ -271,6 +271,7 @@ fn main() -> ExitCode {
                     prepare_for_lto: false,
                     check_exit_count: false,
                     guard_must_fold: false,
+                    free_guard: false,
                 };
                 // Every function with a body.
                 let names: Vec<String> = module
@@ -370,6 +371,8 @@ fn main() -> ExitCode {
                     only_when_forced: false,
                     prepare_for_lto: false,
                     target_unrolling: false,
+                    // The early full-unroll slot of the default pipeline, where inlining is on.
+                    inliner_follows: true,
                 };
                 let names: Vec<String> = module
                     .functions()
