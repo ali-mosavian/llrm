@@ -98,7 +98,7 @@ fn a_select_that_repeats_its_condition_s_select_uses_the_inner_condition() {
 
 /// wasm32 known_loads_walks: `select (x|n), (y|n), false` stayed a chain of
 /// ors and logical ands per unrolled iteration; the pin's `n | (x && y)`
-/// needs one or. +122 B at O2.
+/// needs one or.
 #[test]
 fn two_logical_ors_sharing_an_operand_factor_in_the_false_arm_select() {
     let after = combined(

@@ -114,7 +114,7 @@ fn logic() {
 
 /// wasm32 known_loads_walks: `select n, (y|n), false` was not `n`, so
 /// FoldSelectWithAndOrCond found nothing to fold and the unrolled chain kept
-/// an or and a logical and per iteration (+122 B at O2). The i1 identities of
+/// an or and a logical and per iteration (r3, a reduction of it: 312 B against the pin's 303). The i1 identities of
 /// `simplifySelectInst`, each.
 #[test]
 fn a_select_of_bools_that_is_one_of_its_operands_or_a_constant() {

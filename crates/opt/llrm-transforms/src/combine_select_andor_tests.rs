@@ -28,8 +28,8 @@ fn combined(
 
 /// wasm32 known_loads_walks: `select (a|n), (b|n), false` with every operand
 /// used twice stayed two ors and a logical and per unrolled iteration; the
-/// pin's `select a, (b|n), n` leaves the factoring to the next visit. +122 B
-/// at O2.
+/// pin's `select a, (b|n), n` leaves the factoring to the next visit (r3, a
+/// reduction of it: 312 B against the pin's 303).
 #[test]
 fn a_select_on_an_or_whose_arm_the_second_operand_settles_selects_on_the_first() {
     let after = combined(
