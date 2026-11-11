@@ -77,6 +77,12 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05): the unrolled size, in
+    /// the unroll units, up to which a loop the -O1 rule above refused is unrolled on
+    /// trial; the driver compiles the module again and keeps the unroll only if neither
+    /// its bytes nor its executed work grow (`Tti::unroll_trial_threshold`). `None`: no
+    /// trial.
+    pub unroll_trial_at_o1: Option<u32>,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -463,6 +469,7 @@ impl Tuning {
         promote_va_list: false,
         branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
+        unroll_trial_at_o1: None,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
