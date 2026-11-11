@@ -28,19 +28,24 @@
 //!   casts, and the loop-control instructions; every other instruction makes
 //!   the loop unplannable (the pin widens or replicates it). Exit: one recipe
 //!   kind per row of the card (reductions, floating point, select, compare).
-//! - VP3 the trip count must be a known constant that VF x IC divides: no
-//!   scalar epilogue, no runtime trip-count check (`CM_EpilogueAllowed`'s
-//!   remainder loop). Exit: the epilogue and the vector trip count.
+//! - VP3 the remainder is a scalar loop only (`CM_EpilogueAllowed` with a
+//!   scalar epilogue): the pin also vectorizes it (`vec.epilog.*`, the
+//!   epilogue VF of `EpilogueVectorizationMinVF`), which the plan does not
+//!   price. Exit: epilogue vectorization (VEC3).
 //! - VP4 the scalar cost is the recipe prices at VF 1, not the legacy
 //!   `CM->expectedCost`; the two agree for this recipe set (the loop-control
 //!   instructions are priced alike).
 //! - VP5 register pressure (`calculateRegisterUsageForPlan`) is the live vector
 //!   values of the one block, not the interval walk over a VPlan;
 //!   loop-invariant registers are the splatted operands.
-//! - VP6 `-Os`/`-Oz`: no epilogue is allowed there, so only a trip count VF
-//!   divides is planned and IC stays 1 (`CM_EpilogueNotAllowedOptSize`).
+//! - VP6 `-Os`/`-Oz` and a constant trip count under 16
+//!   (`TinyTripCountVectorThreshold`): no epilogue is allowed there, so only a
+//!   trip count VF x IC divides is planned (`CM_EpilogueNotAllowedOptSize`,
+//!   `CM_EpilogueNotAllowedLowTripLoop`); at `-Os` IC stays 1.
 //! - VP7 no hints (LV-D7 of the legality translation), no scalable VFs (NEON
-//!   only), and a tail-folding threshold is not consulted.
+//!   only). No tail folding: `preferTailFoldingOverEpilogue` is false without
+//!   SVE ([L7378](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7378)),
+//!   so the pin's NEON loops end in an epilogue, as here.
 
 use llrm_mir::tti::{ArithOp, CostKind, MemoryOp, RegisterClass, Tti, Ty, VectorTy};
 
@@ -247,8 +252,7 @@ fn best_vf(
     while vf <= max_vf {
         if let Some(cost) = iteration_cost(tti, &facts.recipes, vf as u32) {
             let candidate = (cost, vf, scalar);
-            // No tail: VP3 requires VF x IC to divide the trip count.
-            if is_more_profitable(candidate, best, facts.trip_count, false) {
+            if is_more_profitable(candidate, best, facts.trip_count, true) {
                 best = candidate;
             }
         }
@@ -337,9 +341,6 @@ pub fn choose(
     if tti.vector_register_bits() == 0 {
         return Err(NotPlanned("The target has no vector registers"));
     }
-    if facts.trip_count == 0 {
-        return Err(NotPlanned("The trip count is not a known constant"));
-    }
     if facts.trip_count == 1 {
         return Err(NotPlanned("Single iteration (non) loop"));
     }
@@ -358,14 +359,26 @@ pub fn choose(
     Ok(Plan { vf, ic: select_interleave_count(tti, facts, vf, cost) })
 }
 
-/// [`choose`], then VP3: the plan the transform can run, with no scalar
-/// epilogue.
+/// The constant trip count under which the pin allows no epilogue
+/// (`TinyTripCountVectorThreshold`, L7809).
+const TINY_TRIP_COUNT: u64 = 16;
+
+/// `getEpilogueLowering`'s `CM_EpilogueAllowed` against
+/// `CM_EpilogueNotAllowedOptSize` (L7076) and `CM_EpilogueNotAllowedLowTripLoop`
+/// (L7809).
+fn epilogue_allowed(facts: &LoopFacts) -> bool {
+    !facts.opt_size && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
+}
+
+/// [`choose`], then the epilogue policy: where none is allowed the plan must
+/// cover the trip count whole.
 pub fn plan(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> Result<Plan, NotPlanned> {
     let chosen = choose(tti, facts)?;
-    if facts.trip_count % (u64::from(chosen.vf) * u64::from(chosen.ic)) != 0 {
+    let covers = facts.trip_count != 0 && facts.trip_count % (u64::from(chosen.vf) * u64::from(chosen.ic)) == 0;
+    if !covers && !epilogue_allowed(facts) {
         return Err(NotPlanned("A scalar epilogue would remain"));
     }
     Ok(chosen)

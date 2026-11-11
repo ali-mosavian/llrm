@@ -189,6 +189,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD13 | sdag-a | no vector types or nodes, but the four 128-bit integer vectors of `LLRM_ARM64_VECTORS` (2026-11-10) | `selectiondag.rs` |
 | VEC1 | llrm-arm64-vec | arm64 `LowerBUILD_VECTOR`/`LowerVECTOR_SHUFFLE`: constant splats and scalar splats only | `llrm-arm64/src/dag/vector.rs` |
 | VEC2 | llrm-arm64-vec | `visitINSERT_VECTOR_ELT`: the insert chain into a `BUILD_VECTOR` only | `selectiondag/combine_vector.rs` |
+| VEC3 | llrm-arm64-vec | LoopVectorize remainder is the scalar loop only: no epilogue vectorization (`vec.epilog.*`, `EpilogueVectorizationMinVF`) | `llrm-transforms/src/loopvectorizeplan.rs` |
 | SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-sdag/src/lowering.rs` |
 | SD15 | sdag-a | `FindMergedConditions` ported without edge probabilities | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |

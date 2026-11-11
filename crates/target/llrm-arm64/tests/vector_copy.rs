@@ -190,3 +190,31 @@ fn a_loaded_byte_converted_to_float_stays_in_the_vector_register() {
     );
     assert!(text.contains("ldr b") && text.contains("ucvtf s0, s"), "{text}");
 }
+
+/// A splat made in the vector loop's preheader and stored in the loop (a fill
+/// of an argument over a run-time count, the vectorizer's `vector.ph`): the
+/// vector value crossed a block and the compile stopped with "@f: a copy of a
+/// constant" (jpeg_single -O3 once the vectorizer made remainders). It is a q
+/// register copy across the edge.
+#[test]
+fn a_splat_made_in_the_preheader_is_stored_in_the_loop() {
+    let text = assembly(
+        "define void @f(ptr noalias %d, i64 %v, i64 %n) {\n\
+         entry:\n\
+         \x20 br label %ph\n\
+         ph:\n\
+         \x20 %h = insertelement <2 x i64> poison, i64 %v, i64 0\n\
+         \x20 %s = shufflevector <2 x i64> %h, <2 x i64> poison, <2 x i32> zeroinitializer\n\
+         \x20 br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %ph ], [ %next, %loop ]\n\
+         \x20 %p = getelementptr inbounds i64, ptr %d, i64 %i\n\
+         \x20 store <2 x i64> %s, ptr %p, align 8\n\
+         \x20 %next = add nuw i64 %i, 2\n\
+         \x20 %done = icmp eq i64 %next, %n\n\
+         \x20 br i1 %done, label %exit, label %loop\n\
+         exit:\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("dup") && (text.contains("str\tq") || text.contains("str q")), "{text}");
+}

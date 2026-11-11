@@ -555,6 +555,17 @@ fn gpr_width(letter: &str) -> Option<Width> {
     }
 }
 
+/// The values the float register file holds across blocks: floats and the
+/// 128-bit integer vectors.
+fn in_float_file(ty: EVT) -> bool {
+    ty.is_floating_point() || is_quad(ty)
+}
+
+/// A value of 128 bits in a float register (`q`): `F128` and the vectors.
+fn is_quad(ty: EVT) -> bool {
+    matches!(ty, EVT::Simple(MVT::F128 | MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64))
+}
+
 /// `DUPv8i16gpr`, `MOVIv2d_ns`, `MOVIv8i16`, `MVNIv4s_msl`: a vector made from
 /// a general register or an immediate.
 fn vector_fill(
@@ -1569,19 +1580,19 @@ impl Emitter<'_> {
                 self.values.insert((id, 0), rd);
                 Ok(())
             }
-            ISD::CopyFromReg if node.values[0].is_floating_point() => {
+            ISD::CopyFromReg if in_float_file(node.values[0]) => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {
                         let (dst, src) = (self.mf.fpr(), fpr_of(id)?);
                         self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
-                        if node.values[0] == EVT::Simple(MVT::F128) {
+                        if is_quad(node.values[0]) {
                             self.mf.wide.push(Reg::Fpr(dst));
                         }
                         dst
                     }
                     NodeData::Register(number) => {
                         let one = self.fvreg(number);
-                        if node.values[0] == EVT::Simple(MVT::F128) {
+                        if is_quad(node.values[0]) {
                             self.mf.wide.push(Reg::Fpr(one));
                         }
                         one
@@ -1628,7 +1639,7 @@ impl Emitter<'_> {
                 Ok(())
             }
             ISD::CopyToReg if self.is_flags(node.ops[1]) => Ok(()),
-            ISD::CopyToReg if self.dag.value_type(node.ops[2]).is_floating_point() => {
+            ISD::CopyToReg if in_float_file(self.dag.value_type(node.ops[2])) => {
                 let dst = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => fpr_of(id)?,
                     NodeData::Register(number) => self.fvreg(number),
@@ -1659,7 +1670,7 @@ impl Emitter<'_> {
                 let Operand::Fpr(src) = self.operand(node.ops[2])? else {
                     return Err("a float copy of a constant".into());
                 };
-                if self.dag.value_type(node.ops[2]) == EVT::Simple(MVT::F128) {
+                if is_quad(self.dag.value_type(node.ops[2])) {
                     self.mf.wide.extend([Reg::Fpr(dst), Reg::Fpr(src)]);
                 }
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });

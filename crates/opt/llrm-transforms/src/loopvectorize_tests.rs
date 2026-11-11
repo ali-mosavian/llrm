@@ -35,14 +35,84 @@ fn a_copy_loop_is_widened_by_the_pins_factors() {
     assert_eq!(count(&text, "store <8 x i16>"), 2, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
     assert_eq!(count(&text, "load i16"), 0, "{text}");
+    // The loop the pin marks as vectorized: one loop, no remainder.
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
 
-/// A trip count VF x IC does not divide would need a remainder loop (VP3): the
-/// loop is left alone.
+/// A trip count VF x IC does not divide (1921) was left scalar ("A scalar
+/// epilogue would remain"); the pin widens the first 1920 and leaves the last
+/// iteration to a copy of the loop, entered at 1920 (`opt -passes=loop-vectorize`
+/// on this loop: `icmp eq i64 %index.next, 1920`, then `%i = phi [ 1920, ..]`).
 #[test]
-fn a_trip_count_with_a_remainder_is_left_scalar() {
+fn a_trip_count_with_a_remainder_is_widened_with_a_scalar_remainder() {
     let text = run(&COPY.replace("1920", "1921"));
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 1, "{text}");
+    assert!(text.contains("icmp eq i64 %next, 1920"), "{text}");
+    assert!(text.contains("%i = phi i64 [ 0, %entry ]"), "{text}");
+    assert!(text.contains("%i.scalar = phi i64 [ 1920, %loop ]"), "{text}");
+    assert!(text.contains("icmp eq i64 %next.scalar, 1921"), "{text}");
+}
+
+/// The remainder of a loop that starts at 8 resumes at the vector loop's end,
+/// `8 + 1920`.
+#[test]
+fn a_remainder_resumes_where_the_vector_loop_ends() {
+    let text = run(&include_str!("../tests/lv/start8.ll").replace("1928", "1929"));
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert!(text.contains("icmp eq i64 %next, 1928"), "{text}");
+    assert!(text.contains("phi i64 [ 1928, %loop ]"), "{text}");
+}
+
+/// Under 16 iterations (TinyTripCountVectorThreshold) and at `-Os` the pin
+/// allows no epilogue: the loop stays scalar.
+#[test]
+fn no_remainder_is_made_where_the_pin_allows_none() {
+    let text = run(&COPY.replace("1920", "15"));
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+    let text = run(&COPY.replace("1920", "1921").replace("define void @f(ptr noalias %a, ptr noalias %b, i64 %n)", "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize"));
+    assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+}
+
+/// A trip count `n` the loop is given: the pin checks `n < 16` (minimum
+/// iterations), widens `n - n % 16` iterations (`n.vec`), tests `n == n.vec` in
+/// the middle block and enters the remainder at `n.vec`, or at 0 for a short
+/// loop.
+#[test]
+fn a_symbolic_trip_count_is_checked_at_run_time() {
+    let text = run(include_str!("../tests/lv/symbolic_trip.ll"));
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 1, "{text}");
+    assert!(text.contains("%min.iters.check = icmp ult i64 %n, 16"), "{text}");
+    assert!(text.contains("%n.mod.vf = and i64 %n, 15"), "{text}");
+    assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
+    assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
+    assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ], [ 0, %entry ]"), "{text}");
+    assert!(text.contains("br i1 %min.iters.check, label %scalar.ph, label %vector.ph"), "{text}");
+}
+
+/// A loop starting at 8 against a symbolic bound: the iterations are
+/// `bound - 8` and the vector loop ends at `8 + n.vec` (`ind.end`).
+#[test]
+fn a_symbolic_bound_from_a_nonzero_start_counts_from_the_start() {
+    let text = run(&include_str!("../tests/lv/symbolic_trip.ll").replace("[ 0, %entry ]", "[ 8, %entry ]"));
+    assert!(text.contains("%n.trip = sub i64 %n, 8"), "{text}");
+    assert!(text.contains("%ind.end = add i64 8, %n.vec"), "{text}");
+    assert!(text.contains("icmp eq i64 %next, %ind.end"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64 [ %ind.end, %middle.block ], [ 8, %entry ]"), "{text}");
+}
+
+/// Run again over its own output the pass would widen the remainder again (its
+/// bound is symbolic): the pin marks the loops `llvm.loop.isvectorized` and a
+/// later run leaves them alone.
+#[test]
+fn the_loops_it_made_are_not_widened_again() {
+    let once = run(include_str!("../tests/lv/symbolic_trip.ll"));
+    assert_eq!(count(&once, "llvm.loop.isvectorized"), 2, "{once}");
+    assert_eq!(count(&once, "llvm.loop.unroll.runtime.disable"), 2, "{once}");
+    let twice = run(&once);
+    assert_eq!(count(&twice, "load <8 x i16>"), 2, "{twice}");
 }
 
 /// The store 80 elements ahead of the load bounds the safe distance: the pin
@@ -94,4 +164,29 @@ fn a_fill_with_a_constant_stores_a_constant_splat() {
 fn an_induction_used_after_the_loop_is_left_scalar() {
     let text = run(include_str!("../tests/lv/exit_value.ll"));
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
+}
+
+/// An exit phi of an invariant value gets an arm from the middle block and
+/// from the remainder; both leave to the one exit (the arm from the loop that
+/// is now the vector loop is gone).
+#[test]
+fn an_exit_phi_takes_an_arm_from_each_way_out() {
+    let source = include_str!("../tests/lv/symbolic_trip.ll")
+        .replace("define void", "define i32")
+        .replace("ret void", "%r = phi i32 [ 7, %loop ]\n  ret i32 %r");
+    let text = run(&source);
+    assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
+    assert!(text.contains("%r = phi i32 [ 7, %middle.block ], [ 7, %loop.scalar ]"), "{text}");
+}
+
+/// The splat of an invariant stored value is made in `vector.ph`, where the
+/// pin makes it, not in the preheader the run-time check branches out of (the
+/// short-trip path does not pay for it).
+#[test]
+fn a_splat_is_made_in_the_vector_preheader() {
+    let text = run(include_str!("../tests/lv/symbolic_fill.ll"));
+    let at = |label: &str| text.find(label).unwrap_or_else(|| panic!("no {label} in {text}"));
+    let splat = at("insertelement <2 x i64> poison, i64 %v");
+    assert!(at("vector.ph:") < splat && splat < at("\nloop:"), "{text}");
+    assert_eq!(count(&text, "store <2 x i64> %broadcast.splat"), 2, "{text}");
 }

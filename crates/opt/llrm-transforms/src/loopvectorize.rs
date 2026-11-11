@@ -26,13 +26,15 @@
 //! # DEVIATE rows
 //! - LVP1 the vector loop is made in place: the scalar induction is the vector
 //!   loop's `index` (the pin makes `vector.ph`, `vector.body`, `middle.block`
-//!   and keeps the scalar loop as the remainder). With no remainder (VP3) and a
-//!   trip count VF x IC divides, the pin's output after SimplifyCFG is this
-//!   loop. Exit: the epilogue (VP3).
+//!   and keeps the scalar loop as the remainder). The remainder is a copy of the
+//!   loop made first ([`crate::loopvectorizeskeleton`]); with a constant trip
+//!   count VF x IC divides there is none, as in the pin after SimplifyCFG. Exit:
+//!   the VPlan skeleton (VP1).
 //! - LVP2 a loop whose induction value is used after the loop, or whose exit
 //!   test is not `icmp eq`/`ne` of the stepped induction against a
 //!   loop-invariant bound, is left alone (the induction may start anywhere: the
-//!   pin's VPlan makes its own canonical IV). Exit: the vector trip count and the middle block.
+//!   pin's VPlan makes its own canonical IV). Exit: the middle block's fix-ups
+//!   of live-outs (LVP5) and the exit tests `ult`/`slt` against a bound.
 //! - LVP3 recipes are loads and stores of consecutive addresses and the loop
 //!   control (VP2 of the planner): a stored value is a loaded value or a
 //!   loop-invariant one (broadcast in the preheader, as the pin's
@@ -63,6 +65,7 @@ use llrm_mir::types::{Type, TypeId};
 
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step};
 use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, plan};
+use crate::loopvectorizeskeleton::{self as skeleton, Shape};
 
 /// `LoopVectorizePass`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -93,8 +96,8 @@ struct Widening {
     step: InstId,
     step_operand: usize,
     index_ty: TypeId,
-    /// Where a splat of an invariant value is made.
-    preheader: BlockId,
+    /// Where the control flow around the vector loop is made.
+    shape: Shape,
 }
 
 /// Why a loop is left alone (LV: Not vectorizing: ...).
@@ -144,6 +147,7 @@ fn extract(
     let index_ty = function.instruction(primary).ty;
     let strides = SymbolicStrideMap::default();
     let preheader = the_loop.get_loop_preheader(function).ok_or(Skipped("The loop has no preheader"))?;
+    let exit = the_loop.get_unique_exit_block(function).ok_or(Skipped("The loop has no unique exit block"))?;
 
     let used_outside = |inst: InstId| -> bool {
         function
@@ -163,7 +167,7 @@ fn extract(
     let mut recipes = Vec::new();
     let mut accesses: Vec<Access> = Vec::new();
     let mut step_operand = None;
-    let mut saw_exit_compare = false;
+    let mut exit_compare = None;
     for inst in function.iter_block(header).collect::<Vec<_>>() {
         let data = function.instruction(inst);
         match data.opcode {
@@ -307,24 +311,30 @@ fn extract(
                 // widened induction meets it.
                 let stepped = function.instruction(step).result.map(Operand::Value);
                 let (a, b) = (data.operands[0], data.operands[1]);
-                let exit_compare = (Some(a) == stepped && invariant(b)) || (Some(b) == stepped && invariant(a));
-                if !exit_compare || !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+                let bound_operand = if Some(a) == stepped && invariant(b) {
+                    Some(1)
+                } else if Some(b) == stepped && invariant(a) {
+                    Some(0)
+                } else {
+                    None
+                };
+                let Some(bound_operand) = bound_operand.filter(|_| matches!(predicate, IntPredicate::Eq | IntPredicate::Ne))
+                else {
                     return Err(Skipped("The exit test is not the stepped induction against a loop-invariant bound"));
-                }
-                saw_exit_compare = true;
+                };
+                exit_compare = Some((inst, bound_operand));
             }
             Opcode::Br => {}
             _ => return Err(Skipped("An instruction the vectorizer does not widen yet")),
         }
     }
     let step_operand = step_operand.ok_or(Skipped("The induction step was not found"))?;
-    if !saw_exit_compare {
-        return Err(Skipped("No exit compare"));
-    }
+    let (compare, bound_operand) = exit_compare.ok_or(Skipped("No exit compare"))?;
     if accesses.is_empty() {
         return Err(Skipped("No memory access to widen"));
     }
-    Ok((recipes, Widening { accesses, step, step_operand, index_ty, preheader }))
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty };
+    Ok((recipes, Widening { accesses, step, step_operand, index_ty, shape }))
 }
 
 fn int_constant(
@@ -378,6 +388,7 @@ fn execute(
     function: &mut Function,
     widening: &Widening,
     plan: Plan,
+    splat_block: BlockId,
 ) {
     let vector_of = |context: &llrm_mir::context::Context, element: TypeId| {
         context.types.intern(Type::Vector { element, count: plan.vf })
@@ -438,7 +449,7 @@ fn execute(
                     (None, Some(scalar)) => match splats.iter().find(|(one, _)| *one == scalar) {
                         Some((_, made)) => *made,
                         None => {
-                            let made = broadcast(context, function, widening.preheader, vector_ty, plan.vf, scalar);
+                            let made = broadcast(context, function, splat_block, vector_ty, plan.vf, scalar);
                             splats.push((scalar, made));
                             made
                         }
@@ -512,6 +523,14 @@ impl FunctionPass for LoopVectorize {
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
                 let cx = env.cx(&*unit.context, &*unit.function);
                 let Some(found) = cx.loops.get_loop_for(header) else { continue };
+                // The product of an earlier run (the vector loop, or its
+                // remainder) is left alone.
+                if let Some(latch) = found.get_loop_latch(cx.function).and_then(|latch| cx.function.terminator(latch))
+                    && skeleton::already_vectorized(unit.metadata, cx.function, latch)
+                {
+                    why(unit, &outer, header, "already vectorized");
+                    continue;
+                }
                 let memory_unit = memory::Unit::within(&*unit.context, unit.layout, &*unit.function, &outer);
                 let mut aa = AggregateAA::new();
                 aa.add_aa_result(BasicAA::new(&memory_unit));
@@ -546,22 +565,67 @@ impl FunctionPass for LoopVectorize {
                     opt_size,
                 };
                 match plan(&*tti, &facts) {
-                    Ok(chosen) => Some((chosen, widening)),
+                    Ok(chosen) => Some((chosen, widening, trip_count)),
                     Err(not) => {
                         why(unit, &outer, header, &format!("plan: {not:?}"));
                         None
                     }
                 }
             };
-            let Some((chosen, widening)) = planned else { continue };
+            let Some((chosen, widening, trip_count)) = planned else { continue };
+            let lanes = u64::from(chosen.vf) * u64::from(chosen.ic);
+            // A constant trip count the lanes divide needs no remainder (LVP1).
+            let splat_block = if trip_count != 0 && trip_count % lanes == 0 {
+                let branch = unit.function.terminator(header).expect("a terminated loop");
+                skeleton::mark_vectorized(unit.context, unit.declared, unit.metadata, unit.function, branch);
+                widening.shape.preheader
+            } else if !exit_phis_are_invariant(unit.function, widening.shape) {
+                why(unit, &outer, header, "recipes: An exit phi of a value the loop defines");
+                continue;
+            } else {
+                match skeleton::add_remainder(
+                    unit.context,
+                    unit.function,
+                    unit.declared,
+                    unit.metadata,
+                    widening.shape,
+                    lanes,
+                ) {
+                    Some(block) => block,
+                    None => {
+                        why(unit, &outer, header, "plan: The loop runs fewer iterations than one vector iteration");
+                        continue;
+                    }
+                }
+            };
             why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
-            execute(unit.context, unit.function, &widening, chosen);
+            execute(unit.context, unit.function, &widening, chosen, splat_block);
             changed = true;
             // The loop's body is new: the expressions are stale.
             session = ScevSession::of(unit.context, unit.function, &outer);
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+/// The exit block's phis read values the loop does not define (LVS3): a remainder
+/// adds an arm from the middle block, which has no iteration's value to give.
+fn exit_phis_are_invariant(
+    function: &Function,
+    shape: Shape,
+) -> bool {
+    crate::edges::phis(function, shape.exit).into_iter().all(|phi| {
+        crate::lcssa::arms(function, phi).into_iter().all(|(value, from)| {
+            from != shape.header
+                || match value {
+                    Operand::Value(value) => match function.value(value).def {
+                        llrm_mir::module::ValueDef::Instruction(def) => function.parent(def) != Some(shape.header),
+                        _ => true,
+                    },
+                    _ => true,
+                }
+        })
+    })
 }
 
 /// `LLVM_DEBUG` of LoopVectorize (D3), on `LLRM_DEBUG=loop-vectorize`: the

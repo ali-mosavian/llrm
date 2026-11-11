@@ -308,6 +308,7 @@ pub mod looploadelim;
 pub mod loopvectorize;
 pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
+pub mod loopvectorizeskeleton;
 pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
