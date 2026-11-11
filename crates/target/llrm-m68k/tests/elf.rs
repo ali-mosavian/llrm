@@ -212,6 +212,7 @@ fn data_bss_weak_and_undefined_symbols_are_as_llvm_mc_writes_them() {
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     };
     let scratch = tempfile::tempdir().unwrap();

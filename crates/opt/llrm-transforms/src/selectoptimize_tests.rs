@@ -14,7 +14,9 @@ fn x86() -> llrm_x86::tti::X86 {
         quad: false,
         real_mode: None,
         loop_micro_op_buffer: 0,
+        issue_width: 0,
         position_independent: std::cell::Cell::new(true),
+        size_bytes: false,
         tuning: llrm_mir::target::Tuning::PIN,
     }
 }

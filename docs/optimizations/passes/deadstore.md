@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:cde1146c4da6df45eb5f6d763d7a6a72067052426ad6fda1a465cb2bba92e5fc -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:1c328ba65fb42943858887bc5f6a1d317b7d26fd9759aeffeea9227211f8d6a1 -->
 
 # deadstore
 
@@ -48,8 +48,8 @@ empty and every local object is invisible on unwind. Exit: when MIR has EH.
 DEVIATE 3: an object is invisible after the function returns when it is
 a stack or frame object (`isa<AllocaInst>`) whose address is not captured
 (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
-and byval arguments (stage 3), and non-alloca objects with no capture
-(malloc) are absent. Exit: stage 3.
+arguments and non-alloca objects with no capture (malloc) are absent.
+Exit: stage 3. A byval or inalloca argument is invisible, as the pin has it.
 DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in),
 `tryFoldIntoCalloc` and
 `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial

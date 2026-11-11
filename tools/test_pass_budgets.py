@@ -36,7 +36,7 @@ def test_the_passes_are_listed_by_the_instructions_they_spend_over_the_budget():
 
 def test_the_d_faces_compile_goes_through_the_wrapper_and_the_sysv_m32_flags_run_py_uses(tmp_path):
     """The raw file with `-Dfar=` and no wrapper failed in wccq (E1020, headers assert 16-bit record sizes): no d_faces row at m32 (#2301)."""
-    cmd = pass_budgets.command("llrm-c", "O2", None, tmp_path / "qc", tmp_path)
+    cmd = pass_budgets.command("llrm-cc", "O2", None, tmp_path / "qc", tmp_path)
     assert {"-m32", "-mabi=sysv"} <= set(cmd), cmd
     assert not [a for a in cmd if a.startswith("-D")], cmd
     wrapped = Path(cmd[-1])

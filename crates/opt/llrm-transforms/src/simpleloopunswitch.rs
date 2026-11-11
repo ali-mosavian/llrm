@@ -127,7 +127,13 @@ impl Analyzed {
     fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 }
@@ -444,6 +450,7 @@ fn build_partial_unswitch_conditional_branch(
                 dom_conditions: None,
                 cond_context: None,
                 cxt: judged_at.map(|(_, at)| at),
+                pending_intrinsics: &[],
             };
             if !llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison(&query, inv, 0) {
                 let ty = match inv {

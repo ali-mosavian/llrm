@@ -35,7 +35,7 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             boolean_contents: BooleanContents::ZeroOrNegativeOne,
             big_endian: true,
-            ..BuilderTarget::m32().dag
+            ..BuilderTarget::for_pointer_bits(32).dag
         },
         shift_amount: EVT::I32,
         jump_tables: false,
@@ -56,7 +56,12 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: true,
             calling: Some(&*CALLING),
         }),
-        ..BuilderTarget::m32()
+        // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
+        // in `BuilderTarget`
+        va_arg_align_cap: Some(super::lowering::VA_SLOT),
+        // `Machine::max_alloca_align`: the frame realigns the stack pointer
+        max_alloca_align: None,
+        ..BuilderTarget::for_pointer_bits(32)
     }
 }
 
@@ -95,13 +100,13 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false, false)
+    select_function_with(module, name, cpu, false, false, false, false, false, true, Default::default(), &Default::default(), &[])
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
 /// in place of the ILP list scheduler, and `indexed`: `(An)+` and `-(An)`
-/// accesses, `short`: `addq` and `subq`, and `absolute_data`: a global's address
-/// is an absolute one, not PC-relative ([`crate::compile::CodeModel`]).
+/// accesses, `short`: `addq` and `subq`, and `absolute_data`: a global's
+/// address is an absolute one, not PC-relative ([`crate::compile::CodeModel`]).
 pub fn select_function_with(
     module: &Module,
     name: &str,
@@ -110,6 +115,11 @@ pub fn select_function_with(
     indexed: bool,
     short: bool,
     absolute_data: bool,
+    size: bool,
+    carry_chain: bool,
+    price: crate::timing::Price,
+    mul: &super::mulprice::Chain,
+    libcalls: &[crate::libcalls::Kind],
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -121,7 +131,11 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let mut target = builder_target();
+    // DEVIATE M68K-DIVSIZE: from the 68020 a divide by a constant stays one
+    // `divu.l` in a size build (4-6 B) where the pin's default (`isIntDivCheap`
+    // false) makes the multiply-high sequence (10-14 B, `mulu.l` and shifts);
+    // X86 and AArch64 return the size flag here too. Owner m68k. Exit: none.
+    let mut target = builder_target().with_int_div_cheap(size && cpu.at_least(Cpu::M68020));
     target.ordered_copies = indexed;
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
@@ -134,8 +148,20 @@ pub fn select_function_with(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, absolute_data, &mut temporaries)
-            .map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(
+            &mut built.dag,
+            cpu,
+            source_order,
+            indexed,
+            short,
+            absolute_data,
+            carry_chain,
+            price,
+            mul.clone(),
+            libcalls,
+            &mut temporaries,
+        )
+        .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         let ends_unreachable = function
             .terminator(block)
@@ -150,8 +176,20 @@ pub fn select_function_with(
             ends_unreachable,
         });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, absolute_data, &mut temporaries)
-                .map_err(|why| format!("{why:?}"))?;
+            let units = select_block_with(
+                &mut extra.dag,
+                cpu,
+                source_order,
+                indexed,
+                short,
+                absolute_data,
+                carry_chain,
+                price,
+                mul.clone(),
+                libcalls,
+                &mut temporaries,
+            )
+            .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected {
                 block: id,

@@ -2,7 +2,7 @@
 //! sequence (`movzx`, `imul`, `shr`, `imul`, `sub`; 13 instructions against 6,
 //! +21..25% clocks on bench/huge at m16 -Os).
 
-use super::super::dag::{DivPrices, ProductPrice};
+use super::super::dag::{DivBytes, DivPrices, ProductPrice};
 use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
 use super::*;
 
@@ -42,11 +42,11 @@ fn a_cheap_divide_by_a_power_of_two_is_still_a_shift() {
     }
 }
 
-/// An `i8` divide has no `DIV8r` in the selector (SD302): at -Oz `(x >> 8) % 6`
-/// of examples/dice.nib and easing.nib stopped compiling (`CannotSelect
-/// ("UDivRem")`), so it keeps the multiply.
+/// An `i8` divide selects `DIV8r` (SD302), so where divides are cheap the
+/// remainder by a constant stays one, as for every other width. It was the
+/// multiply and shifts of the wider types while the selector could not take it.
 #[test]
-fn a_cheap_i8_divide_by_a_constant_stays_a_multiply() {
+fn a_cheap_i8_divide_by_a_constant_stays_a_divide() {
     let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
     let mut dag = SelectionDAG::new(DagConfig { int_div_cheap: true, ..DagConfig::default() });
     let x = dag.get_register(EVT::I8, 5);
@@ -54,7 +54,7 @@ fn a_cheap_i8_divide_by_a_constant_stays_a_multiply() {
     let rem = dag.get_node(ISD::URem, EVT::I8, &[x, divisor]);
     dag.set_root(rem);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
-    assert_ne!(dag.opcode(dag.get_root()), ISD::URem);
+    assert_eq!(dag.opcode(dag.get_root()), ISD::URem);
 }
 
 /// The i486 sheet in real mode (`machine/tune/x86/i486.toml`): `div r16` 24,
@@ -72,6 +72,7 @@ const I486_REAL_MODE: DivPrices = DivPrices {
     divide_long: 43,
     margin: 25,
     product: None,
+    bytes: None,
 };
 
 fn priced(
@@ -136,6 +137,31 @@ fn the_margin_is_read_from_the_prices() {
     assert_ne!(priced(ISD::SRem, EVT::I32, 14, Some(I486_REAL_MODE)), ISD::SRem);
 }
 
+/// recmany `% 5`, `% 3`, `% 7` at m16 -O2 were three magic multiply-high
+/// sequences of about 25 bytes each where bcc's `mov ebx,k; cdq; idiv ebx`
+/// is 11: the choice weighed clocks alone (the sheet's two prices tie), so the
+/// 14 bytes never counted though m16 prices a clock at two bytes. Bytes at the
+/// rate decide where the clocks are within the margin.
+#[test]
+fn the_rate_weighs_the_bytes_of_the_divide_against_the_sequence() {
+    let bytes = DivBytes {
+        prefix: 1,
+        add: 4,
+        shift: 6,
+        extend: 6,
+        multiply: 6,
+        multiply_long: 8,
+        multiply_high: 8,
+        divide: 6,
+        divide_long: 8,
+        milliclocks_per_byte: 500,
+        frequency: 1.0,
+    };
+    assert_ne!(priced(ISD::SRem, EVT::I32, 5, Some(I486_REAL_MODE)), ISD::SRem, "clocks alone: the sequence");
+    let weighed = DivPrices { bytes: Some(bytes), ..I486_REAL_MODE };
+    assert_eq!(priced(ISD::SRem, EVT::I32, 5, Some(weighed)), ISD::SRem, "clocks plus bytes: the divide");
+}
+
 /// The remainder's `q * d` was priced as a 2-shift 2-add chain the selector
 /// does not emit; it emits what `Machine::multiply_by` prices. A dear product
 /// makes the divide win where the cheap chain let the sequence.
@@ -167,4 +193,28 @@ fn a_32_bit_remainder_is_the_sequence_when_the_multiply_high_is_the_shortest_mul
         ISD::SRem,
         "the premise: at the midpoint it was the divide"
     );
+}
+
+/// recmany `% 5` and `% 7` sat in a loop at m16 -O2, and the bytes weighed
+/// against one execution's clocks chose `idiv`: 98 bytes saved for 28889
+/// clocks lost (+12.6%), switch the same (-63 B, +4.9%). The clocks recur with
+/// the block's frequency; the bytes do not.
+#[test]
+fn a_divide_in_a_hot_block_keeps_the_sequence_the_bytes_would_drop() {
+    let bytes = |frequency| DivBytes {
+        prefix: 1,
+        add: 4,
+        shift: 6,
+        extend: 6,
+        multiply: 6,
+        multiply_long: 8,
+        multiply_high: 8,
+        divide: 6,
+        divide_long: 8,
+        milliclocks_per_byte: 500,
+        frequency,
+    };
+    let at = |frequency| DivPrices { bytes: Some(bytes(frequency)), ..I486_REAL_MODE };
+    assert_eq!(priced(ISD::SRem, EVT::I32, 5, Some(at(1.0))), ISD::SRem, "once: the divide");
+    assert_ne!(priced(ISD::SRem, EVT::I32, 5, Some(at(16.0))), ISD::SRem, "sixteen times: the sequence");
 }

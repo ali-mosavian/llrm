@@ -62,8 +62,9 @@ class GateHoles(unittest.TestCase):
         os.makedirs(f"{root}/tools")
         os.makedirs(f"{root}/tests/llc")
         open(f"{root}/tests/llc/hello.c", "w").write("int main(void){return 0;}\n")
-        with open(f"{TOOLS}/llc_check.sh") as f, open(f"{root}/tools/llc_check.sh", "w") as g:
-            g.write(f.read())
+        for name in ("llc_check.sh", "ab_env.sh"):  # ab_env.sh: llc_check.sh sources it (#7506); without it every case exits 2
+            with open(f"{TOOLS}/{name}") as f, open(f"{root}/tools/{name}", "w") as g:
+                g.write(f.read())
         bin_dir = os.path.join(self.d, "bin")
         os.makedirs(bin_dir)
         script(f"{bin_dir}/buildslot", 'echo "error: build broke"\nexit 101\n' if not build_ok else "exit 0\n")
@@ -86,6 +87,7 @@ class GateHoles(unittest.TestCase):
         r = run(["sh", f"{root}/tools/llc_check.sh", "hello"], PATH=f"{bin_dir}:{os.environ['PATH']}",
                 LLRM_PIN_CLANG=clang, LLRM_LLC=llc)
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("build broke", r.stdout + r.stderr)  # it failed for its own reason, not for a missing sourced file
 
     def test_llc_check_with_a_good_build_reads_ok(self):
         """Control: the stubs run a program end to end, so the failing cases above fail for their own reason."""

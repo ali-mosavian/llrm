@@ -1,12 +1,12 @@
 //! Every `ApFloat` operation against LLVM's own, on every value of two 8-bit
-//! formats and a sample of float, double and x87: `tools/llvmport/
+//! formats and a sample of float, double, x87 and quad: `tools/llvmport/
 //! apfloat_dump.sh` runs LLVM `d1106deb71cc` over the same inputs in the same
 //! order and hashes the answers; a line of the golden file is one operation on
 //! one format, with how many different answers it gave.
 
 use crate::apfloat::*;
 use crate::fpclass::RoundingMode;
-use crate::golden_dump::{Dump, ROUNDINGS, add_f, assert_agree, assert_many_answers, formats, inputs};
+use crate::golden_dump::{Dump, ROUNDINGS, add_f, assert_agree, assert_many_answers, formats_with_quad, inputs};
 
 fn each(
     d: &mut Dump,
@@ -44,7 +44,7 @@ fn pairs(
 
 fn golden_lines() -> Vec<String> {
     let mut d = Dump::new();
-    let fmts = formats();
+    let fmts = formats_with_quad();
     for f in &fmts {
         let bits = inputs(f);
         let v: Vec<ApFloat> = bits.iter().map(|b| ApFloat::from_bits(f.sem, *b)).collect();

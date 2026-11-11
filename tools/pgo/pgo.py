@@ -32,6 +32,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
+import cpulimit  # noqa: E402
 MAX_COMMITS = 50
 MAX_AGE_DAYS = 14
 SOURCE_PATHS = ("crates", "src", "Cargo.toml", "Cargo.lock")
@@ -78,7 +80,7 @@ ROWS = {"-m16": "x86_16-wat", "-m32": "x86_32-wat"}
 
 
 def through_driver(driver: Path, binary: Path, arguments: list[str], source: Path, out: str) -> tuple[list[str], dict[str, str]]:
-    """The llrm-cc command (and environment) that compiles `source` with llrm-c's `arguments`, the backend being `binary`: the target a row, not a flag."""
+    """The llrm-cc command (and environment) that compiles `source` with llrm-cc's `arguments`, the backend being `binary`: the target a row, not a flag."""
     row = next((ROWS[one] for one in arguments if one in ROWS), ROWS["-m16"])
     return [str(driver), "-c", *(one for one in arguments if one not in ROWS), "-o", out, str(source)], {**os.environ, "LLRM_LLC": str(binary), "LLRM_CC_TARGET": row}
 
@@ -94,7 +96,7 @@ def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]], driver: P
             wrapped = work / f"{number}-{source.name}"
             wrapped.write_text(HEADER + f'#include "{source}"\n')
             source = wrapped
-        # an object, not /dev/null: llrm-c encodes only for `.o`/`.obj`, so the profile of a compile has the encoder in it
+        # an object, not /dev/null: llrm-cc encodes only for `.o`/`.obj`, so the profile of a compile has the encoder in it
         with llrmbin.with_object([str(binary), *arguments, "-o", llrmbin.OBJECT, str(source)]) as command:
             if driver:
                 command, env = through_driver(driver, binary, arguments, source, command[command.index("-o") + 1])
@@ -104,7 +106,7 @@ def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]], driver: P
         return "" if done.returncode == 0 else f"{name} {' '.join(arguments)}: " + " ".join((done.stderr or done.stdout).split())[:200]
 
     try:
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
             done = list(pool.map(one, enumerate(jobs)))
     finally:
         shutil.rmtree(work, ignore_errors=True)

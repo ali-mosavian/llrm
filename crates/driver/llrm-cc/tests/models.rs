@@ -213,7 +213,7 @@ fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     assert_eq!(said.trim().replace('\n', " "), "12748993 249 0 89 9");
 }
 
-/// tests/run/c programs written for llrm-c use `__far`/`__huge` at m32 (one
+/// tests/run/c programs written for llrm-cc use `__far`/`__huge` at m32 (one
 /// address space: they name nothing) and the OS header's
 /// `PHYSICAL_TEXT_SCREEN`; the x86_32-dos row had neither, so 8 of them
 /// stopped at "expected ';' after top level declarator".
@@ -240,7 +240,7 @@ fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
 }
 
 /// Plain `char` is signed on the DOS rows and unsigned under `-mabi=watcom`, as
-/// llrm-c had it: a stored 251 read -5 where watcom_far_sum.c wants 251 (it
+/// llrm-cc had it: a stored 251 read -5 where watcom_far_sum.c wants 251 (it
 /// printed 1229 for 1485), and copy_runs.c wants the signed sum.
 #[test]
 fn plain_char_is_unsigned_only_under_the_watcom_abi() {

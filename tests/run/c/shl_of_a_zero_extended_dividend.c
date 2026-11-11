@@ -1,4 +1,5 @@
 // flags: -O1 | -O2 | -Os
+// targets: !int16
 // `((unsigned long long)a << 27) / b` was emitted with a 32-bit `shl eax, 27` before `div rcx`: the narrowed shift lost the top 27 bits (softfloat's divide, wrong quotients). Sums of 200000 quotients.
 extern void report(long value);
 
@@ -24,3 +25,4 @@ int main(void)
     report((long)(f(0xffffffffu, 3) & 0x7fffffff));
     return 0;
 }
+// x86-widths: the .out hashes 32-bit ints

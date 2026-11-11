@@ -241,7 +241,10 @@ impl M68kCalling {
             chain = dag.get_token_factor(&stores);
         }
         let callee = self.callee(dag, callee);
-        let mask = dag.get_register_mask();
+        // The callee leaves the condition codes undefined, but the descriptions list
+        // only `SP` and the pin's mask is the preserved set, so the scheduler must
+        // be told: a flag live across the call is recomputed after it.
+        let mask = dag.get_register_mask_clobbering(&[super::generated::ids::reg::CCR]);
         let call = dag.get_node_multi(m68kisd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee, mask]);
         let end = dag.get_callseq_end(
             SDValue { node: call.node, res: 0 },

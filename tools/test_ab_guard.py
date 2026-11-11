@@ -61,6 +61,18 @@ class AbGuard(unittest.TestCase):
     def test_a_base_head_does_not_contain_is_refused(self):
         self.assertEqual(self.run_guard(self.c3).returncode, 2)
 
+    def test_a_row_that_compiled_nothing_on_either_side_is_refused(self):
+        """`compiled base 0 head 0 same 162`: nothing was compared, so "same" says nothing."""
+        for line in (
+            "wasm32 O2: cells 162 compiled base 0 head 0 same 162 differ 0 []\n",
+            "wasm32 O2: cells 162 compiled base 5 head 0 same 157 differ 5 []\n",
+        ):
+            zero = os.path.join(self.repo, "zero")
+            open(zero, "w").write(line)
+            done = self.run_guard(self.c2, counts=zero)
+            self.assertEqual(done.returncode, 2, line)
+            self.assertIn("compiled nothing", done.stderr)
+
     def test_identical_binaries_are_refused(self):
         self.assertIn("identical", self.run_guard(self.c2, [self.bins[0], self.bins[0]]).stderr)
 

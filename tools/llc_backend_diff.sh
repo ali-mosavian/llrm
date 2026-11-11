@@ -9,7 +9,7 @@ llrm=${LLRM_LLC:-$root/target/debug/llrm-llc}
 triple=${LLRM_TRIPLE:-x86_64-linux-gnu}
 out=$(mktemp -d)
 progs=${*:-$(cd "$root/tests/llc" && ls *.c | sed 's/\.c$//')}
-printf '%-10s %7s %7s   %7s %7s  (.text bytes | instructions)\n' prog llc llrm llc llrm
+printf '%-10s %7s %7s   %7s %7s  (code + data bytes | instructions)\n' prog llc llrm llc llrm
 for p in $progs; do
   "$b/clang" -target $triple -O2 -Xclang -disable-llvm-passes -S -emit-llvm "$root/tests/llc/$p.c" -o "$out/$p.ll"
   LLRM_MIR_STAGES="$out/$p.d" "$llrm" -O2 "$out/$p.ll" -o "$out/$p.llrm.o" 2> "$out/$p.err" || { echo "$p: llrm failed"; continue; }
@@ -17,7 +17,7 @@ for p in $progs; do
   [ -n "$stage" ] || { echo "$p: no switchconv stage"; continue; }
   (echo 'target triple = "x86_64-unknown-linux-gnu"'; grep -v '^target triple' "$stage") > "$out/$p.mid.ll"
   "$b/llc" -O2 -relocation-model=pic -filetype=obj "$out/$p.mid.ll" -o "$out/$p.llc.o" 2>> "$out/$p.err" || { echo "$p: llc failed"; head -2 "$out/$p.err"; continue; }
-  t() { size -A "$1" | awk '$1==".text"||$1~/^\.text\./{s+=$2}END{print s+0}'; }
+  t() { uv run -q --project "$root/tools" python "$root/tools/ab/object_bytes.py" x86_64-linux "$1" | awk '{print $1 + $2}'; }  # code + data
   n() { objdump -d --no-show-raw-insn "$1" | grep -cE '^ +[0-9a-f]+:'; }
   printf '%-10s %7s %7s   %7s %7s\n' "$p" "$(t $out/$p.llc.o)" "$(t $out/$p.llrm.o)" "$(n $out/$p.llc.o)" "$(n $out/$p.llrm.o)"
 done

@@ -1,9 +1,9 @@
 #!/bin/bash
 # The C calling-convention matrix, run: each convention's caller and callee
-# built by BCC (checked in, tests/fixtures/callconv/c/bcc) or llrm-c, linked
+# built by BCC (checked in, tests/fixtures/callconv/c/bcc) or llrm-cc, linked
 # in all four pairings, and run under dosrun. One output per program:
 #   WORK/<K><X>.OUT   K: CF CN PF PN; X: BB LB BL LL (caller, callee; L = llrm)
-# A module llrm-c refuses is replaced by BCC's, and WORK/<module>.ERR says why.
+# A module llrm-cc refuses is replaced by BCC's, and WORK/<module>.ERR says why.
 #   tools/callconv/c.sh WORK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -20,7 +20,7 @@ jobs=""
 for k in cf cn pf pn; do
     K=${k^^}
     for m in callee caller aggee agger; do
-        "$BIN/llrm-c" -mabi=cdecl "$k$m.c" -o "$k$m.llrm.obj" 2> "$K${m^^}.ERR" || rm -f "$k$m.llrm.obj"
+        "$BIN/llrm-cc" -mabi=cdecl "$k$m.c" -o "$k$m.llrm.obj" 2> "$K${m^^}.ERR" || rm -f "$k$m.llrm.obj"
     done
     # llrm's module, or BCC's where llrm refuses it: a callee in the llrm
     # caller's segment where the call is near.

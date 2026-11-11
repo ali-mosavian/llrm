@@ -9,12 +9,12 @@ use std::process::Command;
 /// call must see only its own frame on the stack.
 #[test]
 fn libcall_frames_do_not_nest() {
-    let dir = std::env::temp_dir().join("llrm-call-sequences-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("m.ll");
     std::fs::write(
         &source,
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\ntarget triple = \"z80-unknown-none\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
          @x = global double 1.5\n@z = global double 5.5\n\
          declare void @report(i32)\n\
          define i16 @main() {\n\

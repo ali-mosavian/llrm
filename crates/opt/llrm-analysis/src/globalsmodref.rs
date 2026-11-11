@@ -736,7 +736,7 @@ impl GlobalsModRef {
         global: GlobalId,
         argument_may_reach: impl FnOnce() -> ModRefInfo,
     ) -> ModRefInfo {
-        let global_value: &GlobalValue = &globals[global.0 as usize];
+        let Some(global_value) = globals.get(global.0 as usize) else { return ModRefInfo::ModRef };
         if !(local(global_value.linkage) || self.unexported.contains(&global))
             || self.unknown_functions_with_local_linkage
         {
@@ -767,8 +767,14 @@ impl<'a> GlobalsAAResult<'a> {
         &self,
         callee: GlobalId,
     ) -> bool {
+        // A global a pass declared after the Unit was built has no entry here:
+        // not a port.
         matches!(
-            self.unit.globals[callee.0 as usize].name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named),
+            self.unit
+                .globals
+                .get(callee.0 as usize)
+                .and_then(|global| global.name.as_deref())
+                .and_then(llrm_mir::intrinsics::Intrinsic::named),
             Some(llrm_mir::intrinsics::Intrinsic::PortIn | llrm_mir::intrinsics::Intrinsic::PortOut)
         )
     }

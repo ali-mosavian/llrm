@@ -5,7 +5,8 @@ use std::process::Command;
 /// function is called on edge operands and compared with BigInt arithmetic.
 /// Every `llvm.*.with.overflow` stopped the compile with
 /// `Unsupported { op: UAddO, .. "convert node to libcall" }` (so did any C
-/// `__builtin_*_overflow`); the pin expands them in the legalizer.
+/// `__builtin_*_overflow`); the pin expands them in the legalizer, an i64
+/// product through `__multi3`.
 #[test]
 fn the_overflow_operations_compile_and_give_the_wrapped_value_and_the_overflow() {
     let dir = std::env::temp_dir().join(format!("llrm-wasm-overflow-{}", std::process::id()));
@@ -28,7 +29,16 @@ fn the_overflow_operations_compile_and_give_the_wrapped_value_and_the_overflow()
             .expect("wasm-ld");
         assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
         let script = "const m = new WebAssembly.Module(require('fs').readFileSync(process.env.MODULE));
-             const e = new WebAssembly.Instance(m, {}).exports;
+             let e;
+             // The i64 product with overflow is the pin's `__multi3` call (compiler-rt): the result through memory.
+             const env = { __multi3: (r, al, ah, bl, bh) => {
+               const u = (x) => BigInt.asUintN(64, x);
+               const p = BigInt.asUintN(128, (u(al) | (u(ah) << 64n)) * (u(bl) | (u(bh) << 64n)));
+               const view = new DataView(e.memory.buffer);
+               view.setBigUint64(r, p & 0xffffffffffffffffn, true);
+               view.setBigUint64(r + 8, p >> 64n, true);
+             } };
+             e = new WebAssembly.Instance(m, { env }).exports;
              const edge = [0n, 1n, 2n, 0x7fffffffn, 0x80000000n, 0xfffffffen, 0xffffffffn, 0x10000n, 0xffffn, 3n];
              const w = (x) => BigInt.asUintN(32, x), s = (x) => BigInt.asIntN(32, x);
              const pack = (v, o) => w(v) | (o ? 1n << 32n : 0n);

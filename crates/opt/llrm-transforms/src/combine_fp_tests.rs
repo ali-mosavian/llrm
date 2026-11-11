@@ -14,6 +14,10 @@ fn visit(
         Opcode::Binary(BinaryOp::FDiv) => super::visit_fdiv(c, inst),
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => super::visit_fadd_or_fmul(c, inst),
         Opcode::Binary(BinaryOp::FSub) => super::visit_fsub(c, inst),
+        // `simplifyFCmpInst` first, as `combine::visit` does: `fcmp uno 0.0,
+        // 0.0` is `X, X` to the visitor and would be canonicalised for ever.
+        Opcode::FCmp(_) => crate::combine_muldivrem::simplify_first(c, inst)
+            .map_or_else(|| crate::combine_fcmp::visit_fcmp(c, inst), Visit::Replace),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
         Opcode::Call(_) => c.visit_call(inst),
@@ -262,4 +266,47 @@ m1:
     combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
     let after = printed(&module);
     assert!(after.contains("fadd nsz float %p0, %b"), "the add moved into the arm of the second phi: {after}");
+}
+
+/// Pinned `opt -passes=instcombine`: `fcmp une float %x, %x` is `fcmp uno float
+/// %x, 0.0`, and an integer converted to float is never a NaN, so the same
+/// compare of it is false (sfm16_float_i2f kept fcom/fnstsw/sahf on every one).
+#[test]
+fn test_a_float_compared_with_itself_is_a_nan_test_and_an_int_conversion_is_never_nan() {
+    let run = |body: &str| {
+        let mut module = parsed(&format!("define i1 @f(float %x, i32 %k) {{\nb0:\n{body}}}\n"));
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let (context, function) = module.function_mut("f").expect("@f");
+        combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+        printed(&module)
+    };
+    let text = run("  %r = fcmp une float %x, %x\n  ret i1 %r\n");
+    assert!(text.contains("fcmp uno float %x, 0"), "{text}");
+    let text = run("  %c = sitofp i32 %k to float\n  %r = fcmp une float %c, %c\n  ret i1 %r\n");
+    assert!(text.contains("ret i1 false") || text.contains("ret i1 0"), "{text}");
+}
+
+/// wasm32 long_double_arguments -O2: `x*y + a - b + c` kept `fsub fp128 x, 2.0`
+/// and `fadd (..), 0.0`, where the pin has `fadd x, -2.0` and no add of zero
+/// (28 B in `__main_void`): an fp128 constant was neither negated nor known.
+#[test]
+fn an_fp128_constant_subtracted_is_added_negated() {
+    let out = combined("fp128", "  %r = fsub fp128 %x, 0xL00000000000000004000000000000000\n");
+    assert!(out.contains("fadd fp128 %x, 0xL0000000000000000C000000000000000"), "{out}");
+}
+
+#[test]
+fn an_fp128_negative_zero_minus_x_is_fneg() {
+    let out = combined("fp128", "  %r = fsub fp128 0xL00000000000000008000000000000000, %x\n");
+    assert!(out.contains("fneg fp128 %x"), "{out}");
+}
+
+#[test]
+fn an_fp128_sum_that_cannot_be_negative_zero_loses_an_add_of_zero() {
+    let out = combined(
+        "fp128",
+        "  %y = fadd fp128 %x, 0xL0000000000000000BFFF000000000000\n  %r = fadd fp128 %y, 0xL00000000000000000000000000000000\n",
+    );
+    assert!(!out.contains("0xL00000000000000000000000000000000"), "{out}");
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/callframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/callframe.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/callframe.rs sha256:5b578066d30191e3fc30e101628a79ddc657711bb7a3c6747dfd8913b6c95c76 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/callframe.rs sha256:cabc0db11993231f021fa8a2d40af48e9e92aab720912717249bff45c9dfd4fe -->
 
 # callframe
 
@@ -23,18 +23,24 @@ each store becomes a `push` placed before the call, in reverse order, the
 setup's adjustment is the bytes pushed, and a once-read load of the argument
 is folded into `push [m]` unless `slowTwoMemOps`.
 
-The input exists in LIR only as hand-built tests: selection pushes the
-arguments itself (DEVIATE CG6 of row 50, `pushfold.rs`), and the pass finds
-no setup in a body of ours. Its producer is the call lowering of the
-SelectionDAG port (`LowerCall`: `ADJCALLSTACKDOWN`, stores to `[esp+k]`);
-owner sdag-a, with the reserved call frame that prologue insertion (row 80,
-2026-11-13) lays out. Until then the pass does nothing on the corpus.
+The producer is the call lowering of the SelectionDAG port: `LowerCall`
+stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
+`ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
+`call_frame_destroy` at m32 only (`AddrMode::Flat32`, DEVIATE CF4); the
+pass is in the flow at every x86 width. At m16 (`Real16`) and m64 `emit.rs`
+makes `sub sp, N` / `add sp, N - M` itself, so the pass finds no setup and
+changes nothing there. The m16 steps left: emit the pseudos for `Real16`
+(`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
+area out in the m16 prologue, and re-check the readers of the old
+`sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
+rows. Pushes made at m32 selection time (DEVIATE CG6 of row 50,
+`pushfold.rs`) are not this pass's input.
 
 N/A: the Darwin and Win64 conditions of `isLegal`, the stack probe, the
 64-bit forms (`PUSH64`, `INSERT_SUBREG`) and `BuildCFI` (LIR has no CFI
 instruction). DEVIATE CF2 (no number yet): `hasVarSizedObjects` is not in
-LIR; the pass is given it (false until row 80). Owner w-5, review
-2026-11-13.
+LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16,
+review 2026-11-20.
 
 [L147]:
 https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147

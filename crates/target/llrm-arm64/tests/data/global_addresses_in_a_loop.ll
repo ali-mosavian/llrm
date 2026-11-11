@@ -24,7 +24,7 @@ target triple = "arm64-apple-macosx27.2.0"
 
 declare void @use(i32)
 
-define void @f(i32 %n) {
+define void @f(i32 %n) "frame-pointer"="non-leaf" {
 entry:
   br label %loop
 loop:

@@ -131,6 +131,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::lowering::CgpStep;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
@@ -153,6 +154,14 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "cgpaddr_sink_tests.rs"]
 mod sink_tests;
+
+/// The target's lowering, where it runs `step` (every step, by the pin).
+fn lowering_for(
+    analyses: &Analyses,
+    step: CgpStep,
+) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+    analyses.outer().target().lowering().filter(|lowering| lowering.runs_cgp_step(step))
+}
 
 impl FunctionPass for CgpAddr {
     fn name(&self) -> &'static str {
@@ -180,7 +189,7 @@ impl FunctionPass for CgpAddr {
         let branched = crate::cgpbranch::branches_optimized(
             unit.context,
             unit.function,
-            analyses.outer().target().lowering().as_deref(),
+            lowering_for(analyses, CgpStep::Branches).as_deref(),
         );
         // DEVIATE CS1: a dear conversion of a select with a constant arm.
         let costs = analyses.outer().target().costs();
@@ -193,7 +202,7 @@ impl FunctionPass for CgpAddr {
             costs.branch,
         );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
-        let switches = match analyses.outer().target().lowering() {
+        let switches = match lowering_for(analyses, CgpStep::SwitchType) {
             Some(lowering) => {
                 crate::cgpswitch::switch_types_widened(unit.context, unit.layout, &*lowering, unit.function)
             }
@@ -203,7 +212,7 @@ impl FunctionPass for CgpAddr {
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.context, &analyses.outer().globals, unit.function);
         // `optimizeCmp`'s overflow combines, before its other steps.
-        let math = match analyses.outer().target().lowering() {
+        let math = match lowering_for(analyses, CgpStep::OverflowMath) {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
                 crate::cgpmath::overflow_math_formed(
@@ -224,7 +233,7 @@ impl FunctionPass for CgpAddr {
             }
             None => false,
         };
-        let compares = match analyses.outer().target().lowering() {
+        let compares = match lowering_for(analyses, CgpStep::Compares) {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
                 crate::cmpopt::compares_optimized(
@@ -239,8 +248,8 @@ impl FunctionPass for CgpAddr {
             }
             None => false,
         };
-        let masks =
-            one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
+        let masks = one_flag
+            && masks_sunk(unit.context, unit.function, lowering_for(analyses, CgpStep::MaskSinking).as_deref());
         let phis = phis_sunk(unit.function);
         // `optimizeCallInst`'s memory intrinsics: their pointers' known
         // alignment.
@@ -248,7 +257,7 @@ impl FunctionPass for CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
-        let sunk_casts = match analyses.outer().target().lowering() {
+        let sunk_casts = match lowering_for(analyses, CgpStep::CastSinking) {
             Some(lowering) => crate::sinkcast::casts_sunk(
                 unit.context,
                 unit.layout,
@@ -259,7 +268,7 @@ impl FunctionPass for CgpAddr {
             ),
             None => false,
         };
-        let extended = match analyses.outer().target().lowering() {
+        let extended = match lowering_for(analyses, CgpStep::ExtPromotion) {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
                 let promoted = exts_optimized(unit, &*lowering, &mut state);
@@ -279,7 +288,7 @@ impl FunctionPass for CgpAddr {
         );
         // `optimizeInst`'s store case: a merged store is split before its
         // address is sunk.
-        let split = match analyses.outer().target().lowering() {
+        let split = match lowering_for(analyses, CgpStep::SplitStores) {
             Some(lowering) => {
                 crate::splitstore::merged_stores_split(unit.context, unit.layout, &*lowering, unit.function)
             }
@@ -293,7 +302,7 @@ impl FunctionPass for CgpAddr {
         // An address sunk into a loop reads the cast from where it was; made
         // again there, the far pointer's zero offset folds into the address.
         let resunk = addresses
-            && match analyses.outer().target().lowering() {
+            && match lowering_for(analyses, CgpStep::CastSinking) {
                 Some(lowering) => crate::sinkcast::casts_sunk(
                     unit.context,
                     unit.layout,

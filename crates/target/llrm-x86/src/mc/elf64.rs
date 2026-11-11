@@ -135,6 +135,7 @@ mod tests {
             ],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames: Vec::new(),
         }
     }
@@ -256,6 +257,7 @@ mod tests {
             ],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames: Vec::new(),
         };
         let scratch = tempfile::tempdir().unwrap();

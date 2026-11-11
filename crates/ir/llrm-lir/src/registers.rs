@@ -15,12 +15,35 @@ use iced_x86::Register;
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RegId(u8);
 
+thread_local! {
+    static NAMED_BY: std::cell::Cell<Option<&'static Info>> = const { std::cell::Cell::new(None) };
+}
+
+/// Restores the file `Debug` names registers by when dropped.
+pub struct NamedBy(Option<&'static Info>);
+
+impl Drop for NamedBy {
+    fn drop(&mut self) {
+        NAMED_BY.with(|file| file.set(self.0));
+    }
+}
+
+/// Makes `Debug` of a [`RegId`] the name `file` gives it (`x0`) on this thread
+/// while the guard lives; `None` is iced's, x86's (`AL`). Without it an arm64
+/// id prints as the x86 register of the same number.
+pub fn named_by(file: Option<&'static Info>) -> NamedBy {
+    NamedBy(NAMED_BY.with(|cell| cell.replace(file)))
+}
+
 impl std::fmt::Debug for RegId {
     fn fmt(
         &self,
         formatter: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        self.iced().fmt(formatter)
+        match NAMED_BY.with(std::cell::Cell::get).and_then(|file| file.name(*self)) {
+            Some(name) => formatter.write_str(name),
+            None => self.iced().fmt(formatter),
+        }
     }
 }
 
@@ -50,6 +73,18 @@ impl RegId {
     #[inline]
     pub fn values() -> impl Iterator<Item = RegId> + DoubleEndedIterator + ExactSizeIterator {
         Register::values().map(RegId::new)
+    }
+
+    /// The register a description names `name`, in any case: the table of
+    /// names is made once.
+    pub fn named(name: &str) -> Option<RegId> {
+        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, RegId>> =
+            std::sync::LazyLock::new(|| {
+                #[cfg(test)]
+                BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                RegId::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
+            });
+        NAMES.get(name.to_ascii_lowercase().as_str()).copied()
     }
 
     /// The register of iced's number `index`.
@@ -268,6 +303,7 @@ pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 pub struct Cache {
     integers: [std::sync::OnceLock<Vec<RegId>>; 4],
     xmm_bytes: std::sync::OnceLock<u32>,
+    float: std::sync::OnceLock<u32>,
     rfp: std::sync::OnceLock<Vec<RegId>>,
 }
 
@@ -281,6 +317,7 @@ impl Cache {
                 std::sync::OnceLock::new(),
             ],
             xmm_bytes: std::sync::OnceLock::new(),
+            float: std::sync::OnceLock::new(),
             rfp: std::sync::OnceLock::new(),
         }
     }
@@ -321,6 +358,19 @@ pub struct Info {
     /// Worked out on first ask.
     pub cache: Cache,
     pub views: [[Option<RegId>; 8]; 256],
+    /// The file states `@lanes bytes`: its lanes are the bytes of each root,
+    /// from each entry's `lane` and `bits`, not x86's table (the 6502's pairs
+    /// and cells).
+    pub byte_lanes: bool,
+    /// The file states `@lanes x86`: x86's lane table is the one it means.
+    pub lanes_x86: bool,
+    /// The file states `@lanes none`: its target reads no lanes yet, and `lanes::enter` refuses it by name.
+    /// A file with integer views under 32 bits and none of the three lines has no table (`lanes::table_of`).
+    pub lanes_none: bool,
+    /// The file states `@ties rows`: which operand an instruction ties to its
+    /// dest is said by the instruction's row (`^0`), not by its operation
+    /// (x86's rule).
+    pub ties_by_row: bool,
 }
 
 impl Info {
@@ -347,6 +397,14 @@ impl Info {
                 && self.lanes(register) == want
                 && self.bytes(register) == Some(i64::from(bytes))
         })
+    }
+
+    /// The register the description calls `name`, in any case.
+    pub fn by_name(
+        &self,
+        name: &str,
+    ) -> Option<RegId> {
+        self.table.iter().flatten().find(|one| one.name.eq_ignore_ascii_case(name)).map(|one| one.id)
     }
 
     /// Whether the description lists `register`.
@@ -626,8 +684,24 @@ impl Info {
             .cache
             .xmm_bytes
             .get_or_init(
-                || self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8),
+                || self.entries().find(|(_, one)| one.classes & self.float_class() != 0).map_or(0, |(_, one)| one.bits / 8),
             )
+    }
+
+    /// The class scalar floats and vectors live in: `xmm` where the file has
+    /// it, else `fpr` (arm64's `v` registers), else none.
+    pub fn float_class(&self) -> u32 {
+        *self.cache.float.get_or_init(|| {
+            if self.entries().any(|(_, one)| one.classes & class::XMM != 0) { class::XMM } else { class::FPR }
+        })
+    }
+
+    /// Whether `register` is in the file's float class.
+    pub fn in_float_class(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.in_class(register, self.float_class())
     }
 
     /// How wide this register is, or None where the target does not say: a
@@ -644,7 +718,10 @@ impl Info {
         &self,
         register: RegId,
     ) -> bool {
-        self.integer(register) || self.is_segment(register) || self.in_class(register, class::XMM)
+        self.integer(register)
+            || self.is_segment(register)
+            || self.in_class(register, class::XMM)
+            || self.in_class(register, class::FPR)
     }
 
     /// The entries in iced's number order, with their registers.
@@ -810,5 +887,25 @@ impl llrm_support::pyrepr::Repr for RegId {
 impl llrm_support::pyset::PyHash for RegId {
     fn py_hash(&self) -> i64 {
         self.iced().py_hash()
+    }
+}
+
+#[cfg(test)]
+static BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+mod named_tests {
+    use super::*;
+
+    /// `classes::iced` scanned every register, formatting each, for every
+    /// name a description gave (106 names, 2.2 M Ir on a 19 M compile). The
+    /// names are tabled once, however many are asked.
+    #[test]
+    fn test_register_names_are_tabled_once() {
+        assert_eq!(RegId::named("AX"), Some(RegId::AX));
+        assert_eq!(RegId::named("ax"), Some(RegId::AX));
+        assert_eq!(RegId::named("no-such-register"), None);
+        let _ = (0..50).map(|_| RegId::named("ebx")).count();
+        assert_eq!(BUILDS.load(std::sync::atomic::Ordering::Relaxed), 1, "the table was rebuilt");
     }
 }

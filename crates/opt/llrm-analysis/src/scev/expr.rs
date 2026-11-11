@@ -8,6 +8,8 @@
 //! operand pointer. The kinds are numbered as `SCEVTypes` is: the order is
 //! "increasing complexity", which the folders sort by.
 
+use std::rc::Rc;
+
 use llrm_mir::module::{BlockId, Operand};
 
 use super::ap::Ap;
@@ -98,16 +100,16 @@ pub enum Kind {
     ZeroExtend(Use),
     SignExtend(Use),
     PtrToAddr(Use),
-    Add(Vec<Use>),
-    Mul(Vec<Use>),
+    Add(Rc<[Use]>),
+    Mul(Rc<[Use]>),
     UDiv(Use, Use),
     /// The operands, and the header of the loop.
-    AddRec(Vec<Use>, BlockId),
-    UMax(Vec<Use>),
-    SMax(Vec<Use>),
-    UMin(Vec<Use>),
-    SMin(Vec<Use>),
-    SequentialUMin(Vec<Use>),
+    AddRec(Rc<[Use]>, BlockId),
+    UMax(Rc<[Use]>),
+    SMax(Rc<[Use]>),
+    UMin(Rc<[Use]>),
+    SMin(Rc<[Use]>),
+    SequentialUMin(Rc<[Use]>),
     Unknown(Operand),
     CouldNotCompute,
 }

@@ -70,7 +70,7 @@ impl ScalarEvolution {
         // Split the Denominator when it is a product.
         if let Kind::Mul(factors) = self.node(denominator).kind.clone() {
             let mut quotient = numerator;
-            for factor in factors {
+            for factor in factors.iter().copied() {
                 let (q, r) = self.divide(cx, quotient, factor.scev);
                 quotient = q;
                 // Bail out when the Numerator is not divisible by one of the

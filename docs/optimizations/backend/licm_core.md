@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/licm_core.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/licm_core.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/licm_core.rs sha256:22c14d218ac159c9a068fba416e5ba5aa7bc3f6e9c6d3ea9f2e01254670a8a40 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/licm_core.rs sha256:edfbd40600e4029cd1aa250ae845401b975c18dbc9234989fddb8ce8cf3eb64a -->
 
 # licm_core
 
@@ -28,3 +28,6 @@ the loop. A moved instruction goes before the preheader's jump.
 
 ## See also
 `machinelicm` (the x86 policy), the arm64 policy in `llrm-arm64`.
+
+## Used by
+Named by `machinelicm`.
