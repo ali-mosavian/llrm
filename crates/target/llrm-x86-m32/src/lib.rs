@@ -130,6 +130,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // executed work grow. x_life O1: the 3x3 nest unrolled is -15 B and -62% clk (the rolled
         // nest spills); matmul O1 is +1601 B and stays rolled.
         unroll_trial_at_o1: Some(150),
+        unroll_trial_nests_only: true,
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
@@ -721,6 +722,14 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// #9101 narrowed every target's -O1 unroll trial to nests; only m32 was fit on that (a lone loop
+    /// paid in 1 of 46 programs), so m32 says so itself.
+    #[test]
+    fn test_the_o1_unroll_trial_takes_nests_only() {
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        assert!(tuning.unroll_trial_at_o1.is_some() && tuning.unroll_trial_nests_only);
+    }
+
     /// -O3 copied a recursion to depth 8 with the loop first, gcc's setting,
     /// while -O2 copies to depth 2 with the tree first. Over 12 recursion
     /// programs -O3 was bigger by 5556 B and ran 1.12 M more instructions than

@@ -733,6 +733,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn unroll_trial_nests_only(&self) -> bool {
+        self.tuning.unroll_trial_nests_only
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
