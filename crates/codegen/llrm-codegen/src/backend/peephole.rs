@@ -395,6 +395,7 @@ impl Peephole {
                 ),
             ),
         );
+        let body = swapped_registers(self.rules, &body, &self.cpu);
         let body = loaded_segments(self.rules, &body);
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
@@ -1164,6 +1165,16 @@ pub fn restored_copies(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
+}
+
+/// `mov t,a; mov a,b; mov b,t` as `xchg a,b` where the code is for size
+/// (`peephole.peep`, `swapped_registers`).
+pub fn swapped_registers(
+    rules: &peep::Rules,
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    peep::rewritten(rules.swapped_registers, body, &Facts::new(body, Some(cpu)))
 }
 
 /// Drop the reload of a scalar float into the register that filled the cell

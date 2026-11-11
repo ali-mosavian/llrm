@@ -511,6 +511,11 @@ impl Emitter<'_> {
             // instruction table: an undefined value, a zero until MIR has
             // `undef` (the pin's ProcessImplicitDefs drops it)
             ISD::Machine(10) => {
+                // the glue a `CALLSEQ_END` of no bytes is given
+                // (`DYNAMIC_STACKALLOC`'s expansion) is no register
+                if !is_value(n.values[0]) {
+                    return Ok(());
+                }
                 let name = match n.values[0].size_in_bits() {
                     8 => "MOVI8di",
                     16 => "MOVI16di",
@@ -544,9 +549,24 @@ impl Emitter<'_> {
                 if name == "EXTRACT_SUBREG" {
                     let dst = self.new_reg(Class::of_type(n.values[0]));
                     self.values.insert((node, 0), dst);
-                    let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                    let Some(Operand::Use(mut src)) = self.operand(n.ops[0])? else {
                         return Err("EXTRACT_SUBREG of a value that is no register".to_owned());
                     };
+                    // `ConstrainForSubReg`: only data registers have a byte or
+                    // word sub-register, so a 32-bit source is constrained to
+                    // `Dr32`, or copied into one where it cannot be.
+                    if let Reg::Virt(v) = src {
+                        if matches!(self.function.classes[v as usize], Class::Xr32 | Class::Ar32 | Class::Dr32) {
+                            match self.function.classes[v as usize].meet(Class::Dr32) {
+                                Some(narrowed) => self.function.classes[v as usize] = narrowed,
+                                None => {
+                                    let data = self.new_reg(Class::Dr32);
+                                    into.push(Inst::copy(data, src));
+                                    src = data;
+                                }
+                            }
+                        }
+                    }
                     into.push(Inst::copy(dst, src));
                     return Ok(());
                 }

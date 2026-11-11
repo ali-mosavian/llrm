@@ -51,7 +51,7 @@ pub fn split_phi_edges(module: &mut Module) {
 pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
 
 /// Marks every function with a body when the module multiplies longs often
-/// enough to pay for `__mulsi3` (57 B): a long multiply counts one, a long
+/// enough to pay for `__mulsi3` (58 B): a long multiply counts one, a long
 /// long three (its cross products). A lone small multiply is cheaper inline
 /// (copy_runs, switch_jump_table: +10 and +31 B at -Os with the call).
 pub fn mark_long_multiplies(module: &mut Module) {

@@ -71,6 +71,11 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
+    /// counts a callee in bytes of encoded code by instruction kind
+    /// (`Tti::inline_size_view`), not in the pin's units of one per
+    /// instruction. false: the pin's units.
+    pub inline_size_bytes: bool,
     /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
@@ -165,17 +170,10 @@ pub struct Tuning {
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
-    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
-    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
-    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
-    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
-    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
-    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
-    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
-    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
-    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
-    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
-    /// it is off at `-O2` and `-O3`.
+    /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`, or a `minsize` function, always).
+    /// The pin expands at `-Os` (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only; clang
+    /// `-Os` does not set `minsize`), so no target sets this. m32 did from #8672 to 2026-11-11: stft_fixed `-Os` 96.8M ->
+    /// 188.9M clk (+95%) and jpeg_fixed +64% against main, for -127 B and -790 B; `-Os` is strict per axis.
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
@@ -374,6 +372,11 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE PIL-OS (owner alim, exit 2026-11-27): PartiallyInlineLibCalls
+    /// leaves a call in a function tuned for size (`optsize`, `minsize`)
+    /// alone. false: the pin's, which splits it there too and grows the code
+    /// by a compare, a branch and a copy of the call.
+    pub partial_libcalls_skip_at_size: bool,
     /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
     /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
@@ -440,6 +443,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
+        inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
@@ -500,6 +504,7 @@ impl Tuning {
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
+        partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
@@ -568,6 +573,16 @@ pub trait Machine {
     /// its stack. A larger one is a named refusal at pipeline entry.
     fn max_alloca_align(&self) -> Option<u64> {
         None
+    }
+
+    /// Whether a dynamic `alloca` (a variable size, or outside the entry block)
+    /// keeps the alignment it asks for: `DYNAMIC_STACKALLOC` masks the
+    /// address, so it needs neither the clamp to [`Machine::kept_stack_align`]
+    /// nor the refusal at [`Machine::max_alloca_align`], which are for the
+    /// frame's own objects. False: clamped and refused like every other
+    /// `alloca`.
+    fn honors_dynamic_alloca_align(&self) -> bool {
+        false
     }
 
     /// What each operation costs on this target, for profitability.
@@ -840,6 +855,12 @@ pub struct OperationCosts {
     /// equal to `multiply`/`divide` elsewhere.
     pub multiply_long: i64,
     pub divide_long: i64,
+    /// An integer product wider than the target's word (an `i64` on a 32-bit CPU), where the CPU's own multiply is
+    /// narrower: the CPU's whole sequence. 0: priced as `multiply_long`.
+    pub multiply_wide: i64,
+    /// The product of two values extended from the word (`i32` by `i32` into `i64`), the form a fixed-point multiply
+    /// expands to. 0: priced as `multiply_wide`.
+    pub multiply_widening: i64,
     /// Percent by which a constant divide's multiply-high sequence must cost
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
@@ -972,6 +993,9 @@ pub struct OperationCosts {
     /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
     /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
     pub free_intrinsics: bool,
+    /// Whether a fixed-point or saturating intrinsic (`llvm.{s,u}mul.fix[.sat]`, `llvm.{s,u}shl.sat`) is priced as the
+    /// operations it expands to, on this target's table, in a function's estimate. False: priced as a call.
+    pub expanded_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -980,6 +1004,16 @@ pub struct OperationCosts {
 }
 
 impl OperationCosts {
+    /// An integer product wider than the word: `multiply_wide`, else `multiply_long`.
+    pub fn wide_product(&self) -> i64 {
+        if self.multiply_wide > 0 { self.multiply_wide } else { self.multiply_long }
+    }
+
+    /// The product of two word-wide values in a double-wide result: `multiply_widening`, else [`Self::wide_product`].
+    pub fn widening_product(&self) -> i64 {
+        if self.multiply_widening > 0 { self.multiply_widening } else { self.wide_product() }
+    }
+
     /// The ratio under which a constant memset of `zero` bytes, or of any other
     /// byte, is stores; 0 where none is stated. `size`: tuned for size.
     pub fn pieces(
@@ -1074,6 +1108,8 @@ impl Default for OperationCosts {
             divide: 1,
             multiply_long: 1,
             divide_long: 1,
+            multiply_wide: 0,
+            multiply_widening: 0,
             divide_margin: 0,
             multiply_high: 1,
             shift: 1,
@@ -1127,6 +1163,7 @@ impl Default for OperationCosts {
             function: 0,
             function_scale: 100,
             free_intrinsics: false,
+            expanded_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }

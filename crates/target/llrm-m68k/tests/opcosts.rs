@@ -19,7 +19,7 @@ fn the_size_costs_are_bytes_not_one_per_operation() {
     }
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let costs = opcosts::size_costs(cpu).unwrap();
-        assert_eq!((costs.branch, costs.argument, costs.pop, costs.function), (2, 2, 2, 4), "{cpu:?}: bra.b, a push, a pop, one saved register");
+        assert_eq!((costs.branch, costs.argument, costs.pop, costs.function - llrm_m68k::opcosts::FUNCTION_RESIDUE_BYTES), (2, 2, 2, 4), "{cpu:?}: bra.b, a push, a pop, one saved register");
         assert_eq!((costs.float_add, costs.float_multiply, costs.float_divide), (34, 34, 34), "{cpu:?}: 4 words pushed, jsr, lea, 2 stores");
         assert_eq!((costs.float_compare, costs.float_to_int), (26, 20), "{cpu:?}");
         assert_eq!((costs.float_load, costs.float_store), (8, 8), "{cpu:?}: two longs");

@@ -350,6 +350,12 @@ impl Dag for TestDag {
     ) -> bool {
         false
     }
+    fn has_exact_flag(
+        &self,
+        _: u32,
+    ) -> bool {
+        false
+    }
     fn atomic_ordering(
         &self,
         node: u32,
