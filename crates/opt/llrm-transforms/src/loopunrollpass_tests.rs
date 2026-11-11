@@ -1721,6 +1721,58 @@ fn test_a_partial_unroll_is_priced_by_the_cores_resources() {
     assert!(!issue_bound_loop_partially_unrolled(true), "24 clk saved by the control, 9 B of copies at 4000 milliclocks");
 }
 
+/// particle -O3 (m64): a 100-trip loop around a short load-add-store loop. How many `outer` headers the unroll left:
+/// the pin's partial unroll of the outer loop, with or without the throughput model.
+fn nest_outer_loops_left(throughput: bool) -> (usize, usize) {
+    let mut module = parsed(
+        "define void @f(ptr %a, ptr %b) {
+entry:
+  br label %outer
+
+outer:
+  %t = phi i64 [ 0, %entry ], [ %tn, %latch ]
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %outer ], [ %next, %loop ]
+  %p = getelementptr i32, ptr %a, i64 %i
+  %v = load i32, ptr %p
+  %o = getelementptr i32, ptr %b, i64 %i
+  %w = load i32, ptr %o
+  %s = add i32 %v, %w
+  store i32 %s, ptr %o
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 64
+  br i1 %more, label %loop, label %latch, !llvm.loop !0
+
+latch:
+  %tn = add i64 %t, 1
+  %again = icmp ne i64 %tn, 100
+  br i1 %again, label %outer, label %done
+
+done:
+  ret void
+}
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.disable\"}
+",
+    );
+    unroll_on_core(&mut module, throughput, true, 2, 0, 400_000);
+    let text = printed(&module);
+    (text.matches("= phi i64 [ 0, %entry ]").count(), text.matches("load i32").count())
+}
+
+/// The trip model prices one pass over a loop's blocks, so it priced the unroll of a loop around another loop at
+/// no clocks and refused it (particle -O3: 10155 clk with the pin's copies of the outer loop, 27474 without). A loop
+/// with an inner loop keeps the pin's rule.
+#[test]
+fn test_a_loop_around_another_loop_is_not_priced_by_the_trip_model() {
+    let (pin, with_model) = (nest_outer_loops_left(false), nest_outer_loops_left(true));
+    assert_ne!(pin.1, 2, "premise: something is unrolled: {pin:?}");
+    assert_eq!(pin, with_model, "pin {pin:?} against the model {with_model:?}");
+}
+
 /// m68k float_in_memory_loop: sixteen trips of `acc += 0.5` fold to a constant,
 /// but the target's unroll threshold (32) is under the unrolled size (64) and
 /// the analysis stopped at the pin's 10 trips, so the loop stayed: 1600

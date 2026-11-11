@@ -1521,6 +1521,12 @@ fn priced_partial(
     if count < 2 || count >= trip_count.max(2) && trip_count != 0 || up.force || pinfo.explicit_unroll {
         return count;
     }
+    // The trip model prices one pass over the blocks: a loop with an inner loop is not one trip of the model, and its
+    // copies make the inner loops adjacent for the cleanup (particle -O3: copies of the outer loop fused the inner
+    // loops, 27474 -> 10155 clk). The pin's rule stands there.
+    if !lp.is_innermost() {
+        return count;
+    }
     if price::partial_unroll_pays(run, se, analyzed, lp, count, trip_count) {
         count
     } else {
