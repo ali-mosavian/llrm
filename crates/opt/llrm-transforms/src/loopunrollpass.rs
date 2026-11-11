@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod throughput;
 mod recurrence;
 pub mod trial;
 
@@ -2754,12 +2755,37 @@ pub fn unroll_function(
     tti: &dyn Tti,
     options: Options,
 ) -> Result<bool, String> {
+    unroll_function_on(module, name, tti, options, None)
+}
+
+/// `unroll_function` for a program of its own for `target`: the machine's costs and throughput model.
+pub fn unroll_function_on(
+    module: &mut llrm_mir::module::Module,
+    name: &str,
+    tti: &dyn Tti,
+    options: Options,
+    target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>,
+) -> Result<bool, String> {
+    unroll_function_hiding(module, name, tti, options, target, 0)
+}
+
+/// `unroll_function_on` with the last `hidden` globals left out of the pass's view of the module: the callees a
+/// pipeline run declares after its snapshot (`Declared`), which a call in the function names by an id past it.
+pub(crate) fn unroll_function_hiding(
+    module: &mut llrm_mir::module::Module,
+    name: &str,
+    tti: &dyn Tti,
+    options: Options,
+    target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>,
+    hidden: usize,
+) -> Result<bool, String> {
     let layout =
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
-    let outer = llrm_mir::passes::Outer::of(module, None);
+    let outer = llrm_mir::passes::Outer::of(module, target);
     let mut declared = llrm_mir::passes::Declared::of(module);
-    let globals = module.globals.clone();
+    let mut globals = module.globals.clone();
+    globals.truncate(globals.len() - hidden);
     let metadata = module.metadata.clone();
     let id = module
         .functions()

@@ -6753,3 +6753,20 @@ fn a_swap_of_byte_registers_stays_three_moves_for_size() {
 
     assert_eq!(swapped_registers(rules(), &input, &cpu), input);
 }
+
+/// The pass priced `add r,r` against `shl r,1`, and `xor r,r; mov rl,m` against
+/// `movzx`, before it looked for a rule that uses the price, so a target that
+/// states no clocks (arm64 prices through its cost model) was refused on every
+/// function: "generic has no cost for alu_rr" on 43 of 43 functions of the -O1
+/// corpus.
+#[test]
+fn test_a_price_is_asked_only_for_a_rule_the_target_has() {
+    let mut cpu = crate::backend::cpu::profile("386").unwrap().clone();
+    cpu._costs = Default::default();
+    let body = LirBody::new("t", 0, vec![], IndexMap::default(), IndexMap::default());
+    let none = &crate::backend::peep::Rules::NONE;
+    assert!(doubled(none, &body, &cpu).is_ok());
+    assert!(zeroed_loads(none, &body, &cpu).is_ok());
+    assert!(doubled(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
+    assert!(zeroed_loads(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
+}

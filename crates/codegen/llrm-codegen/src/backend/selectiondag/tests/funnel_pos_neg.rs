@@ -61,3 +61,36 @@ fn a_shift_pair_through_one_and_xor_is_a_right_funnel_shift() {
     });
     assert_eq!(dag.opcode(root), ISD::FShr);
 }
+
+/// A constant `z` folds `(srl z, 1)` away before the pair is matched; x86_16 -Os
+/// `call_cleanup_keeps_pair` then kept `shl/not/shr/or` for the folded shape
+/// where `shld` was, 307 -> 327 B. The folded constant is `z >> 1` for a `z` that
+/// is left to the fold's other half, so the pair is still `(fshl x, z, y)`.
+#[test]
+fn a_left_pair_whose_srl_of_a_constant_folded_is_a_left_funnel_shift() {
+    let (dag, root) = combined(|dag, x, _, y| {
+        let last = dag.get_constant(31, EVT::I8);
+        let folded = dag.get_constant(0x3a5c_0f11, EVT::I32);
+        let high = dag.get_node(ISD::Shl, EVT::I32, &[x, y]);
+        let inverse = dag.get_node(ISD::Xor, EVT::I8, &[y, last]);
+        let low = dag.get_node(ISD::Srl, EVT::I32, &[folded, inverse]);
+        dag.get_node(ISD::Or, EVT::I32, &[high, low])
+    });
+    assert_eq!(dag.opcode(root), ISD::FShl);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(0x3a5c_0f11 << 1));
+}
+
+/// The right-hand twin: `(shl (shl z, 1), inv)` folds to `(shl (z << 1), inv)`.
+#[test]
+fn a_right_pair_whose_shl_of_a_constant_folded_is_a_right_funnel_shift() {
+    let (dag, root) = combined(|dag, _, z, y| {
+        let last = dag.get_constant(31, EVT::I8);
+        let folded = dag.get_constant(0x3a5c_0f10, EVT::I32);
+        let inverse = dag.get_node(ISD::Xor, EVT::I8, &[y, last]);
+        let high = dag.get_node(ISD::Shl, EVT::I32, &[folded, inverse]);
+        let low = dag.get_node(ISD::Srl, EVT::I32, &[z, y]);
+        dag.get_node(ISD::Or, EVT::I32, &[high, low])
+    });
+    assert_eq!(dag.opcode(root), ISD::FShr);
+    assert_eq!(dag.constant(dag.operand(root, 0)), Some(0x3a5c_0f10 >> 1));
+}

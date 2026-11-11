@@ -117,6 +117,7 @@ pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
 pub mod combine_castcall;
+pub mod combine_returned_arg;
 pub mod combine_casted_logic;
 pub mod combine_casts;
 #[cfg(test)]
@@ -129,6 +130,7 @@ pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
 pub mod combine_fcmp;
+pub mod combine_fneg;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
 pub mod combine_fpcast;
@@ -355,6 +357,7 @@ mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
+pub mod mergeicmps;
 pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
