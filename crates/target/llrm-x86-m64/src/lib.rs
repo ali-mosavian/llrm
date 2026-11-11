@@ -465,6 +465,12 @@ impl llrm_target::Target for M64 {
                             // DEVIATE REC-7 (owner m64-clocks, exit 2026-11-30), as m32: copies
                             // are 2 deep at -O2 and -O3, not gcc's 8.
                             recursive_inlining_depth: Some((2, 2)),
+                            // DEVIATE REC-1 (priced), m64 (owner m64-clocks, exit 2026-11-30):
+                            // each level of copies is made while its saved call clocks, at
+                            // 0.3125 clk/B (oversight 2026-11-10), pay its bytes, to depth 8
+                            // and a body of 450 `gcc_insns`; the fixed depth above is the fallback.
+                            priced_self_inlining: Some((8, 450)),
+                            recursion_milliclocks_per_byte: 312,
                             // DEVIATE REC-2-LOSERS (owner m64, exit 2026-11-21): the copies cost
                             // net (clk + 0.312 B) against none on recchop -O3 +1020 (2194 B),
                             // bintree -O3 +134 (1160 B, 0 clk), recpow -O2 +4002 (peeled). Their
