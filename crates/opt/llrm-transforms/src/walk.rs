@@ -212,8 +212,8 @@ pub struct Walk {
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
 /// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and
 /// inlining is on (`-fno-inline-functions` asks for no copies of a body, a
-/// recursive one included). None: the pin's inliner, which copies no recursive
-/// callee (`IsRecursiveCall`).
+/// recursive one included). `-fno-inline-recursive` or neither: the pin's
+/// inliner, which copies no recursive callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Recursion {
     pub depth: usize,
@@ -222,12 +222,16 @@ pub struct Recursion {
 
 impl Recursion {
     pub fn of(
-        flag: bool,
+        flag: Option<bool>,
         single: bool,
         inlining: bool,
         o3: bool,
         tti: Option<&dyn llrm_mir::tti::Tti>,
     ) -> Option<Self> {
+        // `-fno-inline-recursive` is off whatever the target says.
+        if flag == Some(false) {
+            return None;
+        }
         match tti.and_then(|tti| tti.recursive_inlining()) {
             Some((depth, callee)) if !single && inlining => {
                 let depth = tti
@@ -235,7 +239,7 @@ impl Recursion {
                     .map_or(depth, |(o2, o3_depth)| if o3 { o3_depth } else { o2 });
                 Some(Self { depth: depth as usize, callee })
             }
-            _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
+            _ => (flag == Some(true)).then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
         }
     }
 }
@@ -1151,8 +1155,8 @@ pub struct SelfInline {
     pub for_size: bool,
     /// -O2 and -O3: the target's byte price at speed counts.
     pub speed_rate: bool,
-    /// `-finline-recursive`.
-    pub flag: bool,
+    /// `-f[no-]inline-recursive`; `None`: the target's default.
+    pub flag: Option<bool>,
     /// -O3: gcc's `max-inline-insns-auto` is the larger bar.
     pub o3: bool,
     /// Inlining is on (`Threshold.limit != 0`).
@@ -1312,6 +1316,66 @@ pub const TRIAL_LIGHT: &str = "walk.trial.light.";
 /// (`Tti::inline_trial_caller_limit` where a target states one).
 const TRIAL_CALLER: usize = 300;
 
+/// Whether both operands of a product are an extension of a value no wider than the word: the product the CPU makes in one
+/// widening multiply where it has one (`muls.l` into a register pair), not a full double-word product.
+fn extended_from_word(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    operands: &[llrm_mir::module::Operand],
+    word: u32,
+) -> bool {
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    use llrm_mir::tti::Ty;
+    operands.iter().take(2).all(|&operand| {
+        let Operand::Value(id) = operand else { return false };
+        let ValueDef::Instruction(def) = function.value(id).def else { return false };
+        let def = function.instruction(def);
+        matches!(def.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt))
+            && def
+                .operands
+                .first()
+                .and_then(|&source| function.operand_type(&module.context, source))
+                .and_then(|ty| Ty::of(&module.context.types, ty))
+                .is_some_and(|kind| matches!(kind, Ty::Int(bits) if bits <= word))
+    })
+}
+
+/// The bytes of a fixed-point or saturating intrinsic as the operations it expands to, from the target's table:
+/// `llvm.{s,u}mul.fix[.sat].iN` is two extensions, the product of two `N`-bit values in `2N` bits, two shifts to take
+/// the scaled middle and, when saturating, two compares and two selects; `llvm.{s,u}shl.sat.iN` is a shift, the shift
+/// back, a compare and a select. None: not one of these.
+fn expanded_intrinsic(
+    costs: &llrm_mir::target::OperationCosts,
+    word: u32,
+    name: &str,
+) -> Option<i64> {
+    let rest = name.strip_prefix("llvm.")?;
+    let (kind, rest) = rest.split_once('.')?;
+    let (op, rest) = (kind.get(1..)?, rest);
+    if !matches!(kind.get(..1)?, "s" | "u") {
+        return None;
+    }
+    let bits: u32 = rest.rsplit_once(".i")?.1.parse().ok()?;
+    let saturating = rest.contains(".sat");
+    let select = costs.branch + costs.r#move;
+    match op {
+        "mul" if rest.starts_with("fix") => {
+            let product = if 2 * bits <= word {
+                costs.multiply
+            } else if bits <= word {
+                costs.widening_product()
+            } else {
+                costs.wide_product()
+            };
+            let scale = 2 * costs.extend + product + 2 * costs.shift + costs.add;
+            Some(if saturating { scale + 2 * (costs.add + select) } else { scale })
+        }
+        "shl" if rest.starts_with("sat") => Some(2 * costs.shift + costs.add + select),
+        _ => None,
+    }
+}
+
 /// SZ2: the bytes `function` becomes, by the target's byte prices
 /// (`Machine::size_costs`, the opcode table's encodings): each operation is
 /// the instructions it lowers to, a dword where the word is smaller
@@ -1345,12 +1409,25 @@ pub fn function_bytes(
                         llrm_mir::module::Operand::Constant(id) if matches!(module.context.get(id).kind, llrm_mir::context::ConstantKind::Int(_))
                     ),
                 );
+            let expanded = (costs.expanded_intrinsics && matches!(operation.opcode, Opcode::Call(_) | Opcode::Invoke(_)))
+                .then(|| llrm_mir::memory::callee(&module.context, function, inst).and_then(|global| module.global(global).name.as_deref()))
+                .flatten()
+                .and_then(|name| expanded_intrinsic(costs, word, name));
             match &operation.opcode {
                 Opcode::Binary(op) => match op {
                     BinaryOp::FAdd | BinaryOp::FSub => costs.float_add,
                     BinaryOp::FMul => costs.float_multiply,
                     BinaryOp::FDiv | BinaryOp::FRem => costs.float_divide,
-                    BinaryOp::Mul => (if wide { costs.multiply_long } else { costs.multiply }) + prefix,
+                    BinaryOp::Mul => {
+                        let product = if !wide {
+                            costs.multiply
+                        } else if extended_from_word(module, function, &operation.operands, word) {
+                            costs.widening_product()
+                        } else {
+                            costs.wide_product()
+                        };
+                        product + prefix
+                    }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if constant_divisor => {
                         // The multiply-high sequence: the constant, the high
                         // multiply, two shifts and two adds (a remainder
@@ -1408,6 +1485,10 @@ pub fn function_bytes(
                 {
                     0
                 }
+                // `llvm.smul.fix.sat` and the like expand to a widening multiply, shifts and compares: priced as calls they
+                // were 12 B each in fixed_point, whose objects are 1.6 kB at the 68020 and 2.9 kB at the 68000. A target
+                // opts in (`expanded_intrinsics`).
+                Opcode::Call(_) | Opcode::Invoke(_) if expanded.is_some() => expanded.unwrap_or(0),
                 Opcode::Call(_) | Opcode::Invoke(_) => {
                     costs.call + costs.argument * operation.operands.len().saturating_sub(1) as i64
                 }

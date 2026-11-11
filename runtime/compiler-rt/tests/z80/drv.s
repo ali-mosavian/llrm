@@ -21,20 +21,20 @@ next:
 	call	OP
 	inc	sp
 	inc	sp
-	ld	a,e
+	ld	a,l
 	cp	a,8(ix)
 	jr	nz,bad
-	ld	a,d
+	ld	a,h
 	cp	a,9(ix)
 	jr	nz,bad
-	ld	a,l
+	ld	a,e
 	cp	a,10(ix)
 	jr	nz,bad
-	ld	a,h
+	ld	a,d
 	cp	a,11(ix)
 	jr	z,good
-bad:	ld	(0x8f1c),de
-	ld	(0x8f1e),hl
+bad:	ld	(0x8f1c),hl
+	ld	(0x8f1e),de
 	ld	hl,(0x8f00)
 	ld	a,h
 	or	a,l

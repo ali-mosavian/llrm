@@ -986,6 +986,12 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // LoopVectorizePass (l.1354): a no-op where the target takes no vector values.
+            slot("loop-vectorize@1354", Box::new(crate::loopvectorize::LoopVectorize {
+                // clang vectorizes loops at -O2 and up (`PTO.LoopVectorization`).
+                only_when_forced: !applied.options.pre,
+                ..Default::default()
+            })),
             // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
             slot(
                 "drop-unnecessary-assumes@1360",
@@ -1413,6 +1419,21 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                     let realigned = realigned_above.is_some_and(|above| wanted > above);
                     if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
+                        // An access that states more than its object keeps claims an alignment nothing has, and
+                        // `isSafeToSpeculateLoad` refuses it (`isDereferenceableAndAlignedPointer`): the second load of
+                        // `c >= '0' && c <= '9'` stayed behind its branch and the range check never formed.
+                        let Some(result) = function.instruction(inst).result else { continue };
+                        for user in function.users(result).into_iter().copied().collect::<Vec<_>>() {
+                            let access = function.instruction(user.user);
+                            let pointer = match access.opcode {
+                                llrm_mir::opcode::Opcode::Load { align, .. } => (user.index == 0).then_some(align),
+                                llrm_mir::opcode::Opcode::Store { align, .. } => (user.index == 1).then_some(align),
+                                _ => None,
+                            };
+                            if pointer.is_some_and(|stated| stated.is_none_or(|stated| stated > kept)) {
+                                function.set_access_align(user.user, kept);
+                            }
+                        }
                     }
                 }
             }
@@ -1703,6 +1724,13 @@ pub fn recorded(
     }
     // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
     // body is final.
+    // `MergeFunctions`: off in the pin's pipeline; a target that wants it at -Os says so (DEVIATE MERGEFUNC-OS).
+    if applied.options.optimize
+        && applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.merge_functions_at_size())
+    {
+        manager.add_program(crate::mergefunc::MergeFunctions);
+    }
     if applied.options.optimize {
         manager.add_program(constmerge::ConstantMerge);
     }
