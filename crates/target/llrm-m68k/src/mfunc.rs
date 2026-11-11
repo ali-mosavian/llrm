@@ -511,6 +511,11 @@ impl Emitter<'_> {
             // instruction table: an undefined value, a zero until MIR has
             // `undef` (the pin's ProcessImplicitDefs drops it)
             ISD::Machine(10) => {
+                // the glue a `CALLSEQ_END` of no bytes is given
+                // (`DYNAMIC_STACKALLOC`'s expansion) is no register
+                if !is_value(n.values[0]) {
+                    return Ok(());
+                }
                 let name = match n.values[0].size_in_bits() {
                     8 => "MOVI8di",
                     16 => "MOVI16di",

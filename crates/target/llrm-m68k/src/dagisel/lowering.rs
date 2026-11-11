@@ -318,6 +318,16 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
 }
 
 impl Hooks for M68kLowering {
+    /// `getStackPointerRegisterToSaveRestore` and the frame's stack alignment,
+    /// which the shared expansion of `DYNAMIC_STACKALLOC`, `STACKSAVE` and
+    /// `STACKRESTORE` reads: the node sequence the pin's
+    /// `LowerDYNAMIC_STACKALLOC` builds (`M68kISelLowering.cpp:3362`), with the
+    /// alignment the frames keep (`frame::SHIPPED_STACK_ALIGN`, the pin's
+    /// is 8: see there).
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        Some((crate::reg::SP, crate::frame::SHIPPED_STACK_ALIGN as u64))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
