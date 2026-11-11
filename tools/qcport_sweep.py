@@ -61,8 +61,8 @@ def kind(message: str) -> str:
 
 
 def cc_env() -> dict[str, str]:
-    """llrm-cc's target for QCport: its default is x86_64-linux, where QCport's Borland sources (`far`, `interrupt`) do not parse and the link step runs."""
-    return {**os.environ, "LLRM_CC_TARGET": oracle_qcport.ROW}
+    """llrm-cc's target for QCport, with every pass checked (`LLRM_VERIFY`): its default is x86_64-linux, where QCport's Borland sources (`far`, `interrupt`) do not parse and the link step runs."""
+    return {**os.environ, "LLRM_CC_TARGET": oracle_qcport.ROW, "LLRM_VERIFY": "1"}  # the gate's setting (qcport-compile.sh): render/sc.c -O2/-O3 compile only without it
 
 
 def mirror_includes(source: Path, into: Path) -> Path:

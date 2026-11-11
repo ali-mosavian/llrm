@@ -324,3 +324,10 @@ def test_the_header_mirror_follows_links_and_drops_the_dos_end_of_file_byte(tmp_
     (tmp_path / "raw" / "DOS.H").symlink_to(tmp_path / "real" / "DOS.H")
     mirrored = q.mirror_includes(tmp_path / "raw", tmp_path / "inc")
     assert (mirrored / "dos.h").read_bytes() == b"#define X 1\n"
+
+
+def test_the_sweep_compiles_with_the_pass_checks_on(tmp_path):
+    """render/sc.c -O2/-O3 on the x86_16-dos row die in the peephole's check (`value#N is read but never defined`) and compile without it: a sweep that did not set
+    LLRM_VERIFY, as the gate's qcport-compile.sh does, read them as clean. The stand-in refuses a compile without it."""
+    compiler = _recording_compiler(tmp_path, "sys.exit(0 if os.environ.get('LLRM_VERIFY') == '1' else 1)\n")
+    assert q.sweep(compiler, _qcport_tree(tmp_path), tmp_path, levels=("-O1", "-O2"), jobs=1) == []

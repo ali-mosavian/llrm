@@ -118,7 +118,10 @@ fn matcher(pattern: &str) -> Regex {
     while !rest.is_empty() {
         if let Some(inner) = rest.strip_prefix("{{") {
             let end = inner.find("}}").expect("an unclosed {{ in a pattern");
+            // Grouped, as FileCheck does: `{{si|di}}` is one alternation, not the end of the pattern.
+            out.push_str("(?:");
             out.push_str(&inner[..end]);
+            out.push(')');
             rest = &inner[end + 2..];
         } else {
             let end = rest.find("{{").unwrap_or(rest.len());
@@ -266,6 +269,15 @@ fn check(
     source: &str,
 ) -> Result<(), String> {
     filecheck(output, &directives(source))
+}
+
+/// `div {{si|di}}` was the regex `div si|di`: it matched any line with "di", so lsr_real_mode_drop's
+/// `CHECK-NOT: imul` started ahead of the div and went red on the imul before it.
+#[test]
+fn test_an_alternation_in_a_pattern_stays_inside_it() {
+    assert!(!matcher("div {{si|di}}").is_match("    mov di, 1"));
+    assert!(matcher("div {{si|di}}").is_match("    div di"));
+    assert!(check("mov di, 1\nimul ax, si, 3\ndiv si\n", "// CHECK: div {{si|di}}\n// CHECK-NOT: imul\n").is_ok());
 }
 
 /// A matcher that accepts everything makes every file pass: it must refuse.

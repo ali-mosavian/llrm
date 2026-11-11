@@ -342,3 +342,74 @@ fn a_68000_shift_by_a_register_costs_two_clocks_a_place_once_the_count_is_known(
     registers.execute("movem.l (%sp)+, %d2-%d5");
     assert_eq!(registers.places_of("lsr.l %d2, %d0"), None, "a register list reloads it");
 }
+
+/// MC68010 Table 9-19 (printed 9-13): `TRAP Instruction` 38 (4/4). The row was
+/// in the table but its column header printed blank, so the lookup by
+/// "Periods" found nothing and every 68010 program that exits by `trap #0`
+/// read UNMEASURED (368 of 556 cells at -O2).
+#[test]
+fn a_68010_trap_is_the_exception_table_row() {
+    assert_eq!(clocks(Cpu::M68010, "trap #0"), 38);
+}
+
+/// MC68030UM Table 11.6.17 (printed 11-50): `TRAP #n`, I-cache case 18 (1/0/4).
+/// The row was transcribed and never read: 363 cells UNMEASURED.
+#[test]
+fn a_68030_trap_is_the_exception_table_row() {
+    assert_eq!(clocks(Cpu::M68030, "trap #0"), 18);
+}
+
+/// Table 11.6.8 `MULU.L`/`MULS.L EA,Dn` 44 plus Table 11.6.2 `#<data>.W,#<data>.L`
+/// 6, as the 68020's 43 + 6. `mulu.l #imm` was UNMEASURED (17 cells).
+#[test]
+fn a_68030_long_multiply_by_an_immediate_adds_the_immediate_fetch() {
+    assert_eq!(clocks(Cpu::M68030, "mulu.l #1000, %d0"), 44 + 6);
+    assert_eq!(clocks(Cpu::M68030, "muls.l #1000, %d1"), 44 + 6);
+}
+
+/// Table 11.6.16 `LEA` 2 plus Table 11.6.3: `(d16,An,Xn)` 6, `(B)` 6, `(d32,B)`
+/// 12, as for the 68020. A full-format index was UNMEASURED.
+#[test]
+fn a_68030_full_format_index_is_priced_by_its_base_displacement() {
+    assert_eq!(clocks(Cpu::M68030, "lea (3619,%a0,%d1), %a0"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68030, "lea (%a0,%d1.l*4), %a1"), 2 + 6);
+    assert_eq!(clocks(Cpu::M68030, "lea (100000,%a0,%d1.l*4), %a1"), 2 + 12);
+}
+
+/// MC68060UM Table 10-10 prints `CMPI` by destination without a PC column;
+/// Table 10-5 prints `(d16,PC)` at the time of `(d16,An)` (0), so the PC form
+/// is the address-register form, as for the 68020. UNMEASURED (6 cells).
+#[test]
+fn a_68060_compare_immediate_to_a_pc_relative_operand_is_priced_as_the_address_form() {
+    assert_eq!(clocks(Cpu::M68060, "cmpi.l #5, (0,%pc)"), clocks(Cpu::M68060, "cmpi.l #5, (0,%a0)"));
+    assert_eq!(clocks(Cpu::M68060, "cmpi.l #5, (0,%pc)"), 2);
+}
+
+/// binutils prints an index displacement as bare hex (`%a1@(100,%d1:w)` is 256,
+/// `%a2@(10,%d0:w)` is 16, a negative is sign-extended to 64 bits) and a
+/// suppressed base as `@(ffffffff800020a0,%d0:l)`. All-digit hex was read as
+/// decimal (256 priced as a brief index, 16 as 10) and the rest was unpriced:
+/// 84 exes at 68000 and 103 at 68020 carried `operand ... is not in the tables`.
+#[test]
+fn an_objdump_index_displacement_is_hex() {
+    assert_eq!(gnu("moveb %a1@(7e,%d1:w),%d0"), "move.b (126,%a1,%d1), %d0");
+    assert_eq!(gnu("moveb %a2@(10,%d0:w),%d1"), "move.b (16,%a2,%d0), %d1");
+    assert_eq!(gnu("moveb %a3@(ffffffffffffffff,%d1:l),%d0"), "move.b (-1,%a3,%d1), %d0");
+    // Table 8.2.3, LEA = 2 + calculate: (d8,An,Xn) 4, (d16,An,Xn) 6, (d32,B) 12
+    let lea = |operand: &str| clocks(Cpu::M68020, &gnu(&format!("lea {operand},%a0")));
+    assert_eq!(lea("%a2@(10,%d0:w)"), 2 + 4, "0x10 is 16");
+    assert_eq!(lea("%a3@(ffffffffffffffff,%d1:l)"), 2 + 4);
+    assert_eq!(lea("%a3@(ffffffffffffff80,%d1:l)"), 2 + 4, "-128 is the brief format's lowest");
+    assert_eq!(lea("%a1@(80,%d1:w)"), 2 + 6, "0x80 is 128, past the brief format");
+    assert_eq!(lea("%a1@(100,%d1:w)"), 2 + 6, "0x100 is 256, a base displacement");
+    assert_eq!(lea("@(ffffffff800020a0,%d0:l)"), 2 + 12, "a suppressed base with a 32-bit displacement");
+    assert!(cost(Cpu::M68000, &gnu("moveb %a1@(7e,%d1:w),%d0"), 2, false).is_ok());
+}
+
+/// A displacement the parser cannot read is a parser fault, not a missing table
+/// row: it was reported as `?1` unpriced and the total looked merely partial.
+#[test]
+fn an_unreadable_index_displacement_is_a_parser_fault() {
+    let why = cost(Cpu::M68020, "lea (zz,%a0,%d1), %a1", 2, false).unwrap_err();
+    assert!(why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
+}

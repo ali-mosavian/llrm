@@ -41,6 +41,8 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
+        // the builder refuses what the machine refuses (6502-ALLOCA-ALIGN, driver.rs)
+        max_alloca_align: Some(crate::frame::MAX_ALLOCA_ALIGN),
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the

@@ -61,6 +61,7 @@ fn relaxed_sizes(
         .map(|item| match item {
             Item::Inst(inst) => crate::encode::encode(inst).ok().map(|encoded| encoded.bytes.len()),
             Item::Bytes(bytes) => Some(bytes.len()),
+            Item::Table(labels) => Some(4 * labels.len()),
             _ => Some(0),
         })
         .collect::<Option<_>>()?;
@@ -103,8 +104,10 @@ fn callee_clocks(
     cpu: Cpu,
     hoisted: &[llrm_lir::registers::RegId],
 ) -> u32 {
-    let direct = inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
-    // a call through the register `lea __mulsi3, An` set (the call-target hoist)
+    let direct =
+        inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
+    // a call through the register `lea __mulsi3, An` set (the call-target
+    // hoist)
     let through = inst.opcode == "CALLj"
         && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Reg(reg) if hoisted.contains(reg)));
     if inst.opcode.starts_with("CALL") && (direct || through) { crate::routine::mulsi3_floor(cpu) } else { 0 }

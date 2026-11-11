@@ -655,6 +655,13 @@ mod tests {
             // `detectShiftUntilZeroIdiom` reads the shift amount's `add`
             // flags; the instruction is read, never rewritten.
             "shiftzero.rs",
+            // InstCombineSelect.cpp's `foldSelectValueEquivalence` reads the
+            // `nuw` of a `trunc` to i1 (`m_NUWTrunc`) as the proof the
+            // `trunc` is a test of the value against zero; it rewrites that
+            // select to the compare and drops the flags only of the
+            // instructions its non-refining simplification went through
+            // (`DropFlags`). It grants no flag.
+            "combine_select_equivalence.rs",
             // `zeromerge` makes one `inbounds` GEP per member of the new
             // `alloca` it builds (llrm only); it reads no flag off an
             // existing instruction.
