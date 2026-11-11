@@ -925,6 +925,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ROTATION-TRIAL (beyond the pin, owner greedy-os-causes, exit 2026-12-05): at a
+    /// size build a counted loop RS1 still rotates is also tried unrotated in a second
+    /// compile, and the smaller object is kept. Needs
+    /// [`Self::rotation_guard_must_fold_at_size`]. False: no trial.
+    fn rotation_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LICM-FRAME (size builds, target opt-in, owner w15, exit
     /// 2026-11-30): the speculative LICM does not hoist an instruction the loop
     /// might never execute into the entry block of a function when the loop
@@ -956,6 +964,14 @@ pub trait Tti {
     /// calibrated against objects (m68k, `size_calibration.rs`); the x86 model is not, and a truthful
     /// credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// Whether an -Os caller's SZ2 trial is decided by the bytes alone: the copies stay when they leave the module
+    /// smaller, the dying callee counted once. Only where `function_bytes` is calibrated against objects and the
+    /// unit count (instructions of the pin's x86) means nothing: an 8-bit target's instruction is one to four
+    /// bytes of work.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
         false
     }
 
@@ -1087,6 +1103,11 @@ pub trait Tti {
     /// whole, and the unroll stays only if it pays. `None`: no trial.
     fn unroll_trial_threshold(&self) -> Option<u32> {
         None
+    }
+
+    /// `Tuning::unroll_trial_nests_only`.
+    fn unroll_trial_nests_only(&self) -> bool {
+        false
     }
 
     /// `Tuning::unroll_never_grows_at_o1`.

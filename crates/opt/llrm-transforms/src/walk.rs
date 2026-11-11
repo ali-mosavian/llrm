@@ -749,11 +749,11 @@ impl ProgramPass for Walk {
                                     // kernel's copy
                                     // 19 B under its 180 (+5 B built; qmove
                                     // -Os).
-                                    let costs = program.target.size_costs();
+                                    let costs = program.target.trial_costs();
                                     let now = module.global(id).function().expect("a body");
                                     // DEVIATE (owner softfloat, exit 2026-11-20): the callee's bytes are summed per
                                     // site off the byte gate's targets, as the x86 model was fit with.
-                                    let gone: i64 = if credit > 0 && tti.opt_size_inline_byte_gate() {
+                                    let gone: i64 = if credit > 0 && (tti.opt_size_inline_byte_gate() || tti.opt_size_inline_trial_by_bytes()) {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
                                         dying_callees_bytes(module, &sites, |body| {
@@ -769,12 +769,22 @@ impl ProgramPass for Walk {
                                     } else {
                                         0
                                     };
-                                    (
-                                        0,
-                                        function_bytes(module, &program.layout, &costs, now)
-                                            - function_bytes(module, &program.layout, &costs, &kept)
-                                            - gone,
-                                    )
+                                    let growth = function_bytes(module, &program.layout, &costs, now)
+                                        - function_bytes(module, &program.layout, &costs, &kept)
+                                        - gone;
+                                    // Bytes that tie to the byte are decided by the clocks the copies save.
+                                    let saved = if growth == 0 && tti.opt_size_inline_trial_by_bytes() {
+                                        let run: i64 = calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_clocks(module, &program.layout, tti, body))
+                                            .sum();
+                                        kept_clocks + run - function_clocks(module, &program.layout, tti, now)
+                                    } else {
+                                        0
+                                    };
+                                    (saved, growth)
                                 };
                                 if remarks {
                                     eprintln!(
@@ -811,8 +821,8 @@ impl ProgramPass for Walk {
                                 // pairs saved on every call, +441k
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
-                                let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
-                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                let kept_bytes = function_bytes(module, &program.layout, &program.target.trial_costs(), &kept);
+                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -1377,6 +1387,106 @@ fn expanded_intrinsic(
     }
 }
 
+/// The operations of `function` by class, width-weighted, as `name=count,...`:
+/// what `function_bytes` prices, for the fit of a target's byte table against
+/// the bytes written (`tools/6502/size_fit.py`).
+pub fn operation_counts(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &llrm_mir::module::Function,
+    costs: &llrm_mir::target::OperationCosts,
+) -> String {
+    use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+    use llrm_mir::tti::Ty;
+    let words = |ty: Option<llrm_mir::types::TypeId>| match ty.and_then(|ty| Ty::of(&module.context.types, ty)) {
+        Some(Ty::Int(bits)) if costs.width_scaled => costs.words(bits),
+        _ => 1,
+    };
+    let mut c = std::collections::BTreeMap::<&str, i64>::new();
+    for (_, inst) in function.walk() {
+        let operation = function.instruction(inst);
+        let first = operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand));
+        let result = operation.result.map(|value| function.value(value).ty);
+        let constant_second = matches!(
+            operation.operands.get(1),
+            Some(llrm_mir::module::Operand::Constant(_))
+        );
+        let (class, n): (&str, i64) = match &operation.opcode {
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) if constant_second => ("addc", words(first)),
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => ("add", words(first)),
+            Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => ("logic", words(first)),
+            Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) if constant_second => {
+                ("shiftc", words(first))
+            }
+            Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => ("shiftv", words(first)),
+            Opcode::Binary(BinaryOp::Mul) => ("mul", words(first)),
+            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => ("div", words(first)),
+            Opcode::Binary(_) => ("fp", 1),
+            Opcode::Cast(
+                CastOp::Trunc | CastOp::BitCast | CastOp::PtrToInt | CastOp::IntToPtr | CastOp::AddrSpaceCast,
+            ) => ("castfree", 1),
+            Opcode::Cast(CastOp::ZExt | CastOp::SExt) => ("ext", words(result)),
+            Opcode::Cast(_) => ("castfp", 1),
+            Opcode::Load { .. } | Opcode::Store { .. } => {
+                let pointer = match operation.opcode {
+                    Opcode::Load { .. } => operation.operands[0],
+                    _ => operation.operands[1],
+                };
+                let (base, _) = llrm_mir::valuetracking::pointer_base_with_constant_offset(
+                    &module.context,
+                    layout,
+                    function,
+                    pointer,
+                );
+                let direct = match base {
+                    llrm_mir::module::Operand::Constant(_) => true,
+                    llrm_mir::module::Operand::Value(value) => {
+                        matches!(
+                            function.value(value).def,
+                            llrm_mir::module::ValueDef::Instruction(i) if matches!(function.instruction(i).opcode, Opcode::Alloca { .. })
+                        )
+                    }
+                    _ => false,
+                };
+                match (&operation.opcode, direct) {
+                    (Opcode::Load { .. }, true) => ("loadd", words(result)),
+                    (Opcode::Load { .. }, false) => ("loadi", words(result)),
+                    (_, true) => ("stored", words(first)),
+                    (_, false) => ("storei", words(first)),
+                }
+            }
+            Opcode::GetElementPtr { .. }
+                if operation.operands[1..].iter().all(|o| matches!(o, llrm_mir::module::Operand::Constant(_))) =>
+            {
+                ("gepc", 1)
+            }
+            Opcode::GetElementPtr { .. } => ("gep", 1),
+            Opcode::ICmp(_) if constant_second => ("icmpc", words(first)),
+            Opcode::ICmp(_) => ("icmp", words(first)),
+            Opcode::FCmp(_) => ("fcmp", 1),
+            Opcode::Select => ("select", words(result)),
+            Opcode::Br => ("br", 1),
+            Opcode::Switch => ("switch", (operation.operands.len() as i64 - 2) / 2 + 1),
+            Opcode::Phi => ("phi", words(result)),
+            Opcode::Call(_) | Opcode::Invoke(_) => {
+                for &argument in operation.operands.iter().skip(1) {
+                    let kind = if matches!(argument, llrm_mir::module::Operand::Constant(_)) {
+                        "callargc"
+                    } else {
+                        "callargv"
+                    };
+                    *c.entry(kind).or_default() += words(function.operand_type(&module.context, argument));
+                }
+                ("call", 1)
+            }
+            Opcode::Ret => ("ret", 1),
+            _ => ("other", 0),
+        };
+        *c.entry(class).or_default() += n;
+    }
+    c.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(",")
+}
+
 /// SZ2: the bytes `function` becomes, by the target's byte prices
 /// (`Machine::size_costs`, the opcode table's encodings): each operation is
 /// the instructions it lowers to, a dword where the word is smaller
@@ -1392,6 +1502,25 @@ pub fn function_bytes(
     use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
     use llrm_mir::tti::Ty;
     let word = layout.pointer(0).bits.max(16);
+    // A target with a native width states its prices per native word (`OperationCosts::words`): an `i32` add on an
+    // 8-bit machine is four byte adds. 1 where it states none.
+    let words = |ty: Option<llrm_mir::types::TypeId>| match ty.and_then(|ty| Ty::of(&module.context.types, ty)) {
+        Some(Ty::Int(bits)) if costs.width_scaled => costs.words(bits),
+        _ => 1,
+    };
+    // The access names its object: a global, or a stack slot, through constant offsets only.
+    let direct = |pointer| {
+        let (base, _) =
+            llrm_mir::valuetracking::pointer_base_with_constant_offset(&module.context, layout, function, pointer);
+        match base {
+            llrm_mir::module::Operand::Constant(_) => true,
+            llrm_mir::module::Operand::Value(value) => matches!(
+                function.value(value).def,
+                llrm_mir::module::ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. })
+            ),
+            _ => false,
+        }
+    };
     function
         .walk()
         .map(|(_, inst)| {
@@ -1427,7 +1556,7 @@ pub fn function_bytes(
                         } else {
                             costs.wide_product()
                         };
-                        product + prefix
+                        product * words(ty) + prefix
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if constant_divisor => {
                         // The multiply-high sequence: the constant, the high
@@ -1442,10 +1571,10 @@ pub fn function_bytes(
                             + 4 * costs.prefix
                     }
                     BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem => {
-                        (if wide { costs.divide_long } else { costs.divide }) + prefix
+                        (if wide { costs.divide_long } else { costs.divide }) * words(ty) + prefix
                     }
-                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift + prefix,
-                    _ => costs.add + prefix,
+                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift * words(ty) + prefix,
+                    _ => costs.add * words(ty) + prefix,
                 },
                 Opcode::Cast(cast) => match cast {
                     CastOp::Trunc | CastOp::BitCast | CastOp::AddrSpaceCast | CastOp::PtrToInt | CastOp::IntToPtr => 0,
@@ -1455,7 +1584,12 @@ pub fn function_bytes(
                     CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound => costs.float_store + costs.float_load,
                     CastOp::ZExt | CastOp::SExt => costs.extend,
                 },
-                Opcode::Load { .. } => (if float { costs.float_load } else { costs.load }) + prefix,
+                Opcode::Load { .. } => {
+                    let price =
+                        if costs.direct_load > 0 && direct(operation.operands[0]) { costs.direct_load } else { costs.load };
+                    (if float { costs.float_load } else { price * words(operation.result.map(|value| function.value(value).ty)) })
+                        + prefix
+                }
                 Opcode::Store { .. } => {
                     let stored =
                         operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand));
@@ -1464,15 +1598,23 @@ pub fn function_bytes(
                     (if matches!(stored, Some(Ty::Float | Ty::Double | Ty::X87)) {
                         costs.float_store
                     } else {
-                        costs.store
+                        (if costs.direct_store > 0 && direct(operation.operands[1]) { costs.direct_store } else { costs.store })
+                            * words(operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand)))
                     }) + if wide { costs.prefix } else { 0 }
+                }
+                Opcode::GetElementPtr { .. }
+                    if costs.constant_offsets_fold
+                        && operation.operands[1..].iter().all(|operand| matches!(operand, llrm_mir::module::Operand::Constant(_))) =>
+                {
+                    0
                 }
                 Opcode::GetElementPtr { .. } => costs.address,
                 // A float compare is the target's own: fcom and the status word on x87, a libcall where the FPU is
                 // software.
                 Opcode::FCmp(_) => costs.add + costs.float_compare,
-                Opcode::ICmp(_) => costs.add + prefix,
+                Opcode::ICmp(_) => costs.add * words(ty) + prefix,
                 Opcode::Select => costs.branch + costs.r#move,
+                Opcode::Br if costs.branch_in_compare => 0,
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
                 // `llvm.lifetime.*`, `llvm.assume` and the rest the cost model calls free emit no instruction: priced as
@@ -1491,10 +1633,17 @@ pub fn function_bytes(
                 // opts in (`expanded_intrinsics`).
                 Opcode::Call(_) | Opcode::Invoke(_) if expanded.is_some() => expanded.unwrap_or(0),
                 Opcode::Call(_) | Opcode::Invoke(_) => {
-                    costs.call + costs.argument * operation.operands.len().saturating_sub(1) as i64
+                    costs.call
+                        + costs.argument
+                            * operation
+                                .operands
+                                .iter()
+                                .skip(1)
+                                .map(|&argument| words(function.operand_type(&module.context, argument)))
+                                .sum::<i64>()
                 }
                 Opcode::Ret => costs.return_,
-                Opcode::Phi => costs.r#move,
+                Opcode::Phi => costs.r#move * words(operation.result.map(|value| function.value(value).ty)),
                 Opcode::Alloca { .. } | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => 0,
                 _ => costs.add,
             }
@@ -1515,6 +1664,7 @@ const HOT_TRIALS: usize = 4;
 #[allow(clippy::too_many_arguments)]
 fn trial_accepted(
     byte_gate: bool,
+    by_bytes: bool,
     keeps_shrinking: bool,
     priced: bool,
     hot: bool,
@@ -1530,6 +1680,10 @@ fn trial_accepted(
         // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
         // INL-HOT: a hot site needs no callee going with the copy; the rate alone decides.
         return (credit > 0 || hot || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
+    }
+    if by_bytes {
+        // Bytes decide; clocks only where they tie exactly.
+        return growth < 0 || (growth == 0 && saved > 0);
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)

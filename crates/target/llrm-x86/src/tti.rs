@@ -733,6 +733,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn unroll_trial_nests_only(&self) -> bool {
+        self.tuning.unroll_trial_nests_only
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
@@ -1114,6 +1118,10 @@ impl Tti for X86 {
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn rotation_trial_at_size(&self) -> bool {
+        self.tuning.rotation_trial_at_size
     }
 
     fn size_rotation_header_limit(&self) -> Option<u32> {

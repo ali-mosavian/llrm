@@ -19,6 +19,7 @@ fn rotated(module: &mut Module) -> bool {
         priced_at_size: false,
         guard_must_fold: false,
         free_guard: false,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -216,6 +217,7 @@ declare i16 @late(i16)
         priced_at_size: false,
         guard_must_fold: false,
         free_guard: false,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -386,6 +388,7 @@ fn rotated_priced(module: &mut Module) -> bool {
         priced_at_size: true,
         guard_must_fold: false,
         free_guard: false,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -443,6 +446,7 @@ fn rotated_checking(check_exit_count: bool) -> bool {
         priced_at_size: false,
         guard_must_fold: false,
         free_guard: false,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -484,6 +488,7 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
         priced_at_size: false,
         guard_must_fold: false,
         free_guard: false,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -572,6 +577,14 @@ b3:
 
 /// `rotated` as a size build where an unfolded guard is refused (RS1).
 fn rotated_guard_must_fold(text: &str) -> bool {
+    rotated_guard_must_fold_trying(text, false)
+}
+
+/// `rotated_guard_must_fold` on a target that opts in to ROTATION-TRIAL or not.
+fn rotated_guard_must_fold_trying(
+    text: &str,
+    rotation_trial: bool,
+) -> bool {
     let mut module = parsed(text);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
@@ -582,6 +595,7 @@ fn rotated_guard_must_fold(text: &str) -> bool {
         priced_at_size: false,
         guard_must_fold: true,
         free_guard: false,
+        rotation_trial,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -659,6 +673,7 @@ fn rotated_as_m32_at_size(text: &str) -> bool {
         priced_at_size: tti.rotation_header_priced_at_size(),
         guard_must_fold: tti.rotation_guard_must_fold_at_size(),
         free_guard: false,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -693,6 +708,7 @@ fn rotated_at_minsize(
         priced_at_size: false,
         guard_must_fold: false,
         free_guard,
+        rotation_trial: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -712,4 +728,35 @@ fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
     assert!(!rotated_at_minsize(COUNTED, true), "`0 < n` stays a compare and a branch");
     let wide = folded.replace("i16", "i64");
     assert!(!rotated_at_minsize(&wide, true), "a counter wider than a register keeps its test above the body");
+}
+
+/// ROTATION-TRIAL: the counted loop RS1 rotates is noted for the driver's second compile, which
+/// leaves it unrotated. x86-m32 x_prefix -Os kept five rotated loops at 136 B kernel; gcc's
+/// unrotated shape is 2 B less a loop (124 B with the loops left, 12 B smaller). Without the
+/// target's opt-in the second compile changes nothing.
+#[test]
+fn test_a_trial_leaves_a_counted_loop_rs1_rotates() {
+    let _ = crate::trial::take_rotated();
+    assert!(rotated_guard_must_fold_trying(COUNTED, true), "the first compile rotates it");
+    assert_eq!(crate::trial::take_rotated(), ["f"], "and notes the function for the trial");
+    assert!(!crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(COUNTED, true)), "the trial leaves it");
+    assert!(crate::trial::take_rotated().is_empty(), "a loop left is not noted");
+    assert!(
+        crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(COUNTED, false)),
+        "a target without the trial rotates it in the trial compile too"
+    );
+    assert!(crate::trial::take_rotated().is_empty());
+}
+
+/// ROTATION-TRIAL on a function of over 4096 instructions: known_loads_walks.c -Os (one 6219-instruction
+/// `main`) compiled 2.27x as long for a trial it lost. A big function is not noted and the trial compile
+/// rotates its counted loop as the first.
+#[test]
+fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
+    let padding: String = (0..4200).map(|at| format!("  %p{at} = add i16 %n, {at}\n")).collect();
+    let big = COUNTED.replacen("b0:\n", &format!("b0:\n{padding}"), 1);
+    let _ = crate::trial::take_rotated();
+    assert!(rotated_guard_must_fold_trying(&big, true));
+    assert!(crate::trial::take_rotated().is_empty(), "a big function is not noted");
+    assert!(crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(&big, true)), "the trial rotates it too");
 }
