@@ -2402,6 +2402,7 @@ pub fn from_lir<T: Target>(
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
             if insn.rematerialized && T::remade_sets_no_flags() {
+                made.remade_sets_flags = made.sets_flags;
                 made.sets_flags = false;
             }
             insts.push(made);

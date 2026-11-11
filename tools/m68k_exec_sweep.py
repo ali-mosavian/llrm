@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """The tests/run/c corpus compiled, linked and run on m68k under qemu-user: the executed sweep that o0_sweep (compile only) is not.
 
-m68k_exec_sweep.py [--cpu 68020|68000] [--levels O1,O2,Os] [--jobs N] [--tsv FILE] [NAME...]
+m68k_exec_sweep.py [--cpu 68020|68000] [--levels O1,O2,Os] [--jobs N] [--tsv FILE] [--no-bench] [NAME...]
+
+The bench/ programs run too (their `NAME.out` reference, the data file a `// data:` header names written into the run directory), since
+a gate that changes library code must be judged on what the programs print, not on whether they compile: bench/floats printed 0 at
+68000 with a miscompiled `__divdf3` while every compile succeeded.
 
 Per program the target applies to and per level: llrm-cc -c, link with the stubs in tools/m68k_exec (crt + report, memcpy and friends, the
 llrm_os layer over raw syscalls) and the compiler-rt archive built by llrm-cc, run under `qemu-m68k -cpu m<CPU>`. One verdict per cell:
@@ -123,7 +127,9 @@ def cell(cc: str, root: str, qemu: str, cpu: str, level: str, path: Path, work: 
     target = f"m68k-{cpu}"
     name = f"{path.stem}.{level}"
     obj, exe = work / f"{name}.o", work / f"{name}.exe"
-    cmd = [cc, f"-{level}", "-w", "-c", *o0_sweep.flags_of(path.read_text(), target), "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(path)]
+    bench = path.parent.parent.name == "bench"
+    includes = ["-I", str(ROOT / "runtime/shared/posix")] + (["-I", str(path.parent)] if bench else [])
+    cmd = [cc, f"-{level}", "-w", "-c", *o0_sweep.flags_of(path.read_text(), target), *includes, "-o", str(obj), str(path)]
     env = {**os.environ, **llrmbin.cc_environment(), "LLRM_CC_TARGET": target}
     try:
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT, env=env)
@@ -148,12 +154,25 @@ def cell(cc: str, root: str, qemu: str, cpu: str, level: str, path: Path, work: 
     return verdict(ran.returncode, ran.stdout, reference.read_bytes() if reference.exists() else None)
 
 
+def sources(names: list[str], no_bench: bool) -> list[Path]:
+    """The programs the sweep runs: tests/run/c, and bench/NAME/NAME.c unless `no_bench`; all of them with no `names`."""
+    found = sorted((ROOT / "tests/run/c").glob("*.c"))
+    if not no_bench:
+        # a `// data: @corpus` input other than the generated signal is not in the tree: not a cell
+        needs_corpus = re.compile(r"^//\s*data:\s*@(?!signal\b)", re.M)
+        found += sorted(
+            p for p in (ROOT / "bench").glob("*/*.c") if p.stem == p.parent.name and not needs_corpus.search(p.read_text())
+        )
+    return [p for p in found if not names or p.stem in names]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpu", default="68020")
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     parser.add_argument("--tsv")
+    parser.add_argument("--no-bench", action="store_true")
     parser.add_argument("names", nargs="*")
     args = parser.parse_args()
     root = os.environ.get("GCC_M68K")
@@ -163,13 +182,19 @@ def main() -> int:
         return 2
     cc = o0_sweep.compiler()
     target = f"m68k-{args.cpu}"
-    chosen = [p for p in sorted((ROOT / "tests/run/c").glob("*.c")) if not args.names or p.stem in args.names]
+    chosen = sources(args.names, args.no_bench)
     programs = [p for p in chosen if ct.applies(target, p.read_text(), p)]
     support = build_support(cc, root, args.cpu, cache_dir(cc), args.jobs)
     levels = args.levels.split(",")
     jobs = [(p, level) for p in programs for level in levels]
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
+        sys.path.insert(0, str(HERE / "hostshim"))
+        import host  # noqa: E402
+
+        for p in programs:
+            if p.parent.parent.name == "bench":
+                host.write_data(str(ROOT), p.stem, str(work))
         with ThreadPoolExecutor(args.jobs) as pool:
             results = list(pool.map(lambda j: cell(cc, root, qemu, args.cpu, j[1], j[0], work, support), jobs))
     rows = [(p.stem, level, *r) for (p, level), r in zip(jobs, results)]
