@@ -55,6 +55,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
     );
     tl.init_actions();
+    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -795,6 +797,7 @@ fn lower_carry_op(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> SDValue {
+    super::pipeline::CARRY_OPS.with(|count| count.set(count.get() + 1));
     if let Some(generic) = generic_carry_op(dag, node) {
         return generic;
     }

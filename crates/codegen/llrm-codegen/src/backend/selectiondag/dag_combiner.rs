@@ -26,10 +26,11 @@
 //! sdag-b. Review 2026-11-13.
 //!
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
-//! simple, non-extending load before operations are legal, with the table
-//! given by `with_tli` (no table: only a load nothing else reads); every
-//! integer truncate is taken as free (`isTruncateFree`). Exit: the target's
-//! truncate query. Owner sdag-b. Review 2026-11-27.
+//! simple, non-extending load, before and after operations are legal (legal
+//! extending load only, as the pin), with the table given by `with_tli` (no
+//! table: only a load nothing else reads); every integer truncate is taken as
+//! free (`isTruncateFree`). Exit: the target's truncate query. Owner sdag-b.
+//! Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
@@ -547,6 +548,24 @@ pub trait CombineHooks {
     /// width, not only `i16` and below. DEVIATE: off by default, as above.
     /// Exit: x86 judged.
     fn widen_multiply_high_any_width(&self) -> bool {
+        false
+    }
+
+    /// Whether `BuildUDIV`/`BuildSDIV` put the magic factor first in the
+    /// multiply-high, so the dividend is the operand a target that reads one
+    /// operand's length (the 486's `mul` early-out) reads. The pin's order is
+    /// (dividend, magic). DEVIATE SD444 (owner w2, exit 2026-12-20; upstream
+    /// check: gcc `expand_mult_highpart` and i386 `mult_bit` at each pin bump):
+    /// off by default. Asked here, not at selection, because only here the
+    /// dividend is still a node whose known bits give its length (a `urem`
+    /// result has its leading zeros; once expanded to `x - q*c` it has none).
+    fn multiply_high_magic_first(
+        &self,
+        _dag: &SelectionDAG,
+        _signed: bool,
+        _dividend: SDValue,
+        _magic: SDValue,
+    ) -> bool {
         false
     }
 
@@ -1943,7 +1962,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` of a load nothing else reads.
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
+    /// value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -1957,7 +1977,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // narrower than the result stays an extending load.
         let stored = if info.ext.is_some() { info.mem_vt } else { wide };
         if info.volatile
-            || !self.dag.has_one_use(load.node)
+            || self.dag.users(load).count() != 1
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
@@ -2098,7 +2118,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let load = self.dag.operand(node, 0);
-        if self.level >= CombineLevel::AfterLegalizeVectorOps || self.dag.opcode(load) != ISD::Load {
+        if self.dag.opcode(load) != ISD::Load {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
@@ -2124,9 +2144,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => false,
         };
-        // `tryToFoldExtOfLoad`: a volatile (not simple) load is widened only
-        // when the extending load is legal.
-        if info.volatile && !legal {
+        // `tryToFoldExtOfLoad`: `(!LegalOperations && !isVolatile) ||
+        // isLoadExtLegal`: after legalization, and for a volatile load, the
+        // extending load must be legal.
+        if (info.volatile || self.legal_operations()) && !legal {
             return None;
         }
         if !others.is_empty() {
@@ -4347,6 +4368,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
+        }
+        // `(sext_in_reg (srl X, c), i8)` is `(sra X, c)` when X has sign bits to
+        // spare (DAGCombiner.cpp#L17478): the shifted-in zeros are all sign.
+        if self.dag.opcode(n0) == ISD::Srl
+            && let Some(amount) = self.dag.constant(self.dag.operand(n0, 1))
+            && amount <= u128::from(bits - ext_bits)
+        {
+            let x = self.dag.operand(n0, 0);
+            if u128::from(bits - ext_bits) - amount < u128::from(super::known_bits::num_sign_bits(self.dag, x)) {
+                return Some(self.dag.get_node(ISD::Sra, vt, &[x, self.dag.operand(n0, 1)]));
+            }
         }
         self.sext_in_reg_of_load(node, n0, vt, ext)
     }
