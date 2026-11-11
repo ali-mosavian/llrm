@@ -1136,6 +1136,10 @@ impl Tti for X86 {
         !self.tuning.keep_constant_displacements
     }
 
+    fn memory_rmw_is_one_instruction(&self) -> bool {
+        true
+    }
+
     fn constant_arith_phi_is_cheap(
         &self,
         optsize: bool,

@@ -1017,6 +1017,13 @@ pub trait Tti {
         true
     }
 
+    /// Whether a load, an operation on it and the store back to the same
+    /// address are one instruction (x86 `inc [mem]`). SimplifyCFG's sink then
+    /// counts the three as one when it prices a phi of displacements.
+    fn memory_rmw_is_one_instruction(&self) -> bool {
+        false
+    }
+
     /// Whether a constant operand of an arithmetic instruction may become a phi
     /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
     /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.

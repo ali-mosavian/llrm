@@ -380,3 +380,28 @@ e:
     assert_eq!(sunk.matches("store i16").count(), 1, "{sunk}");
     assert_eq!(sunk.matches("= load i16").count(), 1, "{sunk}");
 }
+
+/// Four arms bump `[p+418]`, `[p+422]`, `[p+426]`, `[p+430]`: load, add, store
+/// back, an `inc [mem]` each. Sunk, it is one `inc [bx+si]` and a `mov si, imm`
+/// in every arm (jumps added): QCport `_d_mdl_visible` m16 -O2 was +13 B. The
+/// three instructions are one, so the sink does not pay.
+#[test]
+fn test_counter_bumps_at_constant_offsets_stay_bumps_where_the_target_keeps_displacements() {
+    let arm = |name: &str, next: &str, offset: u32| {
+        format!(
+            "{name}:\n  %a{offset} = getelementptr inbounds nuw i8, ptr %p, i16 {offset}\n  %v{offset} = load i32, ptr %a{offset}\n  %w{offset} = add i32 %v{offset}, 1\n  store i32 %w{offset}, ptr %a{offset}\n  br label %e\n\n{next}"
+        )
+    };
+    let text = format!(
+        "define void @f(ptr %p, i1 %c1, i1 %c2, i1 %c3) {{\nb0:\n  br i1 %c1, label %b1, label %t1\n\nt1:\n  br i1 %c2, label %b2, label %t2\n\nt2:\n  br i1 %c3, label %b3, label %b4\n\n{}{}{}{}e:\n  ret void\n}}\n",
+        arm("b1", "", 418),
+        arm("b2", "", 422),
+        arm("b3", "", 426),
+        arm("b4", "", 430)
+    );
+    let keep = llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { keep_constant_displacements: true, ..llrm_mir::target::Tuning::PIN });
+    let sunk = sunk_on(&keep, &text);
+    assert_eq!(sunk.matches("store i32").count(), 4, "{sunk}");
+}

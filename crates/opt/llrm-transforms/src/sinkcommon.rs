@@ -44,9 +44,10 @@
 //!   attribute; the intrinsic cases for variadic parameters, `gcroot` and
 //!   `threadlocal_address` are not in the MIR.
 //! - D4. No `llvm.experimental.deoptimize`.
-//! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
-//!   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
-//!   (`displacement_sink_pays`), not sunk always as the pin does.
+//! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a
+//!   constant offset (`constant_offset_phi_is_cheap` false) a phi of such
+//!   offsets is priced (`displacement_sink_pays`), not sunk always as the pin
+//!   does.
 
 use llrm_mir::context::Context;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -144,18 +145,47 @@ fn unfolds_displacement(
         && !spec.tti.constant_offset_phi_is_cheap()
 }
 
+/// How many of `columns` (instructions per predecessor, from the end) are the
+/// load, the operation and the store of one read-modify-write: the first
+/// predecessor's instructions decide, the others are the same operation.
+fn rmw_chains(
+    function: &Function,
+    columns: &[Vec<InstId>],
+) -> usize {
+    let result = |inst: InstId| function.instruction(inst).result.map(Operand::Value);
+    let mut chains = 0;
+    let mut at = 0;
+    while at + 2 < columns.len() {
+        let (store, op, load) = (columns[at][0], columns[at + 1][0], columns[at + 2][0]);
+        let fused = matches!(function.instruction(store).opcode, Opcode::Store { .. })
+            && matches!(function.instruction(op).opcode, Opcode::Binary(_))
+            && matches!(function.instruction(load).opcode, Opcode::Load { .. })
+            && result(op) == Some(function.instruction(store).operands[0])
+            && result(load).is_some_and(|loaded| function.instruction(op).operands.contains(&loaded))
+            && function.instruction(load).operands[0] == function.instruction(store).operands[1];
+        if fused {
+            chains += 1;
+            at += 3;
+        } else {
+            at += 1;
+        }
+    }
+    chains
+}
+
 /// Whether sinking `columns` (instructions per predecessor, `arms`
 /// predecessors) pays where `unfolding` of them turn a folded displacement
-/// into a phi. Each arm runs `columns - unfolding` instructions today (the
-/// address folds into its access); after the sink one copy runs those, plus an
-/// add and a phi for each address that no longer folds. Counted in
-/// instructions: the sink wins when `(arms - 1) * kept > 2 * unfolding`.
+/// into a phi. Each arm runs `kept` instructions today (the address folds
+/// into its access); after the sink one copy runs those, plus an add for each
+/// address that no longer folds and a move per arm for its phi. Counted in
+/// instructions: the sink wins when `(arms - 1) * kept > (arms + 1) *
+/// unfolding`.
 fn displacement_sink_pays(
-    columns: usize,
+    kept: usize,
     unfolding: usize,
     arms: usize,
 ) -> bool {
-    (arms - 1) * (columns - unfolding) > 2 * unfolding
+    (arms - 1) * kept > (arms + 1) * unfolding
 }
 
 /// `canReplaceOperandWithVariable`: the operand `index` of `inst` may be a phi
@@ -552,7 +582,9 @@ pub fn sunk(
         let scan =
             if unreachable_follows { limit } else { profitable_prefix(function, &phi_operands, &columns[..limit]) };
         let unfold = unfolding[..scan].iter().filter(|&&one| one).count();
-        if unfold == 0 || displacement_sink_pays(scan, unfold, jumps.len()) {
+        let fused =
+            if spec.tti.memory_rmw_is_one_instruction() { 2 * rmw_chains(function, &columns[..scan]) } else { 0 };
+        if unfold == 0 || displacement_sink_pays((scan - unfold).saturating_sub(fused), unfold, jumps.len()) {
             break scan;
         }
         limit = unfolding[..scan].iter().position(|&one| one).expect("an unfolding column");
