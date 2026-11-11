@@ -3,3 +3,5 @@ int one(int *p) { volatile int t = *p; return t; }
 int two(int *p) { volatile int t = *p; volatile int u = p[1]; return t + u; }
 /* the x87 store of a narrowed double: one 4-byte cell (float_return `narrow`) */
 float narrow(double x) { return (float)x; }
+/* no result: nothing is live at the return, so the pin pops eax */
+void none(int *p) { volatile int t = *p; (void)t; }

@@ -305,6 +305,16 @@ impl Machine for Dos {
             // `isIntDivCheap` is `minsize` alone
             // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
             divide_by_bytes: true,
+            // DEVIATE DIV-LIVE-M16 (owner m16, exit 2026-12-01; no pin hook, as DIV-LIVE): at
+            // -O1 and -Os a divide by a constant keeps its `div` only while at most three
+            // 16-bit words are live across it (six registers less the three it pins); `div` pins eax, edx and a divisor register, the
+            // reciprocal's `mul` only eax and edx. huge `% 251` at -O1: +9 B and +21% clk
+            // with the divide kept (2026-11-11).
+            narrow_divide_live_limit: 3,
+            narrow_divide_live_max_bits: 32,
+            // -Os keeps every divide by measurement (2026-11-11, limits 3..6: frames +11 B,
+            // matmul~init +8 B, huge +13% clk over the kept divide).
+            narrow_divide_live_at_size: false,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,

@@ -368,6 +368,7 @@ mod pageindex_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+pub mod partialinline;
 #[cfg(test)]
 mod pin_slots_tests;
 pub mod pipeline;
