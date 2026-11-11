@@ -1195,6 +1195,26 @@ mod tests {
         assert_eq!(sized.libcall_name(ISD::Mul, EVT::I32), Some("__small_mul"));
     }
 
+    /// `PSEUDO_FMIN`/`FMAX` are Expand unless the target says otherwise (TargetLoweringBase.cpp#L864).
+    /// They defaulted to Legal, so `combineSelectToPseudoMinMax` made a node wasm32 could not select
+    /// (jpeg_single, stft_single: `CannotSelect("PseudoFMin")`). Only x86 with SSE has `minss`/`maxss`.
+    #[test]
+    fn the_pseudo_min_max_is_expand_except_on_x86_sse() {
+        let sse = Features { sse2: true, ..Features::default() };
+        let tables = [
+            ("aarch64", a64(), Action::Expand),
+            ("x86_32 x87", TargetLowering::x86_32(Features::default(), MVT::I32), Action::Expand),
+            ("x86_64 sse2", TargetLowering::x86_64(sse, MVT::I64), Action::Legal),
+        ];
+        for (name, t, want) in tables {
+            for op in [ISD::PseudoFMin, ISD::PseudoFMax] {
+                for vt in [MVT::F32, MVT::F64] {
+                    assert_eq!(t.operation_action(op, EVT::from(vt)), want, "{name} {op:?} {vt:?}");
+                }
+            }
+        }
+    }
+
     /// An x86 table's `i8` set-cc result and `i8` register class were the
     /// only ones: AArch64 compares into an `i32` and has no `i8` register.
     #[test]
