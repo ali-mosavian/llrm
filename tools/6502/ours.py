@@ -18,6 +18,10 @@ LOG = 0xF000
 EXTRA = os.environ.get("G6_EXTRA", "").split()
 TYPES = [f"-D__{n}_TYPE__={t}" for n, t in (("INT8", "signed char"), ("UINT8", "unsigned char"), ("INT16", "short"), ("UINT16", "unsigned short"), ("INT32", "long"), ("UINT32", "unsigned long"), ("INT64", "long long"), ("UINT64", "unsigned long long"))]
 INSNS = os.environ.get("SIM65_INSNS", os.path.expanduser("~/scratch/cc65-v2.19-src/sim65-insns"))
+# OURS_PCPROF_DIR=dir (with SIM65_PCPROF_BIN, the sim65 of tools/sim65-pcprof.sh) leaves dir/NAME.dbg and dir/NAME.prof
+# of the first layout for tools/6502/pcprof.py.
+PCPROF_DIR = os.environ.get("OURS_PCPROF_DIR")
+PCPROF_BIN = os.environ.get("SIM65_PCPROF_BIN")
 PADS = [int(x) for x in os.environ.get("OURS_PADS", os.environ.get("OURS_PAD", "0")).split(",")]
 PAD = PADS[0]
 # the runtime (mos_rt.s) of the tree under test: there is no default, a stale one hid 8 link failures and could skew an A/B
@@ -191,6 +195,11 @@ def one(job):
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + reachable_runtime(asm))
     sh(["cl65", "-t", CLT, "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w)
     nb = bytes_of(w / "x.map")
+    if PCPROF_DIR and PCPROF_BIN:
+        os.makedirs(PCPROF_DIR, exist_ok=True)
+        sh(["cl65", "-g", "-t", CLT, "-Wl", f"--dbgfile,{PCPROF_DIR}/{name}.dbg", "-o", "x.bin", "d.s", "f.s"], w)
+        subprocess.run([PCPROF_BIN, "-c", "-x", "4000000000", "x.bin"], cwd=w, capture_output=True, timeout=300,
+                       env=dict(os.environ, SIM65_PCPROF=f"{PCPROF_DIR}/{name}.prof"))
     ins = sh([INSNS, "-c", "-x", "4000000000", "x.bin"], w, timeout=300, text=False)
     m = re.search(rb"(\d+) instructions", ins.stdout + ins.stderr)
     shutil.rmtree(w, True)
