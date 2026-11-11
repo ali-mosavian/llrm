@@ -103,7 +103,7 @@ use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit
 use llrm_mir::tti::Tti;
 
 use crate::lcssa::{arms, from_arms};
-use crate::{cfg, edges, local};
+use crate::{cfg, edges, local, trial};
 
 /// `ZeroTripCountWeights`: the probability that a rotated loop has zero trip
 /// count.
@@ -124,6 +124,13 @@ pub struct Options {
     /// code does not grow; an unfolded guard is a compare and a branch
     /// against the one jump the rotation removes.
     pub guard_must_fold: bool,
+    /// DEVIATE ROTATION-TRIAL (size builds, target opt-in, owner greedy-os-causes, exit
+    /// 2026-12-05): a counted loop whose copied guard does not fold, which RS1 still
+    /// rotates, is left as it is in the driver's second compile and the smaller object
+    /// is kept (`trial`). gcc's `ch_base::copy_headers` leaves such a loop unrotated
+    /// at -Os; whether that pays depends on what the later passes do with the loop,
+    /// which only the finished code shows (x_prefix -12 B, x_transpose +34 B).
+    pub rotation_trial: bool,
     /// DEVIATE Z80-ROT (-Oz, target opt-in, owner z80, exit 2026-11-21): the pin's
     /// minsize limit of no copied instruction is waived for a loop whose copied
     /// header folds away in the preheader, guard and all: the copy costs no byte
@@ -827,11 +834,24 @@ fn rotate_loop(
     {
         return None;
     }
-    if run.options.guard_must_fold
-        && !guard_folds(run, orig_header, orig_preheader, header_end).folds
-        && !header_exit_count_known(run, lp, orig_header)
-    {
-        return None;
+    if run.options.guard_must_fold && !guard_folds(run, orig_header, orig_preheader, header_end).folds {
+        if !header_exit_count_known(run, lp, orig_header) {
+            return None;
+        }
+        // A counted loop: rotated, unless the trial compile leaves it (a big function is rotated in both).
+        if run.options.rotation_trial && run.function.instruction_count() <= trial::ROTATION_TRIAL_MAX_INSTRUCTIONS {
+            if trial::unrotated() {
+                return None;
+            }
+            if let Some(this) = run.this
+                && let Some(name) = run.globals[this.0 as usize].name.as_deref()
+            {
+                if llrm_support::debug::enabled("trial") {
+                    eprintln!("trial noted {name}: {} instructions", run.function.instruction_count());
+                }
+                trial::note_rotated(name);
+            }
+        }
     }
 
     // Find the new loop header: the header's one successor inside the loop. The
@@ -1155,8 +1175,9 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     let mut info = analyze(run);
     // The loop pass manager's worklist is popped from the back: a loop's
     // children before it, siblings in program order.
-    let headers: Vec<BlockId> =
+    let mut headers: Vec<BlockId> =
         info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
     let mut stale = IdSet::<BlockId>::new();
     let mut changed = false;
     for header in headers {
@@ -1237,6 +1258,7 @@ impl FunctionPass for LoopRotate {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target(), &*tti),
             priced_at_size: self.size && tti.rotation_header_priced_at_size(),
             guard_must_fold: self.size && tti.rotation_guard_must_fold_at_size(),
+            rotation_trial: self.size && tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size(),
             free_guard: self.free_guard && self.size && !self.duplicate_headers && tti.rotation_free_guard_at_minsize(),
             rotation_only: false,
             is_util_mode: false,

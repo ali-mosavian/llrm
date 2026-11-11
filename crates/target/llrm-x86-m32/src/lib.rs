@@ -115,6 +115,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // ROW M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz 84 -> 85 B (best 74),
         // an unrotated inner loop changes the outer loop's registers (cause card to the greedy owners).
         rotation_guard_must_fold_at_size: true,
+        // DEVIATE ROTATION-TRIAL (owner greedy-os-causes, exit 2026-12-05, with RS1): a counted loop
+        // RS1 rotates is also tried unrotated in a second compile, kept only if the object is
+        // smaller. Os, 98 cells, unrotated everywhere: 21 smaller (x_jpeg_fixed -213 B, x_radix -20,
+        // x_idioms -16, x_prefix -12), 64 larger (x_transpose +34, x_matmul_f +29, x_life +25).
+        rotation_trial_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
@@ -125,6 +130,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // executed work grow. x_life O1: the 3x3 nest unrolled is -15 B and -62% clk (the rolled
         // nest spills); matmul O1 is +1601 B and stays rolled.
         unroll_trial_at_o1: Some(150),
+        unroll_trial_nests_only: true,
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
@@ -140,12 +146,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
         lftr_any_stride: true,
-        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24, as m16): at the 486 and P5 rates a
-        // merged `a && b` is two `setcc`, a logic op, a `test` and a `jcc`, and byte registers
-        // are scarce; split, the second compare runs only if the first holds and the branch
-        // costs 1 clk not taken. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb; and;
-        // cmp 1; jne`.
-        split_merged_conditions: true,
+        // DEVIATE SD103-M32 (owner x87, exit 2026-11-24): the pin's cost rule, with the price
+        // of a merged `a && b` it omits taken from the table: two `setcc`, a logic op and a
+        // `test`, less the branch saved. sieve -O1: `i <= 31 && i*i < n` merged is `setb; setb;
+        // and; cmp 1; jne`, 20% more clocks; a pair the DAG folds to one compare stays merged.
+        merged_condition_clocks: 2 * costs.set + 2 * costs.add - costs.branch,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
@@ -717,6 +722,14 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// #9101 narrowed every target's -O1 unroll trial to nests; only m32 was fit on that (a lone loop
+    /// paid in 1 of 46 programs), so m32 says so itself.
+    #[test]
+    fn test_the_o1_unroll_trial_takes_nests_only() {
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        assert!(tuning.unroll_trial_at_o1.is_some() && tuning.unroll_trial_nests_only);
+    }
+
     /// -O3 copied a recursion to depth 8 with the loop first, gcc's setting,
     /// while -O2 copies to depth 2 with the tree first. Over 12 recursion
     /// programs -O3 was bigger by 5556 B and ran 1.12 M more instructions than

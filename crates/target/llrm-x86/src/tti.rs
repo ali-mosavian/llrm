@@ -733,6 +733,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_at_o1
     }
 
+    fn unroll_trial_nests_only(&self) -> bool {
+        self.tuning.unroll_trial_nests_only
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }
@@ -1116,6 +1120,10 @@ impl Tti for X86 {
         self.tuning.rotation_guard_must_fold_at_size
     }
 
+    fn rotation_trial_at_size(&self) -> bool {
+        self.tuning.rotation_trial_at_size
+    }
+
     fn size_rotation_header_limit(&self) -> Option<u32> {
         self.tuning.size_rotation_header_limit
     }
@@ -1297,11 +1305,25 @@ impl Tti for X86 {
             _ => false,
         };
         let both_eq = is_eq(query.lhs) && is_eq(query.rhs);
-        match query.logic {
-            Logic::Or if both_eq => CondMerging::SPLIT,
+        // DEVIATE SD103-M32: the `setcc` pair, logic op and `test` a merged
+        // pair costs come off the budget, unless the DAG folds the pair into
+        // one compare (`Tuning::merged_condition_clocks`).
+        let extra = if llrm_mir::jumpmerge::folds_logic_of_setccs(
+            query.context,
+            query.function,
+            query.logic,
+            (query.lhs, query.rhs),
+        ) {
+            0
+        } else {
+            self.tuning.merged_condition_clocks
+        };
+        let params = match query.logic {
+            Logic::Or if both_eq => return CondMerging::SPLIT,
             Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
             _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
-        }
+        };
+        if params.base_cost <= extra { CondMerging::SPLIT } else { CondMerging { base_cost: params.base_cost - extra, ..params } }
     }
 
     fn intrinsic_cost(
