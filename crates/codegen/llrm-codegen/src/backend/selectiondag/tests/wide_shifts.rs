@@ -121,12 +121,17 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
+            imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -138,6 +143,109 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     assert_eq!(dag.opcode(high), x86isd::CMOV);
     assert_eq!(dag.opcode(dag.operand(high, 0)), ISD::FShl, "the false value is the funnel shift");
     assert_eq!(dag.opcode(dag.operand(high, 1)), ISD::Shl, "the true value is the shift by amount & 31");
+}
+
+fn reachable_opcodes(
+    dag: &SelectionDAG,
+    root: SDValue,
+) -> Vec<ISD> {
+    let (mut seen, mut stack, mut found) = (Vec::new(), vec![root], Vec::new());
+    while let Some(v) = stack.pop() {
+        if seen.contains(&v.node) {
+            continue;
+        }
+        seen.push(v.node);
+        found.push(dag.opcode(v));
+        stack.extend((0..dag.node(v).ops.len()).map(|i| dag.operand(v, i)));
+    }
+    found
+}
+
+/// An `i64` shifted by `n & 31` took the select expansion (a `shl_parts` node
+/// or a funnel shift) because the clear bit 5 was only used with a legal
+/// funnel shift and only bit 5 was read: m68k repeated the `amount < 32` test
+/// five times per iteration, +109% clocks on shift_int64_masked_amount. The
+/// pin shifts by one, then by `amount ^ 31`, with no select and no funnel.
+#[test]
+fn a_shift_by_an_amount_known_below_the_half_width_has_no_select_and_no_funnel() {
+    let expand_funnel = |tli: &mut TargetLowering| {
+        tli.set_operation_action(ISD::FShl, MVT::I32, Action::Expand);
+        tli.set_operation_action(ISD::FShr, MVT::I32, Action::Expand);
+    };
+    for (funnel_legal, op) in [(true, ISD::Shl), (true, ISD::Srl), (false, ISD::Shl), (false, ISD::Sra)] {
+        let mut tli = p5();
+        if !funnel_legal {
+            expand_funnel(&mut tli);
+        }
+        let mut dag = dag();
+        let x = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
+        let register = dag.get_register(EVT::I8, 9);
+        let mask = dag.get_constant(31, EVT::I8);
+        let amount = dag.get_node(ISD::And, EVT::I8, &[register, mask]);
+        let moved = dag.get_node(op, EVT::I64, &[x, amount]);
+        let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
+        let thirty_two = dag.get_constant(32, EVT::I8);
+        let upper = dag.get_node(ISD::Srl, EVT::I64, &[moved, thirty_two]);
+        let high = dag.get_node(ISD::Truncate, EVT::I32, &[upper]);
+        let both = dag.get_node(ISD::Add, EVT::I32, &[low, high]);
+        dag.set_root(both);
+        TypeLegalizer::new(&mut dag, &tli).run().unwrap();
+        let root = dag.get_root();
+        let used = reachable_opcodes(&dag, root);
+        for banned in [ISD::ShlParts, ISD::SrlParts, ISD::SraParts, ISD::FShl, ISD::FShr, ISD::Select, ISD::SelectCC] {
+            assert!(!used.contains(&banned), "{op:?}, funnel legal {funnel_legal}: {banned:?} in {used:?}");
+        }
+        assert!(used.contains(&ISD::Xor), "{op:?}, funnel legal {funnel_legal}: no amount ^ 31 in {used:?}");
+    }
+}
+
+/// z80 and 6502 called `__ashldi3` for an `i64` shifted by `n & 31` before the pin's inline expansion was
+/// translated; the inline one grew call_cleanup_keeps_pair by 1146 B (6502 -O2) and 192 B (z80 -O2). A target
+/// that sets `libcall_for_small_variable_shift` keeps the call, one that does not shifts inline.
+#[test]
+fn a_target_keeping_the_shift_routine_calls_it_for_an_amount_known_small() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<&'static str>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            _args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push(name);
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    for keeps in [true, false] {
+        let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        tli.set_operation_action(ISD::ShlParts, MVT::I32, Action::Expand);
+        if keeps {
+            tli.set_libcall_for_small_variable_shift();
+        }
+        let mut dag = dag();
+        let x = dag.get_constant_with(5, EVT::I64, false, true);
+        let register = dag.get_register(EVT::I8, 9);
+        let mask = dag.get_constant(31, EVT::I8);
+        let amount = dag.get_node(ISD::And, EVT::I8, &[register, mask]);
+        let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
+        let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
+        dag.set_root(low);
+        let mut calls = Calls::default();
+        TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+        assert_eq!(calls.0, if keeps { vec!["__ashldi3"] } else { vec![] }, "keeps the routine: {keeps}");
+    }
 }
 
 /// A shift with an amount and no `shl_parts` (the table empty) is refused.
@@ -276,4 +384,120 @@ fn an_i32_funnel_shift_expands_to_two_half_width_funnel_shifts() {
             assert_eq!((l, h), (whole & 0xFFFF, whole >> 16), "{op:?} by {amount}");
         }
     }
+}
+
+/// An `i64` product on a target with no widening multiply of its halves took
+/// `force_expand_multiply` and never the pin's `MUL_I64` (`__muldi3`): 445
+/// lines of assembly and four `__mulsi3` calls for one `u64 * u64` on the 6502.
+/// `ExpandIntRes_MUL` tries `expandMUL`, then the library call, then the
+/// forced expansion; it is now one call of two operands.
+#[test]
+fn a_64_bit_product_without_a_widening_multiply_is_the_pins_default_libcall() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len()));
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let load = |dag: &mut SelectionDAG, slot| {
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I64, chain, ptr, info)
+    };
+    let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));
+    let product = dag.get_node(ISD::Mul, EVT::I64, &[a, b]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+    dag.set_root(low);
+    let mut calls = Calls::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("__muldi3", 2)]);
+}
+
+/// A hook that cannot make the call (`make_lib_call` is `None`, as the m68k
+/// hook is for a result wider than a long) leaves the type legalizer on the
+/// forced expansion: the product still legalizes, with no call in it. The m68k
+/// hook panicked instead and `x_fixmul` stopped compiling.
+#[test]
+fn a_hook_that_declines_the_product_call_leaves_the_inline_expansion() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Declines(usize);
+    impl Hooks for Declines {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _name: &'static str,
+            _args: &[SDValue],
+            _ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0 += 1;
+            None
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let load = |dag: &mut SelectionDAG, slot| {
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I64, chain, ptr, info)
+    };
+    let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));
+    let product = dag.get_node(ISD::Mul, EVT::I64, &[a, b]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+    dag.set_root(low);
+    let mut hook = Declines::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hook).run().unwrap();
+    assert_eq!(hook.0, 1, "the library call was asked for once");
 }

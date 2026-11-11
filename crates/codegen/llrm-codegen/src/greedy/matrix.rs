@@ -674,6 +674,10 @@ mod tests {
             effects: base.effects,
             cache: Default::default(),
             views: base.views,
+            byte_lanes: base.byte_lanes,
+            lanes_x86: base.lanes_x86,
+            lanes_none: base.lanes_none,
+            ties_by_row: base.ties_by_row,
         })))
     }
 

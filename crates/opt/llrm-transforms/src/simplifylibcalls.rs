@@ -23,16 +23,34 @@
 //! integer compare for a legal `n * 8` and aligned pointers; `strcmp(p, "x")`
 //! and `strncmp` of a literal are `memcmp` where the bytes are readable and the
 //! result is only compared with zero, and `memcmp(p, q, n) == 0` is `bcmp`
-//! (`compare.rs`).
+//! (`compare.rs`). `strchr` of a constant string and character, `strpbrk`,
+//! `strspn`, `strcspn` and `strstr` over constant strings fold to an address
+//! into the first string, null or a length, and `memchr` of a constant array
+//! or size folds to compares and a select (`search.rs`). `strcpy`, `stpcpy`,
+//! `strcat`, `strncat` and `strncpy` of a string of known length are an
+//! `llvm.memcpy` of it with its NUL (`copy.rs`), `strlen` finding the end where
+//! the compile states it.
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
 //!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations.
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
+//!   family is `memops.rs`.
+//! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
+//!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
+//!   the character compare the pin makes of a `strchr` or `strstr` tested
+//!   against its own string: such a call is left as it is.
+//! - D5: `memchr` of a constant array and size tested against null (the pin's
+//!   bit-field and OR-chain rewrite) is not translated.
+//! - D6: `stpcpy` with an unused result (the pin's `strcpy` call) and
+//!   `stpcpy(x, x)` (its `strlen` call) are untranslated.
+//! - D7: `strncpy` of an empty source (the pin's `memset`) and of a bound past
+//!   the source and its NUL (a NUL-padded copy) are untranslated, as is
+//!   `stpncpy`.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.
@@ -53,9 +71,15 @@ use llrm_mir::libfunc::{Generic, LibFunc, Routine, TargetLibraryInfo};
 use llrm_mir::module::{InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
-use llrm_mir::types::Type;
+use llrm_mir::types::{Type, TypeId};
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
+use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 mod compare;
+mod copy;
+mod memops;
+mod search;
 
 /// One table per module: the target's library, else the pin's defaults for
 /// the pointer's width.
@@ -82,14 +106,80 @@ impl SimplifyLibCalls {
     }
 }
 
-/// `getConstantDataArrayInfo` of a pointer that is a constant global: every
-/// byte of the array.
+/// The instruction `opcode` placed before the call, as an operand.
+fn build(
+    unit: &mut Unit,
+    site: &Site,
+    opcode: Opcode,
+    ty: TypeId,
+    operands: Vec<Operand>,
+) -> Operand {
+    let made = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+    unit.function.insert(made, Position::Before(site.call)).expect("a placed instruction");
+    Operand::Value(unit.function.instruction(made).result.expect("a result"))
+}
+
+/// `GetStringLength`: the length with the NUL of a constant string, 0 where
+/// the array has no NUL.
+fn string_length(
+    unit: &Unit,
+    site: &Site,
+    operand: Operand,
+) -> u64 {
+    match constant_array(unit, site.env, operand) {
+        Some(bytes) => bytes.iter().position(|&byte| byte == 0).map_or(0, |end| end as u64 + 1),
+        None => 0,
+    }
+}
+
+/// The length operand as a constant, `dyn_cast<ConstantInt>(Size)`.
+fn constant_length(
+    unit: &Unit,
+    operand: Operand,
+) -> Option<u64> {
+    let Operand::Constant(id) = operand else { return None };
+    match unit.context.get(id).kind {
+        ConstantKind::Int(bits) => Some(bits as u64),
+        _ => None,
+    }
+}
+
+/// `getConstantDataArrayInfo`
+/// ([L7001](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7001))
+/// of a pointer based on a constant global: every byte from the constant
+/// offset the pointer adds, through GEPs and casts.
 fn constant_array(
     unit: &Unit,
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
-    constant_array_in(unit.context, env, operand)
+    let query = Query { globals: env.globals, ..Query::bare(unit.context, unit.function, env.layout) };
+    let Operand::Constant(object) = get_underlying_object(&query, operand, 0) else { return None };
+    let ConstantKind::Global(global) = unit.context.get(object).kind else { return None };
+    let space = match unit.context.types.get(query.type_of(operand)?) {
+        Type::Pointer(space) => *space,
+        _ => return None,
+    };
+    let width = env.layout.pointer(space).index_bits;
+    let (base, offset) = strip_and_accumulate_constant_offsets(&query, operand, width, true);
+    if base != Operand::Constant(object) {
+        return None;
+    }
+    let bytes = read_byte_array_from_global(unit.context, env, global, u64::try_from(offset).ok()?)?;
+    let ConstantKind::Bytes(raw) = &unit.context.get(bytes).kind else { return None };
+    Some(raw.to_vec())
+}
+
+/// `getConstantStringInfo(V, Str, TrimAtNul)` of a pointer that is a constant
+/// global.
+fn string_info(
+    unit: &Unit,
+    site: &Site,
+    operand: Operand,
+    trim_at_nul: bool,
+) -> Option<Vec<u8>> {
+    let bytes = constant_array(unit, site.env, operand)?;
+    Some(if trim_at_nul { bytes.into_iter().take_while(|&byte| byte != 0).collect() } else { bytes })
 }
 
 /// `constant_array` over a context alone.
@@ -105,25 +195,25 @@ pub(crate) fn constant_array_in(
     Some(raw.to_vec())
 }
 
-/// `getConstantStringInfo` of a pointer that is a constant global: the bytes
-/// up to the first NUL, which must be there.
+/// `getConstantStringInfo` with `TrimAtNul`: the bytes up to the first NUL,
+/// else the whole tail.
 fn constant_string(
     unit: &Unit,
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
     let raw = constant_array(unit, env, operand)?;
-    let end = raw.iter().position(|&byte| byte == 0)?;
+    let end = raw.iter().position(|&byte| byte == 0).unwrap_or(raw.len());
     Some(raw[..end].to_vec())
 }
 
 /// A call of a stated library routine to form: `emitPutChar`, `emitPutS`,
 /// `emitFWrite`, `emitFPutC`, `emitFPutS`.
-struct NewCall {
-    standard: &'static str,
-    args: Vec<Operand>,
-    returns: llrm_mir::types::TypeId,
-    params: Vec<llrm_mir::types::TypeId>,
+pub(crate) struct NewCall {
+    pub(crate) standard: &'static str,
+    pub(crate) args: Vec<Operand>,
+    pub(crate) returns: llrm_mir::types::TypeId,
+    pub(crate) params: Vec<llrm_mir::types::TypeId>,
 }
 
 enum Rewrite {
@@ -134,13 +224,13 @@ enum Rewrite {
     Call(NewCall),
 }
 
-/// The call of the stated routine `new`, placed before `at`; none where the
+/// The call of the stated routine `new`, placed at `at`; none where the
 /// compile does not state it.
-fn emit(
+pub(crate) fn emit(
     unit: &mut Unit,
     routines: &[Routine],
     new: NewCall,
-    at: InstId,
+    at: Position,
 ) -> Option<InstId> {
     let routine = routines.iter().find(|one| one.standard == new.standard)?;
     let ty =
@@ -163,7 +253,7 @@ fn emit(
     operands.push(callee);
     let call =
         unit.function.create_instruction(Opcode::Call(Box::new(info)), new.returns, operands, Flags::default(), None);
-    unit.function.insert(call, Position::Before(at)).expect("a placed call");
+    unit.function.insert(call, at).expect("a placed call");
     Some(call)
 }
 
@@ -498,6 +588,22 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
+                LibFunc::Strchr => search::str_chr(unit, &site),
+                LibFunc::Memchr => search::mem_chr(unit, &site),
+                LibFunc::Strcpy => copy::str_cpy(unit, &site),
+                LibFunc::Stpcpy => copy::stp_cpy(unit, &site),
+                LibFunc::Strcat => copy::str_cat(unit, &site, &self.routines),
+                LibFunc::Strncat => copy::str_n_cat(unit, &site, &self.routines),
+                LibFunc::Strncpy => copy::str_n_cpy(unit, &site),
+                LibFunc::Strpbrk => search::str_pbrk(unit, &site),
+                LibFunc::Strspn => search::str_spn(unit, &site, true),
+                LibFunc::Strcspn => search::str_spn(unit, &site, false),
+                LibFunc::Strstr => search::str_str(unit, &site),
+                LibFunc::Memcpy => memops::mem_copy(unit, &site, crate::loopidioms::How::Apart),
+                LibFunc::Memmove => memops::mem_copy(unit, &site, crate::loopidioms::How::Overlapping),
+                LibFunc::Mempcpy => memops::mem_p_cpy(unit, &site),
+                LibFunc::Memset => memops::mem_set(unit, &site),
+                LibFunc::Memccpy => memops::mem_c_cpy(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };
@@ -508,7 +614,7 @@ impl FunctionPass for SimplifyLibCalls {
                     Operand::Constant(unit.context.int(ty, 0))
                 }
                 Rewrite::Value(value) => value,
-                Rewrite::Call(new) => match emit(unit, &self.routines, new, call) {
+                Rewrite::Call(new) => match emit(unit, &self.routines, new, Position::Before(call)) {
                     Some(new) => Operand::Value(unit.function.instruction(new).result.expect("a result")),
                     None => continue,
                 },

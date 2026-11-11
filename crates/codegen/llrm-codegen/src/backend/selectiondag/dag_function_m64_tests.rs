@@ -25,6 +25,28 @@ entry:
     assert!(add.dests.iter().all(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.width == 8)), "{add:?}");
 }
 
+/// `s * 7 + b` on a quadword was `lea [s*8+0]; sub; add` (three, and a lea with
+/// a four-byte displacement): `combineAdd`'s hidden LEA was translated for
+/// `i32` only, the pin has it for `i32` and `i64`. It is `lea [b+s*8]; sub s`
+/// (switch_table_holes m64 -O2, +39 B).
+#[test]
+fn an_m64_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define i64 @f(i64 %s, i64 %b) {
+  %m = mul i64 %s, 7
+  %t = add i64 %m, %b
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "add"), "the add is folded into the lea: {names:?}");
+    assert!(names.iter().any(|n| n == "lea") && names.iter().any(|n| n == "sub"), "{names:?}");
+}
+
 /// A seven-argument call at m64 came out with 4-byte values and the 32-bit
 /// `ESP` (`mov r, ESP`), and was refused. It now passes six arguments in the
 /// registers `calling.toml` lists and the seventh on the stack at `RSP`.
@@ -50,12 +72,12 @@ entry:
     assert_eq!(registers, expected);
     // The argument area is a multiple of 16: a call finds the stack aligned
     // (printf crashed in `movaps` with the 8-byte area).
-    let sub = insns
+    let setup = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.name.as_deref() == Some("sub"))
+        .find(|w| w.name.as_deref() == Some("call_frame_setup"))
         .expect("the area reserved");
-    assert!(matches!(sub.sources[1], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{sub:?}");
+    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{setup:?}");
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
@@ -155,6 +177,40 @@ entry:
     );
     for want in ["div", "cqo", "idiv"] {
         assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
+    }
+}
+
+/// Three unsigned divides read one zero for their high half (`v12 := mov v11`
+/// shared), so the zero lived across all three `EDX` clobbers and greedy gave
+/// it a callee-saved register: recmany m64 -Os, `push rbp` + `xor ebp, ebp` +
+/// 3 `mov edx, ebp`, 10 B where the pin's `$rdx = COPY %22` x3, each made again
+/// as `xor edx, edx`, is 6 B. Each divide reads a zero of its own.
+#[test]
+fn each_m64_divide_reads_its_own_zero_high_half() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %a, i64 %b, i64 %c, i64 %x, i64 %y, i64 %z) {
+entry:
+  %p = udiv i64 %a, %x
+  %q = udiv i64 %b, %y
+  %r = udiv i64 %c, %z
+  %s = add i64 %p, %q
+  %t = add i64 %s, %r
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let highs: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref().filter(|w| w.name.as_deref() == Some("div")))
+        .map(|w| w.sources[0].clone())
+        .collect();
+    assert_eq!(highs.len(), 3, "the premise: three divides: {highs:?}");
+    for (at, high) in highs.iter().enumerate() {
+        assert!(!highs[..at].contains(high), "divide {at} reads a zero an earlier one read: {highs:?}");
     }
 }
 
@@ -1318,6 +1374,94 @@ entry:
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
     assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
+}
+
+/// `store volatile double 1.5` was an xmm load of the constant and an xmm store
+/// (m64 float rows, the pool entry stayed); the pin stores the integer image of
+/// a volatile one too (`replaceStoreOfFPConstant` L24395, `legalOrCustom(STORE,
+/// i64)`).
+#[test]
+fn an_m64_volatile_double_constant_store_is_an_integer_store_of_its_image() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  store volatile double 1.5, ptr %p
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| n.starts_with("movs")), "no xmm load of the constant: {names:?}");
+}
+
+/// `(x + 2^31) u< 2^32` is the check that an `i64` fits an `i32`. It stayed an
+/// `add`, a 10-byte `movabs` of the limit and a compare (m64 -Os
+/// widening_multiply +20 B over the pin's `movslq; cmp; jne`): x86's
+/// `shouldTransformSignedTruncationCheck` was off.
+#[test]
+fn an_m64_signed_truncation_check_is_a_sign_extension_compare() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i1 @f(i64 %x) {
+entry:
+  %a = add i64 %x, 2147483648
+  %c = icmp ult i64 %a, 4294967296
+  ret i1 %c
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| &**n == "add"), "the add is gone: {names:?}");
+    assert!(names.iter().any(|n| n.starts_with("movs")), "a sign extension: {names:?}");
+}
+
+/// `x*5 + (x+3)*5` kept a separate `add` (m64 -O2 mul_constants +489 B over the
+/// pin): x86's `(x+3)*5` was not rewritten to `x*5 + 15`, so `x*5` was not
+/// shared.
+#[test]
+fn an_m64_multiply_of_a_sum_shares_the_multiply_of_its_addend() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  %a = add i32 %x, 3
+  %m1 = mul i32 %a, 5
+  %m2 = mul i32 %x, 5
+  %s = add i32 %m1, %m2
+  ret i32 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
+}
+
+/// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
+/// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
+/// compiled to `add; adc` and `xor eax, eax` (u128 max + 1 reported no overflow).
+#[test]
+fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)
+define i1 @f(i128 %a, i128 %b) {
+  %r = call {i128, i1} @llvm.uadd.with.overflow.i128(i128 %a, i128 %b)
+  %o = extractvalue {i128, i1} %r, 1
+  ret i1 %o
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "adc"), "the high halves are added with the carry of the low: {names:?}");
 }
 
 /// `p >= 65535.0f ? 65535.0f : p` converted to an integer stayed a compare

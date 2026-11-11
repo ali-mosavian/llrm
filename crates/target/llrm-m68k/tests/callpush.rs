@@ -32,8 +32,10 @@ fn module() -> llrm_mir::module::Module {
     llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{CALLS}")).expect("parses")
 }
 
+/// Without the call-target register, which adds a `lea` and a saved register to
+/// the frame this test counts.
 fn size() -> Options {
-    Options { size: true, ..Options::default() }
+    Options { size: true, call_targets: false, ..Options::default() }
 }
 
 #[test]
@@ -41,8 +43,10 @@ fn calls_with_two_words_push_them_and_the_frame_goes() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let text = text_with(&module(), "f", cpu, size()).expect("compiles");
         assert!(text.matches("-(%sp)").count() >= 6, "{cpu:?}: no pushes:\n{text}");
-        assert_eq!(text.matches("addq.l\t#8, %sp").count(), 3, "{cpu:?}: no cleanup per call:\n{text}");
-        assert!(!text.contains("suba") && !text.contains("adda") && !text.contains("lea"), "{cpu:?}: a frame:\n{text}");
+        // the three cleanups of 8 B wait and are one (#8049)
+        assert_eq!(text.matches("addq.l\t#8, %sp").count(), 0, "{cpu:?}: a cleanup per call:\n{text}");
+        assert_eq!(text.matches("(24,%sp), %sp").count(), 1, "{cpu:?}: not one cleanup:\n{text}");
+        assert!(!text.contains("suba") && !text.contains("adda"), "{cpu:?}: a frame:\n{text}");
     }
 }
 

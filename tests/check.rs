@@ -118,7 +118,10 @@ fn matcher(pattern: &str) -> Regex {
     while !rest.is_empty() {
         if let Some(inner) = rest.strip_prefix("{{") {
             let end = inner.find("}}").expect("an unclosed {{ in a pattern");
+            // Grouped, as FileCheck does: `{{si|di}}` is one alternation, not the end of the pattern.
+            out.push_str("(?:");
             out.push_str(&inner[..end]);
+            out.push(')');
             rest = &inner[end + 2..];
         } else {
             let end = rest.find("{{").unwrap_or(rest.len());
@@ -232,7 +235,7 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
                 words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
             let done = if words[0] == "llrm-cc" {
                 // llrm-c's arguments, served by llrm-cc over the pinned clang
-                // (needs LLRM_OW, LLRM_CLANG_M16).
+                // (needs the Open Watcom tree, LLRM_CLANG_M16).
                 common::cc::llrm_c().args(&arguments).output()
             } else {
                 Command::new(tool(words[0])).args(&arguments).output()
@@ -266,6 +269,15 @@ fn check(
     source: &str,
 ) -> Result<(), String> {
     filecheck(output, &directives(source))
+}
+
+/// `div {{si|di}}` was the regex `div si|di`: it matched any line with "di", so lsr_real_mode_drop's
+/// `CHECK-NOT: imul` started ahead of the div and went red on the imul before it.
+#[test]
+fn test_an_alternation_in_a_pattern_stays_inside_it() {
+    assert!(!matcher("div {{si|di}}").is_match("    mov di, 1"));
+    assert!(matcher("div {{si|di}}").is_match("    div di"));
+    assert!(check("mov di, 1\nimul ax, si, 3\ndiv si\n", "// CHECK: div {{si|di}}\n// CHECK-NOT: imul\n").is_ok());
 }
 
 /// A matcher that accepts everything makes every file pass: it must refuse.
@@ -337,12 +349,13 @@ fn test_check_max_holds_a_known_gap_to_its_ceiling() {
     assert!(check("a\nx\nx\nx\n", "; CHECK: a\n; CHECK-MAX-2: x").is_err(), "a trailing ceiling covers the rest");
 }
 
-/// An unset toolchain variable made `llrm-cc` fall back to the system clang: 69 false reds on 2026-11-05.
+/// An unset toolchain variable made `llrm-cc` fall back to the system clang: 69
+/// false reds on 2026-11-05.
 #[test]
 fn test_an_unset_toolchain_variable_is_named() {
     let none = |_: &str| None;
-    assert_eq!(common::cc::missing_env(none, false, false), ["LLRM_PIN_CLANG", "LLRM_OW", "LLRM_CLANG_M16"]);
-    assert_eq!(common::cc::missing_env(none, true, false), ["LLRM_PIN_CLANG", "LLRM_OW"]);
+    assert_eq!(common::cc::missing_env(none, false, false), ["LLRM_PIN_CLANG", "OW_TREE", "LLRM_CLANG_M16"]);
+    assert_eq!(common::cc::missing_env(none, true, false), ["LLRM_PIN_CLANG", "OW_TREE"]);
     assert_eq!(common::cc::missing_env(none, false, true), ["LLRM_PIN_CLANG"]);
     let set = |_: &str| Some(std::ffi::OsString::from("/"));
     assert!(common::cc::missing_env(set, false, false).is_empty(), "set to an existing path: nothing missing");

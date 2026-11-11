@@ -51,7 +51,7 @@
 //! # See also
 //! `llrm_mir::tti`, the interface; `llrm_x86::tti`, the x86 model.
 
-use llrm_mir::lowering::{ExtUser, Lowering};
+use llrm_mir::lowering::{ExtUser, Isd, LoadExt, Lowering};
 use llrm_mir::tti::*;
 
 use crate::expand_imm::mov_imm;
@@ -74,18 +74,48 @@ impl Cpu {
     }
 }
 
+/// What a code byte costs a full unroll at -O2/-O3, in thousandths of a clock.
+/// A byte executed cold costs the refill of its 64 B line from L2, about 16
+/// clocks: 0.25 a byte, the floor (a Cortex-A72/M1-class core fetches 16 B a
+/// clock and runs 3-4 instructions a clock, so an instruction is about 0.3).
+/// The saving the model counts is the loop control and the folded operands
+/// only, so the price is set at twice the floor: 0.5 keeps every unroll that
+/// saves 0.5-23 clocks a byte, which the pin makes by size (150) alone
+/// (fpbench -O2 -33% instructions). It was 250, the median of the cells where
+/// gcc and clang differed, against a saving counted over assumed runs.
+///
+/// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
+/// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
+/// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
+/// +148 B for -722 and -168 instructions. A wash at the floor, and they run few
+/// times. jpeg -O2: +28 and +8 B for -33 and -42 instructions of 11.65 M and
+/// 8.49 M (measured, not 0): the 3-trip component loops of the header parse
+/// (`id[c] == want`, 16 B for 11 clocks a run) run once a program, so the
+/// saving is real and one-off. The model prices them right at 1.2 instructions
+/// a byte, above the 0.8 break-even; it cannot know the code is cold.
+const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
+
+/// Bytes, in thousandths, one inliner cost unit (an instruction) stands for.
+const BYTES_PER_COST_UNIT_MILLI: i64 = 4000;
+
+/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250
+/// clocks).
+const INLINE_MILLICLOCKS_PER_UNIT: i64 = 250_000;
+
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
     pub cpu: Cpu,
+    /// `unroll_milliclocks_per_byte`; the tests' knob.
+    pub unroll_rate: i64,
 }
 
 impl AArch64 {
     /// The profile of a `-mcpu` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<AArch64> {
         match cpu {
-            "generic" => Some(AArch64 { cpu: Cpu::Generic }),
-            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1 }),
+            "generic" => Some(AArch64 { cpu: Cpu::Generic, unroll_rate: UNROLL_MILLICLOCKS_PER_BYTE }),
+            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1, unroll_rate: UNROLL_MILLICLOCKS_PER_BYTE }),
             _ => None,
         }
     }
@@ -260,26 +290,211 @@ fn kind_name(kind: CostKind) -> &'static str {
     }
 }
 
-type Prices = llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>>;
+thread_local! {
+    static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rows of the intrinsic table this thread has indexed.
+pub fn intrinsic_rows_indexed() -> usize {
+    INDEXED.with(std::cell::Cell::get)
+}
+
+type Section = llrm_support::hash::HashMap<&'static str, Option<i64>>;
 
 /// Intrinsic prices by (cpu, kind, callee name), as the pinned `opt` gives them
-/// (DEVIATE 1).
-fn intrinsic_prices() -> &'static Prices {
-    static PRICES: std::sync::OnceLock<Prices> = std::sync::OnceLock::new();
-    PRICES.get_or_init(|| {
-        include_str!("tti_intrinsics.txt")
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| {
-                let mut words = line.split(' ');
-                let (cpu, kind, name, cost) = (words.next()?, words.next()?, words.next()?, words.next()?);
-                Some(((cpu, kind, name), cost.parse().ok()))
-            })
-            .collect()
-    })
+/// (DEVIATE 1). A compile reads the rows of one cpu and a few kinds, which the
+/// file keeps together: each such section is found in the text and indexed
+/// when a price of it is first asked for, not the 1081 rows of all of them.
+fn intrinsic_price(
+    cpu: &'static str,
+    kind: &'static str,
+    name: &str,
+) -> Option<Option<i64>> {
+    static SECTIONS: std::sync::Mutex<Vec<(&str, &str, &Section)>> = std::sync::Mutex::new(Vec::new());
+    let mut sections = SECTIONS.lock().unwrap();
+    let known = sections.iter().find(|(c, k, _)| *c == cpu && *k == kind).map(|(_, _, section)| *section);
+    let section = known.unwrap_or_else(|| {
+        let section: &'static Section = Box::leak(Box::new(index_section(cpu, kind)));
+        sections.push((cpu, kind, section));
+        section
+    });
+    section.get(name).copied()
+}
+
+/// The rows `cpu kind name cost` of one section of the table, by name.
+fn index_section(
+    cpu: &str,
+    kind: &str,
+) -> Section {
+    const TABLE: &str = include_str!("tti_intrinsics.txt");
+    let prefix = format!("{cpu} {kind} ");
+    let Some(start) = TABLE.find(&format!("\n{prefix}")).map(|at| at + 1) else { return Section::default() };
+    let rows = TABLE[start..].lines().take_while(|line| line.starts_with(&prefix));
+    let mut section = Section::default();
+    for line in rows {
+        INDEXED.with(|indexed| indexed.set(indexed.get() + 1));
+        let mut words = line[prefix.len()..].split(' ');
+        if let (Some(name), Some(cost)) = (words.next(), words.next()) {
+            section.insert(name, cost.parse().ok());
+        }
+    }
+    section
+}
+
+impl Cpu {
+    /// `ST->getMaxInterleaveFactor()`: 2, 4 with `FeatureMaxInterleaveFactor4`
+    /// (`TuneAppleA14`, which `apple-m1` tunes for, AArch64Processors.td#L422).
+    fn max_interleave_factor(self) -> u32 {
+        match self {
+            Cpu::Generic => 2,
+            Cpu::AppleM1 => 4,
+        }
+    }
+
+    /// `ST->isMisaligned128StoreSlow()`: only the pre-A14 Apple cores and the
+    /// Exynos set it; neither cpu here does.
+    fn misaligned_128_store_slow(self) -> bool {
+        false
+    }
+}
+
+/// `getTypeLegalizationCost(<count x lane>).first`: the number of NEON
+/// registers the vector takes, and its legal lane count per register. A lane
+/// of 8, 16, 32 or 64 bits and a power-of-two count only (DEVIATE VT1: other
+/// shapes are widened or split by `TypeLegalizer` and are not priced).
+fn vector_pieces(ty: VectorTy) -> Option<(i64, u32)> {
+    let lane = match ty.lane {
+        Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
+        Ty::Float => 32,
+        Ty::Double => 64,
+        _ => return None,
+    };
+    if !ty.count.is_power_of_two() {
+        return None;
+    }
+    let total = u64::from(lane) * u64::from(ty.count);
+    // A type of at most 128 bits is one register; wider ones split in halves.
+    let pieces = total.div_ceil(128).max(1) as i64;
+    Some((pieces, lane))
+}
+
+/// `AArch64TTIImpl::getMemoryOpCost` for a fixed vector, the throughput
+/// kinds: L5664 (DEVIATE VT2: `TCK_Latency` reads the scheduling model and is
+/// not priced).
+fn vector_memory_op_cost(
+    cpu: Cpu,
+    op: MemoryOp,
+    ty: VectorTy,
+    align: u64,
+    kind: CostKind,
+) -> Option<Cost> {
+    let (first, lane) = vector_pieces(ty)?;
+    match kind {
+        CostKind::Latency => return None,
+        CostKind::CodeSize | CostKind::SizeAndLatency => return Some(Cost::of(first)),
+        CostKind::RecipThroughput => {}
+    }
+    // Unaligned 128-bit stores, on the cpus that set the feature.
+    if cpu.misaligned_128_store_slow() && op == MemoryOp::Store && u64::from(lane) * u64::from(ty.count) == 128 && align < 16 {
+        const AMORTIZATION_COST: i64 = 6;
+        return Some(Cost::of(first * 2 * AMORTIZATION_COST));
+    }
+    // `useNeonVector`: an element of a power of two between 8 and 64 bits, and an access that is
+    // not byte-aligned, costs the registers it takes.
+    if align != 1 {
+        return Some(Cost::of(first));
+    }
+    // Byte-aligned: broken into the power-of-two pieces `ld1`/`st1` take.
+    if ty.count == 3 && lane == 8 {
+        return Some(Cost::of(first));
+    }
+    let per_register = 128 / lane;
+    let mut cost = i64::from(ty.count / per_register);
+    let remainder = ty.count % per_register;
+    if remainder != 0 {
+        let mut work = vec![(remainder, 0u32)];
+        while let Some((current, offset)) = work.pop() {
+            if current.is_power_of_two() {
+                cost += 1 + i64::from(offset != 0);
+                continue;
+            }
+            let previous = current.next_power_of_two() / 2;
+            work.push((previous, offset));
+            work.push((current - previous, offset + previous));
+        }
+    }
+    Some(Cost::of(cost))
+}
+
+/// `AArch64TTIImpl::getArithmeticInstrCost` for a fixed vector, throughput:
+/// `add`/`sub`/`mul` and the bitwise and shift operations of a legal type are one
+/// instruction per register (L4985-4990, then `BaseT`). DEVIATE VT3: a `mul` of
+/// `<2 x i64>` (14 in the pin: no `mul.2d`) and the divisions and floating-point
+/// operations are not priced, so a loop that has one is not vectorized.
+fn vector_arithmetic_cost(
+    op: ArithOp,
+    ty: VectorTy,
+    kind: CostKind,
+) -> Option<Cost> {
+    if kind != CostKind::RecipThroughput {
+        return None;
+    }
+    let (first, lane) = vector_pieces(ty)?;
+    match op {
+        ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => Some(Cost::of(first)),
+        ArithOp::Shl | ArithOp::LShr | ArithOp::AShr => Some(Cost::of(first)),
+        ArithOp::Mul if lane < 64 => Some(Cost::of(first)),
+        _ => None,
+    }
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
+    /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
+    /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
+    /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
+    /// and `message` into nine: +176 B against gcc.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-15): the pin has no byte
+    /// trial. At -Os the trial that keeps `tmul`, `clamp`, `extend` inline
+    /// (smaller in bytes, the unit model refuses them) is bounded by the
+    /// caller's size, and jpeg_fixed's `bench_jpeg_fixed` is 600+
+    /// instructions. Cost: 16 trials of about 15 ms, jpeg_fixed -Os
+    /// compiles in 0.38 s, not 0.14 s. A callee rejected in one round is
+    /// not tried in the next (`inline_trial_skips_rejected`).
+    fn inline_trial_caller_limit(&self) -> usize {
+        20_000
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-30): the trial's copy goes
+    /// through the cleanup list, not the whole one: Ir of jpeg_fixed -Os
+    /// 1.39 G, not 2.95 G (pre-trial 1.38 G). The cleanup list misses a few
+    /// simplifications, so some trials decide otherwise (jpeg_single 3592
+    /// -> 3608 B, jpeg_fixed 3516 -> 3484 B; the sum is the same). Re-running
+    /// near misses with the whole list swaps the +16 B between the cells at
+    /// 2.05 G Ir (parked, #8278): `extend` and `receive` read alike in both and
+    /// pay in one only. Exit: a trial estimate that predicts the final
+    /// bytes of those two. Exception (w15): at speed a trial of a callee
+    /// with a loop uses the whole list, as the cleanup list has no loop
+    /// passes (vla -O2: the 8-site copy priced +644 B, the unrolled and
+    /// folded one is -40 B); at size the cleanup list stays (jpeg -Os +32 B
+    /// with the whole one).
+    fn inline_trial_light_simplify(&self) -> bool {
+        true
+    }
+
+    fn inline_trial_skips_rejected(&self) -> bool {
+        true
+    }
+
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
@@ -299,14 +514,158 @@ impl Tti for AArch64 {
         true
     }
 
-    /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
-    /// clocks. The median of the -O2/-O3 cells where inlining grew the code
-    /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
+    /// DEVIATE LICM-FRAME (owner w15, exit 2026-11-30): rectwo -Os (+25%
+    /// instructions against clang): `n - 1`, hoisted into the unguarded entry
+    /// because rotation was refused, lived in x19 across the recursive call and
+    /// kept the frame ahead of the base case.
+    fn licm_speculation_keeps_frame_late(&self) -> bool {
+        true
+    }
+
+    /// A loop is rotated at -Os only if the copied exit test folds in the
+    /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
+    /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        true
+    }
+
+    /// The inliner counts a callee's growth in cost units, one per instruction,
+    /// and prices it as `units * inline_o1_unit_bytes_milli / 1000` bytes: an
+    /// arm64 instruction is 4 bytes. (Left at 1000, a unit priced as a byte
+    /// and the rate below was fitted to that; x86-m32 sets 3500.)
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
+    /// clocks, the median of the -O2/-O3 cells where inlining grew the code
+    /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
+    /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
+    /// decisions are those of the fit.
+    ///
+    /// Refit scan (provisional: net = executed instructions + 0.3 x bytes, an
+    /// instruction proxy, not clocks; 2026-11-08, 34 programs at -O2/-O3,
+    /// release/next 8d22165d6d, rerun from the knob and scripts in draft PR
+    /// 8402): 30 and 10 clk/B change no cell against 62.5; 3 changes
+    /// jpeg_fixed and jpeg_single only (+84 B, -1.6k instructions); the
+    /// scoring rate 0.3 makes both worse in bytes and instructions (+540 B,
+    /// +688k instructions on jpeg_single -O2). Kept at the fitted rate.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        // Scan knob (w15/rate-scan only, never merged): milliclocks per byte.
+        if let Some(rate) = std::env::var("LLRM_INL_RATE").ok().and_then(|value| value.parse().ok()) {
+            return rate;
+        }
+        INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
+    /// around an unroll counts once, not 32 times (jpeg_fixed -O2 unrolled a
+    /// 16-trip loop for 49,152 assumed clocks; its instructions did not move).
+    fn unroll_assumes_unknown_loops_run(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE ARM64-IPRA (owner w15, exit 2026-11-30): the pin has
+    /// `-enable-ipra` off; GCC's `-fipa-ra` is on from -O1 and its recpow -Os
+    /// is 32 B smaller for it.
+    ///
+    /// DEVIATE ARM64-IPRA-OS (owner w15, exit 2026-11-15): jpeg_single -Os is
+    /// 20 B larger (3,544 -> 3,564 kernel, +4 B object) with 2% fewer
+    /// executed instructions: the greedy re-allocates the whole function and
+    /// places 3 more moves and 2 more constant rematerializations. No single
+    /// cause; the Os corpus is 40 B smaller in all. Linked to the Os jpeg
+    /// register-allocation card (anyisa); re-measure when it lands.
+    fn interprocedural_register_use(&self) -> bool {
+        true
+    }
+
+    /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
+    fn speed_milliclocks_per_byte(&self) -> i64 {
         250_000
     }
 
+    /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): a tree-recursive
+    /// function of at most 40 `gcc_insns` is copied into itself to depth 2, as
+    /// gcc's recursive inlining does (the call, return and argument setup of a
+    /// small body are most of its clocks). rectwo -O2: 777,916 instructions to
+    /// 165,196 (gcc 266,373), fib 201,208 to 8,824. Depth 3 or a larger limit
+    /// copies recchop and quicksort (+134k, +126k), a clock-priced depth never
+    /// pays at 250 clk/B for the static trip guess. Open: bintree +97k (its
+    /// body is loads and a multiply, not calls). Pin: none.
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        Some((2, 40))
+    }
+
+    /// The calls of a recursion are most of its clocks (rectwo `paths` 12 of
+    /// 15, fib 8 of 11; bintree `walk` 16 of 33, quicksort 16 of 51, queens
+    /// 8 of 37, which copies grew +97k, +126k and more).
+    fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
+        Some((3, 5))
+    }
+
+    /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear recursion called from another function is peeled into
+    /// the caller to gcc's caps. recpow -O2: 67,475 instructions / 260 B to 42,666 / 920 B (gcc 44,084 / 1,244); the other 71 cells of the
+    /// corpus are identical. Pin: none.
+    fn peels_linear_recursion(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save
+    /// [`UNROLL_MILLICLOCKS_PER_BYTE`] for each byte it adds. Exit: the
+    /// per-target clock model (2026-11-20).
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        self.unroll_rate
+    }
+
+    /// DEVIATE IND-MASK (arm64, owner w15, exit 2026-11-30): see the trait.
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the trait.
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the
+    /// trait. crc -O2: the bit loop of a byte loop, 152 B against 88 B rolled.
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
+        true
+    }
+
+    /// `AArch64TTIImpl::enableMemCmpExpansion`
+    /// ([L5499](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5499)).
+    /// llrm's arm64 targets are never `+strict-align`, whose hook returns
+    /// none. The load cap is `getMaxExpandSizeMemcmp`
+    /// ([L1266](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1266)).
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let max_num_loads = if opt_size { 4 } else { 8 };
+        Some(MemCmpExpansionOptions {
+            load_sizes: vec![8, 4, 2, 1],
+            max_num_loads,
+            num_loads_per_block: if is_zero_cmp { max_num_loads } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: vec![3, 5, 6],
+        })
+    }
+
+    /// `AArch64TargetLowering::allowsMisalignedMemoryAccesses`
+    /// ([L3199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L3199)):
+    /// any scalar access, since the targets are not `+strict-align`.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
         true
     }
 
@@ -340,6 +699,55 @@ impl Tti for AArch64 {
 
     fn vector_register_bits(&self) -> u32 {
         128
+    }
+
+    /// `AArch64TTIImpl::getNumberOfRegisters`: 32 NEON registers, 31 general.
+    fn number_of_registers(
+        &self,
+        class: RegisterClass,
+    ) -> u32 {
+        match class {
+            RegisterClass::Vector => 32,
+            RegisterClass::Scalar => 31,
+        }
+    }
+
+    /// `AArch64TTIImpl::getMaxInterleaveFactor`:
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5951>
+    fn max_interleave_factor(
+        &self,
+        vf: u32,
+        has_unordered_reductions: bool,
+    ) -> u32 {
+        if vf == 1 || (has_unordered_reductions && vf <= 4) {
+            return 4;
+        }
+        self.cpu.max_interleave_factor()
+    }
+
+    /// `AArch64TTIImpl::shouldMaximizeVectorBandwidth`: true for fixed-width
+    /// NEON (L375).
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        true
+    }
+
+    fn vector_memory_op_cost(
+        &self,
+        op: MemoryOp,
+        ty: VectorTy,
+        align: u64,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_memory_op_cost(self.cpu, op, ty, align, kind)
+    }
+
+    fn vector_arithmetic_cost(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_arithmetic_cost(op, ty, kind)
     }
 
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
@@ -447,8 +855,8 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Cost {
         let _ = (ret, args);
-        match intrinsic_prices().get(&(self.cpu.name(), kind_name(kind), name)) {
-            Some(Some(cost)) => Cost::of(*cost),
+        match intrinsic_price(self.cpu.name(), kind_name(kind), name) {
+            Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
             // A scalar intrinsic with no case of its own (`stacksave`) is
@@ -925,13 +1333,62 @@ impl Lowering for AArch64Lowering {
         true
     }
 
-    // AArch64ISelLowering.h, `isSExtCheaperThanZExt`: `w` to `x` is one `sxtw`.
-    fn is_sext_cheaper_than_zext(
+    // `isOperationLegalOrCustom`, read from the table the DAG legalizer uses
+    // (`TargetLowering::aarch64`, AArch64ISelLowering.cpp#L481): one table, so the IR-level
+    // answer cannot drift from the legalizer's.
+    fn is_operation_legal_or_custom(
         &self,
-        from_bits: u32,
-        to_bits: u32,
+        op: Isd,
+        bits: u32,
     ) -> bool {
-        from_bits == 32 && to_bits == 64
+        use llrm_sdag::actions::{Aarch64Features, TargetLowering};
+        use llrm_sdag::isd::ISD;
+        use llrm_sdag::mvt::EVT;
+        let node = match op {
+            Isd::Add => ISD::Add,
+            Isd::Sub => ISD::Sub,
+            Isd::Mul => ISD::Mul,
+            Isd::UDiv => ISD::UDiv,
+            Isd::SDiv => ISD::SDiv,
+            Isd::URem => ISD::URem,
+            Isd::SRem => ISD::SRem,
+            Isd::Shl => ISD::Shl,
+            Isd::Srl => ISD::Srl,
+            Isd::Sra => ISD::Sra,
+            Isd::And => ISD::And,
+            Isd::Or => ISD::Or,
+            Isd::Xor => ISD::Xor,
+            Isd::Select => ISD::Select,
+            Isd::SetCc => ISD::SetCC,
+            Isd::Truncate => ISD::Truncate,
+            Isd::ZeroExtend => ISD::ZeroExtend,
+            Isd::SignExtend => ISD::SignExtend,
+        };
+        thread_local! {
+            static TABLE: TargetLowering = TargetLowering::aarch64(Aarch64Features::default());
+        }
+        TABLE.with(|table| table.is_operation_legal_or_custom(node, EVT::integer(bits)))
+    }
+
+    // AArch64ISelLowering.cpp#L1274, `EnableExtLdPromotion = true`: CodeGenPrepare promotes the
+    // operands of an extension towards the load that feeds them (CodeGenPrepare.cpp#L6747):
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1274
+    fn enable_ext_ld_promotion(&self) -> bool {
+        true
+    }
+
+    // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1, Expand)` for every
+    // integer type; the rest is the base class's `Legal`:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1141
+    fn is_load_ext_legal(
+        &self,
+        ext: LoadExt,
+        value_bits: u32,
+        memory_bits: u32,
+    ) -> bool {
+        !(ext == LoadExt::Sign && memory_bits == 1)
+            && llrm_mir::lowering::simple_int(value_bits)
+            && llrm_mir::lowering::simple_int(memory_bits)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942

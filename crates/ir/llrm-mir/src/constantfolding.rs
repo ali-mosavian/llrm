@@ -745,7 +745,7 @@ fn global_variable<'a>(
 
 /// `GlobalVariable::isConstant() && hasDefinitiveInitializer()`: the
 /// initializer.
-fn definitive_constant_initializer(
+pub fn definitive_constant_initializer(
     env: Env,
     context: &Context,
     c: ConstantId,
@@ -2641,6 +2641,14 @@ fn constant_fold_scalar_call3(
         // folds `fmuladd` fused.
         IntrinsicId::Fma | IntrinsicId::Fmuladd => {
             let Type::Float(kind) = context.types.get(ty) else { return None };
+            // DEVIATE (narrower than the pin): an fp128 `fusedMultiplyAdd` is
+            // not ported, so the fold is the unfused sum when the product is
+            // exact, where fused and unfused are one number.
+            if *kind == FloatKind::F128 {
+                let value = |operand: ConstantId| crate::fp128::value(&context.get(operand).kind);
+                let sum = crate::fp128::multiply_add_exact(&value(ops[0])?, &value(ops[1])?, &value(ops[2])?)?;
+                return Some(crate::fp128::constant(context, ty, &sum));
+            }
             let bits = |operand: ConstantId| match context.get(operand).kind {
                 ConstantKind::Float(bits) => Some(bits),
                 _ => None,

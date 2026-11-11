@@ -1,6 +1,7 @@
 """wasm_cells.py BASE NEW: compare two `tools/wasm_corpus.sh` runs (one "## -LEVEL" header, then the table, per level).
 
-A cell is WORSE when its code bytes or its instructions executed grew, BROKEN when it compared in BASE and not in NEW.
+A cell is WORSE when its code bytes or its instructions executed grew, BROKEN when it compared in BASE and not in NEW,
+UNMEASURED when either side has no result (`n/a`: 0 instructions is not a measurement).
 Exit 1 on either; the last line says how many cells were compared of how many.
 """
 import sys
@@ -13,7 +14,10 @@ def read(path):
             level = line[3:].strip()
             continue
         fields = line.split()
-        if len(fields) >= 6 and fields[1].isdigit() and fields[3].isdigit():
+        if len(fields) >= 8 and fields[7].startswith("n/a"):
+            # No result on a side (an unresolved import, a trap): its 0 instructions are not a measurement.
+            cells[(level, fields[0])] = "NA"
+        elif len(fields) >= 6 and fields[1].isdigit() and fields[3].isdigit():
             cells[(level, fields[0])] = (int(fields[1]), int(fields[3]))
         elif len(fields) > 1 and "FAIL" in line:
             cells[(level, fields[0])] = None
@@ -25,6 +29,9 @@ def main(base_path, new_path):
     bad, compared = [], 0
     for key in sorted(base):
         if base[key] is None:
+            continue
+        if base[key] == "NA" or new.get(key) == "NA":
+            bad.append(f"UNMEASURED {key[0]} {key[1]}")
             continue
         if new.get(key) is None:
             bad.append(f"BROKEN {key[0]} {key[1]}")

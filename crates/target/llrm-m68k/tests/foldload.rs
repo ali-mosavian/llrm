@@ -22,11 +22,7 @@ fn module(ir: &str) -> llrm_mir::module::Module {
 }
 
 fn binutils(tool: &str) -> Option<Command> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return None;
-    };
+    let root = support::oracle_root()?;
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{tool}"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     Some(command)
@@ -58,9 +54,11 @@ fn every_post_increment_source_encodes_as_binutils_does() {
     for name in indexed::source_rows() {
         let one =
             Inst { opcode: name, operands: vec![Operand::Reg(reg::D3), Operand::Reg(reg::D3), Operand::Reg(reg::A2)] };
-        // a compare has no tied source
+        // a compare has no tied source; `cmpa` compares into an address
+        // register
         let inst = if name.starts_with("CMP") {
-            Inst { opcode: name, operands: vec![Operand::Reg(reg::D3), Operand::Reg(reg::A2)] }
+            let dest = if name.starts_with("CMPA") { reg::A3 } else { reg::D3 };
+            Inst { opcode: name, operands: vec![Operand::Reg(dest), Operand::Reg(reg::A2)] }
         } else {
             one
         };

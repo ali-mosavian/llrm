@@ -75,6 +75,17 @@ fn based(
     let (one, other) = (object(context, function, base_a), object(context, function, base_b));
     match (one, other) {
         (Some(_), Some(_)) => Alias::No,
+        // `isArgumentOrArgumentLike` against `isIdentifiedFunctionLocal`
+        // ([L1590][arg]): a parameter is not what this activation made, nor a
+        // `noalias` parameter's object, captured or not.
+        //
+        // [arg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1590
+        //
+        // DEVIATE ALIAS1: no `noalias` call result as the local object, no
+        // `extractvalue` of a parameter as argument-like, no `byval` here
+        // unless `Facts` says `noalias`. Owner w12, exit 2026-11-20.
+        (Some(Object::Slot(_) | Object::Unaliased), None) if is_argument(function, base_b) => Alias::No,
+        (None, Some(Object::Slot(_) | Object::Unaliased)) if is_argument(function, base_a) => Alias::No,
         // An unescaped slot is named by nothing but its own address.
         (Some(Object::Slot(slot)), None) | (None, Some(Object::Slot(slot)))
             if !captured(context, callees, function, slot) =>
@@ -83,6 +94,14 @@ fn based(
         }
         _ => Alias::May,
     }
+}
+
+/// Whether `base` is a parameter of `function` (`isArgumentOrArgumentLike`).
+fn is_argument(
+    function: &Function,
+    base: Operand,
+) -> bool {
+    matches!(base, Operand::Value(value) if matches!(function.value(value).def, ValueDef::Argument(_)))
 }
 
 /// An object no other object overlaps: a stack slot, a global, or what a

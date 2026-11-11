@@ -15,21 +15,21 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
-# Every test here compiles with llrm-c and reads the old allocator's `[instr]` rows. Debt `skip-alloc-scaling` in docs/working/ci.md.
-# An llrm-c that is built (--features c-legacy) still has none: the old allocator was deleted, and its tests died with KeyError: 'facts intervals'.
+# Every test here compiles with llrm-cc and reads the old allocator's `[instr]` rows. Debt `skip-alloc-scaling` in docs/working/ci.md.
+# An llrm-cc that is built (--features c-legacy) still has none: the old allocator was deleted, and its tests died with KeyError: 'facts intervals'.
 pytestmark = pytest.mark.usefixtures("old_allocator")
 
 
-# The rows the old allocator's passes print and the tests read: the new allocator still prints `regalloc base`, and an llrm-c with
+# The rows the old allocator's passes print and the tests read: the new allocator still prints `regalloc base`, and an llrm-cc with
 # that row alone made the runner's batches die with KeyError: 'facts intervals'.
 OLD_ALLOCATOR_ROWS = ("facts intervals", "facts slots", "intervals homes", "regalloc base")
 
 
 @pytest.fixture(scope="module")
 def old_allocator():
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     if not compiler.exists():
-        pytest.skip("llrm-c is not built (debt skip-alloc-scaling)")
+        pytest.skip("llrm-cc is not built (debt skip-alloc-scaling)")
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "probe.c"
         source.write_text(straight(1024))
@@ -37,7 +37,7 @@ def old_allocator():
             done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     missing = [row for row in OLD_ALLOCATOR_ROWS if not re.search(rf"^\[instr\].* {re.escape(row)}$", done.stderr, re.M)]
     if missing:
-        pytest.skip(f"this llrm-c has no old allocator: no {', '.join(missing)} row (debt skip-alloc-scaling)")
+        pytest.skip(f"this llrm-cc has no old allocator: no {', '.join(missing)} row (debt skip-alloc-scaling)")
 
 SMALL, LARGE = 1024, 4096
 # 4x the program may cost this much more (a linear pass costs 4x, a quadratic one 16x). Measured 2026-10-09 on main 61be539b2:
@@ -79,7 +79,7 @@ def calls(compiler: Path, source: Path, level: str, step: str) -> int:
 def test_the_allocators_passes_grow_as_the_program_does():
     """lir coalesce took 23x as long for 4x the statements, regalloc base 54x and lir twoaddr 21x (#943): neighbour sets joined
     whole at each copy, every register's holders looked at for each value, a scan of the block for each tied instruction."""
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         best = {}
         for n in (SMALL, LARGE):
@@ -97,7 +97,7 @@ def test_a_split_finds_its_instruction_by_index_not_by_walking_the_block():
     so the position is bisected."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
     import ladder_gen as gen
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "mem800.c"
         source.write_text(gen.generate("mem", 800))
@@ -110,7 +110,7 @@ def test_a_spill_lists_the_units_of_a_register_in_time_linear_in_its_operands():
     far for each: `regalloc base` on the ladder's `mem` cost 259.7 / 586.4 Minstr at N=1600 / 3200 (2.26x per doubling; 2.09x now)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
     import ladder_gen as gen
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     cost = {}
     with tempfile.TemporaryDirectory() as work:
         for n in (1600, 3200):
@@ -128,7 +128,7 @@ def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_inst
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](224))
@@ -143,7 +143,7 @@ def test_a_spill_patches_the_postings_of_the_block_it_changed_instead_of_making_
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](224))
@@ -158,7 +158,7 @@ def test_a_spill_passes_over_the_instructions_that_name_no_spilled_value():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](224))
@@ -172,7 +172,7 @@ def test_a_rewrite_works_out_the_widths_of_the_values_it_changed_only():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](224))
@@ -186,7 +186,7 @@ def test_a_rewrite_counts_what_the_instructions_it_changed_say_of_the_register_c
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](224))
@@ -201,7 +201,7 @@ def test_a_rewrite_prices_the_siblings_of_the_values_it_changed_only():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](224))
@@ -216,7 +216,7 @@ def test_a_rewrite_that_changes_most_instructions_finds_the_homes_afresh():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -232,7 +232,7 @@ def test_a_rewrite_patches_the_numbering_and_keeps_the_intervals_it_did_not_chan
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -248,7 +248,7 @@ def test_a_split_asks_the_values_segments_where_it_is_live_and_makes_no_rows_of_
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -263,7 +263,7 @@ def test_the_points_that_destroy_registers_are_not_looked_for_again_in_every_ins
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -284,7 +284,7 @@ def test_a_split_asks_what_holds_a_register_where_it_splits_and_gathers_none_of_
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -302,7 +302,7 @@ def test_a_rewrite_moves_the_holders_of_a_register_it_named_in_the_index_and_doe
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -317,7 +317,7 @@ def test_the_recolor_step_costs_what_it_did_before_the_intervals_were_shared():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -332,7 +332,7 @@ def test_a_memory_phi_asks_its_own_slot_sharing_and_not_a_pass_over_every_block(
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -349,7 +349,7 @@ def test_taking_a_placed_value_out_does_not_shift_every_value_placed_after_it():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -365,7 +365,7 @@ def test_a_spill_asks_whether_a_candidate_sibling_meets_its_group_and_not_the_we
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -381,7 +381,7 @@ def test_a_candidate_sibling_that_would_join_is_asked_of_one_graph_a_round_not_o
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "nest.c"
         source.write_text(scaling.AXES["nest"](32))
@@ -397,7 +397,7 @@ def test_a_spill_rewrite_keeps_the_instructions_that_name_no_spilled_value_at_on
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -412,7 +412,7 @@ def test_a_spill_asks_no_slot_colouring_of_the_homes_it_leaves_behind():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
@@ -428,7 +428,7 @@ def test_a_reload_inserted_in_a_long_block_renumbers_no_occurrence_after_it():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -445,7 +445,7 @@ def test_the_facts_of_a_rewrite_are_edited_where_they_are_not_copied():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -461,7 +461,7 @@ def test_a_value_with_more_values_live_than_registers_is_not_recolored():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -475,7 +475,7 @@ def test_a_spill_shares_the_lists_of_the_blocks_it_does_not_change():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](800))
@@ -489,7 +489,7 @@ def test_a_spill_copies_no_block_it_does_not_change():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](800))
@@ -505,7 +505,7 @@ def test_a_carve_works_on_the_positions_that_name_the_value_not_on_the_block():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -519,7 +519,7 @@ def test_a_short_update_looks_at_the_definitions_of_the_spilled_values_and_not_a
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -533,7 +533,7 @@ def test_an_update_made_local_looks_at_the_definitions_of_the_spilled_values_and
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -547,7 +547,7 @@ def test_the_liveness_of_the_pieces_a_split_made_is_asked_of_their_postings_and_
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -558,7 +558,7 @@ def test_a_load_is_asked_of_the_stores_to_its_own_symbol_and_not_of_every_store_
     """Every load of a global was asked, one by one, whether each of the body's stores to other globals keeps it: 300 loads against
     300 stores took `spill stable loads` 1,226 Minstr at -O2 -m32 (5,102 at 600), most of it `may_overlap` building the same answer
     for every pair. The stores to another external symbol meet it by region and are found by block, not named for each load."""
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     n = 300
     lines = ["extern void sink(int *);", *(f"int a{k}, k{k};" for k in range(n)), "void taken(void){"]
     lines += [f" sink(&a{k}); sink(&k{k});" for k in range(n)]
@@ -578,7 +578,7 @@ def test_a_local_split_asks_the_postings_for_the_references_of_the_value_and_not
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "cells.c"
         source.write_text(scaling.AXES["cells"](448))
@@ -593,7 +593,7 @@ def test_the_peephole_grows_as_a_loop_nest_does():
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         spent = {}
         for n in (16, 64):
@@ -611,7 +611,7 @@ def test_a_split_by_region_costs_a_fraction_of_a_million_instructions_not_a_mill
     vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
     sys.path.insert(0, str(vsgcc))
     import scaling
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](200))
@@ -635,7 +635,7 @@ def test_a_split_rewrites_an_instruction_without_scanning_the_operands_of_its_re
     """`LiveIntervals::rewrite_instr` removed an instruction's operands with `retain` over the whole list of the register: each
     split child of a far pointer rewrote ~n instructions, each a scan of ~n operands. `regalloc base` at -Os (code16) cost
     41.96 / 233.45 Minstr at 400 / 1600 guarded stores (5.56x for 4x; clang's trySplit grows 4.18x). The operands sit in slots."""
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = llrmbin.bin_dir() / "llrm-cc"
     cost = {}
     with tempfile.TemporaryDirectory() as work:
         for n in (400, 1600):

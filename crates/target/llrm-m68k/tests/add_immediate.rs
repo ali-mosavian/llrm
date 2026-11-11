@@ -10,6 +10,7 @@ const HEX: &str = include_str!("../bench/library/hex.ll");
 fn hex_keeps_one_counter_and_no_pointer_step() {
     for cpu in ["68000", "68020"] {
         let out = assembly(HEX, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
+        assert!(out.contains("subq.l\t#1, %d"), "{cpu}: the counter is not stepped by subq:\n{out}");
         assert!(!out.contains("lea\t(-1,%a0), %a0"), "{cpu}: a second pointer step:\n{out}");
     }
 }

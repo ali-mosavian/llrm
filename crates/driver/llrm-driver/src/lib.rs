@@ -18,6 +18,7 @@ pub const DEFAULT: &str = "x86-m16";
 
 /// Every target built in.
 pub fn all() -> Vec<Rc<dyn Target>> {
+    llrm_x86_backend::install();
     vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32), Rc::new(llrm_x86_m64::M64)]
 }
 
@@ -74,7 +75,7 @@ pub fn mode_target(
         .ok_or("--mode N: no target with that mode")?;
     let cpu = target.default_cpu();
     let machine = llrm_codegen::backend::cpu::tuned_for(&*target, cpu, size)?.target();
-    // m16 states no TTI: llrm-c prices there by the generic rules, and so does
+    // m16 states no TTI: llrm-cc prices there by the generic rules, and so does
     // this.
     let tti = machine.tti().map_or("none", |tti| tti.name());
     let described = format!("{} cpu {cpu} tti {tti} datalayout {}", target.name(), target.layout().datalayout);

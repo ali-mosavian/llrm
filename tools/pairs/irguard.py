@@ -44,6 +44,22 @@ def check_dso_local(text: str, name: str = "<ir>") -> None:
         raise SystemExit(f"irguard: {name}: {len(missing)} symbols without dso_local (first: {missing[0]}); the pin's llc would be PIC and ours not")
 
 
+REOPTIMISED = re.compile(r"^; optimised: |^; ModuleID = '<stdin>'", re.M)
+
+
+def reoptimised(text: str) -> bool:
+    """IR an optimiser wrote (`pin.opt` stamps `; optimised:`; `opt -S` over stdin names its module `<stdin>`), not a front end's raw IR.
+    Fed to llrm-llc it runs our mid-end a second time on the pin's output, before LSR, which the pin's llc does not: a same-IR byte
+    compare then reads that as a back-end difference (m32 div_constants -O1 read +28/+39 B; real flow, ours 4324 B against 5012 B)."""
+    return bool(REOPTIMISED.search(text))
+
+
+def check_raw(text: str, name: str = "<ir>") -> None:
+    """Refuses re-optimised IR for a run that is to compare one flow against the other."""
+    if reoptimised(text):
+        raise SystemExit(f"irguard: {name}: re-optimised IR (pin opt output); llrm-llc would re-run our mid-end on it. Use raw front-end IR, or label the run `re-optimised`")
+
+
 SHIFT = re.compile(r"\b((?:shl|lshr|ashr)(?: (?:nuw|nsw|exact))* i(\d+) [^,\n]+, (\d+))\b")
 
 
@@ -53,6 +69,11 @@ def undefined_shifts(text: str) -> list[str]:
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--raw":
+        for path in sys.argv[2:]:
+            with open(path) as handle:
+                check_raw(handle.read(), path)
+        sys.exit(0)
     for path in sys.argv[2:]:
         with open(path) as handle:
             check(handle.read(), sys.argv[1], path)

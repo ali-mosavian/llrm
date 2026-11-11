@@ -49,7 +49,7 @@
 //! Review 2026-11-13.
 //!
 //! DEVIATE SD11: no floating-point constant folding (`foldConstantFPMath`,
-//! `FP_TO_SINT` of a constant, `FoldSetCC` on FP constants), no FP constant
+//! `FP_TO_SINT` of a constant), no FP constant
 //! bitcasts; `ConstFp` holds raw bits. Reason: needs an `APFloat` (f80
 //! included); not on the integer path A1 builds. Exit: with the FP builder
 //! piece. Owner sdag-a. Review 2026-11-13.
@@ -60,9 +60,13 @@
 //! makes them. Exit: with `computeKnownBits` (sdag-b, B2). Owner sdag-a.
 //! Review 2026-11-13.
 //!
-//! DEVIATE SD13: no vector types or nodes (`BUILD_VECTOR`, `SPLAT_VECTOR`,
-//! `VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
-//! vector MIR. Owner sdag-a. Review 2026-11-13.
+//! DEVIATE SD13: no vector types or nodes (`SPLAT_VECTOR`, `VSCALE`,
+//! floating-point and 64-bit vectors, vector arithmetic), except the four
+//! 128-bit integer vectors `v16i8`, `v8i16`, `v4i32`, `v2i64` of the arm64
+//! flag `LLRM_ARM64_VECTORS`: their `BUILD_VECTOR`, `INSERT_VECTOR_ELT`,
+//! `SCALAR_TO_VECTOR`, splat `VECTOR_SHUFFLE`, loads and stores exist since
+//! 2026-11-10 (VEC1, VEC2). Exit: the rest, with the arm64 vectorizer's
+//! pieces. Owner llrm-arm64-vec. Review 2026-11-12.
 //!
 //! DEVIATE SD15: `FindMergedConditions` is ported (`builder/mergedcond.rs`)
 //! without the edge probabilities (`TProb`/`FProb`) the pin keeps on the blocks
@@ -102,7 +106,7 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, x86isd};
+pub use llrm_sdag::{actions, intrinsic_cost, isd, libcalls, lowering, mvt, target_names};
 pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitcast_combine;
@@ -110,16 +114,24 @@ pub mod bitreverse_combine;
 pub mod bswap_combine;
 pub mod builder;
 pub mod chain_combine;
+pub mod combine_andnot;
+mod combine_avg;
 pub mod combine_funnel;
+pub mod combine_lifetime_end;
 pub mod combine_load;
-pub mod combine_store_merge;
 pub mod combine_load_combine;
+pub mod combine_mulo;
 pub mod combine_select_minmax;
-pub mod combine_trunc_stores;
+pub mod combine_store_merge;
 pub mod combine_token_factor;
+pub mod combine_trunc_stores;
+pub mod combine_urem_eq;
+pub mod combine_vector;
 pub mod ctcount_combine;
-mod dag;
+pub mod dag;
 pub mod dag_combiner;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/dag_function.rs"]
 pub mod dag_function;
 pub mod dag_select;
 pub mod dag_target;
@@ -128,12 +140,15 @@ mod demanded_bits;
 pub mod div_combine;
 pub mod div_const;
 pub mod dump;
-pub mod emit;
+pub mod emit_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
 pub mod expand_overflow;
 pub mod expand_sat;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/fastisel.rs"]
+pub mod fastisel;
 pub mod fold;
 pub mod fp_combine;
 pub mod fp_value;
@@ -150,16 +165,38 @@ pub mod logic_setcc;
 mod match_rotate;
 pub mod narrow_divrem;
 pub mod opcodes;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/postprocess.rs"]
+pub mod postprocess;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/preprocess.rs"]
+pub mod preprocess;
 mod reassociate;
 pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/select.rs"]
+pub mod select;
+pub mod select_api;
 pub mod setcc_extreme;
 pub mod switchcg;
 pub mod target_calling;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/unfold.rs"]
+pub mod unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_carry.rs"]
 pub mod x86_carry;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
-pub mod x86_preprocess;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
+pub mod x86_nodes;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86isd.rs"]
+pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
@@ -178,6 +215,10 @@ mod asmcall_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod codecall_tests;
+#[cfg(test)]
+mod combine_avg_tests;
+#[cfg(test)]
+mod combine_parity_tests;
 #[cfg(test)]
 mod dag_function_aggregates_tests;
 #[cfg(test)]
@@ -207,7 +248,8 @@ mod dag_select_tests;
 #[cfg(test)]
 mod dagisel_tests;
 #[cfg(test)]
-mod emit_tests;
+#[cfg(test)]
+mod exact_shift_tests;
 #[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
@@ -236,6 +278,8 @@ mod memlib_tests;
 mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
+#[cfg(test)]
+mod or_as_add_tests;
 #[cfg(test)]
 mod overflow_tests;
 #[cfg(test)]

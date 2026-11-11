@@ -316,7 +316,7 @@ void B_SPLY(SD *commands)
 {
     macro_begin(&player.m, commands);
     run(&player);
-    str_tmp_free(commands);
+    str_free_if_tmp(commands);
 }
 
 

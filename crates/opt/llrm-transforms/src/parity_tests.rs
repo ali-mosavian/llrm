@@ -150,6 +150,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "leaopt@5",
             "jumps@17",
             "copyprop@18",
+            "breakfalsedeps@19",
             "allocate@11",
             "unknown@1",
         ],
@@ -670,6 +671,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("adce@815", "adce"),
     ("memcpyopt@818", "memcpyopt"),
     ("licm@823", "licm"),
+    ("loop-vectorize@1354", "loopvectorize"),
     ("drop-unnecessary-assumes@1360", "dropunnecessaryassumes"),
     ("drop-unnecessary-assumes@1577", "dropunnecessaryassumes"),
     ("infer-alignment@1362", "inferalignment"),
@@ -680,6 +682,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("lower-constant-intrinsics@1597", "lowerconstantintrinsics"),
     ("instsimplify@1662", "instsimplify"),
     ("divrempairs@1667", "divrempairs"),
+    ("mergeicmps@1672", "mergeicmps"),
     ("expandmemcmp@1673", "expandmemcmp"),
     ("tailrec@1677", "tailcallelim"),
     ("jumpthreading@668", "jumpthreading"),
@@ -705,9 +708,12 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("fixupbw@14", "codegen:backend/fixupbw"),
     ("fixupleas@14", "codegen:backend/fixupleas"),
     ("copyprop@18", "codegen:backend/machinecp"),
+    ("breakfalsedeps@19", "codegen:backend/breakfalsedeps"),
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
+    ("looptermfold", "looptermfold"),
     ("hardwareloops", "hardwareloops"),
+    ("constanthoisting", "constanthoisting"),
 ];
 
 /// Every source line of the module `name`: its file and its directory.

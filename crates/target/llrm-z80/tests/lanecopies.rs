@@ -30,7 +30,8 @@ fn a_pack_records_the_lane_each_byte_fills_in_the_pair() {
 #[test]
 fn a_pair_copied_beside_a_lane_copy_keeps_its_pair_class() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let out = std::env::temp_dir().join("llrm-z80-pair-beside-lane.s");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("llrm-z80-pair-beside-lane.s");
     let done = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
         .args(["-S", "-O2", "-o", out.to_str().unwrap(), &format!("{dir}/tests/data/pair_reload_beside_lane_copy.ll")])
         .output()

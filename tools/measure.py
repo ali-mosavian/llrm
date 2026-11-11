@@ -278,7 +278,7 @@ def has_cc(sha: str) -> bool:
 
 def base_with_cc(head: str, base_sha: str) -> str | None:
     """`base_sha` if it can be built and measured as llrm-cc; else the nearest first-parent ancestor of `head` that can (gate run 3: the
-    cost step built main, which has llrm-c only: "no bin target named llrm-cc"); None where there is none."""
+    cost step built main, which has llrm-cc only: "no bin target named llrm-cc"); None where there is none."""
     if has_cc(base_sha):
         return base_sha
     return next((sha for sha in git("rev-list", "--first-parent", "-n", "300", head).split()[1:] if has_cc(sha)), None)

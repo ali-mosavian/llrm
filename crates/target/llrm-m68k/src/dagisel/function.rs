@@ -1,10 +1,8 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
-//! DEVIATE: no jump tables and no live-in registers: a `switch` is a chain of
-//! compares and the C convention passes everything on the stack, so the slice
-//! (arithmetic, branches, calls) needs neither. Reason: the pin's jump tables
-//! wait for the m68k machine function's table support. Exit: M4.
+//! DEVIATE: no live-in registers: the C convention passes everything on the
+//! stack, so the slice (arithmetic, branches, calls) needs none. Exit: M4.
 
 use std::sync::LazyLock;
 
@@ -26,6 +24,12 @@ use crate::target::M68k;
 
 static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
 
+/// The DAG builder lowers the module's `switch` instructions (clusters, bit
+/// tests and jump tables, `SwitchLoweringUtils`), as the pin's does with no
+/// `LowerSwitch` pass in the codegen pipeline. The mid-end's switch lowering
+/// is off wherever this is on.
+pub const SWITCHES_IN_DAG: bool = true;
+
 /// The builder's view of m68k: 32-bit pointers, `i8` to `i32` in registers,
 /// and the `CALL`/`RET` nodes of the pin.
 pub fn builder_target() -> BuilderTarget {
@@ -35,10 +39,10 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             boolean_contents: BooleanContents::ZeroOrNegativeOne,
             big_endian: true,
-            ..BuilderTarget::m32().dag
+            ..BuilderTarget::for_pointer_bits(32).dag
         },
         shift_amount: EVT::I32,
-        jump_tables: false,
+        jump_tables: SWITCHES_IN_DAG,
         string_instructions: false,
         // no FPU at any CPU: a float travels as the integer of its width
         soft_float: true,
@@ -56,7 +60,12 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: true,
             calling: Some(&*CALLING),
         }),
-        ..BuilderTarget::m32()
+        // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
+        // in `BuilderTarget`
+        va_arg_align_cap: Some(super::lowering::VA_SLOT),
+        // `Machine::max_alloca_align`: the frame realigns the stack pointer
+        max_alloca_align: None,
+        ..BuilderTarget::for_pointer_bits(32)
     }
 }
 
@@ -87,6 +96,9 @@ pub struct Selected {
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
     pub ends_unreachable: bool,
+    /// The blocks each of the function's jump tables goes to, by table number
+    /// (`MachineJumpTableInfo`; the same on every block).
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -95,12 +107,26 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false)
+    select_function_with(
+        module,
+        name,
+        cpu,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        Default::default(),
+        &Default::default(),
+        &[],
+    )
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
 /// in place of the ILP list scheduler, and `indexed`: `(An)+` and `-(An)`
-/// accesses, and `short`: `addq` and `subq`.
+/// accesses, `short`: `addq` and `subq`, and `absolute_data`: a global's
+/// address is an absolute one, not PC-relative ([`crate::compile::CodeModel`]).
 pub fn select_function_with(
     module: &Module,
     name: &str,
@@ -108,6 +134,12 @@ pub fn select_function_with(
     source_order: bool,
     indexed: bool,
     short: bool,
+    absolute_data: bool,
+    size: bool,
+    carry_chain: bool,
+    price: crate::timing::Price,
+    mul: &super::mulprice::Chain,
+    libcalls: &[crate::libcalls::Kind],
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -119,7 +151,11 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let mut target = builder_target();
+    // DEVIATE M68K-DIVSIZE: from the 68020 a divide by a constant stays one
+    // `divu.l` in a size build (4-6 B) where the pin's default (`isIntDivCheap`
+    // false) makes the multiply-high sequence (10-14 B, `mulu.l` and shifts);
+    // X86 and AArch64 return the size flag here too. Owner m68k. Exit: none.
+    let mut target = builder_target().with_int_div_cheap(size && cpu.at_least(Cpu::M68020));
     target.ordered_copies = indexed;
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
@@ -132,8 +168,20 @@ pub fn select_function_with(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
-            .map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(
+            &mut built.dag,
+            cpu,
+            source_order,
+            indexed,
+            short,
+            absolute_data,
+            carry_chain,
+            price,
+            mul.clone(),
+            libcalls,
+            &mut temporaries,
+        )
+        .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         let ends_unreachable = function
             .terminator(block)
@@ -146,10 +194,23 @@ pub fn select_function_with(
             phis: Vec::new(),
             locals: Vec::new(),
             ends_unreachable,
+            tables: Vec::new(),
         });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
-                .map_err(|why| format!("{why:?}"))?;
+            let units = select_block_with(
+                &mut extra.dag,
+                cpu,
+                source_order,
+                indexed,
+                short,
+                absolute_data,
+                carry_chain,
+                price,
+                mul.clone(),
+                libcalls,
+                &mut temporaries,
+            )
+            .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected {
                 block: id,
@@ -159,6 +220,7 @@ pub fn select_function_with(
                 phis: Vec::new(),
                 locals: Vec::new(),
                 ends_unreachable: false,
+                tables: Vec::new(),
             });
         }
     }
@@ -192,6 +254,9 @@ pub fn select_function_with(
     locals.sort();
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;
+    }
+    for one in &mut selected {
+        one.tables.clone_from(&info.jump_tables);
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
         for (at, &(phi, incoming)) in pending.iter().enumerate() {

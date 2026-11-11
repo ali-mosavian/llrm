@@ -78,7 +78,7 @@ Top 20 functions by (ours - pin with the pass), m16 -Os; the last column is the 
 
 Where it says `addr`, the pin's address sinking explains up to that many instructions of the function's excess; `none` or a small number means the excess is something else (copies, far pointers: `docs/working/instruction-gap-vs-pin.md`).
 
-Decision, to be confirmed: **m32** is matched, so for m32 the slot is a numbered DEVIATE C1, "CodeGenPrepare's work is done in isel (address forms rebuilt in the user's block), `addresssink.rs` (compares, address phis) and the select and switch lowering"; owner w-4, review 2026-12-01. **m16**: a row C2 with the 1544-instruction upper bound; the next step is an experiment (sink where the 8086 form is legal) before any PR, because the pin cannot say what the 8086 form is worth.
+Decision, to be confirmed: **m32** is matched, so for m32 the slot is a numbered DEVIATE C1, "CodeGenPrepare's work is done in isel (address forms rebuilt in the user's block), `addresssink.rs` (compares, address phis) and the select and switch lowering"; owner w10-instcombine, review 2026-12-01. **m16**: a row C2 with the 1544-instruction upper bound; the next step is an experiment (sink where the 8086 form is legal) before any PR, because the pin cannot say what the 8086 form is worth.
 
 ## Table (the pin's order in `optimizeInst`)
 

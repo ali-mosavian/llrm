@@ -298,9 +298,9 @@ pub fn infer(
             .all(
                 |&id| {
                     let Some((linkage, function)) = body(id) else {
-                        return module.global(id).function().is_some_and(|one| Facts::of(&one.attrs).contains(fact));
+                        return module.global(id).function().is_some_and(|one| Facts::states(&one.attrs, fact));
                     };
-                    if Facts::of(&function.attrs).contains(fact) {
+                    if Facts::states(&function.attrs, fact) {
                         return true;
                     }
                     exact(linkage) && function.walk().all(|(_, inst)| !breaks(function, inst))
@@ -649,7 +649,7 @@ fn stamp_flags(
             (one.no_sync, Fact::NoSync),
             (one.no_recurse, Fact::NoRecurse),
         ] {
-            if stated && !Facts::of(&function.attrs).contains(fact) {
+            if stated && !Facts::states(&function.attrs, fact) {
                 function.attrs.extend(fact.attribute());
             }
         }
@@ -675,7 +675,8 @@ pub fn infer_module(
 
 /// `deriveAttrsInPostOrder` (FunctionAttrs.cpp:2211,
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L2211>)
-/// for what is translated, in its order: `addMemoryAttrs`, `addArgumentAttrs`,
+/// for what is translated, in its order: `addArgumentReturnedAttrs`,
+/// `addMemoryAttrs`, `addArgumentAttrs`,
 /// then the flags. The members whose attributes changed.
 pub fn post_order(
     module: &mut Module,
@@ -704,7 +705,8 @@ pub fn post_order_with(
         .filter(|&id| module.global(id).function().is_some_and(|one| !llrm_mir::facts::opaque(one)))
         .collect();
     let list: Vec<GlobalId> = set.iter().copied().collect();
-    let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
+    let mut changed: BTreeSet<GlobalId> = crate::argumentattrs::add_argument_returned_attrs(module, &set);
+    changed.extend(stamp_memory(module, &list));
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
     changed.extend(crate::initializes::add_initializes(module, layout, &set));
     changed.extend(crate::initializes::add_access_ranges(module, layout, &set));

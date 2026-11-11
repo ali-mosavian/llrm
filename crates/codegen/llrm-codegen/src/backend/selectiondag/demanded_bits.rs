@@ -26,7 +26,9 @@
 //! their folds. Owner llrm-target-wasm, review 2026-12-10.
 //! Covered opcodes: `and`, `or`, `xor`, `shl`, `srl`, `rotl` and `rotr` by a
 //! constant, the three extensions' zero and any forms, `trunc`. The rest fall
-//! back to `computeKnownBits`.
+//! back to `computeKnownBits`. A right shift by one of a sum of two extended
+//! values is an `avgfloor` or `avgceil` of the narrow values where the target
+//! has the node (`combine_avg.rs`, DEVIATE SD600).
 //!
 //! `ShrinkDemandedOp` and the half-width shift rewrites run where the target
 //! hook `free_narrowing` says the casts are free (x86-64; at m32 the pin's
@@ -141,7 +143,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !self.dag.has_one_use(op.node) {
             return Ok(());
         }
-        let size = (128 - demanded.leading_zeros()).max(1);
+        // DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05), `known_zero_narrowing`:
+        // the pin sizes by the demanded bits alone, so an `or` of two bytes read as
+        // a word was done as a word; the bits known zero above the narrow type come
+        // back as a zero extension. An `and` keeps the pin's sizing: its zeros come
+        // from its own mask, and `zext(and8(trunc x, c))` folds back into the `and`.
+        let by_known_zero = self.hooks.known_zero_narrowing() && self.dag.opcode(op) != ISD::And;
+        let live = if by_known_zero { demanded & !known_bits(self.dag, op).zero } else { demanded };
+        let size = (128 - live.leading_zeros()).max(1);
         let mut small = size.next_power_of_two();
         while small < width {
             let narrow = EVT::integer(small);
@@ -151,7 +160,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let a = self.dag.get_node(ISD::Truncate, narrow, &[a]);
                 let b = self.dag.get_node(ISD::Truncate, narrow, &[b]);
                 let x = self.dag.get_node(opcode, narrow, &[a, b]);
-                let z = self.dag.get_node(ISD::AnyExtend, vt, &[x]);
+                let kept = if small >= 128 { u128::MAX } else { (1u128 << small) - 1 };
+                let extend = if demanded & !kept == 0 { ISD::AnyExtend } else { ISD::ZeroExtend };
+                let z = self.dag.get_node(extend, vt, &[x]);
                 return Self::combine_to(tlo, op, z).map(|_| ());
             }
             small *= 2;
@@ -392,6 +403,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         return Self::combine_to(tlo, op, not);
                     }
                 }
+                // "If we can't turn this into a 'not', try to shrink the
+                // constant."
+                if self.dag.constant(op1) != Some(all) {
+                    self.shrink_demanded_constant(op, demanded, tlo)?;
+                    if tlo.is_some() {
+                        return Err(());
+                    }
+                }
                 if demanded != all {
                     let (d0, d1) = (
                         self.simplify_multiple_use_demanded_bits(op0, demanded, depth + 1),
@@ -423,7 +442,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 // demanded is one shift by the difference (likewise `srl`).
                 let outside = if is_shl { mask(amount) } else { all & !(all >> amount) };
                 if self.dag.opcode(op0) == inner_op && demanded & outside == 0 {
-                    if let Some(c1) = self.dag.constant(self.dag.operand(op0, 1)).filter(|&c| c < u128::from(width)) {
+                    if let Some(c1) = self.dag.constant(self.dag.operand(op0, 1)).filter(|&c| c < u128::from(width))
+                        && (self.dag.has_one_use(op0.node) || self.hooks.fold_shift_of_shared_shift(vt, c1 as u32))
+                    {
                         let diff = i64::from(amount) - c1 as i64;
                         let shifted = if is_shl { diff >= 0 } else { diff >= 0 };
                         let (new_op, by) = if shifted { (opcode, diff as u128) } else { (inner_op, (-diff) as u128) };
@@ -473,14 +494,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let k = self.sdb(op0, in_demanded, depth + 1, false, tlo)?;
                 // `shl` to the lower half (TargetLowering.cpp#L1964): only
                 // where the upper half is demanded and the source's upper half
-                // is zero, i.e. the narrow shift is `nuw`.
+                // is zero, i.e. the narrow shift is `nuw`: the *result's* upper
+                // half is known zero, not the source's.
                 if is_shl && width % 2 == 0 && amount < width / 2 {
                     let half = EVT::integer(width / 2);
                     let top_demanded = demanded & !mask(width / 2) == all & !mask(width / 2);
                     if top_demanded
                         && self.hooks.narrowing_profitable(vt, half)
                         && self.hooks.free_narrowing(vt, half)
-                        && k.zero & (all & !mask(width / 2)) == all & !mask(width / 2)
+                        && ((k.zero << amount) | mask(amount)) & (all & !mask(width / 2)) == all & !mask(width / 2)
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
                         let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));
@@ -495,6 +517,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     if let Some(d0) = self.simplify_multiple_use_demanded_bits(op0, in_demanded, depth + 1) {
                         let new = self.dag.get_node(opcode, vt, &[d0, op1]);
                         return Self::combine_to(tlo, op, new);
+                    }
+                }
+                // "Try to match AVG patterns (after shift simplification)."
+                if !is_shl {
+                    if let Some(avg) = self.combine_shift_to_avg(op, demanded) {
+                        return Self::combine_to(tlo, op, avg);
                     }
                 }
                 if is_shl {
@@ -709,6 +737,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 known_bits(self.dag, op)
             }
+            // `SimplifyDemandedBits` of `CTPOP` (TargetLowering.cpp#L2478): one
+            // demanded bit is the parity, taken before operation legalization (this
+            // DAG has no vector types: the pin's scalar-only limit holds).
+            ISD::CtPop if demanded == 1 && !legal_operations => {
+                let new = self.dag.get_node(ISD::Parity, vt, &[self.dag.operand(op, 0)]);
+                return Self::combine_to(tlo, op, new);
+            }
             _ => known_bits(self.dag, op),
         };
         known.width = width;
@@ -724,7 +759,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         known: KnownBits,
         tlo: &mut Tlo,
     ) -> Result<KnownBits, ()> {
-        if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() {
+        // [L3175]: "Avoid folding to a constant if any OpaqueConstant is
+        // involved": a hoisted constant (`bitcast iN C`) stays a register.
+        //
+        // [L3175]: https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3175
+        let opaque_operand = self.dag.node(op).ops.iter().any(|&operand| self.dag.is_opaque(operand));
+        if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() && !opaque_operand {
             let vt = self.dag.value_type(op);
             let constant = self.dag.get_constant(known.one, vt);
             return Self::combine_to(tlo, op, constant);

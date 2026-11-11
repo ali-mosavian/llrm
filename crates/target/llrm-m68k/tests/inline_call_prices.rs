@@ -48,5 +48,7 @@ define i32 @k(i32 %x, i32 %y) {\n\
 #[test]
 fn a_size_build_keeps_a_callee_that_would_grow_the_code_as_a_call() {
     let asm = assembly(THREE_SITES, cpu_of("68000").unwrap(), Level::Os).unwrap_or_else(|why| panic!("{why}"));
-    assert_eq!(asm.matches("jsr\tf").count(), 3, "{asm}");
+    // a callee called three times may be called through a register: count the
+    // calls, not the name
+    assert_eq!(asm.lines().filter(|line| line.trim_start().starts_with("jsr")).count(), 3, "{asm}");
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:796f62714b2575236f9b1e7ea08edeb82494e1248614cd51a5837d0d61e5dda1 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:427dc04ec8be0788454b97799f417b6bbda6f3f5370a41b7599a5703b3d444ab -->
 
 # simplifycfg
 
@@ -114,9 +114,11 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
 - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
-  (`FoldInstsToUnreachable`): not ported yet. It reads the target's
-  `NullPointerIsDefined`, which the MIR has no flag for. `invoke`,
-  `catchswitch` and `indirectbr` do not exist in the MIR.
+  (`FoldInstsToUnreachable`): the `noreturn` call is ported
+  (`insts_folded_to_unreachable`); `assume(false)` and the store to null are
+  not. Exit 2026-12-01. The store reads the target's `NullPointerIsDefined`,
+  which the MIR has no flag for. `invoke`, `catchswitch` and `indirectbr` do
+  not exist in the MIR.
 - D4. No branch weights: the MIR has none, so the case weights
   `ConstantFoldTerminator` merges and the `!prof` it sets are not kept.
   `!make.implicit` is not a MIR kind. There is no `DomTreeUpdater`; as at

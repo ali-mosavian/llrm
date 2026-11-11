@@ -83,7 +83,7 @@ impl ModulePass for InferFunctionAttrs {
         for at in 0..module.globals.len() {
             let global = &module.globals[at];
             let Some(function) = global.function() else { continue };
-            if !function.is_declaration() || function.attrs.contains(&Attribute::Flag("optnone".to_owned())) {
+            if !function.is_declaration() || function.attrs.contains(&Attribute::Flag("optnone".into())) {
                 continue;
             }
             let Some(name) = global.name.as_deref().filter(|name| !name.starts_with("llvm.")) else { continue };
@@ -223,7 +223,7 @@ impl<'f> Declaration<'f> {
         flag: &str,
     ) {
         if !self.has(flag) {
-            self.function.attrs.push(Attribute::Flag(flag.to_owned()));
+            self.function.attrs.push(Attribute::Flag(flag.into()));
             self.changed = true;
         }
     }
@@ -235,7 +235,7 @@ impl<'f> Declaration<'f> {
     ) {
         let Some(attrs) = self.function.parameter_attrs.get_mut(arg) else { return };
         if !attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == flag)) {
-            attrs.push(Attribute::Flag(flag.to_owned()));
+            attrs.push(Attribute::Flag(flag.into()));
             self.changed = true;
         }
     }
@@ -245,7 +245,7 @@ impl<'f> Declaration<'f> {
         flag: &str,
     ) {
         if !self.function.return_attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == flag)) {
-            self.function.return_attrs.push(Attribute::Flag(flag.to_owned()));
+            self.function.return_attrs.push(Attribute::Flag(flag.into()));
             self.changed = true;
         }
     }
@@ -439,7 +439,7 @@ impl Setters for Declaration<'_> {
     ) {
         let has = self.function.attrs.iter().any(|one| matches!(one, Attribute::Str(key, _) if key == "alloc-family"));
         if !has {
-            self.function.attrs.push(Attribute::Str("alloc-family".to_owned(), Some(family.to_owned())));
+            self.function.attrs.push(Attribute::Str("alloc-family".into(), Some(family.to_owned())));
             self.changed = true;
         }
     }

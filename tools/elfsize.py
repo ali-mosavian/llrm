@@ -14,19 +14,34 @@ SHF_ALLOC, SHF_EXECINSTR = 0x2, 0x4
 SHT_NOBITS = 8
 
 
-def headers(body: bytes) -> tuple[list[tuple[int, int, int, int, int]], int, int]:
-    """((name offset, type, flags, file offset, size) of each section header, the index of the name table, address bits) of a
-    little-endian ELF32 or ELF64 object."""
+EM_386, EM_X86_64 = 3, 62
+
+
+def byte_order(body: bytes) -> str:
+    """struct's prefix for the object's byte order (e_ident[EI_DATA]): m68k objects are big-endian."""
+    return ">" if body[5] == 2 else "<"
+
+
+def machine(body: bytes) -> int:
     import struct
 
+    return struct.unpack_from(byte_order(body) + "H", body, 0x12)[0]
+
+
+def headers(body: bytes) -> tuple[list[tuple[int, int, int, int, int]], int, int]:
+    """((name offset, type, flags, file offset, size) of each section header, the index of the name table, address bits) of an
+    ELF32 or ELF64 object of either byte order."""
+    import struct
+
+    e = byte_order(body)
     if body[4] == 1:  # ELFCLASS32
-        shoff = struct.unpack_from("<I", body, 0x20)[0]
-        shentsize, shnum, shstrndx = struct.unpack_from("<HHH", body, 0x2E)
-        rows = [struct.unpack_from("<IIIIIIIIII", body, shoff + i * shentsize) for i in range(shnum)]
+        shoff = struct.unpack_from(e + "I", body, 0x20)[0]
+        shentsize, shnum, shstrndx = struct.unpack_from(e + "HHH", body, 0x2E)
+        rows = [struct.unpack_from(e + "IIIIIIIIII", body, shoff + i * shentsize) for i in range(shnum)]
         return [(h[0], h[1], h[2], h[4], h[5]) for h in rows], shstrndx, 32
-    shoff = struct.unpack_from("<Q", body, 0x28)[0]
-    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", body, 0x3A)
-    rows = [struct.unpack_from("<IIQQQQIIQQ", body, shoff + i * shentsize) for i in range(shnum)]
+    shoff = struct.unpack_from(e + "Q", body, 0x28)[0]
+    shentsize, shnum, shstrndx = struct.unpack_from(e + "HHH", body, 0x3A)
+    rows = [struct.unpack_from(e + "IIQQQQIIQQ", body, shoff + i * shentsize) for i in range(shnum)]
     return [(h[0], h[1], h[2], h[4], h[5]) for h in rows], shstrndx, 64
 
 
@@ -58,8 +73,11 @@ def code_size(path, padding) -> tuple[int, int, int]:
     """(code bytes without alignment padding, the padding, bytes that start no instruction) of the object's executable sections; `padding(content, bits)` is sizes.padding,
     each section read from its own start (its alignment is the section's) as 32- or 64-bit code, whichever the object is."""
     code = align = unread = 0
+    with open(path, "rb") as file:
+        x86 = machine(file.read(0x14)) in (EM_386, EM_X86_64)
     for content, bits in executable_sections(path):
-        found, skipped = padding(content, bits)
+        # padding's decoder is x86's: on another machine's code it would find "padding" in instructions
+        found, skipped = padding(content, bits) if x86 else (0, 0)
         code += len(content) - found
         align += found
         unread += skipped

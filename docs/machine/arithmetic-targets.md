@@ -8,7 +8,7 @@ For contributors to the backend's constant arithmetic. A multiply or divide by a
 
 ## Multiply by a constant
 
-`arithmetic::scale` ([`arithmetic.rs`](../optimizations/backend/arithmetic.md)) compares binary and signed-digit chains of shifts, adds, subtracts and `lea` against `imul` by the immediate, each priced from the CPU's column, including the source-preserving move a destructive two-address form needs. Ties keep the multiply. A signed digit chain makes seven `(x << 3) - x`. A negative number is the chain of its magnitude and a `neg`, or, as gcc's `synth_mult` has it, `source - (source * q << m)`. A narrow value gets shifts, adds and subtracts only (`cheapest_narrow_chain`), since `lea` makes a dword. The chains are remembered per profile. On the 386 an `imul` by a positive imm8 costs `max(ceil(log2(m)), 3) + 6` (Intel 80386 Programmer's Reference); other CPUs price it by the immediate's bits from the table.
+`arithmetic::scale` ([`arithmetic.rs`](../optimizations/backend/arithmetic.md)) compares binary and signed-digit chains of shifts, adds, subtracts and `lea` against `imul` by the immediate, each priced from the CPU's column, including the source-preserving move a destructive two-address form needs. Ties keep the multiply. A signed digit chain makes seven `(x << 3) - x`. A negative number is the chain of its magnitude and a `neg`, or `source - (source * q << m)`. A narrow value gets shifts, adds and subtracts only (`cheapest_narrow_chain`), since `lea` makes a dword. The chains are remembered per profile. On the 386 an `imul` by a positive imm8 costs `max(ceil(log2(m)), 3) + 6` (Intel 80386 Programmer's Reference); other CPUs price it by the immediate's bits from the table.
 
 ```
  x * 20 on the 486/P6:   lea bx,[ecx+ecx*4]      x*5

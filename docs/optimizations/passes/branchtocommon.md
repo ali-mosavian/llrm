@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/branchtocommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/branchtocommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:963367ada9148b9d7a16a3a36df1c89f4dd062d9eaf91fef605891889011825f -->
+<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:13585adb4d136f0dbd8860eb9beb4e1f5fadc6a2f12711ec63c367a23052516d -->
 
 # branchtocommon
 
@@ -39,8 +39,8 @@ The block's comparison runs in the predecessor:
 | `simplifycfg-branch-fold-threshold` (2), `-bonus-inst-threshold` (1), `-branch-fold-common-dest-vector-multiplier` (2) | `FOLD_THRESHOLD`, `BONUS_THRESHOLD`, `VECTOR_MULTIPLIER` | MIRROR |
 
 - D1. No pseudo probes (a `minsize` function is priced as `CodeSize`).
-- D2. The MIR has no branch weights or `!unpredictable`: the fold is never
-  held back for a predictable branch, and no weights are computed.
+- D2. (retired) the fold reads `!prof` and `!unpredictable`, holds back for
+  a probably-decided first branch, and computes the merged weights.
 - D3. No debug locations. The bonus instructions lose the metadata that can
   make a speculated instruction undefined, as in
   [`twoentryphi`](twoentryphi.md) (D4 there).

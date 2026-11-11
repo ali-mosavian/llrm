@@ -2,9 +2,16 @@
 //! `.pdata` (`RUNTIME_FUNCTION`) for each function of `.text`.
 //!
 //! # How it works
-//! There is no Win64 frame lowering to declare the prologue (DEVIATE from
-//! LLVM's `.seh_*` directives, `X86WinCOFFStreamer`), so the prologue is read
-//! back from the function's final bytes: a straight-line run of `push` of a
+//! The compiler declares the prologue with `.seh_*` directives (`from_seh`).
+//! DEVIATE COFF-SEH-1 (owner object-refactor, exit 2026-11-30): code that
+//! declares nothing, an assembled object, has its prologue read back from the
+//! function's final bytes where LLVM would need the directives
+//! (`X86WinCOFFStreamer`). In the Win64 corpus (170 objects, 824 functions,
+//! 2026-11-07) every function is declared, none is read back. The read-back is
+//! kept for assembled input, and is deleted if the assembler declares
+//! `.seh_*`.
+//!
+//! The read-back takes a straight-line run of `push` of a
 //! register, `sub rsp, imm`, `lea`/`mov` of the frame register from `rsp`, and
 //! `mov`/`movaps` of a non-volatile register to `[rsp+d]`. The run ends at the
 //! first other instruction; a prologue that does not fit what the unwind codes
@@ -28,7 +35,9 @@
 //! `X86Objects::write_object`, for a 64-bit COFF object only.
 
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
-use llrm_object::{Binding, Definition, Fix, Object, Reloc, Role, Section, Seh, Symbol, Target, Unsupported};
+use llrm_object::{
+    Binding, Comdat, Definition, Fix, Object, Reloc, Role, Section, Seh, Selection, Symbol, Target, Unsupported,
+};
 
 const PUSH_NONVOL: u8 = 0;
 const ALLOC_LARGE: u8 = 1;
@@ -303,6 +312,43 @@ fn is_frame_set(instruction: &Instruction) -> bool {
     }
 }
 
+/// The name and `UNWIND_INFO` bytes of the function at (section, offset,
+/// size, symbol index): the compiler's declared prologue, else the code's.
+/// None for a frameless leaf: the pin writes neither `.xdata` nor `.pdata`
+/// for a function with no `.seh_*` directive (DEVIATE COFF-UNWIND-LEAF-1
+/// closed here).
+fn unwind_of(
+    object: &Object,
+    frames: &[llrm_object::Frame],
+    (section, offset, size, index): (usize, usize, usize, usize),
+) -> Result<Option<(String, Vec<u8>)>, Unsupported> {
+    let name = object.symbols[index].name.clone();
+    let code = &object.sections[section].image;
+    // A producer that declared the prologue is believed. A function it
+    // declared a frame for but no directive is believed to have no
+    // prologue: bytes that say otherwise are a path that forgot to
+    // declare, not something to describe from the bytes. Only code that
+    // declared nothing at all (an assembled object) is read.
+    let declared = frames.iter().find(|frame| (frame.section, frame.offset) == (section, offset));
+    let body = code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?;
+    let info = match declared {
+        Some(frame) if !frame.seh.is_empty() => from_seh(&name, &frame.seh)?,
+        Some(_) => {
+            let read = from_prologue(&name, body)?;
+            if !read.codes.is_empty() {
+                return Err(refused(&name, "its code has a prologue the compiler declared no `.seh_*` directive for"));
+            }
+            read
+        }
+        None => from_prologue(&name, body)?,
+    };
+    if info.codes.is_empty() && info.frame.is_none() {
+        return Ok(None);
+    }
+    let bytes = info.bytes().map_err(|why| refused(&name, &why))?;
+    Ok(Some((name, bytes)))
+}
+
 /// `object` with `.xdata` and `.pdata` for every function of its text, the
 /// functions being the defined symbols of a text section that have a size. An
 /// object with none is returned as it is.
@@ -328,37 +374,60 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
 
     let frames = object.frames.clone();
     let mut object = object.clone();
+    // A function in a COMDAT section has its unwind data in sections of its
+    // own, associative with the code: the linker keeps or drops them together.
+    let (own, shared): (Vec<_>, Vec<_>) =
+        functions.into_iter().partition(|one| object.comdats.iter().any(|comdat| comdat.section == one.0));
+    let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| Section {
+        name: name.to_owned(),
+        role: Role::ROData,
+        near: true,
+        align: 4,
+        spans: vec![[0, image.len()]],
+        image,
+        relocs,
+    };
+    for (code_section, offset, size, index) in own {
+        let Some((name, bytes)) = unwind_of(&object, &frames, (code_section, offset, size, index))? else { continue };
+        let xdata = object.sections.len();
+        object.symbols.push(Symbol {
+            name: format!("$unwind${name}"),
+            binding: Binding::Local,
+            definition: Definition::Defined { section: xdata, offset: 0 },
+            size: 0,
+            group: None,
+            visibility: Default::default(),
+        });
+        let unwind_symbol = object.symbols.len() - 1;
+        let rva = Fix::image_relative(4);
+        let relocs = vec![
+            Reloc::new(0, rva, Target::Symbol(index), 0),
+            Reloc::new(4, rva, Target::Symbol(index), size as i64),
+            Reloc::new(8, rva, Target::Symbol(unwind_symbol), 0),
+        ];
+        object.sections.push(section(".xdata", bytes, Vec::new()));
+        object.sections.push(section(".pdata", vec![0; 12], relocs));
+        for at in [xdata, xdata + 1] {
+            object.comdats.push(Comdat {
+                section: at,
+                selection: Selection::Associative,
+                associated: Some(code_section),
+            });
+        }
+    }
+    let functions = shared;
+    if functions.is_empty() {
+        return Ok(object);
+    }
     let xdata = object.sections.len();
     let mut xdata_image: Vec<u8> = Vec::new();
     let mut pdata_image: Vec<u8> = Vec::new();
     let mut pdata_relocs: Vec<Reloc> = Vec::new();
-    for (section, offset, size, index) in functions {
-        let name = object.symbols[index].name.clone();
-        let code = &object.sections[section].image;
-        // A producer that declared the prologue is believed. A function it
-        // declared a frame for but no directive is believed to have no
-        // prologue: bytes that say otherwise are a path that forgot to
-        // declare, not something to describe from the bytes. Only code that
-        // declared nothing at all (an assembled object) is read.
-        let declared = frames.iter().find(|frame| (frame.section, frame.offset) == (section, offset));
-        let body = code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?;
-        let info = match declared {
-            Some(frame) if !frame.seh.is_empty() => from_seh(&name, &frame.seh)?,
-            Some(_) => {
-                let read = from_prologue(&name, body)?;
-                if !read.codes.is_empty() {
-                    return Err(refused(
-                        &name,
-                        "its code has a prologue the compiler declared no `.seh_*` directive for",
-                    ));
-                }
-                read
-            }
-            None => from_prologue(&name, body)?,
-        };
-
+    for function in functions {
+        let (_, _, size, index) = function;
+        let Some((name, bytes)) = unwind_of(&object, &frames, function)? else { continue };
         let at = xdata_image.len();
-        xdata_image.extend(info.bytes().map_err(|why| refused(&name, &why))?);
+        xdata_image.extend(bytes);
         object
             .symbols
             .push(
@@ -380,15 +449,9 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
         pdata_relocs.push(Reloc::new(entry + 4, rva, Target::Symbol(index), size as i64));
         pdata_relocs.push(Reloc::new(entry + 8, rva, Target::Symbol(unwind_symbol), 0));
     }
-    let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| Section {
-        name: name.to_owned(),
-        role: Role::ROData,
-        near: true,
-        align: 4,
-        spans: vec![[0, image.len()]],
-        image,
-        relocs,
-    };
+    if xdata_image.is_empty() {
+        return Ok(object);
+    }
     object.sections.push(section(".xdata", xdata_image, Vec::new()));
     object.sections.push(section(".pdata", pdata_image, pdata_relocs));
     Ok(object)

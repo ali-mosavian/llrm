@@ -10,9 +10,10 @@
 //!   fixed bytes`; the addend already holds the correction for a byte inside
 //!   the opcode word (`encodePCRelImm`).
 //!
-//! DEVIATE: `encodeFPSYSSelect`, `encodeScale` and `encodeIndexSuppress` (FPU
-//! and 68020 index modes) are not translated. Reason: the slice does not reach
-//! them. Exit: M7.
+//! `encodeScale` and `encodeIndexSuppress` are the pin's, for the full
+//! extension word of the PC-relative indexed forms (`PCIBD`). DEVIATE:
+//! `encodeFPSYSSelect` (FPU control registers) is not translated. Reason: the
+//! slice does not reach it. Exit: M7.
 //!
 //! # See also
 //! `llvm/lib/Target/M68k/MCTargetDesc/M68kMCCodeEmitter.cpp`, pin d1106deb71cc.
@@ -38,6 +39,18 @@ pub struct Fixup {
 pub struct Encoded {
     pub bytes: Vec<u8>,
     pub fixups: Vec<Fixup>,
+}
+
+/// A jump table: one absolute 32-bit fixup per label.
+pub fn table(labels: &[String]) -> Encoded {
+    Encoded {
+        bytes: vec![0; 4 * labels.len()],
+        fixups: labels
+            .iter()
+            .enumerate()
+            .map(|(at, label)| Fixup { offset: 4 * at, symbol: label.clone(), addend: 0, size: 4, pc_rel: false })
+            .collect(),
+    }
 }
 
 /// `getEncodingValue` with the `D/A` bit `getMachineOpValue` adds.
@@ -135,6 +148,12 @@ fn operand_value(
             Ok(0)
         }
         (Enc::InverseMoveMask, Operand::Imm(mask)) => Ok((*mask as u16).reverse_bits() as u64),
+        // `encodeScale`: log2 of a scale of 1, 2, 4 or 8.
+        (Enc::Scale, Operand::Imm(scale)) if matches!(scale, 1 | 2 | 4 | 8) => Ok(u64::from(scale.trailing_zeros())),
+        (Enc::Scale, Operand::Imm(scale)) => Err(format!("{}: scale {scale} is not 1, 2, 4 or 8", inst.opcode)),
+        // `encodeIndexSuppress`: bit 4 is set when there is no index register;
+        // every operand here names one.
+        (Enc::IndexSuppress, Operand::Reg(_)) => Ok(0),
         _ => Err(format!("{}: operand {index} is not encodable as {enc:?}", inst.opcode)),
     }
 }
@@ -150,6 +169,19 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     }
     let mut bits: u128 = 0;
     let mut fixups = Vec::new();
+    // an operand's field may be split over several pieces (a long over two
+    // words): the widest extent is the field a value must fit
+    let field_bits = |index: u8| {
+        pieces
+            .iter()
+            .filter_map(|piece| match *piece {
+                Piece::Operand { at, from, width, enc: Enc::Plain, .. } if at == index => {
+                    Some(u16::from(from) + u16::from(width))
+                }
+                _ => None,
+            })
+            .max()
+    };
     for piece in pieces {
         let (lo, width, value) = match *piece {
             Piece::Const { lo, width, value } => (lo, width, value),
@@ -160,6 +192,37 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
                 // `d0` first: ours is the printed order.
                 let enc =
                     if at == 1 && matches!(inst.opcode, "MOVM32em" | "MOVM16em") { Enc::InverseMoveMask } else { enc };
+                // a displacement is signed (128 is not a byte there); an
+                // immediate may be written as either (`andi.b
+                // #255`, `#-1`). The small `Plain` fields (registers, a quick
+                // immediate where 8 is written 0, a bit number) are masked on
+                // purpose and stay so.
+                let displacement = crate::dagisel::local::text(inst.opcode).is_some_and(|&(_, _, shape)| {
+                    shape
+                        .iter()
+                        .any(
+                            |one| usize::from(one.at) == at as usize
+                                && ["ARII", "ARID", "PCI", "PCD"].iter().any(|m| one.method.contains(m)),
+                        )
+                });
+                let extent = match enc {
+                    Enc::Plain if displacement => field_bits(at),
+                    Enc::RelocImm(size) | Enc::PcRelImm(size) => Some(u16::from(size)),
+                    _ => None,
+                };
+                if let (Some(Operand::Imm(value)), Some(bits)) = (inst.operands.get(at as usize), extent) {
+                    // the pin masks silently; binutils refuses, and a cut
+                    // displacement is another stack slot:
+                    // `(260,%sp,%a5)` in an 8-bit index field read
+                    // `(4,%sp,%a5)`
+                    let top = if displacement { 1i64 << (bits - 1) } else { 1i64 << bits };
+                    if bits < 64 && !(-(1i64 << (bits - 1))..top).contains(value) {
+                        return Err(format!(
+                            "{}: operand {at} = {value} does not fit its {bits}-bit field",
+                            inst.opcode
+                        ));
+                    }
+                }
                 let whole = operand_value(inst, at as usize, enc, lo, &mut fixups)?;
                 (lo, width, whole >> from)
             }

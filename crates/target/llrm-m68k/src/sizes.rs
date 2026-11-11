@@ -9,10 +9,10 @@
 //! | operation | forms | bytes |
 //! |---|---|---|
 //! | add, sub, and, or, xor | `add.l %d1,%d0` | 2 |
-//! | the same with a constant | `addq`/`addi` | 2 + 2 or 4 |
+//! | the same with a constant | `addq` 1 to 8; `addi.w`, `addi.l` | 2; 2 + 2 or 4 |
 //! | shift, rotate | `lsl.l %d1,%d0`, `lsl.l #n,%d0` | 2 |
 //! | multiply, 16 bit | `muls.w %d1,%d0` | 2 |
-//! | multiply, 32 bit | 68020 `muls.l %d1,%d0` | 4 |
+//! | multiply, 32 bit | 68020 `muls.l %d1,%d0`; with a constant | 4; 8 |
 //! | divide, 16 bit | `ext.l %d0; divs.w %d1,%d0` | 4 |
 //! | divide, 32 bit | 68020 `divs.l %d1,%d0` | 4 |
 //! | compare | `cmp.l %d1,%d0` | 2 |
@@ -42,6 +42,30 @@ fn libcall(arguments: i64) -> i64 {
     6 + 2 * arguments + 2
 }
 
+/// The extension bytes of a constant `right` operand of an `add`-class
+/// operation, per 32-bit piece: none for the `addq`/`subq` range 1 to 8, two
+/// for an operation of at most 16 bits, four for a long one.
+fn immediate(
+    op: ArithOp,
+    ty: Ty,
+    right: OperandInfo,
+    parts: i64,
+) -> i64 {
+    if !right.constant {
+        return 0;
+    }
+    if parts == 1
+        && matches!(op, ArithOp::Add | ArithOp::Sub)
+        && right.value.is_some_and(|value| (1..=8).contains(&value.unsigned_abs()))
+    {
+        return 0;
+    }
+    match ty {
+        Ty::Int(bits) if bits <= 16 => 2,
+        _ => 4,
+    }
+}
+
 /// Bytes of an arithmetic operation, `cpu_has_long_muldiv` the 68020's
 /// `muls.l`/`divs.l`.
 pub fn arithmetic(
@@ -52,13 +76,21 @@ pub fn arithmetic(
 ) -> Cost {
     let parts = pieces(ty);
     let wide = parts > 1;
-    let immediate = if right.constant { 2 } else { 0 };
     let bytes = match op {
-        ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => (2 + immediate) * parts,
+        ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => {
+            (2 + immediate(op, ty, right, parts)) * parts
+        }
         ArithOp::Shl | ArithOp::LShr | ArithOp::AShr => 2 * parts + if wide { 2 } else { 0 },
         ArithOp::Mul if wide => libcall(parts * 2),
         ArithOp::Mul if matches!(ty, Ty::Int(bits) if bits > 16) => {
-            if cpu_has_long_muldiv { 4 } else { libcall(2) }
+            // `muls.l #imm,%dn` is the opcode, the extension word and a
+            // 32-bit immediate; a power of two is a shift
+            match (cpu_has_long_muldiv, right.constant) {
+                (false, _) => libcall(2),
+                (true, false) => 4,
+                (true, true) if right.power_of_two => 2,
+                (true, true) => 8,
+            }
         }
         ArithOp::Mul => 2,
         ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem if wide => libcall(parts * 2),

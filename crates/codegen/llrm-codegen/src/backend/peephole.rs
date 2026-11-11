@@ -94,7 +94,7 @@
 //! The zero load became `xor`, the subtraction of one `dec`, and the compare
 //! with zero `or`, which sets the flags `jne` reads as `cmp` did.
 //!
-//! From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
+//! From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-cc -O2 -m16`:
 //! the `ParallelCopy` and `Peephole` stages.
 //!
 //! # Runs
@@ -152,7 +152,7 @@ fn count(
     counter.get(&value).copied().unwrap_or(0)
 }
 
-fn emit(
+pub(crate) fn emit(
     bits: u32,
     what: &Semantics,
 ) -> Option<select::Emitted> {
@@ -265,6 +265,7 @@ impl Peephole {
             return body;
         };
         let frame = frame.borrow();
+        let regs = body.regs();
         // The reserved call area is stack storage no cell names a spill of.
         if frame.size() == 0 || frame.call_area != 0 {
             return body;
@@ -285,7 +286,10 @@ impl Peephole {
                 if address.is_none() && through.is_some() {
                     return body;
                 }
-                if through.is_some_and(|through| [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&through))
+                if through.is_some_and(|through| {
+                    let root = regs.root(through);
+                    root == regs.root(regs.frame) || root == regs.root(regs.stack)
+                })
                     && address.is_none_or(|address| address.space != Space::Frame)
                 {
                     return body;
@@ -323,6 +327,20 @@ impl LIRTransform for Peephole {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns a zero (`MOV32r0`) into `xor`
+        // where the flags are dead ([X86InstrInfo.cpp:6236]).
+        if !self.cpu.optimized {
+            // the flag liveness costs a dataflow: only a body with a zero to make pays it
+            let has_zero = body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
+                one.what.as_ref().is_some_and(|what| {
+                    matches!(
+                        (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()),
+                        (Operation::Move, Some("mov"), [Loc::Reg(_)], [Loc::Imm(Imm { value: 0, address: None, .. })])
+                    )
+                })
+            });
+            return Ok(if has_zero { zeroes(&body) } else { body });
+        }
         self.once(body)
     }
 }
@@ -347,6 +365,7 @@ impl Peephole {
             Some(merged) => self.released(merged),
             None => body,
         };
+        let body = crate::backend::floatslotcopy::copied(&body, &self.cpu, &self.saved, &self.classes).unwrap_or(body);
         let body = forwarded_reloads(self.rules, &body);
         let body = forwarded_float_reloads(self.rules, &body);
         let body = forwarded_copies(self.rules, &body);
@@ -376,6 +395,7 @@ impl Peephole {
                 ),
             ),
         );
+        let body = swapped_registers(self.rules, &body, &self.cpu);
         let body = loaded_segments(self.rules, &body);
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
@@ -402,10 +422,15 @@ impl Peephole {
             self.rules,
             &compares_again(&tested(
                 self.rules,
-                &cleared(&narrowed_moves(self.rules, &body), self.cpu.size || self.cpu.min_size),
+                &cleared(
+                    &narrowed_moves(self.rules, &body),
+                    self.cpu.size || self.cpu.min_size,
+                    self.cpu.size_one_is_xor_inc,
+                ),
             )),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = pushed_immediates(&body, &self.cpu);
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
@@ -417,6 +442,73 @@ impl Peephole {
         }
         gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))
     }
+}
+
+/// `mov r32, imm8` as `push imm8; pop r`: 3 bytes against the `mov`'s 5. A
+/// translation of `ExpandMOVImmSExti8`
+/// ([X86InstrInfo.cpp:6236]), which the pin applies at `minsize`; zero and -1
+/// stay `xor` and `or` (`cleared`). Flags are untouched and the pair is atomic,
+/// so stack-relative cells between instructions keep their offsets; `masm`
+/// states the frame address after each push and pop as for any other.
+///
+/// DEVIATE PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): the same at `-Os` on
+/// a target that says so (`Tuning::push_imm_at_size`). Two clocks on the 486
+/// against the `mov`'s one: `-Os` is bytes-strict.
+///
+/// [X86InstrInfo.cpp:6236]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6236
+pub fn pushed_immediates(
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    let at_size = cpu.size && cpu.target().tti().is_some_and(|tti| tti.push_imm_at_size());
+    if body.bits != 32 || !(body.min_size || cpu.min_size || at_size) {
+        return body.clone();
+    }
+    let regs = body.regs();
+    let sp = Loc::Reg(reg(regs.named(regs.stack, 4), 4));
+    let imm8 = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Move
+                && what.name.as_deref() == Some("mov")
+                && one.clobbers.is_empty()
+                && one.symbol != Some(true) =>
+        {
+            match (what.dests.as_slice(), what.sources.as_slice()) {
+                ([Loc::Reg(dest)], [Loc::Imm(Imm { value, width: 4, address: None })])
+                    if dest.width == 4
+                        && (-128..=127).contains(value)
+                        && ![0, -1].contains(value)
+                        && Loc::Reg(dest.clone()) != sp =>
+                {
+                    Some(dest.clone())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns = Vec::with_capacity(block.insns.len());
+            for one in &block.insns {
+                match imm8(one) {
+                    Some(dest) => {
+                        let source = one.what.as_ref().expect("a move").sources[0].clone();
+                        let push = semantics(Operation::Push, "push", vec![], vec![source]);
+                        let pop = semantics(Operation::Pop, "pop", vec![Loc::Reg(dest)], vec![]);
+                        insns.push(Arc::new(with_what(one, push)));
+                        insns.push(Arc::new(with_what(one, pop)));
+                    }
+                    None => insns.push(Arc::clone(one)),
+                }
+            }
+            block.with_insns(insns)
+        })
+        .collect();
+    LirBody { blocks, ..body.clone() }
 }
 
 /// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
@@ -507,7 +599,7 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner w1, w2 for the DAG path; permanent target tuning): the
+/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent target tuning): the
 /// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
 /// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
 /// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
@@ -520,6 +612,9 @@ pub fn zeroed_loads(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
+    if rules.zeroed_loads.is_none() {
+        return Ok(body.clone());
+    }
     cpu.clears_before_byte_load()?;
     Ok(peep::rewritten(rules.zeroed_loads, body, &Facts::new(body, Some(cpu))))
 }
@@ -591,7 +686,9 @@ pub fn _lanes(
         return Lanes::new();
     }
     let start = regs.get(register).map_or(0, |one| one.lane / 8);
-    Lanes::span(full, start, register.size() as u32)
+    // The file's width; `iced`'s only for a register the file does not list.
+    let bytes = regs.bytes(register).map_or_else(|| register.size() as u32, |bytes| bytes as u32);
+    Lanes::span(full, start, bytes)
 }
 
 /// Write only the live low word of a register-only dword move
@@ -1073,6 +1170,16 @@ pub fn restored_copies(
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
 }
 
+/// `mov t,a; mov a,b; mov b,t` as `xchg a,b` where the code is for size
+/// (`peephole.peep`, `swapped_registers`).
+pub fn swapped_registers(
+    rules: &peep::Rules,
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    peep::rewritten(rules.swapped_registers, body, &Facts::new(body, Some(cpu)))
+}
+
 /// Drop the reload of a scalar float into the register that filled the cell
 /// (`peephole.peep`, `forwarded_float_reloads`).
 pub fn forwarded_float_reloads(
@@ -1315,6 +1422,15 @@ pub fn _moved_by(
     Some((moved, _lanes(regs, destination).or(&source.map(|one| _lanes(regs, one)).unwrap_or_default())))
 }
 
+/// The x87 control-word save and load. They are barriers so that nothing moves
+/// across a rounding-mode switch, but they touch one memory cell and no
+/// register: as unknown instructions they made every register live before them,
+/// so no register was free anywhere a function converts a float to an integer.
+fn control_word(what: &Semantics) -> bool {
+    matches!(what.name.as_deref(), Some("fnstcw" | "fldcw"))
+        && what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::Mem(_)))
+}
+
 /// `_register_effects` of an instruction that says only what it does: no
 /// required or delivered register, no clobber and no symbol. Asked of a
 /// proposed rewrite of one, which needs no instruction made of it to ask (copy
@@ -1329,7 +1445,7 @@ pub fn _register_effects_of_what(
     if what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty) {
         return Some((Lanes::new(), Lanes::new()));
     }
-    if what.op == Operation::Barrier {
+    if what.op == Operation::Barrier && !control_word(what) {
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
@@ -1385,7 +1501,7 @@ fn _register_effects_worked(
         return None;
     }
     let what = match &one.what {
-        Some(what) if what.op != Operation::Barrier => what,
+        Some(what) if what.op != Operation::Barrier || control_word(what) => what,
         // `getattr(one.op, "node", None)`: a `mir.Op` has no `node`, so the
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
@@ -1903,7 +2019,7 @@ fn _loaded_scaled_add<'a>(
         || !regs.integer(temporary.register)
         || !regs.integer(total.register)
         || ir::root(temporary.register) == ir::root(total.register)
-        || ir::root(temporary.register) == RegId::ESP
+        || ir::root(temporary.register) == ir::root(regs.stack)
         || load.defines.len() != 1
         || shift.defines != load.defines
         || shift.uses != load.defines
@@ -2233,13 +2349,14 @@ fn _affine_address(
     // no prefix and reads no dword register.
     let scale = address.scale;
     let width = i64::from(dest.width);
-    let Some(form) = llrm_mir::target::three_operand(
+    let Some(form) = llrm_mir::target::three_operand_of(
         &cpu.operations,
         &cpu.address_forms,
         width,
         i64::from(cpu.operand_bytes),
         scale,
         word,
+        terms.len() + usize::from(disp != 0),
     ) else {
         return Ok(None);
     };
@@ -2364,6 +2481,12 @@ pub fn doubled(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
+    // The clocks are asked for the rule that uses them, not for the pass: a
+    // target with no such rule, or that prices through its cost model, states
+    // none (a missing clock is an error where a rule needs it, never 0).
+    if rules.doubled.is_none() {
+        return Ok(body.clone());
+    }
     cpu.doubling()?;
     Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
 }
@@ -2989,7 +3112,7 @@ fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
 /// Use XOR for zero only when later integer work replaces every arithmetic
 /// flag.
 pub fn zeroes(body: &LirBody) -> LirBody {
-    cleared(body, false)
+    cleared(body, false, false)
 }
 
 /// `zeroes`, and with `ones`, `mov r,-1` as `or r,-1` on the same condition.
@@ -3009,6 +3132,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
 pub fn cleared(
     body: &LirBody,
     ones: bool,
+    one_is_xor_inc: bool,
 ) -> LirBody {
     let regs = body.regs();
     let live = _flags_live_out(body);
@@ -3074,6 +3198,38 @@ pub fn cleared(
                                     vec![Loc::Reg(*dest), minus_one],
                                 ),
                             ));
+                        }
+                    }
+                }
+            }
+            // `MOV32r1` (X86InstrCompiler.td#L335, `OptForSize, Not64BitMode`):
+            // 1 is `xor r,r; inc r`, three bytes where `mov r,1` has five.
+            if ones && one_is_xor_inc && flags_dead && one.clobbers.is_empty() && one.symbol != Some(true) {
+                if let Some(what) = &one.what {
+                    if let (
+                        Operation::Move,
+                        Some("mov"),
+                        [Loc::Reg(dest)],
+                        [Loc::Imm(Imm { value: 1, width: 4, address: None })],
+                    ) = (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+                    {
+                        if dest.width == 4 && regs.integer(dest.register) {
+                            let zero = with_what(
+                                &one,
+                                semantics(
+                                    Operation::Binary,
+                                    "xor",
+                                    vec![Loc::Reg(*dest)],
+                                    vec![Loc::Reg(*dest), Loc::Reg(*dest)],
+                                ),
+                            );
+                            let up = with_what(
+                                &one,
+                                semantics(Operation::Unary, "inc", vec![Loc::Reg(*dest)], vec![Loc::Reg(*dest)]),
+                            );
+                            // Reversed below: the xor comes first.
+                            insns.push(Arc::new(up));
+                            one = Arc::new(zero);
                         }
                     }
                 }

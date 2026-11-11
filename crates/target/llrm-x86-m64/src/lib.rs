@@ -42,12 +42,27 @@ pub fn layout() -> llrm_target::layout::Layout {
 pub struct M64;
 
 /// The registers and the address forms the descriptions state.
-static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
-    LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+static REGISTERS: LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
+    LazyLock::new(|| llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses"));
 
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
+});
+
+/// DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): the x86-64 column's processor resources
+/// (`machine/tune/x86/x86-64.toml` `[schedule]`, the pin's SandyBridgeModel) and latencies, each operation the
+/// sum of its forms as the clock table is. A form the schedule does not list occupies no resource.
+static THROUGHPUT: LazyLock<llrm_mir::target::Throughput> = LazyLock::new(|| {
+    let table = TIMINGS.cpu("x86-64").expect("timings.times states the x86-64 column");
+    let find = |rows: &[(String, i64)], form: &str| rows.iter().find(|(one, _)| one == form).map(|(_, value)| *value);
+    let latency = |form: &str| 1000 * find(&table.latency, form).or_else(|| find(&table.clocks, form)).unwrap_or(1);
+    let text = llrm_target::tune::X86.iter().find(|(name, _)| *name == "x86-64").map(|(_, text)| *text).expect("the x86-64 tune file");
+    llrm_target::schedule::Schedule::parse(text).expect("x86-64.toml's [schedule] parses").throughput(
+        table.issue,
+        OPCOSTS.operations(&latency, 0),
+        &|price| OPCOSTS.operations(price, 0),
+    )
 });
 
 /// The CPUs' timings: `timings.times`.
@@ -79,6 +94,14 @@ impl llrm_target::Target for M64 {
         bytes: u32,
     ) -> u32 {
         bytes
+    }
+
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 4,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
     }
 
     fn register_op_bytes(
@@ -184,6 +207,10 @@ impl llrm_target::Target for M64 {
         LAYOUT.clone()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     /// An argument takes a dword at least: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes
@@ -222,8 +249,17 @@ impl llrm_target::Target for M64 {
         Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
     }
 
+    /// `GR32_NOSP`/`GR64_NOSP`'s caller-saved registers, in the pin's order.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        vec![RegId::RAX, RegId::RCX, RegId::RDX, RegId::RSI, RegId::RDI, RegId::R8, RegId::R9, RegId::R10, RegId::R11]
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         CALLING.native().frame_wrap_split_size
+    }
+
+    fn frame_object_aligned(&self) -> bool {
+        CALLING.native().frame_object_aligned
     }
 
     fn frame_red_zone(&self) -> i64 {
@@ -256,6 +292,14 @@ impl llrm_target::Target for M64 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
     }
 
     /// What cdecl32 keeps, but the frame register.
@@ -365,13 +409,27 @@ impl llrm_target::Target for M64 {
 
     fn cost_model(&self) -> CostModel {
         |prices| {
-            llrm_target::described_with(
+            llrm_target::described_throughput(
                 prices,
                 Some(OPCOSTS.size_costs()),
                 llrm_x86::tti::X86::of_cpu("x86-64")
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
+                            // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
+                            // memory_expansion.c text -3281 B.
+                            second_ipsccp: true,
+                            // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
+                            // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
+                            // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
+                            // against the old selector.
+                            imul_at_size: true,
+                            rep_stos_at_size: true,
+                            // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
+                            carry_slot_indexes: false,
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            unroll_recurrence_veto: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
@@ -384,13 +442,18 @@ impl llrm_target::Target for M64 {
                             // milliclocks a byte, the m64 net rate (fpbench -O2:
                             // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
                             unroll_milliclocks_per_byte: 312,
+                            unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
+                            // `mov m64, imm32`: sign-extended.
+                            unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
                             // the `imul`.
                             price_pin_multiplies: true,
+                            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+                            lftr_any_stride: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
                             // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
@@ -399,6 +462,16 @@ impl llrm_target::Target for M64 {
                             // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
                             // exit 2026-11-20.
                             recursive_inlining_growth: Some((450, 150)),
+                            // DEVIATE REC-7 (owner m64-clocks, exit 2026-11-30), as m32: copies
+                            // are 2 deep at -O2 and -O3, not gcc's 8.
+                            recursive_inlining_depth: Some((2, 2)),
+                            // DEVIATE REC-2-LOSERS (owner m64, exit 2026-11-21): the copies cost
+                            // net (clk + 0.312 B) against none on recchop -O3 +1020 (2194 B),
+                            // bintree -O3 +134 (1160 B, 0 clk), recpow -O2 +4002 (peeled). Their
+                            // bodies are load chains the call overhead hides under (call share
+                            // 52%, 45%); fib/frames/rectwo are 83-93% and win 42k-250k.
+                            // A call-share bar costs queens -O3 -2492 (share 24%); the fix is a
+                            // trial copy priced by the sheet's latencies.
                             // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
@@ -411,11 +484,24 @@ impl llrm_target::Target for M64 {
                             // count (particle -O3: count 3 of 100 left a nest copy,
                             // +433 B, +8.6% clk).
                             unroll_jam_exact_count: true,
+                            // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
+                            // constants after LSR on every target; m64 first.
+                            constant_hoisting: true,
+                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
+                            zext_imm_is_basic: true,
+                            // DEVIATE MEM-OS (owner anyisa, exit 2026-11-14): see Tuning.
+                            // A piece is a load and a store at `[reg+disp8]` (`movups` and a qword 4 + 4, a
+                            // dword and a byte 3 + 3, a word 4 + 4); the call is `mov edx, n` 5 and the
+                            // jump 5, 14 with the setup of a frame object's pointers.
+                            size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+                            // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
+                            immediate_forms_at_size: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: true })),
+                Some(THROUGHPUT.clone()),
             )
         }
     }
@@ -430,6 +516,65 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// CARRY-SI: carrying the coalescer's slot indexes through the scheduler
+    /// moved x86 cells worse at -O1 (2026-11-07), so m64 numbers the function
+    /// afresh until it has priced them.
+    #[test]
+    fn test_m64_does_not_carry_the_slot_indexes_yet() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert!(!tti.carries_slot_indexes());
+    }
+
+    /// REC-7 at m64: recursion copies went 8 deep (gcc's default), so rectwo -O2
+    /// ran 719563 instructions in 2120 B where depth 2 runs 161513 in 392 B.
+    #[test]
+    fn test_m64_copies_a_recursion_two_deep_at_o2_and_o3() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert_eq!(tti.recursive_inlining_depth(), Some((2, 2)));
+    }
+
+    /// The m64 sheet had a cache line and no line fill, so no byte rate was
+    /// derivable at m64 and the borrowed 312 had no number to be compared with.
+    /// Zen 5 fills a 64 B line from L2 in 10 clk: 156 mclk/B.
+    #[test]
+    fn test_the_sheet_states_the_measured_line_fill_and_derives_its_byte_rate() {
+        let cpu = super::TIMINGS.cpu("x86-64").expect("the default CPU");
+        assert_eq!((cpu.cache_line, cpu.line_fill_clocks), (Some(64), Some(10)));
+        assert_eq!(cpu.byte_rate(), Some(156));
+    }
+
     /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
     /// `long double`) had no register class and the DAG path refused it.
     #[test]

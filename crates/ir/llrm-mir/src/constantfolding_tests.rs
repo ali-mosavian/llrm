@@ -112,8 +112,8 @@ fn a_load_of_an_externally_initialized_constant_is_kept() {
 }
 
 #[test]
-fn mir_has_no_lane_operations_and_no_half() {
-    assert!(rejects("define void @f(<4 x i32> %a) {\n  %x = extractelement <4 x i32> %a, i32 0\n  ret void\n}\n"));
+fn mir_has_lane_operations_but_no_half() {
+    assert!(!rejects("define void @f(<4 x i32> %a) {\n  %x = extractelement <4 x i32> %a, i32 0\n  ret void\n}\n"));
     assert!(rejects("define half @f(half %a) {\n  ret half %a\n}\n"));
 }
 

@@ -45,8 +45,10 @@ use crate::support::hash::HashMap;
 
 /// The prices of the rewrite, from the CPU's table.
 pub struct MaskByAnd {
-    /// Clocks the `and` saves over the `movzx`.
-    pub clocks_saved: i64,
+    /// Clocks the `and` saves over the `movzx`; none where the CPU states no
+    /// clock for either (a target that prices through its cost model): the
+    /// rewrite is then not priced, so it is not made.
+    pub clocks_saved: Option<i64>,
     /// Thousandths of a clock a byte of code is worth
     /// (`speed_milliclocks_per_byte`).
     pub milliclocks_per_byte: i64,
@@ -61,8 +63,8 @@ impl MaskByAnd {
         &self,
         frequency: f64,
     ) -> bool {
-        self.clocks_saved > 0
-            && frequency * self.clocks_saved as f64 * 1000.0 >= (self.milliclocks_per_byte * EXTRA_BYTES) as f64
+        let Some(saved) = self.clocks_saved.filter(|saved| *saved > 0) else { return false };
+        frequency * saved as f64 * 1000.0 >= (self.milliclocks_per_byte * EXTRA_BYTES) as f64
     }
 }
 
@@ -79,10 +81,15 @@ impl LIRTransform for MaskByAnd {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        if self.milliclocks_per_byte <= 0 || self.clocks_saved <= 0 || body.bits != 32 {
+        if self.milliclocks_per_byte <= 0 || self.clocks_saved.is_none_or(|saved| saved <= 0) || body.bits != 32 {
             return Ok(body);
         }
         let frequencies = MachineBlockFrequencyInfo::of(&body);
+        // A `movzx` of a `setcc` that `FixupSetCC` rewrites becomes a zero made
+        // before the compare (`xor`, two bytes): cheaper than the `and` here in
+        // both bytes and clocks, so it is left alone.
+        let fixed = crate::backend::fixupsetcc::fixed(&body);
+        let kept: llrm_mir::hash::HashSet<i64> = fixed.blocks.iter().flat_map(|b| b.insns.iter()).map(|one| one.at).collect();
         let regs = body.regs();
         let reads = read_counts(&body);
         let mut out = body.clone();
@@ -93,6 +100,9 @@ impl LIRTransform for MaskByAnd {
             let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
             let mut changed = false;
             for at in 0..insns.len() {
+                if !kept.contains(&insns[at].at) {
+                    continue;
+                }
                 if let Some(new) =
                     masked(&insns[at], &reads).filter(|_| flags_dead_after(regs, body.bits, &insns[at + 1..]))
                 {
@@ -213,4 +223,20 @@ fn flags_dead_after(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A CPU that states neither clock (a target that prices through its cost
+    /// model) stopped the whole pipeline at `cost("movzx")`. Not stated is not
+    /// free: the rewrite is not priced, so it is never made.
+    #[test]
+    fn test_a_pass_with_no_stated_clocks_never_pays() {
+        let rate = 1;
+        let stated = MaskByAnd { clocks_saved: Some(1), milliclocks_per_byte: rate };
+        let unstated = MaskByAnd { clocks_saved: None, milliclocks_per_byte: rate };
+        assert!(stated.pays(1.0e9) && !unstated.pays(1.0e9));
+    }
 }

@@ -136,17 +136,20 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let wide = EVT::integer(wide_bits);
         // Allowed and fast on the target: DEVIATE.
         let step = i64::from(narrow / 8);
-        let little = |offsets: &[i64]| (0..stores.len()).all(|i| offsets[i] == i as i64 * step + first_offset);
-        let big = |offsets: &[i64]| {
+        let ascending = |offsets: &[i64]| (0..stores.len()).all(|i| offsets[i] == i as i64 * step + first_offset);
+        let descending = |offsets: &[i64]| {
             let n = stores.len();
             (0..n).all(|i| offsets[n - 1 - i] == i as i64 * step + first_offset)
         };
+        // the offsets that line up for the native data layout
+        let little_target = self.hooks.little_endian();
+        let native = |offsets: &[i64]| if little_target { ascending(offsets) } else { descending(offsets) };
+        let opposite = |offsets: &[i64]| if little_target { descending(offsets) } else { ascending(offsets) };
         let (mut need_bswap, mut need_rotate) = (false, false);
-        // The target is little endian.
-        if !little(&offsets) {
-            if narrow == 8 && big(&offsets) {
+        if !native(&offsets) {
+            if narrow == 8 && opposite(&offsets) {
                 need_bswap = true;
-            } else if stores.len() == 2 && big(&offsets) {
+            } else if stores.len() == 2 && opposite(&offsets) {
                 need_rotate = true;
             } else {
                 return None;
@@ -162,12 +165,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             source = self.dag.get_node(ISD::Rotr, wide, &[source, amount]);
         }
         let NodeData::Mem(first_info) = self.dag.node(first_store).data else { return None };
-        let new = self.dag.get_store(
-            chain,
-            source,
-            self.dag.operand(first_store, 2),
-            MemInfo { mem_vt: wide, ..first_info },
-        );
+        let new =
+            self.dag.get_store(chain, source, self.dag.operand(first_store, 2), MemInfo { mem_vt: wide, ..first_info });
         // The other stores are left to the combines that remove dead ones.
         self.replace_value(st, new);
         Some(new)

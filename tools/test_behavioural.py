@@ -131,7 +131,7 @@ def test_the_set_covers_all_ten_wrong_outputs_of_4146_across_frontends():
 
 
 def test_a_red_that_is_green_on_the_second_run_refuses_nothing():
-    """#5785 was refused for 23 wrong programs 100 s after the same tree ran 0 wrong (LLRM_OW missing in one run): one red run is no proof."""
+    """#5785 was refused for 23 wrong programs 100 s after the same tree ran 0 wrong (Open Watcom tree missing in one run): one red run is no proof."""
     import parity_squash as ps
 
     runs = iter([RED, GREEN])
@@ -141,6 +141,6 @@ def test_a_red_that_is_green_on_the_second_run_refuses_nothing():
 def test_a_red_both_times_names_a_missing_open_watcom_tree(monkeypatch, capsys):
     import parity_squash as ps
 
-    monkeypatch.delenv("LLRM_OW", raising=False)
+    monkeypatch.setenv("HOME", "/nonexistent")
     assert ps.pre_merge_behavioural(["crates/codegen/llrm-codegen/src/backend/machinesched.rs"], build=lambda: None, run=lambda: RED)
-    assert "LLRM_OW" in capsys.readouterr().out
+    assert "tools/ow-fetch.sh" in capsys.readouterr().out

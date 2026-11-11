@@ -33,7 +33,7 @@ use llrm_lir::registers::{RegId, Regs};
 use llrm_target::pressure::PressureSets;
 
 use crate::model::lir::Insn;
-use crate::support::hash::HashMap;
+use crate::support::hash::{HashMap, HashSet};
 
 /// A change of one set's pressure (`PressureChange`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,7 +109,7 @@ impl Model {
         model
     }
 
-    fn weight(
+    pub(crate) fn weight(
         &self,
         value: u32,
     ) -> Option<(u32, &[usize])> {
@@ -128,7 +128,7 @@ pub enum Pick {
     Neither,
 }
 
-/// `tryPressure` (MachineScheduler.cpp#L3805), bottom-up: compares what two
+/// `tryPressure` (MachineScheduler.cpp#L3805): compares what two
 /// candidates do to one kind of pressure (`RPDelta.Excess`, `.CriticalMax` or
 /// `.CurrentMax`, for `RegExcess`, `RegCritical` and `RegMax`). A change that
 /// lowers pressure beats one that does not; for the same set the smaller
@@ -138,6 +138,7 @@ pub enum Pick {
 pub fn try_pressure(
     try_p: Option<PressureChange>,
     cand_p: Option<PressureChange>,
+    same_boundary: bool,
 ) -> Pick {
     let inc = |change: Option<PressureChange>| change.map_or(0, |change| change.inc);
     let (try_inc, cand_inc) = (inc(try_p), inc(cand_p));
@@ -150,6 +151,11 @@ pub fn try_pressure(
     let decides = greater((try_inc < 0).into(), (cand_inc < 0).into());
     if decides != Pick::Neither {
         return decides;
+    }
+    // The size of a change is not compared between the top and the bottom
+    // boundary.
+    if !same_boundary {
+        return Pick::Neither;
     }
     // Both affect the same set (or neither any): the smallest increase.
     let set = |change: Option<PressureChange>| change.map_or(usize::from(u16::MAX), |change| change.set);
@@ -405,46 +411,7 @@ impl<'a> Tracker<'a> {
         critical: &[PressureChange],
         max_limit: &[u32],
     ) -> Delta {
-        let mut delta = Delta::default();
-        for (set, &inc) in change.iter().enumerate() {
-            if inc == 0 {
-                continue;
-            }
-            let limit = self.model.limits[set] + self.live_thru[set];
-            let (old, max_old) = (self.current[set], self.max[set]);
-            let new = (old as i32 + inc) as u32;
-            let max_new = max_old.max(new);
-            if delta.excess.is_none() {
-                // `ExcessInc` is unsigned in the pin and narrowed to the
-                // change's signed field: the drop back to the
-                // limit comes out negative.
-                let over = if new > limit {
-                    if old > limit { new as i32 - old as i32 } else { (new - limit) as i32 }
-                } else if old > limit {
-                    limit as i32 - old as i32
-                } else {
-                    0
-                };
-                if over != 0 {
-                    delta.excess = Some(PressureChange { set, inc: over });
-                }
-            }
-            if max_new == max_old {
-                continue;
-            }
-            if delta.critical_max.is_none() {
-                if let Some(entry) = critical.iter().find(|entry| entry.set == set) {
-                    let over = max_new as i32 - entry.inc;
-                    if over > 0 {
-                        delta.critical_max = Some(PressureChange { set, inc: over });
-                    }
-                }
-            }
-            if delta.current_max.is_none() && max_new > max_limit[set] {
-                delta.current_max = Some(PressureChange { set, inc: (max_new - max_old) as i32 });
-            }
-        }
-        delta
+        delta_of(self.model, &self.live_thru, &self.current, &self.max, change, critical, max_limit)
     }
 
     /// `RegionCriticalPSets`: the sets whose region pressure `max_set_pressure`
@@ -460,6 +427,233 @@ impl<'a> Tracker<'a> {
             .filter(|&(set, &most)| most > model.limits[set])
             .map(|(set, _)| PressureChange { set, inc: 0 })
             .collect()
+    }
+}
+
+/// `computeExcessPressureDelta` and `computeMaxPressureDelta`: what changing
+/// each set by `change` does, given the pressure `current` and the most it has
+/// been, `max`. Shared by both directions.
+fn delta_of(
+    model: &Model,
+    live_thru: &[u32],
+    current: &[u32],
+    max: &[u32],
+    change: &[i32],
+    critical: &[PressureChange],
+    max_limit: &[u32],
+) -> Delta {
+    let mut delta = Delta::default();
+    for (set, &inc) in change.iter().enumerate() {
+        if inc == 0 {
+            continue;
+        }
+        let limit = model.limits[set] + live_thru[set];
+        let (old, max_old) = (current[set], max[set]);
+        let new = (old as i32 + inc) as u32;
+        let max_new = max_old.max(new);
+        if delta.excess.is_none() {
+            // `ExcessInc` is unsigned in the pin and narrowed to the
+            // change's signed field: the drop back to the
+            // limit comes out negative.
+            let over = if new > limit {
+                if old > limit { new as i32 - old as i32 } else { (new - limit) as i32 }
+            } else if old > limit {
+                limit as i32 - old as i32
+            } else {
+                0
+            };
+            if over != 0 {
+                delta.excess = Some(PressureChange { set, inc: over });
+            }
+        }
+        if max_new == max_old {
+            continue;
+        }
+        if delta.critical_max.is_none() {
+            if let Some(entry) = critical.iter().find(|entry| entry.set == set) {
+                let over = max_new as i32 - entry.inc;
+                if over > 0 {
+                    delta.critical_max = Some(PressureChange { set, inc: over });
+                }
+            }
+        }
+        if delta.current_max.is_none() && max_new > max_limit[set] {
+            delta.current_max = Some(PressureChange { set, inc: (max_new - max_old) as i32 });
+        }
+    }
+    delta
+}
+
+/// `RegPressureTracker` of the top zone (`TopRPTracker`): the pressure at the
+/// top of the nodes scheduled from the top so far, as `advance` follows it,
+/// and [`Self::delta`] (`getMaxDownwardPressureDelta`) of placing a node next.
+///
+/// A value stops being live at the node that reads it last in the code as it
+/// stands: every other reader is already above. A value live below the region
+/// never stops.
+pub struct TopTracker<'a> {
+    model: &'a Model,
+    region: &'a Region,
+    live: HashMap<u32, u32>,
+    current: Vec<u32>,
+    max: Vec<u32>,
+    live_thru: Vec<u32>,
+    /// Per (name, writer): the readers not yet placed at the top.
+    pending: HashMap<(u32, u32), u32>,
+    /// The (name, writer) pairs live below the region.
+    live_out: HashSet<(u32, u32)>,
+}
+
+impl<'a> TopTracker<'a> {
+    /// A tracker at the top of the region: its live-ins (the values it reads
+    /// before any def, and those live through) are live (`addLiveRegs`,
+    /// `closeTop`); `live_thru` as for [`Tracker::over`].
+    pub fn over(
+        model: &'a Model,
+        region: &'a Region,
+        live_out: impl IntoIterator<Item = u32>,
+        live_thru: impl IntoIterator<Item = u32>,
+    ) -> Self {
+        let sets = model.limits.len();
+        let mut tracker = Self {
+            model,
+            region,
+            live: HashMap::default(),
+            current: vec![0; sets],
+            max: vec![0; sets],
+            live_thru: vec![0; sets],
+            pending: HashMap::default(),
+            live_out: HashSet::default(),
+        };
+        for reads in &region.reads {
+            for &(value, version) in reads {
+                *tracker.pending.entry((value, version)).or_default() += 1;
+            }
+        }
+        let mut through = Vec::new();
+        for value in live_out {
+            let version = region.last_def.get(&value).copied().unwrap_or(LIVE_IN);
+            tracker.live_out.insert((value, version));
+            if version == LIVE_IN {
+                through.push(value);
+            }
+        }
+        for reads in &region.reads {
+            for &(value, version) in reads {
+                if version == LIVE_IN {
+                    tracker.make_live(value, LIVE_IN);
+                }
+            }
+        }
+        for value in through {
+            tracker.make_live(value, LIVE_IN);
+        }
+        tracker.max.clone_from(&tracker.current);
+        for value in live_thru {
+            if let Some((weight, in_sets)) = model.weight(value) {
+                for &set in in_sets {
+                    tracker.live_thru[set] += weight;
+                }
+            }
+        }
+        tracker
+    }
+
+    pub fn max(&self) -> &[u32] {
+        &self.max
+    }
+
+    pub fn current(&self) -> &[u32] {
+        &self.current
+    }
+
+    fn make_live(
+        &mut self,
+        value: u32,
+        version: u32,
+    ) {
+        let Some((weight, sets)) = self.model.weight(value) else { return };
+        if self.live.insert(value, version).is_none() {
+            for &set in sets {
+                self.current[set] += weight;
+            }
+        }
+    }
+
+    /// Whether `node`, placed next, is the last reader of `(value, version)`.
+    fn last_reader(
+        &self,
+        value: u32,
+        version: u32,
+    ) -> bool {
+        self.pending.get(&(value, version)).copied() == Some(1) && !self.live_out.contains(&(value, version))
+    }
+
+    /// `advance`: `node` is placed below everything placed so far. Its last
+    /// reads end values; its defs, unless nothing reads them
+    /// (`detectDeadDefs`), start them.
+    pub fn place(
+        &mut self,
+        node: usize,
+    ) {
+        let region = self.region;
+        for &(value, version) in &region.reads[node] {
+            if self.live.get(&value) != Some(&version) {
+                self.make_live(value, version);
+            }
+            let last = self.last_reader(value, version);
+            *self.pending.get_mut(&(value, version)).expect("a read is pending") -= 1;
+            if last && self.live.get(&value) == Some(&version) {
+                self.live.remove(&value);
+                if let Some((weight, sets)) = self.model.weight(value) {
+                    for &set in sets {
+                        self.current[set] -= weight;
+                    }
+                }
+            }
+        }
+        for &value in &region.writes[node] {
+            let key = (value, node as u32);
+            if self.pending.get(&key).is_some_and(|&readers| readers > 0) || self.live_out.contains(&key) {
+                self.make_live(value, node as u32);
+            }
+        }
+        for (max, &now) in self.max.iter_mut().zip(&self.current) {
+            *max = (*max).max(now);
+        }
+    }
+
+    /// `getMaxDownwardPressureDelta` (`bumpDownwardPressure`): placing `node`
+    /// next ends the values it reads last and starts every value it writes
+    /// that is not live. The pin takes the live set as it was before the
+    /// reads end, so `c := add c` that ends `c` ends it and does not start it
+    /// again.
+    pub fn delta(
+        &self,
+        node: usize,
+        critical: &[PressureChange],
+        max_limit: &[u32],
+    ) -> Delta {
+        let mut change = vec![0i32; self.current.len()];
+        for &(value, version) in &self.region.reads[node] {
+            if self.live.get(&value) == Some(&version) && self.last_reader(value, version) {
+                if let Some((weight, sets)) = self.model.weight(value) {
+                    for &set in sets {
+                        change[set] -= weight as i32;
+                    }
+                }
+            }
+        }
+        for &value in &self.region.writes[node] {
+            if !self.live.contains_key(&value) {
+                if let Some((weight, sets)) = self.model.weight(value) {
+                    for &set in sets {
+                        change[set] += weight as i32;
+                    }
+                }
+            }
+        }
+        delta_of(self.model, &self.live_thru, &self.current, &self.max, &change, critical, max_limit)
     }
 }
 
@@ -732,18 +926,23 @@ mod tests {
     /// every tie.
     #[test]
     fn try_pressure_compares_as_the_pin_does() {
-        assert_eq!(try_pressure(change(3, -1), change(3, 1)), Pick::Try);
-        assert_eq!(try_pressure(change(3, 1), change(0, -2)), Pick::Cand);
-        assert_eq!(try_pressure(change(2, 1), change(2, 3)), Pick::Try);
-        assert_eq!(try_pressure(change(2, 3), change(2, 1)), Pick::Cand);
-        assert_eq!(try_pressure(change(5, 1), change(2, 1)), Pick::Try);
-        assert_eq!(try_pressure(change(2, 1), change(5, 1)), Pick::Cand);
+        assert_eq!(try_pressure(change(3, -1), change(3, 1), true), Pick::Try);
+        assert_eq!(try_pressure(change(3, 1), change(0, -2), true), Pick::Cand);
+        assert_eq!(try_pressure(change(2, 1), change(2, 3), true), Pick::Try);
+        assert_eq!(try_pressure(change(2, 3), change(2, 1), true), Pick::Cand);
+        assert_eq!(try_pressure(change(5, 1), change(2, 1), true), Pick::Try);
+        assert_eq!(try_pressure(change(2, 1), change(5, 1), true), Pick::Cand);
         // Both lower, different sets: the priority reverses.
-        assert_eq!(try_pressure(change(5, -1), change(2, -1)), Pick::Cand);
-        assert_eq!(try_pressure(None, change(4, 1)), Pick::Try);
-        assert_eq!(try_pressure(change(4, 1), None), Pick::Cand);
-        assert_eq!(try_pressure(None, None), Pick::Neither);
-        assert_eq!(try_pressure(change(1, 2), change(1, 2)), Pick::Neither);
+        assert_eq!(try_pressure(change(5, -1), change(2, -1), true), Pick::Cand);
+        assert_eq!(try_pressure(None, change(4, 1), true), Pick::Try);
+        assert_eq!(try_pressure(change(4, 1), None, true), Pick::Cand);
+        assert_eq!(try_pressure(None, None, true), Pick::Neither);
+        assert_eq!(try_pressure(change(1, 2), change(1, 2), true), Pick::Neither);
+        // A top and a bottom candidate: only a decrease decides, never the
+        // size of a rise (`Cand.AtTop != TryCand.AtTop`).
+        assert_eq!(try_pressure(change(1, 2), None, false), Pick::Neither);
+        assert_eq!(try_pressure(None, change(1, 2), false), Pick::Neither);
+        assert_eq!(try_pressure(change(1, -1), change(1, 2), false), Pick::Try);
     }
 
     #[test]
@@ -751,5 +950,85 @@ mod tests {
         let model = model();
         let critical = Tracker::critical_sets(&model, &[3, 3]);
         assert_eq!(critical, [PressureChange { set: 0, inc: 0 }]);
+    }
+
+    /// The top tracker follows the prefix placed so far: a value starts at
+    /// its def and ends at its last reader, and the most it has been stays.
+    #[test]
+    fn the_top_tracker_ends_a_value_at_its_last_reader() {
+        let model = model();
+        let insns = [insn(&[1], &[]), insn(&[2], &[]), insn(&[3], &[1, 2])];
+        let region = Region::of(&insns);
+        let mut top = TopTracker::over(&model, &region, [3], []);
+        assert_eq!(top.current(), &[0, 0]);
+        top.place(0);
+        top.place(1);
+        assert_eq!(top.current(), &[2, 0]);
+        top.place(2);
+        assert_eq!((top.current(), top.max()), (&[1, 0][..], &[2, 0][..]));
+    }
+
+    /// A value read twice stays live until the second reader is placed: the
+    /// first reader is not its last.
+    #[test]
+    fn the_top_tracker_keeps_a_value_for_its_other_readers() {
+        let model = model();
+        let insns = [insn(&[1], &[]), insn(&[2], &[1]), insn(&[3], &[1])];
+        let region = Region::of(&insns);
+        let mut top = TopTracker::over(&model, &region, [2, 3], []);
+        top.place(0);
+        // Placing 1 starts 2 and leaves 1 for node 2: +1.
+        assert_eq!(top.delta(1, &[], &[1, 0]).current_max, Some(PressureChange { set: 0, inc: 1 }));
+        top.place(1);
+        assert_eq!(top.current(), &[2, 0]);
+        // Placing 2 ends 1 and starts 3: no change in the sum.
+        assert_eq!(top.delta(2, &[], &[0, 0]).current_max, None);
+        top.place(2);
+        assert_eq!(top.current(), &[2, 0]);
+    }
+
+    /// A value live below the region is never ended by a reader in it, and
+    /// one live into it counts from the start.
+    #[test]
+    fn the_top_tracker_starts_with_the_live_ins_and_never_ends_a_live_out() {
+        let model = model();
+        let insns = [insn(&[2], &[1])];
+        let region = Region::of(&insns);
+        let mut top = TopTracker::over(&model, &region, [1, 2], []);
+        assert_eq!(top.current(), &[1, 0], "value 1 is read before any def: live in");
+        top.place(0);
+        assert_eq!(top.current(), &[2, 0], "1 stays: it is live out");
+    }
+
+    /// A def nothing reads and nothing below needs does not stay live after
+    /// the node is placed (`detectDeadDefs`), but the question counts it
+    /// (`bumpDownwardPressure` does not detect dead defs).
+    #[test]
+    fn the_top_tracker_does_not_keep_a_dead_def_but_prices_it() {
+        let model = model();
+        let insns = [insn(&[1], &[])];
+        let region = Region::of(&insns);
+        let mut top = TopTracker::over(&model, &region, [], []);
+        assert_eq!(top.delta(0, &[], &[0, 0]).current_max, Some(PressureChange { set: 0, inc: 1 }));
+        top.place(0);
+        assert_eq!((top.current(), top.max()), (&[0, 0][..], &[0, 0][..]));
+    }
+
+    /// The pin takes the live set as it was before the reads end, so the last
+    /// read of `c` by `c := add c` ends it and its def does not start it:
+    /// above the limit that is a drop of one, where placing the node leaves the
+    /// pressure as it was.
+    #[test]
+    fn the_top_question_for_a_tied_instruction_ends_the_value_and_does_not_restart_it() {
+        let model = model();
+        let insns = [insn(&[1], &[]), insn(&[1], &[1])];
+        let region = Region::of(&insns);
+        let mut top = TopTracker::over(&model, &region, [1, 2, 3], []);
+        top.place(0);
+        assert_eq!(top.current(), &[3, 0], "two live through and 1: over the limit of 2");
+        let asked = top.delta(1, &[], &[3, 0]);
+        assert_eq!(asked.excess, Some(PressureChange { set: 0, inc: -1 }));
+        top.place(1);
+        assert_eq!(top.current(), &[3, 0], "placing it ends 1 and starts the 1 it writes");
     }
 }

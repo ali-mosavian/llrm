@@ -284,13 +284,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "loop-vectorize",
-        NA,
-        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
-        "",
-    ),
-    row(
-        Late,
         "transform-warning",
         NA,
         "diagnostic for failed pragmas; no output Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
@@ -302,13 +295,6 @@ const ROWS: &[Disposition] = &[
         Why::Missing,
         "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
         "w4",
-    ),
-    row(
-        Late,
-        "mergeicmps",
-        Why::Missing,
-        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
-        "w-4, 11-09",
     ),
     row(
         Late,
@@ -451,7 +437,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w-6)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w10-instcombine)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),

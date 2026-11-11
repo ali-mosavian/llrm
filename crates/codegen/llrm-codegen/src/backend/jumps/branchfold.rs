@@ -133,6 +133,9 @@ struct Folder<'a> {
     entry: i64,
     /// Loop headers with a measured trip count stay where they are.
     protected: &'a BTreeSet<i64>,
+    /// After the last user of the virtual values: an edge block holding only
+    /// the anchor of an identity copy is a passage too (`_passage_late`).
+    late: bool,
     /// The register file and width the effects of an instruction are worked
     /// out in; none in a body that has no allocation (a test's).
     regs: Option<(llrm_lir::registers::Regs, u32)>,
@@ -149,7 +152,24 @@ pub fn folded(
     body: &LirBody,
     protected: &BTreeSet<i64>,
 ) -> LirBody {
+    folded_at(body, protected, false)
+}
+
+/// `folded` once nothing reads the virtual values any more.
+pub fn folded_late(
+    body: &LirBody,
+    protected: &BTreeSet<i64>,
+) -> LirBody {
+    folded_at(body, protected, true)
+}
+
+fn folded_at(
+    body: &LirBody,
+    protected: &BTreeSet<i64>,
+    late: bool,
+) -> LirBody {
     let mut folder = Folder::of(body, protected);
+    folder.late = late;
     while folder.pass() {}
     if !folder.rename.is_empty() {
         let rename: IndexMap<u32, u32> =
@@ -350,6 +370,7 @@ impl<'a> Folder<'a> {
             odds: body.odds.clone(),
             entry: body.entry,
             protected,
+            late: false,
             regs: body.registers.map(|regs| (regs, body.bits)),
             rename: IndexMap::default(),
             stale: BTreeSet::new(),
@@ -436,7 +457,7 @@ impl<'a> Folder<'a> {
         // A block that does nothing and goes to one block.
         if block.at != self.entry
             && !self.protected.contains(&block.at)
-            && let Some(onward) = super::_passage(&block)
+            && let Some(onward) = if self.late { super::_passage_late(&block) } else { super::_passage(&block) }
             && onward != block.at
             && self.preds.get(&block.at).is_some_and(|entering| entering.iter().any(|from| *from != block.at))
         {

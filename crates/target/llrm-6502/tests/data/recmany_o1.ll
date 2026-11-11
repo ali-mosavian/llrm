@@ -1,6 +1,6 @@
 ; ModuleID = 'tests/run/c/recmany_o1.c'
 source_filename = "tests/run/c/recmany_o1.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 
 ; Function Attrs: nofree norecurse nosync nounwind optsize memory(none)
 define dso_local i32 @bench_recmany(i16 noundef %0) local_unnamed_addr #0 {

@@ -246,7 +246,7 @@ impl GraphDiff {
 
     /// `getChildren<InverseEdge>`: the CFG children of `node`, successors
     /// (reversed) or predecessors, with the snapshot's changes.
-    fn children(
+    pub fn children(
         &self,
         graph: &impl DomGraph,
         node: BlockId,
@@ -263,6 +263,42 @@ impl GraphDiff {
         // Add children present in the snapshot for not in the real CFG.
         result.extend_from_slice(&changes.di[1]);
         result
+    }
+}
+
+/// A graph as a [`GraphDiff`] snapshot of it: what a calculator walks given a
+/// `GraphDiff` (`ForwardIDFCalculator(DT, GD)`).
+pub struct Snapshot<'a, G: DomGraph> {
+    pub graph: &'a G,
+    pub diff: &'a GraphDiff,
+}
+
+impl<G: DomGraph> DomGraph for Snapshot<'_, G> {
+    fn entry(&self) -> Option<BlockId> {
+        self.graph.entry()
+    }
+
+    fn max_number(&self) -> usize {
+        self.graph.max_number()
+    }
+
+    fn nodes(&self) -> &[BlockId] {
+        self.graph.nodes()
+    }
+
+    fn successors(
+        &self,
+        block: BlockId,
+    ) -> BlockList {
+        // `children` gives the successors reversed, as the pin walks them.
+        self.diff.children(self.graph, block, false).into_iter().rev().collect()
+    }
+
+    fn predecessors(
+        &self,
+        block: BlockId,
+    ) -> BlockList {
+        self.diff.children(self.graph, block, true).into_iter().collect()
     }
 }
 
