@@ -11,7 +11,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
-use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
+use crate::mc::inst::{FpConvert, Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
 use crate::regalloc::{Allocation, spill_access};
@@ -122,6 +122,10 @@ fn cheap_alu(op: &Op) -> bool {
 /// A constant one instruction makes (`movz`, `movn` or a logical immediate):
 /// the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
+
+/// `fmov s, w`: the pin's cross-class `COPY`, which early `MachineLICM`
+/// hoists with the constant it reads.
+pub(crate) const FMOV_TO_FPR: &str = "FmovToFpr";
 
 fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
@@ -239,6 +243,9 @@ fn view_with(
                 // it is read (`reMaterializeTrivialDef`), not copied from one
                 // value.
                 Op::Copy { .. } if zero => (Kind::Op(ZERO), false, false, false),
+                Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }) => {
+                    (Kind::Op(FMOV_TO_FPR), false, false, false)
+                }
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
                     matches!(

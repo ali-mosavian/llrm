@@ -1132,6 +1132,11 @@ impl llrm_mir::tti::Tti for PolicyOnly {
         lhs: llrm_mir::tti::OperandInfo,
         rhs: llrm_mir::tti::OperandInfo,
     ) -> llrm_mir::tti::Cost {
+        use llrm_mir::tti::ArithOp;
+        // a shift by a variable amount is a library call (z80 `__ashlhi3`), by a constant a few instructions
+        if cost == llrm_mir::tti::CostKind::CodeSize && matches!(op, ArithOp::Shl | ArithOp::LShr | ArithOp::AShr) && !rhs.constant {
+            return llrm_mir::tti::Cost::of(12);
+        }
         llrm_mir::tti::Basic.arithmetic_cost(op, ty, cost, lhs, rhs)
     }
 }
@@ -1285,4 +1290,39 @@ fn a_verdict_is_described_with_its_cost_and_threshold() {
     let over = InlineCost::Cost { cost: 90, threshold: 90, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(describe(&over), "cost=90 threshold=90 no");
     assert_eq!(describe(&InlineCost::Never("recursive".into())), "never (recursive)");
+}
+
+const ROTATE: &str = "define internal i16 @callee(i16 %x, i16 %n) nounwind {
+b0:
+  %a = and i16 %n, 15
+  %l = shl i16 %x, %a
+  %b = sub i16 0, %n
+  %c = and i16 %b, 15
+  %r = lshr i16 %x, %c
+  %o = or i16 %l, %r
+  ret i16 %o
+}
+
+define i16 @f(i16 %x, i16 %k) nounwind {
+b0:
+  %p = call i16 @callee(i16 %x, i16 noundef 5)
+  %q = call i16 @callee(i16 %p, i16 %k)
+  ret i16 %q
+}
+";
+
+/// z80 `rotate_small` -O1 576 -> 922 B once `fshl` had a price: the size rule priced `rotl16(x, 5)` with the callee's
+/// variable amount (two library calls, 27 B against a 10 B call) and kept it out of line with `rotl16(x, n)`. The copy
+/// at a constant amount is three instructions; the rule counts it so (`isGEPFree` prices with the site's constants).
+#[test]
+fn the_size_rule_prices_a_callee_with_the_constants_of_the_site() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let tti = PolicyOnly(policy, None, false);
+    let inlined = |at| {
+        let (cost, threshold) = priced_with(ROTATE, at, false, CallerSize::OptSize, Some(&tti));
+        cost < threshold
+    };
+    assert!(inlined(0), "a constant amount: three instructions against a call");
+    assert!(!inlined(1), "a variable amount keeps the call");
 }

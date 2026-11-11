@@ -5,8 +5,16 @@
 //! The walk is the shared [`licm_core`] one, over the allocator's
 //! [`MFunction`]. The policy is the pin's `IsProfitableToHoist` for a
 //! rematerializable instruction (`MOVaddr`, `MOVi32imm`): it always moves, the
-//! allocator makes it again where a register is short. Nothing that reads
-//! memory or the flags, has an effect, or touches a physical register moves.
+//! allocator makes it again where a register is short. A copy between register
+//! classes (the `fmov s, w` of a float constant, the pin's cross-class `COPY`)
+//! moves with the constant it reads (`IsProfitableToHoist` L1273 reaching
+//! `CanCauseHighRegPressure` L1235), unless the values live at once in the loop
+//! and the copies already moved fill the class (DEVIATE ML3, exit 2026-11-20:
+//! the peak over the loop's blocks, not the pin's per-set back trace; a loop
+//! with a call counts the values it names against `d8`-`d15`, the registers a
+//! call keeps; a block that does not run on every trip keeps its copies,
+//! `AvoidSpeculation` L1349 without the peak). Nothing that reads memory or the
+//! flags, has an effect, or touches a physical register moves.
 //!
 //! # Example
 //! ```text
@@ -19,8 +27,18 @@
 //! `llrm_codegen::backend::licm_core` (the walk), `lir_view` (runs it before
 //! allocation).
 
+use std::collections::{BTreeSet, HashMap};
+
 use llrm_codegen::backend::licm_core::{self, Block, Facts, Inst as CoreInst, Policy};
 use llrm_spike_mf::mfunc::{Inst, Kind, MFunction, Operand, Reg};
+
+use crate::lir_view::{Class, FMOV_TO_FPR};
+
+/// Registers a loop can hold values of a class in: `x0`-`x28`, `v0`-`v31`.
+const GPR_LIMIT: usize = 29;
+const FPR_LIMIT: usize = 32;
+/// `d8`-`d15`, the float registers a call keeps.
+const FPR_CALLEE_SAVED: usize = 8;
 
 #[derive(Clone)]
 struct Wrapped {
@@ -105,13 +123,68 @@ impl CoreInst for Wrapped {
     }
 }
 
-struct Arm64;
+struct Arm64<'a> {
+    classes: &'a [Class],
+    /// Values of each class (general, floating) the loop names, and the copies
+    /// this walk has moved out of it.
+    named: [usize; 2],
+    /// The loop calls: a float it names is kept in `d8`-`d15` or not at all.
+    calls: bool,
+    /// The values live out of each block.
+    live: HashMap<i64, BTreeSet<u32>>,
+    /// The most values of each class live at once in the loop.
+    peak: [usize; 2],
+    /// The copies this loop has moved out, by class.
+    hoisted: [usize; 2],
+}
 
-impl Policy<Wrapped> for Arm64 {
+impl Arm64<'_> {
+    /// `live` held at one point of the loop.
+    fn note(
+        &mut self,
+        live: &BTreeSet<u32>,
+    ) {
+        let mut counts = [0, 0];
+        for &value in live {
+            counts[self.slot(value)] += 1;
+        }
+        for slot in 0..2 {
+            self.peak[slot] = self.peak[slot].max(counts[slot]);
+        }
+    }
+
+    fn slot(
+        &self,
+        value: u32,
+    ) -> usize {
+        usize::from(self.classes.get(value as usize) != Some(&Class::Gpr))
+    }
+}
+
+impl Policy<Wrapped> for Arm64<'_> {
     fn begin(
         &mut self,
-        _facts: &Facts<'_, Wrapped>,
+        facts: &Facts<'_, Wrapped>,
     ) {
+        self.named = [0, 0];
+        self.calls = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.inst.call));
+        self.peak = [0, 0];
+        self.hoisted = [0, 0];
+        for block in facts.inside_blocks() {
+            let mut now: BTreeSet<u32> = self.live.get(&block.at).cloned().unwrap_or_default();
+            self.note(&now);
+            for one in block.insns.iter().rev() {
+                for value in &one.defs {
+                    now.remove(value);
+                }
+                now.extend(one.uses.iter().copied());
+                self.note(&now);
+            }
+        }
+        for &value in facts.named {
+            let slot = self.slot(value);
+            self.named[slot] += 1;
+        }
     }
 
     fn movable(
@@ -121,9 +194,34 @@ impl Policy<Wrapped> for Arm64 {
         insns: &[Wrapped],
         index: usize,
     ) -> bool {
-        let _ = at;
         let one = &insns[index];
         let inst = &one.inst;
+        // A copy between classes (the pin's `COPY` that becomes `fmov`); one
+        // within a class is the coalescer's, and hoisting it moved a loop's
+        // constant out of reach of the `mov` that made it (algos -O1, +8 B).
+        let across = |one: &Wrapped| one.uses.first().is_some_and(|&from| self.slot(from) != self.slot(one.defs[0]));
+        if (inst.kind == Kind::Op(FMOV_TO_FPR) || (inst.kind == Kind::Copy && !one.defs.is_empty() && across(one)))
+            && !inst.rematerializable
+            && one.defs.len() == 1
+            && one.uses.len() == 1
+            && !one.physical
+            && facts.defs.get(&one.defs[0]) == Some(&1)
+            && !facts.copied.contains(&one.defs[0])
+            && (facts.every_trip)(at)
+        {
+            let slot = self.slot(one.defs[0]);
+            // A float held across a call lives in `d8`-`d15` or nowhere.
+            let limit = if slot == 1 && self.calls { FPR_CALLEE_SAVED } else { [GPR_LIMIT, FPR_LIMIT][slot] };
+            // With a call the held float needs `d8`-`d15`: the values the loop
+            // names compete for them. Without one, what is live at once does.
+            let held = if slot == 1 && self.calls { self.named[slot] } else { self.peak[slot] + self.hoisted[slot] };
+            if held + 1 >= limit {
+                return false;
+            }
+            self.named[slot] += 1;
+            self.hoisted[slot] += 1;
+            return true;
+        }
         (inst.rematerializable || (inst.may_load && inst.invariant_load))
             // `CheapInstr && CreatesCopy`: a constant a phi takes would need a
             // copy.
@@ -169,9 +267,41 @@ fn successors<C>(
     succ
 }
 
+/// The values live out of each block, by the usual backward dataflow.
+fn live_out(blocks: &[Block<Wrapped>]) -> HashMap<i64, BTreeSet<u32>> {
+    let place: HashMap<i64, usize> = blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
+    let mut live_in: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
+    let mut out: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); blocks.len()];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for number in (0..blocks.len()).rev() {
+            let mut now: BTreeSet<u32> = BTreeSet::new();
+            for to in &blocks[number].succ {
+                if let Some(&next) = place.get(to) {
+                    now.extend(live_in[next].iter().copied());
+                }
+            }
+            let mut before = now.clone();
+            for one in blocks[number].insns.iter().rev() {
+                for value in &one.defs {
+                    before.remove(value);
+                }
+                before.extend(one.uses.iter().copied());
+            }
+            if before != live_in[number] {
+                live_in[number] = before;
+                changed = true;
+            }
+            out[number] = now;
+        }
+    }
+    blocks.iter().zip(out).map(|(block, live)| (block.at, live)).collect()
+}
+
 /// Moves what the loops of `function` recompute to their preheaders; whether
 /// anything moved.
-pub fn hoist<C>(function: &mut MFunction<C>) -> bool {
+pub fn hoist(function: &mut MFunction<Class>) -> bool {
     let Some(first) = function.blocks.first() else { return false };
     let blocks: Vec<Block<Wrapped>> = (0..function.blocks.len())
         .map(|at| Block {
@@ -181,7 +311,20 @@ pub fn hoist<C>(function: &mut MFunction<C>) -> bool {
             insns: function.blocks[at].insts.iter().cloned().map(Wrapped::new).collect(),
         })
         .collect();
-    let Some(moved) = licm_core::hoist(&blocks, first.id as i64, &mut Arm64) else { return false };
+    let Some(moved) = licm_core::hoist(
+        &blocks,
+        first.id as i64,
+        &mut Arm64 {
+            classes: &function.classes,
+            named: [0, 0],
+            calls: false,
+            live: live_out(&blocks),
+            peak: [0, 0],
+            hoisted: [0, 0],
+        },
+    ) else {
+        return false;
+    };
     for (block, new) in function.blocks.iter_mut().zip(moved) {
         block.insts = new.insns.into_iter().map(|one| one.inst).collect();
     }
@@ -226,7 +369,7 @@ mod tests {
         let mut cond = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(3)]);
         cond.terminator = true;
         let user = |reg: u32| Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(reg))]);
-        let mut function = MFunction::<()>::new("f");
+        let mut function = MFunction::<Class>::new("f");
         function.blocks = vec![
             // preheader, falls into 1
             block(0, vec![]),
@@ -268,7 +411,7 @@ mod tests {
         };
         let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
         back.terminator = true;
-        let mut function = MFunction::<()>::new("f");
+        let mut function = MFunction::<Class>::new("f");
         function.blocks = vec![
             block(0, vec![page(10, "lCPI")]),
             block(1, vec![load(11, true), load(12, false), back]),
@@ -277,5 +420,62 @@ mod tests {
         assert!(hoist(&mut function));
         let loads = |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.may_load).count();
         assert_eq!((loads(0), loads(1)), (1, 1), "{function:?}");
+    }
+
+    fn constant(dst: u32) -> Inst {
+        let mut inst = Inst::new(Kind::Op("MOVi32imm"), vec![Operand::Def(Reg::Virt(dst)), Operand::Imm(0x3fb3_74bc)]);
+        inst.rematerializable = true;
+        inst.cheap_as_move = true;
+        inst
+    }
+
+    /// The `fmov s, w` of a float constant, as the view names it.
+    fn copy(
+        dst: u32,
+        src: u32,
+    ) -> Inst {
+        Inst::new(Kind::Op(FMOV_TO_FPR), vec![Operand::Def(Reg::Virt(dst)), Operand::Use(Reg::Virt(src))])
+    }
+
+    /// A float constant made in the loop (`mov w, #imm` then `fmov s, w`) had
+    /// only the `mov` hoisted: the held GPR constant was then split and made
+    /// again on each latch (jpeg_single -O1: 3 `mov`/`movk` pairs where the pin
+    /// makes 1, `IsProfitableToHoist` hoisting the `COPY` too).
+    #[test]
+    fn the_copy_of_a_hoisted_constant_into_a_float_register_is_hoisted_with_it() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let user = Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(1))]);
+        let mut function = MFunction::<Class>::new("f");
+        function.classes = vec![Class::Gpr, Class::Fpr];
+        function.blocks = vec![block(0, vec![]), block(1, vec![constant(0), copy(1, 0), user, back]), block(2, vec![])];
+        assert!(hoist(&mut function));
+        let copies =
+            |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op(FMOV_TO_FPR)).count();
+        assert_eq!((copies(0), copies(1)), (1, 0), "{function:?}");
+    }
+
+    /// A loop that already names every float register keeps the copy: the
+    /// held constant would only be spilled (`CanCauseHighRegPressure`).
+    #[test]
+    fn the_copy_stays_in_a_loop_that_names_every_float_register() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut function = MFunction::<Class>::new("f");
+        let held = FPR_LIMIT as u32;
+        function.classes = vec![Class::Fpr; held as usize + 2];
+        function.classes[0] = Class::Gpr;
+        let target = held + 1;
+        let mut body = vec![constant(0), copy(target, 0)];
+        // The loop reads `held` float values made before it.
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(value))]));
+        }
+        body.push(back);
+        function.blocks = vec![block(0, vec![]), block(1, body), block(2, vec![])];
+        hoist(&mut function);
+        let copies =
+            |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op(FMOV_TO_FPR)).count();
+        assert_eq!((copies(0), copies(1)), (0, 1), "{function:?}");
     }
 }

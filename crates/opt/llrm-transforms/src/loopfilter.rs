@@ -46,6 +46,30 @@ pub fn scoped() -> bool {
     ONLY.with(|only| only.borrow().is_some())
 }
 
+/// Whether the loop headed by `header` is in the scope; every loop is, without one.
+pub fn allows(header: BlockId) -> bool {
+    ONLY.with(|only| only.borrow().as_ref().is_none_or(|only| only.contains(&header)))
+}
+
+thread_local! {
+    static UNSWITCHED: RefCell<(bool, Vec<BlockId>)> = const { RefCell::new((false, Vec::new())) };
+}
+
+/// What a scoped `SimpleLoopUnswitch` hands the loop pass manager
+/// (`LPMUpdater::addSiblingLoops` and `revisitCurrentLoop`): the sibling loops
+/// it cloned and whether the loop is to be run again.
+pub fn note_unswitched(
+    revisit: bool,
+    siblings: Vec<BlockId>,
+) {
+    UNSWITCHED.with(|noted| *noted.borrow_mut() = (revisit, siblings));
+}
+
+/// The last [`note_unswitched`], cleared.
+pub fn take_unswitched() -> (bool, Vec<BlockId>) {
+    UNSWITCHED.with(|noted| std::mem::take(&mut *noted.borrow_mut()))
+}
+
 /// `headers` less the loops outside the scope; all of them without one.
 pub fn retain(headers: &mut Vec<BlockId>) {
     ONLY.with(|only| {
