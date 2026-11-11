@@ -3,7 +3,7 @@
 
 use llrm_6502::driver::{Level, Request, assembly};
 
-const LOCATED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+const LOCATED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"
 define i8 @f(i8 %a) !dbg !5 {
   %b = add i8 %a, 1, !dbg !7
   %c = xor i8 %b, 2, !dbg !8
@@ -56,7 +56,7 @@ fn g_starts_the_function_at_its_scope_line() {
     assert!(scope < first, "{text}");
 }
 
-const CALLS: &str = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+const CALLS: &str = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 declare i8 @g(i8)
 define i8 @f(i8 %a, i8 %c) !dbg !5 {
   %t = icmp eq i8 %c, 0, !dbg !7

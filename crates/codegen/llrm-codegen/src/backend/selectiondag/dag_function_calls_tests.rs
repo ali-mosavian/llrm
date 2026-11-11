@@ -1215,6 +1215,7 @@ entry:
         saved: vec![],
         slot: 2,
         align: 2,
+        object_align: 2,
         optional: false,
         enter: false,
         free: false,
