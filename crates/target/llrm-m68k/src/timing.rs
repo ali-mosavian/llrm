@@ -541,7 +541,14 @@ fn gnu_operand(text: &str) -> String {
                 };
             match parts.next() {
                 None => format!("({displacement},{base})"),
-                Some(index) => format!("({displacement},{base},{})", index.split(':').next().unwrap_or(index)),
+                Some(index) => {
+                    // an indexed displacement is bare hex, sign-extended to 64 bits
+                    let displacement = match u64::from_str_radix(&displacement, 16) {
+                        Ok(bits) if base != "%pc" && !displacement.starts_with("0x") => (bits as i64).to_string(),
+                        _ => displacement,
+                    };
+                    format!("({displacement},{base},{})", index.split(':').next().unwrap_or(index))
+                }
             }
         }
     }

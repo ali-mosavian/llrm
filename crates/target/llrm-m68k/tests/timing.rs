@@ -180,6 +180,18 @@ fn a_gnu_mnemonic_loses_its_size_letter_to_a_suffix() {
     assert_eq!(gnu("linkw %fp,#-4"), "link.w %fp, #-4");
 }
 
+/// objdump prints an indexed operand's displacement as bare hex, sign-extended to 64 bits
+/// (`%a1@(7e,%d1:l)`, `%a2@(ffffffffffffffff,%d0:w)`); it was read as decimal and failed, leaving
+/// bench_io, fill_nest, loop_interchange, memory_expansion and widening_multiply unpriced.
+#[test]
+fn a_gnu_indexed_displacement_is_bare_hex() {
+    assert_eq!(gnu("movel %a1@(7e,%d1:l),%d0"), "move.l (126,%a1,%d1), %d0");
+    assert_eq!(gnu("movel %a1@(10,%d1:l),%d0"), "move.l (16,%a1,%d1), %d0");
+    assert_eq!(gnu("movel %a2@(ffffffffffffffff,%d0:w),%d1"), "move.l (-1,%a2,%d0), %d1");
+    assert_eq!(gnu("movel %a1@(ffffffffffffff80,%d1:l),%d0"), "move.l (-128,%a1,%d1), %d0");
+    assert_eq!(gnu("movel %a1@(80000668,%d1:l),%d0"), "move.l (2147485288,%a1,%d1), %d0");
+}
+
 #[test]
 fn a_gnu_operand_is_the_pins_addressing_syntax() {
     assert_eq!(gnu("movel %a0@(12),%d2"), "move.l (12,%a0), %d2");
