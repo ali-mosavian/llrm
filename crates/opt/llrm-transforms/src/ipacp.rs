@@ -33,10 +33,10 @@
 //! The copy is an internal function `<origin>.constprop.N` with each known
 //! parameter replaced by its constant. A later call with the same constants
 //! (`Cloning::contexts`) goes to the copy already made. A function gets at
-//! most eight clones (`ipa-cp-max-recursive-depth`), which also bounds the
+//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH below), which also bounds the
 //! recursion: a clone that calls itself with a new constant (`place(q, row + 1,
 //! n)` in the clone for `row`) is a candidate for the next clone, so GCC's -O3
-//! unrolls `queens` into eight, one a row. The copy is an ordinary function:
+//! unrolls `queens` into eight, one a row (four here). The copy is an ordinary function:
 //! the inliner takes a clone with one caller into it.
 //!
 //! GCC propagates lattices over the whole call graph and prices a value with
@@ -126,7 +126,13 @@ use crate::profit::{self, OperationCosts};
 const EVAL_THRESHOLD: i64 = 500;
 /// `ipa-cp-max-recursive-depth` (params.opt:225), which
 /// `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
-const MAX_CLONES: usize = 8;
+/// DEVIATE IPACP-DEPTH (owner x86-m32-c, exit 2026-12-05; gcc's is 8): the
+/// clones' compile cost grows faster than their number. m32 -O3, instructions
+/// against no clones, clocks of queens: depth 2 x1.55 151,615; 4 x4.13
+/// 140,365; 6 x18.95 113,064; 8 x71.1 79,692 (121 programs, total +3.3% /
+/// +4.2% / +8.8% / +24.9%). Each superlinear pass fixed lets a deeper depth
+/// fit the bar (row M32-QUEENS-O3).
+const MAX_CLONES: usize = 4;
 /// Our clocks, at our block frequencies (held to ten trips), per GCC time unit:
 /// `place` with `row` known saves 667 here and 245.8 in GCC's dump
 /// (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1)
@@ -196,6 +202,10 @@ pub fn cloned(
     let unit: i64 = procedures.iter().filter_map(|&id| module.global(id).function()).map(inline::operations).sum();
     // The calls, grouped by what they know.
     let mut groups: BTreeMap<Key, Vec<(GlobalId, InstId, i64)>> = BTreeMap::new();
+    // What each call of a callee passes, the calls that know nothing too: a
+    // parameter every call gives the same constant has a constant lattice
+    // (GCC), any other a variable one.
+    let mut passed: BTreeMap<GlobalId, Vec<Vec<Option<ConstantId>>>> = BTreeMap::new();
     for &id in procedures {
         let Some(caller) = module.global(id).function() else { continue };
         let constants = facts::current_call_constants(&module.context, caller);
@@ -204,6 +214,7 @@ pub fn cloned(
         for (block, at) in caller.walk() {
             let Some(name) = llrm_mir::memory::callee(&module.context, caller, at) else { continue };
             let known = constants.get(&at).map_or(&[][..], Vec::as_slice);
+            passed.entry(name).or_default().push(known.to_vec());
             if known.iter().all(Option::is_none) {
                 continue;
             }
@@ -274,32 +285,56 @@ pub fn cloned(
         let replaces = private.contains(&name)
             && !addressed.contains(&name)
             && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
-        let (saved, loops, _) = time_saved(module, layout, name, body, &known, &callees, costs);
-        let level = state.made.get(&origin).copied().unwrap_or(0);
-        let chain = chain_benefit(
-            module,
-            layout,
-            name,
-            body,
-            &known,
-            &callees,
-            costs,
-            level,
-            &mut BTreeMap::new(),
-        );
-        let frequency: i64 = sites.iter().map(|site| site.2).sum();
-        let mut benefit = chain.saturating_mul(frequency) / profit::UNIT;
-        // GCC's `incorporate_penalties`: a function in a cycle with others, not
-        // one that calls itself.
         let own = body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(name));
-        if recursive.contains(&name) && !own {
-            benefit = benefit * (100 - RECURSION_PENALTY) / 100;
+        let frequency: i64 = sites.iter().map(|site| site.2).sum();
+        // GCC prices a value of a variable lattice alone
+        // (`estimate_local_effects`: "estimates for value 0 for param
+        // #0"): `chop(0, 64)` of a halving recursion saves nothing from `lo =
+        // 0` or from `hi = 64`, though both together bound its loop
+        // (recchop -O3: gcc declines, 1204 B). The clone then binds
+        // every constant these calls agree on
+        // (`find_more_scalar_values_for_callers_subset`). A constant lattice
+        // (every call agrees) is part of each context.
+        let agreed: Vec<Option<ConstantId>> = (0..known.len())
+            .map(|at| {
+                let first = known[at]?;
+                let every = passed.get(&name)?;
+                let all = every.iter().all(|call| call.get(at).copied().flatten() == Some(first));
+                (all && private.contains(&name) && !addressed.contains(&name)).then_some(first)
+            })
+            .collect();
+        let variable: Vec<usize> = (0..known.len()).filter(|&at| known[at].is_some() && agreed[at].is_none()).collect();
+        let contexts: Vec<Vec<Option<ConstantId>>> = if variable.is_empty() {
+            vec![known.clone()]
+        } else {
+            variable
+                .iter()
+                .map(|&one| (0..known.len()).map(|at| if at == one { known[at] } else { agreed[at] }).collect())
+                .collect()
+        };
+        let mut verdict = false;
+        let (mut saved, mut loops, mut benefit) = (0, false, 0);
+        for context in &contexts {
+            let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs);
+            let level = state.made.get(&origin).copied().unwrap_or(0);
+            let chain =
+                chain_benefit(module, layout, name, body, context, &callees, costs, level, &mut BTreeMap::new());
+            let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
+            // GCC's `incorporate_penalties`: a function in a cycle with others,
+            // not one that calls itself.
+            if recursive.contains(&name) && !own {
+                context_benefit = context_benefit * (100 - RECURSION_PENALTY) / 100;
+            }
+            let pays = (context_saved > 0 || context_loops)
+                && (replaces
+                    || (context_benefit * 1000 >= EVAL_THRESHOLD * size
+                        && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
+            if pays || !verdict && context_benefit >= benefit {
+                (saved, loops, benefit) = (context_saved, context_loops, context_benefit);
+            }
+            verdict |= pays;
         }
         let cost = if replaces { 0 } else { size };
-        let verdict = (saved > 0 || loops)
-            && (replaces
-                || (benefit * 1000 >= EVAL_THRESHOLD * size
-                    && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
         llrm_support::debug!(
             "ipa-cp",
             "{}: {} sites, {} of {} actuals known, saved {saved} clocks, loops {loops}, benefit {benefit}, size {size}: {}",
@@ -381,6 +416,27 @@ fn is_simple_jump(
         .collect();
     let constants = instruction.operands.iter().filter(|one| matches!(one, Operand::Constant(_))).count();
     parameters.len() == 1 && parameters.len() + constants == instruction.operands.len()
+}
+
+/// The parameter a simple jump function (`is_simple_jump`) reads, if any.
+fn jump_source(
+    body: &Function,
+    operand: Operand,
+) -> Option<llrm_mir::module::ValueId> {
+    let Operand::Value(value) = operand else { return None };
+    if body.parameters().contains(&value) {
+        return Some(value);
+    }
+    let llrm_mir::module::ValueDef::Instruction(made) = body.value(value).def else { return None };
+    body.instruction(made)
+        .operands
+        .iter()
+        .find_map(
+            |one| match one {
+                Operand::Value(v) if body.parameters().contains(v) => Some(*v),
+                _ => None,
+            },
+        )
 }
 
 /// What a context is worth, with what the contexts it passes to its own calls
@@ -553,7 +609,11 @@ fn time_saved(
         }
     }
     // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known
-    // actuals make constant against one that varies.
+    // actuals make constant against a counter that starts at one they make
+    // constant too, so that the trip count is known (GCC's predicate on the
+    // `niter` expression needs every parameter it reads: `chop(0, 64)`'s
+    // `for (i = lo; i < hi; ++i)` has "loops with known iterations: 0" with
+    // `hi` alone, and recchop -O3 cloned `chop` for the bonus).
     let hint = cfg::loops_of(body)
         .iter()
         .any(
@@ -569,7 +629,41 @@ fn time_saved(
                         operand,
                         Operand::Value(v) if values.contains_key(v) && !matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(_)) || matches!(operand, Operand::Value(v) if values.contains_key(v) && body.parameters().contains(v))
                     );
-                    let moving = |operand: &Operand| matches!(operand, Operand::Value(v) if varying.contains(v));
+                    // A counter: a loop phi, or one step of it, whose arms from
+                    // outside the loop are constant.
+                    let starts_known = |operand: &Operand| {
+                        let Operand::Value(v) = operand else { return false };
+                        let llrm_mir::module::ValueDef::Instruction(made) = body.value(*v).def else { return false };
+                        let phi = if body.instruction(made).opcode == Opcode::Phi {
+                            made
+                        } else {
+                            let step = body.instruction(made);
+                            let phis = step
+                                .operands
+                                .iter()
+                                .filter_map(
+                                    |one| match one {
+                                        Operand::Value(w) => match body.value(*w).def {
+                                            llrm_mir::module::ValueDef::Instruction(inst)
+                                                if body.instruction(inst).opcode == Opcode::Phi => Some(inst),
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    },
+                                );
+                            let mut phis = phis;
+                            match (matches!(step.opcode, Opcode::Binary(_)), phis.next(), phis.next()) {
+                                (true, Some(only), None) => only,
+                                _ => return false,
+                            }
+                        };
+                        crate::lcssa::arms(body, phi).into_iter().all(|(value, from)| {
+                            one.body.contains(&cfg::id(from)) || consts::_operand(&unit, value, &values, None).is_some()
+                        })
+                    };
+                    let moving = |operand: &Operand| {
+                        matches!(operand, Operand::Value(v) if varying.contains(v)) && starts_known(operand)
+                    };
                     compared.operands.len() == 2 && ((constant(&compared.operands[0]) && moving(&compared.operands[1])) || (constant(&compared.operands[1]) && moving(&compared.operands[0])))
                 }
             }),
@@ -588,6 +682,15 @@ fn time_saved(
             .zip(&instruction.operands)
             .map(|(&parameter, &operand)| {
                 if !is_simple_jump(body, operand) {
+                    return None;
+                }
+                // GCC follows a recursion only through the same parameter (a
+                // value generated by the call itself,
+                // `self_recursively_generated_p`): a
+                // permutation of the parameters (hanoi's `mv(n-1, via, to,
+                // from)`) makes the lattice variable, and no
+                // chain of contexts.
+                if jump_source(body, operand).is_some_and(|source| source != parameter) {
                     return None;
                 }
                 let number = consts::_operand(&unit, operand, &values, None)?;
@@ -649,12 +752,13 @@ fn constant_addresses(
     }
 }
 
-/// Whether `id` is a function the program runs once: `main`.
+/// Whether `id` is a function the program runs once: `main`, as the object
+/// format spells it (`_main` for C's convention, `main_` for Open Watcom's).
 fn runs_once(
     module: &Module,
     id: GlobalId,
 ) -> bool {
-    module.global(id).name.as_deref().is_some_and(|name| name.trim_start_matches('_') == "main")
+    module.global(id).name.as_deref().is_some_and(|name| name.trim_matches('_') == "main")
 }
 
 /// The calls in `sites` made to `clone`.
