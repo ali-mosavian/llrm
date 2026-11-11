@@ -1,0 +1,397 @@
+//! The loop vectorizer's planner: which vectorization factor (VF) and
+//! interleave count (IC) a legal loop gets, and the plan the transform runs.
+//!
+//! # How it works
+//! A translation of LLVM `d1106deb71cc` `LoopVectorizationPlanner.cpp` and
+//! `LoopVectorize.cpp`, in the pin's order. The plan is the loop's widenable
+//! instructions ([`Recipe`]). The widest VF comes from the registers
+//! (`getMaximizedVFForTarget`, L235: the register width over the widest type,
+//! or over the smallest where the target maximizes bandwidth, clamped to the
+//! safe dependence distance and the trip count). Each power of two up to it is
+//! priced with the target's throughput costs, per lane; the cheapest wins and
+//! a tie goes to the wider (`isMoreProfitable`, L709). The interleave count
+//! (`selectInterleaveCount`, LoopVectorize.cpp#L3705) divides the registers by
+//! the loop's register pressure, caps at the target's maximum and the trip
+//! count, then interleaves small loops until the loop overhead is about 5 %.
+//!
+//! # Example
+//! A copy of `i16`s over 1920 trips on a 128-bit target: widest VF `128 / 16`
+//! = 8; VF 8 costs `(load 1 + store 1 + induction + branch) / 8` per lane
+//! against 6 for the scalar loop; IC = 2 (`getMaxInterleaveFactor` 2, the
+//! trip count allows 120 trips of 16).
+//!
+//! # DEVIATE rows
+//! - VP1 the plan is one flat list of recipes of the loop's single block: no
+//!   VPlan CFG or regions, so no VPlan transforms (`optimizeForVFAndUF`, tail
+//!   folding, epilogue vectorization). Exit: the VPlan data structure.
+//! - VP2 recipes are the memory accesses, integer binary operations, integer
+//!   casts, and the loop-control instructions; every other instruction makes
+//!   the loop unplannable (the pin widens or replicates it). Exit: one recipe
+//!   kind per row of the card (reductions, floating point, select, compare).
+//! - VP3 the remainder is a scalar loop only (`CM_EpilogueAllowed` with a
+//!   scalar epilogue): the pin also vectorizes it (`vec.epilog.*`, the
+//!   epilogue VF of `EpilogueVectorizationMinVF`), which the plan does not
+//!   price. Exit: epilogue vectorization (VEC3).
+//! - VP4 the scalar cost is the recipe prices at VF 1, not the legacy
+//!   `CM->expectedCost`; the two agree for this recipe set (the loop-control
+//!   instructions are priced alike).
+//! - VP5 register pressure (`calculateRegisterUsageForPlan`) is the live vector
+//!   values of the one block, not the interval walk over a VPlan;
+//!   loop-invariant registers are the splatted operands.
+//! - VP6 `-Os`/`-Oz` and a constant trip count under 16
+//!   (`TinyTripCountVectorThreshold`): no epilogue is allowed there, so only a
+//!   trip count VF x IC divides is planned (`CM_EpilogueNotAllowedOptSize`,
+//!   `CM_EpilogueNotAllowedLowTripLoop`); IC stays 1 there (L3705). The pin's
+//!   other low-trip branches (`MaxVFForTC`, trip = a power of two + 1) and the
+//!   divisibility test against the largest VF before any smaller one are not
+//!   translated: the divisibility is tested on the chosen VF x IC. Exit: VEC3
+//!   (LV-X3, 2026-11-20).
+//! - VP8 the loop-control prices (`CONTROL_COST_PER_ITERATION`,
+//!   `SCALAR_CONTROL_COST`) are the count of the loop's phi/add/compare/branch,
+//!   not quantities of the pin's cost model; they feed the small-loop rule.
+//!   Exit: the VPlan cost model (VP1).
+//! - VP7 no hints (LV-D7 of the legality translation), no scalable VFs (NEON
+//!   only). No tail folding: `preferTailFoldingOverEpilogue` is false without
+//!   SVE ([L7378](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7378)),
+//!   so the pin's NEON loops end in an epilogue, as here.
+
+use llrm_mir::tti::{ArithOp, CostKind, MemoryOp, RegisterClass, Tti, Ty, VectorTy};
+
+/// One widenable instruction of the loop, by what its cost and widening need.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Recipe {
+    /// A load of `lane` bits with consecutive addresses (stride 1), aligned to
+    /// `align` bytes.
+    Load { lane: Ty, align: u64 },
+    /// A store, as above.
+    Store { lane: Ty, align: u64 },
+    /// An integer binary operation of `lane`.
+    Binary { op: ArithOp, lane: Ty },
+}
+
+/// What a recipe list is priced against: the loop-control instructions that
+/// run once per vector iteration (the induction's add, the exit compare and the
+/// branch).
+const CONTROL_COST_PER_ITERATION: i64 = 3;
+
+/// The scalar loop-control cost: the `phi`, the add, the compare and the branch
+/// each cost 1 (`LV: Found an estimated cost of 1 for VF 1` on them, as the pin
+/// prints), and the address computations 0.
+const SCALAR_CONTROL_COST: i64 = 4;
+
+/// `LoopVectorizationCostModel::SmallLoopCost`: interleave until the loop
+/// overhead is about 5 %.
+const SMALL_LOOP_COST: i64 = 20;
+
+/// The loop to plan.
+#[derive(Clone, Debug)]
+pub struct LoopFacts {
+    pub recipes: Vec<Recipe>,
+    /// The exact trip count (`getSmallConstantTripCount`), 0 when it is not
+    /// constant.
+    pub trip_count: u64,
+    /// `getMaxSafeVectorWidthInBits` of the dependence checker.
+    pub max_safe_width_in_bits: u64,
+    /// `isSafeForAnyVectorWidth`: no dependence bounds the width; otherwise IC
+    /// stays 1 (`selectInterleaveCount` uses the distance for the VF
+    /// alone).
+    pub safe_for_any_vector_width: bool,
+    /// `getMaxStoreLoadForwardSafeDistanceInBits`, unless
+    /// `isSafeForAnyStoreLoadForwardDistances`.
+    pub store_load_forward_bits: Option<u64>,
+    /// The widest induction type's width, `getWidestInductionType`.
+    pub widest_induction_bits: u32,
+    /// The function is `optsize` or `minsize` (VP6).
+    pub opt_size: bool,
+}
+
+/// The chosen factors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Plan {
+    pub vf: u32,
+    pub ic: u32,
+}
+
+/// Why a loop is not planned (`LV: Not vectorizing: ...`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NotPlanned(pub &'static str);
+
+fn lane_bits(ty: Ty) -> u32 {
+    match ty {
+        Ty::Int(bits) => bits,
+        Ty::Float => 32,
+        Ty::Double | Ty::Pointer => 64,
+        Ty::X87 => 80,
+    }
+}
+
+fn recipe_lane(recipe: &Recipe) -> Ty {
+    match *recipe {
+        Recipe::Load { lane, .. } | Recipe::Store { lane, .. } | Recipe::Binary { lane, .. } => lane,
+    }
+}
+
+/// `getSmallestAndWidestTypes` (L513): the loads' and stores' lane widths; the
+/// widest starts at 8.
+fn smallest_and_widest(recipes: &[Recipe]) -> (u32, u32) {
+    let (mut smallest, mut widest) = (u32::MAX, 8);
+    for recipe in recipes {
+        if matches!(recipe, Recipe::Load { .. } | Recipe::Store { .. }) {
+            let bits = lane_bits(recipe_lane(recipe));
+            smallest = smallest.min(bits);
+            widest = widest.max(bits);
+        }
+    }
+    (if smallest == u32::MAX { widest } else { smallest }, widest)
+}
+
+/// `bit_floor`.
+fn bit_floor(value: u64) -> u64 {
+    if value == 0 { 0 } else { 1 << (63 - value.leading_zeros()) }
+}
+
+/// `clampVFByMaxTripCount` (L360 region): no VF past the largest power of two
+/// within the trip count / IC.
+fn clamp_vf_by_max_trip_count(
+    vf: u64,
+    max_trip_count: u64,
+) -> u64 {
+    if max_trip_count != 0 && max_trip_count <= vf {
+        return bit_floor(max_trip_count).max(1);
+    }
+    vf
+}
+
+/// `getMaximizedVFForTarget` (L235), fixed width.
+fn maximized_vf_for_target(
+    tti: &dyn Tti,
+    max_trip_count: u64,
+    smallest: u32,
+    widest: u32,
+    max_safe_vf: u64,
+) -> u64 {
+    let register_bits = u64::from(tti.vector_register_bits());
+    let max_vector = bit_floor(register_bits / u64::from(widest)).min(max_safe_vf);
+    if max_vector == 0 {
+        return 1;
+    }
+    let max_vf = clamp_vf_by_max_trip_count(max_vector, max_trip_count);
+    // If the MaxVF was already clamped, there is no point in trying a larger
+    // one.
+    if max_vf != max_vector {
+        return max_vf;
+    }
+    if tti.should_maximize_vector_bandwidth() {
+        let max_bandwidth = bit_floor(register_bits / u64::from(smallest)).min(max_safe_vf);
+        return clamp_vf_by_max_trip_count(max_bandwidth, max_trip_count);
+    }
+    max_vf
+}
+
+/// The price of one iteration of the loop at `vf`, the recipes plus the loop
+/// control; `None` if the target does not price one of them (so that VF is not
+/// taken).
+fn iteration_cost(
+    tti: &dyn Tti,
+    recipes: &[Recipe],
+    vf: u32,
+) -> Option<i64> {
+    let kind = CostKind::RecipThroughput;
+    let mut total = if vf == 1 { SCALAR_CONTROL_COST } else { CONTROL_COST_PER_ITERATION };
+    for recipe in recipes {
+        let cost = match *recipe {
+            Recipe::Load { lane, align } | Recipe::Store { lane, align } => {
+                let op = if matches!(recipe, Recipe::Load { .. }) { MemoryOp::Load } else { MemoryOp::Store };
+                if vf == 1 {
+                    tti.memory_op_cost(op, lane, kind, false)
+                } else {
+                    tti.vector_memory_op_cost(op, VectorTy { lane, count: vf }, align, kind)?
+                }
+            }
+            Recipe::Binary { op, lane } => {
+                if vf == 1 {
+                    tti.arithmetic_cost(op, lane, kind, Default::default(), Default::default())
+                } else {
+                    tti.vector_arithmetic_cost(op, VectorTy { lane, count: vf }, kind)?
+                }
+            }
+        };
+        if !cost.valid {
+            return None;
+        }
+        total += cost.value;
+    }
+    Some(total)
+}
+
+/// `isMoreProfitable` (L709) for fixed VFs, the throughput kind: `a` against
+/// `b` by the cost per lane, then, for a known trip count, by the cost of the
+/// whole loop; a tie is not better.
+fn is_more_profitable(
+    (cost_a, vf_a, scalar_a): (i64, u64, i64),
+    (cost_b, vf_b, scalar_b): (i64, u64, i64),
+    trip_count: u64,
+    has_tail: bool,
+) -> bool {
+    // (CostA / WidthA) < (CostB / WidthB), without the division.
+    let lower_without_trip_count = cost_a * (vf_b as i64) < cost_b * (vf_a as i64);
+    if trip_count == 0 {
+        return lower_without_trip_count;
+    }
+    let for_trip_count = |vf: u64, vector: i64, scalar: i64| -> i64 {
+        if has_tail {
+            vector * (trip_count / vf) as i64 + scalar * (trip_count % vf) as i64
+        } else {
+            vector * trip_count.div_ceil(vf) as i64
+        }
+    };
+    for_trip_count(vf_a, cost_a, scalar_a) < for_trip_count(vf_b, cost_b, scalar_b)
+}
+
+/// `computeBestVF` (L5640): the cheapest VF in `1, 2, 4 .. max_vf`.
+fn best_vf(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    max_vf: u64,
+) -> (u32, i64) {
+    let scalar = iteration_cost(tti, &facts.recipes, 1).expect("the scalar loop is priced");
+    let mut best = (scalar, 1u64, scalar);
+    let mut vf = 2u64;
+    while vf <= max_vf {
+        if let Some(cost) = iteration_cost(tti, &facts.recipes, vf as u32) {
+            let candidate = (cost, vf, scalar);
+            if is_more_profitable(candidate, best, facts.trip_count, true) {
+                best = candidate;
+            }
+        }
+        vf *= 2;
+    }
+    (best.1 as u32, best.0)
+}
+
+/// The loop's register pressure at `vf`, for `selectInterleaveCount` (VP5): the
+/// vector values live at once in the block, one per widened load and binary
+/// operation, and the splatted operands as the loop-invariant ones.
+fn max_local_users(recipes: &[Recipe]) -> u32 {
+    let values = recipes.iter().filter(|recipe| !matches!(recipe, Recipe::Store { .. })).count() as u32;
+    values.max(1)
+}
+
+/// `selectInterleaveCount` (LoopVectorize.cpp#L3705), the part that applies
+/// without reductions.
+fn select_interleave_count(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    vf: u32,
+    loop_cost: i64,
+) -> u32 {
+    // Do not interleave where no epilogue is allowed (optsize or a tiny trip count, VP6), where the distance
+    // already bounded the VF ("We used the distance for the interleave
+    // count"), and a loop that is free needs none.
+    if !epilogue_allowed(facts) || !facts.safe_for_any_vector_width || loop_cost == 0 {
+        return 1;
+    }
+    let registers = tti.number_of_registers(if vf == 1 { RegisterClass::Scalar } else { RegisterClass::Vector });
+    let users = max_local_users(&facts.recipes);
+    let mut ic = bit_floor(u64::from(registers / users)).max(1) as u32;
+
+    let mut max_interleave = tti.max_interleave_factor(vf, false);
+    // The exact trip count bounds the interleave count (the pin's
+    // `InterleaveCountLB` and `UB`).
+    if facts.trip_count != 0 {
+        let available = facts.trip_count;
+        let lower = bit_floor((available / (u64::from(vf) * 2)).min(u64::from(max_interleave)).max(1)) as u32;
+        let upper = bit_floor((available / u64::from(vf)).min(u64::from(max_interleave)).max(1)) as u32;
+        max_interleave = lower;
+        if upper != lower {
+            let tail_upper = available % (u64::from(vf) * u64::from(upper));
+            let tail_lower = available % (u64::from(vf) * u64::from(lower));
+            if tail_upper == tail_lower {
+                max_interleave = upper;
+            }
+        }
+    }
+    ic = ic.min(max_interleave).max(1);
+
+    // We want to interleave small loops in order to reduce the loop overhead
+    // and expose ILP.
+    if loop_cost < SMALL_LOOP_COST {
+        // Interleave until the loop overhead is about 5 % of the cost of the
+        // loop.
+        let small_ic = ic.min(bit_floor((SMALL_LOOP_COST / loop_cost) as u64) as u32);
+        // Interleave until the store and load ports (estimated by the max
+        // interleave count) are saturated.
+        let stores = facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Store { .. })).count() as u32;
+        let loads = facts.recipes.iter().filter(|recipe| matches!(recipe, Recipe::Load { .. })).count() as u32;
+        let saturated = (ic / stores.max(1)).max(ic / loads.max(1));
+        // `EnableLoadStoreRuntimeInterleave` is on by default.
+        if saturated > small_ic {
+            return saturated;
+        }
+        // "Interleaving to reduce branch cost". (A scalar VF with aggressive
+        // interleaving returns `max(IC / 2, SmallIC)`: VF is a vector
+        // here.)
+        return small_ic;
+    }
+    // A large loop that could benefit from interleaving.
+    if tti.enable_aggressive_interleaving() {
+        return ic;
+    }
+    1
+}
+
+/// The factors the pin chooses for `facts` on `tti` (`computeBestVF`,
+/// `selectInterleaveCount`), or why not, before the epilogue is considered.
+pub fn choose(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> Result<Plan, NotPlanned> {
+    if tti.vector_register_bits() == 0 {
+        return Err(NotPlanned("The target has no vector registers"));
+    }
+    if facts.trip_count == 1 {
+        return Err(NotPlanned("Single iteration (non) loop"));
+    }
+    let (smallest, widest) = smallest_and_widest(&facts.recipes);
+    // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
+    // WidestType).
+    let mut max_safe = bit_floor(facts.max_safe_width_in_bits / u64::from(widest));
+    if let Some(distance) = facts.store_load_forward_bits {
+        max_safe = max_safe.min(distance / u64::from(widest));
+    }
+    let max_vf = maximized_vf_for_target(tti, facts.trip_count, smallest, widest, max_safe);
+    let (vf, cost) = best_vf(tti, facts, max_vf);
+    if vf == 1 {
+        return Err(NotPlanned("Vectorization is possible but not beneficial"));
+    }
+    Ok(Plan { vf, ic: select_interleave_count(tti, facts, vf, cost) })
+}
+
+/// The constant trip count under which the pin allows no epilogue
+/// (`TinyTripCountVectorThreshold`, L7809).
+const TINY_TRIP_COUNT: u64 = 16;
+
+/// `getEpilogueLowering`'s `CM_EpilogueAllowed` against
+/// `CM_EpilogueNotAllowedOptSize` (L7076) and `CM_EpilogueNotAllowedLowTripLoop`
+/// (L7809).
+fn epilogue_allowed(facts: &LoopFacts) -> bool {
+    !facts.opt_size && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
+}
+
+/// [`choose`], then the epilogue policy: where none is allowed the plan must
+/// cover the trip count whole.
+pub fn plan(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> Result<Plan, NotPlanned> {
+    let chosen = choose(tti, facts)?;
+    let covers = facts.trip_count != 0 && facts.trip_count % (u64::from(chosen.vf) * u64::from(chosen.ic)) == 0;
+    if !covers && !epilogue_allowed(facts) {
+        return Err(NotPlanned("A scalar epilogue would remain"));
+    }
+    Ok(chosen)
+}
+
+#[cfg(test)]
+#[path = "loopvectorizeplan_tests.rs"]
+mod tests;

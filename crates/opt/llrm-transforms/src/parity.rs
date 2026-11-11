@@ -319,6 +319,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    partial(
+        "loop-vectorize@1354",
+        Late,
+        "loop-vectorize",
+        "loopvectorize.rs widens single-block innermost loops of consecutive integer loads and stores whose constant trip count VF x IC divides, with the planner's (loopvectorizeplan.rs) and legality's (loopvectorizelegality.rs) pin factors; a no-op unless the target takes vector values (arm64 with LLRM_ARM64_VECTORS, default off); deviations LV-D1..D7, VP1..VP7, LVP1..LVP4; criterion: VF and IC equal the pin's remark on the tests; exit: epilogue and runtime checks, reductions, widening, FP lanes (ARM64-VEC POC, 2026-11-10)",
+    ),
     entry(
         "drop-unnecessary-assumes@1360",
         Late,

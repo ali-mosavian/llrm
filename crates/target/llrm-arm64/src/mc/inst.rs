@@ -362,12 +362,86 @@ pub enum Barrier {
     IshSt,
 }
 
+/// The lane layout of a 128-bit vector: `16b`, `8h`, `4s`, `2d`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Arrangement {
+    B16,
+    H8,
+    S4,
+    D2,
+}
+
+impl Arrangement {
+    /// `imm5` of `dup` (general): the lane size as the position of its lowest
+    /// set bit.
+    pub(super) fn imm5(self) -> u32 {
+        match self {
+            Arrangement::B16 => 0b00001,
+            Arrangement::H8 => 0b00010,
+            Arrangement::S4 => 0b00100,
+            Arrangement::D2 => 0b01000,
+        }
+    }
+
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Arrangement::B16 => "16b",
+            Arrangement::H8 => "8h",
+            Arrangement::S4 => "4s",
+            Arrangement::D2 => "2d",
+        }
+    }
+}
+
+/// How a `movi`/`mvni` places its byte: `lsl` into a halfword or word lane, or
+/// `msl` (shifting ones in).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ImmShape {
+    /// `.8h`, `lsl #0` or `#8`.
+    H8(u8),
+    /// `.4s`, `lsl #0`, `#8`, `#16` or `#24`.
+    S4(u8),
+    /// `.2s`, the same shifts: a 64-bit register (`Q` clear).
+    S2(u8),
+    /// `.4s`, `msl #8` or `#16`.
+    S4Msl(u8),
+}
+
+impl ImmShape {
+    /// `cmode` of the modified-immediate encoding.
+    pub(super) fn cmode(self) -> u32 {
+        match self {
+            ImmShape::H8(shift) => 0b1000 | u32::from(shift / 8) << 1,
+            ImmShape::S4(shift) | ImmShape::S2(shift) => u32::from(shift / 8) << 1,
+            ImmShape::S4Msl(shift) => 0b1100 | u32::from(shift == 16),
+        }
+    }
+}
+
+impl Fill {
+    /// Whether it writes all 128 bits; `movi d` and the `.2s` forms write 64.
+    pub fn is_quad(&self) -> bool {
+        !matches!(self, Fill::MaskD(_) | Fill::Imm { shape: ImmShape::S2(_), .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Fill {
     Zero,
     Byte(u8),
-    /// The low byte of a general register.
-    Gpr(Gpr),
+    /// `dup`: the low lane bits of a general register in every lane.
+    Dup(Arrangement, Gpr),
+    /// `movi`/`mvni v.<shape>, #imm8`: the byte placed by the shape, inverted
+    /// by `mvni`.
+    Imm {
+        invert: bool,
+        shape: ImmShape,
+        imm8: u8,
+    },
+    /// `movi v.2d, #mask`: each bit of `imm8` is a whole byte of ones or zeros.
+    Mask(u8),
+    /// `movi d, #mask`: the same, into a double register.
+    MaskD(u8),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -674,6 +748,14 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
     },
+    /// `scvtf`/`ucvtf s, s` (`d, d`): the integer in a vector register's low
+    /// lane to a float of the same size.
+    FpLaneToFp {
+        signed: bool,
+        size: FpSize,
+        rd: Vreg,
+        rn: Vreg,
+    },
     FpInt {
         op: FpConvert,
         width: Width,
@@ -692,8 +774,8 @@ pub enum Inst {
         fpr: Vreg,
         fbits: u8,
     },
-    /// A 16-byte vector with every byte `fill`: `movi v.2d, #0`, `movi v.16b,
-    /// #imm`, `dup v.16b, w`.
+    /// A 16-byte vector from an immediate or a general register: `movi v.2d,
+    /// #0`, `movi v.16b, #imm`, `dup v.8h, w`, `movi v.8h, #imm, lsl #8`.
     VectorFill {
         rd: Vreg,
         fill: Fill,

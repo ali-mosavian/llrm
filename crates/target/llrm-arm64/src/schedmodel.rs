@@ -71,6 +71,10 @@ impl Arm64Model {
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
         let opcode = *opcode_numbers().get(pin_opcode(insn)?)?;
+        // An opcode only the vector patterns emit has no class while the vectors are off: it was unmodeled before them.
+        if !crate::machine::vectors_enabled() && llrm_dagisel::generated::aarch64::sched::dynamic_only(opcode) {
+            return None;
+        }
         let shifted = shift_amount(insn).is_some_and(|amount| amount != 0);
         let mut holds = |pred: SchedPred| match pred {
             SchedPred::HasShiftedReg => shifted,
@@ -498,6 +502,22 @@ mod tests {
             (model.unit(&unknown).micro_ops, model.def_latency(&unknown)),
             (1, default_def_latency(&unknown, 3))
         );
+    }
+
+    /// With the vector types live the generated tables dropped `FMOVWSr` (a
+    /// scalar float bitcast, `fmov w, s`) and gave `MOVIv2d_ns` a class: with
+    /// the vectors off the first was priced by default and the second by its
+    /// row, and `sfm16_float` scheduled its `fmov` after the `fcmp` (8 of 188
+    /// objects differed from release/next). The bitcast keeps its class; the
+    /// vector `movi` has none until the vectors are on.
+    #[test]
+    fn a_scalar_bitcast_has_a_class_and_a_vector_movi_has_none_with_the_vectors_off() {
+        assert!(!crate::machine::vectors_enabled(), "the test runs with LLRM_ARM64_VECTORS unset");
+        let model = Arm64Model::generic();
+        let bitcast = Arc::new(form("FMOVWSr", vec![held(2)]));
+        assert_ne!(model.def_latency(&bitcast), default_def_latency(&bitcast, 3), "FMOVWSr is priced by its row");
+        let movi = Arc::new(form("MOVIv2d_ns", vec![imm(0)]));
+        assert_eq!(model.def_latency(&movi), default_def_latency(&movi, 3), "MOVIv2d_ns is unmodeled");
     }
 
     /// AArch64 schedules from both ends and keeps the latency heuristic on
