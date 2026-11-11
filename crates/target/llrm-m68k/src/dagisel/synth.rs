@@ -130,9 +130,11 @@ impl Search {
 }
 
 /// The multiply by the library routine before the 68020: the call and the
-/// routine's floor; the site is `pea`, `move.l`, `jsr`, `addq.l` (14 B).
+/// routine's floor. The bytes are the least a site costs (`pea` of the constant
+/// 4, `move.l x, -(%sp)` 2, `jsr (d,%pc)` 4); the `addq` that pops them is
+/// shared with the next call. A chain is taken at -Os only below that.
 fn library_multiply(cpu: Cpu) -> Cost {
-    (14, crate::routine::mulsi3_floor(cpu) + one(cpu, "jsr (__mulsi3,%pc)", 4).1)
+    (10, crate::routine::mulsi3_floor(cpu) + one(cpu, "jsr (__mulsi3,%pc)", 4).1)
 }
 
 /// The cheapest chain for `x * c` in `bits` bits that beats the multiply

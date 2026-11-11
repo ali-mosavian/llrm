@@ -27,8 +27,15 @@ fn a_constant_that_is_not_near_a_power_of_two_is_a_chain_where_clocks_are_priced
 #[test]
 fn the_68000_never_calls_the_library_for_a_short_chain() {
     for level in [Level::O1, Level::O2, Level::Os] {
+        let out = compile("68000", level, 6);
+        assert!(!out.contains("__mulsi3"), "68000 {level:?} x*6: a call:\n{out}");
+    }
+    // 1000 is a 12 B chain: it beats the call's clocks, not its bytes
+    let out = compile("68000", Level::O2, 1000);
+    assert!(!out.contains("__mulsi3"), "68000 -O2 x*1000: a call:\n{out}");
+    for level in [Level::O1, Level::Os] {
         let out = compile("68000", level, 1000);
-        assert!(!out.contains("__mulsi3"), "68000 {level:?} x*1000: a call:\n{out}");
+        assert!(out.contains("__mulsi3"), "68000 {level:?} x*1000: a chain larger than the call site:\n{out}");
     }
 }
 
