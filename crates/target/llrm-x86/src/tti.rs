@@ -737,6 +737,10 @@ impl Tti for X86 {
         self.tuning.unroll_trial_nests_only
     }
 
+    fn inline_dying_credit_at_os(&self) -> bool {
+        self.tuning.inline_dying_credit_at_os
+    }
+
     fn second_ipsccp(&self) -> bool {
         self.tuning.second_ipsccp
     }

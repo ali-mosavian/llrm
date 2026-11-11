@@ -2251,11 +2251,12 @@ impl<'a> Analyzer<'a> {
         let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         // the callee's frame goes once, with the callee
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
-        // At -Os the credit for the callee that goes is left to the trial (SZ2 prices the
-        // copies in bytes): the units cannot see what a copy carries at the site (a
-        // 9-argument float callee, 21 units against ~70 B a copy, inlined three times
-        // was +193 B).
-        let credit = self.site.callee_dies && k >= 2 && self.site.caller_size == CallerSize::Speed;
+        // D13: where the target says the units undercount a copy (`inline_dying_credit_at_os`),
+        // -Os takes no credit for the callee that goes (a 9-argument float callee, 21 units
+        // against ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let credit = self.site.callee_dies
+            && k >= 2
+            && (self.site.caller_size == CallerSize::Speed || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
         if credit { (k - 1) * size > k * call + frame } else { size > call }
     }
 

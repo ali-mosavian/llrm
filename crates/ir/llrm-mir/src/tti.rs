@@ -1139,6 +1139,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_dying_credit_at_os` (D13).
+    fn inline_dying_credit_at_os(&self) -> bool {
+        true
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
