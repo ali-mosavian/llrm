@@ -5195,6 +5195,19 @@ fn a_masked_byte_wanted_past_a_call_stays_a_movzx_at_o2() {
     assert!(listing.contains("movzx"), "the extension was made a mask: {listing}");
 }
 
+/// x_cordic -O2: both arms of the body joined in the loop latch (`inc; cmp; branch back`), one reached by a taken
+/// `jmp` that ran 3 clocks a trip (50,829 clk; 49,539 with the latch copied into each arm, gcc 49,031). The pin's
+/// tail-duplication bound (2 instructions) kept the latch; the priced copy (DEVIATE TAILDUP-HOT) takes it.
+#[test]
+fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
+    let text = include_str!("tests_data/latch_arms.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "arms").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The latch's `xor` of 5 stands once in each arm, not once behind a `jmp` from one of them.
+    let copies = listing.lines().filter(|line| line.trim() == "xor esi, 5").count();
+    assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
+}
+
 /// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
 /// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
 /// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
