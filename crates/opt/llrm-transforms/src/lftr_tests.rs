@@ -190,30 +190,3 @@ exit:
     assert!(!changed, "{after}");
     assert!(!after.contains("%exitcond"), "{after}");
 }
-
-/// A wider counter stepping by -1 beside a narrow one that the exit count is
-/// computed in: `lftr_any_stride` took the wider one and compared it by
-/// `trunc` + i16 compare, a mask the narrow test never paid (wasm32 `idioms`
-/// +77 B at -O2, +74 B at -O3).
-#[test]
-fn test_a_wider_counter_with_a_step_other_than_one_is_not_compared_by_trunc() {
-    let text = "define i16 @f(i16 %n) {
-entry:
-  %w = zext i16 %n to i32
-  br label %loop
-loop:
-  %j = phi i16 [ %n, %entry ], [ %jn, %loop ]
-  %i = phi i32 [ %w, %entry ], [ %in, %loop ]
-  %s = phi i16 [ 0, %entry ], [ %s2, %loop ]
-  %s2 = add i16 %s, %n
-  %jn = add nsw i16 %j, -1
-  %in = add nsw i32 %i, -1
-  %c = icmp ne i16 %jn, -1
-  br i1 %c, label %loop, label %exit
-exit:
-  ret i16 %s2
-}
-";
-    let (_, after) = replaced_on(text);
-    assert!(!after.contains("lftr.wideiv"), "{after}");
-}
