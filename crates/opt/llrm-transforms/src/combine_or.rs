@@ -60,7 +60,18 @@ const FOLDS: &[Fold] = &[
     mask_merge,
     low_bit_mask_through_bit,
     fold_bitwise_logic_with_intrinsics,
+    with_op_replaced,
 ];
+
+/// `simplifyAndOrWithOpReplaced` with a zero.
+fn with_op_replaced(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    crate::combine_op_replaced::fold_and_or_with_op_replaced(c, inst, BinaryOp::Or)
+}
 
 /// `matchBSwapOrBitReverse`.
 fn bswap_or_bitreverse(

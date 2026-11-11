@@ -147,3 +147,24 @@ fn the_mask_fold_keeps_a_pair_that_has_other_users() {
         &["lshr"],
     );
 }
+
+/// `x | (x ^ y)` is `x | y` (`simplifyAndOrWithOpReplaced`): the port kept
+/// the xor, so known_loads_walks `f` kept an `xor` and an `or` where the pin
+/// has `or x, 7` (wasm32 -O3, +1 instruction per site).
+#[test]
+fn an_or_of_x_and_x_xor_y_is_or_of_x_and_y() {
+    check(XY, "  %e = xor i32 %x, %y\n  %r = or i32 %x, %e\n", &["or i32 %x, %y"], &["xor"]);
+    check(X, "  %e = xor i32 %x, 7\n  %r = or i32 %e, %x\n", &["or i32 %x, 7"], &["xor"]);
+}
+
+/// A subtree that another user reads is only simplified: the xor stays for its
+/// other user, and the `or` reads `y` directly.
+#[test]
+fn a_shared_xor_stays_for_its_other_user() {
+    check(
+        XY,
+        "  %e = xor i32 %x, %y\n  %s = add i32 %e, 1\n  %o = or i32 %x, %e\n  %r = add i32 %o, %s\n",
+        &["xor i32 %x, %y", "or i32 %x, %y"],
+        &[],
+    );
+}

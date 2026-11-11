@@ -286,3 +286,22 @@ fn an_and_of_two_phis_of_one_block_fed_by_it_folds_into_one_phi() {
     assert!(got.contains("and i8 %a, %b"), "the `and` of the start values is in the entry: {got}");
     assert_eq!(got.matches(" and ").count(), 1, "no `and` stays in the loop: {got}");
 }
+
+/// `x & (x ^ y)` is `x & ~y`: `x` reads all ones inside the xor
+/// (`simplifyAndOrWithOpReplaced` for `and`), as the pin's instcombine does.
+#[test]
+fn an_and_of_x_and_x_xor_y_is_x_and_not_y() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x, i32 %y) {\nb0:\n  %a = xor i32 %x, %y\n  %r = and i32 %x, %a\n  ret i32 %r\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let only_and = |c: &mut Combiner, inst: InstId| match c.function.instruction(inst).opcode {
+        Opcode::Binary(BinaryOp::And) => visit_and(c, inst),
+        _ => Visit::None,
+    };
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, only_and);
+    let got = printed(&module);
+    assert!(got.contains("and i32 %x, %") && !got.contains("xor i32 %x, %y"), "{got}");
+}

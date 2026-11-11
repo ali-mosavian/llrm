@@ -481,7 +481,7 @@ pub fn visit_and(
     if let Some(found) = fold_idempotent_recurrence(c, inst, BinaryOp::And) {
         return found;
     }
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 10] = [
         fold_one_shifted_by,
         fold_negated_low_bit,
         fold_power_of_two_sum,
@@ -491,6 +491,7 @@ pub fn visit_and(
         fold_mask_into_one_arm,
         fold_shifted_power_of_two,
         fold_bitwise_logic_with_intrinsics,
+        |c, inst, _, _| crate::combine_op_replaced::fold_and_or_with_op_replaced(c, inst, BinaryOp::And),
     ];
     // DEVIATE 3 and 4: the rest of visitAnd.
     if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {
