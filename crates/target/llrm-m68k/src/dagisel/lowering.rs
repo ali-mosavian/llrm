@@ -248,6 +248,19 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         false
     }
 
+    /// `TLI.isTruncateFree`: DEVIATE M68K-TRUNC-FREE (owner llrm-target-m68k,
+    /// exit 2026-11-24): the pin's m68k keeps the default, false. A data
+    /// register's low byte or word is the narrow value, so truncating costs
+    /// nothing; with false a load another reader takes narrow is no longer
+    /// widened for a `zext` (`mul_words_to_long` +4 B, `pattern_fill` -Os +2 B).
+    fn is_truncate_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        !from.is_vector() && !to.is_vector() && from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
+    }
+
     /// `getScalarShiftAmountTy`: the pin's m68k keeps the default, the pointer
     /// type (`i32`). A shift a combine made after legalization with the
     /// shared `i8` amount had no pattern: `CannotSelect(Shl)`.
