@@ -33,7 +33,7 @@
 //! ```
 
 use llrm_mir::constantfolding::accumulate_constant_offset;
-use llrm_mir::context::{ConstantId, ConstantKind};
+use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::simplify::simplify_gep_operands;
@@ -54,6 +54,7 @@ pub(crate) enum Step {
 }
 
 /// The parts of a `getelementptr`.
+#[derive(Clone)]
 pub(crate) struct Gep {
     pub source: TypeId,
     pub ptr: Operand,
@@ -68,6 +69,13 @@ pub(crate) struct GepFlags {
     pub in_bounds: bool,
     pub nusw: bool,
     pub nuw: bool,
+}
+
+/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant expression.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum GepRef {
+    Inst(InstId),
+    Const(ConstantId),
 }
 
 impl GepFlags {
@@ -274,7 +282,19 @@ impl Combiner<'_> {
         gep: InstId,
         no_assumptions: bool,
     ) -> Operand {
-        let Gep { source, indices, flags, ty, .. } = self.gep_of(gep).expect("a getelementptr");
+        let view = self.gep_of(gep).expect("a getelementptr");
+        self.emit_gep_offset_of(at, &view, no_assumptions)
+    }
+
+    /// `emitGEPOffset` of a `GEPOperator`: the offset of `gep`, an
+    /// instruction's view or a constant expression's, computed before `at`.
+    pub fn emit_gep_offset_of(
+        &mut self,
+        at: InstId,
+        gep: &Gep,
+        no_assumptions: bool,
+    ) -> Operand {
+        let Gep { source, indices, flags, ty, .. } = gep.clone();
         let int_ty = self.index_type(ty);
         // nusw implies nsw for the offset arithmetic.
         let gep_flags = GepFlags::of(flags);
@@ -365,6 +385,57 @@ impl Combiner<'_> {
                 |base| base.indices.iter().all(|&index| self.constant_int(index).is_some())
                     && gep.indices.iter().any(|&index| self.constant_int(index).is_some_and(|value| value != 0)),
             )
+    }
+
+    /// The `GEPOperator` `v` is: a `getelementptr` instruction or a
+    /// constant-expression one.
+    pub(crate) fn gep_ref(
+        &self,
+        v: Operand,
+    ) -> Option<GepRef> {
+        match v {
+            Operand::Value(_) => self.definition_of(v).filter(|&def| self.gep_of(def).is_some()).map(GepRef::Inst),
+            Operand::Constant(id) => match &self.context.get(id).kind {
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { .. }) => Some(GepRef::Const(id)),
+                _ => None,
+            },
+            Operand::Block(_) => None,
+        }
+    }
+
+    /// The pointer, indices and flags of a `GEPOperator`.
+    pub(crate) fn gep_view(
+        &self,
+        gep: GepRef,
+    ) -> Gep {
+        match gep {
+            GepRef::Inst(inst) => self.gep_of(inst).expect("a getelementptr"),
+            GepRef::Const(id) => {
+                let constant = self.context.get(id);
+                let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) =
+                    &constant.kind
+                else {
+                    unreachable!("a constant-expression getelementptr")
+                };
+                let mut flags = Flags::default();
+                if *inbounds {
+                    flags.insert(Flags::INBOUNDS);
+                } else if *nusw {
+                    flags.insert(Flags::NUSW);
+                }
+                if *nuw {
+                    flags.insert(Flags::NUW);
+                }
+                let (&ptr, indices) = operands.split_first().expect("a base pointer");
+                Gep {
+                    source: *source,
+                    ptr: Operand::Constant(ptr),
+                    indices: indices.iter().map(|&index| Operand::Constant(index)).collect(),
+                    flags,
+                    ty: constant.ty,
+                }
+            }
+        }
     }
 
     pub(crate) fn definition_of(

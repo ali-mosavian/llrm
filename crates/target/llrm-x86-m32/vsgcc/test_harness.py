@@ -32,7 +32,7 @@ def built(tmp_path_factory):
     previous = harness.OUT
     harness.OUT = work
     harness.record_stub(work)
-    for prog in ("scroll", "fib", "x_ll_div", "nbody"):
+    for prog in ("scroll", "fib", "x_ll_div", "nbody", "run_mul_constants"):
         done = subprocess.run([str(HERE / "build.sh"), prog], capture_output=True, text=True, env=env)
         assert done.returncode == 0 and "FAIL" not in done.stdout, (prog, done.stdout, done.stderr)
     yield work
@@ -66,6 +66,15 @@ def test_the_per_mnemonic_clocks_add_up_to_the_clocks_of_the_run(built):
     assert sum(count for count, _ in r["by_op"].values()) == r["ins"]
 
 
+def test_a_tests_run_c_cell_yields_clocks(built):
+    """tests/run/c cells (mul_constants, div_constants_short, ...) have only `main`, so the harness found no kernel and the table had no
+    clocks for them; `run_NAME` now counts the cell's `main`, and its reports are the cell's `.out`."""
+    for v in ("llrm", "llrmOs", "gccO2", "clangO2"):
+        r = harness.run("run_mul_constants", v)
+        assert r["clocks"] > 0 and r["ins"] > 0, r
+        assert r["reports"] == [int(x) for x in (harness.REPO / "tests/run/c/mul_constants.out").read_text().split()]
+
+
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):
     """gcc inlined bench_fib into main: the region was never entered and fib read 0 instructions for gcc."""
     assert harness.run("fib", "gccO2")["ins"] > 0
@@ -97,6 +106,28 @@ def test_a_multiply_costs_what_its_multiplier_is():
     assert harness.multiply_clocks(25173, True) == 10 + 15
     assert harness.multiply_clocks(0xCCCCCCCD, False) == 42
     assert harness.multiply_clocks(0xFFFFFFFF, True) == 15      # -1: n = 5 for a negative multiplier
+
+
+def test_a_two_operand_imul_is_priced_under_each_multiplier_model_and_the_models_disagree():
+    """The data sheet names the multiplier only for one-operand MUL/IMUL; `IMUL r, r/m` was priced by its source alone, and
+    matmul -O1 against gcc flipped with that choice (+674 source, -376 destination). `imul eax, ebx` with eax = 3, ebx = 0x7FFF:
+    source 10+15 = 25, destination 13, min 13; the three-operand form reads the immediate (source) or the r/m (dest)."""
+    from types import SimpleNamespace
+
+    from iced_x86 import Decoder
+
+    regs = {harness.UC_X86_REG_EAX: 3, harness.UC_X86_REG_EBX: 0x7FFF}
+    uc = SimpleNamespace(reg_read=lambda reg: regs[reg])
+    two = Decoder(32, bytes.fromhex("0fafc3"), ip=0).decode()          # imul eax, ebx
+    assert harness.multiplier_of(uc, two, "source") == 0x7FFF
+    assert harness.multiplier_of(uc, two, "dest") == 3
+    assert harness.multiplier_of(uc, two, "min") == 3
+    three = Decoder(32, bytes.fromhex("6bc30a"), ip=0).decode()        # imul eax, ebx, 10
+    assert harness.multiplier_of(uc, three, "source") == 10
+    assert harness.multiplier_of(uc, three, "dest") == 0x7FFF
+    assert harness.multiplier_of(uc, three, "min") == 10
+    one = Decoder(32, bytes.fromhex("f7eb"), ip=0).decode()            # imul ebx
+    assert {harness.multiplier_of(uc, one, m) for m in harness.IMUL_MODELS} == {0x7FFF}
 
 
 def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_the_stack(built):
@@ -166,11 +197,9 @@ def test_ctime_times_the_programs_programs_py_lists_and_no_file():
 
 
 def test_levels_time_gives_llrm_cc_its_tree_and_skips_programs_gcc_cannot_build(monkeypatch):
-    """`levels_time.py` ran llrm-cc without LLRM_OW (the -O0 bench/bintree compile exited 1) and handed gcc bench/jpeg_fixed, which needs bench_io.h."""
+    """`levels_time.py` handed gcc bench/jpeg_fixed, which needs bench_io.h."""
     import levels_time
-    monkeypatch.delenv("LLRM_OW", raising=False)
     levels_time.setup()
-    assert os.environ.get("LLRM_OW")
     names = levels_time.bench_sources()
     assert "bintree" in names and "jpeg_fixed" not in names, sorted(names)
 
@@ -243,6 +272,39 @@ def test_data_bytes_counts_the_constants_gcc_keeps_in_rodata_not_only_text(tmp_p
     assert harness.data_bytes("p", "gccO2") == 16
 
 
+def test_executed_alignment_nops_cost_their_clocks(tmp_path, monkeypatch):
+    """The harness counted an executed alignment `nop` apart and charged it nothing: x_matmul_f -O3 ran 1,604 of them (two builds, one
+    with the loop pad and one without, both read 67,696 clocks) while gcc, which pads with `lea esi,[esi]`, paid for its pad.
+    A 3-trip loop with two `nop`s a trip costs 6 `nop` clocks more than the same loop without, and runs the same instructions."""
+    import subprocess
+    import sys
+    sys.path.insert(0, str(harness.REPO / "tools"))
+    import linkrecipe
+    (tmp_path / "o").mkdir()
+    (tmp_path / "b").mkdir()
+    done = subprocess.run(["gcc", "-m32", "-c", str(HERE / "stub.s"), "-o", str(tmp_path / "stub.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    done = subprocess.run(["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x8000", "-o", str(tmp_path / "stub.elf"), str(tmp_path / "stub.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    harness.record_stub(tmp_path)
+
+    def run(prog, pad):
+        (tmp_path / f"{prog}.s").write_text(
+            f".text\n.globl main, bench_{prog}\nmain:\n call bench_{prog}\n ret\nbench_{prog}:\n mov $3,%ecx\n1:\n{pad} dec %ecx\n jnz 1b\n ret\n"
+        )
+        done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / f"{prog}.s"), "-o", str(tmp_path / f"{prog}.o")], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        done = subprocess.run(["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x20000", "-o", str(tmp_path / "b" / f"{prog}.gccO2.elf"), str(tmp_path / f"{prog}.o")], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return harness.run(prog, "gccO2")
+
+    plain, padded = run("plain", ""), run("padded", " nop\n nop\n")
+    assert (plain["nops"], padded["nops"]) == (0, 6)
+    assert padded["ins"] == plain["ins"]
+    assert padded["clocks"] - plain["clocks"] == 6 * harness.clocks.clocks("nop")
+
+
 def test_code_bytes_leaves_out_alignment_padding(tmp_path, monkeypatch):
     """The leg counted whole .text: a loop gcc aligned with nops read as growth (the judge's code_bytes leaves padding out, so the two disagreed).
     6 bytes of code, `.p2align 4`, 1 byte of code: 17 bytes in the section, 7 of code and 10 of padding."""
@@ -307,3 +369,15 @@ def test_novec_build_turns_gccs_vectorizer_off(built, tmp_path):
     obj = lambda w, c: (w / "b" / f"nbody.{c}O3.o").read_bytes()
     assert obj(work, "gcc") != obj(built, "gcc")
     assert obj(work, "clang") == obj(built, "clang")
+
+
+def test_an_lp64_only_cell_is_refused_at_m32():
+    """run_mulconst_i64 (`// targets: lp64`) ran at m32 with a 32-bit long: ok=False for gcc, clang and llrm alike, and the cell was quoted."""
+    with pytest.raises(SystemExit, match="not a cell"):
+        harness.check_applies("run_mulconst_i64")
+    import sys
+    sys.argv = ["harness.py", "run_mulconst_i64", "gccO1"]
+    with pytest.raises(SystemExit, match="not a cell"):
+        harness.main()
+    harness.check_applies("run_urem_eq")
+    harness.check_applies("x_iir")

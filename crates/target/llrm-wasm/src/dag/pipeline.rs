@@ -144,7 +144,22 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `getScalarShiftAmountTy`: wasm shifts by the type of the value shifted
+    /// (the combiner's default is a byte).
+    fn shift_amount_type(
+        &self,
+        shifted: EVT,
+    ) -> EVT {
+        shifted
+    }
+
     fn fold_and_of_extload(&self) -> bool {
+        true
+    }
+
+    /// `visitSUB`'s `C2-(A+C1)` is `(C2-C1)-A` (DAGCombiner.cpp#L4432) and the
+    /// folds beside it: the pin has them on for every target.
+    fn sub_algebra_folds(&self) -> bool {
         true
     }
 
@@ -171,6 +186,13 @@ impl CombineHooks for WasmCombines {
     /// `tryStoreMergeOfConstants`: two byte stores are one `i32.store16`, a
     /// truncating store of the promoted type (`isTruncStoreLegal(i32, i16)`).
     fn merge_stores_via_trunc_store(&self) -> bool {
+        true
+    }
+
+    /// `replaceStoreOfFPConstant`: a `float`/`double` constant store, volatile
+    /// too (`isNormalStore`), is an `i32`/`i64` constant store, as the pin does
+    /// for wasm.
+    fn store_fp_constant_as_i64(&self) -> bool {
         true
     }
 

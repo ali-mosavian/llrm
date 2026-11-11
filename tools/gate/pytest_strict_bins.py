@@ -1,7 +1,7 @@
 """A pytest plugin: a test skipped because a binary this repository builds "is not built" fails.
 
-The gate builds every binary its tests use. tests/test_readme.py skipped its C case on `llrm-c is not built` after the gate's build stopped
-making llrm-c (`c-legacy` is off by default), and examples/dot regressed at m16 with the gate green. A host capability (a tool the
+The gate builds every binary its tests use. tests/test_readme.py skipped its C case on `llrm-cc is not built` after the gate's build stopped
+making llrm-cc (`c-legacy` is off by default), and examples/dot regressed at m16 with the gate green. A host capability (a tool the
 repository does not build: the pin's llc, QCport) is declared in tiers.toml instead."""
 import re
 

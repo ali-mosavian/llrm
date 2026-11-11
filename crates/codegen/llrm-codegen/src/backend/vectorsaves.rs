@@ -63,8 +63,10 @@ impl LIRTransform for VectorSaves {
         // objects (`assignCalleeSavedSpillSlots`) are 16 bytes each and
         // adjacent, not a block of their own to a register.
         let align = std::mem::replace(&mut frame.align, 16);
+        let object_align = frame.object_align.replace(16);
         let block = frame.cell(("vector-save", 0), 16 * used.len() as i64 + self.bias);
         frame.align = align;
+        frame.object_align = object_align;
         let block = block.map_err(|refused| refused.0)?;
         for (at, register) in used.into_iter().enumerate() {
             let mut cell = block.clone();

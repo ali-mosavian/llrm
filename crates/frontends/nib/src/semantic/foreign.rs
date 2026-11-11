@@ -150,6 +150,7 @@ pub(super) fn foreign_signature(
 ) -> Result<Signature, Diagnostic> {
     let mut signature = signature(types, &declared.function, id)?;
     signature.foreign = true;
+    signature.unsplit();
     let abi = declared.abi.resolved(types.native);
     if !types.conventions.iter().any(|one| one == abi.name()) {
         return Err(Diagnostic::new(

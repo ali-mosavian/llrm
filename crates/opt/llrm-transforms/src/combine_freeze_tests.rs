@@ -67,46 +67,67 @@ b0:
     assert!(!after.contains("freeze"), "{after}");
 }
 
-/// A freeze of an argument with another user left that user unfrozen: pinned
-/// instcombine (`freezeOtherUses`) hoists the freeze to the entry and reads it
-/// in every dominated use (`freeze_dominated_uses_test1`). It cost
-/// `freeze i8` after jpeg's `inbuf` load being missing at -O1.
+/// `foldFreezeIntoRecurrence`: a freeze of the phi of `add nsw` recurrence
+/// from a constant was kept, and the `nsw` with it; the pin drops the flag
+/// and the freeze. `compare_to_int64` -O3 (m68k) kept `freeze i32 %iv` and
+/// the `nsw` on the outer induction step into the unroller: 171 instructions
+/// where the pin's IR folds to 7.
 #[test]
-fn a_freeze_replaces_the_dominated_uses_of_its_operand() {
+fn a_freeze_of_a_recurrence_drops_the_flag_and_the_freeze() {
     let after = combined(
-        "declare void @use(i32)
-define void @f(i32 %v) {
-b0:
-  %fr = freeze i32 %v
-  call void @use(i32 %v)
-  call void @use(i32 %fr)
-  ret void
+        "define i32 @f() {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ -1, %entry ], [ %n, %loop ]
+  %n = add nsw i32 %i, 1
+  %fr = freeze i32 %i
+  %c = icmp slt i32 %n, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 %fr
 }
 ",
     );
-    assert!(!after.contains("@use(i32 %v)"), "{after}");
-    assert_eq!(after.matches("freeze i32 %v").count(), 1, "{after}");
+    assert!(!after.contains("freeze"), "{after}");
+    assert!(!after.contains("add nsw"), "{after}");
 }
 
-/// A freeze in a branch arm stayed there with the other arm unfrozen: the
-/// freeze moves to right after the definition (the entry) and both arms read it.
+/// A recurrence whose start may be poison keeps a freeze, on the start.
 #[test]
-fn a_freeze_moves_next_to_the_definition_to_dominate_more_uses() {
+fn a_freeze_of_a_recurrence_moves_to_the_start() {
     let after = combined(
-        "declare void @use(i32)
-define void @f(i32 %v, i1 %c) {
-b0:
-  br i1 %c, label %a, label %b
-a:
-  %fr = freeze i32 %v
-  call void @use(i32 %fr)
-  ret void
-b:
-  call void @use(i32 %v)
-  ret void
+        "define i32 @f(i32 %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ %s, %entry ], [ %n, %loop ]
+  %n = add nsw i32 %i, 1
+  %fr = freeze i32 %i
+  %c = icmp slt i32 %n, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 %fr
 }
 ",
     );
-    assert!(!after.contains("@use(i32 %v)"), "{after}");
-    assert!(after.find("freeze").unwrap() < after.find("br i1").unwrap(), "{after}");
+    assert!(after.contains("freeze i32 %s"), "{after}");
+    assert!(!after.contains("freeze i32 %i"), "{after}");
+    assert!(!after.contains("add nsw"), "{after}");
+}
+
+/// `freezeOtherUses`: every use the freeze dominates reads the frozen value,
+/// so two reads of one possibly-poison value agree.
+#[test]
+fn the_other_uses_of_a_frozen_value_read_the_freeze() {
+    let after = combined(
+        "define i32 @f(i32 %a, i1 %p) {
+b0:
+  %fr = freeze i32 %a
+  %s = add i32 %a, %fr
+  ret i32 %s
+}
+",
+    );
+    assert!(after.contains("add i32 %fr, %fr"), "{after}");
 }

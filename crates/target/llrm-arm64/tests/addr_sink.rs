@@ -1,6 +1,6 @@
 //! Address-mode sinking (`CodeGenPrepare::optimizeMemoryInst`) on arm64.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 /// The scaled-index mode was judged for an 8-byte access, so a float's
@@ -16,7 +16,6 @@ entry:\n  %p = getelementptr inbounds float, ptr @a, i64 %i\n  br label %loop\n\
 loop:\n  %k = phi i64 [ 0, %entry ], [ %k1, %loop ]\n  %v = load volatile float, ptr %p\n  %k1 = add i64 %k, 1\n\
   %d = icmp ult i64 %k1, 100\n  br i1 %d, label %loop, label %exit\n\
 exit:\n  ret float %v\n}\n";
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(ir, Platform::Darwin, true).expect("lowers");
     assert!(asm.contains("lsl #2]"), "{asm}");
 }

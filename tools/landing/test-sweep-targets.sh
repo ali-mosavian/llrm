@@ -8,7 +8,7 @@ mkt() { mkdir -p "$r/$1/debug/deps"; echo '{}' > "$r/$1/.rustc_info.json"
 mkt big/llrm/target; mkt tgt-big; mkt shallow/target; mkt flat-target; mkt other/llrm/target
 mkdir -p $r/notcargo/llrm/target/debug/deps; head -c 5000 /dev/zero > $r/notcargo/llrm/target/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib; touch -d "10 hours ago" $r/notcargo/llrm/target/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib
 head -c 100000 /dev/zero > $r/big/llrm/target/debug/deps/filler.bin; head -c 100000 /dev/zero > $r/tgt-big/debug/deps/filler.bin
-out=$(SWEEP_ROOTS=$r CAP_KB=60 "$here/sweep-targets.sh")
+out=$(SWEEP_ROOTS=$r CAP_KB=60 IDLE_HOURS=0 "$here/sweep-targets.sh")
 echo "$out" | grep -q "big/llrm/target: pruned" || { echo "FAIL: the nested over-cap target was not pruned: $out"; exit 1; }
 [ ! -e $r/big/llrm/target/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib ] && [ -e $r/big/llrm/target/debug/deps/libu-bbbbbbbbbbbbbbbb.rlib ] || { echo "FAIL: stale hash kept or newest removed"; exit 1; }
 for small in shallow/target flat-target other/llrm/target notcargo/llrm/target; do [ -e $r/$small/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib ] || { echo "FAIL: $small was pruned"; exit 1; }; done

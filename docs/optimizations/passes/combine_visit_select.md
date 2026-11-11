@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:87364b248f591291eeab7d2c78f653eff5e37609a8273947d81ae1d53921ad9e -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:6ae66af67a679fd27aaba3995f0c748caaa0d5cfb8c3674932e2800f8c2c01fc -->
 
 # combine_visit_select
 
@@ -43,4 +43,4 @@ are dropped, not swapped.
 ```
 
 ## Used by
-Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`.
+Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`.

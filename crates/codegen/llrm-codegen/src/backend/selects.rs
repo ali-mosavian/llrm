@@ -22,6 +22,19 @@
 //! (`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
 //! and a conditional move. Exit: the legalizer's expansion lands.
 //!
+//! DEVIATE S4 (no number): `llvm.{u}{add,sub}.with.overflow` is expanded here
+//! to the operation and `icmp ult`, for the selectors that have no UADDO
+//! (`--isel=old`, shadow): CodeGenPrepare forms the intrinsic on every x86 width
+//! (`shouldFormOverflowOp`), and the old selector stopped at
+//! "@llvm.uadd.with.overflow.i16" (nib and qb tests). The pin's legalizer expands
+//! UADDO the same way (`TargetLowering::expandUADDSUBO`). Exit: the old selector
+//! is deleted.
+//!
+//! DEVIATE S5 (no number): `llvm.experimental.noalias.scope.decl` is erased
+//! here for the same selectors: no code runs it, and the DAG builder returns
+//! at it (`SelectionDAGBuilder`, `case Intrinsic::experimental_noalias_scope_decl`).
+//! Exit: the old selector is deleted.
+//!
 //! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 //! CodeGenPrepare's `optimizeSelectInst` forms no branch where
 //! `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
@@ -32,6 +45,58 @@
 //! moved nothing over 834 objects. Exit: the expansion at selection, the
 //! registry slot `emit-lowered-select` (lir-cleanup-port, PR by 2026-11-13;
 //! #3052).
+//!
+//! Rows opened by the i64 select moving to the DAG (owner w12, 2026-11-09;
+//! each cell is at or under the pin llc, over the previous MIR expansion;
+//! bytes before -> after, release/next only):
+//! - I64SEL-1, exit 2026-11-12: m32 `select_of_constants` .text +32 (-O1, -O2)
+//!   and +64 (-O3), 12 of 420 functions grow by 1..7 B. Harness (run_, cycle
+//!   model) clocks base -> head: O1 270645 -> 273325 (+1.0%), O2 267647 ->
+//!   270127 (+0.9%), O3 266972 -> 270147 (+1.2%), Os 455460 -> 458620 (+0.7%);
+//!   .text counts 16-B function alignment: f381 and f383 (`select c, 2, -2`
+//!   i64) grow 29 -> 33 B and cross a slot (+16 each; O3: f381-f384, +64);
+//!   the functions that shrink stay in their slot. Cause: base made one
+//!   diamond for both halves in MIR (29 B); the DAG makes two CMOV pseudos
+//!   and the second one's `mov -1` sits between them, so the cascade does not
+//!   merge them (33 B). The pin's `f381` is 33 B too (clang -O2 -march=i486),
+//!   so head is pin parity and base was a non-pin win (the MIR one-diamond
+//!   expansion, which the pin does not make). External bars (m32 -march=i486,
+//!   tools/external_flags.py cd1e12d510e4) for f381/f383: gcc 13.4 O1 32 B, O2
+//!   43 B; clang O1 33 B, O2 33 B: head is 1 B over the best at O1, level at
+//!   O2; base (29 B) beat both. Exit 2026-11-12: re-add the one-diamond
+//!   expansion for the select of two i64 constants as a priced DEVIATE (or
+//!   the pass the pin uses to keep `mov -1` out of the first CMOV window).
+//!   The scheduler is right (traced: `MOV32r0` goes first, held by the live
+//!   EFLAGS). `f409` is its own row, I64SEL-6.
+//! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
+//!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
+//!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
+//!   (O1, +0.28%), 139968 -> 140365 (O2), 139969 -> 140364 (O3); cycles within
+//!   noise, output equal; m32 `word_compares` identical. Cause: SD447 keeps
+//!   `x*257` as `imul` on a tie, so the ADC takes `2*setbe` as an `add`
+//!   before it, the flags are clobbered, the `cmp` is repeated with its load
+//!   unfolded and one more value is live (R15D). Without the multiply the pin
+//!   emits our shape. Evidence: ~/scratch/handoff/m64-mul257-adc-flags-2026-11-09.md.
+//! - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8 B, -Os +10 B
+//!   (only `__divsf3`: 493 -> 503 B, pin 560 B; register naming and one
+//!   `mov`). Native instructions equal within 1 at O1 and Os (sfm16_float_add
+//!   O1 128138 -> 128139, Os 128548 -> 128548), output equal.
+//! - I64SEL-4, exit 2026-11-10 18:00Z: m32 `x_sf_cmp64` -Os +1302 executed
+//!   instructions (+1.1% clocks) at equal bytes (`test; js` became
+//!   `test; jns`, a branch layout flip).
+//! - I64SEL-5, owner z80, exit 2026-11-12: z80-sdcc `call_clobbers_flags`
+//!   -O2/-Os .text 602 -> 618 B. Cause: the shared `add (sext i1 c), x` ->
+//!   `sub x, (zext c)` fold (pin `visitADDLikeCommutative`) now fires; `add
+//!   hl,de` (11 T) becomes `ex de,hl; or a,a; sbc hl,bc` (23 T), +12 T per
+//!   execution of the site (static estimate, not measured; ucsim run PASS,
+//!   the runner prints no T).
+//! - I64SEL-6, owner w12 (w9 traces), exit 2026-11-12: `f409` (`x<y ? INT64_MIN/2^31
+//!   : 0`, m32 -march=i486, symbol size): base 25 B (O1, O2), head 30 / 32 B,
+//!   clang 28 / 28, gcc 32 / 27: over the best external by +2 (O1) and +5
+//!   (O2). Head emits `setl al; and eax,255; shl eax,31`: the CMOV diamond
+//!   comes before the SETCC, FixupSetCC does not fire, MaskByAnd masks. Card:
+//!   ~/scratch/handoff/f409-cmov-before-setcc-2026-11-09.md. Its growth is part
+//!   of I64SEL-1's .text total.
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
@@ -146,6 +211,71 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
             function.replace_all_uses_with(call.result.ok_or("a min or max value")?, chosen);
             function.erase(inst)?;
         }
+        let scope_decls: Vec<InstId> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
+                let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
+                match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
+                    (true, Some(Intrinsic::NoAliasScopeDecl)) => Some(inst),
+                    _ => None,
+                }
+            })
+            .collect();
+        for inst in scope_decls {
+            function.erase(inst)?;
+        }
+        let overflowing: Vec<(InstId, BinaryOp)> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
+                let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
+                match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
+                    (true, Some(Intrinsic::WithOverflow { op: op @ (BinaryOp::Add | BinaryOp::Sub), signed: false })) => {
+                        Some((inst, op))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        for (inst, op) in overflowing {
+            let call = function.instruction(inst).clone();
+            let [a, b, _] = call.operands[..] else { return Err("an overflow operation of two operands".into()) };
+            let pair = call.result.ok_or("an overflow value")?;
+            let users: Vec<(InstId, u32)> = function
+                .users(pair)
+                .iter()
+                .map(|one| {
+                    let user = function.instruction(one.user);
+                    match &user.opcode {
+                        Opcode::ExtractValue(path) if path.len() == 1 => Ok((one.user, path[0])),
+                        _ => Err("an overflow pair read other than by extractvalue".to_owned()),
+                    }
+                })
+                .collect::<Result<_, _>>()?;
+            let operand_ty = function.operand_type(context, a).ok_or("an overflow operand type")?;
+            let bit = context.types.int(1);
+            let before = |function: &mut Function, opcode, ty, operands: Vec<Operand>| -> Result<Operand, String> {
+                let made = function.create_instruction(opcode, ty, operands, Flags::default(), None);
+                function.insert(made, Position::Before(inst))?;
+                Ok(Operand::Value(function.instruction(made).result.expect("a value")))
+            };
+            let math = before(function, Opcode::Binary(op), operand_ty, vec![a, b])?;
+            // `a + b` wrapped iff the sum is below `a`; `a - b` iff `a` is below `b`.
+            let flag = if op == BinaryOp::Add {
+                before(function, Opcode::ICmp(IntPredicate::Ult), bit, vec![math, a])?
+            } else {
+                before(function, Opcode::ICmp(IntPredicate::Ult), bit, vec![a, b])?
+            };
+            for (user, field) in users {
+                let value = function.instruction(user).result.ok_or("an extracted value")?;
+                function.replace_all_uses_with(value, if field == 0 { math } else { flag });
+                function.erase(user)?;
+            }
+            function.erase(inst)?;
+        }
     }
     Ok(())
 }
@@ -159,7 +289,7 @@ pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
     ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i1" | "i8" | "i16" | "i32" | "i64")
 }
 
 /// Every select of `module`'s functions made a branch and a phi.
@@ -178,6 +308,18 @@ pub fn priced(
     tti: &dyn Tti,
     wanted: &dyn Fn(&str) -> bool,
     price: &dyn Fn(&str) -> Option<i64>,
+) -> Result<(), String> {
+    priced_with_trees(module, tti, wanted, price, &|_| false)
+}
+
+/// `priced`, and for the types `trees` names the sums with a join of compares
+/// (`booleans::branched`, DEVIATE SETCC-TREE-BRANCH).
+pub fn priced_with_trees(
+    module: &mut Module,
+    tti: &dyn Tti,
+    wanted: &dyn Fn(&str) -> bool,
+    price: &dyn Fn(&str) -> Option<i64>,
+    trees: &dyn Fn(&str) -> bool,
 ) -> Result<(), String> {
     // A near pointer is one register: the width of a compare a chain may move.
     let word_bits = module
@@ -207,7 +349,7 @@ pub fn priced(
                 }
             }
         }
-        crate::backend::booleans::branched(context, function, price, wanted, word_bits)?;
+        crate::backend::booleans::branched(context, function, price, wanted, trees, word_bits)?;
         // After the pricing: the pin keeps this `setcc` chain, it branches
         // none.
         crate::backend::selectconstants::inverted_setcc_sums(context, function)?;
@@ -621,6 +763,64 @@ entry:
         }
     }
 
+    /// #7043's inliner leaves `llvm.experimental.noalias.scope.decl` in the
+    /// body; `--isel=old` refused it ("@main: @llvm.experimental.noalias.scope.decl",
+    /// 18 nib and qb tests). No code runs it.
+    #[test]
+    fn test_a_noalias_scope_declaration_is_erased() {
+        let text = "declare void @llvm.experimental.noalias.scope.decl()
+define i16 @f(i16 %a) {
+entry:
+  call void @llvm.experimental.noalias.scope.decl()
+  %b = add i16 %a, 1
+  ret i16 %b
+}
+";
+        let mut after = llrm_mir::parse::module(text).unwrap();
+        super::minmax_expanded(&mut after).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("call void"), "{}", llrm_mir::print::module(&after));
+        let arguments = vec![Val::Int { bits: 41, width: 16 }];
+        assert_eq!(run(&after, "f", arguments, 100).unwrap(), Val::Int { bits: 42, width: 16 });
+    }
+
+    /// CodeGenPrepare's `uadd.with.overflow.i16` reached `--isel=old` (nib and qb
+    /// tests, 30 red since #7304): "@llvm.uadd.with.overflow.i16" was refused.
+    /// The sum and the carry, with the same answers.
+    #[test]
+    fn test_an_unsigned_overflow_pair_becomes_an_operation_and_a_compare() {
+        let text = "declare { i16, i1 } @llvm.uadd.with.overflow.i16(i16, i16)
+declare { i16, i1 } @llvm.usub.with.overflow.i16(i16, i16)
+define i16 @f(i16 %a, i16 %b) {
+entry:
+  %s = call { i16, i1 } @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)
+  %sum = extractvalue { i16, i1 } %s, 0
+  %carry = extractvalue { i16, i1 } %s, 1
+  %d = call { i16, i1 } @llvm.usub.with.overflow.i16(i16 %a, i16 %b)
+  %diff = extractvalue { i16, i1 } %d, 0
+  %borrow = extractvalue { i16, i1 } %d, 1
+  %c = zext i1 %carry to i16
+  %w = zext i1 %borrow to i16
+  %c2 = shl i16 %c, 1
+  %x = add i16 %sum, %diff
+  %y = add i16 %x, %c2
+  %z = add i16 %y, %w
+  ret i16 %z
+}
+";
+        let mut after = llrm_mir::parse::module(text).unwrap();
+        super::minmax_expanded(&mut after).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("= call"), "{}", llrm_mir::print::module(&after));
+        for (a, b) in [(5u128, 3u128), (3, 5), (0xFFFF, 1), (0, 0), (0x8000, 0x8000)] {
+            let sum = (a + b) & 0xFFFF;
+            let diff = a.wrapping_sub(b) & 0xFFFF;
+            let want = (sum + diff + (u128::from(a + b > 0xFFFF) << 1) + u128::from(a < b)) & 0xFFFF;
+            let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
+            assert_eq!(run(&after, "f", arguments, 100).unwrap(), Val::Int { bits: want, width: 16 });
+        }
+    }
+
     /// `llvm.smax.i16` and its kin, which SCEV's exit values and InstCombine
     /// now emit, were refused by isel (item.c, cmd.c, mdl_ai.c): a compare and
     /// a select, with the same answers.
@@ -704,7 +904,7 @@ done:
     #[test]
     fn the_dag_run_keeps_an_integer_select_for_its_own_lowering() {
         use crate::backend::shadow::Selector;
-        for ty in ["i8", "i16", "i32"] {
+        for ty in ["i8", "i16", "i32", "i64"] {
             assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}");
             assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
         }

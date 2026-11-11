@@ -196,3 +196,75 @@ j:
     );
     assert!(!after.contains("phi") && after.contains("ret i8 %s"), "{after}");
 }
+
+/// wasm32 r3 (an `i8` counter left over once the unroller used the trip
+/// count): the counter's add fed only its own phi and survived to the
+/// output, +20 B against the pin.
+#[test]
+fn an_induction_variable_nothing_reads_is_deleted() {
+    let after = combined(
+        "define i8 @f(i8 %n) {
+b0:
+  br label %loop
+loop:
+  %dead = phi i8 [ 0, %b0 ], [ %dead.next, %loop ]
+  %live = phi i8 [ 0, %b0 ], [ %live.next, %loop ]
+  %dead.next = add nuw i8 %dead, 4
+  %live.next = add nuw i8 %live, 1
+  %done = icmp eq i8 %live.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %live.next
+}
+",
+    );
+    assert!(!after.contains("%dead"), "{after}");
+    assert!(after.contains("%live"), "{after}");
+}
+
+/// Phis that only read each other (a swap nothing observes) stayed, each one
+/// a copy at lowering.
+#[test]
+fn phis_used_only_by_each_other_are_deleted() {
+    let after = combined(
+        "define i8 @f(i8 %n) {
+b0:
+  br label %loop
+loop:
+  %a = phi i8 [ 0, %b0 ], [ %b, %loop ]
+  %b = phi i8 [ 1, %b0 ], [ %a, %loop ]
+  %live = phi i8 [ 0, %b0 ], [ %live.next, %loop ]
+  %live.next = add nuw i8 %live, 1
+  %done = icmp eq i8 %live.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %live.next
+}
+",
+    );
+    assert_eq!(after.matches("phi i8").count(), 1, "{after}");
+}
+
+/// A web of 16 phis is left: the pin stops there to bound the walk.
+#[test]
+fn a_web_of_sixteen_phis_is_left() {
+    let mut phis = String::new();
+    for i in 0..16 {
+        phis.push_str(&format!("  %p{i} = phi i8 [ 0, %b0 ], [ %p{}, %loop ]\n", (i + 1) % 16));
+    }
+    let after = combined(&format!(
+        "define i8 @f(i8 %n) {{
+b0:
+  br label %loop
+loop:
+{phis}  %live = phi i8 [ 0, %b0 ], [ %live.next, %loop ]
+  %live.next = add nuw i8 %live, 1
+  %done = icmp eq i8 %live.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %live.next
+}}
+"
+    ));
+    assert!(after.contains("%p15 = phi"), "{after}");
+}

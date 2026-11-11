@@ -3,14 +3,13 @@
 //! against the hand selector's 788). The pin keeps an arm's constant in the
 //! arm.
 
-use llrm_arm64::driver::{self, IselMode, Level};
+use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
 const SWITCH_LOOP: &str = include_str!("data/switch_loop_o2.ll");
 
 #[test]
 fn a_loop_of_switch_arms_saves_no_callee_saved_register_for_their_constants() {
-    driver::set_isel_mode(IselMode::Dag);
     for level in [Level::O2, Level::Os] {
         let text = driver::assembly(SWITCH_LOOP, Platform::Linux, level).expect("lowers");
         assert!(text.contains("cbnz") || text.contains("subs"), "premise: the loop is there:\n{text}");

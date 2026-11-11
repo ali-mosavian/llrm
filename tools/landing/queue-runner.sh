@@ -41,13 +41,8 @@ while true; do
     tip=$(git -C "$W" rev-parse "origin/$LAND_BRANCH" 2>/dev/null); G="${LAND_TMP:-/tmp/landing}/tip-green.sha"; S="${LAND_TMP:-/tmp/landing}/tip-stop.txt"
     if [ -n "$tip" ] && [ "$tip" != "$(cat "$G" 2>/dev/null)" ]; then
       (cd "$W" && git checkout -q --detach "$tip") 2>/dev/null
-      # the packages changed since the last green tip and everything depending on them; none (only tooling changed) runs nothing
-      crates=--workspace; [ -s "$G" ] && crates=$(cd "$W" && tip_crates "$(cat "$G")" "$tip" 2>/dev/null)
-      out=; rc=0
-      if [ -n "$crates" ]; then
-        out=$( (cd "$W" && CARGO_TARGET_DIR="$T" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
-      fi
-      if stop=$(red_tip "$HERE/red-allow.txt" "$rc" <<<"$out"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
+      # the packages changed since the last green tip and everything depending on them; none (only tooling changed) runs nothing; a crate list that cannot be made is red (tip_verdict)
+      if stop=$(tip_verdict "$W" "$T" "$HERE/red-allow.txt" "$(cat "$G" 2>/dev/null)" "$tip"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
     fi
     [ -f "$S" ] && { cat "$S"; sleep 300; continue; }
   fi

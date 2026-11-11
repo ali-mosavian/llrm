@@ -2,7 +2,7 @@
 
     python3 -m unittest tools/pairs/test_dist_relocatable.py
 
-DIST_LLRM_C names the llrm-c to test (default: skipped). It is copied out of its
+DIST_LLRM_C names the llrm-cc to test (default: skipped). It is copied out of its
 build tree and run under strace: reading anything from the tree it was built in
 (borland.h, wccq) is the failure; a dist whose tree is gone gave E1055.
 SCRATCH_A and SCRATCH_B, two pair_build.sh scratch roots at different paths,
@@ -24,10 +24,10 @@ HAVE_STRACE = shutil.which("strace") is not None
 class Relocatable(unittest.TestCase):
     @unittest.skipUnless(DIST and HAVE_STRACE, "DIST_LLRM_C and strace")
     def test_a_dist_that_moved_reads_nothing_from_the_tree_it_was_built_in(self):
-        """llrm-c opened borland.h and wccq under its build tree: a removed tree failed every compile (E1055)."""
+        """llrm-cc opened borland.h and wccq under its build tree: a removed tree failed every compile (E1055)."""
         built = Path(DIST).resolve()
         with tempfile.TemporaryDirectory() as tmp:
-            moved = Path(tmp) / "moved" / "llrm-c"
+            moved = Path(tmp) / "moved" / "llrm-cc"
             moved.parent.mkdir()
             shutil.copy2(built, moved)
             (Path(tmp) / "t.c").write_text("int f(int a) { return a * 2; }\n")
@@ -49,7 +49,7 @@ class Relocatable(unittest.TestCase):
         sums = []
         for scratch in (os.environ["SCRATCH_A"], os.environ["SCRATCH_B"]):
             subprocess.run(["tools/pairs/pair_build.sh", scratch, os.environ["SHA"]], check=True)
-            dist = next(Path(scratch).glob("sbp-*/dist/llrm-c"))
+            dist = next(Path(scratch).glob("sbp-*/dist/llrm-cc"))
             sums.append(hashlib.md5(dist.read_bytes()).hexdigest())
         self.assertEqual(sums[0], sums[1])
 

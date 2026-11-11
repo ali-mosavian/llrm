@@ -28,10 +28,10 @@
 //!  b4: r = phi [b1: v] [b2: x]
 //! ```
 //!
-//! DEVIATE M7 (row 44): `hasStoreBetween` counts every store, call and
-//! ordered access as one that may alias the load: no alias analysis reaches
-//! LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
-//! along a critical edge. Exit: memory operands with an alias query on LIR.
+//! `hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`); an
+//! instruction with no `Insn::memory` may alias anything, so a body whose target
+//! states none (x86) counts every store, as `mayAlias` without operands does.
+//! (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
 //!
 //! Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
 //! instruction goes to a post-dominating block when no in-cycle operand it
@@ -69,13 +69,21 @@
 //!
 //! DEVIATE M6 (no number): an instruction that reads or writes any physical
 //! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
-//! through (and a use of a constant register). Effect: none seen, 0 sinks
-//! missed over d_faces and the 820-object corpus at -O2 (counted: no
-//! instruction that passes `safe_to_move` has a physical write and no read).
+//! through (and a use of a constant register). The frame register of a frame
+//! cell, local or argument, is not one: the pin's frame index carries none
+//! (os_execute m64 -Os kept eight `mov r8,[rsp+k]` the pin sinks and folds,
+//! +35 B). The earlier count (0 sinks missed over d_faces and the 820-object
+//! corpus at -O2) saw physical writes only, not reads.
 //! The flags are the pin's rule in full: a def moves only if dead (read by no
 //! later instruction of its block and no successor), and not into a block that
 //! reads them (`SinkInstruction`'s zombie check).
 //! Exit: honor a dead implicit def when LIR marks one.
+//!
+//! DEVIATE F1 (owner w2, exit 2026-11-12): the x87 compare is one pseudo here
+//! and writes the flags itself (the pin's `SAHF` does), so flags defs above it
+//! sink. tests_run_c_fcmp_all -Os m32 grew 4600 -> 4728 B (pin llc 6296); the
+//! cause is not yet read. Exit: cause found and fixed, or the growth shown to
+//! be the pin's own.
 //!
 //! DEVIATE M7 (no number): an instruction whose pinned operands are all
 //! sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
@@ -106,7 +114,7 @@ use llrm_mir::blockfrequency::BranchProbability;
 use crate::backend::liveness;
 use crate::liveness::blockfrequency::{Graph, MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
 use crate::liveness::cfg::{Cfg, DomTree};
-use crate::model::ir::{Imm, Loc, Operation};
+use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
@@ -134,6 +142,8 @@ pub struct MachineSink {
     /// The registers a block may hold at once (`getRegPressureSetLimit`; the
     /// number of allocatable registers, not the pin's per-set limits).
     pub limit: usize,
+    /// DEVIATE SINK-EXT: see `Tuning::sink_spares_ranges`.
+    pub spare_ranges: bool,
 }
 
 impl LIRTransform for MachineSink {
@@ -149,7 +159,7 @@ impl LIRTransform for MachineSink {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(sunk_within(&body, self.size, self.limit, Some(&self.classes)))
+        Ok(sunk_within_ranges(&body, self.size, self.limit, Some(&self.classes), self.spare_ranges))
     }
 }
 
@@ -227,9 +237,8 @@ fn edge_probabilities(
     all
 }
 
-/// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `hasStoreBetween`
-/// counts. No alias analysis reaches here, so any of these may alias a load
-/// (DEVIATE M7).
+/// `mayStore() || isCall() || hasOrderedMemoryRef()`: what `isSafeToMove`'s
+/// `SawStore` counts.
 pub(crate) fn may_store(one: &Insn) -> bool {
     let Some(what) = &one.what else { return true };
     one.volatile()
@@ -241,16 +250,31 @@ pub(crate) fn may_store(one: &Insn) -> bool {
         )
 }
 
-/// `TII->isAsCheapAsAMove`: a copy or a move of a constant.
-pub(crate) fn as_cheap_as_a_move(one: &Insn) -> bool {
+/// `isCall() || hasOrderedMemoryRef()`: an access `hasStoreBetween` treats as
+/// aliasing whatever it moves.
+pub(crate) fn ordered_access(one: &Insn) -> bool {
+    let Some(what) = &one.what else { return true };
+    one.volatile() || one.call.is_some() || matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape)
+}
+
+/// `TII->isAsCheapAsAMove`: a copy or a move of a constant, the constant as
+/// the target judges it (`Target::cheap_move_immediate`; x86's refuses the
+/// `movabs`, AArch64's a constant of more than two instructions).
+pub(crate) fn as_cheap_as_a_move(
+    one: &Insn,
+    cheap_immediate: fn(u8, i64) -> bool,
+) -> bool {
     one.what
         .as_ref()
         .is_some_and(
             |what| what.op == Operation::Move
-                && matches!(
-                    (what.dests.as_slice(), what.sources.as_slice()),
-                    ([Loc::Held(_)], [Loc::Held(_) | Loc::Imm(Imm { address: None, .. })])
-                ),
+                && match (what.dests.as_slice(), what.sources.as_slice()) {
+                    ([Loc::Held(_)], [Loc::Held(_)]) => true,
+                    ([Loc::Held(dest)], [Loc::Imm(Imm { value, address: None, .. })]) => {
+                        cheap_immediate(dest.width as u8, *value)
+                    }
+                    _ => false,
+                },
         )
 }
 
@@ -360,9 +384,16 @@ struct Sinker {
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
     /// the instruction.
     sorted: Vec<Vec<usize>>,
+    /// The order the selector recorded each edge's odds in, which is the order
+    /// it added them (`addSuccessor`) and which the pin's equal-depth
+    /// successors keep. A stated edge sorts before one with no odds (edges a
+    /// later pass made, e.g. a split); those keep terminator order after them.
+    stated: HashMap<(usize, usize), usize>,
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.
     has_store_cache: HashMap<(usize, usize), bool>,
+    /// `StoreInstrCache`: the stores between a pair of blocks.
+    store_instr_cache: HashMap<(usize, usize), Vec<Arc<Insn>>>,
     /// `ToSplit`.
     to_split: Vec<(usize, usize)>,
     changed: bool,
@@ -373,6 +404,10 @@ struct Sinker {
     flags_live_in: Vec<bool>,
     /// `RegClassInfo->getRegPressureSetLimit`.
     limit: usize,
+    /// DEVIATE SINK-EXT.
+    spare_ranges: bool,
+    /// `Target::cheap_move_immediate`.
+    cheap_immediate: fn(u8, i64) -> bool,
     /// Instructions with an operand the encoding pins to a register (DEVIATE
     /// M7).
     pinned: HashSet<usize>,
@@ -447,6 +482,7 @@ impl Sinker {
                 merged: HashMap::default(),
                 to_split: Vec::new(),
                 has_store_cache: HashMap::default(),
+                store_instr_cache: HashMap::default(),
                 changed: false,
                 ..before
             };
@@ -473,6 +509,13 @@ impl Sinker {
             }
         }
         let depths = crate::analysis::intervals::depths_shared(body);
+        let stated = body
+            .odds
+            .taken
+            .keys()
+            .enumerate()
+            .filter_map(|(rank, (from, to))| Some(((*position.get(from)?, *position.get(to)?), rank)))
+            .collect();
         let mut sinker = Self {
             size,
             arguments: crate::greedy::remat::argument_loads(body),
@@ -495,14 +538,18 @@ impl Sinker {
             cycle,
             considered: HashSet::default(),
             sorted: Vec::new(),
+            stated,
             merged: HashMap::default(),
             to_split: Vec::new(),
             has_store_cache: HashMap::default(),
+            store_instr_cache: HashMap::default(),
             changed: false,
             regs: body.regs(),
             bits: body.bits,
             flags_live_in: Vec::new(),
             limit: usize::MAX,
+            spare_ranges: false,
+            cheap_immediate: llrm_target::x86_cheap_move_immediate,
             pinned: HashSet::default(),
             stack: None,
             phi_blocks,
@@ -591,7 +638,32 @@ impl Sinker {
         // An incoming argument's cell is a fixed stack object in the pin, a
         // frame index with no register: the frame register the address is
         // spelled through is not a read of one.
-        let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
+        // A local object's cell is a frame index in the pin too: `%stack.N`
+        // carries no register until frame lowering, so its load sinks.
+        let frame_cell = one
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| {
+                    let mut cells = what
+                        .sources
+                        .iter()
+                        .chain(&what.dests)
+                        .filter_map(
+                            |place| match place {
+                                Loc::Mem(mem) => Some(mem),
+                                _ => None,
+                            },
+                        );
+                    cells.clone().next().is_some()
+                        && cells.all(|mem| {
+                            mem.base.is_none()
+                                && mem.index.is_none()
+                                && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                        })
+                },
+            );
+        let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
         // DEVIATE (segment-reads): an access through the default data segment
         // names no register in the pin (`MOV32rm` carries `$noreg`), so its
@@ -622,6 +694,7 @@ impl Sinker {
             .any(
                 |&(register, _)| register != llrm_lir::registers::RegId::None
                     && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register)))
+                    && !(frame_cell && self.regs.is_stack(register))
                     && !(default_segment && self.regs.is_data_segment(register)),
             );
         if physical_reads || physical(&effect.writes) || flags(&reads) {
@@ -712,6 +785,7 @@ impl Sinker {
         let sorted = (0..n)
             .map(|block| {
                 let mut all = self.cfg.succs[block].clone();
+                all.sort_by_key(|&succ| self.stated.get(&(block, succ)).copied().unwrap_or(usize::MAX));
                 for &child in &children[block] {
                     if !all.contains(&child) {
                         all.push(child);
@@ -918,7 +992,7 @@ impl Sinker {
         if !self.considered.insert((from, to)) {
             return true;
         }
-        if !as_cheap_as_a_move(one) {
+        if !as_cheap_as_a_move(one, self.cheap_immediate) {
             return true;
         }
         for &value in &one.defines {
@@ -981,12 +1055,15 @@ impl Sinker {
 
     /// `hasStoreBetween`
     /// ([#L1660](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1660)):
-    /// whether a store, call or ordered access may run between `from` and
-    /// `to`, which must be in a straight line. Past the thresholds it says yes.
+    /// whether a call, an ordered access or a store that may alias `moved` may
+    /// run between `from` and `to`, which must be in a straight line. Past the
+    /// thresholds it says yes. The stores of a pair are kept
+    /// (`StoreInstrCache`), so the next load asks each one.
     fn has_store_between(
         &mut self,
         from: usize,
         to: usize,
+        moved: &Insn,
     ) -> bool {
         if !self.dom.dominates(from, to) || !self.post.dominates(to, from) {
             return true;
@@ -994,10 +1071,14 @@ impl Sinker {
         if let Some(&known) = self.has_store_cache.get(&(from, to)) {
             return known;
         }
+        if let Some(stores) = self.store_instr_cache.get(&(from, to)) {
+            return stores.iter().any(|store| store.may_alias(moved));
+        }
         let mut handled = HashSet::default();
         let mut dominated: Vec<usize> = Vec::new();
+        let mut stores: Vec<Arc<Insn>> = Vec::new();
+        let mut aliased = false;
         let mut stack = vec![from];
-        let mut saw_store = false;
         while let Some(block) = stack.pop() {
             if !handled.insert(block) {
                 continue;
@@ -1009,7 +1090,7 @@ impl Sinker {
             dominated.push(block);
             let too_big = self.insns[block].len() > SINK_LOAD_INSTS_PER_BLOCK_THRESHOLD
                 || dominated.len() > SINK_LOAD_BLOCKS_THRESHOLD;
-            if too_big || self.insns[block].iter().any(|one| may_store(one)) {
+            if too_big || self.insns[block].iter().any(|one| ordered_access(one)) {
                 // What sits above or below the block in the straight line
                 // shares the answer.
                 for &other in &dominated {
@@ -1019,12 +1100,20 @@ impl Sinker {
                         self.has_store_cache.insert((from, other), true);
                     }
                 }
-                saw_store = true;
-                break;
+                self.has_store_cache.insert((from, to), true);
+                return true;
+            }
+            for one in self.insns[block].iter().filter(|one| may_store(one)) {
+                aliased |= one.may_alias(moved);
+                stores.push(Arc::clone(one));
             }
         }
-        self.has_store_cache.insert((from, to), saw_store);
-        saw_store
+        if stores.is_empty() {
+            self.has_store_cache.insert((from, to), false);
+        } else {
+            self.store_instr_cache.insert((from, to), stores);
+        }
+        aliased
     }
 
     /// `SinkInstruction`: the instruction at `index` of `block`, moved into a
@@ -1043,6 +1132,9 @@ impl Sinker {
         if self.touches_machine_state(block, index) {
             return false;
         }
+        if self.stretches_over_clobber(block, index, &one) {
+            return false;
+        }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
         // A dead flags def that is live into the block it moves to would turn
@@ -1057,7 +1149,7 @@ impl Sinker {
                 one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))));
             let enters_cycle = self.cycle[sink_to].is_some_and(|header| self.irreducible[header] || header == sink_to);
             // A load goes along a critical edge only past no store.
-            let store_between = loads && self.has_store_between(block, sink_to);
+            let store_between = loads && self.has_store_between(block, sink_to, &one);
             if store_between || !self.dom.dominates(block, sink_to) || enters_cycle {
                 self.postpone_split_critical_edge(&one, block, sink_to, break_phi_edge);
                 return false;
@@ -1086,6 +1178,36 @@ impl Sinker {
         self.insns[sink_to].insert(0, moved);
         self.changed = true;
         true
+    }
+
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): moving the
+    /// instruction at `index` out of `block` trades its result for the
+    /// operands that die at it, and an instruction that clobbers registers
+    /// follows it in `block`: the extra values would stay live across that
+    /// clobber and be spilled. The pin sinks it (`isProfitableToSinkTo` counts
+    /// no such cost outside a cycle).
+    fn stretches_over_clobber(
+        &self,
+        block: usize,
+        index: usize,
+        one: &Insn,
+    ) -> bool {
+        if !self.spare_ranges {
+            return false;
+        }
+        let me = self.canonical(one.id());
+        let dying = one
+            .uses
+            .iter()
+            .filter(|&&value| !self.stack_has(value))
+            .filter(|&&value| {
+                self.uses.get(&value).into_iter().flatten().all(|&used| matches!(used, Use::Insn(id) if id == me))
+            })
+            .count();
+        dying > one.defines.len()
+            && self.insns[block][index + 1..]
+                .iter()
+                .any(|next| !next.clobbers.is_empty() || !next.clobbers_high.is_empty())
     }
 
     /// `ProcessBlock`: the block bottom-up.
@@ -1120,6 +1242,24 @@ pub fn sunk_within(
     limit: usize,
     classes: Option<&crate::backend::classes::RegisterClasses>,
 ) -> LirBody {
+    sunk_within_ranges(body, size, limit, classes, false)
+}
+
+/// [`sunk_within`], and with `spare_ranges` DEVIATE SINK-EXT.
+pub fn sunk_within_ranges(
+    body: &LirBody,
+    size: bool,
+    limit: usize,
+    classes: Option<&crate::backend::classes::RegisterClasses>,
+    spare_ranges: bool,
+) -> LirBody {
+    // `ProcessBlock` (MachineSink.cpp#L959-L961) leaves a block with one
+    // successor or fewer, or none of its own, at once: a body with no other
+    // block has nothing to sink and no edge to split, and needs none of the
+    // analyses the round builds.
+    if !body.blocks.iter().any(|block| block.succ.len() > 1 && !block.insns.is_empty()) {
+        return body.clone();
+    }
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
     // when nothing moved and nothing was marked.
@@ -1127,7 +1267,9 @@ pub fn sunk_within(
     loop {
         let mut sinker = Sinker::new(&body, size, before.take());
         sinker.limit = limit;
+        sinker.spare_ranges = spare_ranges;
         if let Some(classes) = classes {
+            sinker.cheap_immediate = classes.cheap_move_immediate;
             sinker.pinned = body
                 .blocks
                 .iter()
@@ -1254,6 +1396,65 @@ mod tests {
             .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
             .collect();
         assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
+    }
+
+    /// `x = a * 7; if (y != y) x = NaN` compares with `fcom` and branches on
+    /// `jp`: the compare's `sahf` sets the flags before the branch, so the
+    /// `sub` above it is dead in flags and sinks into the arm that uses it.
+    /// The pseudo declared no flags write, the `sub` stayed above the select
+    /// and the loop paid three movs and a jmp per trip (sfm16_float_div m32
+    /// -O2 with the select left to the DAG: 5607 -> 6801 instructions).
+    #[test]
+    fn test_flags_set_by_a_float_compare_make_the_flags_above_it_dead() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let fcom = insn(1, Operation::Compare, "fcom", vec![], vec![held(3), held(4)], vec![], vec![3, 4]);
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "sub", vec![held(9)], vec![held(1), held(2)], vec![9], vec![1, 2]),
+                    fcom,
+                    insn(2, Operation::Branch, "jp", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock::new(
+            1,
+            vec![
+                insn(3, Operation::Move, "mov", vec![held(20)], vec![held(9)], vec![20], vec![9]),
+                insn(6, Operation::Compare, "cmp", vec![], vec![held(20), imm(0)], vec![], vec![20]),
+                insn(4, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        // Neither successor reads the flags it is entered with: each sets its
+        // own.
+        let leaf = LirBlock::new(
+            2,
+            vec![
+                insn(7, Operation::Compare, "cmp", vec![], vec![held(1), imm(0)], vec![], vec![1]),
+                insn(5, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        let mut body = LirBody::new(
+            "fcom_flags",
+            0,
+            vec![entry.into(), arm.into(), leaf.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3, 4].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let after = sunk(&body, false);
+        let names = |at: usize| -> Vec<String> {
+            after.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["fcom", "jp"], "the sub left the block that compares");
+        assert_eq!(names(1), ["sub", "mov", "cmp", "ret"], "and runs in the arm that uses it");
     }
 
     /// An instruction sunk into a block that itself sinks it on is one
@@ -1653,6 +1854,57 @@ mod tests {
         assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the fsub moved, as the pin has it");
     }
 
+    /// A sum of two dying values sank past the branch beside a call: both
+    /// operands stayed live across the call and were spilled (x_idioms -Os,
+    /// 13 results spilled, +61 B). With the size rule on it stays before the
+    /// call; with it off the pin's sink moves it.
+    #[test]
+    fn test_in_a_size_build_a_sum_of_dying_values_stays_before_a_call() {
+        let call = {
+            let mut one = (*insn(1, Operation::Move, "mov", vec![held(6)], vec![held(9)], vec![6], vec![9])).clone();
+            one.clobbers.insert(llrm_lir::registers::RegId::from_raw(0));
+            Arc::new(one)
+        };
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(
+                        0,
+                        Operation::FloatArith,
+                        "fadd",
+                        vec![held(10)],
+                        vec![held(1), held(2)],
+                        vec![10],
+                        vec![1, 2],
+                    ),
+                    call,
+                    insn(5, Operation::Compare, "cmp", vec![], vec![held(3), held(4)], vec![], vec![3, 4]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(10)], vec![5], vec![10])])
+        };
+        let join = LirBlock::new(2, vec![insn(4, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let mut body = LirBody::new(
+            "chain",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3, 4, 9].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let first = |body: &LirBody| body.blocks[0].insns.first().and_then(|one| one.what.as_ref()?.name.clone());
+        assert_ne!(first(&sunk_within(&body, true, usize::MAX, None)).as_deref(), Some("fadd"), "the pin sinks it");
+        let spared = sunk_within_ranges(&body, true, usize::MAX, None, true);
+        assert_eq!(first(&spared).as_deref(), Some("fadd"), "the size rule keeps it");
+    }
+
     /// x_collatz ran `lea edi,[ecx+ecx*2]` on every trip of its inner loop,
     /// above the branch whose odd arm alone read it: the sinker took the
     /// `lea`'s address operand for a memory read and refused to move it
@@ -1797,7 +2049,8 @@ mod tests {
     /// A load in a loop, read only in the exit that the loop's two paths both
     /// reach, was left in the loop whatever lay between (DEVIATE M1: no load
     /// along a critical edge); the pin sinks it when `hasStoreBetween` finds
-    /// none. With a store on the way it stays.
+    /// none. With a store on the way it stays, unless both say what they reach
+    /// and it is another object (`mayAlias`; every store counted before).
     #[test]
     fn test_a_load_goes_along_a_critical_edge_past_no_store() {
         use crate::model::ir::Mem;
@@ -1805,7 +2058,17 @@ mod tests {
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let build = |between: Arc<Insn>| {
+        let reaches = |one: Arc<Insn>, slot: i64, store: bool| -> Arc<Insn> {
+            let mut one = (*one).clone();
+            one.memory = Some(crate::model::memref::MemRef {
+                object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+                offset: Some(0),
+                bytes: Some(4),
+                store,
+            });
+            Arc::new(one)
+        };
+        let build = |between: Arc<Insn>, load_slot: Option<i64>| {
             // entry -> head; head -> latch | exit; latch -> head | side; side
             // -> exit.
             let mut body = LirBody::new(
@@ -1817,15 +2080,18 @@ mod tests {
                         1,
                         vec![2, 4],
                         vec![
-                            insn(
-                                10,
-                                Operation::Move,
-                                "mov",
-                                vec![held(3)],
-                                vec![Loc::Mem(cell.clone())],
-                                vec![3],
-                                vec![1],
-                            ),
+                            {
+                                let load = insn(
+                                    10,
+                                    Operation::Move,
+                                    "mov",
+                                    vec![held(3)],
+                                    vec![Loc::Mem(cell.clone())],
+                                    vec![3],
+                                    vec![1],
+                                );
+                                load_slot.map_or(load.clone(), |slot| reaches(load, slot, false))
+                            },
                             jump(11),
                         ],
                     )
@@ -1852,10 +2118,14 @@ mod tests {
         let nop = insn(15, Operation::Move, "mov", vec![held(6)], vec![held(1)], vec![6], vec![1]);
         let store = insn(15, Operation::Move, "mov", vec![Loc::Mem(cell.clone())], vec![held(1)], vec![], vec![1]);
         let loads = |body: &LirBody, at: usize| body.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
-        let clear = build(nop);
+        let clear = build(nop, None);
         assert!(loads(&clear, 4) && !loads(&clear, 1), "no store between: the load left the loop");
-        let blocked = build(store);
+        let blocked = build(store.clone(), None);
         assert!(loads(&blocked, 1) && !loads(&blocked, 4), "a store between: the load stays");
+        let elsewhere = build(reaches(store.clone(), 2, true), Some(1));
+        assert!(loads(&elsewhere, 4) && !loads(&elsewhere, 1), "a store to another object: the load left the loop");
+        let there = build(reaches(store, 1, true), Some(1));
+        assert!(loads(&there, 1) && !loads(&there, 4), "a store to its object: the load stays");
     }
 
     /// The edge a loop is left by is split-worthy (at most the pin's 40
@@ -1887,6 +2157,89 @@ mod tests {
         assert!(odds[&(1, 1)] > SPLIT_EDGE_PROBABILITY_THRESHOLD, "the back edge");
     }
 
+    /// The `if (a > 0) r = g(b)` shape: the entry makes the constant 7 that
+    /// only the join's phi reads on the edge past the arm. `edge` is the
+    /// odds of that edge. At most the pin's 40 percent (it is 37.5 for
+    /// `icmp sgt a, 0`: `llc -O2 -stop-after=machine-sink`, the constant in
+    /// a block of its own) the cheap constant is made on the edge; at 50 it
+    /// stays in the entry.
+    fn constant_past_an_arm(edge: f64) -> LirBody {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let entry = block(
+            0,
+            vec![1, 2],
+            vec![
+                insn(0, Operation::Move, "mov", vec![held(3)], vec![imm(7)], vec![3], vec![]),
+                insn(1, Operation::Compare, "cmp", vec![], vec![held(1), imm(0)], vec![], vec![1]),
+                insn(2, Operation::Branch, "jle", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        let arm =
+            block(1, vec![2], vec![insn(3, Operation::Move, "mov", vec![held(4)], vec![held(1)], vec![4], vec![1])]);
+        let join = LirBlock {
+            phis: vec![crate::model::lir::Phi { result: 5, incoming: vec![(0, 3), (1, 4)] }].into(),
+            ..block(2, vec![], vec![insn(4, Operation::Return, "ret", vec![], vec![held(5)], vec![], vec![5])])
+        };
+        let mut body = LirBody::new(
+            "past",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let certain = crate::model::lir::BlockOdds::CERTAIN;
+        body.odds.taken.insert((0, 2), (edge * certain) as u32);
+        body.odds.taken.insert((0, 1), ((1.0 - edge) * certain) as u32);
+        body
+    }
+
+    fn made_in_entry(body: &LirBody) -> bool {
+        body.blocks[0].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov")))
+    }
+
+    #[test]
+    fn test_a_constant_made_in_the_entry_goes_onto_a_split_edge_of_at_most_40_percent() {
+        let moved = sunk(&constant_past_an_arm(0.375), false);
+        assert!(!made_in_entry(&moved), "the constant is made before the branch that skips its use");
+        assert_eq!(moved.blocks.len(), 4, "a block on the edge to the join");
+        let edge = moved.blocks.iter().find(|block| ![0, 1, 2].contains(&block.at)).expect("the edge block");
+        assert!(edge.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov"))));
+    }
+
+    /// The control: at 50 percent the edge is not worth a block for a constant.
+    #[test]
+    fn test_a_constant_made_in_the_entry_stays_when_its_edge_is_over_40_percent() {
+        let moved = sunk(&constant_past_an_arm(0.5), false);
+        assert!(made_in_entry(&moved));
+        assert_eq!(moved.blocks.len(), 3);
+    }
+
+    /// `as_cheap_as_a_move` asked x86's rule of every target: `movabs` was
+    /// never cheap, so AArch64's `movz x0, #1, lsl #32` (one instruction)
+    /// was split out at any probability. The target's rule decides now.
+    #[test]
+    fn test_the_target_decides_whether_a_constant_is_cheap() {
+        let wide = |value: i64| {
+            insn(
+                0,
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(Held { value: 1, width: 8, offset: 0 })],
+                vec![Loc::Imm(crate::model::ir::Imm { value, width: 8, address: None })],
+                vec![1],
+                vec![],
+            )
+        };
+        let one_move = wide(0x1_0000_0000);
+        assert!(!as_cheap_as_a_move(&one_move, llrm_target::x86_cheap_move_immediate), "x86: a movabs");
+        assert!(as_cheap_as_a_move(&one_move, |_, _| true), "a target whose constant is one instruction");
+        assert!(as_cheap_as_a_move(&wide(7), llrm_target::x86_cheap_move_immediate));
+    }
+
     /// The sink asked a graph of the body for its frequencies, another for its
     /// edge probabilities, and found its loops a third and fourth time
     /// (`loops`, `irreducible`): d_faces, 9 rounds, 4 M instructions. One
@@ -1913,6 +2266,34 @@ mod tests {
         let _ = Sinker::new(&body, false, None);
         let built = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before;
         assert_eq!(built, 1, "graphs built for one round");
+    }
+
+    /// A body without a block of two successors has nothing the sink can move
+    /// (`ProcessBlock` returns at once for each of its blocks), yet every
+    /// round built a graph, dominators, frequencies and liveness for it:
+    /// memory_expansion's `MachineSink` was 34.0 M against the pin's 3.9 M.
+    /// Counted, not timed.
+    #[test]
+    fn test_a_body_without_a_branch_builds_no_analyses() {
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let body = |blocks: Vec<LirBlock>| {
+            let mut body = LirBody::new("f", 0, blocks.into_iter().collect(), IndexMap::default(), IndexMap::default());
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let graphs = |body: &LirBody| {
+            let before = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get);
+            let _ = sunk(body, false);
+            crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before
+        };
+        let straight = body(vec![block(0, vec![1], vec![]), block(1, vec![], vec![ret(1)])]);
+        let branching =
+            body(vec![block(0, vec![1, 2], vec![jump(0)]), block(1, vec![2], vec![]), block(2, vec![], vec![ret(2)])]);
+        assert_eq!(graphs(&straight), 0, "graphs built for a body that cannot sink");
+        assert!(graphs(&branching) > 0, "a body with a branch is still analysed");
     }
 
     /// x_bubble's inner loop: `j + 1` is computed in the header, read by the
@@ -1997,5 +2378,101 @@ mod tests {
         // against the latch's pressure: room for it, and none.
         assert_eq!(names(&sunk_within(&bubble(12), false, 7, None), 3), ["add", "cmp", "jne"], "room");
         assert_eq!(names(&sunk_within(&bubble(12), false, 3, None), 1), ["mov", "add", "cmp", "jle"], "full");
+    }
+
+    /// A loop block that branches back to its header or on to the next block
+    /// of a condition chain: the selector adds the chain edge first, and the
+    /// pin's sort keeps that order among blocks of one depth, so a load used
+    /// down the chain sinks one block along (os_execute m32 -Os: eight byte
+    /// loads stayed in the block above, `mov r8, [esp+k]` held across the
+    /// branches, +22 B over the unrotated loop's `cmp [slot], imm`). Sorted
+    /// by the block's `succ` order the header came first, and took the load.
+    #[test]
+    fn test_successors_of_one_depth_keep_the_order_the_selector_added_them_in() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "chain",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(10)]).into(),
+                block(1, vec![2], vec![jump(11)]).into(),
+                block(
+                    2,
+                    vec![1, 3],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]),
+                        jump(13),
+                    ],
+                )
+                .into(),
+                block(
+                    3,
+                    vec![1, 4],
+                    vec![insn(14, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]), jump(15)],
+                )
+                .into(),
+                block(4, vec![], vec![ret(16)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body.odds.taken.insert((2, 3), crate::model::lir::BlockOdds::CERTAIN as u32 - 1000);
+        body.odds.taken.insert((2, 1), 1000);
+        body.odds.taken.insert((3, 4), 1000);
+        body.odds.taken.insert((3, 1), crate::model::lir::BlockOdds::CERTAIN as u32 - 1000);
+        let sinker = Sinker::new(&body, true, None);
+        assert_eq!(sinker.sorted_successors(2).first(), Some(&3), "{:?}", sinker.sorted_successors(2));
+        assert_eq!(sinker.sorted_successors(3).first(), Some(&4), "{:?}", sinker.sorted_successors(3));
+    }
+
+    /// A byte load of a local buffer, compared in only one arm, stayed in the
+    /// block above the branch: its cell is addressed through the frame
+    /// register, and a physical read kept it (DEVIATE M6; os_execute m64 -Os
+    /// +35 B over the pin, eight `mov r8,[rsp+k]` the pin sinks and folds into
+    /// `cmp [slot], imm`). The pin's local is a frame index with no register.
+    #[test]
+    fn test_a_load_of_a_local_cell_sinks_into_the_arm_that_reads_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "local",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![1, 2],
+                    vec![
+                        insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]),
+                        jump(11),
+                    ],
+                )
+                .into(),
+                block(
+                    1,
+                    vec![],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                        insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+                .into(),
+                block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let sunk = sunk(&body, false);
+        let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
     }
 }

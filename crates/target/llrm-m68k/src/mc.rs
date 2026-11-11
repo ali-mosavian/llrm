@@ -125,7 +125,12 @@ fn print_method(
     // The type suffix (`8`, `16`, `32`) changes nothing in the text.
     let kind = method.trim_end_matches("Mem").trim_start_matches("print").trim_end_matches(char::is_numeric);
     Ok(match kind {
-        "Operand" | "Immediate" => print_operand(inst, at)?,
+        "Operand" => print_operand(inst, at)?,
+        // `printImmediate`: a symbol in an immediate slot is `#sym` (the address), bare `sym` is the memory at it.
+        "Immediate" => match operand(inst, at)? {
+            Operand::Symbol(name, addend) => format!("#{}", symbol(name, *addend)),
+            _ => print_operand(inst, at)?,
+        },
         "PCRelImm" => print_disp(inst, at)?,
         "MoveMask" => print_move_mask(inst, at)?,
         "ARI" => format!("({})", print_operand(inst, at)?),

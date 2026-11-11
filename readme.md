@@ -158,59 +158,52 @@ fn dot(a: &[i16], b: &[i16]) -> i32:
 
 ```asm
 _dot proc far
-    push bp                           ; a is the far pointer [bp+6], b [bp+10]
+    push bp
     mov bp, sp
-    sub sp, 10                        ; spill slots [bp-2] to [bp-10]
     push si
     push di
 L0_1:
-    les di, dword ptr [bp+6]          ; es:di = a, a descriptor
-    mov cx, word ptr es:[di]          ; cx = len(a)
-    lfs bx, dword ptr [bp+10]         ; fs:bx = b
-    mov si, word ptr fs:[bx]          ; si = len(b)
-    xor eax, eax                      ; 0, the result for an empty slice
-    test cx, cx
-    je L0_3                           ; len(a) = 0
-L0_5:
-    test si, si
-    je L0_3                           ; len(b) = 0
-L0_2:
-    mov word ptr [bp-2], cx           ; len(a), spilled
-    mov ax, word ptr es:[di+4]
-    mov word ptr [bp-4], ax           ; a's data offset, spilled
-    mov es, word ptr es:[di+6]        ; es = a's data segment
-    mov ax, word ptr fs:[bx+4]
-    mov word ptr [bp-6], ax           ; b's data offset, spilled
-    mov fs, word ptr fs:[bx+6]        ; fs = b's data segment
-    xor eax, eax                      ; total = 0
-    mov cx, 1                         ; cx = i + 1
-L0_4:
-    mov dword ptr [bp-10], eax        ; total, spilled on every pass
-    lea bx, [ecx+ecx]                 ; bx = 2(i + 1)
-    mov di, word ptr [bp-4]           ; di = a's data offset
-    movsx edx, word ptr es:[bx+di-2]  ; a[i]
-    mov di, word ptr [bp-6]           ; di = b's data offset
-    movsx eax, word ptr fs:[bx+di-2]  ; b[i]
-    imul eax, edx
-    add eax, dword ptr [bp-10]        ; total += product, reloaded
-    cmp cx, word ptr [bp-2]
-    jae L0_3                          ; i + 1 reached len(a)
+    mov si, ax                        ; ax, cx = len(a), len(b), promoted out of the descriptors
+    cmp ax, cx
+    jb L0_7
 L0_6:
-    mov dx, cx
-    inc dx
-    cmp cx, si
-    mov cx, dx                        ; i + 1; the flags are still the compare
-    jb L0_4                           ; until i + 1 reaches len(b)
+    mov si, cx
+L0_7:
+    test si, si                       ; si = min(len(a), len(b)): zip stops at the shorter
+    je L0_2_1                         ; nothing to pair: the result is 0
+L0_2:
+    mov dx, word ptr [bp+8]           ; a's data segment
+    mov cx, si                        ; cx counts from -n up to 0
+    neg cx
+    add si, si                        ; si = 2n, the byte length
+    mov di, word ptr [bp+6]           ; a's data offset
+    add di, si                        ; di = the end of a's n elements
+    mov es, dx
+    add si, word ptr [bp+12]          ; si = the end of b's n elements
+    mov fs, word ptr [bp+14]          ; fs = b's data segment
+    xor eax, eax                      ; total = 0
+L0_4:
+    lea bx, [ecx+ecx]                 ; bx = 2 * (i - n), negative
+    movsx edx, word ptr es:[bx+di]    ; a[i]
+    movsx ebx, word ptr fs:[bx+si]    ; b[i]
+    imul ebx, edx
+    add eax, ebx                      ; total += the product
+    inc cx
+    jne L0_4                          ; until cx reaches 0
+    jmp L0_3
+L0_2_1:
+    xor eax, eax                      ; the result of an empty zip
 L0_3:
-    pop di                            ; the long is in eax, where it returns
+    pop di
     pop si
-    leave
+    pop bp
     retf
 _dot endp
 ```
 
-A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
-elements until the shorter slice ends, so there is no `n`, and no index to check.
+A Nib slice is a six-byte descriptor on the stack (length, far data pointer); the lengths also arrive promoted
+in `ax` and `cx`. `zip` pairs the elements until the shorter slice ends, so there is no `n`, and no index to check:
+`cx` runs from -n up to 0 and both arrays are addressed from their ends.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
 BASIC, `llrm-qb dot.bas --dialect pds71 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline=DOT -S` (DOT is called once, and would go into its caller):

@@ -289,7 +289,32 @@ def body_checks(head: str, description: str, base: str = BASE, cwd: Path = ROOT,
 
 def warnings(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """The description checks that only warn (all of them unless BODY_CHECKS=refuse)."""
-    return [] if BODY_CHECKS == "refuse" else body_checks(head, description, base, cwd, title)
+    return subject_length(title)[0] + ([] if BODY_CHECKS == "refuse" else body_checks(head, description, base, cwd, title))
+
+
+CONVENTIONAL = re.compile(r"(feat|fix|perf|refactor|test|docs|build|ci|chore|style|revert)(\([^)]+\))?!?: \S")
+
+
+def subject_refusals(title: str) -> list[str]:
+    """The squash subject is the PR title: a merge-commit line or a non-conventional title must not land."""
+    if not title or CONVENTIONAL.match(title):
+        return []
+    return [f"squash subject {title!r} is not `type(scope): description` (a 'Merge ...' title is a merge-commit line): retitle the PR"]
+
+
+SUBJECT_TARGET, SUBJECT_MAX = 60, 72
+SUBJECT_MAX_FROM = datetime.date(2026, 11, 12)  # ratchet: warn until sessions have adapted (157 of 400 subjects were over 72 on 11-05), then refuse
+
+
+def subject_length(title: str, today: datetime.date | None = None) -> tuple[list[str], list[str]]:
+    """(warnings, refusals) for a title longer than the target; over the max it refuses from SUBJECT_MAX_FROM."""
+    n = len(title)
+    if n <= SUBJECT_TARGET:
+        return [], []
+    note = f"{n} chars: squash subject {title!r} is over the {SUBJECT_TARGET} target (max {SUBJECT_MAX}); shorten the PR title"
+    if n > SUBJECT_MAX and (today or datetime.date.today()) >= SUBJECT_MAX_FROM:
+        return [], [note]
+    return [note], []
 
 
 def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
@@ -298,7 +323,7 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
         return [f"the PR head does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
     why = [f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR" for path, page in dead_links(base, head, cwd)]
     soft = body_checks(head, description, base, cwd, title) if BODY_CHECKS == "refuse" else []
-    return soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
+    return subject_refusals(title) + subject_length(title)[1] + soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, release/next sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
@@ -1115,7 +1140,7 @@ def new_lib_failures(
     names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
     smoke = parity_smoke_module()
     packages, graph = smoke.workspace_graph()
-    # The changed crates and every crate that depends on one: llrm-c's lib tests were red on parity while PRs merged, as each changed only a dependency.
+    # The changed crates and every crate that depends on one: llrm-cc's lib tests were red on parity while PRs merged, as each changed only a dependency.
     touched = smoke.dependants(smoke.touched_packages(files, packages), graph)
     # llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources: a change to any .rs under crates/ can turn one red,
     # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
@@ -1152,6 +1177,7 @@ ALWAYS_SCANNERS = (
     "no_local_paths",
     "no_partial_ecx_counts",
     "no_todo",
+    "no_watcom_frontend",
     "selectiondag_registry",
     "target_facts",
     "tracked_build_products",
@@ -1336,7 +1362,7 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
     started = time.time()
     (build or _build_release)()
     red = behavioural.red_programs((run or _run_behavioural)())
-    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (LLRM_OW missing) and refused #5785
+    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (Open Watcom tree missing) and refused #5785
         print(f"behavioural: {len(red)} wrong; running once more on the same tree{red_env_cause()}")
         red = [program for program in behavioural.red_programs((run or _run_behavioural)()) if program in red]
     print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s{red_env_cause() if red else ''}")
@@ -1387,8 +1413,10 @@ def _run_stale() -> subprocess.CompletedProcess:
 
 def red_env_cause() -> str:
     """What a behavioural run needs from the environment and lacks, for the REFUSED line; empty when it has it."""
-    ow = os.environ.get("LLRM_OW")
-    return "" if ow and Path(ow).expanduser().is_dir() else " (LLRM_OW is unset or not a directory: a missing Open Watcom tree, not a miscompile)"
+    import llrmbin  # noqa: PLC0415
+
+    tree = llrmbin.ow_tree()
+    return "" if llrmbin.ow_present() else f" ({tree} is missing: run tools/ow-fetch.sh; a missing Open Watcom tree, not a miscompile)"
 
 
 def _run_behavioural() -> str:
@@ -1656,7 +1684,7 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
-ALONE_DEPENDANTS = {"llrm-qb", "llrm-c", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
+ALONE_DEPENDANTS = {"llrm-qb", "llrm-cc", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
 ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
 SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
 

@@ -64,7 +64,8 @@ fn a_loaded_argument_is_pushed_from_memory_with_no_register_between() {
 #[test]
 fn a_store_between_the_load_and_the_call_keeps_the_load_first() {
     let text = text_with(&module(), "pk", Cpu::M68000, options(true)).expect("compiles");
-    let load = text.find("(%a0), %d0").or_else(|| text.find("(%a0), %d1")).unwrap_or(usize::MAX);
+    // the old value may sit in a data or an address register
+    let load = text.find("(%a0), %").unwrap_or(usize::MAX);
     let store = text.find("#9").unwrap_or(0);
     assert!(load < store, "the old value must be read before the store:\n{text}");
 }

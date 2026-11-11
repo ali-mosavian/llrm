@@ -43,6 +43,29 @@ pub fn scratch(text: &str) -> Vec<String> {
     order(text, "@scratch")
 }
 
+/// Whether a `@lanes bytes` line says the file's lanes are the bytes of each root.
+pub fn byte_lanes(text: &str) -> bool {
+    order(text, "@lanes").iter().any(|word| word == "bytes")
+}
+
+/// Whether the file says its lanes are x86's table: `@lanes x86`. A file with integer views under 32 bits and
+/// none of `@lanes bytes`, `@lanes x86` and `@lanes none` is refused (`lanes::table_of`).
+pub fn lanes_x86(text: &str) -> bool {
+    order(text, "@lanes").iter().any(|word| word == "x86")
+}
+
+/// Whether the file says `@lanes none`: its target reads no lanes yet, and a read (`lanes::enter`) is refused by
+/// name until the file states the lanes it needs.
+pub fn lanes_none(text: &str) -> bool {
+    order(text, "@lanes").iter().any(|word| word == "none")
+}
+
+/// Whether a `@ties rows` line says the rows of the file's instructions state
+/// which operand is tied to the dest.
+pub fn ties_by_row(text: &str) -> bool {
+    order(text, "@ties").iter().any(|word| word == "rows")
+}
+
 /// The 8-bit allocation order a `@bytes al cl dl ah ch dh bl bh` line states
 /// (the GR8 class of X86RegisterInfo.td): the high bytes are in it.
 pub fn bytes(text: &str) -> Vec<String> {
@@ -87,9 +110,24 @@ pub fn float_facts(text: &str) -> (usize, bool) {
     if let Some(&found) = FACTS.lock().expect("the facts lock").get(text) {
         return found;
     }
-    let facts = parse(text).map_or((0, false), |all| (of_class(&all, "x87").len(), !of_class(&all, "xmm").is_empty()));
+    let facts = file(text).map_or((0, false), |all| (of_class(&all, "x87").len(), !of_class(&all, "xmm").is_empty()));
     FACTS.lock().expect("the facts lock").insert(text.to_owned(), facts);
     facts
+}
+
+/// [`parse`], once per distinct text: the register file is read by the class
+/// table, the cpu table and the float facts of one compile, and each parsed it
+/// again (0.9 M Ir of a 17 M compile).
+pub fn file(text: &str) -> Result<std::sync::Arc<Vec<Register>>, String> {
+    static FILES: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<Register>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    if let Some(found) = FILES.lock().expect("the files lock").get(text) {
+        return Ok(std::sync::Arc::clone(found));
+    }
+    let parsed = std::sync::Arc::new(parse(text)?);
+    FILES.lock().expect("the files lock").insert(text.to_owned(), std::sync::Arc::clone(&parsed));
+    Ok(parsed)
 }
 
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
@@ -250,7 +288,7 @@ pub fn source_with(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {}, lanes_x86: {}, lanes_none: {}, ties_by_row: {} }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         bytes.join(", "),
@@ -260,7 +298,11 @@ pub fn source_with(
         optional("data_segment")?,
         optional("stack_segment")?,
         optional("code_segment")?,
-        optional("far_segment")?
+        optional("far_segment")?,
+        byte_lanes(text),
+        lanes_x86(text),
+        lanes_none(text),
+        ties_by_row(text)
     ));
     Ok(code)
 }
@@ -399,5 +441,21 @@ mod source_tests {
                 .unwrap()
                 .contains("bytes: &'static [Reg] = &[Reg::AL, Reg::AH]")
         );
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    /// Each of the class table, the cpu table and the float facts parsed the
+    /// register file again: four parses of one text per compile. However
+    /// often a text is asked, it is parsed once.
+    #[test]
+    fn test_a_register_file_is_parsed_once_however_often_it_is_asked() {
+        let text = "regfile_once_probe 8 regfile_once_probe 0 gpr - -\n";
+        let before = super::parsed();
+        for _ in 0..20 {
+            assert_eq!(super::file(text).expect("parses").len(), 1);
+        }
+        assert_eq!(super::parsed() - before, 1);
     }
 }

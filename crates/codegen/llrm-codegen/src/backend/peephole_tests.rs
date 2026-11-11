@@ -1416,6 +1416,49 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
     }
 }
 
+/// jpeg_fixed -Os x86_64 kept three zero stores as `mov qword ptr [rsp+N],0` (9
+/// bytes each, 27) where one `xor` and three register stores take 17: the run
+/// took no qword store, +42 bytes once the coalescer stopped sharing the zero.
+#[test]
+fn test_qword_zero_stores_share_a_dead_register_in_long_mode() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let classes = crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64);
+    let store = |at: i64, width: u32, disp: i64| {
+        let cell = Loc::Mem(Mem { through: RegId::RSP, ..Mem::new(frame(disp), width) });
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Move, "mov", vec![cell], vec![im(0, width)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let stores = vec![store(0, 8, 8), store(1, 4, 16), store(2, 8, 24)];
+    // everything after is live unless written first: the scratch registers are
+    // written whole
+    let after: Vec<Arc<Insn>> = [RegId::RAX, RegId::RBX, RegId::RCX, RegId::RDX]
+        .into_iter()
+        .enumerate()
+        .map(|(at, register)| {
+            let what = sem(Operation::Move, "mov", vec![rl(register, 8)], vec![im(1, 8)]);
+            Arc::new(insn(20 + at as i64, Some((20 + at as i64, 21 + at as i64)), Some(what), vec![], vec![]))
+        })
+        .collect();
+    let mut input = body("stores", 0, vec![block(0, stores.into_iter().chain(after).collect(), vec![]).into()]);
+    input.bits = 64;
+    input.registers = Some(classes.registers);
+
+    let result = sharedstores::shared(&input, size, &[], &classes);
+
+    // the flags are live at the end of the body, so the zero is a `mov`; what
+    // matters is that the stores read the register
+    let whats: Vec<&Semantics> = result.blocks[0].insns[..4].iter().map(|one| one.what.as_ref().unwrap()).collect();
+    assert!(matches!(whats[0].dests[..], [Loc::Reg(_)]), "{whats:?}");
+    for store in &whats[1..] {
+        assert!(matches!((&store.dests[..], &store.sources[..]), ([Loc::Mem(_)], [Loc::Reg(_)])), "{store:?}");
+    }
+}
+
 /// Which scratch register a run may take is the convention's fact
 /// (`Target::callee_saved`): where it preserves BX, a run takes BX only if the
 /// body already names it (so its epilogue saves it), else it would push and pop
@@ -1646,12 +1689,51 @@ fn test_minus_one_is_or_at_size_when_flags_are_dead() {
             block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
             block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
         ];
-        let result = cleared(&body("ones", 0, crate::model::lir::shared(blocks)), ones).insns()[0].clone();
+        let result = cleared(&body("ones", 0, crate::model::lir::shared(blocks)), ones, false).insns()[0].clone();
         let what = result.what.as_ref().unwrap();
         assert_eq!(what.name.as_deref(), Some(if orred { "or" } else { "mov" }), "{successor} {ones}");
         if orred {
             assert_eq!(what.sources, [eax, im(-1, 4)]);
         }
+    }
+}
+
+/// `mov eax, 1` at size is `xor eax,eax; inc eax` (the pin's `MOV32r1`): m32
+/// phi_slot_unknown_arm -Os kept two `mov r,1` (5 B each) where the pin has 3.
+/// Only a 32-bit-address body at size, and only where the flags are dead.
+#[test]
+fn test_a_one_at_size_is_xor_and_inc() {
+    // (successor's first instruction, ones, fact, bits, rewritten): the target
+    // fact decides, not the word size (a 64-bit body with the fact on was left
+    // as `mov r,1` by a `bits == 32` test in shared code).
+    for (successor, ones, fact, bits, rewritten) in [
+        ("cmp", true, true, 32, true),
+        ("cmp", false, true, 32, false),
+        ("cmp", true, false, 32, false),
+        ("cmp", true, true, 64, true),
+        ("jb", true, true, 32, false),
+    ] {
+        let eax = rl(RegId::EAX, 4);
+        let set =
+            insn(0, Some((0, 5)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(1, 4)])), vec![], vec![]);
+        let jump = insn(5, Some((5, 7)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(7))), vec![], vec![]);
+        let first = match successor {
+            "jb" => Some(semt(Operation::Branch, "jb", vec![], vec![], Some(9))),
+            _ => Some(sem(Operation::Compare, "cmp", vec![], vec![eax.clone(), im(2, 4)])),
+        };
+        let blocks = vec![
+            block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
+            block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
+        ];
+        let input = LirBody { bits, ..body("one", 0, crate::model::lir::shared(blocks)) };
+        let result = cleared(&input, ones, fact);
+        let names: Vec<_> = result.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
+        let want: &[&str] = if rewritten { &["xor", "inc", "jmp"] } else { &["mov", "jmp"] };
+        assert_eq!(
+            names.iter().map(|name| name.as_deref().unwrap()).collect::<Vec<_>>(),
+            want,
+            "{successor} {ones} {fact} {bits}"
+        );
     }
 }
 
@@ -3826,7 +3908,7 @@ fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
 
 /// X86FixupLEAs `optLEAALU`: `lea ecx,[eax+edx]; add ebx,ecx` is `add ebx,eax;
 /// add ebx,edx`, and a subtract the same two steps. Without the case the
-/// six-term sums of two llrm-c listings kept the `lea`/`mov` pair and ended
+/// six-term sums of two llrm-cc listings kept the `lea`/`mov` pair and ended
 /// `mov eax, edx`.
 #[test]
 fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
@@ -4128,6 +4210,7 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
         effects: llrm_mir::memory::Effects::NONE,
         private: vec![],
         disturbs: Default::default(),
+        block: false,
     };
     let load = Insn {
         symbol: Some(false),
@@ -5527,9 +5610,9 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
 }
 
 /// nbody -O3 at m64: `movsd [rsp-0x20], xmm13 ; movsd xmm13, [rsp-0x20]` stood
-/// in the loop four times a trip (800 of 27.6k instructions); the pin's code has
-/// no such pair, and the rule that drops it knew `mov` and nothing wider than a
-/// dword.
+/// in the loop four times a trip (800 of 27.6k instructions); the pin's code
+/// has no such pair, and the rule that drops it knew `mov` and nothing wider
+/// than a dword.
 #[test]
 fn test_a_float_reload_of_the_register_that_filled_the_cell_is_dropped_at_m64() {
     let cell = || Loc::Mem(mem(frame(-16), 8, RegId::RSP, -16, 1));
@@ -6268,4 +6351,383 @@ fn test_a_volatile_frame_access_stops_the_forwarding() {
     let base = Addr::new(Space::Frame, -20);
     let indexed = Mem { index_through: RegId::SI, scale: 1, ..mem(Some(base), 2, RegId::BP, -20, 1) };
     assert_eq!(reload_across_with(Loc::Mem(indexed), false, true), 3);
+}
+
+/// `fld dword [from]` then `fstp dword [to]` in the frame, an anchor between,
+/// then a tail that writes (so frees) every general register in `tail_writes`
+/// and reads those in `tail_reads`.
+fn float_copy_body(
+    from: (i64, u32),
+    to: (i64, u32),
+    tail_reads: &[RegId],
+) -> LirBody {
+    float_copy_body_then(from, to, tail_reads, false)
+}
+
+/// `float_copy_body`, a `fldcw` (the rounding-mode restore after a float to
+/// integer conversion) after the pair when `control_word`.
+fn float_copy_body_then(
+    from: (i64, u32),
+    to: (i64, u32),
+    tail_reads: &[RegId],
+    control_word: bool,
+) -> LirBody {
+    let cell = |(disp, width): (i64, u32)| Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(disp), width) });
+    let top = Loc::st(0);
+    let load = sem(Operation::FloatLoad, "fld", vec![top.clone()], vec![cell(from)]);
+    let store = sem(Operation::FloatStore, "fstp", vec![cell(to)], vec![top]);
+    let mut insns = vec![
+        Arc::new(insn(0, Some((0, 1)), Some(load), vec![], vec![])),
+        Arc::new(insn(1, Some((1, 1)), None, vec![], vec![])),
+        Arc::new(insn(1, Some((1, 2)), Some(store), vec![], vec![])),
+    ];
+    if control_word {
+        let word = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-30), 2) });
+        let what = sem(Operation::Barrier, "fldcw", vec![], vec![word]);
+        insns.push(Arc::new(insn(5, Some((5, 6)), Some(what), vec![], vec![])));
+    }
+    for (at, register) in tail_reads.iter().enumerate() {
+        let what = sem(Operation::Compare, "cmp", vec![], vec![rl(*register, 4), im(0, 4)]);
+        insns.push(Arc::new(insn(10 + at as i64, Some((10 + at as i64, 11 + at as i64)), Some(what), vec![], vec![])));
+    }
+    for (at, register) in [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX].into_iter().enumerate() {
+        if !tail_reads.contains(&register) {
+            let what = sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(1, 4)]);
+            insns.push(Arc::new(insn(
+                20 + at as i64,
+                Some((20 + at as i64, 21 + at as i64)),
+                Some(what),
+                vec![],
+                vec![],
+            )));
+        }
+    }
+    let mut made = body("float-copy", 0, vec![block(0, insns, vec![]).into()]);
+    made.bits = 16;
+    made
+}
+
+fn float_copy(
+    input: &LirBody,
+    size: bool,
+) -> Option<LirBody> {
+    let cpu = crate::backend::cpu::tuned("486", size).unwrap();
+    crate::backend::floatslotcopy::copied(input, cpu, &saved(), &crate::backend::classes::RegisterClasses::m16())
+}
+
+/// x87rotate -O2 -m16 shifted ten floats through frame cells with `fld dword
+/// [A]` / `fstp dword [B]` pairs: 10 clocks a float on a 486 against 2 through
+/// a register (2875 derived cost against ow's 2597). A free register makes the
+/// pair a dword load and store, the anchor between them kept.
+#[test]
+fn test_a_float_slot_copy_goes_through_a_free_register_at_speed() {
+    let input = float_copy_body((-4, 4), (-8, 4), &[]);
+
+    let result = float_copy(&input, false).expect("the pair is copied through a register");
+
+    let insns = &result.blocks[0].insns;
+    assert_eq!(names(&insns[..2]), ["mov", "mov"], "{insns:?}");
+    assert!(insns[2].what.is_none(), "the anchor stays, after the moves");
+    let (load, store) = (insns[0].what.as_ref().unwrap(), insns[1].what.as_ref().unwrap());
+    assert!(matches!(&load.sources[..], [Loc::Mem(cell)] if cell.addr == frame(-4) && cell.width == 4), "{load:?}");
+    assert!(matches!(&store.dests[..], [Loc::Mem(cell)] if cell.addr == frame(-8) && cell.width == 4), "{store:?}");
+    assert_eq!(load.dests, store.sources, "one register carries the word");
+}
+
+/// The cell is copied whole: a double is two dwords.
+#[test]
+fn test_a_double_slot_copy_moves_both_dwords() {
+    let input = float_copy_body((-8, 8), (-16, 8), &[]);
+
+    let result = float_copy(&input, false).expect("the pair is copied through a register");
+
+    let whats: Vec<&Semantics> = result.blocks[0].insns.iter().filter_map(|one| one.what.as_ref()).take(4).collect();
+    let cells: Vec<i64> = whats
+        .iter()
+        .map(|what| match (&what.dests[..], &what.sources[..]) {
+            ([Loc::Mem(cell)], _) | (_, [Loc::Mem(cell)]) => cell.addr.unwrap().disp,
+            _ => i64::MIN,
+        })
+        .collect();
+    assert_eq!(cells, [-8, -16, -4, -12], "{whats:?}");
+}
+
+/// Where bytes are strict (-Os) the pair stays: 8 bytes against 6 are not
+/// worth it. With no register dead, or cells that overlap, or a float stored
+/// as a double (a conversion), it stays at speed too.
+#[test]
+fn test_a_float_slot_copy_stays_where_it_is_not_cheaper_or_not_safe() {
+    let free = float_copy_body((-4, 4), (-8, 4), &[]);
+    assert!(float_copy(&free, true).is_none(), "-Os keeps the x87 pair");
+
+    let busy = float_copy_body((-4, 4), (-8, 4), &[RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX]);
+    assert!(float_copy(&busy, false).is_none(), "no register is dead after the pair");
+
+    let overlapping = float_copy_body((-4, 8), (-8, 8), &[]);
+    assert!(float_copy(&overlapping, false).is_none(), "a word store would change what a later word loads");
+
+    let converting = float_copy_body((-4, 4), (-16, 8), &[]);
+    assert!(float_copy(&converting, false).is_none(), "fld dword, fstp qword converts");
+}
+
+/// `fnstcw` and `fldcw` switch the rounding mode around a float to integer
+/// conversion. They were barriers with no known effect, which reads and writes
+/// every register: no register was dead anywhere before one, in a function
+/// that converts a float (x87rotate -O2 -m16 had no register for a copy; 4
+/// loop pairs stayed `fld`/`fstp`). They touch one cell and no register.
+#[test]
+fn test_a_control_word_switch_names_its_cell_and_no_register() {
+    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-2), 2) });
+    let save = sem(Operation::Barrier, "fnstcw", vec![cell.clone()], vec![]);
+    let load = sem(Operation::Barrier, "fldcw", vec![], vec![cell]);
+    for what in [save, load] {
+        let one = insn(0, Some((0, 1)), Some(what), vec![], vec![]);
+        let input = body("control-word", 0, vec![block(0, vec![Arc::new(one)], vec![]).into()]);
+        let effect = crate::backend::liveness::effect(input.regs(), 16, &input.blocks[0].insns[0])
+            .expect("the effect of a control-word switch is known");
+        // the FPU condition codes are flag lanes; a register lane would make it
+        // live-killing
+        assert!(effect.writes.iter().all(|lane| lane.0 == RegId::None), "{effect:?}");
+        assert!(effect.reads.iter().all(|lane| [RegId::BP, RegId::EBP, RegId::SS].contains(&lane.0)), "{effect:?}");
+    }
+}
+
+/// A register is free for a float copy where a `fldcw` follows: the switch
+/// reads its cell's address and no general register.
+#[test]
+fn test_a_float_slot_copy_finds_a_free_register_before_a_control_word_switch() {
+    let input = float_copy_body_then((-4, 4), (-8, 4), &[], true);
+
+    assert!(float_copy(&input, false).is_some());
+}
+
+/// A block that runs once in ten calls does not repay the bytes the register
+/// moves add to a double copy (6 clocks saved, +8 B): the saving is per run,
+/// not per site (m32 regparm3_matrix_31_callee grew 8 B for a copy outside any
+/// loop).
+#[test]
+fn test_a_double_slot_copy_in_a_cold_block_stays() {
+    let mut input = float_copy_body((-8, 8), (-16, 8), &[]);
+    let at = input.blocks[0].at;
+    let table = |runs: f64| Some(Arc::new(crate::model::lir::BlockFrequencies([(at, runs)].into_iter().collect())));
+    input.frequencies = table(0.1);
+    assert!(float_copy(&input, false).is_none(), "cold: stays");
+    input.frequencies = table(1.0);
+    assert!(float_copy(&input, false).is_some(), "once a call: the saving repays the bytes");
+}
+
+/// The register copy prices from the target's own `x87_load`, `x87_store`,
+/// `mov_rm` and `mov_mr`: a profile that lists none of them (any target but the
+/// x86 family, which alone has the tune tables with them) never runs the pass.
+#[test]
+fn test_a_float_slot_copy_needs_the_targets_x87_and_move_costs() {
+    let input = float_copy_body((-4, 4), (-8, 4), &[]);
+    let cpu = crate::backend::cpu::tuned("486", false).unwrap();
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    assert!(crate::backend::floatslotcopy::copied(&input, cpu, &saved(), &classes).is_some());
+
+    let mut without = cpu.clone();
+    without._costs = std::sync::Arc::new(cpu._costs.iter().filter(|(name, _)| name != "x87_store").cloned().collect());
+    assert!(crate::backend::floatslotcopy::copied(&input, &without, &saved(), &classes).is_none());
+}
+
+/// The pass is for the x87: a body whose register file lists no x87 registers
+/// (any non-x86 target, were one ever to reach it) is left alone even where
+/// its cells and costs would qualify.
+#[test]
+fn test_a_float_slot_copy_is_skipped_on_a_register_file_without_x87() {
+    use llrm_lir::registers::{Info, Regs, class};
+    let base = &llrm_x86_m16::REGISTER_INFO;
+    let mut table = base.table;
+    for entry in table.iter_mut().flatten() {
+        entry.classes &= !class::RFP;
+    }
+    let bare = Regs(Box::leak(Box::new(Info {
+        table,
+        frame: base.frame,
+        stack: base.stack,
+        loads: base.loads,
+        scratch: base.scratch,
+        bytes: base.bytes,
+        data_segment: base.data_segment,
+        stack_segment: base.stack_segment,
+        code_segment: base.code_segment,
+        far_segment: base.far_segment,
+        widths: base.widths,
+        effects: base.effects,
+        cache: Default::default(),
+        views: base.views,
+        byte_lanes: base.byte_lanes,
+        lanes_x86: base.lanes_x86,
+        lanes_none: base.lanes_none,
+        ties_by_row: base.ties_by_row,
+    })));
+    let mut input = float_copy_body((-4, 4), (-8, 4), &[]);
+    assert!(float_copy(&input, false).is_some(), "with the x86 register file the pair is copied");
+    input.registers = Some(bare);
+    assert!(float_copy(&input, false).is_none(), "without x87 registers it is not");
+}
+
+/// nbody -O1 kept 24 `mov dword ptr [m], imm` stores of its f64 constants (7 B
+/// each, +82 B against gcc with 3.8% fewer clocks): -Os shared one register for
+/// them. At -O1, where bytes decide, a target that allows sharing
+/// (`share_literal_stores`) shares a run outside any cycle, and not in a loop.
+#[test]
+fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
+    let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
+    cpu.share_literal_stores = true;
+    cpu.speed_rate = false;
+    assert!(cpu.bytes_strict(), "-O1");
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    let shared = |looped: bool| {
+        let stores: Vec<Arc<Insn>> =
+            [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
+        let next = after_stores(false, &[]);
+        let first = block(0, stores, if looped { vec![0, 1] } else { vec![1] });
+        let input = body("stores", 0, vec![first.into(), block(1, next, vec![]).into()]);
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns)
+    };
+    assert_eq!(shared(false), ["xor", "mov", "mov"], "outside a loop: one zero, two register stores");
+    assert_eq!(shared(true), ["mov", "mov"], "in a loop the load is a clock every trip");
+
+    cpu.share_literal_stores = false;
+    let stores: Vec<Arc<Insn>> =
+        [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
+    let input =
+        body("stores", 0, vec![block(0, stores, vec![1]).into(), block(1, after_stores(false, &[]), vec![]).into()]);
+    assert_eq!(
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns),
+        ["mov", "mov"],
+        "a target that does not allow it"
+    );
+}
+
+/// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a move into the
+/// stack pointer, zero, -1, a wider immediate and a non-32-bit body stay as they are.
+#[test]
+fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
+    // (destination, value, bits, rewritten)
+    for (dest, value, bits, rewritten) in [
+        (RegId::EAX, 40, 32, true),
+        (RegId::EAX, -5, 32, true),
+        (RegId::ESP, 40, 32, false),
+        (RegId::EAX, 0, 32, false),
+        (RegId::EAX, -1, 32, false),
+        (RegId::EAX, 200, 32, false),
+        (RegId::EAX, 40, 64, false),
+    ] {
+        let set = insn(
+            0,
+            Some((0, 5)),
+            Some(sem(Operation::Move, "mov", vec![rl(dest, 4)], vec![im(value, 4)])),
+            vec![],
+            vec![],
+        );
+        let input = LirBody {
+            bits,
+            min_size: true,
+            ..body("f", 0, vec![block(0, vec![Arc::new(set)], vec![]).into()])
+        };
+        let done = pushed_immediates(&input, &crate::backend::cpu::tuned("486", false).unwrap());
+        let names: Vec<_> = done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
+        let want: &[&str] = if rewritten { &["push", "pop"] } else { &["mov"] };
+        assert_eq!(
+            names.iter().map(|name| name.as_deref().unwrap()).collect::<Vec<_>>(),
+            want,
+            "{dest:?} {value} {bits}"
+        );
+    }
+}
+
+/// `mov cx,ax; mov ax,bx; mov bx,cx`, with `after` the instructions that follow it.
+fn swap_through_a_temporary(after: Vec<Arc<Insn>>) -> LirBody {
+    swap_through_a_temporary_of([RegId::AX, RegId::BX, RegId::CX], 2, after)
+}
+
+/// The same swap through `[a, b, temporary]`, `width` bytes wide.
+fn swap_through_a_temporary_of(
+    [a, b, t]: [RegId; 3],
+    width: u32,
+    after: Vec<Arc<Insn>>,
+) -> LirBody {
+    let (ax, bx, cx) = (rl(a, width), rl(b, width), rl(t, width));
+    let mut insns = vec![
+        point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![ax.clone()]), vec![2], vec![1]),
+        point(2, sem(Operation::Move, "mov", vec![ax], vec![bx.clone()]), vec![3], vec![2]),
+    ];
+    // The allocator's cycle breaker leaves the anchor of the middle move's
+    // virtual value between the moves.
+    insns.push(lir::anchor(Arc::clone(&insns[1])));
+    insns.push(point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]));
+    insns.extend(after);
+    insns.push(Arc::new(Insn {
+        reads_complete: true,
+        ..insn(9, Some((9, 9)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+    }));
+    body("swap", 1, vec![block(1, insns, vec![]).into()])
+}
+
+/// m64 -Os tail_calls `swapped` and `mixed`: a register swap through a scratch
+/// register was three moves (9 B at 64 bits) where gcc's `xchg` is 3 B, +23 B
+/// over the four functions that swap their arguments.
+#[test]
+fn a_swap_through_a_dead_temporary_is_one_xchg_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+
+    let made = swapped_registers(rules(), &swap_through_a_temporary(vec![]), &cpu);
+
+    assert_eq!(names_of(&made), ["xchg", "ret"]);
+}
+
+/// An `xchg` of registers is slower than three moves: not where the code is
+/// for speed.
+#[test]
+fn a_swap_through_a_temporary_stays_three_moves_for_speed() {
+    let mut cpu = peephole().cpu;
+    cpu.size = false;
+    let input = swap_through_a_temporary(vec![]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
+
+/// The temporary holds a value the swap leaves behind: the later read of it
+/// needs the moves.
+#[test]
+fn a_swap_whose_temporary_is_read_later_is_not_an_xchg() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    let (cx, dx) = (rl(RegId::CX, 2), rl(RegId::DX, 2));
+    let input = swap_through_a_temporary(vec![point(4, sem(Operation::Move, "mov", vec![dx], vec![cx]), vec![5], vec![4])]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
+
+/// 16-, 32- and 64-bit swaps become an `xchg`: it moves exactly the bits the
+/// moves did (a 16-bit `mov` keeps the upper bits, as `xchg r16` does; a 32-bit one
+/// clears them in both registers, as `xchg r32` does) and sets no flags.
+#[test]
+fn a_swap_of_16_32_and_64_bit_registers_is_one_xchg_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    for (regs, width) in [([RegId::AX, RegId::BX, RegId::CX], 2), ([RegId::EAX, RegId::EBX, RegId::ECX], 4), ([RegId::RAX, RegId::RBX, RegId::RCX], 8)] {
+        let mut input = swap_through_a_temporary_of(regs, width, vec![]);
+        if width == 8 {
+            input.bits = 64;
+        }
+        let made = swapped_registers(rules(), &input, &cpu);
+
+        assert_eq!(names_of(&made), ["xchg", "ret"], "{width} bytes");
+    }
+}
+
+/// The rule covers 16-, 32- and 64-bit registers only (`width_in`): a byte swap
+/// stays three moves.
+#[test]
+fn a_swap_of_byte_registers_stays_three_moves_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    let input = swap_through_a_temporary_of([RegId::AL, RegId::BL, RegId::CL], 1, vec![]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
 }

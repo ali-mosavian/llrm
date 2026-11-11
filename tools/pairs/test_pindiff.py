@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import llrmbin  # noqa: E402
 
 
 def load(name: str):
@@ -154,9 +156,9 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
     import os
 
     pindiff = load("pindiff")
-    if not (os.environ.get("LLRM_OW") and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
+    if not (llrmbin.ow_present() and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
         # The gate sets all three; where it requires the pin's tools (LLRM_REQUIRE_PINTOOLS) a missing one is red, not a skipped check.
-        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
+        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs the Open Watcom tree (tools/ow-fetch.sh), LLRM_PIN_CLANG and LLRM_CLANG_M16")
     import tempfile
 
     guard = load("irguard")
@@ -288,7 +290,6 @@ def test_m32_clang_flags_do_not_default_every_function_to_regcall(monkeypatch):
     """targets.toml gave m32 `-fdefault-calling-conv=regcall` for llrm-cc; pindiff ran ours with sysv, so all 71 m32 programs stopped at
     `llrm-llc: @___regcall3__f: calling convention 92` and the table was empty."""
     pindiff = load("pindiff")
-    monkeypatch.setenv("LLRM_OW", "/nonexistent")
     _, flags = pindiff.clang_flags("m32")
     assert "-fdefault-calling-conv=regcall" not in flags
 
@@ -299,10 +300,12 @@ def test_an_os_row_is_not_the_o2_row():
     import os
     import tempfile
 
-    llc = os.environ.get("LLRM_LLC")
-    if not llc or "LLRM_OW" not in os.environ or "LLRM_PIN_CLANG" not in os.environ:
-        pytest.skip("needs LLRM_LLC, LLRM_OW and LLRM_PIN_CLANG")
     pindiff = load("pindiff")
+    llc = os.environ.get("LLRM_LLC") or str(Path(os.environ.get("LLRM_BIN", "target/release")) / "llrm-llc")
+    if not Path(llc).is_file():
+        pytest.skip(f"llrm-llc is not built ({llc})")  # the gate builds it: strict_bins turns this skip into a failure
+    if not llrmbin.ow_present() or not (Path(os.environ.get("LLRM_PIN_CLANG") or pindiff.pin.PINNED_BIN / "clang")).is_file():
+        pytest.skip("needs the Open Watcom tree and the pin's clang (host tools)")
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "d7.c"
         src.write_text("int f(int x) { return x / 7; }\n")
@@ -338,7 +341,7 @@ def test_drift_header_names_the_binary_the_ir_and_the_md5s(tmp_path):
     before.write_bytes(b"one")
     after.write_bytes(b"two")
     lines = drift.header(["aaa", "bbb"], [before, after])
-    assert "llrm-llc" in lines[0] and "NOT llrm-c" in lines[0] and "clang IR" in lines[0]
+    assert "llrm-llc" in lines[0] and "NOT llrm-cc" in lines[0] and "clang IR" in lines[0]
     assert lines[1] == "# before: aaa llrm-llc md5 f97c5d29941b"
     assert lines[2] == "# after: bbb llrm-llc md5 b8a9f715dbb6"
 
@@ -411,3 +414,61 @@ def test_the_m16_row_datalayout_is_the_machines_string_not_its_template():
     (`{datalayout:x86` in the datalayout), so no m16 figure existed on 2026-10-29."""
     pindiff = load("pindiff")
     assert "{" not in pindiff.cc_entry("m16")["datalayout"]
+
+
+def test_a_pin_llc_that_exits_zero_without_output_is_refused_not_read_from_the_last_run(tmp_path, monkeypatch):
+    """The pin's asm/obj live in a persistent work dir; a silent rc-0 compile left the previous run's file and the row was figured from it."""
+    import subprocess
+
+    pindiff = load("pindiff")
+    ir = "define void @f() {\n  ret void\n}\n"
+
+    def run(command, *args, **kwargs):
+        if "-o" in command and str(command[command.index("-o") + 1]).endswith(".raw.ll"):
+            Path(command[command.index("-o") + 1]).write_text(ir)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 1, "", "ours: not reached\n")
+
+    monkeypatch.setattr(pindiff.subprocess, "run", run)
+    monkeypatch.setattr(pindiff.pin, "opt", lambda *a, **k: subprocess.CompletedProcess([], 0, ir, ""))
+    monkeypatch.setattr(pindiff.pin, "llc", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(pindiff.irguard, "check", lambda *a, **k: None)
+    monkeypatch.setattr(pindiff, "clang_flags", lambda machine: ("clang", []))
+    (tmp_path / "f.pin.s").write_text("stale\n")
+    (tmp_path / "f.pin.o").write_bytes(b"stale")
+    src = tmp_path / "f.c"
+    src.write_text("void f(void){}\n")
+    result = pindiff.one(src, "m32", "O2", "llc", tmp_path, False)
+    assert isinstance(result, str) and result.startswith("pin llc:"), result
+
+
+def test_lea_padding_counts_as_padding_not_code():
+    """Ours aligns with `lea esi,[esi+eiz*1+0x0]`; the nop-only filter left ~1.7 KB of it in memory_expansion's "padding-free" bytes (m32 -O1:
+    ours 31083 B read 31006 against the pin's 30095), and the code-B gap of every m32 row came out too large (2026-11-08)."""
+    pindiff = load("pindiff")
+    listing = (
+        "   0:\tb8 01 00 00 00       \tmov    eax,0x1\n"
+        "   5:\t8d b4 26 00 00 00 00 \tlea    esi,[esi+eiz*1+0x0]\n"
+        "   c:\t8d 76 00             \tlea    esi,[esi+0x0]\n"
+        "   f:\t8d 04 06             \tlea    eax,[esi+eax*1]\n"
+        "  12:\t90                   \tnop\n"
+    )
+    assert pindiff.nop_bytes(listing) == 7 + 3 + 1
+
+
+def test_pin_optimised_ir_is_refused_as_raw_input():
+    """w12 2026-11-08: one.rt.ll (pin opt output) fed to llrm-llc re-ran our mid-end before LSR; the compare read +28/+39 B at m32 -O1
+    div_constants that real flow (4324 B against 5012 B) does not have."""
+    guard = load("irguard")
+    reopt = (Path(__file__).resolve().parent / "testdata" / "one.rt.ll").read_text()
+    assert guard.reoptimised(reopt)
+    with pytest.raises(SystemExit, match="re-optimised IR"):
+        guard.check_raw(reopt, "one.rt.ll")
+    guard.check_raw("; ModuleID = 'a.c'\ndefine void @f() { ret void }\n", "raw")
+
+
+def test_pindiff_labels_what_its_pin_column_is():
+    """The pin column (pin opt on raw IR) is 3471 B on m32 -O1 div_constants_ulong where the real clang -O1 is 3771: it was read as the pin's size."""
+    diff = load("pindiff")
+    assert "RAW clang IR" in diff.pin_column_label(False) and "not clang's own -O flow" in diff.pin_column_label(False)
+    assert "RE-OPTIMISED" in diff.pin_column_label(True)

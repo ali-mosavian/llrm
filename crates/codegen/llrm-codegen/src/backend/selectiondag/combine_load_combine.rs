@@ -75,13 +75,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if index < bytes {
                     return Some(ByteProvider::Zero);
                 }
-                self.calculate_byte_provider(
-                    self.dag.operand(op, 0),
-                    index - bytes,
-                    depth + 1,
-                    index as usize,
-                    mask,
-                )
+                self.calculate_byte_provider(self.dag.operand(op, 0), index - bytes, depth + 1, index as usize, mask)
             }
             ISD::AnyExtend | ISD::SignExtend | ISD::ZeroExtend => {
                 let narrow = self.dag.operand(op, 0);
@@ -146,7 +140,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return None;
         }
         let width = (vt.size_in_bits() / 8) as usize;
-        // The target is little endian: a load's byte `i` is at offset `i`.
+        // A little-endian target's load has byte `i` at offset `i`.
         let mut base: Option<(Base, i64)> = None;
         let mut chain: Option<SDValue> = None;
         let mut loads: Vec<SDValue> = Vec::new();
@@ -201,7 +195,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let kept = &offsets[..width - zero_extended];
         let little = kept.iter().enumerate().all(|(i, &at)| at - first_offset == i as i64);
         let big = kept.iter().enumerate().all(|(i, &at)| at - first_offset == (kept.len() - i - 1) as i64);
-        let need_bswap = match (kept.len() >= 2, little, big) {
+        // only the low bytes of a little-endian value are zero-extended
+        if zero_extended > 0 && !self.hooks.little_endian() {
+            return None;
+        }
+        let (native, opposite) = if self.hooks.little_endian() { (little, big) } else { (big, little) };
+        let need_bswap = match (kept.len() >= 2, native, opposite) {
             (true, true, _) => false,
             (true, false, true) => true,
             _ => return None,

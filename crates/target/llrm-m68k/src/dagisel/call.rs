@@ -241,7 +241,10 @@ impl M68kCalling {
             chain = dag.get_token_factor(&stores);
         }
         let callee = self.callee(dag, callee);
-        let mask = dag.get_register_mask();
+        // The callee leaves the condition codes undefined, but the descriptions list
+        // only `SP` and the pin's mask is the preserved set, so the scheduler must
+        // be told: a flag live across the call is recomputed after it.
+        let mask = dag.get_register_mask_clobbering(&[super::generated::ids::reg::CCR]);
         let call = dag.get_node_multi(m68kisd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee, mask]);
         let end = dag.get_callseq_end(
             SDValue { node: call.node, res: 0 },
@@ -453,17 +456,19 @@ impl TargetCalling for M68kCalling {
     }
 }
 
-/// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, the offset folded
-/// into the symbol. A global the PIC model reaches through the GOT is not
-/// translated (see the DEVIATE above): `lower_operation` assumes the small
-/// code model without PIC, where every reference is direct.
+/// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, or `Wrapper` where
+/// the code model makes the address absolute (`classifyGlobalReference`), the
+/// offset folded into the symbol. A global the PIC model reaches through the
+/// GOT is not translated (see the DEVIATE above): `lower_operation` assumes
+/// no PIC, where every reference is direct.
 pub fn lower_global_address(
     dag: &mut SelectionDAG,
     node: SDValue,
+    absolute: bool,
 ) -> SDValue {
     let NodeData::Global { symbol, offset } = dag.node(node).data else {
         unreachable!("GlobalAddress has a global payload")
     };
     let address = dag.get_target_global_address(EVT::I32, symbol, offset);
-    dag.get_node(m68kisd::WRAPPER_PC, EVT::I32, &[address])
+    dag.get_node(if absolute { m68kisd::WRAPPER } else { m68kisd::WRAPPER_PC }, EVT::I32, &[address])
 }

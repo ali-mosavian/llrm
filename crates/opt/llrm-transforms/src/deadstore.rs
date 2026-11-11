@@ -43,8 +43,8 @@
 //! DEVIATE 3: an object is invisible after the function returns when it is
 //! a stack or frame object (`isa<AllocaInst>`) whose address is not captured
 //! (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
-//! and byval arguments (stage 3), and non-alloca objects with no capture
-//! (malloc) are absent. Exit: stage 3.
+//! arguments and non-alloca objects with no capture (malloc) are absent.
+//! Exit: stage 3. A byval or inalloca argument is invisible, as the pin has it.
 //! DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in),
 //! `tryFoldIntoCalloc` and
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
@@ -53,9 +53,10 @@
 //! `eliminateRedundantStoresOfExistingValues` are in, and a call's
 //! `initializes` (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s
 //! argument and capture rules; nothing unwinds). Exit: stage 2.
-//! DEVIATE 5: only stores and constant-length memsets are candidates, and
-//! `storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
-//! and friends). Exit: stage 2.
+//! DEVIATE 5: only stores, constant-length memsets and calls that only write
+//! their one pointer argument (`getForDest`) are candidates, and `storeIsNoop`
+//! knows no `getInitialValueOfAllocation` (it needs `calloc` and friends).
+//! Exit: stage 2.
 //! DEVIATE 6: a call that initializes an object keeps the earlier writes to it
 //! when a pointer into the object also reaches the call through another
 //! argument (the pin trusts `initializes`: the callee reads before it writes
@@ -173,7 +174,8 @@ impl FunctionPass for DeadStoreElimination {
                 .walk()
                 .any(
                     |(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })
-                        || llrm_analysis::memory::MemRef::filled(&probe, inst).is_some(),
+                        || llrm_analysis::memory::MemRef::filled(&probe, inst).is_some()
+                        || dest_call(unit.context, probe.globals, outer.callees(), unit.function, inst),
                 )
         };
         if !writes {
@@ -253,6 +255,35 @@ impl FunctionPass for DeadStoreElimination {
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+/// A call that may be dead like a store (`getLocForWrite` is `getForDest`,
+/// `isRemovable` the `willReturn` and `doesNotThrow` call): an ordinary
+/// callee that always comes back and writes only what its pointer arguments
+/// point to. The pin's `getForDest` also asks that no
+/// operand bundle is on the call; MIR has none.
+fn dest_call(
+    context: &Context,
+    globals: &[llrm_mir::module::GlobalValue],
+    callees: &Callees,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let Opcode::Call(_) = function.instruction(inst).opcode else { return false };
+    let Some(callee) = memory::callee(context, function, inst) else { return false };
+    // The intrinsics (`memcpy`, `memmove`, `lifetime`, ...) have their own
+    // locations.
+    if globals.get(callee.0 as usize).is_none_or(|global| global.intrinsic().is_some()) {
+        return false;
+    }
+    let Some(summary) = callees.get(&callee) else { return false };
+    summary.arguments_only
+        && summary.effects.writes
+        && !summary.memset
+        && !summary.pattern
+        && !summary.lifetime
+        && !summary.no_return
+        && memory::call_returns(context, callees, function, inst)
 }
 
 /// `OverwriteResult`.
@@ -490,6 +521,9 @@ impl<'a> Dse<'a> {
         if self.is_store(inst) {
             return self.aa.location_of(inst);
         }
+        if dest_call(self.context, self.aa.unit().globals, self.callees, self.function, inst) {
+            return self.dest_call_loc(inst);
+        }
         let filled = if let Some((destination, _, bytes)) = self.transfer(inst) {
             llrm_analysis::memory::MemRef::at(self.aa.unit(), destination, bytes)
         } else {
@@ -643,13 +677,62 @@ impl<'a> Dse<'a> {
         reaching <= filled
     }
 
-    /// `isRemovable`: not a volatile store or memset.
+    /// `getLocForWrite` of a call, `MemoryLocation::getForDest(CB)`: the one
+    /// pointer argument it writes through, of unknown size (any access before
+    /// or after the pointer clobbers). None where it writes through two.
+    fn dest_call_loc(
+        &self,
+        inst: InstId,
+    ) -> Option<Rc<Location>> {
+        let unit = self.aa.unit();
+        let instruction = self.function.instruction(inst);
+        let Opcode::Call(info) = &instruction.opcode else { return None };
+        let callee = memory::callee(self.context, self.function, inst)?;
+        let callee_function = unit.globals.get(callee.0 as usize)?.function()?;
+        // The pointer arguments it may write through: those not `readonly` or
+        // `readnone`, at the call or on the callee.
+        let mut used: Option<Operand> = None;
+        for (index, &operand) in instruction.operands[..instruction.operands.len() - 1].iter().enumerate() {
+            let pointer = matches!(
+                self.context.types.get(self.function.operand_type(self.context, operand)?),
+                llrm_mir::types::Type::Pointer(_)
+            );
+            if !pointer {
+                continue;
+            }
+            let read_only = |attrs: &[llrm_mir::opcode::Attribute]| {
+                let facts = llrm_mir::facts::Facts::of(attrs);
+                facts.read_only() || facts.read_none()
+            };
+            if info.argument_attrs.get(index).is_some_and(|attrs| read_only(attrs))
+                || callee_function.parameter_attrs.get(index).is_some_and(|attrs| read_only(attrs))
+            {
+                continue;
+            }
+            match used {
+                None => used = Some(operand),
+                // "Can't describe writing to two distinct locations."
+                Some(first) if first != operand => return None,
+                Some(_) => {}
+            }
+        }
+        let reference = llrm_analysis::memory::MemRef::at(unit, used?, 1);
+        Some(self.aa.location_for(&reference, true))
+    }
+
+    /// `isRemovable`: not a volatile store or memset; a call that always
+    /// comes back and whose result nothing uses.
     fn is_removable(
         &self,
         inst: InstId,
     ) -> bool {
         match self.function.instruction(inst).opcode {
             Opcode::Store { volatile, .. } => !volatile,
+            Opcode::Call(_) if dest_call(self.context, self.aa.unit().globals, self.callees, self.function, inst) => {
+                // "A call that returns, does not throw, and whose result nobody
+                // uses."
+                self.function.instruction(inst).result.is_none_or(|result| self.function.users(result).is_empty())
+            }
             Opcode::Call(_) => (self.memset(inst).is_some() || self.pattern(inst)) && !self.memset_volatile(inst),
             _ => false,
         }
@@ -713,6 +796,21 @@ impl<'a> Dse<'a> {
         &self,
         loc: &Location,
     ) -> bool {
+        // A byval or inalloca argument is treated as an alloca: its stores are
+        // dead at the end of the function (DSEState's constructor).
+        if let Some(Operand::Value(value)) = loc.reference.root
+            && let ValueDef::Argument(index) = self.function.value(value).def
+        {
+            let attrs = self.function.parameter_attrs.get(index as usize).map_or(&[][..], Vec::as_slice);
+            return attrs
+                .iter()
+                .any(
+                    |attr| matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Type(name, _) if matches!(name.as_str(), "byval" | "inalloca")
+                    ),
+                );
+        }
         let Some(object) = self.object_of(loc) else { return false };
         if !matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame) {
             return false;
@@ -1341,7 +1439,10 @@ impl<'a> Dse<'a> {
         if !self.memory_is_not_modified_between(dead, killing) {
             return None;
         }
-        let shift = ((killing_off - dead_off) * 8) as u32;
+        // `tryToMergePartialOverlappingStores`' `LShiftAmount`: the byte at the
+        // lower address is the high one on a big-endian target.
+        let offset_bits = ((killing_off - dead_off) * 8) as u32;
+        let shift = if self.aa.unit().layout.big_endian { dead_bits - killing_bits - offset_bits } else { offset_bits };
         let mask_of = |bits: u32| if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
         let mask = mask_of(killing_bits) << shift;
         Some(((dead_constant & !mask) | ((killing_constant & mask_of(killing_bits)) << shift)) & mask_of(dead_bits))

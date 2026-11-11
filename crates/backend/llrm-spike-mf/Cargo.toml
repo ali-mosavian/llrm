@@ -12,4 +12,5 @@ llrm-mir = { workspace = true }
 llrm-support = { workspace = true }
 
 [dev-dependencies]
+libc = { workspace = true }
 llrm-x86-m16 = { workspace = true }

@@ -15,7 +15,7 @@ CSV = os.path.join(HERE, "..", "..", "src", "timing", "z80.csv")
 # CSV form -> (manual section title, row label or None for the section's own rows)
 SECTION = {
     "ld b;c": "LD r, r'", "ld b;n": "LD r,n", "ld b;(hl)": "LD r, (HL)", "ld (hl);b": "LD (HL), r",
-    "ld (hl);n": "LD (HL), n", "ld a;(bc)": "LD A, (BC)", "ld a;(de)": "LD A, (DE)", "ld (bc);a": "LD (BC), A",
+    "ld (hl);n": "LD (HL), n", "ld a;(bc)": "LD A, (BC)", "ld a;(de)": "LD A, (DE)", "ld (bc);a": "LD (BC), A", "ld (de);a": "LD (DE), A",
     "ld a;(nn)": "LD A, (nn)", "ld (nn);a": "LD (nn), A", "ld hl;(nn)": "LD HL, (nn)", "ld (nn);hl": "LD (nn), HL",
     "ld bc;(nn)": "LD dd, (nn)", "ld bc;nn": "LD dd, nn", "ld hl;nn": "LD dd, nn", "ld ix;nn": "LD IX, nn",
     "ld sp;hl": "LD SP, HL", "ld b;(ix+d)": "LD r, (IX+d)", "ld (ix+d);b": "LD (IX+d), r",
@@ -34,7 +34,11 @@ SECTION = {
     "and b": "AND s@AND r", "and n": "AND s@AND n", "or b": "OR s@OR r", "or n": "OR s@OR n", "xor b": "XOR s@XOR r",
     "xor n": "XOR s@XOR n", "cp b": "CP s@CP r", "cp n": "CP s@CP n", "cp (hl)": "CP s@CP (HL)",
     "sla b": "SLA m@SLA r", "sra b": "SRA m@SRA r", "srl b": "SRL m@SRL r", "rl b": "RL m@RL r", "rr b": "RR m@RR r",
-    "sla (hl)": "SLA m@SLA (HL)",
+    "sla (hl)": "SLA m@SLA (HL)", "ld sp;ix": "LD SP, IX", "sub (ix+d)": "SUB s@SUB (IX+d)",
+    "and (ix+d)": "AND s@AND (IX+d)", "or (ix+d)": "OR s@OR (IX+d)", "xor (ix+d)": "XOR s@XOR (IX+d)",
+    "cp (ix+d)": "CP s@CP (IX+d)", "dec (ix+d)": "DEC m@DEC (IX+d)", "add hl;sp": "ADD HL, ss", "add ix;sp": "ADD IX, pp",
+    "add hl;hl": "ADD HL, ss", "add ix;ix": "ADD IX, pp", "ld (nn);bc": "LD (nn), dd", "sub (hl)": "SUB s@SUB (HL)",
+    "and (hl)": "AND s@AND (HL)", "or (hl)": "OR s@OR (HL)", "xor (hl)": "XOR s@XOR (HL)",
 }
 
 

@@ -757,6 +757,68 @@ b5:
     assert!(inner.contains(" = phi ptr addrspace(3)"), "the inner loop walks a huge pointer: {after}");
 }
 
+/// bench/huge bq16 -O1 (`h(c, r) = (r * 201& + c) MOD 251`): the inner loop
+/// steps a huge pointer, the 32-bit index and, for the remainder's `trunc`,
+/// a 16-bit copy of the index. `replaceCongruentIVs` keys the truncation of the
+/// wide counter by the header's last phi, the pointer, so the copy stayed: a
+/// fifth value live across the inner loop (an extra slot store and reload per
+/// outer trip, 18 B). CIV1 takes the narrowest integer phi.
+#[test]
+fn a_narrow_copy_of_the_wide_index_is_its_truncation_beside_a_huge_pointer() {
+    let text = format!(
+        "{DOS}define i32 @f(ptr addrspace(3) %h) {{
+entry:
+  br label %outer
+outer:
+  %r = phi i16 [ 0, %entry ], [ %r1, %latch ]
+  %m = mul nuw i16 %r, 201
+  %base = zext i16 %m to i32
+  br label %inner
+inner:
+  %c = phi i16 [ 0, %outer ], [ %c1, %inner ]
+  %cz = zext nneg i16 %c to i32
+  %x = add nuw nsw i32 %cz, %base
+  %off = shl nuw nsw i32 %x, 1
+  %p = getelementptr i8, ptr addrspace(3) %h, i32 %off
+  %q = urem i32 %x, 251
+  %qt = trunc nuw nsw i32 %q to i16
+  store i16 %qt, ptr addrspace(3) %p
+  %c1 = add nuw nsw i16 %c, 1
+  %ec = icmp eq i16 %c1, 201
+  br i1 %ec, label %latch, label %inner
+latch:
+  %r1 = add nuw nsw i16 %r, 1
+  %er = icmp eq i16 %r1, 200
+  br i1 %er, label %exit, label %outer
+exit:
+  ret i32 0
+}}
+"
+    );
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: Some(3),
+        address_registers: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
+    let mut module = parsed(&text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    let inner = after.split("inner:").nth(1).and_then(|rest| rest.split("\nlatch:").next()).expect("inner");
+    assert!(inner.contains(" = phi ptr addrspace(3)"), "the inner loop walks a huge pointer: {after}");
+    assert_eq!(inner.matches(" = phi i16").count(), 1, "the exit counter only, no 16-bit copy of the index: {after}");
+}
+
 /// The pass began with no expressions of its own function, so the loop passes
 /// before it (IndVars) had made them for nothing: a second run on a function it
 /// leaves as it is made as many expressions as the first (4.6 M Ir of
@@ -1571,6 +1633,34 @@ e:
     manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
+}
+
+/// bench/ring -O1 (m32): `a[i] = 3 * i - 4` took an end-biased counter and a
+/// base made by two geps (`ptr + i - 4096`, then `+ 4096`), 4 B over the pin's
+/// pointer walk. Formulae of the first use hid the pointer's counter from the
+/// store (the pin's `VisitedRegs` rule was off for every target).
+#[test]
+fn a_store_through_the_counter_keeps_the_pointer_walk() {
+    let text = "@a = internal global [1024 x i32] zeroinitializer
+define void @f() {
+entry:
+  br label %l
+l:
+  %i = phi i32 [ 0, %entry ], [ %n, %l ]
+  %m = mul nuw nsw i32 %i, 3
+  %v = add nsw i32 %m, -4
+  %p = getelementptr inbounds nuw [4 x i8], ptr @a, i32 %i
+  store i32 %v, ptr %p, align 4
+  %n = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %n, 1024
+  br i1 %c, label %e, label %l
+e:
+  ret void
+}
+";
+    let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("phi ptr") && !after.contains("4096"), "{after}");
 }
 
 /// switch_table_holes (m32 -O2): `buf[t[i - 7]] += (i8)(i + 1)` made the byte
