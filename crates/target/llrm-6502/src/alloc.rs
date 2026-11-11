@@ -212,6 +212,44 @@ impl<const STACK: bool> Target for Mos<STACK> {
         crate::timing::estimate(Cpu::Mos6502, "ldx rc2").map_or(1, |priced| priced.bytes + priced.cycles as u32)
     }
 
+    /// The copy of `from` into `to` in the timing tables: a transfer between
+    /// `a`, `x` and `y` (two through `a` between `x` and `y`), a store or a
+    /// load of a cell, and `lda`+`sta` between two cells. Greedy hints a
+    /// value the register that makes its copies cheapest.
+    fn copy_register_cost(
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        // Dormant: the hint moves 39 cells worse than the tip (6502-HINT-1
+        // follow-up).
+        if !llrm_support::env_flag!("LLRM_6502_COPY_HINT") {
+            return 0;
+        }
+        let is_index = |register: RegId| matches!(register, reg::A | reg::X | reg::Y);
+        if to == from || !(is_index(to) || is_cell(to)) || !(is_index(from) || is_cell(from)) {
+            return 0;
+        }
+        // bytes when the function is sized; clocks plus 3 per byte otherwise
+        // (the project's O2 rate)
+        let price = |mnemonic: &str, operand: &str| {
+            crate::timing::instruction(Cpu::Mos6502, mnemonic, operand)
+                .map_or(0, |cost| if size { cost.bytes } else { cost.cycles as u32 + 3 * cost.bytes })
+        };
+        let name = |register: RegId| match register {
+            reg::A => "a",
+            reg::X => "x",
+            _ => "y",
+        };
+        match (is_cell(to), is_cell(from)) {
+            (true, true) => price("lda", "rc2") + price("sta", "rc2"),
+            (true, false) => price(&format!("st{}", name(from)), "rc2"),
+            (false, true) => price(&format!("ld{}", name(to)), "rc2"),
+            (false, false) if to == reg::A || from == reg::A => price(&format!("t{}{}", name(from), name(to)), ""),
+            (false, false) => 2 * price("tax", ""),
+        }
+    }
+
     /// `isAsCheapAsAMove` against the copy it replaces. In a register a literal
     /// is `lda #n` (2 B, 2 clocks) against `tax`/`txa`/`tay`/`tya` (1 B, 2
     /// clocks): the copy stays, as does a tie in clocks; there is no `xor a`.
@@ -3553,6 +3591,9 @@ fn emit_with<const STACK: bool>(
     keep_carry_in_c(&mut function);
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
+    if crate::cmpzero::drop_zero_compares(&mut function) {
+        remove_dead(&mut function);
+    }
     reschedule_kills::<Mos<STACK>>(&mut function);
     commute_accumulator::<Mos<STACK>>(&mut function);
     two_address(&mut function);

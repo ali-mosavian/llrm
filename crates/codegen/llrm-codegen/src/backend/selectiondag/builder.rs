@@ -1965,6 +1965,12 @@ impl Builder<'_> {
         {
             return Err(Refused("a calling convention the target's hook does not place"));
         }
+        if let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+            && self.calling().is_some_and(|calling| !calling.calls_unlowered_intrinsic(&name))
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
+        }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
             && direct
@@ -4068,7 +4074,10 @@ impl Builder<'_> {
         inst: llrm_mir::module::InstId,
         pointer: Operand,
     ) -> MemInfo {
-        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+        // A global is recorded too: the pin's pointer info always carries `V`,
+        // and alias analysis needs it to compare a global with a pointer
+        // computed from another.
+        if !self.dag.config().use_aa || !matches!(info.base, MemBase::Unknown | MemBase::Global(_)) {
             return info;
         }
         let location = super::dag::MemLocation {

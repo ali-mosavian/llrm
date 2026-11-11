@@ -118,8 +118,8 @@ def footprint(target: str, obj: Path) -> Footprint:
         return Footprint(code, data, 0)
     if obj.read_bytes()[:4] == b"\x7fELF":
         return elf_footprint(target, obj)
-    if target.startswith("x86_16"):
-        import sizes  # the OMF reader, which imports the compiler tooling: only a 16-bit object needs it
+    if target.startswith(("x86_16", "x86_32")):
+        import sizes  # the OMF reader, which imports the compiler tooling: only an OMF object (16- or 32-bit Watcom) needs it
 
         size = sizes.code_size(obj)
         initialised, zero = sizes.data_bytes(obj)

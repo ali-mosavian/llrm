@@ -201,6 +201,20 @@ pub trait TargetCalling: Debug + Sync {
         true
     }
 
+    /// Whether a direct call of an `llvm.*` function that no intrinsic, atomic
+    /// or target hook lowered is emitted as a call to a symbol of that name
+    /// (a runtime routine of the target's own). A target with none says no and
+    /// the call is refused by name: the symbol would fail only at link, or
+    /// bind to nothing meant. The same refusal, with the same wording, as
+    /// `BuilderTarget::refuse_unknown_intrinsics` (#8452) for a flow without
+    /// this hook; 6502 converges on that field with the shared flow.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
+    ) -> bool {
+        true
+    }
+
     /// `CanLowerReturn`: whether a result of these parts leaves in registers.
     /// When not, the function returns it through a hidden pointer, the first
     /// parameter (`sret` demotion).

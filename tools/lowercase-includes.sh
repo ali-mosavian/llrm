@@ -5,7 +5,7 @@
 set -eu
 src=$(cd "$1" && pwd); dst=$2
 rm -rf "$dst"; mkdir -p "$dst"
-(cd "$src" && find . -type f) | while read -r file; do
+(cd "$src" && find -L . -type f) | while read -r file; do
   lower=$(printf '%s' "$file" | tr 'A-Z' 'a-z')
   mkdir -p "$dst/$(dirname "$lower")"
   tr -d '\032' <"$src/$file" >"$dst/$lower"
