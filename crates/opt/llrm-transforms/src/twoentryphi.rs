@@ -46,7 +46,7 @@
 //!   kept cmp/setae/sub-of-select, 11 insns a step against 9 as a branch;
 //!   sfm16_dbg -15 B, x_jpeg_fixed/single -8 B each, f2i -2 B: four cells
 //!   smaller, none larger (m32 -Os, 95 programs). Owner greedy-os-causes, exit
-//!   2026-12-05.
+//!   2026-11-24.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's

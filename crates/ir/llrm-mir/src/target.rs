@@ -67,7 +67,7 @@ pub struct Tuning {
     /// can keep in a register. false: the pin's `va_start`, which leaves the
     /// list in memory.
     pub promote_va_list: bool,
-    /// DEVIATE SETCC-TREE-BRANCH (owner x86-m32, exit 2026-12-05): at -Os a
+    /// DEVIATE SETCC-TREE-BRANCH (owner x86-m32, exit 2026-11-24): at -Os a
     /// sum `x + zext(c)` whose `c` is an `and`/`or` of two or more word
     /// compares is a branch around `x + 1` (the byte price of the `setcc`
     /// chain decides), where the pin keeps the `setcc`/`or`/`movzx` chain.
@@ -77,7 +77,7 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
-    /// DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05): the unrolled size, in
+    /// DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-11-24): the unrolled size, in
     /// the unroll units, up to which a loop the -O1 rule above refused is unrolled on
     /// trial; the driver compiles the module again and keeps the unroll only if neither
     /// its bytes nor its executed work grow (`Tti::unroll_trial_threshold`). `None`: no
@@ -92,7 +92,7 @@ pub struct Tuning {
     /// (`Tti::inline_size_view`), not in the pin's units of one per
     /// instruction. false: the pin's units.
     pub inline_size_bytes: bool,
-    /// DEVIATE D6 (`twoentryphi.rs`; owner greedy-os-causes, exit 2026-12-05):
+    /// DEVIATE D6 (`twoentryphi.rs`; owner greedy-os-causes, exit 2026-11-24):
     /// at `optsize`, where there is no conditional move, a two-entry phi is not
     /// folded into a `select` whose arms are both computed (a diamond: branch
     /// and move), at the price the fold saves. false: the pin's.
@@ -112,7 +112,7 @@ pub struct Tuning {
     /// takes are 3.5 to 5 times that on x86 (22 callees of the m32 O1 corpus:
     /// median 3.99 bytes per unit). Scales the growth the -O1 bytes-vs-clocks
     /// check compares with its per-byte rate; 1000: one byte a unit.
-    /// DEVIATE INL-O1 unit scale (owner x86-m32, exit 2026-12-05). Stated cost,
+    /// DEVIATE INL-O1 unit scale (owner x86-m32, exit 2026-11-24). Stated cost,
     /// exit 2026-11-15 (strict -O1 clocks, not waived): x_sf_cmp64 81196 ->
     /// 93965 clk (best gcc/clang 90307), x_sf_div 146540 -> 152986 (149453),
     /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
