@@ -2087,16 +2087,35 @@ impl<'a> Analyzer<'a> {
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
         let view = self.size_view();
-        llrm_mir::instructioncost::instruction_cost(
+        llrm_mir::instructioncost::instruction_cost_known(
             view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
             self.callee,
             inst,
+            &self.callee.instruction(inst).operands,
             llrm_mir::tti::CostKind::CodeSize,
+            &|operand| self.site_constant_info(operand),
         )
         .value
+    }
+
+    /// What a callee operand is at this site when the call's constant arguments
+    /// fix it (`SimplifiedValues`), for a size priced as the copy would be: a
+    /// shift by 5 is not a library call of a variable amount.
+    ///
+    /// DEVIATE SZ1-SITE: the pin prices only a GEP with the site's constants
+    /// (`isGEPFree`); the byte size view prices every instruction the analysis
+    /// could not fold. Exit: none (the size view is the target's).
+    fn site_constant_info(
+        &self,
+        operand: Operand,
+    ) -> Option<llrm_mir::tti::OperandInfo> {
+        match self.constant(operand)? {
+            Simple::Int(width, bits) => Some(llrm_mir::tti::OperandInfo::constant(bits as i128, width)),
+            _ => None,
+        }
     }
 
     /// The target's code size of the call and the pushes of its arguments,
