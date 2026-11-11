@@ -75,6 +75,11 @@ BENCH = ROOT / "bench"
 # `bas` is BASIC on the Microsoft runtime (MS LINK, in DOSBox: only where QB45 and the others are installed); `bq16` the same source on
 # our runtime, real mode, linked by jwlink: always available.
 LANGUAGES = {"bas": ".bas", "bq16": ".bas", "bq32": ".bas", "c": ".c", "nib": ".nib"}
+# Reference twins: a C source for a Nib semantic the C twin lacks (`init`: locals zero-initialised, `bounds`: indices checked), in
+# `bench/NAME/twin/SEMANTIC.c`. It is a variant of the program named `NAME~SEMANTIC`, measured and given to the reference compilers as any
+# C program, and not judged or ratcheted: the C compilers' bytes on it are the bar a Nib program with that semantic is held to
+# (`bar_program`). It must print what the program prints (`NAME.out`), as every variant does.
+TWINS = ("init", "bounds")
 BASIC_LANGUAGES = ("bas",)
 OURS_BASIC = ("bq16", "bq32")
 # The flat target is counted by the emulator the program runs in (guest instructions, on virtual time), net of its empty start-up
@@ -170,7 +175,32 @@ def variants(directory: Path, every_language: bool = False) -> list[Variant]:
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
                               bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)),
                               bool(settings.get("emulated"))))
+    for semantic in TWINS:
+        source = directory / "twin" / f"{semantic}.c"
+        if source.exists() and (every_language or ONLY is None or "c" in ONLY):
+            head = run_tests.header(source)
+            out.append(Variant(f"{name}~{semantic}", "c", source, settings["region"]["c"], head.get("known"), "qb45", bool(settings.get("timed_only")),
+                              tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)), bool(settings.get("emulated"))))
     return out
+
+
+def is_twin_name(name: str) -> bool:
+    """A reference twin's program name (`NAME~SEMANTIC`)."""
+    return "~" in name
+
+
+def is_twin(variant: Variant) -> bool:
+    """A reference twin (TWINS): measured, not judged."""
+    return is_twin_name(variant.name)
+
+
+def bar_program(name: str, language: str, present: set[str]) -> str:
+    """The program whose C reference compilers are the bar for `name` in `language`, among the programs `present` in a table: a Nib program
+    is held to its C twin with the Nib semantics (`NAME~init`, then `NAME~bounds`) where the program has one, and to `NAME` otherwise;
+    the plain twin stays a column of its own."""
+    if language != "nib":
+        return name
+    return next((f"{name}~{semantic}" for semantic in TWINS if f"{name}~{semantic}" in present), name)
 
 
 def expected_output(directory: Path) -> list[str]:
@@ -355,6 +385,17 @@ def note_lines(measured: dict) -> list[str]:
     return [f"NOTE {why} ({notes.count(why)} cells)" for why in sorted(set(notes))]
 
 
+def reference_job(key: tuple[str, str, str], stem: str, built: tuple[Path, Path], region: str | None, want: list[str], obj: Path, files: tuple, source: Path) -> tuple:
+    """The job `measure` takes for one reference cell: the helpers are counted only where the reference's map names them."""
+    return (stem, built[0], built[1], region, want, obj, files, links_helpers(key[1]), source)
+
+
+def links_helpers(reference: str) -> bool:
+    """Whether a reference's linker map names the library modules its program pulls in: a C reference's does (`Module: LIB(NAME)`). BC's is Microsoft's, its
+    runtime is linked whole, and counting helpers refused every BASIC reference cell (`helper $AC is called and not in the map`, 31 programs x 3 compilers)."""
+    return reference in REFERENCES["c"]
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
@@ -514,7 +555,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             plain[key] = built[0]
         else:
             files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
-            owned.append((key, (stem, built[0], built[1], variant.region if counted else None, want, obj, files, True, variant.source)))
+            owned.append((key, reference_job(key, stem, built, variant.region if counted else None, want, obj, files, variant.source)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
@@ -1042,6 +1083,8 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
         if stale:
             problems.append(stale)
         for variant in variants(directory):
+            if is_twin(variant):
+                continue
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
                 label = f"{name} {variant.language} -{opt}"

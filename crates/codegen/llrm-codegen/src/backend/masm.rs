@@ -1314,7 +1314,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // costs a 486 3 clocks): they lie a multiple of it below the registers,
     // and the gap is reserved with them.
     let slot = procedure.registers.slot;
-    let align = procedure.registers.align.max(slot);
+    let align = procedure.registers.object_align.max(slot);
     // A 64-bit frame aligns the locals' base to the widest object, as the pin
     // aligns each object to its own and only the total to the stack
     // (`calculateFrameObjectOffsets`); the call alignment is `frame`'s below.
@@ -4985,6 +4985,7 @@ mod tests {
             saved: Vec::new(),
             slot: 4,
             align: 4,
+            object_align: 4,
             optional: false,
             enter: false,
             wrap_split_size: false,
@@ -5039,6 +5040,7 @@ mod tests {
             saved: Vec::new(),
             slot: 4,
             align: 4,
+            object_align: 4,
             optional: false,
             enter: false,
             wrap_split_size: false,
@@ -5097,6 +5099,7 @@ mod tests {
                 saved: Vec::new(),
                 slot: 4,
                 align: 4,
+                object_align: 4,
                 optional: false,
                 enter,
                 wrap_split_size: false,
@@ -5174,6 +5177,7 @@ mod tests {
             saved: Vec::new(),
             slot: 4,
             align: 4,
+            object_align: 4,
             optional,
             enter: false,
             wrap_split_size: false,
@@ -5353,6 +5357,7 @@ mod tests {
             saved: Vec::new(),
             slot: 4,
             align: 4,
+            object_align: 4,
             optional: false,
             enter: false,
             wrap_split_size: false,
@@ -5543,6 +5548,7 @@ mod tests {
                 saved: Vec::new(),
                 slot: 4,
                 align: 4,
+                object_align: 4,
                 optional: false,
                 enter: false,
                 wrap_split_size: false,

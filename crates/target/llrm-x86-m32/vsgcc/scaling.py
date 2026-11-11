@@ -34,7 +34,7 @@ PRELUDE_C = "extern void report(long value);\n"
 
 
 def small(k: int) -> int:
-    """A small odd multiplier: a 32-bit one sends llrm's isel into a ~75 M-instruction synth_mult search per multiply (see `mulconst`)."""
+    """A small odd multiplier: a 32-bit one sends llrm's isel into a ~75 M-instruction chain search per multiply (see `mulconst`)."""
     return lcg(k) % 61 * 2 + 3
 
 

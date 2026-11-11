@@ -59,8 +59,8 @@ pub fn builder_target() -> BuilderTarget {
         // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
         // in `BuilderTarget`
         va_arg_align_cap: Some(super::lowering::VA_SLOT),
-        // `Machine::max_alloca_align`: nothing realigns the frame
-        max_alloca_align: Some(8),
+        // `Machine::max_alloca_align`: the frame realigns the stack pointer
+        max_alloca_align: None,
         ..BuilderTarget::for_pointer_bits(32)
     }
 }

@@ -169,6 +169,8 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         "ids.rs",
         ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions, &target.extra_symbols, &target.registers)?,
     )?;
+    // A hand-selected opcode (`extra_symbols`) has a descriptor and a scheduling class too.
+    emitted.extend(target.extra_symbols.iter().filter_map(|name| ids.0.get(name).map(|&value| value as u16)));
     write("instrinfo.rs", emit::render_instr_info(inputs.instrinfo, &ids, &emitted, &style)?)?;
     if !target.sched_cpus.is_empty() {
         modules.push_str("pub mod sched;\n");

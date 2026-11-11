@@ -80,6 +80,8 @@ use crate::interprocedural::{
 /// is not passed (`ipa-deadargs`).
 pub struct ModuleIpo {
     pub inline: crate::inline::Threshold,
+    /// The clones made here count against the interprocedural step's.
+    pub cloning: crate::ipacp::Shared,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -121,31 +123,46 @@ impl ProgramPass for ModuleIpo {
                 modules[at].changed(id);
             }
         }
-        let mut cloning = crate::ipacp::Cloning::default();
-        for at in 0..count {
-            let (made, before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
-                crate::ipacp::cloned(
-                    module,
-                    &program.layout,
-                    &procedures[at],
-                    &private[at],
-                    &costs,
-                    self.inline.cp_clone,
-                    &mut cloning,
-                )
-            });
-            vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
-            for &id in &made.added {
-                procedures[at].push(id);
-                private[at].insert(id);
+        let mut cloning = self.cloning.borrow_mut();
+        // gcc finishes ipa-cp before ipa-inline (and the pin's specializer
+        // solves again after each round): a clone's constants reach the calls
+        // in its body, which are cloned in turn, so a chain such as
+        // `place(row + 1)` is whole before the walk inlines one link into the
+        // next. Off without `-fipa-cp-clone`: `cloned` makes nothing then.
+        loop {
+            let mut cloned_now = false;
+            for at in 0..count {
+                let (made, before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
+                    crate::ipacp::cloned(
+                        module,
+                        &program.layout,
+                        &procedures[at],
+                        &private[at],
+                        &costs,
+                        self.inline.cp_clone,
+                        &mut cloning,
+                    )
+                });
+                vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
+                for &id in &made.added {
+                    procedures[at].push(id);
+                    private[at].insert(id);
+                }
+                for &id in made.added.iter().chain(&made.edited) {
+                    llrm_mir::memory::unsplit(
+                        &mut function_mut(&mut program.modules[at], id).1.attrs,
+                        llrm_mir::memory::Moved::OutOfArguments,
+                    );
+                    modules[at].changed(id);
+                    changed = true;
+                    cloned_now = true;
+                }
             }
-            for &id in made.added.iter().chain(&made.edited) {
-                llrm_mir::memory::unsplit(
-                    &mut function_mut(&mut program.modules[at], id).1.attrs,
-                    llrm_mir::memory::Moved::OutOfArguments,
-                );
+            if !cloned_now {
+                break;
+            }
+            for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
                 modules[at].changed(id);
-                changed = true;
             }
         }
         for at in 0..count {
@@ -195,8 +212,8 @@ pub struct Walk {
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
 /// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and
 /// inlining is on (`-fno-inline-functions` asks for no copies of a body, a
-/// recursive one included). None: the pin's inliner, which copies no recursive
-/// callee (`IsRecursiveCall`).
+/// recursive one included). `-fno-inline-recursive` or neither: the pin's
+/// inliner, which copies no recursive callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Recursion {
     pub depth: usize,
@@ -205,12 +222,16 @@ pub struct Recursion {
 
 impl Recursion {
     pub fn of(
-        flag: bool,
+        flag: Option<bool>,
         single: bool,
         inlining: bool,
         o3: bool,
         tti: Option<&dyn llrm_mir::tti::Tti>,
     ) -> Option<Self> {
+        // `-fno-inline-recursive` is off whatever the target says.
+        if flag == Some(false) {
+            return None;
+        }
         match tti.and_then(|tti| tti.recursive_inlining()) {
             Some((depth, callee)) if !single && inlining => {
                 let depth = tti
@@ -218,7 +239,7 @@ impl Recursion {
                     .map_or(depth, |(o2, o3_depth)| if o3 { o3_depth } else { o2 });
                 Some(Self { depth: depth as usize, callee })
             }
-            _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
+            _ => (flag == Some(true)).then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
         }
     }
 }
@@ -365,7 +386,8 @@ impl ProgramPass for Walk {
                         let by = crate::inline::Caller {
                             layout: &program.layout,
                             effects: known.as_deref(),
-                            recursive: recursive.contains(&id),
+                            recursive: recursive.contains(&id)
+                                && !tti.as_deref().is_some_and(|tti| tti.inline_frames_into_recursive_callers()),
                             self_inlining: None,
                             peeling: !self.inline.single && recursion.is_some(),
                             depth: recursion.map_or(0, |one| one.depth),
@@ -606,7 +628,9 @@ impl ProgramPass for Walk {
                                 // ordinary rules, are inlined into the trial too (the pin inlines
                                 // callee-first, so `foo` into `main` and `bar` into that copy meet
                                 // the constants together); one round, so O(n).
-                                if size != crate::inlinecost::CallerSize::Speed && tti.opt_size_inline_chain_trial() {
+                                if (size != crate::inlinecost::CallerSize::Speed || (!self.speed_rate && tti.inline_trials_at_o1()))
+                                    && tti.opt_size_inline_chain_trial()
+                                {
                                     let mut seen = Vec::new();
                                     let second = crate::inlinecost::sites_with_trials(
                                         module,
@@ -1131,8 +1155,8 @@ pub struct SelfInline {
     pub for_size: bool,
     /// -O2 and -O3: the target's byte price at speed counts.
     pub speed_rate: bool,
-    /// `-finline-recursive`.
-    pub flag: bool,
+    /// `-f[no-]inline-recursive`; `None`: the target's default.
+    pub flag: Option<bool>,
     /// -O3: gcc's `max-inline-insns-auto` is the larger bar.
     pub o3: bool,
     /// Inlining is on (`Threshold.limit != 0`).

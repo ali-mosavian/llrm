@@ -46,8 +46,9 @@
 //! - D1. No block has its address taken in the MIR, no pseudo probes, no
 //!   debug-record lists to hoist in step (the debug records of a hoisted
 //!   instruction move with it); `!mmra` tags are compared as written.
-//! - D2. `TargetTransformInfo::isProfitableToHoist` is true (the base
-//!   implementation, which the x86 target does not change); `nomerge` and
+//! - D2. `TargetTransformInfo::isProfitableToHoist` is `Tti::is_profitable_to_hoist`
+//!   (the base implementation is true; the pin's AArch64 and PowerPC override it,
+//!   x86 here does, FOLD-HOIST); `nomerge` and
 //!   `convergent` are not attributes of the MIR.
 //! - D3. Instructions are compared by operation, type and operands (a call by
 //!   its type, convention and tail kind, its attributes only intersecting); the
@@ -146,6 +147,8 @@ fn safe_to_hoist(
 /// Identical instructions `first` and `second` that can and should be hoisted
 /// together.
 fn should_hoist(
+    context: &Context,
+    spec: &Speculation,
     function: &Function,
     first: InstId,
     second: InstId,
@@ -154,7 +157,10 @@ fn should_hoist(
         Opcode::Call(info) => Some(info.tail == Tail::MustTail),
         _ => None,
     };
-    !matches!((tail(first), tail(second)), (Some(a), Some(b)) if a != b)
+    if matches!((tail(first), tail(second)), (Some(a), Some(b)) if a != b) {
+        return false;
+    }
+    spec.tti.is_profitable_to_hoist(context, function, first) && spec.tti.is_profitable_to_hoist(context, function, second)
 }
 
 fn commutative(opcode: &Opcode) -> bool {
@@ -459,7 +465,7 @@ pub fn hoisted(
         if identical {
             identical = safe_to_hoist(context, spec, function, first, bodies[0].2)
                 && bodies[1..].iter().zip(&current[1..]).all(|((_, _, flags), &other)| {
-                    safe_to_hoist(context, spec, function, other, *flags) && should_hoist(function, first, other)
+                    safe_to_hoist(context, spec, function, other, *flags) && should_hoist(context, spec, function, first, other)
                 });
         }
         // A `musttail` call stays with its `ret`.
