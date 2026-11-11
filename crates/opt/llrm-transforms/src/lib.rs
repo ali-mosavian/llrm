@@ -172,6 +172,7 @@ pub mod combine_phi;
 pub mod combine_phi_args;
 pub mod combine_ptrcast;
 pub mod combine_select;
+pub mod combine_select_andor;
 pub mod combine_select_bit_test;
 pub mod combine_select_bools;
 pub mod combine_select_cttz_ctlz;

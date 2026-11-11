@@ -22,7 +22,8 @@
 //! `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 //! `foldSelectWithSRem`, the
 //! `foldSPFofSPF`, and everything after the not-condition but
-//! `foldSelectToCmp` (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
+//! `foldSelectToCmp` (`foldSelectCmpBitcasts` ... `foldSelectEqualityTest`);
+//! `FoldSelectWithAndOrCond` is `combine_select_andor`.
 //!
 //! DEVIATE 3: `replaceInInstruction` (the arms' instructions that read the
 //! condition get its value) is not made:
@@ -45,6 +46,7 @@ use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_phi::UB_IMPLYING;
+use crate::combine_select_andor::select_with_and_or_cond;
 use crate::combine_select_bit_test::{select_bit_test, select_icmp_and_and};
 use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_cttz_ctlz::select_cttz_ctlz;
@@ -90,6 +92,7 @@ const FOLDS: &[Fold] = &[
     select_of_symmetric_select,
     nested_selects,
     select_to_cmp,
+    select_with_and_or_cond,
 ];
 
 impl Combiner<'_> {

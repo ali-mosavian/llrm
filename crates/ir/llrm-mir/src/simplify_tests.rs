@@ -112,6 +112,45 @@ fn logic() {
     check("  %s = shl i16 %x, 8\n  %r = and i16 %s, 65280\n", "r", Some("%s"));
 }
 
+/// wasm32 known_loads_walks: `select n, (y|n), false` was not `n`, so
+/// FoldSelectWithAndOrCond found nothing to fold and the unrolled chain kept
+/// an or and a logical and per iteration (+122 B at O2). The i1 identities of
+/// `simplifySelectInst`, each.
+#[test]
+fn a_select_of_bools_that_is_one_of_its_operands_or_a_constant() {
+    let q = "  %q = icmp eq i16 %y, 0\n";
+    // Y && (X || Y) --> Y
+    check(&format!("{q}  %b = or i1 %q, %c\n  %r = select i1 %c, i1 %b, i1 false\n"), "r", Some("%c"));
+    // (X || Y) && Y --> Y
+    check(&format!("{q}  %b = or i1 %q, %c\n  %r = select i1 %b, i1 %c, i1 false\n"), "r", Some("%c"));
+    // Y || (X && Y) --> Y
+    check(&format!("{q}  %a = and i1 %q, %c\n  %r = select i1 %c, i1 true, i1 %a\n"), "r", Some("%c"));
+    // (X && Y) || Y --> Y
+    check(&format!("{q}  %a = and i1 %q, %c\n  %r = select i1 %a, i1 true, i1 %c\n"), "r", Some("%c"));
+    // (X || Y) && (X || !Y) --> X
+    check(
+        &format!(
+            "{q}  %ny = xor i1 %q, true\n  %o1 = or i1 %c, %ny\n  %o2 = or i1 %c, %q\n  %r = select i1 %o1, i1 %o2, i1 false\n"
+        ),
+        "r",
+        Some("%c"),
+    );
+    // !(X || Y) && X --> false
+    check(
+        &format!("{q}  %o = or i1 %c, %q\n  %n = xor i1 %o, true\n  %r = select i1 %n, i1 %c, i1 false\n"),
+        "r",
+        Some("0"),
+    );
+    // !(X && Y) || X --> true
+    check(
+        &format!("{q}  %a = and i1 %c, %q\n  %n = xor i1 %a, true\n  %r = select i1 %n, i1 true, i1 %c\n"),
+        "r",
+        Some("1"),
+    );
+    // Unrelated operands: nothing.
+    check(&format!("{q}  %p = icmp eq i16 %x, 0\n  %r = select i1 %q, i1 %p, i1 false\n"), "r", None);
+}
+
 #[test]
 fn select_phi_cast_and_compare() {
     check("  %r = select i1 true, i16 %x, i16 %y\n", "r", Some("%x"));

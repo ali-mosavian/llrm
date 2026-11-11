@@ -3063,20 +3063,8 @@ fn simplify_select(
         }
     }
     if q.ty(cond) == q.ty(true_val) {
-        // select C, 1, 0 -> C
-        if q.is_one(true_val) && q.is_zero(false_val) {
-            return Some(cond);
-        }
-        // select (X && Y), Y... : the logical and/or of the arms.
-        if let Some((a, b, _)) = q.binary_of(cond, BinaryOp::And)
-            && ((a == true_val && b == false_val) || (a == false_val && b == true_val))
-        {
-            return Some(false_val);
-        }
-        if let Some((a, b, _)) = q.binary_of(cond, BinaryOp::Or)
-            && ((a == true_val && b == false_val) || (a == false_val && b == true_val))
-        {
-            return Some(true_val);
+        if let Some(v) = select::simplify_select_of_bools(q, cond, true_val, false_val) {
+            return Some(v);
         }
     }
     // select ?, X, X -> X
@@ -4570,6 +4558,24 @@ pub fn simplify_instruction_operands_at(
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals, analyses, cxt, can_use_undef: true };
     simplify_instruction_with_operands(&mut q, inst, operands, RECURSION_LIMIT)
+}
+
+/// `simplifySelectInst(Cond, TrueVal, FalseVal, FMF,
+/// SQ.getWithInstruction(&cxt))` for a caller that has a module and the
+/// instruction it asks at.
+pub fn simplify_select_operands_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    condition: Operand,
+    if_true: Operand,
+    if_false: Operand,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
+    simplify_select(&mut q, condition, if_true, if_false, RECURSION_LIMIT)
 }
 
 /// `simplifyICmpInst` for operands.
