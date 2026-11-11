@@ -30,11 +30,13 @@ fn run() -> Result<(), String> {
         mut fast_inc,
         mut fold_inc,
         mut x86_out,
-    ) = (None, None, None, None, None, None, None, None, None, None, None);
+        mut vts_path,
+    ) = (None, None, None, None, None, None, None, None, None, None, None, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--inc" => inc_path = args.next(),
             "--ids" => ids_path = args.next(),
+            "--vts" => vts_path = args.next(),
             "--pin" => pin = args.next(),
             "--out" => out = args.next(),
             "--x86-out" => x86_out = args.next(),
@@ -57,6 +59,7 @@ fn run() -> Result<(), String> {
             record: std::path::Path::new(&record),
             inc: &read(inc_path, "--inc")?,
             ids: &read(ids_path, "--ids")?,
+            vts: &vts_path.map_or(Ok(String::new()), |p| read(Some(p), "--vts"))?,
             pin: &pin.ok_or("missing --pin")?,
             instrinfo: &read(memflags, "--instrinfo")?,
             out: std::path::Path::new(&out),
@@ -101,7 +104,7 @@ fn run() -> Result<(), String> {
     {
         for &cpu_name in cpus {
             let cpu = features::Cpu::load(FEATURES, cpu_name)?;
-            let mut pruner = prune::Pruner::new(&cpu, &table.pattern_predicates, &ids)?;
+            let mut pruner = prune::Pruner::new(&cpu, &table.pattern_predicates, &ids, &inc::Ids::default())?;
             let kept = pruner.prune(&tree.root);
             let flat = flatten::flatten(&kept, &tree.lists);
             let source = emit::Source {

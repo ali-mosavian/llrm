@@ -250,6 +250,7 @@ impl<'a> Scheduler<'a> {
         if let Some(pressure) = &self.pressure {
             cand.pressure = pressure.delta(node, at_top);
         }
+        cand.phys_bias = self.bias_phys_reg(node, at_top);
         cand.stall = zone.latency_stall_cycles(unit);
         // `isTheSameCluster(ZoneCluster, SU->ParentClusterIdx)`.
         let zone_cluster = if at_top { self.top_cluster } else { self.bot_cluster };
@@ -258,6 +259,30 @@ impl<'a> Scheduler<'a> {
         cand.depth = unit.depth;
         cand.height = unit.height;
         cand
+    }
+
+    /// `biasPhysReg` for a copy: schedule it at once when the physical end is
+    /// already scheduled, and a copy of a physical register in (out) at the
+    /// bottom (top) at once unless it is at the region's boundary, where it
+    /// waits. `ExitSU` edges (`exit_latency`) count as successors. The
+    /// pin's `isMoveImmediate` case needs a physical def, which no node has
+    /// before allocation, and `BiasPRegsExtra` is SystemZ's.
+    fn bias_phys_reg(
+        &self,
+        node: usize,
+        at_top: bool,
+    ) -> i32 {
+        let Some((dest, source)) = self.units[node].copy_physical else { return 0 };
+        let (scheduled, unscheduled) = if at_top { (source, dest) } else { (dest, source) };
+        if scheduled {
+            return 1;
+        }
+        if !unscheduled {
+            return 0;
+        }
+        let at_boundary =
+            if at_top { self.succs_left[node] == 0 && self.graph.exit_latency[node] == 0 } else { self.preds_left[node] == 0 };
+        if at_boundary { -1 } else { 1 }
     }
 
     /// `initResourceDelta`.
@@ -550,6 +575,26 @@ mod tests {
         graph.exit_latency[2] = 3;
         let got = Scheduler::new(&graph, &machine, units, RegionPolicy::bottom_up(), None).schedule().0;
         assert_eq!(got[0], 2, "the live-out def stayed behind the stores: {got:?}");
+    }
+
+    /// pin: `biasPhysReg`. A copy of a physical register in (`COPY $wzr`) is
+    /// scheduled first from the top (the physical end is scheduled) and
+    /// deferred at the bottom (the register is at the boundary), so the
+    /// bidirectional zones start it from the top. nbody O2's 22-node
+    /// preheader began with the bottom's pick of another node and the
+    /// constants it held lived through the loop.
+    #[test]
+    fn test_a_copy_of_a_physical_register_is_started_from_the_top() {
+        let graph = Graph::from_edges(3, &[]);
+        let machine = machine(0);
+        let plain = vec![unit(1, 0), unit(1, 0), unit(1, 0)];
+        let mut biased = plain.clone();
+        biased[2].copy_physical = Some((false, true));
+        let policy = RegionPolicy::bidirectional(false);
+        let without = Scheduler::new(&graph, &machine, plain, policy, None).schedule().0;
+        let with = Scheduler::new(&graph, &machine, biased, policy, None).schedule().0;
+        assert_ne!(without[0], 2, "no bias: the copy is not first ({without:?})");
+        assert_eq!(with[0], 2, "the copy of a physical register starts from the top ({with:?})");
     }
 
     /// pin: `llc -mcpu=generic` (in order) hoists the load and the divides

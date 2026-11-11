@@ -385,3 +385,136 @@ fn an_i32_funnel_shift_expands_to_two_half_width_funnel_shifts() {
         }
     }
 }
+
+/// The `__muldi3` call `ExpandIntRes_MUL` makes where a product of two words
+/// has no widening multiply, for a target that does (`size_routine`) or does
+/// not name a routine for functions tuned for size (the gate in `expand_mul`).
+fn product_calls(size_routine: bool) -> Vec<(&'static str, usize)> {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len()));
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    if size_routine {
+        tli.set_size_libcall_name(ISD::Mul, MVT::I64, "__muldi3");
+    }
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let load = |dag: &mut SelectionDAG, slot| {
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I64, chain, ptr, info)
+    };
+    let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));
+    let product = dag.get_node(ISD::Mul, EVT::I64, &[a, b]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+    dag.set_root(low);
+    let mut calls = Calls::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+    calls.0
+}
+
+
+/// A target that names a size routine for the `i64` product calls it: one
+/// `__muldi3` of two operands, not 445 lines and four `__mulsi3` calls.
+#[test]
+fn a_target_with_a_size_routine_calls_it_for_a_64_bit_product() {
+    assert_eq!(product_calls(true), vec![("__muldi3", 2)]);
+}
+
+/// The 6502, m68k and wasm name no size routine for the product (DEVIATE in
+/// `expand_mul`: inline until measured). #6858's tests expected the call from
+/// them anyway and went red on `release/next`; the product stays inline.
+#[test]
+fn a_target_without_a_size_routine_keeps_a_64_bit_product_inline() {
+    assert_eq!(product_calls(false), vec![]);
+}
+
+/// A hook that cannot make the call (`make_lib_call` is `None`, as the m68k
+/// hook is for a result wider than a long) leaves the type legalizer on the
+/// forced expansion: the product still legalizes, with no call in it. The m68k
+/// hook panicked instead and `x_fixmul` stopped compiling.
+#[test]
+fn a_hook_that_declines_the_product_call_leaves_the_inline_expansion() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Declines(usize);
+    impl Hooks for Declines {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _name: &'static str,
+            _args: &[SDValue],
+            _ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0 += 1;
+            None
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    tli.set_size_libcall_name(ISD::Mul, MVT::I64, "__muldi3");
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let load = |dag: &mut SelectionDAG, slot| {
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I64, chain, ptr, info)
+    };
+    let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));
+    let product = dag.get_node(ISD::Mul, EVT::I64, &[a, b]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+    dag.set_root(low);
+    let mut hook = Declines::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hook).run().unwrap();
+    assert_eq!(hook.0, 1, "the library call was asked for once");
+}

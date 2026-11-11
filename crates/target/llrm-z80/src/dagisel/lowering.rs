@@ -137,6 +137,11 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_libcall_name(op, vt, name);
         }
     }
+    // the product of two zero-extended words is one call in a function tuned
+    // for size, the whole 32-bit result in `hl` (low) and `de` (`expand_mul`): 15 B
+    // for the product against 216 B of partial products. At -O2 the partial
+    // products ran faster in div_constants_short and compare_to_int64.
+    tl.set_size_libcall_name(UMulLoHi, MVT::I16, "__umulhisi3");
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
     for (vt, names) in [
@@ -242,9 +247,10 @@ impl Z80Lowering {
 }
 
 /// `ExpandDivRemLibCall` for a word: the routine returns the quotient in `de`
-/// and the remainder in `hl`, the registers of a long result; the divide
-/// routine `__udivhi3` leaves both there already, the signed one is
-/// `__divremhi4`.
+/// and the remainder in `hl`, the registers of a long result (low word `hl`,
+/// high word `de`), so the remainder is the first part and the quotient the
+/// second; the divide routine `__udivhi3` leaves both there already, the
+/// signed one is `__divremhi4`.
 fn lower_divrem_word(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -273,7 +279,7 @@ fn lower_divrem_word(
     let callee = dag.get_target_external_symbol(EVT::I16, name);
     let root = dag.entry_node();
     let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
-    let [quotient, remainder] = values[..] else { return None };
+    let [remainder, quotient] = values[..] else { return None };
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I16], &[quotient, remainder]))
 }
 

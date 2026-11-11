@@ -1131,11 +1131,10 @@ fn a_small_immediate_at_m32_os_is_push_pop() {
     assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
 }
 
-/// A signed divide by 1024 is `idiv` at m32 -Os and -Oz (a `minsize` function too), the
-/// `sar; shr; add; sar` sequence at -O2: 4 Os cells -131 B (jpeg_fixed -45). The pin keeps the
-/// `idiv` at minsize only (`isIntDivCheap`); -Os is a DEVIATION. DEVIATE SDIV-POW2-OS.
+/// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
+/// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]
-fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
+fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_minsize_only() {
     let text = |attrs: &str| {
         format!(
             "target datalayout = \"@m32-datalayout@\"\n\
@@ -1148,7 +1147,7 @@ fn a_signed_divide_by_a_power_of_two_is_idiv_at_m32_os() {
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
     let at_os = listing(&["-mabi=sysv", "-Os"], "optsize");
-    assert!(at_os.contains("idiv"), "-Os: {at_os}");
+    assert!(!at_os.contains("idiv") && at_os.contains("sar"), "-Os: {at_os}");
     let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize");
     assert!(marked.contains("idiv"), "minsize function: {marked}");
     let at_speed = listing(&["-mabi=sysv", "-O2"], "");
@@ -5071,6 +5070,27 @@ fn a_hidden_or_internal_callee_at_pic_is_resolved_and_a_weak_one_never_is() {
     );
 }
 
+/// Two 64-bit arguments swapped for a call (`g(b, a)`, the caller keeps neither) were three
+/// moves through `rax` at m64 -Os, 9 B where gcc's `xchg rdi, rsi` is 3 B. The rewrite has a unit
+/// test on a hand-built body; this is the pipeline's, at 64 bits, where the `rax` the swap
+/// borrows is read nowhere after it.
+#[test]
+fn a_swap_of_two_64_bit_arguments_for_a_call_is_one_xchg_at_m64_os() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64, i64)\n\
+                define i64 @f(i64 %a, i64 %b) {\n  %r = call i64 @g(i64 %b, i64 %a)\n  %s = add i64 %r, 1\n  ret i64 %s\n}\n";
+    let xchgs = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        (listing.lines().filter(|line| line.trim_start().starts_with("xchg")).count(), listing)
+    };
+    let (size, listing) = xchgs("-Os");
+    assert_eq!(size, 1, "{listing}");
+    let (speed, listing) = xchgs("-O2");
+    assert_eq!(speed, 0, "{listing}");
+}
+
 /// A 16-trip loop of calls in an internal function that nothing will inline
 /// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
 /// early unroll leaves an internal function's loops to be priced at each
@@ -5096,4 +5116,56 @@ fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o
     assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
     let on = ["-m64", "-O3", "--isel=dag"];
     assert!(calls_of_h(&on) >= 1);
+}
+
+/// `p >= 65535.0f ? 65535.0f : p` was branched before selection (`ucomiss`,
+/// `jb`, `movss`): fp selects never reached the DAG, so its `pseudo_fmin` was
+/// dead code and the clamps of jpeg_fixed and stft_single grew 24-80 B at m64.
+/// It is `minss`.
+#[test]
+fn a_float_clamp_is_minss_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(float %p) {\n\
+                  %c = fcmp oge float %p, 6.553500e+04\n\
+                  %q = select i1 %c, float 6.553500e+04, float %p\n\
+                  ret float %q\n}\n";
+    let (built, _) = compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("minss") && !listing.contains("ucomiss"), "{listing}");
+}
+
+/// `x_life`'s 3x3 neighbour nest (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes) at -O1
+/// with `-funroll-loops`: the -O1 unroll rule counts the 3-trip inner loop one instruction too large and kept both
+/// loops, which spill their counters to the stack (416 B, 564,234 clk, gcc 368,623). The pin's threshold unrolls the
+/// nest to nine straight loads, and unrolled it is smaller (401 B, 214,872 clk), which only a second compile can see
+/// (DEVIATE UNROLL-O1-TRIAL): the nest is kept unrolled.
+#[test]
+fn a_nest_whose_unroll_is_no_larger_and_no_slower_is_unrolled_at_o1() {
+    let text = include_str!("tests_data/life_nest.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-funroll-loops", "-march=i486"]), text, "bench_x_life").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // The eight neighbours of the centre are loaded in one straight run: no loop is left around them.
+    let mut loads = 0;
+    let mut most = 0;
+    for line in listing.lines().map(str::trim) {
+        if line.ends_with(':') {
+            loads = 0;
+        } else if line.contains(", byte ptr [") && !line.starts_with("cmp") {
+            loads += 1;
+            most = most.max(loads);
+        }
+    }
+    assert!(most >= 8, "the nest kept a loop: at most {most} neighbour loads in a block: {listing}");
+}
+
+/// `matmul` at -O1 with `-funroll-loops`: the pin's threshold unrolls it (303 -> 1904 B), which the trial prices
+/// and puts back: the code stays well under the unrolled size (about 100 instructions rolled, 600 unrolled).
+#[test]
+fn a_nest_whose_unroll_grows_the_code_stays_rolled_at_o1() {
+    let text = include_str!("tests_data/matmul_int.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-funroll-loops", "-march=i486"]), text, "bench_matmul").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let instructions = listing.lines().filter(|line| line.starts_with("    ") && !line.trim_end().ends_with(':')).count();
+    assert!(instructions < 250, "matmul unrolled to {instructions} instructions: {listing}");
 }

@@ -443,6 +443,10 @@ mod tests {
         assert!(keeps_stacked(Level::O2, framed, cheaper_stack));
         assert!(!keeps_stacked(Level::Os, framed, framed) && !keeps_stacked(Level::O2, framed, framed));
         assert!(keeps_stacked(Level::O2, None, stacked));
+        // loop_fusion -O1 `same`: 13 B (10%) smaller for 4% more weighted clocks, so the strict level keeps it
+        let (framed, stacked) = (Some((124, 6472)), Some((111, 6746)));
+        assert!(keeps_stacked(Level::O1, framed, stacked) && !keeps_stacked(Level::O2, framed, stacked));
+        assert!(!keeps_stacked(Level::O1, stacked, framed));
     }
 
     #[test]
@@ -758,15 +762,16 @@ fn drop_repeated_slot_accesses(
 }
 
 /// Whether the push and pop form of a function stays: where it prices lower
-/// by the rule that picks the other variants (bytes first at the size levels,
-/// weighted clocks plus 3 a byte otherwise), or where either price is missing.
+/// by the rule that picks the other variants (`prefers`: bytes first at the
+/// size levels, the smaller relative regret at -O1, weighted clocks plus 3 a
+/// byte otherwise), or where either price is missing.
 fn keeps_stacked(
     level: Level,
     framed: Option<(u32, u64)>,
     stacked: Option<(u32, u64)>,
 ) -> bool {
     match (framed, stacked) {
-        (Some(was), Some(now)) => cheaper(level, now, was),
+        (Some(was), Some(now)) => prefers(level, now, was),
         _ => true,
     }
 }

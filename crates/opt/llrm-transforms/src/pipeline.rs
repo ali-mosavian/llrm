@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, sccp, simpleloopunswitch, simplifycfg,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, sccp, simpleloopunswitch, simplifycfg,
     switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -199,9 +199,9 @@ pub struct Options {
     /// switch, with its `unreachable` default, as the pin's passes leave it).
     pub lower_switches: bool,
     /// `loopidioms::Merge` also makes adjacent stores wider ones (LLVM's
-    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm, exit 2026-11-20); off for a
-    /// target whose backend merges them, so the inliner and the passes after
-    /// it price the stores the pin's IR has.
+    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm,
+    /// exit 2026-11-20); off for a target whose backend merges them, so the
+    /// inliner and the passes after it price the stores the pin's IR has.
     pub merge_stores: bool,
     /// After `PromoteMemToReg` the write-through `Promote` forwards a global's
     /// store to the loads after it, across blocks with phis, where there is no
@@ -213,7 +213,8 @@ pub struct Options {
     pub sink: bool,
     /// `Spares`: a fixed-cell load rematerialized past the writes alias proves
     /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
-    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
+    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit
+    /// 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
     /// A CFG simplification ahead of loop strength reduction, to tidy the
     /// compare-and-branch that follows a `cmpxchg`: the pin's
@@ -223,7 +224,8 @@ pub struct Options {
     pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
-    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.4 M Ir at d_faces.
+    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers),
+    /// 8.4 M Ir at d_faces.
     pub stored_homes: bool,
     /// The spiller makes a load of a cell nothing writes again where it is read
     /// (D-I). llrm only; off by default, `-fllrm-stable-loads`. Read by the
@@ -241,7 +243,9 @@ pub struct Options {
     /// has it (`isLoadExtLegal`); off for a target that has not, where the
     /// wider compare costs more than the extension saved.
     pub extload: bool,
-    /// `zeromerge`: zeroed locals that follow each other in the entry block share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
+    /// `zeromerge`: zeroed locals that follow each other in the entry block
+    /// share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit
+    /// 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
     pub zero_merge: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
@@ -268,9 +272,9 @@ pub struct Options {
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
     /// `-floop-unroll-and-jam`: LLVM's `LoopUnrollAndJamPass`, in the Late
-    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default pipelines have it off
-    /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
-    /// particle row gains from it.
+    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default
+    /// pipelines have it off (`enable-unroll-and-jam`); it is on at -O3 and
+    /// -Omax, where the particle row gains from it.
     pub unroll_and_jam: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
@@ -462,6 +466,12 @@ impl Options {
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
     pub fn prefers_size(&self) -> bool {
         self.for_size
+    }
+
+    /// Whether this is -O1: optimizing, with the unroller's -O1 level (`unroll_level`) and size not
+    /// preferred.
+    pub fn at_o1(&self) -> bool {
+        self.optimize && !self.for_size && unroll_level(self) == 1
     }
 
     /// Whether the target's byte price at speed counts: -O2 and -O3.
@@ -869,8 +879,8 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
-    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`), and where `write_through` is
-    // on: the write-through `Promote`
+    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`),
+    // and where `write_through` is on: the write-through `Promote`
     // after PromoteMemToReg forwards a store of a global to the load after it,
     // which LLVM's InstCombine does in `visitLoadInst`
     // (FindAvailableLoadedValue, not translated); GVN does it at the other
@@ -986,6 +996,12 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // LoopVectorizePass (l.1354): a no-op where the target takes no vector values.
+            slot("loop-vectorize@1354", Box::new(crate::loopvectorize::LoopVectorize {
+                // clang vectorizes loops at -O2 and up (`PTO.LoopVectorization`).
+                only_when_forced: !applied.options.pre,
+                ..Default::default()
+            })),
             // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
             slot(
                 "drop-unnecessary-assumes@1360",
@@ -1050,6 +1066,10 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
+            slot(
+                "mergeicmps@1672",
+                Box::new(crate::mergeicmps::MergeICmps::with_routines(applied.options.library.clone())),
+            ),
             slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
@@ -1375,7 +1395,9 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
 
 /// An `alloca` asking more than the target's frames keep and no more than it
 /// accepts (`Machine::kept_stack_align`, `max_alloca_align`) is clamped to what
-/// they keep; one asking more than it accepts is refused by name. Alignment is
+/// they keep; one asking more than it accepts is refused by name. A dynamic one
+/// is left as asked where the target masks the address
+/// (`honors_dynamic_alloca_align`). Alignment is
 /// the explicit one, else the type's, as known-bits reads it.
 pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
     let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
@@ -1383,6 +1405,7 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
     if kept.is_none() && max.is_none() {
         return Ok(());
     }
+    let honors_dynamic = program.target.honors_dynamic_alloca_align();
     // The passes that raise an alloca's alignment stop at the datalayout's
     // stack alignment (`tryEnforceAlignment`); no frame here keeps more.
     if let Some(kept) = kept {
@@ -1404,6 +1427,9 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                     else {
                         continue;
                     };
+                    if honors_dynamic && !llrm_mir::instructioncost::is_static_alloca(function, inst) {
+                        continue;
+                    }
                     let wanted = align.unwrap_or_else(|| layout.align(&context.types, allocated));
                     if let Some(max) = max.filter(|max| wanted > *max) {
                         return Err(format!(
@@ -1595,7 +1621,10 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
-    if applied.options.second_inline && applied.options.inline.limit != 0 {
+    let target_wants_round = !applied.options.prices_bytes()
+        && !applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.inline_second_round_at_o1());
+    if (applied.options.second_inline || target_wants_round) && applied.options.inline.limit != 0 {
         manager.compute::<GlobalsAA>();
         manager.compute::<GlobalsModRefAnalysis>();
         let mut simplify = Fixed::linear(&walked("walk2"), Phase::Simplify);
@@ -1629,8 +1658,9 @@ pub fn recorded(
         manager.add(stage);
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
-    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not held, as GlobalDCE, which
-    // LLVM runs after this point, abandoned it here.
+    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not
+    // held, as GlobalDCE, which LLVM runs after this point, abandoned it
+    // here.
     manager.recompute::<GlobalsAA>();
     manager.recompute::<GlobalsModRefAnalysis>();
     // The summaries are made. The passes below move and rewrite what a function
@@ -1650,6 +1680,11 @@ pub fn recorded(
     // Each loop's counters chosen once, on the loop the passes above leave.
     for pass in strength_slot(applied) {
         manager.add_boxed(pass);
+    }
+    // `addIRPasses`: PartiallyInlineLibCalls follows LSR (the pin's
+    // `-disable-partial-libcall-inlining` is `LLRM_NO_PARTIAL_LIBCALLS`).
+    if applied.options.wanted("partialinline") && !llrm_support::env_flag!("LLRM_NO_PARTIAL_LIBCALLS") {
+        manager.add(partialinline::PartiallyInlineLibCalls);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far
     // there.
@@ -1696,7 +1731,8 @@ pub fn recorded(
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
     }
-    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and loop idioms made the fills.
+    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and
+    // loop idioms made the fills.
     if applied.options.wanted("zeromerge") {
         manager.add(zeromerge::ZeroMerge);
     }

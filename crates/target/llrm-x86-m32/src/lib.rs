@@ -119,6 +119,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
         unroll_never_grows_at_o1: true,
+        // DEVIATE UNROLL-O1-TRIAL (owner x86-m32-c, exit 2026-12-05, with UNROLL-O1): a loop
+        // that rule refuses is unrolled by the pin's threshold (150 units,
+        // `UnrollThresholdDefault`) in a second compile, kept only if neither the bytes nor the
+        // executed work grow. x_life O1: the 3x3 nest unrolled is -15 B and -62% clk (the rolled
+        // nest spills); matmul O1 is +1601 B and stays rolled.
+        unroll_trial_at_o1: Some(150),
         // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
@@ -142,7 +148,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         split_merged_conditions: true,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
-        sdiv_pow2_stays_at_size: true,
+        sdiv_pow2_stays_at_size: false,
         push_imm_at_size: true,
         // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30): see `Tuning::merge_functions_at_size`.
         merge_functions_at_size: true,
@@ -163,7 +169,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50 packed ops) is vector-shaped: vector-deferred list.
         unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
-        inline_o1_unit_bytes_milli: 3500,
+        // DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner counts a callee in
+        // bytes of encoded code by instruction kind (`sizes`), not one unit an instruction scaled by
+        // a fitted 3.5. x_jpeg_single -O1 inlined `next` (about 190 B, 8 sites) at an estimated 82 B:
+        // +1533 B and +0.5 M clk.
+        inline_size_bytes: true,
+        inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: per_byte,
         sdiv_by_magnitude: true,
         call_sequence_fixed_clocks: costs.call + costs.return_,
@@ -183,6 +194,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
         // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
         keep_constant_arith_operands: true,
+        // DEVIATE PHICONST-2 (owner x87, exit 2026-11-24): see `Tti::folds_phi_constant_chains`.
+        phi_constant_chains: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
             value: [2, 3, 5],
@@ -429,6 +442,11 @@ impl llrm_target::Target for M32 {
     ) -> Option<(RegId, RegId)> {
         let (push, pop) = convention.frame_slot_scratch.as_ref()?;
         Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
+    /// `GR32_NOSP`/`GR64_NOSP`'s caller-saved registers, in the pin's order.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        vec![RegId::EAX, RegId::ECX, RegId::EDX]
     }
 
     fn frame_wrap_split_size(&self) -> bool {

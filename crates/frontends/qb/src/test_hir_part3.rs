@@ -4423,3 +4423,26 @@ fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
         assert_eq!(quiet_loops(false, &far), 1, "{call} does not move a far array");
     }
 }
+
+/// A checked subscript was two signed compares, `x < 0` then `x >= count`,
+/// kept as `test/js` plus `cmp/jae` to the same ERROR 9 block: 4 B and a
+/// branch more than the one unsigned compare clang's bounds check emits.
+#[test]
+fn test_a_checked_subscript_is_one_unsigned_compare() {
+    let text = listing_in("qb45", &["-fsanitize=bounds"], "oneck", "DIM a%(100)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n");
+    assert_eq!(text.matches("\n    cmp ").count(), 1, "{text}");
+    assert_eq!(text.matches("\n    js ").count(), 0, "{text}");
+}
+
+/// A 32768-element array's count, 8000h, was read as a signed word: every
+/// access under -fsanitize=bounds raised ERROR 9 and the store was gone.
+#[test]
+fn test_a_checked_subscript_of_a_32768_element_array_can_pass() {
+    let text = listing_in(
+        "qb45",
+        &["--huge-arrays", "-fsanitize=bounds"],
+        "bigck",
+        "REM $DYNAMIC\r\nDIM a%(32767)\r\nINPUT n%\r\na%(n%) = 7\r\nEND\r\n",
+    );
+    assert!(text.contains("es:[bx], 7"), "{text}");
+}
