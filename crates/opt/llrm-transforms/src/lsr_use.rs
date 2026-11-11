@@ -940,7 +940,13 @@ impl Cost {
         self.c.num_regs += 1;
         // DEVIATE LU13: kept across a call, a recurrence is reloaded and
         // stored every trip, an invariant reloaded.
-        if r.across_call {
+        // DEVIATE LU22: but not one the loop as written forms again each trip
+        // from its counter.
+        let recomputed = r.as_written
+            && r.tti.lsr_written_derived_ivs_are_recomputed()
+            && r.se.addrec_header(reg) == Some(r.l)
+            && !is_existing_phi(r.se, r.cx, reg);
+        if r.across_call && !recomputed {
             self.c.spills += if r.se.addrec_header(reg) == Some(r.l) { 2 } else { 1 };
         }
 

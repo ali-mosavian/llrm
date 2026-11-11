@@ -2255,6 +2255,16 @@ pub trait Tti {
         false
     }
 
+    /// Whether an add-recurrence the loop as written computes from its counter
+    /// (`la + i * 4` with only `i` a phi) is made again each trip and so is not
+    /// kept across a call. LSR's baseline rates it a register the call would
+    /// spill (`lsr_call_clobbers_registers`) as it does the pointer phi that
+    /// replaces it, so four such arrays look as dear written as reduced.
+    /// DEVIATE LU22 (`lsr_use.rs`).
+    fn lsr_written_derived_ivs_are_recomputed(&self) -> bool {
+        false
+    }
+
     /// Multiplies the loop as written does to form an induction variable that
     /// steps by `step` (`bits` wide) and is not a phi of its own: `i * 54`
     /// where the loop only has `i`. LSR's baseline sees one add-recurrence

@@ -657,11 +657,16 @@ struct Lu {
     folds_offsets: bool,
     step_multiplies: u32,
     exit_bound_live: bool,
+    derived_recomputed: bool,
 }
 
 impl Tti for Lu {
     fn lsr_written_exit_bound_is_live(&self) -> bool {
         self.exit_bound_live
+    }
+
+    fn lsr_written_derived_ivs_are_recomputed(&self) -> bool {
+        self.derived_recomputed
     }
 
     fn unfolded_address_offsets_fold(&self) -> bool {
@@ -855,5 +860,41 @@ fn the_loop_as_written_keeps_the_exit_bound_live() {
         assert_eq!(regs(true, false, to_bound, se), 1, "the target does not ask");
         assert_eq!(regs(false, true, to_bound, se), 1, "a candidate is what it says");
         assert_eq!(regs(true, true, to_const, se), 1, "a constant bound is no register");
+    });
+}
+
+/// DEVIATE LU22. sat_builtins at 6502 -O1: a loop over `la[i]`, `ula[i]`,
+/// `qa[i]`, `uqa[i]` that calls `report` was rewritten into four pointer
+/// phis, each kept in a frame slot across the call (+43 B, +0.6% clk), because
+/// the baseline rated the `la + i * 4` it forms again each trip as a recurrence
+/// the call spills too. Only the loop as written is spared, and only where the
+/// target says so.
+#[test]
+fn an_iv_the_loop_as_written_forms_again_each_trip_is_not_spilled_across_a_call() {
+    with_loop(|cx, se, a, _, header, _| {
+        let ty = Ty::Int(32);
+        let four = se.get_constant_of_type(cx, ty, 4);
+        let reg = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(four)], header, Flags::default()).scev;
+        let mut spills = |as_written: bool, recomputed: bool| {
+            let tti = Lu { derived_recomputed: recomputed, ..Lu::default() };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: false,
+                across_call: true,
+            };
+            let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };
+            let (mut cost, mut seen) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut seen, &HashSet::default(), &use_of(Kind::Address, &[0]), None);
+            cost.c.spills
+        };
+        assert_eq!(spills(true, true), 0, "as written, formed again each trip");
+        assert_eq!(spills(true, false), 2, "the target does not ask");
+        assert_eq!(spills(false, true), 2, "a pointer phi is kept and stored");
     });
 }

@@ -269,7 +269,9 @@ impl Tti for Mos6502 {
     ) -> bool {
         let key = |c: &LsrCost| {
             // u64: a rejected formula carries `u32::MAX` terms.
+            // a spill is a store and a reload of a cell (DEVIATE LU13)
             let work = 3 * u64::from(c.add_rec_cost)
+                + 3 * u64::from(c.spills)
                 + 7 * u64::from(c.num_base_adds)
                 + 40 * u64::from(c.num_iv_muls)
                 + 4 * u64::from(c.imm_cost);
@@ -307,6 +309,19 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LU13 (z80's, see there): what a loop keeps across a call is in
+    /// the frame, reloaded each trip and for a recurrence stored each trip.
+    /// sat_builtins -O1: four pointers over `la`, `ula`, `qa`, `uqa` in frame
+    /// slots against one counter and shifts (+43 B, +0.6% clk).
+    fn lsr_call_clobbers_registers(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LU22: `la + i * 4` is made from `i` each trip as written.
+    fn lsr_written_derived_ivs_are_recomputed(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU20: the bound of an exit test is a cell next to the counter.
