@@ -735,16 +735,19 @@ fn sequences(
     // A call area made before a diamond can serve a call on each path: the
     // second call's cleanup has no call area of its own to claim it, and its
     // arguments are stored into the area the first call's sequence would have
-    // pushed away. That area stays.
+    // pushed away. That area stays. The call may be laid out before the area's
+    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says nothing.
     for (up, _) in insts
         .iter()
         .enumerate()
         .filter(|(i, inst)| matches!(inst.kind, Kind::Op("ADJCALLSTACKUP")) && !claimed.contains(i))
     {
         let Some(Operand::Imm(bytes)) = insts[up].operands.first() else { continue };
-        let Some(call) = (0..up).rev().find(|&i| insts[i].call) else { continue };
+        if !insts[..up].iter().any(|inst| inst.call) {
+            continue;
+        }
         found.retain(|one: &Sequence| {
-            let shared = one.bytes == *bytes && one.down < call && blocks[one.down] != blocks[one.up];
+            let shared = one.bytes == *bytes && blocks[one.down] != blocks[one.up];
             if shared {
                 others.push(one.bytes);
             }

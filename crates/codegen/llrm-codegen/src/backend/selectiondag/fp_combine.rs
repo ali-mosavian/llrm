@@ -138,7 +138,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `isKnownNeverLogicalZero`, as far as a constant shows it.
-    fn fp_known_never_zero(
+    pub(super) fn fp_known_never_zero(
         &self,
         value: SDValue,
     ) -> bool {

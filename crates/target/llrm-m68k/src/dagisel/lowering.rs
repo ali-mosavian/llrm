@@ -380,15 +380,6 @@ impl Hooks for M68kLowering {
         signed: bool,
     ) -> Option<Vec<SDValue>> {
         use super::call::{Ext, In, Out};
-        // DEVIATE: a result wider than two longs (an `i128`; `RetCC_M68k_C` has
-        // i32 in D0, D1:
-        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kCallingConv.td#L26-L32)
-        // is not modeled, so the caller expands the operation inline. An `i64`
-        // or `f64` is D0:D1 and is modeled below. Exit: a result in memory in
-        // `lower_call`, by 2026-12-20.
-        if rets.iter().any(|ret| ret.size_in_bits() > 64) {
-            return None;
-        }
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let out = |value: SDValue, dag: &SelectionDAG| Out {
             value,

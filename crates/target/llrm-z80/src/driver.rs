@@ -186,7 +186,9 @@ pub fn selections_with_alternatives(
     let select_form = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
+        crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
+        crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
         one
     };
@@ -209,9 +211,8 @@ pub fn selections_with_alternatives(
         one
     };
     // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
-    // other way, a sized one with every multiply inline (`DECOMPOSE_MULS`); the caller prices the two
-    // (`compile::decomposed_functions`). At -O1 an unsized one is also selected with each shift and multiply site
-    // priced (`PRICED_SITES`); the caller keeps it where it is no worse on either axis.
+    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one (at -O1 only) with every multiply a
+    // call (`CALL_MULS`); the caller prices the two (`compile::decomposed_functions`).
     let calls_the_routine = |name: &str| -> Option<bool> {
         module.globals.iter().find_map(|global| {
             let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
@@ -233,22 +234,22 @@ pub fn selections_with_alternatives(
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
-            let muls = calls_the_routine(name).filter(|sized| *sized);
+            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
+            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
+            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
+            let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
             let fills = has_fills(name);
-            // DEVIATE z80-callinline-price: an unsized function of a module that links the long routines. One
-            // alternative per function: a function with a sized form or a fill keeps those.
-            let sites = muls.is_none() && !fills && request.level == Level::O1 && calls_the_routine(name) == Some(false);
-            if muls.is_none() && !fills && !sites {
+            if muls.is_none() && !fills {
                 return None;
             }
-            let switch = muls.map(|_| &crate::dagisel::pipeline::DECOMPOSE_MULS);
+            let switch = muls.map(|sized| {
+                if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS }
+            });
             if let Some(switch) = switch {
                 switch.with(|one| one.set(true));
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
-            crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(sites));
             let selected = (name.clone(), select(name, false), select(name, true));
-            crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
@@ -329,6 +330,8 @@ impl llrm_mir::target::Machine for Z80Machine {
         llrm_mir::target::Tuning {
             max_stores_per_memcpy: MEMCPY_STORES,
             max_stores_per_memcpy_opt_size: MEMCPY_STORES,
+            max_stores_per_memset: memset_stores(llrm_mir::target::Tuning::PIN.max_stores_per_memset),
+            max_stores_per_memset_opt_size: memset_stores(llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size),
             ..llrm_mir::target::Tuning::PIN
         }
     }
@@ -343,6 +346,19 @@ impl llrm_mir::target::Machine for Z80Machine {
 /// prices it). Reason: variadic copied a 12 B struct argument twice as 6 word pairs, 72 B each. Exit: none; the number
 /// is the target's price, as m16's `Dos::tuning` is.
 const MEMCPY_STORES: usize = 1;
+
+/// `MaxStoresPerMemset` where the level allows no trade between bytes and clocks (-O1, -Os, -Oz): one store of the widest
+/// width, then the fill is an `ldir`. The pin's x86 limits (16 at speed, 8 at size) count 4-byte stores, which are two
+/// word stores of 3 B each through IX here: a 34 B zero fill was 102 B against an `ldir` fill of 13 B for 1.1% of its
+/// clocks (huffman_decode -O1 +70 B over the -Os form). Where bytes are priced at 3 T (-O2, -O3) the two forms are within
+/// the noise of that rate and the pin's limit stays.
+///
+/// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-24), as Z80-MEMCPY-LIMIT.
+const MEMSET_STORES: usize = 1;
+
+fn memset_stores(pin: usize) -> usize {
+    if crate::dagisel::pipeline::STRICT_LEVEL.with(std::cell::Cell::get) { MEMSET_STORES } else { pin }
+}
 
 thread_local! {
     /// Parses of a module's text for its source file since the last
