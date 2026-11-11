@@ -1,10 +1,15 @@
 # The Z80 convention, after SDCC 4.5.0's `--sdcccall 1` (read off its output): a byte in A, then L, H, E, D, C, B;
-# a word in HL, then DE, BC; a byte result in A, a word in DE, a long in HL:DE (HL high). Whatever does not fit goes
-# on the stack, the caller popping it. IX is the frame register and the callee keeps it.
+# a word in HL, then DE, BC; a byte result in A, a word in DE, a long in HL:DE (HL low) as argument and as result.
+# Whatever does not fit goes on the stack, the caller popping it. IX is the frame register and the callee keeps it.
 # DEVIATE from SDCC: its second argument is in L or DE by the first one's width (f(u8, u16): DE); here a word takes
-# the first free pair, HL. Its callee pops the stack arguments; here the caller does. Unpriced: no T-state or byte
-# figure on the corpus yet. Interop with SDCC-built objects is not a goal for the CP/M .COM first target (our own
-# runtime, no SDCC library). Exit: price both on the corpus once emission exists (by 2026-11-05), else follow SDCC.
+# the first free pair, HL. Its callee pops the stack arguments; here the caller does. Interop with SDCC-built objects
+# is not a goal for the CP/M .COM first target (our own runtime, no SDCC library). Unpriced: no T-state or byte figure
+# on the corpus yet. Exit: price both on the corpus once emission exists (by 2026-11-05), else follow SDCC.
+# DEVIATE from SDCC: it puts a long's low word in DE and its high word in HL, as argument and as result. Here the
+# argument is placed in order (HL, then DE) and the result list repeats that order, as the pin's RetCC lists the
+# registers (`AnalyzeCallResult` assigns the parts in order). A long that passes through a function or into the next
+# call needs no swap: with the result in DE:HL, shl_long_by_one was 31 B and long_step_by_one 18 B over SDCC.
+# Owner z80-argpush, 2026-11-10; priced on the corpus at five levels (docs/working/z80-long-order-ab-2026-11-10.md).
 default = "z80"
 private = "z80"
 
@@ -46,5 +51,5 @@ elf = "*"
 [z80.result]
 1 = ["a"]
 2 = ["e", "d"]
-4 = ["e", "d", "l", "h"]
+4 = ["l", "h", "e", "d"]
 pointer = ["e", "d"]

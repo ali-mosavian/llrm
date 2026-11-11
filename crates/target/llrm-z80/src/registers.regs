@@ -6,6 +6,8 @@
 # @bytes: the 8-bit allocation order. A comes last: the 8-bit ALU works on A only, so a value that does not need it
 # should not hold it.
 @bytes b c d e h l a
+# @lanes: a lane per byte of each root (the scheduler's and liveness's masks), not x86's table.
+@lanes bytes
 #
 # name bits root lane classes dwarf codeview
 a      8   a    0   gpr,int        - -

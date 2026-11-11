@@ -131,6 +131,9 @@ pub struct Selection {
     pub sized: bool,
     /// Selected with each long shift and multiply site priced (`pipeline::PRICED_SITES`).
     pub site_priced: bool,
+    /// The same function selected with its long adds as the generic expansion, not carry ops
+    /// (`pipeline::GENERIC_CARRY`); none where it has no carry ops.
+    pub generic: Option<Box<Selection>>,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
@@ -253,7 +256,7 @@ pub fn select_function_with(
         );
     let tables = info.jump_tables.clone();
     let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, site_priced: super::pipeline::PRICED_SITES.with(std::cell::Cell::get), unreachable, frequencies, tables })
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, site_priced: super::pipeline::PRICED_SITES.with(std::cell::Cell::get), unreachable, frequencies, tables })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

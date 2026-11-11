@@ -15,6 +15,7 @@ pub mod commute;
 pub mod ldir;
 pub mod mfunc;
 pub mod narrow;
+pub mod post_update;
 pub mod prepare;
 pub mod regalloc;
 pub mod runtime_size;

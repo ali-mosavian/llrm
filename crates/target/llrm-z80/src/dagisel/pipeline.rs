@@ -81,6 +81,15 @@ thread_local! {
     /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
     /// prices the two with the routine linked once (`compile::decomposed_functions`).
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function is selected with the words of its long adds and subtracts left to the generic
+    /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
+    /// two forms (`compile::lines_of`).
+    pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The carry ops `lower_carry_op` made since the count was last taken: a function with none has no
+    /// generic form to price.
+    pub static CARRY_OPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Set while the generic form of a selection is emitted and allocated (`Selection::generic`).
+    pub static GENERIC_FORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -338,6 +347,11 @@ pub fn select_block(
     (sized, long_multiply): (bool, bool),
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering();
+    if GENERIC_CARRY.with(std::cell::Cell::get) {
+        for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
+            tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
+        }
+    }
     tli.set_opt_for_size(sized);
     // a long multiply is a call (`RTLIB::MUL_I32`) in a module with enough of
     // them to pay for the routine (`prepare::mark_long_multiplies`), at every

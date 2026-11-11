@@ -62,15 +62,18 @@ fn test_a_leaf_frame_has_no_cell_for_the_omitted_frame_register() {
     }
 }
 
+/// A 486 pops in 4 clocks: `push eax` / `pop ecx` only where the 4 B matter (-Os); `sub esp, 4` / `add esp, 4` elsewhere
+/// (FRAMESLOT-PRICE, tests/check/c/m32_one_slot_frame_by_price.c).
 #[test]
-fn test_a_one_slot_leaf_frame_is_push_and_pop() {
+fn test_a_one_slot_leaf_frame_is_push_and_pop_where_the_bytes_matter() {
     for level in ["-O1", "-O2", "-Os"] {
         let asm = compiled(level);
         for name in ["one", "narrow"] {
             let body = function(&asm, name);
+            let (open, close) = if level == "-Os" { ("push eax", "pop ecx") } else { ("sub esp, 4", "add esp, 4") };
             assert!(
-                body.contains(&"push eax") && body.contains(&"pop ecx"),
-                "{level} {name}: expected push eax / pop ecx:\n{}",
+                body.contains(&open) && body.contains(&close),
+                "{level} {name}: expected {open} / {close}:\n{}",
                 body.join("\n")
             );
         }
