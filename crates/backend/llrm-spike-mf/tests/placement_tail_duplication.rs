@@ -38,3 +38,27 @@ fn without_a_copy_size_placement_leaves_the_join_alone() {
     let (order, copies) = place_duplicating(&mut graph);
     assert!(copies.is_empty() && order.contains(&3));
 }
+
+/// jpeg_fixed -O2 at arm64: a loop header copied into its predecessors left
+/// placement indexing the removed block (index out of bounds; no object for
+/// 6 cells). Graph found by fuzzing, with a loop through 1, 2, 5.
+#[test]
+fn a_copied_away_loop_block_does_not_break_placement() {
+    let succ = vec![vec![5], vec![5], vec![1, 4], vec![6, 4], vec![5], vec![2, 4], vec![]];
+    let n = succ.len();
+    let jumps: Vec<bool> = succ.iter().map(|s| s.len() == 1).collect();
+    let mut odds = Odds::default();
+    for (b, v) in succ.iter().enumerate().filter(|(_, v)| v.len() == 2) {
+        odds.insert((b as u32, v[0] as u32), (BranchProbability::new(7, 8), 0));
+        odds.insert((b as u32, v[1] as u32), (BranchProbability::new(1, 8), 1));
+    }
+    let cfg = Cfg::from_successors(succ);
+    let ids: Vec<u32> = (0..n as u32).collect();
+    let graph = Graph::from_cfg(&cfg, &ids, vec![false; n], &odds, false);
+    let mut graph = graph.with_tail_duplication(2, vec![1; n], jumps);
+    let (order, _) = place_duplicating(&mut graph);
+    let mut seen = order.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), order.len(), "a block is laid out once: {order:?}");
+}

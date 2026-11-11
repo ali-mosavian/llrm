@@ -733,6 +733,9 @@ impl<'a, L: Layout> Placer<'a, L> {
         updated: &mut HashSet<usize>,
         filter: Option<&Filter>,
     ) {
+        if self.gone[block] {
+            return;
+        }
         let chain = self.chain_of[block];
         if !updated.insert(chain) {
             return;
@@ -986,6 +989,9 @@ impl<'a, L: Layout> Placer<'a, L> {
         let mut exiting: Option<usize> = None;
         let mut to_outer: HashSet<usize> = HashSet::default();
         for &block in &blocks {
+            if self.gone[block] {
+                continue;
+            }
             let chain = self.chain_of[block];
             if block != self.tail(chain) {
                 continue;
@@ -1135,6 +1141,7 @@ impl<'a, L: Layout> Placer<'a, L> {
         }
         debug_assert!(self.work.is_empty());
         let mut order = self.loops[this].blocks.clone();
+        order.retain(|&block| !self.gone[block]);
         order.sort_unstable();
         let mut member = vec![false; self.layout.len()];
         for &block in &order {
@@ -1142,6 +1149,10 @@ impl<'a, L: Layout> Placer<'a, L> {
         }
         let filter = Filter { order, member };
         let header = self.loops[this].header;
+        // The copies took the header's place.
+        if self.gone[header] {
+            return;
+        }
         let top = self.find_best_loop_top(header, &filter);
         self.preferred_exit = None;
         let mut exiting = None;
