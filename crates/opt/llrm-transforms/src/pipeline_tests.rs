@@ -1429,6 +1429,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "lower-constant-intrinsics@1597",
             "rotate@1621",
             "loop-interchange@1631",
+            "loop-vectorize@1354",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
@@ -2259,6 +2260,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "lower-constant-intrinsics@1597",
             "rotate@1621",
             "loop-interchange@1631",
+            "loop-vectorize@1354",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
@@ -3172,4 +3174,67 @@ b:
     assert!(off.contains("samesign uge"), "premise: with no passes the compare stays\n{off}");
     let after = run(pipeline::Options::standard());
     assert!(after.contains("icmp eq i8 %x, 127"), "{after}");
+}
+
+/// The div_ceil idiom of the pin's `divceil.ll` reached `visitAdd` in the
+/// -O2 pipeline unfolded: the backend divided twice (`udiv` and `urem`).
+#[test]
+fn test_o2_folds_the_div_ceil_idiom_to_one_udiv() {
+    let text = "define i8 @f(i8 range(i8 0, 101) %x, i8 range(i8 1, 11) %y) {
+b:
+  %q = udiv i8 %x, %y
+  %r = urem i8 %x, %y
+  %c = icmp ne i8 %r, 0
+  %z = zext i1 %c to i8
+  %res = add i8 %q, %z
+  ret i8 %res
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("urem"), "premise: with no passes the idiom stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("udiv") && !after.contains("urem"), "{after}");
+}
+
+/// `x == INT_MAX ? INT_MIN : x + 1` (`add nsw`) of `foldSelectValueEquivalence`'s
+/// own comment reached the backend as a compare and a select; -O2 makes it
+/// the add.
+#[test]
+fn test_o2_folds_a_select_guarding_an_overflow_to_the_add() {
+    let text = "define i32 @f(i32 %x) {
+b:
+  %c = icmp eq i32 %x, 2147483647
+  %a = add nsw i32 %x, 1
+  %s = select i1 %c, i32 -2147483648, i32 %a
+  ret i32 %s
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("select"), "premise: with no passes the select stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(!after.contains("select") && after.contains("add i32 %x, 1"), "{after}");
 }

@@ -46,7 +46,7 @@ $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm Os) -mabi=$ABI $LLRM_LD -Os 
 for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm $o) -mabi=$ABI $LLRM_LD -$o -march=i486 -c -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || fail "FAIL llrm$o $P"; done
 [ -z "${VSGCC_ONLY:-}" ] || exit $FAILED
 cd $O/b
-# Our m32 target states a stack alignment of 4 (S32); the pin's and gcc's Linux default is 16, which keeps a reserved call frame where 4 pushes.
+# The externals keep their Linux default stack (16): ours is `-mabi=sysv`, whose convention keeps 16 at a call (DEVIATE CF6, rewritten 2026-11-10).
 F="$REF_LD -Dfar= -m32 -march=i486 $(python3 "$R/tools/external_flags.py" --reloc=-fno-pic) ${VSGCC_GCC_EXTRA:-}"
 # VSGCC_GCC_EXTRA: one more flag on the externals' lines, spelled out only to test the flag parity refusal below
 # VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
@@ -57,13 +57,13 @@ for o in O1 O2 O3 Os; do
   # the program's header flags; gcc with no spelling for one (headerflags.py exits 3) has no column here: n/a, nothing built or linked for it
   HFC=$(HF clang $o) || fail "FAIL header flags clang$o $P"
   GCC_NA=0; HFG=$(HF gcc $o) || { GCC_NA=1; echo "n/a gcc$o $P: no gcc spelling for its header flags"; }
-  VSGCC_SOURCE=$ORIG python3 "$(dirname "$0")/flagcheck.py" externals clang $o $F $HFC -mstack-alignment=4 -$o || fail "FAIL flag parity clang$o $P"
-  [ $GCC_NA = 1 ] || VSGCC_SOURCE=$ORIG python3 "$(dirname "$0")/flagcheck.py" externals gcc $o $F $HFG -mpreferred-stack-boundary=2 -$o || fail "FAIL flag parity gcc$o $P"
-  [ $GCC_NA = 1 ] || gcc $F $HFG $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || fail "FAIL gcc$o $P"
-  $CLANG $F $HFC $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || fail "FAIL clang$o $P"
+  VSGCC_SOURCE=$ORIG python3 "$(dirname "$0")/flagcheck.py" externals clang $o $F $HFC -$o || fail "FAIL flag parity clang$o $P"
+  [ $GCC_NA = 1 ] || VSGCC_SOURCE=$ORIG python3 "$(dirname "$0")/flagcheck.py" externals gcc $o $F $HFG -$o || fail "FAIL flag parity gcc$o $P"
+  [ $GCC_NA = 1 ] || gcc $F $HFG $NV_GCC -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || fail "FAIL gcc$o $P"
+  $CLANG $F $HFC $NV_CLANG -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || fail "FAIL clang$o $P"
   # the objects above carry no unwind tables, as the other columns need; the .eh_frame column reads these (llrm always writes one)
-  [ $GCC_NA = 1 ] || gcc ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $HFG $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.eh.o $S 2>/dev/null || fail "FAIL gcc$o eh $P"
-  $CLANG ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $HFC $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.eh.o $S 2>/dev/null || fail "FAIL clang$o eh $P"
+  [ $GCC_NA = 1 ] || gcc ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $HFG $NV_GCC -$o -c -o $P.gcc$o.eh.o $S 2>/dev/null || fail "FAIL gcc$o eh $P"
+  $CLANG ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $HFC $NV_CLANG -$o -c -o $P.clang$o.eh.o $S 2>/dev/null || fail "FAIL clang$o eh $P"
   CS="gcc clang"; [ $GCC_NA = 0 ] || CS="clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm $o) -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || fail "FAIL llrmElf$o $P"

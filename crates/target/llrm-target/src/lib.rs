@@ -963,6 +963,7 @@ pub trait Target {
             vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
+            object_align: self.stack_alignment(),
             optional: self.frame_optional(),
             saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
@@ -1010,6 +1011,14 @@ pub trait Target {
         None
     }
 
+    /// The registers a one-slot frame's `pop` may take, first choice first
+    /// (`X86RegisterInfo::findDeadCallerSavedReg` walks `GR32_NOSP`): the first
+    /// that no return takes a result in and the function does not save. Empty
+    /// where the target keeps the pair its convention declares.
+    fn frame_slot_pop_order(&self) -> Vec<RegId> {
+        Vec::new()
+    }
+
     /// `frame_slot_scratch` for a function of `convention`, where the target's
     /// frames differ by convention (m32's DOS ones keep Watcom's layout).
     fn frame_slot_scratch_of(
@@ -1054,6 +1063,9 @@ pub struct FrameRegisters {
     /// assumes it (its frame cells then sit on their alignments): a slot's
     /// worth where the target says no more.
     pub align: i64,
+    /// The most an object of the frame is aligned to: `align`, but for a
+    /// convention that keeps the stack wider than the target's objects need.
+    pub object_align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
     /// The registers are pushed before the locals' space even where nothing is

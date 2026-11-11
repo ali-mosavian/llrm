@@ -65,6 +65,8 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
     );
     tl.init_actions();
+    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -208,6 +210,10 @@ impl Hooks for MosLowering {
 
     /// `makeLibCall` through `LowerCall`: the routine's address is a target
     /// external symbol; a long or a long long travels as words, low first.
+    ///
+    /// DEVIATE: a shift count goes as a word. Reason: the routines are libgcc's
+    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the count
+    /// at the target's shift type (a byte). Exit: none.
     fn make_lib_call(
         &mut self,
         dag: &mut SelectionDAG,
@@ -235,8 +241,14 @@ impl Hooks for MosLowering {
                 })
                 .collect()
         };
+        let shift = name.starts_with("__ashl") || name.starts_with("__lshr") || name.starts_with("__ashr");
         let mut outs = Vec::new();
-        for &value in args {
+        for (at, &value) in args.iter().enumerate() {
+            let value = if shift && at == 1 && dag.value_type(value).size_in_bits() < 16 {
+                dag.get_node(ISD::ZeroExtend, EVT::I16, &[value])
+            } else {
+                value
+            };
             let vt = dag.value_type(value);
             let parts = words(dag, value);
             let split = parts.len() > 1;

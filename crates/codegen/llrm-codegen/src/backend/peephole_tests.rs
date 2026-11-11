@@ -6558,6 +6558,8 @@ fn test_a_float_slot_copy_is_skipped_on_a_register_file_without_x87() {
         cache: Default::default(),
         views: base.views,
         byte_lanes: base.byte_lanes,
+        lanes_x86: base.lanes_x86,
+        lanes_none: base.lanes_none,
         ties_by_row: base.ties_by_row,
     })));
     let mut input = float_copy_body((-4, 4), (-8, 4), &[]);
@@ -6600,6 +6602,28 @@ fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
     );
 }
 
+/// wrapv_overflow_check -O1 stored its lone zero as `xor eax,eax; mov [m],eax` (7 B for the pin's 10 B): +1 clk for 3 B, a worse
+/// cell against main. A lone literal store stays at -O1 (the pin); a run of two still shares.
+#[test]
+fn test_a_lone_literal_store_is_not_shared_at_o1() {
+    let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
+    cpu.share_literal_stores = true;
+    cpu.speed_rate = false;
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    let shared = |count: usize| {
+        let stores: Vec<Arc<Insn>> =
+            (0..count).map(|at| literal_store(at as i64, 4, -4 * (at as i64 + 1), 0)).collect();
+        let input = body(
+            "stores",
+            0,
+            vec![block(0, stores, vec![1]).into(), block(1, after_stores(false, &[]), vec![]).into()],
+        );
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns)
+    };
+    assert_eq!(shared(1), ["mov"], "a lone store");
+    assert_eq!(shared(2), ["xor", "mov", "mov"], "a run of two");
+}
+
 /// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a move into the
 /// stack pointer, zero, -1, a wider immediate and a non-32-bit body stay as they are.
 #[test]
@@ -6635,4 +6659,97 @@ fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
             "{dest:?} {value} {bits}"
         );
     }
+}
+
+/// `mov cx,ax; mov ax,bx; mov bx,cx`, with `after` the instructions that follow it.
+fn swap_through_a_temporary(after: Vec<Arc<Insn>>) -> LirBody {
+    swap_through_a_temporary_of([RegId::AX, RegId::BX, RegId::CX], 2, after)
+}
+
+/// The same swap through `[a, b, temporary]`, `width` bytes wide.
+fn swap_through_a_temporary_of(
+    [a, b, t]: [RegId; 3],
+    width: u32,
+    after: Vec<Arc<Insn>>,
+) -> LirBody {
+    let (ax, bx, cx) = (rl(a, width), rl(b, width), rl(t, width));
+    let mut insns = vec![
+        point(1, sem(Operation::Move, "mov", vec![cx.clone()], vec![ax.clone()]), vec![2], vec![1]),
+        point(2, sem(Operation::Move, "mov", vec![ax], vec![bx.clone()]), vec![3], vec![2]),
+    ];
+    // The allocator's cycle breaker leaves the anchor of the middle move's
+    // virtual value between the moves.
+    insns.push(lir::anchor(Arc::clone(&insns[1])));
+    insns.push(point(3, sem(Operation::Move, "mov", vec![bx], vec![cx]), vec![4], vec![3]));
+    insns.extend(after);
+    insns.push(Arc::new(Insn {
+        reads_complete: true,
+        ..insn(9, Some((9, 9)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+    }));
+    body("swap", 1, vec![block(1, insns, vec![]).into()])
+}
+
+/// m64 -Os tail_calls `swapped` and `mixed`: a register swap through a scratch
+/// register was three moves (9 B at 64 bits) where gcc's `xchg` is 3 B, +23 B
+/// over the four functions that swap their arguments.
+#[test]
+fn a_swap_through_a_dead_temporary_is_one_xchg_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+
+    let made = swapped_registers(rules(), &swap_through_a_temporary(vec![]), &cpu);
+
+    assert_eq!(names_of(&made), ["xchg", "ret"]);
+}
+
+/// An `xchg` of registers is slower than three moves: not where the code is
+/// for speed.
+#[test]
+fn a_swap_through_a_temporary_stays_three_moves_for_speed() {
+    let mut cpu = peephole().cpu;
+    cpu.size = false;
+    let input = swap_through_a_temporary(vec![]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
+
+/// The temporary holds a value the swap leaves behind: the later read of it
+/// needs the moves.
+#[test]
+fn a_swap_whose_temporary_is_read_later_is_not_an_xchg() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    let (cx, dx) = (rl(RegId::CX, 2), rl(RegId::DX, 2));
+    let input = swap_through_a_temporary(vec![point(4, sem(Operation::Move, "mov", vec![dx], vec![cx]), vec![5], vec![4])]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
+}
+
+/// 16-, 32- and 64-bit swaps become an `xchg`: it moves exactly the bits the
+/// moves did (a 16-bit `mov` keeps the upper bits, as `xchg r16` does; a 32-bit one
+/// clears them in both registers, as `xchg r32` does) and sets no flags.
+#[test]
+fn a_swap_of_16_32_and_64_bit_registers_is_one_xchg_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    for (regs, width) in [([RegId::AX, RegId::BX, RegId::CX], 2), ([RegId::EAX, RegId::EBX, RegId::ECX], 4), ([RegId::RAX, RegId::RBX, RegId::RCX], 8)] {
+        let mut input = swap_through_a_temporary_of(regs, width, vec![]);
+        if width == 8 {
+            input.bits = 64;
+        }
+        let made = swapped_registers(rules(), &input, &cpu);
+
+        assert_eq!(names_of(&made), ["xchg", "ret"], "{width} bytes");
+    }
+}
+
+/// The rule covers 16-, 32- and 64-bit registers only (`width_in`): a byte swap
+/// stays three moves.
+#[test]
+fn a_swap_of_byte_registers_stays_three_moves_for_size() {
+    let mut cpu = peephole().cpu;
+    cpu.size = true;
+    let input = swap_through_a_temporary_of([RegId::AL, RegId::BL, RegId::CL], 1, vec![]);
+
+    assert_eq!(swapped_registers(rules(), &input, &cpu), input);
 }

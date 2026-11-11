@@ -89,6 +89,50 @@ fn test_the_unrolled_copies_hold_no_arithmetic_on_constants() {
     assert!(!text.contains("add i16 0, 1") && !text.contains("icmp slt i16 1, 4"), "{text}");
 }
 
+/// A loop holding `llvm.fshl` was "not computed" to the unroller (no price for the call), so it
+/// stayed rolled: 6502 `rotate_small` -O2 5861 B against 912 B once it folds.
+#[test]
+fn test_a_loop_holding_a_funnel_shift_is_sized_and_unrolled() {
+    let mut module = parsed(
+        "declare i16 @llvm.fshl.i16(i16, i16, i16)
+define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i16 [ %x, %b0 ], [ %s, %b1 ]
+  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %n, i16 %i)
+  %s = add i16 %acc, %r
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 4
+  br i1 %go, label %b1, label %b2
+
+b2:
+  %out = phi i16 [ %s, %b1 ]
+  ret i16 %out
+}
+",
+    );
+    // a target with no price of its own for the intrinsic: the generic profile
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+    };
+    let tti = crate::testing::Flagged::default();
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
+    let text = printed(&module);
+    assert!(!text.contains("phi i16 [ 0"), "no loop phi is left: {text}");
+}
+
 #[test]
 fn test_a_loop_of_many_trips_is_kept() {
     let mut module = parsed(&counted(500));
@@ -1632,4 +1676,50 @@ declare void @late(ptr)
         inliner_follows: true,
     };
     super::unroll_function_hiding(&mut module, "f", &tti, options, None, 1).expect("unrolls without a panic");
+}
+
+/// m68k float_in_memory_loop: sixteen trips of `acc += 0.5` fold to a constant,
+/// but the target's unroll threshold (32) is under the unrolled size (64) and
+/// the analysis stopped at the pin's 10 trips, so the loop stayed: 1600
+/// soft-float adds, 3.54 M clocks against clang's 1798. The pin unrolls it
+/// without analysis (its bar is 150); under a lower bar the analysis now runs
+/// for every loop the pin's bar would have unrolled.
+#[test]
+fn test_a_constant_float_chain_under_a_low_unroll_threshold_is_unrolled() {
+    let mut module = parsed(
+        "define double @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi double [ 0.0, %b0 ], [ %s, %b1 ]
+  %s = fadd double %acc, 5.000000e-01
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 16
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret double %s
+}
+",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu").with_tuning(llrm_mir::target::Tuning {
+        unroll_threshold: Some(32),
+        unroll_max_percent_threshold_boost: Some(400),
+        ..llrm_mir::target::Tuning::PIN
+    });
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+    };
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
 }

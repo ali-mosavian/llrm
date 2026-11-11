@@ -189,17 +189,20 @@ pub struct Threshold {
     /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
     /// callers pass though the unit grows (`ipacp`).
     pub cp_clone: bool,
-    /// `-finline-recursive`: gcc's recursive inlining and peeling (a recursive
-    /// function copied into itself to depth 3, a recursive callee's own calls
-    /// inlined in the copy, its tail-call elimination deferred until the
-    /// copies are made). Off: the pin's inliner, which copies a recursive
-    /// callee once (DEVIATE (recursion), docs/architecture/recursion-rows.md).
-    pub recursive: bool,
+    /// `-f[no-]inline-recursive`: gcc's recursive inlining and peeling (a
+    /// recursive function copied into itself to depth 3, a recursive callee's
+    /// own calls inlined in the copy, its tail-call elimination deferred until
+    /// the copies are made). `Some(true)`: on, bounds of gcc's own unless the
+    /// target states some. `Some(false)`: off, the pin's inliner, which copies
+    /// a recursive callee once. `None`: the target's default (on at -O2 and
+    /// -O3 where it states bounds, else off); DEVIATE (recursion),
+    /// docs/architecture/recursion-rows.md.
+    pub recursive: Option<bool>,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, min_size: false, last: true, cp_clone: false, recursive: false }
+        Self { limit, single: false, min_size: false, last: true, cp_clone: false, recursive: None }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -1063,6 +1066,11 @@ fn fold_entry_allocas(
             (copy, alloca, Some(block) == entry)
         })
         .collect();
+    // Asked before the fold: it is what makes the count constant, and an alloca
+    // that was dynamic is the one to move to the caller's entry.
+    let was_dynamic = copies
+        .iter()
+        .any(|&(copy, alloca, in_entry)| in_entry && alloca && !is_static_alloca(context, function, copy));
     for &(copy, alloca, _) in &copies {
         if alloca || function.instruction(copy).opcode == Opcode::Phi {
             continue;
@@ -1074,7 +1082,7 @@ fn fold_entry_allocas(
     }
     let copies: Vec<(InstId, bool)> =
         copies.into_iter().filter(|&(_, _, in_entry)| in_entry).map(|(copy, alloca, _)| (copy, alloca)).collect();
-    if !copies.iter().any(|&(copy, alloca)| alloca && !is_static_alloca(context, function, copy)) {
+    if !was_dynamic {
         return;
     }
     let first = anchor

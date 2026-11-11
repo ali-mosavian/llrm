@@ -402,7 +402,7 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
-            options.inline.recursive = true;
+            options.inline.recursive = Some(true);
             crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
@@ -438,7 +438,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: Some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut analyses)?;
@@ -447,7 +447,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     speed_rate: true,
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
-                    flag: true,
+                    flag: Some(true),
                     o3: false,
                     inlining: true,
                 };
@@ -503,7 +503,7 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: Some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut analyses).expect("the walk runs");
@@ -654,7 +654,7 @@ b0:
                 promote_rate: None,
                 rerun_unchanged: true,
                 speed_rate: true,
-                inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                inline: crate::inline::Threshold { recursive: Some(true), ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
             };
             walk.run(program, &mut Default::default())
@@ -877,7 +877,7 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: recursive.then_some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut Default::default())
@@ -980,7 +980,7 @@ b0:
                     promote_rate: None,
                     rerun_unchanged: true,
                     speed_rate: true,
-                    inline: crate::inline::Threshold { recursive, ..Default::default() },
+                    inline: crate::inline::Threshold { recursive: recursive.then_some(true), ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut Default::default())
@@ -1134,7 +1134,7 @@ fn walked_top_with(
                 promote_rate: None,
                 rerun_unchanged: true,
                 speed_rate: true,
-                inline: crate::inline::Threshold { recursive, ..Default::default() },
+                inline: crate::inline::Threshold { recursive: recursive.then_some(true), ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
             };
             walk.run(program, &mut Default::default())
@@ -2537,7 +2537,7 @@ fn calls_of_copying(
 #[test]
 fn test_the_real_mode_target_copies_no_tree_recursion_by_default() {
     assert!(calls_of_tree(0, false) <= 3, "copies of a tree recursion in itself: {}", calls_of_tree(0, false));
-    let flagged = crate::inline::Threshold { recursive: true, ..crate::inline::Threshold::default() };
+    let flagged = crate::inline::Threshold { recursive: Some(true), ..crate::inline::Threshold::default() };
     assert!(calls_of_tree_with(0, false, flagged) > 3, "control: the flag copies it");
 }
 
@@ -2727,7 +2727,7 @@ fn calls_left_in(source: &llrm_mir::module::Module) -> usize {
         std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
-            options.inline.recursive = true;
+            options.inline.recursive = Some(true);
             crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
@@ -2897,7 +2897,7 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
-            options.inline.recursive = false;
+            options.inline.recursive = None;
             crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
         },
     )
@@ -2937,6 +2937,24 @@ fn m32_tree_calls(
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
     assert_eq!(calls, 6, "-O2 left {calls} calls of fib");
+}
+
+/// `-fno-inline-recursive` copied nothing on x86-m32 and changed no byte: the
+/// target states bounds, so `Recursion::of` took them whatever the flag said
+/// (fib -O2: the 6 calls of the default stood with the flag off, AM-8's D10-off
+/// A/B had no switch). Off leaves the calls the pin's inliner leaves; the
+/// default and `-finline-recursive` still copy.
+#[test]
+fn test_no_inline_recursive_copies_no_recursion_where_the_target_copies_by_default() {
+    let with = |flag: Option<bool>| {
+        let mut options = crate::pipeline::Options::default();
+        options.inline.recursive = flag;
+        m32_fib_calls(options)
+    };
+    assert_eq!(with(None), 6, "the default copies");
+    assert_eq!(with(Some(true)), 6, "-finline-recursive is unchanged where the target copies");
+    let off = with(Some(false));
+    assert!(off < 6, "-fno-inline-recursive left {off} calls of fib, the default's 6");
 }
 
 /// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
@@ -3281,6 +3299,51 @@ fn test_free_intrinsics_are_priced_only_where_a_target_asks() {
     assert_eq!(priced(false) - priced(true), 5 + 2 * 2, "the marker call and its two arguments");
 }
 
+/// `llvm.smul.fix.sat` was priced as a call (12 B) at every CPU while it expands to a widening multiply, shifts, compares
+/// and selects: fixed_point's objects are 2.9 kB at the 68000 and 1.6 kB at the 68020 against an estimate of 1.6 kB at
+/// both. A target that opts in prices it on its own table, the product from `multiply_widening`.
+#[test]
+fn test_fixed_point_intrinsics_are_priced_as_their_expansion_where_a_target_asks() {
+    let module = parsed(
+        "declare i32 @llvm.smul.fix.sat.i32(i32, i32, i32 immarg)\ndefine i32 @f(i32 %a, i32 %b) {\n  %r = call i32 @llvm.smul.fix.sat.i32(i32 %a, i32 %b, i32 8)\n  ret i32 %r\n}\n",
+    );
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap().2;
+    let layout = llrm_mir::datalayout::DataLayout::parse("E-m:e-p:32:16:32-i32:16:32-n8:16:32").unwrap();
+    let priced = |expanded_intrinsics, multiply_widening| {
+        let costs = llrm_mir::target::OperationCosts {
+            call: 5,
+            argument: 2,
+            add: 2,
+            shift: 2,
+            extend: 2,
+            branch: 2,
+            r#move: 2,
+            multiply: 14,
+            multiply_widening,
+            expanded_intrinsics,
+            ..Default::default()
+        };
+        crate::walk::function_bytes(&module, &layout, &costs, function)
+    };
+    let as_a_call = priced(false, 0);
+    assert!(priced(true, 8) > as_a_call, "the expansion is more than a call and its three arguments");
+    assert_eq!(priced(true, 160) - priced(true, 8), 160 - 8, "the product is the table's `multiply_widening`");
+}
+
+/// A product of two values extended from the word is the CPU's widening multiply, not a double-word product: the walker
+/// prices `mul i64 (sext i32), (sext i32)` at `multiply_widening` and a plain `mul i64` at `multiply_wide`.
+#[test]
+fn test_a_product_of_two_extended_words_is_the_widening_product() {
+    let module = parsed(
+        "define i64 @f(i32 %a, i32 %b) {\n  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %r = mul i64 %x, %y\n  ret i64 %r\n}\ndefine i64 @g(i64 %a, i64 %b) {\n  %r = mul i64 %a, %b\n  ret i64 %r\n}\n",
+    );
+    let by_name = |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
+    let layout = llrm_mir::datalayout::DataLayout::parse("E-m:e-p:32:16:32-i32:16:32-n8:16:32").unwrap();
+    let costs = llrm_mir::target::OperationCosts { extend: 2, multiply_wide: 100, multiply_widening: 10, ..Default::default() };
+    let (widening, wide) = (crate::walk::function_bytes(&module, &layout, &costs, by_name("f")), crate::walk::function_bytes(&module, &layout, &costs, by_name("g")));
+    assert_eq!(widening - wide, 2 * 2 + 10 - 100, "two extensions and the widening product, against the wide product");
+}
+
 /// jpeg_fixed Nib at m16 -O2: `next_byte` is a few hot instructions and a long
 /// cold refill block; inlined at 36 loop sites (#7817) the code went 4305 ->
 /// 9398 B and the clocks rose 561k, for the call it saved. The cold block's
@@ -3349,4 +3412,127 @@ done:
 }";
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
     assert!(m16.contains("call i16 @next_byte"), "the calls were inlined:\n{m16}");
+}
+
+/// A target stating a size view: `Viewed(has_view, is_view, measured)`. The
+/// view prices a memory access at seven units where the target prices one.
+struct Viewed(bool, bool, bool);
+
+impl llrm_mir::tti::Tti for Viewed {
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        self.0.then(|| std::rc::Rc::new(Viewed(false, true, false)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
+    }
+
+    fn inline_size_view_is_measured(&self) -> bool {
+        self.2
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        kind: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        volatile: bool,
+    ) -> llrm_mir::tti::Cost {
+        let one = llrm_mir::tti::Basic.memory_op_cost(op, ty, cost, volatile);
+        if self.1 { one * 7 } else { one }
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        user: llrm_mir::tti::ImmUser,
+        index: u32,
+        value: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        global: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        kind: llrm_mir::tti::CastKind,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        cost: llrm_mir::tti::CostKind,
+        lhs: llrm_mir::tti::OperandInfo,
+        rhs: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
+}
+
+/// The SZ2 trials priced a body in any target's size view, the 6502's and
+/// m68k's included: `tail_calls` -Os at 6502 and 65C02 came out different
+/// from the tip (a `_even -> _odd` site kept or refused on other sizes, the
+/// object changed). Only a measured view, for a speed caller, prices a trial.
+#[test]
+fn test_a_trial_body_is_priced_in_a_view_only_when_it_is_measured_and_the_caller_is_speed() {
+    let module = parsed(
+        "define i32 @f(ptr %p) {
+b0:
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    let id = module.named("f").unwrap();
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).unwrap();
+    let size = |tti: &Viewed, speed: bool| super::body_size(&module, &layout, tti, id, speed);
+    let own = size(&Viewed(false, false, false), true);
+    assert_eq!(size(&Viewed(true, false, false), true), own, "an unmeasured view is not used (6502, m68k)");
+    assert_eq!(size(&Viewed(true, false, false), false), own);
+    assert_eq!(size(&Viewed(true, false, true), false), own, "a measured view is not used for a size caller");
+    assert!(size(&Viewed(true, false, true), true) > own, "a measured view serves a speed caller");
 }
