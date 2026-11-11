@@ -502,18 +502,6 @@ impl Printer<'_> {
                 self.push(format!("rl {}", name(hi)));
                 self.push("adc hl, hl");
             }
-            "ADC16Fhl" => self.push("adc hl, hl"),
-            // x + x with the carry out: `add hl, hl` in hl, `sla lo; rl hi` in the other pairs
-            "SHL16F" => {
-                let pair = self.register(inst, 0)?;
-                if pair == reg::HL {
-                    self.push("add hl, hl");
-                } else {
-                    let (lo, hi) = lanes(pair)?;
-                    self.push(format!("sla {}", name(lo)));
-                    self.push(format!("rl {}", name(hi)));
-                }
-            }
             "SUB16F" => {
                 let source = name_of(self, 3)?;
                 self.push("or a, a");

@@ -303,8 +303,9 @@ fn allocated_with(
     expand::BYTES_FIRST.with(|one| one.set(!matches!(request.level, Level::O2 | Level::O3 | Level::Omax)));
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
-    crate::long_shift::fuse(&mut function);
-    crate::long_shift::sink(&mut function);
+    if std::env::var("LLRM_NO_Z80_SHL32").is_err() {
+        crate::long_shift::double_and_sink(&mut function);
+    }
     if std::env::var("LLRM_Z80_DUMP_SSA").is_ok_and(|one| one == name) {
         dump(&function);
     }

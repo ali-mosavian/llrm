@@ -20,50 +20,92 @@
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 
-/// `SHL16F`, the copies that bring in the high word, `ADC16Fhl`, as one
-/// `SHL32 [lo', hl', f, lo, hl]` (the copy in and out of hl stay).
-pub fn fuse(function: &mut MFunction) {
-    for block in &mut function.blocks {
-        let mut at = 0;
-        while at < block.insts.len() {
-            if block.insts[at].kind != Kind::Op("SHL16F") {
-                at += 1;
-                continue;
+/// The vreg a chain of copies starts from.
+fn root(
+    function: &MFunction,
+    mut v: u32,
+) -> u32 {
+    'walk: loop {
+        for block in &function.blocks {
+            for inst in &block.insts {
+                if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(u))]) = (inst.kind, &inst.operands[..])
+                    && *d == v
+                {
+                    v = *u;
+                    continue 'walk;
+                }
             }
-            let [Operand::Def(low), Operand::Def(_), Operand::Use(from)] = block.insts[at].operands[..] else {
-                at += 1;
-                continue;
-            };
-            // only copies between, none of them writes the flags
-            let Some(adc) = (at + 1..block.insts.len()).find(|&k| block.insts[k].kind != Kind::Copy) else {
-                break;
-            };
-            if block.insts[adc].kind != Kind::Op("ADC16Fhl") {
-                at += 1;
-                continue;
-            }
-            let [Operand::Def(hl), Operand::Def(flags), Operand::Use(_), Operand::Use(_)] = block.insts[adc].operands[..]
-            else {
-                at += 1;
-                continue;
-            };
-            let mut fused = Inst::new(
-                Kind::Op("SHL32"),
-                vec![
-                    Operand::Def(low),
-                    Operand::Def(hl),
-                    Operand::Def(flags),
-                    Operand::Use(from),
-                    Operand::Use(hl),
-                ],
-            );
-            fused.ties = vec![(0, 3), (1, 4)];
-            fused.sets_flags = true;
-            block.insts[adc] = fused;
-            block.insts.remove(at);
-            at = adc;
         }
+        return v;
     }
+}
+
+/// The virtual register copied into the physical `reg` by the nearest copy before `at`.
+fn copied_into(
+    insts: &[Inst],
+    at: usize,
+    reg: Reg,
+) -> Option<(usize, u32)> {
+    let k = (0..at).rev().find(|&k| insts[k].operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == reg)))?;
+    match (insts[k].kind, &insts[k].operands[..]) {
+        (Kind::Copy, [Operand::Def(_), Operand::Use(Reg::Virt(v))]) => Some((k, *v)),
+        _ => None,
+    }
+}
+
+/// `ADD16F x, x` and the `ADC16F y, y` after it (a long added to itself) as one `SHL32 [lo', hl', f, x, hl]`: the
+/// copies in and out of hl around each stay, those of the low word go with the instruction.
+fn fuse_block(
+    function: &mut MFunction,
+    b: usize,
+) -> bool {
+    let insts = &function.blocks[b].insts;
+    for add in 0..insts.len() {
+        let [Operand::Def(hl), Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(x))] = insts[add].operands[..] else {
+            continue;
+        };
+        if insts[add].kind != Kind::Op("ADD16F") {
+            continue;
+        }
+        let Some((into, held)) = copied_into(insts, add, hl) else { continue };
+        if root(function, held) != root(function, x) {
+            continue;
+        }
+        // the low word's copy out of hl, then the high word's copy in and its ADC16F
+        let Some(out) = (add + 1..insts.len()).find(|&k| {
+            matches!(&insts[k].operands[..], [Operand::Def(Reg::Virt(_)), Operand::Use(r)] if *r == hl && insts[k].kind == Kind::Copy)
+        }) else {
+            continue;
+        };
+        let Operand::Def(low) = insts[out].operands[0] else { continue };
+        let Some(adc) = (out + 1..insts.len()).find(|&k| insts[k].kind != Kind::Copy) else { continue };
+        let [Operand::Def(_), Operand::Def(flags), Operand::Use(_), Operand::Use(Reg::Virt(y)), Operand::Use(_)] =
+            insts[adc].operands[..]
+        else {
+            continue;
+        };
+        if insts[adc].kind != Kind::Op("ADC16F") {
+            continue;
+        }
+        let Some((_, held_high)) = copied_into(insts, adc, hl) else { continue };
+        if root(function, held_high) != root(function, y) || insts[out + 1..adc].iter().any(|i| i.kind != Kind::Copy) {
+            continue;
+        }
+        let mut fused = Inst::new(
+            Kind::Op("SHL32"),
+            vec![Operand::Def(low), Operand::Def(hl), Operand::Def(flags), Operand::Use(Reg::Virt(x)), Operand::Use(hl)],
+        );
+        fused.ties = vec![(0, 3), (1, 4)];
+        fused.sets_flags = true;
+        let insts = &mut function.blocks[b].insts;
+        insts[adc] = fused;
+        // the low word's copy out, its add and the copy in ahead of it go
+        for k in [out, add, into] {
+            insts.remove(k);
+        }
+        return true;
+    }
+    false
 }
 
 fn successors(
@@ -91,34 +133,44 @@ fn reads(
     inst.operands.iter().any(|operand| matches!(operand, Operand::Use(Reg::Virt(u)) if *u == v))
 }
 
-/// Moves each `SHL32` of a block that branches, with the copies that carry its
-/// results, into the successor whose only predecessor is the block, where
-/// everything that reads them is: the exit path no longer computes it.
-pub fn sink(function: &mut MFunction) {
+/// A long doubled in a block that branches: fused, and moved with the copies that carry its results into the
+/// successor whose only predecessor is the block, where everything that reads them is, so the exit path no longer
+/// computes it. A block where that does not happen keeps the two instructions: fused, a doubling in straight code
+/// pays for the forced registers (rotate_small -O1 +347 B).
+pub fn double_and_sink(function: &mut MFunction) {
+    if std::env::var("LLRM_NO_Z80_SHL32").is_ok() {
+        return;
+    }
     for b in 0..function.blocks.len() {
-        let successors_of_b = successors(function, b);
-        if successors_of_b.len() < 2 {
+        if successors(function, b).len() < 2 {
             continue;
         }
-        let Some(shift) = function.blocks[b].insts.iter().position(|inst| inst.kind == Kind::Op("SHL32")) else {
-            continue;
-        };
-        // the target: the one successor that only this block enters
-        let predecessors = |id: u32| {
-            (0..function.blocks.len()).filter(|&p| successors(function, p).contains(&id)).collect::<Vec<_>>()
-        };
-        let candidates: Vec<usize> = successors_of_b
-            .iter()
-            .copied()
-            .filter(|&id| predecessors(id) == [b])
-            .filter_map(|id| function.blocks.iter().position(|block| block.id == id))
-            .collect();
-        for target in candidates {
-            if sink_into(function, b, target, shift) {
-                break;
-            }
+        let before = function.clone();
+        if !fuse_block(function, b) || !sink_block(function, b) {
+            *function = before;
         }
     }
+}
+
+fn sink_block(
+    function: &mut MFunction,
+    b: usize,
+) -> bool {
+    let successors_of_b = successors(function, b);
+    let Some(shift) = function.blocks[b].insts.iter().position(|inst| inst.kind == Kind::Op("SHL32")) else {
+        return false;
+    };
+    // the target: a successor that only this block enters
+    let predecessors = |id: u32| {
+        (0..function.blocks.len()).filter(|&p| successors(function, p).contains(&id)).collect::<Vec<_>>()
+    };
+    let candidates: Vec<usize> = successors_of_b
+        .iter()
+        .copied()
+        .filter(|&id| predecessors(id) == [b])
+        .filter_map(|id| function.blocks.iter().position(|block| block.id == id))
+        .collect();
+    candidates.into_iter().any(|target| sink_into(function, b, target, shift))
 }
 
 /// One attempt: the unit of the `SHL32` at `shift` of block `b` into block `target`.
