@@ -353,7 +353,7 @@ const MEMCPY_STORES: usize = 1;
 /// clocks (huffman_decode -O1 +70 B over the -Os form). Where bytes are priced at 3 T (-O2, -O3) the two forms are within
 /// the noise of that rate and the pin's limit stays.
 ///
-/// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-30), as Z80-MEMCPY-LIMIT.
+/// DEVIATE Z80-MEMSET-LIMIT (owner z80-pf, exit 2026-11-24), as Z80-MEMCPY-LIMIT.
 const MEMSET_STORES: usize = 1;
 
 fn memset_stores(pin: usize) -> usize {
