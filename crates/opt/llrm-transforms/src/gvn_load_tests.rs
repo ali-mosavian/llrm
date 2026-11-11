@@ -167,6 +167,19 @@ fn test_a_load_partly_available_is_loaded_in_the_predecessor_that_lacks_it() {
     assert!(!text.contains("b3:\n  %r = load"), "{text}");
 }
 
+/// DEVIATE GVN-PRE-OPTSIZE: x_bubble -Os grew a carried `%.pre` phi and a copy
+/// on the swap path (gcc inserts a partial redundancy only on speed edges). An
+/// `optsize` or `minsize` function keeps its load in the join; the same body
+/// without the attribute is the test above.
+#[test]
+fn test_a_load_partly_available_stays_in_the_join_of_an_optsize_function() {
+    for attribute in ["optsize", "minsize"] {
+        let sized = PARTLY.replace("(i16 %x, i16 %y, i1 %c) {", &format!("(i16 %x, i16 %y, i1 %c) {attribute} {{"));
+        let (text, changed) = loaded(&sized, XYC);
+        assert!(!changed && !text.contains(".pre") && text.contains("b3:\n  %r = load"), "{attribute}: {text}");
+    }
+}
+
 /// x_heapsort's sift loop: the child's element is loaded on the arm that chose
 /// it by a select of two indexes, not on the other arm. The GEPs off `@g` are
 /// in blocks that dominate both arms, but the translation of the address into

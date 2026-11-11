@@ -18,6 +18,16 @@
 //! DEVIATE 19, `takeName` is not carried to a phi made for a load: names are
 //! cosmetic.
 //!
+//! DEVIATE GVN-PRE-OPTSIZE (owner greedy-os-causes, exit 2026-12-01): the pin's
+//! `performLoadPRE` has no size gate; here `processNonLocalLoad` skips it, and
+//! `performLoopLoadPRE`, in a function with `optsize` or `minsize`, as gcc's
+//! `tree-ssa-pre.cc` inserts to remove a partial redundancy only on an edge
+//! optimized for speed
+//! ([`do_pre_regular_insertion`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/tree-ssa-pre.cc#L3358)).
+//! The load stays in the join; a fully redundant load is still removed.
+//! m32 -Os, pin `opt` toggle over 94 programs: -57 B (x_jpeg_fixed -15, x_bubble -7);
+//! x_rle +4 B (cause in the PR). Exit: the pin gates it, or the gate is measured away.
+//!
 //! OWED, stage 5 and 6 of docs/architecture/gvn-port.md: a load with
 //! unavailable blocks is not partially eliminated (`performLoopLoadPRE`,
 //! `performLoadPRE`), and `performScalarPRE` of a load's GEP indices is not
@@ -31,7 +41,7 @@ use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::opcode::{Attribute, Flags, Opcode};
 
 use super::exposing;
 use super::{GvnPass, local};
@@ -700,11 +710,13 @@ impl GvnPass<'_> {
             return true;
         }
         // Step 4: Eliminate partial redundancy (`enable-load-pre`).
+        // DEVIATE GVN-PRE-OPTSIZE: not at `optsize` or `minsize` (see the module doc).
+        let at_size = self.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"));
         if !self.pre {
             return changed;
         }
         self.perform_loop_load_pre(load, &mut values_per_block, &unavailable_blocks)
-            || self.perform_load_pre(load, &mut values_per_block, &unavailable_blocks)
+            || (!at_size && self.perform_load_pre(load, &mut values_per_block, &unavailable_blocks))
             || changed
     }
 }
