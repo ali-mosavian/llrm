@@ -35,7 +35,9 @@ Clocks (cycles --exe 5110bd14; 68000 base -> head; 68020 similar) and object byt
 ## Other targets (same two dists, tests/run/c, -O2/-O3/-Os)
 
 x86_16-wat 534, x86_32-wat 522, x86_32-linux 426, x86_64-linux 417, arm64 417, wasm32 414, z80 348 cells: all compiled, all objects identical.
-6502-sim65 351 cells: 348 compiled on both sides (3 refused on both), 350 identical; memmove_overlap -O3 16056 -> 6334 B.
+6502-sim65 351 cells: 348 compiled on both sides (3 refused on both), 350 identical; one differs, memmove_overlap -O3 (the shared analysis; the 6502 bar is `FULL_UNROLL_UNITS`).
+Checked on sim65 (`tools/6502/ours_cr.py`, 6502, each side's llrm-cc/llrm-llc): PASS against the reference at O1, O2, O3, Os on both sides.
+-O3 linked bytes 1076 -> 1296 (+220), clocks 17,484 -> 12,375 (-29%); O1/O2/Os identical (852/17,349; 1076/17,484; 730/17,569). The object-file size (16056 -> 6334) first quoted is not code bytes.
 
 ## The two worse rows
 
