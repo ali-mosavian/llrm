@@ -1388,3 +1388,49 @@ done:
     assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
     assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
 }
+
+/// m68k float_in_memory_loop: sixteen trips of `acc += 0.5` fold to a constant,
+/// but the target's unroll threshold (32) is under the unrolled size (64) and
+/// the analysis stopped at the pin's 10 trips, so the loop stayed: 1600
+/// soft-float adds, 3.54 M clocks against clang's 1798. The pin unrolls it
+/// without analysis (its bar is 150); under a lower bar the analysis now runs
+/// for every loop the pin's bar would have unrolled.
+#[test]
+fn test_a_constant_float_chain_under_a_low_unroll_threshold_is_unrolled() {
+    let mut module = parsed(
+        "define double @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi double [ 0.0, %b0 ], [ %s, %b1 ]
+  %s = fadd double %acc, 5.000000e-01
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 16
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret double %s
+}
+",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu").with_tuning(llrm_mir::target::Tuning {
+        unroll_threshold: Some(32),
+        unroll_max_percent_threshold_boost: Some(400),
+        ..llrm_mir::target::Tuning::PIN
+    });
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+    };
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
+}
