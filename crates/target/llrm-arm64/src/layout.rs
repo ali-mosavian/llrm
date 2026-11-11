@@ -6,12 +6,37 @@
 //! not placed).
 
 use llrm_spike_mf::cfg::Cfg;
-use llrm_spike_mf::placement::{Graph, Layout, Odds, place};
+use llrm_spike_mf::placement::{Graph, Layout, Odds, place_duplicating};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::frame::Lowered;
 use crate::jumptable::Table;
 use crate::mc::inst::{Inst, Target};
+
+/// `TailDupPlacementThreshold`. DEVIATE: the pin raises it to 4 at -O3; the
+/// layout is not told the level. Exit: 11-13.
+const TAIL_DUPLICATION_SIZE: usize = 2;
+
+/// What placement may do with `block`: the instructions a copy repeats
+/// (`usize::MAX`: it cannot be copied) and whether it ends in one
+/// unconditional jump, so it can take a copy.
+fn copy_cost(block: &Lowered) -> (usize, bool) {
+    let ends = matches!(block.insts.last(), Some(Inst::Branch { link: false, .. } | Inst::Ret { .. }));
+    let whole = ends
+        && !block.insts.iter().any(|inst| matches!(inst, Inst::Cfi(_) | Inst::Label(_)))
+        && !block.insts.iter().filter_map(label_of).any(|label| label == block.label);
+    // A conditional branch before the closing `b` makes it the way on: the
+    // pin's block falls through there and holds no jump.
+    let count = match block.insts.as_slice() {
+        [.., before, Inst::Branch { link: false, .. }] if label_of(before).is_some() && !matches!(before, Inst::Branch { .. }) => {
+            block.insts.len() - 1
+        }
+        insts => insts.len(),
+    };
+    let jump = matches!(block.insts.last(), Some(Inst::Branch { link: false, .. }))
+        && block.insts.iter().filter_map(label_of).count() == 1;
+    (if whole { count } else { usize::MAX }, jump)
+}
 
 pub(crate) fn label_of(inst: &Inst) -> Option<&str> {
     match inst {
@@ -734,20 +759,26 @@ pub fn fold(
     // block forwarding can make one) keeps the layout order, as frequencies
     // need an entry that is no loop header. Exit: 11-12.
     let mut likelihood: HashMap<(String, String), u32> = HashMap::default();
+    let mut copies: Vec<(usize, usize)> = Vec::new();
     let placed: Vec<usize> = if edges.iter().any(|next| next.contains(&0)) {
         reachable.clone()
     } else {
         let cfg = Cfg::from_successors(edges.clone());
-        let graph = Graph::from_cfg(&cfg, &ids, vec![false; ids.len()], &odds, optsize);
-        for (from, next) in edges.iter().enumerate() {
-            for &to in next {
+        let mut graph = Graph::from_cfg(&cfg, &ids, vec![false; ids.len()], &odds, optsize);
+        let (counts, jumps_to): (Vec<usize>, Vec<bool>) =
+            reachable.iter().map(|&old| copy_cost(&blocks[old])).unzip();
+        graph = graph.with_tail_duplication(TAIL_DUPLICATION_SIZE, counts, jumps_to);
+        let (pinned, made) = place_duplicating(&mut graph);
+        copies = made;
+        // The odds of every edge, as the copies left them.
+        for from in 0..edges.len() {
+            for &to in graph.successors(from) {
                 likelihood.insert(
                     (blocks[reachable[from]].label.clone(), blocks[reachable[to]].label.clone()),
                     graph.probability(from, to).get_numerator(),
                 );
             }
         }
-        let pinned = place(&graph);
         // DEVIATE: the old first-successor chain is kept unless placement
         // executes fewer jumps by the same frequencies; the pin's
         // placement ignores that cost (quicksort's swap path gains a
@@ -808,10 +839,24 @@ pub fn fold(
             }
             placed
         };
-        let order = if jumps(&pinned) < jumps(&identity) { pinned } else { identity };
+        // Placement's copies are in its order only.
+        let order = if !copies.is_empty() || jumps(&pinned) < jumps(&identity) { pinned } else { identity };
         order.into_iter().map(|new| reachable[new]).collect()
     };
     let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
+    // `TailDupPlacement`: the body of the block copied ends the block that
+    // took it, as the jump to it was.
+    for (tail, pred) in copies {
+        let (insts, locs) = {
+            let tail = taken[reachable[tail]].as_ref().expect("a block copied is there");
+            (tail.insts.clone(), tail.locs.clone())
+        };
+        let pred = taken[reachable[pred]].as_mut().expect("a block that takes a copy is there");
+        pred.insts.pop();
+        pred.locs.pop();
+        pred.insts.extend(insts);
+        pred.locs.extend(locs);
+    }
     let mut ordered: Vec<Lowered> = placed.into_iter().map(|at| taken[at].take().expect("placed once")).collect();
     // The pin copies in layout order (`TailDuplicator`, then
     // `MachineCopyPropagation`): a jump to the block next to it stays a

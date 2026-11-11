@@ -42,6 +42,8 @@ use crate::sink::Jump;
 const STATIC_LIKELY_PROB: u32 = 80;
 /// `PredecessorLimit`.
 const PREDECESSOR_LIMIT: usize = 1000;
+/// `TailDupPlacementPenalty` (2 per cent).
+const TAIL_DUP_PLACEMENT_PENALTY: u32 = 2;
 /// `ExitBlockBias`.
 const EXIT_BLOCK_BIAS: u32 = 0;
 
@@ -101,6 +103,43 @@ pub trait Layout {
     fn gains_remove_jumps(&self) -> bool {
         false
     }
+    /// `TailDupPlacementThreshold` (`initTailDupThreshold`): the instructions
+    /// a block may hold and be copied while placing; 0: placement copies
+    /// nothing (`TailDupPlacement` off).
+    fn tail_duplication_size(&self) -> usize {
+        0
+    }
+    /// The instructions of `block` a copy would repeat (`TailDuplicator::
+    /// shouldTailDuplicate` counts them against the size).
+    fn instruction_count(
+        &self,
+        _block: usize,
+    ) -> usize {
+        usize::MAX
+    }
+    /// `canTailDuplicate(tail, pred)`: `pred` ends in one unconditional jump
+    /// to `tail`, so the body can take its place.
+    fn can_tail_duplicate(
+        &self,
+        _tail: usize,
+        _pred: usize,
+    ) -> bool {
+        false
+    }
+    /// `tail`'s body and successors now end `pred` (the copy); `tail` stays
+    /// for its other predecessors.
+    fn duplicate(
+        &mut self,
+        _tail: usize,
+        _pred: usize,
+    ) {
+    }
+    /// `removeDeadBlock`: `tail` has no predecessor left.
+    fn remove(
+        &mut self,
+        _tail: usize,
+    ) {
+    }
 }
 
 /// A chain of blocks laid out in a row (`BlockChain`).
@@ -124,7 +163,7 @@ struct FlatLoop {
 }
 
 struct Placer<'a, L: Layout> {
-    layout: &'a L,
+    layout: &'a mut L,
     chain_of: Vec<usize>,
     chains: Vec<Chain>,
     work: Vec<usize>,
@@ -133,6 +172,12 @@ struct Placer<'a, L: Layout> {
     loops: Vec<FlatLoop>,
     innermost: Vec<Option<usize>>,
     preferred_exit: Option<usize>,
+    /// `MPDT`, taken of the CFG as placement found it; with tail duplication.
+    post: Option<Cfg>,
+    /// The copies made, in order: (the block copied, the block that took it).
+    copies: Vec<(usize, usize)>,
+    /// Blocks tail duplication removed.
+    gone: Vec<bool>,
 }
 
 const NONE: usize = usize::MAX;
@@ -299,13 +344,14 @@ impl<'a, L: Layout> Placer<'a, L> {
         false
     }
 
-    /// `selectBestSuccessor`.
+    /// `selectBestSuccessor`; the flag: the successor is chosen to be tail
+    /// duplicated (`BlockAndTailDupResult::ShouldTailDup`).
     fn select_best_successor(
         &mut self,
         block: usize,
         chain: usize,
         filter: Option<&Filter>,
-    ) -> Option<usize> {
+    ) -> (Option<usize>, bool) {
         let (successors, adjusted) = self.collect_viable_successors(block, chain, filter);
         if let Some(result) = self.computed.remove(&block) {
             let result_chain = self.chain_of[result];
@@ -314,16 +360,21 @@ impl<'a, L: Layout> Placer<'a, L> {
                 && result_chain != chain
                 && result == self.head(result_chain)
             {
-                return Some(result);
+                return (Some(result), false);
             }
         }
         let mut best = None;
         let mut best_prob = BranchProbability::get_zero();
+        // Blocks with CFG violations that tail duplication may place anyway.
+        let mut candidates: Vec<(BranchProbability, usize)> = Vec::new();
         for succ in successors {
             let real = self.probability(block, succ);
             let prob = adjusted_probability(real, adjusted);
             let succ_chain = self.chain_of[succ];
             if self.has_better_layout_predecessor(block, succ, succ_chain, real, chain, filter) {
+                if self.should_tail_duplicate(succ) {
+                    candidates.push((prob, succ));
+                }
                 continue;
             }
             if best.is_some() && best_prob >= prob {
@@ -332,7 +383,305 @@ impl<'a, L: Layout> Placer<'a, L> {
             best = Some(succ);
             best_prob = prob;
         }
-        best
+        // In order of decreasing probability (a stable sort); the first that
+        // pays wins, none that is below the best.
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut duplicate = false;
+        for (prob, succ) in candidates {
+            if prob < best_prob {
+                break;
+            }
+            if self.can_tail_duplicate_unplaced_preds(block, succ, chain, filter)
+                && self.is_profitable_to_tail_dup(block, succ, best_prob, chain, filter)
+            {
+                best = Some(succ);
+                duplicate = true;
+                break;
+            }
+        }
+        (best, duplicate)
+    }
+
+    /// `shouldTailDuplicate`: a block with several ways on, small enough.
+    fn should_tail_duplicate(
+        &self,
+        block: usize,
+    ) -> bool {
+        let size = self.layout.tail_duplication_size();
+        let ways = self.layout.successors(block);
+        if size == 0 || ways.len() == 1 || ways.contains(&block) || self.gone[block] {
+            return false;
+        }
+        let limit = if self.layout.optimize_for_size() { 1 } else { size };
+        self.layout.instruction_count(block) <= limit
+    }
+
+    /// `canTailDuplicateUnplacedPreds`: `succ` can be copied into every
+    /// predecessor of it that is not placed (`bb` is).
+    fn can_tail_duplicate_unplaced_preds(
+        &self,
+        bb: usize,
+        succ: usize,
+        chain: usize,
+        filter: Option<&Filter>,
+    ) -> bool {
+        if !self.should_tail_duplicate(succ) {
+            return false;
+        }
+        let mut duplicate = true;
+        let mut copies = 0;
+        let ways = self.layout.successors(bb);
+        for &pred in self.layout.predecessors(succ) {
+            if pred == bb
+                || filter.is_some_and(|filter| !filter.member[pred])
+                || (self.chain_of[pred] == chain && !self.layout.successors(succ).is_empty())
+            {
+                continue;
+            }
+            if !self.layout.can_tail_duplicate(succ, pred) {
+                // The copy would make a trellis: leave this predecessor out.
+                let mine = self.layout.successors(pred);
+                if ways.len() > 1
+                    && mine.len() == ways.len()
+                    && !ways.contains(&pred)
+                    && mine.iter().all(|one| ways.contains(one))
+                {
+                    continue;
+                }
+                duplicate = false;
+                continue;
+            }
+            copies += 1;
+        }
+        if copies == 0 {
+            return false;
+        }
+        // The exit block.
+        if self.layout.successors(succ).is_empty() {
+            return true;
+        }
+        // Plus the predecessor already placed.
+        copies += 1;
+        // More copies than successors cannot bring more fall-through.
+        !(copies > self.layout.successors(succ).len() || !duplicate)
+    }
+
+    /// `greaterWithBias`: `a` beats `b` by more than the penalty.
+    fn greater_with_bias(
+        &self,
+        a: BlockFrequency,
+        b: BlockFrequency,
+    ) -> bool {
+        let entry = self.layout.frequency(0);
+        let penalty = BranchProbability::new(TAIL_DUP_PLACEMENT_PENALTY, 100);
+        let gain = a - b;
+        gain / penalty >= entry
+    }
+
+    /// `isProfitableToTailDup`: copying `succ` into the other predecessors
+    /// adds fall-through (`q_prob` is the odds of the best successor of `bb`
+    /// otherwise).
+    fn is_profitable_to_tail_dup(
+        &self,
+        bb: usize,
+        succ: usize,
+        q_prob: BranchProbability,
+        chain: usize,
+        filter: Option<&Filter>,
+    ) -> bool {
+        let (succ_succs, adjusted) = self.collect_viable_successors(succ, chain, filter);
+        let p_prob = self.probability(bb, succ);
+        let bb_freq = self.layout.frequency(bb);
+        let succ_freq = self.layout.frequency(succ);
+        let p = bb_freq * p_prob;
+        let q_out = bb_freq * q_prob;
+        if succ_succs.is_empty() {
+            return self.greater_with_bias(p, q_out);
+        }
+        let mut best_succ_succ = BranchProbability::get_zero();
+        let mut post_dominator = None;
+        for &one in &succ_succs {
+            let prob = self.probability(succ, one);
+            if prob > best_succ_succ {
+                best_succ_succ = prob;
+            }
+            if post_dominator.is_none() && self.post.as_ref().is_some_and(|post| post.post_dominates(one, succ)) {
+                post_dominator = Some(one);
+                break;
+            }
+        }
+        // Succ's best incoming edge that is not from `bb`.
+        let mut q_in = BlockFrequency(0);
+        for &pred in self.layout.predecessors(succ) {
+            if pred == succ
+                || pred == bb
+                || self.chain_of[pred] == chain
+                || filter.is_some_and(|filter| !filter.member[pred])
+            {
+                continue;
+            }
+            let freq = self.layout.frequency(pred) * self.probability(pred, succ);
+            if freq > q_in {
+                q_in = freq;
+            }
+        }
+        let f = succ_freq - q_in;
+        let (lower, upper) = (q_in.min(f), q_in.max(f));
+        let Some(pdom) = post_dominator.filter(|&pdom| self.layout.successors(succ).contains(&pdom)) else {
+            let u_prob = best_succ_succ;
+            let v_prob = adjusted - u_prob;
+            let v = succ_freq * v_prob;
+            let base = p + v;
+            let dup = q_out + lower * u_prob + upper * v_prob;
+            return self.greater_with_bias(base, dup);
+        };
+        let u_prob = self.probability(succ, pdom);
+        let v_prob = adjusted - u_prob;
+        let u = succ_freq * u_prob;
+        let v = succ_freq * v_prob;
+        if u_prob > adjusted.div_u32(2)
+            && !self.has_better_layout_predecessor(succ, pdom, self.chain_of[pdom], u_prob, chain, filter)
+        {
+            // Cases 3 and 4.
+            return self.greater_with_bias(p + v, q_out + upper * v_prob + lower * u_prob);
+        }
+        // Cases 1 and 2.
+        self.greater_with_bias(p + u, q_out + lower * adjusted + upper * u_prob)
+    }
+
+    /// `markBlockSuccessors` for one block.
+    fn mark_block_successors(
+        &mut self,
+        chain: usize,
+        block: usize,
+        loop_header: usize,
+        filter: Option<&Filter>,
+    ) {
+        for succ in self.layout.successors(block).to_vec() {
+            if filter.is_some_and(|filter| !filter.member[succ]) {
+                continue;
+            }
+            let succ_chain = self.chain_of[succ];
+            if succ_chain == chain || succ == loop_header {
+                continue;
+            }
+            if self.chains[succ_chain].unscheduled == 0 {
+                continue;
+            }
+            self.chains[succ_chain].unscheduled -= 1;
+            if self.chains[succ_chain].unscheduled > 0 {
+                continue;
+            }
+            self.work.push(self.head(succ_chain));
+        }
+    }
+
+    /// `TailDuplicator::tailDuplicate` in layout mode, for the placer's
+    /// blocks: `block` is copied into every predecessor but `lpred` that ends
+    /// in a jump to it, and into `lpred` when that leaves it the only one.
+    /// Returns the predecessors that took a copy.
+    fn tail_duplicate(
+        &mut self,
+        block: usize,
+        lpred: usize,
+    ) -> Vec<usize> {
+        let mut done = Vec::new();
+        for pred in self.layout.predecessors(block).to_vec() {
+            if pred == block || !self.layout.can_tail_duplicate(block, pred) || pred == lpred {
+                continue;
+            }
+            self.layout.duplicate(block, pred);
+            self.copies.push((block, pred));
+            done.push(pred);
+        }
+        // Copied into all its predecessors but the one before it: that one
+        // takes the body.
+        let rest = self.layout.predecessors(block);
+        if rest == [lpred]
+            && self.layout.successors(lpred) == [block]
+            && self.layout.can_tail_duplicate(block, lpred)
+        {
+            self.layout.duplicate(block, lpred);
+            self.copies.push((block, lpred));
+            done.push(lpred);
+        }
+        done
+    }
+
+    /// `maybeTailDuplicateBlock`: whether `block` was removed, and whether it
+    /// was copied into `lpred`.
+    fn maybe_tail_duplicate(
+        &mut self,
+        block: usize,
+        lpred: usize,
+        chain: usize,
+        filter: Option<&Filter>,
+    ) -> (bool, bool) {
+        // An unplaced block on its own, or the end of the chain.
+        let own = self.chain_of[block];
+        if !self.should_tail_duplicate(block) || (self.chains[own].blocks.len() != 1 && self.tail(own) != block) {
+            return (false, false);
+        }
+        let done = self.tail_duplicate(block, lpred);
+        if done.is_empty() {
+            return (false, false);
+        }
+        let removed = self.layout.predecessors(block).is_empty();
+        if removed {
+            self.layout.remove(block);
+            self.gone[block] = true;
+            self.chains[own].blocks.retain(|&one| one != block);
+            self.chain_of[block] = NONE;
+            self.work.retain(|&one| one != block);
+        }
+        let to_lpred = done.contains(&lpred);
+        // `UnscheduledPredecessors` of the successors the copies reach.
+        for &pred in &done {
+            if pred == lpred || filter.is_some_and(|filter| !filter.member[pred]) || self.chain_of[pred] == chain {
+                continue;
+            }
+            let pred_chain = self.chain_of[pred];
+            for succ in self.layout.successors(pred).to_vec() {
+                if filter.is_some_and(|filter| !filter.member[succ]) {
+                    continue;
+                }
+                let new_chain = self.chain_of[succ];
+                if new_chain != chain && new_chain != pred_chain {
+                    self.chains[new_chain].unscheduled += 1;
+                }
+            }
+        }
+        (removed, to_lpred)
+    }
+
+    /// `repeatedlyTailDuplicateBlock`: the new end of the chain.
+    fn repeatedly_tail_duplicate(
+        &mut self,
+        block: usize,
+        lpred: usize,
+        loop_header: usize,
+        chain: usize,
+        filter: Option<&Filter>,
+    ) -> usize {
+        let (mut removed, mut to_lpred) = self.maybe_tail_duplicate(block, lpred, chain, filter);
+        if !removed {
+            return lpred;
+        }
+        let to_original = to_lpred;
+        // The block copied into may still be small enough to copy again.
+        while to_lpred && removed {
+            let blocks = &self.chains[chain].blocks;
+            if blocks.len() < 2 {
+                break;
+            }
+            let (dup, pred) = (blocks[blocks.len() - 1], blocks[blocks.len() - 2]);
+            (removed, to_lpred) = self.maybe_tail_duplicate(dup, pred, chain, filter);
+        }
+        let end = self.tail(chain);
+        if to_original {
+            self.mark_block_successors(chain, end, loop_header, filter);
+        }
+        end
     }
 
     /// `selectBestCandidateBlock`: the most frequent block of the work list.
@@ -364,6 +713,10 @@ impl<'a, L: Layout> Placer<'a, L> {
         let count = if filter.is_some() { blocks.len() } else { self.layout.len() };
         while *from < count {
             let block = if filter.is_some() { blocks[*from] } else { *from };
+            if self.gone[block] {
+                *from += 1;
+                continue;
+            }
             let chain = self.chain_of[block];
             if chain != placed {
                 return Some(self.head(chain));
@@ -409,7 +762,12 @@ impl<'a, L: Layout> Placer<'a, L> {
         self.mark_chain_successors(chain, head, filter);
         let mut block = self.tail(chain);
         loop {
-            let mut best = self.select_best_successor(block, chain, filter);
+            let (mut best, mut duplicate) = self.select_best_successor(block, chain, filter);
+            if let Some(succ) = best
+                && !duplicate
+            {
+                duplicate = self.can_tail_duplicate_unplaced_preds(block, succ, chain, filter);
+            }
             if best.is_none() {
                 best = self.select_best_candidate_block(chain);
             }
@@ -417,6 +775,15 @@ impl<'a, L: Layout> Placer<'a, L> {
                 best = self.first_unplaced(chain, filter, &mut from);
             }
             let Some(best) = best else { break };
+            // Placement may have changed tail duplication opportunities.
+            if duplicate {
+                block = self.repeatedly_tail_duplicate(best, block, head, chain, filter);
+                // The chosen successor was copied into `block`: go round
+                // again with `block` as the end.
+                if !self.layout.successors(block).contains(&best) {
+                    continue;
+                }
+            }
             let succ_chain = self.chain_of[best];
             // a successor that did not fit the CFG
             self.chains[succ_chain].unscheduled = 0;
@@ -852,11 +1219,20 @@ impl<'a, L: Layout> Placer<'a, L> {
 }
 
 /// The order `blocks` should be laid out in, as indices of the current layout.
-pub fn place<L: Layout>(layout: &L) -> Vec<usize> {
+pub fn place<L: Layout>(layout: &mut L) -> Vec<usize> {
+    place_duplicating(layout).0
+}
+
+/// [`place`], and the copies placement made (`TailDupPlacement`): each is a
+/// block and the predecessor that took its body and successors, in the order
+/// they happened. A block left with no predecessor is not in the order.
+pub fn place_duplicating<L: Layout>(layout: &mut L) -> (Vec<usize>, Vec<(usize, usize)>) {
     let count = layout.len();
     if count < 2 {
-        return (0..count).collect();
+        return ((0..count).collect(), Vec::new());
     }
+    let post = (layout.tail_duplication_size() > 0)
+        .then(|| Cfg::from_successors((0..count).map(|block| layout.successors(block).to_vec()).collect()));
     let mut placer = Placer {
         layout,
         chain_of: vec![NONE; count],
@@ -866,13 +1242,18 @@ pub fn place<L: Layout>(layout: &L) -> Vec<usize> {
         loops: Vec::new(),
         innermost: vec![None; count],
         preferred_exit: None,
+        post,
+        copies: Vec::new(),
+        gone: vec![false; count],
     };
     let order = placer.build_cfg_chains();
+    let (copies, gone) = (std::mem::take(&mut placer.copies), std::mem::take(&mut placer.gone));
     // every block exactly once, the entry first
     let mut seen = vec![false; count];
-    let whole =
-        order.len() == count && order[0] == 0 && order.iter().all(|&block| !std::mem::replace(&mut seen[block], true));
-    if whole { order } else { (0..count).collect() }
+    let whole = order.len() == gone.iter().filter(|&&one| !one).count()
+        && order[0] == 0
+        && order.iter().all(|&block| !gone[block] && !std::mem::replace(&mut seen[block], true));
+    if whole { (order, copies) } else { ((0..count).collect(), Vec::new()) }
 }
 
 /// The IR's branch probabilities by `(from, to)` block number, with the
@@ -890,6 +1271,16 @@ pub struct Graph {
     pinned: Vec<bool>,
     loops: Vec<Loop>,
     size: bool,
+    tail_dup: Option<TailDup>,
+}
+
+/// What placement may copy: `size` instructions per block, `counts` of each
+/// block's, and the blocks that end in one unconditional jump (they can take
+/// a copy).
+struct TailDup {
+    size: usize,
+    counts: Vec<usize>,
+    jumps: Vec<bool>,
 }
 
 /// The machine function as `BlockFrequencyInfo` walks it.
@@ -946,6 +1337,20 @@ impl EdgeProbabilities for Probabilities<'_> {
 }
 
 impl Graph {
+    /// Lets placement copy blocks (`TailDupPlacement`): at most `size`
+    /// instructions, `counts[b]` in block `b`; `jumps[b]`: `b` ends in one
+    /// unconditional jump, so it can take a copy of its successor.
+    pub fn with_tail_duplication(
+        mut self,
+        size: usize,
+        counts: Vec<usize>,
+        jumps: Vec<bool>,
+    ) -> Graph {
+        debug_assert!(counts.len() == self.succs.len() && jumps.len() == self.succs.len());
+        self.tail_dup = Some(TailDup { size, counts, jumps });
+        self
+    }
+
     /// The graph of `function`. `odds` are the IR's edge probabilities and
     /// positions among the branch's successors by `(from, to)` block number;
     /// an edge it lacks shares what the others leave. Successors are in the
@@ -1019,7 +1424,7 @@ impl Graph {
             (0..count).map(|block| info.get_block_freq(BlockId(block as u32))).collect()
         };
         let loops = loop_forest(cfg);
-        Graph { counts_jumps: false, gains_remove_jumps: false, succs, preds, probs, freqs, pinned, loops, size }
+        Graph { counts_jumps: false, gains_remove_jumps: false, succs, preds, probs, freqs, pinned, loops, size, tail_dup: None }
     }
 }
 
@@ -1144,6 +1549,55 @@ impl Layout for Graph {
     fn optimize_for_size(&self) -> bool {
         self.size
     }
+
+    fn tail_duplication_size(&self) -> usize {
+        self.tail_dup.as_ref().map_or(0, |dup| dup.size)
+    }
+
+    fn instruction_count(
+        &self,
+        block: usize,
+    ) -> usize {
+        self.tail_dup.as_ref().map_or(usize::MAX, |dup| dup.counts[block])
+    }
+
+    fn can_tail_duplicate(
+        &self,
+        tail: usize,
+        pred: usize,
+    ) -> bool {
+        self.tail_dup.as_ref().is_some_and(|dup| dup.jumps[pred]) && self.succs[pred] == [tail]
+    }
+
+    fn duplicate(
+        &mut self,
+        tail: usize,
+        pred: usize,
+    ) {
+        self.preds[tail].retain(|&one| one != pred);
+        self.succs[pred] = self.succs[tail].clone();
+        self.probs[pred] = self.probs[tail].clone();
+        for at in 0..self.succs[pred].len() {
+            let succ = self.succs[pred][at];
+            if !self.preds[succ].contains(&pred) {
+                self.preds[succ].push(pred);
+            }
+        }
+        if let Some(dup) = &mut self.tail_dup {
+            dup.counts[pred] = dup.counts[pred].saturating_sub(1) + dup.counts[tail];
+            dup.jumps[pred] = dup.jumps[tail];
+        }
+    }
+
+    fn remove(
+        &mut self,
+        tail: usize,
+    ) {
+        for succ in std::mem::take(&mut self.succs[tail]) {
+            self.preds[succ].retain(|&one| one != tail);
+        }
+        self.probs[tail].clear();
+    }
 }
 
 /// `MachineBasicBlock::updateTerminator`: the branches of the block at `at`
@@ -1263,7 +1717,7 @@ pub fn place_blocks_priced<C, J: Jump>(
     let mut graph = Graph::of::<C, J>(function, odds, size);
     graph.counts_jumps = counts_jumps;
     graph.gains_remove_jumps = gains_remove_jumps;
-    let order = place(&graph);
+    let order = place(&mut graph);
     let identity = order.iter().enumerate().all(|(at, &block)| at == block);
     let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();
     let edge_odds: HashMap<(u32, u32), BranchProbability> = graph
