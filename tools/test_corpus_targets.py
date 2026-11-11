@@ -86,6 +86,14 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
 
 
+def test_long_double_stride_is_not_for_the_6502():
+    """long_double_stride's 16 is Watcom's 4-byte long double alignment (4 + 8 + 2 padded); the 6502 aligns to 1 and printed 11, read as
+    a miscompile in the 11-11 float sweep (8, 16, 11 vs 8, 16, 16)."""
+    source = (RUN / "long_double_stride.c").read_text()
+    only_tags = "// targets: " + " ".join(ct.tags(source)) + "\n"  # ours_cr.py reads the tags alone: the -m32 flags do not exclude the 6502 there
+    assert not ct.applies("6502-sim65", only_tags) and ct.applies("x86_32-dos", only_tags)
+
+
 def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
     """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
     and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
