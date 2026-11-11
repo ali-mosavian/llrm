@@ -1292,6 +1292,7 @@ fn staged(
         slot_scratch: entry
             .and_then(|one| target.arch.frame_slot_scratch_of(one))
             .or(base.slot_scratch)
+            .filter(|_| target.cpu.pops_frame_slot())
             .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
         ..base
     };
