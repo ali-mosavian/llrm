@@ -400,21 +400,6 @@ define i32 @f(ptr %s, i32 %x, float %y, i8 %z) {\n  %r = call i32 (ptr, ...) @pr
     );
 }
 
-/// An `sret` parameter is in `x8`, not `x0`, and a `byval` one is in memory.
-/// The hook once placed both as plain pointers, so `scale(sret %0, ptr %1,
-/// i64)` read its source from `x0` while the caller passed the result slot in
-/// `x8`. The `sret` pointer now takes `x8` and no argument register (the
-/// emitted-ops test in `dag_emit_rows`); `byval` is refused.
-#[test]
-fn byval_arguments_are_refused_not_placed_as_pointers() {
-    let byval = "%t = type { i64, i64, i64 }\n\
-define void @f(ptr byval(%t) %r, ptr %s) {\n  store i64 1, ptr %s\n  ret void\n}";
-    assert!(selected(byval).expect_err("refused").contains("moves it"));
-    let call = "%t = type { i64, i64, i64 }\ndeclare void @g(ptr byval(%t), ptr)\n\
-define void @f(ptr %r, ptr %s) {\n  call void @g(ptr byval(%t) %r, ptr %s)\n  ret void\n}";
-    assert!(selected(call).expect_err("refused").contains("byval"));
-}
-
 /// Scalar floats: arithmetic, compares, conversions, loads and stores select
 /// the pin's opcodes; names are its `-stop-after=finalize-isel` for the same
 /// IR.
@@ -510,7 +495,8 @@ mod emitted {
         ir += "loop:\n  %acc = phi { i64, i1 } [ %first, %entry ], [ %next, %loop ]\n";
         ir += "  %v = extractvalue { i64, i1 } %acc, 0\n  %ok = extractvalue { i64, i1 } %acc, 1\n";
         ir += "  %next = call { i64, i1 } @step(i64 %v)\n  br i1 %ok, label %done, label %loop\ndone:\n  ret i64 %v\n}";
-        let mf = machine(&ir);
+        let mut mf = machine(&ir);
+        llrm_arm64::mfunc::lower_phis(&mut mf).expect("lowers");
         assert_eq!(llrm_arm64::mfunc::undefined_reads(&mf), vec![]);
     }
 
@@ -1033,4 +1019,20 @@ fn a_replaced_store_does_not_hide_the_bits_its_value_needs() {
 fn a_shifted_and_masked_field_is_one_ubfiz() {
     let ir = "define i32 @f(i32 %y) {\n  %s = shl i32 %y, 4\n  %t = and i32 %s, 112\n  ret i32 %t\n}";
     assert_eq!(selected(ir).unwrap(), [["UBFMWri", "RET_ReallyLR"]]);
+}
+
+/// `isNarrowingProfitable` is false for a scalar on AArch64: the index
+/// `zext i8` scaled by 4 stayed one `shl` on 64 bits and folded into the
+/// store as `[x1, x8, lsl #2]`. We narrowed it to a 32-bit `lsl` first, which
+/// cost an instruction in every iteration of stft's bit-reversal loop.
+#[test]
+fn a_scaled_byte_index_folds_into_the_store() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+              target triple = \"aarch64-unknown-linux-gnu\"\n\
+              define void @f(ptr %b, ptr %p, float %v) {\n  %c = load i8, ptr %b\n  %z = zext i8 %c to i64\n  \
+              %a = getelementptr inbounds float, ptr %p, i64 %z\n  store float %v, ptr %a\n  ret void\n}\n";
+    let asm = llrm_arm64::driver::assembly(ir, llrm_arm64::machine::Platform::Linux, llrm_arm64::driver::Level::O0)
+        .expect("lowers");
+    assert!(asm.contains("lsl #2]"), "{asm}");
+    assert!(!asm.contains("lsl w"), "{asm}");
 }

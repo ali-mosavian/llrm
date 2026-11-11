@@ -36,6 +36,16 @@ def test_every_emitted_name_is_in_intrinsics_td(td):
     assert len(gen.VALUETRACKING_NAMES) == len(set(gen.VALUETRACKING_NAMES))
 
 
+def test_a_name_in_the_rust_tests_is_not_an_enumerated_intrinsic():
+    """`llvm.memcpy.p0.p0.i32` in intrinsics.rs's test module stopped the run ("not in Intrinsics.td"); cutting
+    at the module once also dropped 22 names, so the count is pinned to what the table declares."""
+    source = (gen.ROOT / "crates/ir/llrm-mir/src/intrinsics.rs").read_text()
+    declared = set(re.findall(r'name: "(llvm\.[a-z][a-z0-9_.]*)"', source))
+    assert "llvm.memcpy.p0.p0.i32" in source
+    assert "llvm.memcpy.p0.p0.i32" not in gen.mir_names()
+    assert declared <= gen.mir_names()
+
+
 ATTRIBUTE = r'F\("(\w+)"\)|I\("(\w+)", (\d+)\)|R\((-?\d+), (-?\d+)\)'
 
 

@@ -7,7 +7,7 @@ dist_extra_bins() {
   echo $out
 }
 
-# dist_features WORKTREE: the --features the commit'"'"'s four dist bins require (their required-features, read from its Cargo.toml: llrm-c needs c-legacy), empty for a commit that has none.
+# dist_features WORKTREE: the --features the commit'"'"'s four dist bins require (their required-features, read from its Cargo.toml: llrm-cc needs c-legacy), empty for a commit that has none.
 dist_features() {
   python3 - "$1/Cargo.toml" <<'EOP'
 import sys, tomllib
@@ -15,7 +15,7 @@ try:
     bins = tomllib.load(open(sys.argv[1], "rb")).get("bin", [])
 except OSError:
     bins = []
-want = {f for b in bins if b.get("name") in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront") for f in b.get("required-features", [])}
+want = {f for b in bins if b.get("name") in ("llrm-cc", "llrm-qb", "llrm-nib", "nibfront") for f in b.get("required-features", [])}
 print(",".join(sorted(want)))
 EOP
 }

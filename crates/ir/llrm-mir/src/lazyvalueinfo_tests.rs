@@ -108,12 +108,14 @@ fn solves_grow_linearly_with_the_function() {
     }
 }
 
-/// DEVIATE 1: MIR has no vectors.
+/// DEVIATE 1 (was: MIR has no vectors): `insertelement` now parses (VECTORS-1,
+/// PR-A). LVI still tracks no vector lane, so the solver's
+/// `solveBlockValueInsertElement` arm stays untranslated until a pass needs it.
 #[test]
-fn mir_has_no_vectors() {
+fn insertelement_parses_and_lvi_has_no_lane_arm() {
     assert!(
         parse::module("define <2 x i32> @f(<2 x i32> %v) {\nentry:\n  %r = insertelement <2 x i32> %v, i32 1, i32 0\n  ret <2 x i32> %r\n}\n")
-            .is_err()
+            .is_ok()
     );
 }
 

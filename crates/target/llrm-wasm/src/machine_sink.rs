@@ -25,7 +25,7 @@
 //! isProfitableToSinkTo, AllUsesDominatedByBlock}`,
 //! `MachineInstr::isSafeToMove`.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::loopinfo::LoopInfo;
@@ -180,9 +180,9 @@ impl Sink {
             uses: Vec::new(),
             defs: Vec::new(),
             def_site: Vec::new(),
-            considered: HashSet::new(),
-            merge_candidates: HashMap::new(),
-            copy_source: HashMap::new(),
+            considered: HashSet::default(),
+            merge_candidates: HashMap::default(),
+            copy_source: HashMap::default(),
             to_split: Vec::new(),
         };
         sink.index_registers(f);

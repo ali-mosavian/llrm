@@ -191,12 +191,13 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in
-    // the entry, which runs a copy of the test and falls into the loop (the
-    // likelier way) rather than copy the return over it. The scheduler may put
-    // the load of n and the two zeros in any order and register names, so the
-    // test pins the shape: three entry instructions (the load and two zeros),
-    // the test, and the loop with the registers its instructions name.
+    // The comparison stays flags beside its branch. m16's tail-duplication
+    // threshold is 1 (#6827), so the test is not copied into the loop: it
+    // closes with `jmp` (the mid-end rotates real loops first). The scheduler
+    // may put the load of n and the two zeros in any order and register
+    // names, so the test pins the shape: three entry instructions (the load
+    // and two zeros), the test, and the loop with the registers its
+    // instructions name.
     assert_eq!(&got[..3], ["push bp", "mov bp, sp", "L0_0:"], "{got:?}");
     let entry = &got[3..6];
     let load = entry.iter().find(|one| one.contains("[bp+6]")).unwrap_or_else(|| panic!("{got:?}"));
@@ -213,13 +214,13 @@ done:
     assert_eq!(
         &got[6..],
         [
+            "L0_1:".to_owned(),
             format!("cmp {i}, {n}"),
             "jge L0_8".to_owned(),
             "L0_5:".to_owned(),
             format!("add {sum}, {i}"),
             format!("inc {i}"),
-            format!("cmp {i}, {n}"),
-            "jl L0_5".to_owned(),
+            "jmp L0_1".to_owned(),
             "L0_8:".to_owned(),
             "pop bp".to_owned(),
             "retf".to_owned(),
@@ -3387,6 +3388,8 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 /// A float's bits are an integer's through a stack temporary (SROA turns a
 /// double stored and read as an i32 into `bitcast double to i64`; isel refused
 /// "BitCast to an i64" and "BitCast of a float", 48 of 260 QCport compiles).
+/// Where a register is free the copy into the temporary is dword moves
+/// (`floatslotcopy`), the same bits without the x87 round trip.
 #[test]
 fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
     let text = |from: &str, to: &str| {
@@ -3395,9 +3398,12 @@ fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
         ))
     };
     let single = text("float", "i32");
-    assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
+    let stored = |lines: &[String], x87: &str| {
+        lines.iter().any(|line| line.starts_with(x87) || line.starts_with("mov dword ptr [bp-"))
+    };
+    assert!(stored(&single, "fstp dword ptr [bp-"), "{single:?}");
     let double = text("double", "i64");
-    assert!(double.iter().any(|line| line.starts_with("fstp qword ptr [bp-")), "{double:?}");
+    assert!(stored(&double, "fstp qword ptr [bp-"), "{double:?}");
     let back = text("i32", "float");
     assert!(back.iter().any(|line| line.starts_with("fld dword ptr [bp-")), "{back:?}");
     let back = text("i64", "double");
@@ -6114,8 +6120,10 @@ fn test_a_poison_float_or_address_is_zero() {
     let float = "define float @f(float %a) {\n  %v = fadd float poison, %a\n  ret float %v\n}\n";
     let address = "define i16 @g() addrspace(1) {\n  %v = load i16, ptr poison\n  ret i16 %v\n}\n";
     // As LLVM's X86FloatingPoint.cpp L1580: an IMPLICIT_DEF x87 register is
-    // loaded with `fldz`.
-    assert!(listing(float, "f").iter().any(|one| one == "fldz"), "{:?}", listing(float, "f"));
+    // loaded with `fldz`; FF2 reads the +0.0 from the pool as `fadd [K]`
+    // where that needs no exchange.
+    let zero = |one: &String| one == "fldz" || one.starts_with("fadd") && one.contains("$K");
+    assert!(listing(float, "f").iter().any(zero), "{:?}", listing(float, "f"));
     assert!(!listing(address, "g").is_empty());
 }
 

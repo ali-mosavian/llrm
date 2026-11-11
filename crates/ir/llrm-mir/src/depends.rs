@@ -44,6 +44,37 @@ pub fn effectful(opcode: &Opcode) -> bool {
     ) || opcode.is_terminator()
 }
 
+/// Whether the edits made to `function` since `mark` left the CFG as it was
+/// (`PreservedAnalyses::preserveSet<CFGAnalyses>` where a pass only knows what
+/// it edited): no block made or erased, no terminator inserted, erased or
+/// moved, no block operand changed. False where the log does not reach `mark`.
+pub fn cfg_unchanged_since(
+    context: &Context,
+    function: &Function,
+    mark: crate::module::Mark,
+) -> bool {
+    const EDGES: Depends = Depends { models: |_, _, _| false, keyed: |_, _, _| false, flows: None, edges: true };
+    function.changes_since(mark).is_some_and(|changes| EDGES.unaffected(changes, context, function))
+}
+
+/// What a pass that edited since `mark` (or did not, if `!changed`) names as
+/// kept: everything if nothing changed, the CFG set if no block or edge did.
+pub fn kept_after(
+    context: &Context,
+    function: &Function,
+    mark: crate::module::Mark,
+    changed: bool,
+) -> crate::passes::PreservedAnalyses {
+    use crate::passes::PreservedAnalyses;
+    if !changed {
+        PreservedAnalyses::all()
+    } else if cfg_unchanged_since(context, function, mark) {
+        PreservedAnalyses::none().preserve_cfg()
+    } else {
+        PreservedAnalyses::none()
+    }
+}
+
 impl Depends {
     /// Whether `changes` leave a result of this declaration as it was.
     pub fn unaffected(

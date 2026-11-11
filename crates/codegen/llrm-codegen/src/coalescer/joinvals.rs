@@ -60,6 +60,12 @@ struct Val {
     pruned: bool,
     pruned_computed: bool,
     identical: bool,
+    /// `ValidLanes` of the one lane: an `implicit_def` writes an undefined
+    /// value, which clears it once the value is known to be erasable.
+    valid: bool,
+    /// `ErasableImplicitDef`: an `implicit_def` only provides a live-out value
+    /// for a phi's predecessor, and goes where a live value overlaps it.
+    erasable_implicit_def: bool,
 }
 
 impl Val {
@@ -71,7 +77,15 @@ impl Val {
             pruned: false,
             pruned_computed: false,
             identical: false,
+            valid: true,
+            erasable_implicit_def: false,
         }
+    }
+
+    /// `mustKeepImplicitDef`: an `implicit_def` that is a value like any other.
+    fn must_keep_implicit_def(&mut self) {
+        self.erasable_implicit_def = false;
+        self.valid = true;
     }
 }
 
@@ -204,6 +218,14 @@ impl<'a> JoinVals<'a> {
             let key = self.lis.defining_instr(&vni.def(), self.sides[me].reg);
             Some(Rc::new(self.lis.instr(key).clone()))
         };
+        // An IMPLICIT_DEF writes undef values. It is normally live only until
+        // the end of its block; if it is really live longer and gets pruned in
+        // another block, this flag is cleared again.
+        let is_implicit_def =
+            def_mi.as_ref().is_some_and(|insn| crate::processimpdefs::implicit_def_of(insn).is_some());
+        if is_implicit_def {
+            self.sides[me].vals[val_no].erasable_implicit_def = true;
+        }
         // Find the value in Other that overlaps VNI->def, if any.
         let other_lrq = self.sides[other].lr.query(&vni.def());
         // It is possible that both values are defined by the same instruction,
@@ -239,8 +261,12 @@ impl<'a> JoinVals<'a> {
             if vni.is_phi_def() && !self.sides[me].is_entry_input(self.lis, &vni) {
                 return Resolution::Merge;
             }
-            // Overlapping lanes can't be resolved: one lane, valid on both.
-            return Resolution::Impossible;
+            // Overlapping lanes can't be resolved: one lane, valid on both
+            // (an implicit def's is not).
+            if self.sides[me].vals[val_no].valid && self.sides[other].vals[other_id].valid {
+                return Resolution::Impossible;
+            }
+            return Resolution::Merge;
         }
         // No simultaneous def. Is Other live at the def?
         let Some(other_vni) = other_lrq.value_in() else {
@@ -251,11 +277,37 @@ impl<'a> JoinVals<'a> {
         assert!(!SlotIndex::is_same_instr(&vni.def(), &other_vni.def()), "Broken LRQ");
         // We have overlapping values, or possibly a kill of Other.
         // Recursively compute assignments up the dominator tree.
-        self.compute_assignment(other, other_vni.id() as usize);
+        let other_id = other_vni.id() as usize;
+        self.compute_assignment(other, other_id);
+        if self.sides[other].vals[other_id].erasable_implicit_def {
+            // An IMPLICIT_DEF that extends beyond its basic block is a normal
+            // value: keep it. So is one that this def redefines an incoming
+            // value of.
+            let other_def = other_vni.def();
+            let other_block = self.lis.indexes.get_mbb_from_index(&other_def);
+            let extends = def_mi
+                .as_ref()
+                .is_some_and(
+                    |_| {
+                        let at = self.lis.indexes.get_mbb_from_index(&vni.def());
+                        at != other_block || self.sides[me].lr.live_at(&self.lis.indexes.get_mbb_start_idx(other_block))
+                    },
+                );
+            if extends {
+                self.sides[other].vals[other_id].must_keep_implicit_def();
+            } else {
+                // The deferred clearing of the lane.
+                self.sides[other].vals[other_id].valid = false;
+            }
+        }
         // Allow overlapping PHI values.
         let Some(def_mi) = def_mi else {
             return Resolution::Replace;
         };
+        // Check for simple erasable conflicts.
+        if is_implicit_def {
+            return Resolution::Erase;
+        }
         // Include the non-conflict where DefMI is a coalescable copy that kills
         // OtherVNI. We still want the copy erased and value numbers merged.
         if self.cp.is_coalescable(&def_mi) {
@@ -272,11 +324,15 @@ impl<'a> JoinVals<'a> {
             self.sides[me].vals[val_no].identical = true;
             return Resolution::Erase;
         }
-        // The remaining checks apply to the lanes, of which there is one. The
-        // value written is valid in OtherVNI, so `(WriteLanes &
-        // OtherV.ValidLanes).none()` does not hold, and what is left is a def
-        // that clobbers a live value: when it kills Other it is an early
-        // clobber def (illegal to merge), else it clobbers all of the one lane.
+        // The remaining checks apply to the lanes, of which there is one. If
+        // the value it overwrites is an erased `implicit_def`'s, no lane is
+        // clobbered: `(WriteLanes & OtherV.ValidLanes).none()`, so Replace.
+        if !self.sides[other].vals[other_id].valid {
+            return Resolution::Replace;
+        }
+        // Else the value written is valid in OtherVNI: a def that clobbers a
+        // live value: when it kills Other it is an early clobber def (illegal
+        // to merge), else it clobbers all of the one lane.
         Resolution::Impossible
     }
 
@@ -393,10 +449,17 @@ impl<'a> JoinVals<'a> {
                 Resolution::Replace => {
                     // This value takes precedence over the value in Other.LR.
                     self.lis.prune_value(&mut self.sides[other].lr, &def, Some(end_points));
+                    // Check if we're replacing an IMPLICIT_DEF value. The
+                    // IMPLICIT_DEF instructions are only inserted to provide a
+                    // live-out value for PHI predecessors, so the instruction
+                    // should simply go away once its value has been replaced.
+                    let other_id = self.sides[me].vals[i].other_vni.as_ref().expect("a replaced value").id() as usize;
+                    let other_v = &self.sides[other].vals[other_id];
+                    let erase_imp_def = other_v.erasable_implicit_def && other_v.resolution == Resolution::Keep;
                     // This value will reach instructions below, but we need to
                     // make sure the live range also reaches the instruction at
                     // Def.
-                    if !def.is_block() {
+                    if !def.is_block() && !erase_imp_def {
                         end_points.push(def);
                     }
                 }
@@ -406,7 +469,12 @@ impl<'a> JoinVals<'a> {
                         // LR or Other.LR. We can no longer trust the value
                         // mapping computed by computeAssignment(), the value
                         // that was originally copied could have been replaced.
-                        self.lis.prune_value(&mut self.sides[me].lr, &def, Some(end_points));
+                        let other_id = self.sides[me].vals[i].other_vni.as_ref().expect("a merged value").id() as usize;
+                        let other_v = &self.sides[other].vals[other_id];
+                        let erase_imp_def = other_v.erasable_implicit_def && other_v.resolution == Resolution::Keep;
+                        // If the source is an erasable IMPLICIT_DEF, the pruned
+                        // end point is the next def boundary, not a real use.
+                        self.lis.prune_value(&mut self.sides[me].lr, &def, (!erase_imp_def).then_some(end_points));
                     }
                 }
                 Resolution::Impossible => unreachable!("Unresolved conflicts"),
@@ -425,9 +493,17 @@ impl<'a> JoinVals<'a> {
     ) {
         for i in 0..self.sides[me].lr.get_num_val_nums() as usize {
             // Get the def location before anything invalidates it.
-            let def = self.sides[me].lr.valnos[i].def();
-            if self.sides[me].vals[i].resolution != Resolution::Erase {
-                continue;
+            let vni = Rc::clone(&self.sides[me].lr.valnos[i]);
+            let def = vni.def();
+            match self.sides[me].vals[i].resolution {
+                Resolution::Erase => {}
+                // If an IMPLICIT_DEF value is pruned, it doesn't serve a
+                // purpose any longer: the instruction was only inserted to
+                // give every PHI predecessor a value.
+                Resolution::Keep if self.sides[me].vals[i].erasable_implicit_def && self.sides[me].vals[i].pruned => {
+                    self.sides[me].lr.remove_val_no(&vni);
+                }
+                _ => continue,
             }
             let key = self.lis.defining_instr(&def, self.sides[me].reg);
             if let Some((_, src)) = full_copy(self.lis.instr(key)) {

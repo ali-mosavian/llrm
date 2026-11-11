@@ -37,8 +37,8 @@ def code_of(disassembly: str) -> dict[str, list[str]]:
     for line in disassembly.splitlines():
         if (head := re.match(r"^[0-9a-f]+ <(.+)>:$", line)) is not None:
             current = out.setdefault(head.group(1), [])
-        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\t(.*)$", line)):
-            current.append(f"{row.group(1)} {row.group(2).split('#')[0].strip()}")
+        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\s+(.*)$", line)):
+            current.append(f"{row.group(1)} {re.split(r"\s#\s|//", row.group(2))[0].strip()}")
     return out
 
 
@@ -76,6 +76,12 @@ def variables_of(path: str) -> dict[tuple[str, str], tuple]:
     return out
 
 
+ARCHES = {  # arch -> (clang --target, disassembler under the pin directory)
+    "x86_64": ("x86_64-unknown-linux-gnu", "objdump"),
+    "arm64": ("aarch64-unknown-linux-gnu", "llvm-objdump"),
+}
+
+
 GLOBAL_ADDRESS = (3, 161)  # DW_OP_addr and DW_OP_addrx: where the address comes from is the writer's form, not the place
 
 
@@ -111,20 +117,22 @@ def main() -> int:
     parser.add_argument("sources", nargs="+")
     parser.add_argument("--pin", default=os.environ.get("LLRM_PIN_BIN"), help="the pin LLVM bin directory (default: $LLRM_PIN_BIN)")
     parser.add_argument("--llc", required=True, help="llrm-llc")
+    parser.add_argument("--arch", choices=sorted(ARCHES), default="x86_64", help="the target; arm64 needs a pin built with AArch64")
     args = parser.parse_args()
     if not args.pin:
         parser.error("--pin or LLRM_PIN_BIN names the pin LLVM bin directory")
+    disassembler = ARCHES[args.arch][1] if args.arch == "x86_64" else f"{args.pin}/{ARCHES[args.arch][1]}"
     work = Path(tempfile.mkdtemp(prefix="dwarfloc-"))
     total = {"same": 0, "form": 0, "different": 0, "missing": 0, "refused": 0, "files refused": 0}
     for source in map(Path, args.sources):
         try:
             ir, opt = work / f"{source.stem}.ll", work / f"{source.stem}.opt.ll"
-            run([f"{args.pin}/clang", "--target=x86_64-unknown-linux-gnu", "-fno-pic", "-O2", "-g", "-gdwarf-5", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
+            run([f"{args.pin}/clang", f"--target={ARCHES[args.arch][0]}", "-fno-pic", "-O2", "-g", "-gdwarf-5", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
             run([f"{args.pin}/opt", "-O2", str(ir), "-S", "-o", str(opt)])
             pin_o, our_o = work / f"{source.stem}.pin.o", work / f"{source.stem}.our.o"
             run([f"{args.pin}/llc", "-O2", "-relocation-model=static", "-dwarf-version=5", "-filetype=obj", str(opt), "-o", str(pin_o)])
             run([args.llc, "-O2", "-g", "-o", str(our_o), str(opt)])
-            pin_code, our_code = (code_of(run(["objdump", "-d", "--no-show-raw-insn", str(o)])) for o in (pin_o, our_o))
+            pin_code, our_code = (code_of(run([disassembler, "-d", "--no-show-raw-insn", str(o)])) for o in (pin_o, our_o))
             pin_vars, our_vars = variables_of(str(pin_o)), variables_of(str(our_o))
         except (RuntimeError, KeyError) as why:
             print(f"  refused {source.name}: {why}")

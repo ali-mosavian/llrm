@@ -16,15 +16,16 @@
 //! objects, taken frame address), the base pointer for over-aligned objects,
 //! `WasmLocal` stack objects, stack maps and the libcall thread context.
 //! Reason: each needs IR the slice does not reach. A function that needs one is
-//! refused by name. Exit: with the alloca forms that use them (undated, none
-//! planned).
+//! refused by name. Exit: with the alloca forms that use them, no later than
+//! 2026-11-30 (the shared `ExpandDYNAMIC_STACKALLOC` plus the frame-pointer
+//! path; the pin accepts them, `tests/run/c/alloca_frame.c` is the cell).
 //!
 //! # See also
 //! `WebAssemblyFrameLowering.cpp` (`emitPrologue` L254, `emitEpilogue` L330),
 //! `WebAssemblyRegisterInfo.cpp` (`eliminateFrameIndex` L52) and
 //! `PrologEpilogInserter.cpp` (`AdjustStackOffset`), pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -128,8 +129,8 @@ pub fn frame_lowering(
 
     // `eliminateFrameIndex`: an address added to a constant that has no other
     // use folds the offset into that constant.
-    let mut uses: HashMap<VReg, u32> = HashMap::new();
-    let mut constants: HashMap<VReg, (usize, usize, u32)> = HashMap::new();
+    let mut uses: HashMap<VReg, u32> = HashMap::default();
+    let mut constants: HashMap<VReg, (usize, usize, u32)> = HashMap::default();
     for (block, insts) in f.blocks.iter().enumerate() {
         for (at, inst) in insts.iter().enumerate() {
             for operand in &inst.operands {

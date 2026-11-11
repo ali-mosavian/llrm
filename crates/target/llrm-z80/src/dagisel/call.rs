@@ -5,7 +5,7 @@
 //! # How it works
 //! A byte argument takes the first free of `a l h e d c b`, a word the first
 //! free pair of `hl de bc`, as `Convention::place` says. A byte result leaves
-//! in `a`, a word in the pair `de`, a long in `de` then `hl`. The values arrive
+//! in `a`, a word in the pair `de`, a long in `hl` then `de` (the order of the argument registers). The values arrive
 //! already split into legal `i8` and `i16` parts, so an `i32` is two words.
 //!
 //! An argument that fits no register goes on the stack at the offset
@@ -16,8 +16,11 @@
 //! address and saved IX in front of the first argument
 //! (`first_argument_offset`) are the frame resolver's, added in one place.
 //!
-//! DEVIATE: the stores are not `PUSH`. Reason: the pin turns stores into pushes
-//! in a separate pass (`X86CallFrameOptimization`). Exit: that pass (row 7).
+//! DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the stores are not
+//! `PUSH`. Reason: the pin turns stores into pushes in a separate pass
+//! (`X86CallFrameOptimization`); `expand::push_arguments` is that pass, after
+//! allocation, and the stores are chained top word first (`LowerCall` joins them
+//! in a `TokenFactor`) so that every push stands at its store.
 //!
 //! # See also
 //! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311),
@@ -37,6 +40,10 @@ pub const CALL: ISD = ISD::Target(ids::CALL);
 pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
 /// A store to SP + offset in the call frame.
 pub const STSP: ISD = ISD::Target(ids::STSP);
+/// `ldir` behind a test of the count.
+pub const LDIRG: ISD = ISD::Target(ids::LDIRG);
+/// The byte stored, then `ldir` over the rest: a fill of a constant count.
+pub const LDFILL: ISD = ISD::Target(ids::LDFILL);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, Site, TargetCalling};
@@ -66,13 +73,15 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 }
 
 /// The location of each argument and the bytes the stack ones take; a word's
-/// two bytes are named as their pair.
+/// two bytes are named as their pair. The arguments from `fixed` on are a
+/// variadic call's unnamed ones: on the stack after the named ones.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
-    let placement = convention.place(&kinds);
+    let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
         .iter()
@@ -135,17 +144,24 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::z80();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
+    let (targets, bytes) = locations(&convention, &vts, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
-    let mut stores = Vec::new();
-    for (out, &target) in outs.iter().zip(&targets) {
-        if let Location::Stack(offset) = target {
-            let at = dag.get_constant(offset as u128, EVT::I16);
-            stores.push(dag.get_node_multi(STSP, &[EVT::OTHER], &[chain, out.value, at]));
-        }
-    }
-    if !stores.is_empty() {
-        chain = dag.get_token_factor(&stores);
+    // The stores run in the order of the pushes that replace them, the top word
+    // first; one chain keeps the scheduler from reordering them.
+    let mut stores: Vec<_> = outs
+        .iter()
+        .zip(&targets)
+        .filter_map(|(out, &target)| match target {
+            Location::Stack(offset) => Some((offset, out.value)),
+            Location::Register(_) => None,
+        })
+        .collect();
+    stores.sort_by_key(|&(offset, _)| std::cmp::Reverse(offset));
+    for (offset, value) in stores {
+        let at = dag.get_constant(offset as u128, EVT::I16);
+        let store = dag.get_node_multi(STSP, &[EVT::OTHER], &[chain, value, at]);
+        chain = SDValue { node: store.node, res: 0 };
     }
     let in_registers: Vec<_> = outs
         .iter()
@@ -156,23 +172,40 @@ pub fn lower_call(
         })
         .collect();
     let mut glue = None;
+    // `call (iy)` takes its target in IY: copied first, the pointer is not a
+    // pair-sized value live while the arguments fill HL, DE and BC
+    let callee = match (dag.opcode(callee), dag.node(callee).data) {
+        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+            dag.get_target_global_address(EVT::I16, symbol, offset)
+        }
+        // `X86TargetLowering::LowerCall`: a libcall's `ExternalSymbol` becomes the `TargetExternalSymbol` the call selects on
+        (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+            let name = dag.symbol_names[id as usize].clone();
+            // the runtime's own name for a C library routine, as the builder's `libcalls` table gives it
+            let symbol = super::function::LIBCALLS.iter().find(|(c_name, _)| *c_name == name).map_or(name.as_str(), |(_, symbol)| symbol);
+            dag.get_target_external_symbol(EVT::I16, symbol)
+        }
+        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode, _) => callee,
+        _ => {
+            let copy = dag.get_copy_to_phys_reg(chain, crate::reg::IY, callee, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+            dag.get_phys_register(EVT::I16, crate::reg::IY)
+        }
+    };
     for &(out, register) in &in_registers {
         let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
     }
-    let callee = match (dag.opcode(callee), dag.node(callee).data) {
-        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
-            dag.get_target_global_address(EVT::I16, symbol, offset)
-        }
-        _ => callee,
-    };
     let mut operands = vec![chain, callee];
     for &(out, register) in &in_registers {
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
-    operands.push(dag.get_register_mask());
+    // DEVIATE SCM1 (as x86's `call_clobbered_flags`): only the flags, the one live physical register that crosses
+    // a call in this DAG; the scheduler recomputes a flags value after the call. Exit: with the per-target clobber lists.
+    operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::F]));
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
     let end =
@@ -197,7 +230,7 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::z80();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let (sources, _) = locations(&convention, &vts, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -328,6 +361,74 @@ impl TargetCalling for Z80Calling {
         live_in: LiveIn,
     ) -> Vec<SDValue> {
         lower_formal_arguments(dag, chain, ins, fixed, live_in).expect("legal parts")
+    }
+
+    /// The unnamed arguments follow the named ones' stack bytes.
+    fn variadic_frame_offset(
+        &self,
+        named: &[In],
+    ) -> Option<i64> {
+        let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
+        locations(&abi::z80(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
+    }
+
+    /// `EmitTargetCodeForMemcpy`, as X86's is `rep movs`: `ldir` behind a test
+    /// of the count (7 B and 19 T before the copy), where `__memcpy` is a
+    /// call (3 B) and a push, a swap, the same test, the same `ldir`, a pop and
+    /// a return, about 60 T more. A function tuned for size keeps the call:
+    /// 4 B less at each site.
+    fn emit_memcpy_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+        opt_size: bool,
+    ) -> Option<SDValue> {
+        if opt_size {
+            return None;
+        }
+        let size = dag.get_zext_or_trunc(size, EVT::I16);
+        Some(dag.get_node(LDIRG, EVT::OTHER, &[chain, dst, src, size]))
+    }
+
+    /// `EmitTargetCodeForMemset`, as X86's is `rep stos`: the byte stored at the
+    /// destination and `ldir` copying it forward over the next `n - 1` bytes
+    /// (`ld (hl), v; ld e, l; ld d, h; inc de; ld bc, n - 1; ldir`, 13 B at
+    /// the site and no routine) where `__memseta` is a call (7 B at the site)
+    /// and a 21 B routine linked once. Only for a constant count of two or
+    /// more, and only in the selection that asks for it (`INLINE_FILLS`): the
+    /// module price decides whether the routine goes
+    /// (`compile::decomposed_functions`).
+    fn emit_memset(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        if !super::pipeline::INLINE_FILLS.with(std::cell::Cell::get) {
+            return None;
+        }
+        let bytes = u64::try_from(dag.constant(size)?).ok().filter(|bytes| (2..=0x1_0000).contains(bytes))?;
+        let count = dag.get_constant(u128::from(bytes - 1), EVT::I16);
+        Some(dag.get_node(LDFILL, EVT::OTHER, &[chain, dst, value, count]))
+    }
+
+    /// Not `ldir`: a `memmove` whose destination is above its source overlaps
+    /// the wrong way for a forward copy, and the runtime's `__memmove`
+    /// picks the direction.
+    fn emit_memmove(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _dst: SDValue,
+        _src: SDValue,
+        _size: SDValue,
+    ) -> Option<SDValue> {
+        None
     }
 
     fn lower_return(

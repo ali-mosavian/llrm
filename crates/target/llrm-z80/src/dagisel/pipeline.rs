@@ -11,10 +11,12 @@ use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLev
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::live_out;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
@@ -68,6 +70,26 @@ thread_local! {
     /// Set while a function is selected the second time, under `ILP`
     /// (DEVIATE Z80S1).
     pub static ILP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function that calls `__mulsi3` for its long multiplies is
+    /// selected the second time, with the shifts and adds of `x * (2^k +- 1)`
+    /// kept (`driver::selections_with_alternatives`).
+    pub static DECOMPOSE_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// An unsized function's long shifts by a constant and long multiplies by `2^k +- 1` are each priced as a
+    /// site (`site_price`), the routine's call or the inline form, whichever costs less.
+    pub static PRICED_SITES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function with a constant-count `memset` is selected the second time, each such fill an
+    /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
+    /// prices the two with the routine linked once (`compile::decomposed_functions`).
+    pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function is selected with the words of its long adds and subtracts left to the generic
+    /// expansion (an add and a compare of the sum), not the carry ops (`lower_carry_op`); the caller prices the
+    /// two forms (`compile::lines_of`).
+    pub static GENERIC_CARRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The carry ops `lower_carry_op` made since the count was last taken: a function with none has no
+    /// generic form to price.
+    pub static CARRY_OPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Set while the generic form of a selection is emitted and allocated (`Selection::generic`).
+    pub static GENERIC_FORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -100,6 +122,14 @@ impl SchedInfo for Z80Sched {
         opcode: u32,
     ) -> bool {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
+    }
+
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
     }
 
     /// A flags result is the register `f`.
@@ -140,18 +170,159 @@ pub enum Refusal {
 }
 
 /// The Z80's combiner hooks.
-struct Z80Combines;
+struct Z80Combines {
+    /// The size routine `__mulsi3` is this function's long multiply.
+    long_multiply: bool,
+    /// The long multiplies are priced per site (`site_price::mul_inline`).
+    priced: bool,
+}
+
+/// `2^k +- 1` (k up to 8): shifts and one add (`decompose_mul_by_constant`).
+fn near_power_factor(c: u128) -> bool {
+    let near_power = |n: u128| n.is_power_of_two() && n <= 256;
+    c >= 3 && (near_power(c - 1) || near_power(c + 1))
+}
 
 impl CombineHooks for Z80Combines {
+    /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
+    /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
+    /// a small `c` was `inc hl`s (bintree -O2 +14 B). The pin's default is
+    /// true. Owner: llrm-target-z80. Exit: 2026-11-20, a price per constant.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
+    /// A shift is one `add hl, hl` or `sla`/`rl` pair a bit: `x * 36` is
+    /// `((x << 3) + x) << 2`, 5 shifted bits, not `(x << 5) + (x << 2)`, 7.
+    fn factor_trailing_zeros_of_mul(&self) -> bool {
+        true
+    }
+
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
+    ///
+    /// A long multiplied by `2^k +- 1` (k up to 8) is `k` long shifts and an
+    /// add (each a `add hl, hl` / `adc` pair); the multiply expands through
+    /// byte lanes instead: 49 instructions for `x * 3`, 58 for `x * 7`. Where
+    /// the function calls `__mulsi3` for its long multiplies (tuned for size,
+    /// a module with enough of them) the call, about 14 B, is the smaller
+    /// form: the decomposition left alone grew 12 -Os cells.
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
-        _c: u128,
+        c: u128,
     ) -> bool {
-        matches!(vt, EVT::I8 | EVT::I16)
+        match vt {
+            EVT::I8 | EVT::I16 => true,
+            EVT::I32 if self.priced => crate::site_price::mul_inline(c),
+            EVT::I32 => !self.long_multiply && near_power_factor(c),
+            _ => false,
+        }
+    }
+
+    /// The byte-lane multiply of a long whose three high bytes are zero is 15
+    /// instructions for `x * 3` where the shifts and the add are 21 (a
+    /// zero-extended byte, byte_multiply -O2 +36 B and +38,149 T); a
+    /// zero-extended word keeps the decomposition (23 against 44).
+    fn decompose_mul_by_constant_of(
+        &self,
+        dag: &SelectionDAG,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.decompose_mul_by_constant(vt, c)
+            && !(vt == EVT::I32 && llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, x, 0xFFFF_FF00))
+    }
+
+    /// The pin's default: a compare of a masked or zero-extended value against
+    /// a constant is made in the narrower type (`(and x, 7) == 3` is a byte
+    /// `cp`), legal or not; the type legalizer promotes it to a byte. Without
+    /// it the word compare kept a `sub a, #0` for the high byte the mask had
+    /// zeroed (div_constants_short, 36 sites).
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        _legal: bool,
+    ) -> bool {
+        true
+    }
+
+    /// A selector masked to three bits and compared with 0..7 in a chain is
+    /// one `and` and a byte `cp` each, not a word compare with `sub a, #0` for
+    /// the zeroed high byte (div_constants_short, 36 sites).
+    fn narrow_setcc_with_other_uses(&self) -> bool {
+        true
+    }
+
+    /// X86InstrCompiler.td: `shl x, 1` is `add x, x`. A long shifted by one is
+    /// then a long add, whose carry is `adc hl, rr` (`carry.rs`); expanded as a
+    /// shift it was the funnel of two words, 24 instructions.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        matches!(op, ISD::Shl | ISD::Srl | ISD::And)
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        level: CombineLevel,
+    ) -> Option<SDValue> {
+        // Also called for every target node, whatever its operands.
+        if dag.opcode(node) == ISD::And {
+            // A mask that fits the byte a word was extended from (zero or any: the high byte is masked off) is a byte `and`, extended after: no pair is made
+            // for the extension and read back. The pin leaves it to isel.
+            // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): with the byte shift, huffman_decode `getbit`.
+            let (value, mask) = (dag.operand(node, 0), dag.operand(node, 1));
+            let byte = (dag.value_type(node) == EVT::I16 && matches!(dag.opcode(value), ISD::ZeroExtend | ISD::AnyExtend))
+                .then(|| dag.operand(value, 0))
+                .filter(|byte| dag.value_type(*byte) == EVT::I8);
+            return match (byte, dag.constant(mask)) {
+                (Some(byte), Some(bits)) if bits <= 0xFF => {
+                    let mask = dag.get_constant(bits, EVT::I8);
+                    let masked = dag.get_node(ISD::And, EVT::I8, &[byte, mask]);
+                    Some(dag.get_node(ISD::ZeroExtend, EVT::I16, &[masked]))
+                }
+                _ => None,
+            };
+        }
+        if !matches!(dag.opcode(node), ISD::Shl | ISD::Srl) {
+            return None;
+        }
+        let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        // A word whose high byte is zero, shifted right by less than 8 (C's promotion of a char): the shift runs on the
+        // byte, one instruction a step against two, and the extension is what the demanded bits then fold away. The
+        // pin narrows only a known amount (`SimplifyDemandedBits`, `SRL`).
+        // DEVIATE Z80-BYTE-SHIFT (owner z80, exit 2026-12-15): huffman_decode `getbit`, `stream[i] >> (7 - n)`.
+        if dag.opcode(node) == ISD::Srl {
+            let width = dag.value_type(amount).size_in_bits();
+            if level == CombineLevel::BeforeLegalizeTypes
+                && dag.value_type(node) == EVT::I16
+                && dag.constant(amount).is_none()
+                && width >= 8
+                && masked_value_is_zero(dag, value, 0xFF00)
+                && masked_value_is_zero(dag, amount, ((1u128 << width) - 1) & !7)
+            {
+                let byte = dag.get_node(ISD::Truncate, EVT::I8, &[value]);
+                let count = if width == 8 { amount } else { dag.get_node(ISD::Truncate, EVT::I8, &[amount]) };
+                let shifted = dag.get_node(ISD::Srl, EVT::I8, &[byte, count]);
+                return Some(dag.get_node(ISD::ZeroExtend, EVT::I16, &[shifted]));
+            }
+            return None;
+        }
+        (level == CombineLevel::BeforeLegalizeTypes
+            && dag.value_type(node) == EVT::I32
+            && dag.constant(amount) == Some(1))
+        .then(|| dag.get_node(ISD::Add, EVT::I32, &[value, value]))
     }
 
     /// A word compare against a constant is two byte compares and a branch
@@ -173,22 +344,44 @@ pub fn select_block(
     cpu: Cpu,
     info: &mut FunctionLoweringInfo,
     optimize: bool,
+    (sized, long_multiply): (bool, bool),
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = target_lowering();
-    let mut lowering = Z80Lowering;
+    let mut tli = target_lowering();
+    if GENERIC_CARRY.with(std::cell::Cell::get) {
+        for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
+            tli.set_operation_action(op, MVT::I16, llrm_codegen::backend::selectiondag::Action::Expand);
+        }
+    }
+    tli.set_opt_for_size(sized);
+    // a long multiply is a call (`RTLIB::MUL_I32`) in a module with enough of
+    // them to pay for the routine (`prepare::mark_long_multiplies`), at every
+    // level: four word multiplies inline cost more bytes and more T-states
+    let priced = PRICED_SITES.with(std::cell::Cell::get) && !sized && long_multiply;
+    if priced {
+        tli.set_priced_shift_call(crate::site_price::shift_calls);
+    }
+    if long_multiply {
+        tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+        if !sized {
+            tli.set_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+            tli.set_inline_constant_mul(if priced { crate::site_price::mul_inline } else { near_power_factor });
+        }
+    }
+    let mut lowering = Z80Lowering { sized };
+    let mut combines = Z80Combines { long_multiply: sized && long_multiply, priced };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
         .run()
         .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
     }
@@ -197,7 +390,21 @@ pub fn select_block(
         Cpu::Z80 => z80_z80::TABLE,
         Cpu::Z180 => z80_z180::TABLE,
     });
-    let mut hooks = Z80Hooks::new(cpu, false);
+    // the users of each constant before any is selected: a selected store no longer names it
+    let mut uses: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
+    for (id, node) in dag.nodes().iter().enumerate() {
+        if dag.is_deleted(id as u32) {
+            continue;
+        }
+        let mut seen: Vec<u32> = Vec::new();
+        for op in &node.ops {
+            if !seen.contains(&op.node) && dag.nodes()[op.node as usize].opcode == ISD::Constant {
+                seen.push(op.node);
+                *uses.entry(op.node).or_default() += 1;
+            }
+        }
+    }
+    let mut hooks = Z80Hooks::new(cpu, false).with_uses(uses);
     do_instruction_selection_with(dag, &Z80Pins, |adapter, node| selector.select(adapter, &mut hooks, node))
         .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();

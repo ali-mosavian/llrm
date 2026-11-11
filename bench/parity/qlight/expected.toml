@@ -1,61 +1,126 @@
-reason = "inputs read through volatile or DATA so no build folds the kernel; reference counts change with the source"
-blessed = "2026-10-25"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "a86671e48da5bbbad4c9740c238eb4e0"
+
+[ow.O1]
+instructions = 338
+memory_operands = 18
+clocks = 981
+code_bytes = 445
+helper_bytes = 235
+data_bytes = 10
+bss_bytes = 0
+kernel_ms = 0.006
 
 [ow.O2]
 instructions = 343
 memory_operands = 18
-code_bytes = 215
+clocks = 972
+code_bytes = 450
+helper_bytes = 235
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0061
 
 [ow.Os]
 instructions = 338
 memory_operands = 18
-code_bytes = 210
+clocks = 981
+code_bytes = 445
+helper_bytes = 235
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.006
+
+[bcc.O1]
+instructions = 102
+memory_operands = 34
+clocks = 661
+code_bytes = 214
+helper_bytes = 0
+data_bytes = 10
+bss_bytes = 0
+kernel_ms = 0.003
 
 [bcc.O2]
 instructions = 110
 memory_operands = 34
+clocks = 617
 code_bytes = 216
+helper_bytes = 0
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0031
 
 [bcc.Os]
 instructions = 102
 memory_operands = 34
+clocks = 661
 code_bytes = 214
+helper_bytes = 0
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.003
+
+[tc.O1]
+instructions = 713
+memory_operands = 55
+clocks = 1686
+code_bytes = 402
+helper_bytes = 188
+data_bytes = 10
+bss_bytes = 0
+kernel_ms = 0.0111
 
 [tc.O2]
 instructions = 716
 memory_operands = 55
-code_bytes = 221
+clocks = 1613
+code_bytes = 409
+helper_bytes = 188
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0112
 
 [tc.Os]
 instructions = 713
 memory_operands = 55
-code_bytes = 214
+clocks = 1686
+code_bytes = 402
+helper_bytes = 188
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0111
+
+[tcpp.O1]
+instructions = 711
+memory_operands = 62
+clocks = 1662
+code_bytes = 444
+helper_bytes = 197
+data_bytes = 10
+bss_bytes = 0
+kernel_ms = 0.0111
 
 [tcpp.O2]
 instructions = 719
 memory_operands = 62
-code_bytes = 249
+clocks = 1618
+code_bytes = 446
+helper_bytes = 197
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0112
 
 [tcpp.Os]
 instructions = 711
 memory_operands = 62
-code_bytes = 247
+clocks = 1662
+code_bytes = 444
+helper_bytes = 197
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0111
 
 [bc.O2]
 instructions = 770

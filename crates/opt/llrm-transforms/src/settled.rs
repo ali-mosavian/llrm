@@ -342,8 +342,19 @@ pub fn slice(
                 known.push(summary.finish());
                 kept = (Some(effects.finish()), Some(summary.finish()));
             }
-            GlobalKind::Variable(_) => {
-                (id, format!("{global:?}"), outer.sizes().get(&id)).hash(&mut declaration);
+            GlobalKind::Variable(variable) => {
+                (
+                    id,
+                    global.name.as_deref(),
+                    global.linkage,
+                    global.visibility,
+                    global.unnamed_addr,
+                    global.address_space,
+                    (variable.ty, variable.constant, variable.externally_initialized),
+                    (variable.initializer, variable.align),
+                    outer.sizes().get(&id),
+                )
+                    .hash(&mut declaration);
             }
         }
         declared.push(declaration.finish());
@@ -358,13 +369,8 @@ pub fn slice(
     };
     let globals =
         outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok()).map(|globals| globals.read_by(&named));
-    let hashed = |value: &dyn std::fmt::Debug| {
-        let mut hasher = digest();
-        format!("{value:?}").hash(&mut hasher);
-        hasher.finish()
-    };
-    let slice =
-        Slice { own: own.finish(), parts: [one_of(callees), one_of(known), hashed(&globals), 0, one_of(declared)] };
+    let globals = numbered(&|hasher| globals.hash(hasher));
+    let slice = Slice { own: own.finish(), parts: [one_of(callees), one_of(known), globals, 0, one_of(declared)] };
     FACTS.with(|held| held.replace(cache));
     read::swap(saved);
     slice
@@ -394,23 +400,34 @@ fn named(
     metadata: &[llrm_mir::module::MetadataNode],
     outer: &Outer,
 ) -> BTreeSet<GlobalId> {
-    let mut out = BTreeSet::new();
-    if let Some(one) = function.personality {
-        llrm_analysis::globalsaa::embedded(context, one, &mut out);
-    }
-    for (_, inst) in function.walk() {
-        for operand in &function.instruction(inst).operands {
-            if let Operand::Constant(id) = operand {
-                llrm_analysis::globalsaa::embedded(context, *id, &mut out);
-            }
-        }
-    }
+    let mut out = named_by_body(context, function);
     // Metadata is only added to in a run, so a module of the proxy's metadata's
     // length names what the proxy saw: found once per proxy, not per body.
     if metadata.len() == outer.metadata.len() {
         out.extend(outer.memo(0, || MetadataNamed(metadata_named(context, metadata))).0.iter().copied());
     } else {
         out.extend(metadata_named(context, metadata));
+    }
+    out
+}
+
+/// The globals `function`'s personality and operands name, each constant
+/// visited once.
+pub(crate) fn named_by_body(
+    context: &Context,
+    function: &Function,
+) -> BTreeSet<GlobalId> {
+    let mut out = BTreeSet::new();
+    let mut seen = llrm_analysis::globalsaa::Visited::default();
+    if let Some(one) = function.personality {
+        llrm_analysis::globalsaa::embedded_once(context, one, &mut seen, &mut out);
+    }
+    for (_, inst) in function.walk() {
+        for operand in &function.instruction(inst).operands {
+            if let Operand::Constant(id) = operand {
+                llrm_analysis::globalsaa::embedded_once(context, *id, &mut seen, &mut out);
+            }
+        }
     }
     out
 }
@@ -456,6 +473,30 @@ mod tests {
         let mut by_hand = llrm_mir::hash::Fx::default();
         7u32.hash(&mut by_hand);
         assert_eq!(hasher.finish(), by_hand.finish());
+    }
+
+    /// A body that names one global in each of its stores.
+    fn stores(count: usize) -> llrm_mir::module::Module {
+        let body: String = (0..count).map(|_| "  store i32 1, ptr @g\n").collect();
+        llrm_mir::parse::module(&format!("@g = global i32 0\ndefine void @f() {{\nb0:\n{body}  ret void\n}}\n"))
+            .expect("parses")
+    }
+
+    /// `slice` walked every operand of the body and visited its constant
+    /// again each time: 55,362 visits in a jpeg_single compile, 0.34% of it.
+    /// The visits are one per distinct constant, whatever the body's size.
+    #[test]
+    fn test_the_globals_a_body_names_cost_a_visit_per_constant_not_per_operand() {
+        let visits = |count: usize| {
+            let module = stores(count);
+            let f = module.globals.iter().find_map(|one| one.function()).expect("a function");
+            let before = llrm_mir::counts::get(llrm_mir::counts::Event::ConstantsEmbedded);
+            let named = super::named_by_body(&module.context, f);
+            assert_eq!(named.len(), 1);
+            llrm_mir::counts::get(llrm_mir::counts::Event::ConstantsEmbedded) - before
+        };
+        let (small, large) = (visits(20), visits(400));
+        assert_eq!(small, large, "visits grew with the operands: {small} for 20, {large} for 400");
     }
 
     const IR: &str = "@a = global i16 0\n@b = global i16 0\n\

@@ -1072,3 +1072,134 @@ fn test_a_target_that_prefers_exit_ne_gets_the_not_equal_compare() {
     let text = crate::testing::managed_on(&mut module, IndVars { lftr: false, size: false }, machine);
     assert!(text.contains("icmp ne i32 %i, 1"), "{text}");
 }
+
+/// `willNotOverflow` widens the `i128` add of a restoring divide's counter to
+/// `i256`, and `ConstantRange` stopped at 128 bits: IndVars panicked
+/// ("outside 1..=128") compiling the quad-precision divide `div.c`.
+#[test]
+fn an_i128_loop_is_widened_by_indvars_without_a_panic() {
+    let text = "define i128 @f(i128 %a, i128 %b) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %latch ]
+  %r = phi i128 [ %a, %entry ], [ %r.shl, %latch ]
+  %q = phi i128 [ 0, %entry ], [ %q.next, %latch ]
+  %ge = icmp uge i128 %r, %b
+  br i1 %ge, label %sub, label %latch
+sub:
+  %d = sub i128 %r, %b
+  br label %latch
+latch:
+  %r.new = phi i128 [ %d, %sub ], [ %r, %loop ]
+  %q.next = phi i128 [ 1, %sub ], [ %q, %loop ]
+  %r.shl = shl i128 %r.new, 1
+  %i.next = add nsw i32 %i, 1
+  %c = icmp slt i32 %i.next, 117
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i128 %q.next
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert!(printed(&module).contains("define i128 @f"), "{}", printed(&module));
+}
+
+/// Sequential counted loops on one bound. The pin's loop passes visit them
+/// in program order, so each loop's trip count finds the earlier ones'
+/// already made; visited last first, one query recursed through every loop
+/// before it (about 5 KB of stack each; 1666 loops overflowed 8 MB, as
+/// `llrm-pass indvars` did at 2400 loops).
+#[test]
+fn many_loops_on_one_bound_do_not_nest_their_trip_count_queries() {
+    const LOOPS: usize = 120;
+    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n");
+    for i in 0..LOOPS {
+        let from = if i == 0 { "b0".to_string() } else { format!("m{}", i - 1) };
+        let next = if i + 1 == LOOPS { "x".to_string() } else { format!("h{}", i + 1) };
+        text += &format!(
+            "h{i}:\n  %i{i} = phi i32 [ 0, %{from} ], [ %j{i}, %h{i} ]\n  %j{i} = add nsw i32 %i{i}, 1\n  %c{i} = icmp slt i32 %j{i}, %n\n  br i1 %c{i}, label %h{i}, label %m{i}\nm{i}:\n  br label %{next}\n"
+        );
+    }
+    text += "x:\n  ret i32 0\n}\n";
+    // Small enough that one nested query per loop overflows.
+    let ran = std::thread::Builder::new().stack_size(STACK).spawn(move || widening(&text).0).expect("a thread").join();
+    assert!(ran.is_ok(), "the query recursion overflowed a {STACK} byte stack");
+}
+
+const STACK: usize = 2 << 20;
+
+/// grep -Os (+2 B at wasm32): the pin's `indvars` sinks the outer counter's
+/// increment from the inner loop's preheader to the latch that reads it; ours
+/// left it there and the old value lived across the inner loop in a second
+/// local.
+#[test]
+fn an_increment_only_the_latch_reads_leaves_the_inner_loops_preheader() {
+    let (preheader, rest) = sunk_nested(true);
+    assert!(!preheader.contains("%i.next = add"), "{preheader}");
+    assert!(rest.contains("%i.next = add"), "{rest}");
+}
+
+/// The pin sinks on every target; ours does only where `Tti` asks (a default
+/// target grew 17 cells with it on). A default target keeps the increment in
+/// the inner loop's preheader.
+#[test]
+fn test_a_target_that_does_not_sink_invariants_keeps_the_increment_in_the_preheader() {
+    let (preheader, _) = sunk_nested(false);
+    assert!(preheader.contains("%i.next = add"), "{preheader}");
+}
+
+/// `acc * 3 + j` is no closed form: the loops stay.
+fn sunk_nested(sinks: bool) -> (String, String) {
+    let text = crate::invariantsink::tests::nested("")
+        .replace("%a2 = add i32 %a, %j", "%a3 = mul i32 %a, 3\n  %a2 = add i32 %a3, %j");
+    let mut module = parsed(&text);
+    let before = results(&module, &[&[1, 1], &[3, 2], &[4, 0]]);
+    let machine = crate::testing::Tuned { sinks_invariants: sinks, ..Default::default() };
+    let after = crate::testing::managed_on(&mut module, IndVars { lftr: true, size: false }, machine);
+    assert_eq!(results(&module, &[&[1, 1], &[3, 2], &[4, 0]]), before, "{after}");
+    let (preheader, rest) = after.split_once("inner:").expect("inner");
+    (preheader.to_string(), rest.to_string())
+}
+
+/// Compile time: every run built the body's whole loop list again
+/// (`cfg::natural`, 308 M Ir over 534 runs on memexp -O2, one run for each of
+/// a function's 403 loops) though it keeps the tree and loops. Two runs over
+/// a function derive its shape once.
+#[test]
+fn test_two_runs_over_a_function_derive_its_shape_once() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let before = llrm_analysis::cfg::shapes_derived();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(IndVars { lftr: true, size: false });
+    manager.add(IndVars { lftr: true, size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "the shape was derived again");
+}
+
+/// A run built a tree, loops and assumption cache of its own though the
+/// manager held them: the pin's loop passes read the manager's (jpeg_fixed -O2:
+/// `within_declared` 14.3 M of indvars' 69.3 M Ir).
+#[test]
+fn test_a_run_reads_the_managers_tree_and_loops_not_its_own() {
+    let mut module = parsed(&two_counters(0, 1));
+    let before = llrm_analysis::scev::analysis::sessions_made();
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert_eq!(llrm_analysis::scev::analysis::sessions_made() - before, 0, "{}", printed(&module));
+}

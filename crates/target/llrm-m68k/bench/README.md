@@ -13,6 +13,10 @@ the same arguments and data. `cargo run -p llrm-m68k --example bench` prints the
 - **Instructions** are executed instructions inside `k`, counted from qemu's trace through a
   pipe (never a file), killed at 2M lines. Clocks are priced by `examples/cycles.rs` from
   `src/timing.rs` (Motorola's published tables).
+- **Pin `llc` columns are same-IR.** The kernels are hand-written IR (`library/hex.ll` is tool-printed), not the
+  pin clang's output: `llc -O2` at 68000 differs in text bytes between this IR and `clang -O2 -emit-llvm` IR in
+  23 of 23 programs (arrsum 124 vs 70, copy 90 vs 230). The columns compare backends on one IR; the pin's result
+  for a program is the `clang` column of `examples/matrix` (pin clang to IR, then the pin's `llc`, LSR once).
 - **gcc.** `kernels/*.c` mirror the IR; compiled with `m68k-linux-gnu-gcc -Os` and `-O2` from `$GCC_M68K` (the apt debs unpacked without
   root); the columns read `-` when it is not set.
 - **Not compared.** vbcc.

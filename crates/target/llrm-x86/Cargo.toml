@@ -24,6 +24,8 @@ llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
 llrm-sdag = { workspace = true }
 llrm-support = { workspace = true }
+llrm-qbruntime = { workspace = true }
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

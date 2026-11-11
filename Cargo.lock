@@ -197,7 +197,6 @@ dependencies = [
  "llrm-alloc",
  "llrm-analysis",
  "llrm-bcdriver",
- "llrm-c",
  "llrm-cc",
  "llrm-codegen",
  "llrm-debug",
@@ -221,6 +220,8 @@ dependencies = [
 name = "llrm-6502"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
+ "llrm-analysis",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
@@ -229,6 +230,7 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
+ "llrm-support",
  "llrm-target",
  "llrm-transforms",
  "tempfile",
@@ -258,6 +260,7 @@ dependencies = [
 name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
  "llrm-analysis",
  "llrm-codegen",
  "llrm-dagisel",
@@ -265,7 +268,6 @@ dependencies = [
  "llrm-dwarf",
  "llrm-elf",
  "llrm-env",
- "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",
  "llrm-mir",
@@ -311,35 +313,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-c"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "indexmap",
- "llrm-c",
- "llrm-codegen",
- "llrm-debug",
- "llrm-driver",
- "llrm-mir",
- "llrm-object",
- "llrm-support",
- "llrm-target",
- "llrm-transforms",
- "llrm-x86",
- "llrm-x86-m16",
- "llrm-x86-m32",
- "num-bigint",
- "num-traits",
- "regex",
- "rustc-hash",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml",
-]
-
-[[package]]
 name = "llrm-cc"
 version = "0.1.0"
 dependencies = [
@@ -379,6 +352,7 @@ dependencies = [
  "llrm-target",
  "llrm-transforms",
  "llrm-x86",
+ "llrm-x86-dagisel",
  "llrm-x86-m16",
  "llrm-x86-m32",
  "llrm-x86-m64",
@@ -442,6 +416,7 @@ dependencies = [
  "llrm-object",
  "llrm-target",
  "llrm-x86",
+ "llrm-x86-backend",
  "llrm-x86-m16",
  "llrm-x86-m16-select",
  "llrm-x86-m32",
@@ -514,6 +489,7 @@ dependencies = [
 name = "llrm-m68k"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
  "llrm-analysis",
  "llrm-cgen",
  "llrm-codegen",
@@ -563,6 +539,7 @@ dependencies = [
  "llrm-object",
  "llrm-target",
  "llrm-transforms",
+ "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
  "num-bigint",
@@ -629,6 +606,7 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-object",
+ "llrm-omf",
  "llrm-qbruntime",
  "llrm-support",
  "llrm-target",
@@ -667,6 +645,7 @@ dependencies = [
 name = "llrm-spike-mf"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "llrm-codegen",
  "llrm-lir",
  "llrm-mir",
@@ -708,6 +687,7 @@ dependencies = [
  "llrm-lir",
  "llrm-mir",
  "llrm-object",
+ "llrm-support",
  "toml",
 ]
 
@@ -733,6 +713,7 @@ dependencies = [
 name = "llrm-wasm"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
  "llrm-analysis",
  "llrm-codegen",
  "llrm-dagisel",
@@ -742,6 +723,7 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
+ "llrm-support",
  "llrm-target",
  "llrm-transforms",
 ]
@@ -753,6 +735,7 @@ dependencies = [
  "iced-x86",
  "llrm-codeview",
  "llrm-coff",
+ "llrm-dagisel",
  "llrm-debug",
  "llrm-dwarf",
  "llrm-elf",
@@ -761,11 +744,39 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
+ "llrm-qbruntime",
  "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-x86-backend"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-analysis",
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-qbruntime",
+ "llrm-support",
+ "llrm-target",
+ "llrm-x86",
+ "llrm-x86-dagisel",
+ "llrm-x86-m16",
+ "llrm-x86-m32",
+]
+
+[[package]]
+name = "llrm-x86-dagisel"
+version = "0.1.0"
+dependencies = [
+ "llrm-dagisel",
 ]
 
 [[package]]
@@ -781,6 +792,7 @@ dependencies = [
  "llrm-object",
  "llrm-support",
  "llrm-target",
+ "llrm-transforms",
  "llrm-x86",
  "num-bigint",
  "num-traits",
@@ -854,6 +866,8 @@ dependencies = [
 name = "llrm-z80"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
+ "llrm-analysis",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
@@ -861,8 +875,10 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
+ "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "tempfile",
 ]
 
 [[package]]

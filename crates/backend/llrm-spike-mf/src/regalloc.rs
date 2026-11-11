@@ -67,6 +67,16 @@ pub trait Target {
     fn root(register: RegId) -> RegId;
     /// A root no allocator hands out (the frame and stack pointers).
     fn reserved(root: RegId) -> bool;
+    /// DEVIATE HC1: how many independent instructions `HoistCommonCodeInSuccs`
+    /// may look past for an identical one in the other successor. The pin
+    /// compares heads only, an intended rule
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>).
+    /// Reason: a constant both successors need, one of them behind a load,
+    /// stays twice (crc16: `move.l #65535,%d0` on both sides of a guard). Exit:
+    /// 2026-11-12, or when the pin hoists past them.
+    fn hoist_window() -> usize {
+        0
+    }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
     /// Whether two allocatable registers share storage (a pair and its
@@ -76,6 +86,12 @@ pub trait Target {
         other: RegId,
     ) -> bool {
         one == other
+    }
+    /// The two byte registers a pair register is made of. Liveness follows
+    /// the bytes: a pair read after its bytes were written is not live from
+    /// the entry.
+    fn lanes_of(_register: RegId) -> Option<[RegId; 2]> {
+        None
     }
     /// Whether a register worth `weight` (its mentions, each scaled by its loop
     /// depth) should take `root`, when `first_use` says no other register
@@ -135,6 +151,12 @@ pub trait Target {
         0
     }
 
+    /// What a callee-saved register and a spill cost in bytes, where `-Os`
+    /// prices the first use of a callee-saved register by them (DEVIATE CSR5).
+    fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
+        None
+    }
+
     /// The percentage of that cost greedy charges (LLVM's default 30 prices
     /// it below its own spill weights).
     fn csr_cost_scale() -> u32 {
@@ -145,14 +167,55 @@ pub trait Target {
     /// pin's is `enableMachineScheduler()`: x86 and AArch64 true; M68k and
     /// WebAssembly false (the default of a target that sets nothing). Here
     /// true, as before, until a target's owner states otherwise.
+    ///
+    /// m68k (owner greedy-subreg, exit 2026-11-29): keeps true. False is the
+    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins
+    /// before the global `a := b`), but makes 7-9 cells per CPU/level worse
+    /// (68000 O2 div_constants_long +284 B), as in idiv_loop_os, where the
+    /// pin's own order gives the same `bra` + `moveq #0`. Not flipped while
+    /// a strict cell is worse.
     fn joins_global_copies() -> bool {
         true
+    }
+
+    /// Whether a join that leaves both values the registers they had is
+    /// always taken, without pricing it ([`Target::should_coalesce`] prices
+    /// only what a join takes away, so it says yes). A target whose
+    /// `should_coalesce` can refuse such a join says no.
+    fn joins_unnarrowed_for_free() -> bool {
+        true
+    }
+
+    /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`): the pin's order.
+    fn joins_loop_carried_first() -> bool {
+        false
     }
 
     /// DEVIATE C13: whether a copy between widths is joined (the pin always
     /// does). Exit for a target that says false: its profitability rule.
     fn joins_sub_registers() -> bool {
         true
+    }
+
+    /// The bytes of a use operand `inst` reads, where it reads less than the
+    /// whole: `(operand, byte offset, bytes)`. The sign test of a pair reads
+    /// its high byte; liveness takes the rest of the pair as not read there.
+    fn read_lanes(_inst: &Inst) -> Option<(usize, u32, u32)> {
+        None
+    }
+
+    /// Whether `lane_moves`' building instruction (a `PACK`) is converted to
+    /// one copy per part into its lane of the whole (`eliminateRegSequence`),
+    /// which the coalescer then joins. False: it stays one instruction and the
+    /// parts are hinted.
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    /// Whether a copy into or out of a byte above the low one of a wider value
+    /// is joined (`CoalescerPair` with a `SubIdx`). False: such a copy stays.
+    fn joins_lanes() -> bool {
+        false
     }
 
     /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
@@ -163,11 +226,57 @@ pub trait Target {
         true
     }
 
+    /// A jump to the block with id `block`, for a block a shared phase made on
+    /// an edge (`PhiElimination`) or a jump it put where a branch fell through.
+    /// None: the target has no such form, and a function that needs one is
+    /// refused.
+    fn branch_to(_block: u32) -> Option<Inst> {
+        None
+    }
+
     /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
     /// register coalescer in the pin) orders the function before allocation.
     /// Here false: a target opts in once its numbers say so.
     fn schedules_before_allocation() -> bool {
         false
+    }
+
+    /// The processor the pre-RA scheduler schedules for
+    /// (`TargetSchedModel`). Here the generic one, as before; DEVIATE MS7
+    /// until a target states its own.
+    fn scheduling_model() -> std::rc::Rc<dyn llrm_codegen::backend::schedmodel::SchedulingModel> {
+        std::rc::Rc::new(llrm_codegen::backend::schedmodel::GenericModel)
+    }
+
+    /// Whether the row `name`, loading an incoming stack argument (a frame slot
+    /// below zero) that nothing writes or takes the address of, is made again
+    /// where it is read, not stored and reloaded: the pin's rule for an
+    /// immutable fixed stack object (`isLoadFromInvariantOrConstantMemory`).
+    /// Only a full-width row that takes any register the value may land in.
+    fn is_invariant_argument_load(_name: &str) -> bool {
+        false
+    }
+
+    /// Whether an instruction made again by the spiller stops setting the
+    /// flags its original sets: the reader after the original reads that
+    /// original's flags, not those of a copy that stands beside another
+    /// instruction. A target whose loads set the flags in hardware (m68k's
+    /// `move`) says true, and keeps the flags across the copy itself.
+    fn remade_sets_no_flags() -> bool {
+        false
+    }
+
+    /// Whether the row `name` loads a frame object a call filled (see
+    /// `frame_address`): made again where it is read.
+    fn is_buffer_load(_name: &str) -> bool {
+        false
+    }
+
+    /// The frame object whose address `inst` puts in a register (z80 `LEAFI`),
+    /// for the buffers a call fills (`call_result_buffers`); None for the
+    /// targets that pass no address of a local to a call this way.
+    fn frame_address(_inst: &Inst) -> Option<i32> {
+        None
     }
 
     /// Whether a value is spilled, not given a callee-saved register, when
@@ -190,6 +299,14 @@ pub trait Target {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
+    /// Whether a move of a symbol's address is made again where it is read, as
+    /// any literal is. The pin does for `MOV32ri` of a global; the price is
+    /// the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload,
+    /// 6502's pair of immediates is not (the objects grew).
+    fn remats_symbol_addresses() -> bool {
+        false
+    }
+
     /// `isAsCheapAsAMove` against the copy it replaces: whether making the
     /// literal move `literal` again for a copy from a value that may take
     /// `source` to one that may take `destination` costs no more than the
@@ -203,10 +320,38 @@ pub trait Target {
         true
     }
 
+    /// Whether a rematerializable instruction may read registers (the pin's
+    /// `isReMaterializable` with `allUsesAvailableAt`, not the trivial form):
+    /// AArch64 flags every non-flag-setting `ADD`/`SUB`.
+    fn remat_reads_registers() -> bool {
+        false
+    }
+
+    /// Whether making the literal move `literal` again takes no more bytes than
+    /// the copy it replaces, so that a build for size may do it where the
+    /// constant stays read (DEVIATE C10 keeps the copy otherwise). The
+    /// default is no: a literal move is longer than a register copy on the
+    /// machines this was priced for.
+    fn literal_move_is_copy_sized(_literal: &llrm_codegen::model::lir::Insn) -> bool {
+        false
+    }
+
     /// What one register-to-register copy costs, in the unit of
     /// [`Target::operand_cost`].
     fn copy_cost() -> u32 {
         1
+    }
+
+    /// `TII.getInstrCost(COPY, {to, from})`: what the copy of `from` into `to`
+    /// costs, in the unit of [`Target::operand_cost`]. Greedy hints a value the
+    /// register that makes the copies naming it cheapest (llvm-mos
+    /// `getRegAllocationHints`, `COPY`); all 0 is the pin's order.
+    fn copy_register_cost(
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
     }
 
     /// What the instruction `inst` costs with its operand `operand` in
@@ -256,6 +401,14 @@ pub trait Target {
         Vec::new()
     }
 
+    /// Whether greedy allocation keeps an `early_clobber` instruction's defs
+    /// out of the registers it reads. The spike allocator always does; a target
+    /// opts in here where its expansion writes a result before it has read an
+    /// address (m68k's zero-extending load).
+    fn greedy_early_clobber() -> bool {
+        false
+    }
+
     /// The class the instruction `name` names for operand `index`, where it
     /// does (`MCInstrDesc::operands`).
     fn operand_class(
@@ -273,12 +426,46 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// Whether a spill store or reload of a byte of a wider register names the
+    /// register of that lane, as every other instruction names the value. A
+    /// target whose byte registers are not halves of the wider one (z80's `e`
+    /// of `de`) numbers the value as before.
+    fn spills_named_by_lane() -> bool {
+        false
+    }
+    /// Whether `spill_store_lane` is stated.
+    fn spills_lanes() -> bool {
+        false
+    }
+    /// The instruction that stores `register`, one lane of a spilled value of
+    /// `offset` bytes up, to frame `slot`.
+    fn spill_store_lane(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+        _offset: u32,
+    ) -> Option<Inst> {
+        None
+    }
     /// `foldMemoryOperand`: `inst` with its only read of the spilled `register`
     /// taken straight from frame `slot`, where the target has an
     /// instruction form for that; the reload then goes.
     fn fold_spill(
         _inst: &Inst,
         _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+    /// Whether an instruction named `name` only defines zero, so that spilling
+    /// its value is a store of the zero register (`foldMemoryOperandImpl` of a
+    /// `COPY` from a physical register).
+    fn is_zero_def(_name: &str) -> bool {
+        false
+    }
+    /// The instruction that stores the zero register to frame `slot`.
+    fn zero_store(
+        _class: Self::Class,
         _slot: i32,
     ) -> Option<Inst> {
         None
@@ -499,6 +686,18 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
                 copy.origin = inst.origin;
                 out.push(copy);
                 inst.operands[used] = Operand::Use(destination);
+                // The other uses of the source read the copy too
+                // (`processTiedPairs`, TwoAddressInstructionPass.cpp#L1722):
+                // `x = add y, y` is `x = y; x = add x, x`, so `y` can die here
+                // and share x's register. Not under early clobber, where x is
+                // written before the uses read.
+                if !inst.early_clobber {
+                    for (at, operand) in inst.operands.iter_mut().enumerate() {
+                        if at != used && matches!(operand, Operand::Use(other) if *other == source) {
+                            *operand = Operand::Use(destination);
+                        }
+                    }
+                }
             }
             out.push(inst);
         }
@@ -551,6 +750,19 @@ struct Nodes {
 }
 
 impl Nodes {
+    /// The nodes a register stands for: a physical pair is its two bytes.
+    fn all<T: Target>(
+        &mut self,
+        register: Reg,
+    ) -> Vec<usize> {
+        if let Reg::Phys(p) = register
+            && let Some(lanes) = T::lanes_of(T::root(p))
+        {
+            return lanes.iter().map(|lane| self.of::<T>(Reg::Phys(*lane))).collect();
+        }
+        vec![self.of::<T>(register)]
+    }
+
     fn of<T: Target>(
         &mut self,
         register: Reg,
@@ -585,8 +797,12 @@ fn effects<T: Target>(
     let mut uses = Vec::new();
     for operand in &inst.operands {
         match operand {
-            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => defs.push(nodes.of::<T>(*r)),
-            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => uses.push(nodes.of::<T>(*r)),
+            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => {
+                defs.extend(nodes.all::<T>(*r))
+            }
+            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => {
+                uses.extend(nodes.all::<T>(*r))
+            }
             _ => {}
         }
     }

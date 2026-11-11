@@ -8,7 +8,7 @@ use llrm_mir::module::{Instruction, Operand, ValueDef};
 
 use super::super::dag::SDValue;
 use super::super::mvt::EVT;
-use super::super::x86isd;
+use super::LoweringNodes;
 use super::{Builder, Refused};
 
 impl Builder<'_> {
@@ -36,7 +36,13 @@ impl Builder<'_> {
                 *self.info.static_allocas.get(&value).ok_or(Refused("inline code naming other than a frame place"))?;
             ops.push(self.dag.get_target_frame_index(pointer, index));
         }
-        let node = self.dag.get_node_multi(x86isd::LLRM_CODE, &[EVT::OTHER, EVT::GLUE], &ops);
+        let node = self
+            .dag
+            .get_node_multi(
+                LoweringNodes::need(self.target.dag.nodes.code, "inline code")?,
+                &[EVT::OTHER, EVT::GLUE],
+                &ops,
+            );
         let mut chain = SDValue { node: node.node, res: 0 };
         let mut glue = SDValue { node: node.node, res: 1 };
         let vt = self.type_of(instruction.ty)?;

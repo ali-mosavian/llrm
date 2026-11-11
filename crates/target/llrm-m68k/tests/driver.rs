@@ -67,3 +67,13 @@ fn the_mid_end_stages_are_written_where_dump_names() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(written.iter().any(|extension| extension == "ll"), "no stage written: {written:?}");
 }
+
+/// The processor is a fact of the machine the mid-end is handed, not a
+/// default every pass shares.
+#[test]
+fn the_machine_and_its_cost_model_carry_the_cpu() {
+    use llrm_m68k::dagisel::hooks::Cpu;
+    assert_eq!(llrm_m68k::machine::M68k::for_cpu(Cpu::M68020).cpu, Cpu::M68020);
+    assert_eq!(llrm_m68k::machine::M68kMachine { cpu: Cpu::M68040 }.cpu, Cpu::M68040);
+    assert_eq!(llrm_m68k::machine::M68k::default().cpu, Cpu::M68000);
+}

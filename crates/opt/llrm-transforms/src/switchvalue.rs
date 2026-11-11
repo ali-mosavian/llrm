@@ -690,8 +690,12 @@ pub fn folded(
         return true;
     }
     // A block of only the terminator, and for a branch the compare it reads,
-    // folds into its predecessors.
-    let condition = defining(function, function.instruction(switch).operands[0]);
+    // folds into its predecessors. Not a `switch` with the instruction that
+    // makes its value before it: that value is made anew on each entry
+    // (`SI == &*BB->begin()`, SimplifyCFG.cpp#L8607:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8607).
+    let condition = defining(function, function.instruction(switch).operands[0])
+        .filter(|_| function.instruction(switch).opcode != Opcode::Switch);
     let empty = {
         let mut instructions = function.iter_block(block);
         match instructions.next() {

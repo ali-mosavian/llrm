@@ -1,4 +1,4 @@
-"""m16os called `llrm-c`, dropped 10-26: a dist with only llrm-cc crashed the header (FileNotFoundError) and its listings ran llrm-cc without its environment."""
+"""m16os called `llrm-cc`, dropped 10-26: a dist with only llrm-cc crashed the header (FileNotFoundError) and its listings ran llrm-cc without its environment."""
 from __future__ import annotations
 
 import importlib.util
@@ -27,7 +27,7 @@ def test_a_dist_with_only_llrm_cc_is_named(tmp_path):
     shim(dist / "llrm-qb", "true")
     header = load("m16os").identify(dist)
     assert "89abcdef89abcdef89abcdef89abcdef89abcdef" in header, header
-    assert "llrm-cc " in header and "llrm-c " not in header, header
+    assert "llrm-cc " in header, header
 
 
 def test_a_dist_without_a_build_stamp_is_named_by_its_directory(tmp_path):

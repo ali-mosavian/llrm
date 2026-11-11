@@ -37,8 +37,8 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
         }
     };
     let ins = [
-        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any },
-        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any },
+        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None },
+        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None },
     ];
     let args = calling.lower_formal_arguments(&mut dag, entry, &ins, &mut fixed);
     let sum = dag.get_node(ISD::Add, EVT::I32, &[args[0], args[1]]);
@@ -53,6 +53,7 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
             split: false,
             variadic: false,
             sret: false,
+            byval: None,
         }],
     );
     dag.set_root(ret);
@@ -67,7 +68,7 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
 /// yet"), so any legalization that asked for a slot aborted the compile.
 #[test]
 fn a_scratch_frame_object_is_numbered_after_the_existing_ones() {
-    use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
+    use llrm_codegen::backend::selectiondag::dag_target::FrameObjects;
     use llrm_m68k::dagisel::pipeline::Temporaries;
     let mut frame = Temporaries::new(2);
     assert_eq!(frame.create_stack_temporary(8, 4), 2);

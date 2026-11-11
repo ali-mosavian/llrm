@@ -24,7 +24,16 @@ fn loads(flags: &[&str]) -> usize {
         .output()
         .unwrap();
     assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
-    std::fs::read_to_string(&output).unwrap().lines().filter(|l| l.trim_start().starts_with("ldr")).count()
+    // A pair load is two loads.
+    std::fs::read_to_string(&output)
+        .unwrap()
+        .lines()
+        .map(|l| match l.trim_start() {
+            line if line.starts_with("ldr") => 1,
+            line if line.starts_with("ldp") => 2,
+            _ => 0,
+        })
+        .sum()
 }
 
 /// The flag was "unrecognized argument", so no mid-end comparison could be

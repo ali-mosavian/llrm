@@ -261,7 +261,7 @@ impl Epochs {
 pub fn touches_memory(opcode: &Opcode) -> bool {
     matches!(
         opcode,
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::VaArg
     )
 }
 

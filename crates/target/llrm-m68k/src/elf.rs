@@ -15,7 +15,7 @@
 //! `llvm/lib/Target/M68k/MCTargetDesc/M68kELFObjectWriter.cpp`, pin
 //! d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_elf::{Machine, Relocation};
 use llrm_mir::image::{Export, Variable};
@@ -124,7 +124,7 @@ pub fn object(
     name: &str,
     items: &[Item],
 ) -> Result<Object, String> {
-    object_with(name, items, &HashMap::new(), &[])
+    object_with(name, items, &HashMap::default(), &[])
 }
 
 /// [`object`] with the module's globals: `.rodata`, `.data` and `.bss` hold
@@ -164,7 +164,7 @@ fn place(
 ) -> Result<Placed, String> {
     let mut code = Vec::new();
     let mut labels: Vec<(&str, usize)> = Vec::new();
-    let mut defined: HashMap<&str, usize> = HashMap::new();
+    let mut defined: HashMap<&str, usize> = HashMap::default();
     let mut pending = Vec::new();
     for (index, item) in items.iter().enumerate() {
         match item {
@@ -203,7 +203,7 @@ fn place(
 
     // Symbols: the labels, then the undefined names the fixups use.
     let mut symbols: Vec<Symbol> = Vec::new();
-    let mut index_of: HashMap<String, usize> = HashMap::new();
+    let mut index_of: HashMap<String, usize> = HashMap::default();
     let functions: Vec<&(&str, usize)> = labels.iter().filter(|(label, _)| !label.starts_with('.')).collect();
     for (label, offset) in &labels {
         let local = label.starts_with('.');
@@ -324,6 +324,7 @@ fn place(
         symbols,
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames: Vec::new(),
     }))
 }

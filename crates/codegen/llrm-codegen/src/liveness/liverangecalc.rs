@@ -104,6 +104,9 @@ pub struct LiveRangeCalc {
     touched: Vec<usize>,
     /// Reserved: a value that is known to be "undef" (`UndefVNI`).
     undef_vni: Vn,
+    /// A read no def reaches is of an undefined lane and extends nothing
+    /// (`computeSubRangeUndefs`), where it is otherwise a failed assertion.
+    undef_ok: bool,
 }
 
 impl Default for LiveRangeCalc {
@@ -120,6 +123,7 @@ impl LiveRangeCalc {
             live_in: Vec::new(),
             touched: Vec::new(),
             undef_vni: VNInfo::new(0xbad, SlotIndex::default()),
+            undef_ok: false,
         }
     }
 
@@ -330,7 +334,11 @@ impl LiveRangeCalc {
         // If a unique reaching def was found, blit in the live ranges
         // immediately.
         if unique_vni {
-            let the_vni = the_vni.expect("a unique value");
+            let Some(the_vni) = the_vni else {
+                assert!(self.undef_ok, "a unique value");
+                self.live_in.clear();
+                return true;
+            };
             assert!(!self.is_undef(&Some(the_vni.clone())));
             let mut updater = LiveRangeUpdater::new(Some(lr));
             for bn in work_list {
@@ -545,21 +553,27 @@ impl LiveIntervalCalc {
         operands: &[Operand],
         ctx: &Ctx,
     ) {
-        // Step 1: Create minimal live segments for every definition of Reg.
-        // Visit all def operands. If the same instruction has multiple defs of
-        // Reg, createDeadDef() will deduplicate.
-        for mo in operands {
-            if !mo.is_def && !mo.reads_reg {
-                continue;
+        // A value some def writes by lane has its main range made from its
+        // sub-ranges (`constructMainRangeFromSubranges`): a lane def does not
+        // end the other lanes, which one whole range cannot say.
+        let by_lane = operands.iter().any(|mo| mo.is_def && mo.lanes != Operand::ALL);
+        if !by_lane {
+            // Step 1: Create minimal live segments for every definition of Reg.
+            // Visit all def operands. If the same instruction has multiple defs of
+            // Reg, createDeadDef() will deduplicate.
+            for mo in operands {
+                if !mo.is_def && !mo.reads_reg {
+                    continue;
+                }
+                if mo.is_def {
+                    Self::create_dead_def(ctx.indexes, &mut li.range, mo);
+                }
             }
-            if mo.is_def {
-                Self::create_dead_def(ctx.indexes, &mut li.range, mo);
-            }
+            // Step 2: Extend live segments to all uses, constructing SSA form as
+            // necessary.
+            self.calc.reset_live_out_map(ctx.cfg.len());
+            self.extend_to_uses(&mut li.range, operands, ctx);
         }
-        // Step 2: Extend live segments to all uses, constructing SSA form as
-        // necessary.
-        self.calc.reset_live_out_map(ctx.cfg.len());
-        self.extend_to_uses(&mut li.range, operands, ctx);
         // The sub-ranges (LiveIntervalCalc.cpp#L43,
         // `MRI->shouldTrackSubRegLiveness`): one per lane mask some def
         // names alone. DEVIATE: the masks are not refined to disjoint
@@ -574,14 +588,17 @@ impl LiveIntervalCalc {
         }
         // The lanes no def names alone keep their own sub-range, so the
         // sub-ranges cover the value (the pin's refined sub-ranges do).
+        let mut rest_mask = None;
         if let Some(rest) =
             masks.iter().fold(None, |all: Option<ValueLanes>, one| Some(all.map_or(*one, |a| a.union(*one))))
         {
             let rest = ValueLanes(!rest.0);
             if !rest.is_empty() {
                 masks.push(rest);
+                rest_mask = Some(rest);
             }
         }
+        self.calc.undef_ok = true;
         for lanes in masks {
             // A def that keeps the rest of the value (`readsReg`) reads the
             // lanes it does not define.
@@ -591,7 +608,12 @@ impl LiveIntervalCalc {
                 if mo.is_def && mo.lanes.overlaps(lanes) {
                     mine.push(Operand { reads_reg: false, ..*mo });
                 }
-                if mo.reads_reg && reads.overlaps(lanes) {
+                // The lanes no lane def names are read by a partial def only
+                // where an earlier whole def defined them: a read with no def
+                // above it is of an undefined lane (`computeSubRangeUndefs`),
+                // and is left out of their range.
+                let undef_read = mo.is_def && rest_mask == Some(lanes);
+                if mo.reads_reg && reads.overlaps(lanes) && !undef_read {
                     mine.push(Operand { is_def: false, ..*mo });
                 }
             }
@@ -604,8 +626,106 @@ impl LiveIntervalCalc {
             self.create_dead_defs(&mut range, &mine, ctx);
             self.calc.reset_live_out_map(ctx.cfg.len());
             self.extend_to_uses(&mut range, &mine, ctx);
+            Self::drop_unreached(&mut range, ctx);
             li.create_sub_range(lanes).range = range;
         }
+        self.calc.undef_ok = false;
+        if by_lane {
+            self.main_range_from_sub_ranges(li, operands, ctx);
+        }
+    }
+
+    /// `computeSubRangeUndefs` (LiveIntervals.cpp#L1740): a lane is not live
+    /// where no def of it reaches. Extending a read up the CFG with
+    /// `undef_ok` runs on past the last def to the function's entry; what no
+    /// path from a def reaches is cut. DEVIATE: by blocks, not by operand
+    /// (the pin marks the reads `undef` and never extends them).
+    fn drop_unreached(
+        range: &mut LiveRange,
+        ctx: &Ctx,
+    ) {
+        let mut first_def: Vec<Option<SlotIndex>> = vec![None; ctx.cfg.len()];
+        let mut work: Vec<usize> = Vec::new();
+        for def in range.valnos.iter().filter(|vn| !vn.is_unused()).map(|vn| vn.def()) {
+            let block = ctx.indexes.get_mbb_from_index(&def);
+            let at = if def < ctx.indexes.get_mbb_start_idx(block) { ctx.indexes.get_mbb_start_idx(block) } else { def };
+            if first_def[block].is_none_or(|was| at < was) {
+                first_def[block] = Some(at);
+            }
+            work.push(block);
+        }
+        // Blocks a def reaches over at least one edge.
+        let mut reached = vec![false; ctx.cfg.len()];
+        while let Some(block) = work.pop() {
+            for &next in &ctx.cfg.succs[block] {
+                if !reached[next] {
+                    reached[next] = true;
+                    work.push(next);
+                }
+            }
+        }
+        let mut kept: Vec<Segment> = Vec::with_capacity(range.segments.len());
+        for segment in &range.segments {
+            let mut block = ctx.indexes.get_mbb_from_index(&segment.start);
+            loop {
+                let (block_start, block_end) = *ctx.indexes.get_mbb_range(block);
+                let from = if reached[block] { Some(block_start) } else { first_def[block] };
+                if let Some(from) = from {
+                    let (start, end) = (segment.start.max(from), segment.end.min(block_end));
+                    if start < end {
+                        match kept.last_mut() {
+                            Some(last) if last.end == start && match (&last.valno, &segment.valno) {
+                                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                                (None, None) => true,
+                                _ => false,
+                            } =>
+                            {
+                                last.end = end
+                            },
+                            _ => kept.push(Segment::new(start, end, segment.valno.clone())),
+                        }
+                    }
+                }
+                if segment.end <= block_end || block + 1 >= ctx.cfg.len() {
+                    break;
+                }
+                block += 1;
+            }
+        }
+        range.segments = kept;
+    }
+
+    /// `constructMainRangeFromSubranges`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervalCalc.cpp#L105>):
+    /// a dead def in the main range at every def of every sub-range (what the
+    /// range already held, a parameter's dead def, stays), then extended to
+    /// every read. One value per def, not per stretch: values that keep the
+    /// lanes of an earlier def are values of their own, which spill hoisting
+    /// and value mapping tell apart.
+    fn main_range_from_sub_ranges(
+        &mut self,
+        li: &mut LiveInterval,
+        operands: &[Operand],
+        ctx: &Ctx,
+    ) {
+        let mut range = LiveRange::new();
+        let held: Vec<SlotIndex> =
+            li.range.valnos.iter().filter(|vn| !vn.is_unused() && !vn.is_phi_def()).map(|vn| vn.def()).collect();
+        let defs: Vec<SlotIndex> = li
+            .sub_ranges()
+            .iter()
+            .flat_map(|sub| sub.range.valnos.iter())
+            .filter(|vn| !vn.is_unused() && !vn.is_phi_def())
+            .map(|vn| vn.def())
+            .collect();
+        for def in held.into_iter().chain(defs) {
+            range.create_dead_def(def);
+        }
+        self.calc.reset_live_out_map(ctx.cfg.len());
+        self.calc.undef_ok = true;
+        self.extend_to_uses(&mut range, operands, ctx);
+        self.calc.undef_ok = false;
+        li.range = range;
     }
 
     /// `createDeadDefs` (LiveIntervalCalc.cpp#L128).

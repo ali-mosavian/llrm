@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+import cpulimit  # noqa: E402
 import qbruntime  # noqa: E402
 import run_tests  # noqa: E402
 
@@ -25,7 +26,7 @@ def inventory(work: Path, archive: Path) -> dict:
     objects = work / "objects"
     objects.mkdir(parents=True, exist_ok=True)
     stems = {source: f"I{at:03d}" for at, source in enumerate(sources)}
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         compiled = dict(zip(sources, pool.map(lambda source: compile_one(source, objects / f"{stems[source]}.OBJ"), sources)))
     jobs = [
         dosbatch.Job(stems[source], "obj", objects / f"{stems[source]}.OBJ", runtime="empty", runtime_file=archive)

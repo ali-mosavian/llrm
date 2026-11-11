@@ -78,6 +78,9 @@ pub fn apply_pass_flag(
     options: &mut pipeline::Options,
     flag: &str,
 ) -> bool {
+    if INERT.contains(&flag) {
+        return true;
+    }
     let Some(name) = flag.strip_prefix("-f") else { return false };
     let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
     PASSES
@@ -91,6 +94,12 @@ pub fn apply_pass_flag(
         )
 }
 
+/// gcc switches for what this pipeline does by the pin's rules: taken,
+/// changing nothing, so a gcc or clang command line still builds
+/// (`-f[no-]peel-loops`: the translated LoopUnrollPass peels by the pin's
+/// rules).
+const INERT: &[&str] = &["-fpeel-loops", "-fno-peel-loops"];
+
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
@@ -99,7 +108,6 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
         options.unroll = on;
         options.loop_unrolling = on;
     }),
-    ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
     ("inline-functions", |options, on| {
         options.inline = if !on {
@@ -117,9 +125,10 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
-    ("inline-recursive", |options, on| options.inline.recursive = on),
+    ("inline-recursive", |options, on| options.inline.recursive = Some(on)),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
+    ("thread-jumps", |options, on| options.thread_jumps = on),
     ("tree-switch-conversion", |options, on| options.switch_conversion = on),
     ("jump-tables", |options, on| options.jump_tables = on),
     ("tree-dse", |options, on| options.drop_stores = on),
@@ -128,6 +137,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("aarch64-atomic-cfg-tidy", |options, on| options.atomic_cfg_tidy = on),
     ("llrm-cgpaddr", |options, on| options.cgpaddr = on),
     ("llrm-typepromotion", |options, on| options.typepromotion = on),
+    ("llrm-zero-merge", |options, on| options.zero_merge = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
     ("llrm-stable-loads", |options, on| options.stable_loads = on),
@@ -430,6 +440,7 @@ impl Flags {
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
             _ if flag.starts_with("-fno-sanitize=") => self.sanitize.set(&flag["-fno-sanitize=".len()..], false)?,
+            _ if INERT.contains(&flag) => {}
             _ if flag.starts_with("-f") => {
                 let (name, on) = match flag[2..].strip_prefix("no-") {
                     Some(name) => (name, false),

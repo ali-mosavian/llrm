@@ -11,8 +11,8 @@ use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{CallInfo, Flags, Opcode};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::passes::Outer;
 use llrm_mir::types::Type;
@@ -97,15 +97,15 @@ impl Graph<'_> {
         let effect = llrm_analysis::mssa::shadow::effect_of_in(self.accesses, &unit);
         let access = match at {
             Created::Beginning => {
-                self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::Beginning, &effect)?
+                self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::Beginning, &effect)?
             }
             Created::End => {
-                self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::End, &effect)?
+                self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::End, &effect)?
             }
             Created::After(previous) => {
-                self.updater.create_memory_access_after(self.mssa, inst, None, previous, &effect)?
+                self.updater.create_memory_access_after(self.mssa, function, inst, None, previous, &effect)?
             }
-            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, inst, None, next, &effect)?,
+            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, function, inst, None, next, &effect)?,
         };
         if self.mssa.access(access).kind == Kind::Def {
             self.updater.insert_def(self.mssa, function, access, rename_uses);
@@ -146,20 +146,106 @@ fn reassociate(
     graph: &mut Graph,
     preheader: BlockId,
     one: &Reassociation,
+    renamed: &mut Renamed,
 ) -> Result<(), String> {
     let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
     if let Reassociation::MinMax { .. } = one {
         return hoist_min_max(function, context, declared, graph, preheader, terminator, one);
+    }
+    if let Reassociation::IcmpAddSub { icmp, dead, pred, variant, op, a, b } = *one {
+        // The compare keeps its value: new operands, no poison-generating flag.
+        let ty = function.instruction(dead).ty;
+        let flags = if pred.is_signed() { Flags::NSW } else { Flags::NUW };
+        let inv = function.create_instruction(Opcode::Binary(op), ty, vec![a, b], flags, Some("invariant.op"));
+        function.insert(inv, Position::Before(terminator))?;
+        graph.created(context, function, inv, preheader, Created::End);
+        let inv_result = function.instruction(inv).result.ok_or("an invariant op with no result")?;
+        function.set_opcode(icmp, Opcode::ICmp(pred));
+        function.set_operand(icmp, 0, variant);
+        function.set_operand(icmp, 1, Operand::Value(inv_result));
+        let mut kept = function.instruction(icmp).flags;
+        kept.remove(Flags::SAMESIGN);
+        function.set_flags(icmp, kept);
+        graph.erase(function, dead);
+        function.erase(dead)?;
+        return Ok(());
+    }
+    if let Reassociation::MulAdd { i, variant, factor, changes, adds } = one {
+        // The poison flags of the adds looked through go, and those of each
+        // product the factor is put into.
+        let poison = Flags::NUW.union(Flags::NSW);
+        for &add in adds {
+            let kept = function.instruction(add).flags.without(poison);
+            function.set_flags(add, kept);
+        }
+        let ty = function.instruction(*i).ty;
+        let mut variant = renamed.value(*variant);
+        for &(ins, slot, _) in changes {
+            // A product an earlier reassociation of the loop changed stands as
+            // the instruction that took its place, with its factor in `slot`.
+            let ins = renamed.inst(ins);
+            let invariant = function.instruction(ins).operands[slot];
+            let mul = function.create_instruction(
+                Opcode::Binary(BinaryOp::Mul),
+                ty,
+                vec![invariant, *factor],
+                Flags::default(),
+                Some("factor.op.mul"),
+            );
+            function.insert(mul, Position::Before(terminator))?;
+            graph.created(context, function, mul, preheader, Created::End);
+            let mul_result = Operand::Value(function.instruction(mul).result.ok_or("a product with no result")?);
+            let old = function.instruction(ins).clone();
+            let mut operands = old.operands.clone();
+            operands[slot] = mul_result;
+            let name =
+                old.result.and_then(|result| function.value(result).name.clone()).map(|name| format!("{name}.reass"));
+            let new = function.create_instruction(
+                old.opcode.clone(),
+                ty,
+                operands,
+                old.flags.without(poison),
+                name.as_deref(),
+            );
+            function.insert(new, Position::Before(ins))?;
+            let home = function.parent(ins).ok_or("an instruction in no block")?;
+            graph.created(context, function, new, home, Created::End);
+            let old_result = old.result.ok_or("a product with no result")?;
+            let new_result = Operand::Value(function.instruction(new).result.ok_or("a product with no result")?);
+            if variant == Operand::Value(old_result) {
+                variant = new_result;
+            }
+            function.replace_all_uses_with(old_result, new_result);
+            graph.erase(function, ins);
+            function.erase(ins)?;
+            renamed.insts.insert(ins, new);
+            renamed.values.insert(old_result, new_result);
+        }
+        let result = function.instruction(*i).result.ok_or("a product with no result")?;
+        function.replace_all_uses_with(result, variant);
+        renamed.values.insert(result, variant);
+        graph.erase(function, *i);
+        function.erase(*i)?;
+        return Ok(());
     }
     let old = one.inst();
     let ty = function.instruction(old).ty;
     // The invariant instruction, then the new one: its opcode and flags, the
     // operands before the invariant one, and those after it.
     let (invariant, rebuilt) = match one {
-        Reassociation::BinaryOp { op, lv, c1, c2, flags, .. } => (
-            (Opcode::Binary(*op), vec![*c1, *c2], *flags, "invariant.op"),
-            (Opcode::Binary(*op), *flags, vec![*lv], vec![]),
-        ),
+        Reassociation::BinaryOp { op, lv, c1, c2, flags, chained, bo0, .. } => {
+            // A link of a chain reads the invariant the one before it made.
+            let (lv, c1) = if *chained {
+                let before = function.instruction(renamed.inst(*bo0));
+                (before.operands[0], before.operands[1])
+            } else {
+                (*lv, *c1)
+            };
+            (
+                (Opcode::Binary(*op), vec![c1, *c2], *flags, "invariant.op"),
+                (Opcode::Binary(*op), *flags, vec![lv], vec![]),
+            )
+        }
         Reassociation::Gep { gep, src, in_bounds } => {
             let (gep, src) = (function.instruction(*gep), function.instruction(*src));
             let (Opcode::GetElementPtr { source: outer }, Opcode::GetElementPtr { source: inner }) =
@@ -174,7 +260,13 @@ fn reassociate(
                 (Opcode::GetElementPtr { source: *inner }, flags, vec![], src.operands[1..].to_vec()),
             )
         }
-        Reassociation::MinMax { .. } => unreachable!("handled above"),
+        Reassociation::SubAdd { inv_op, result_op, lv, c1, c2, .. } => (
+            (Opcode::Binary(*inv_op), vec![*c1, *c2], Flags::default(), "invariant.op"),
+            (Opcode::Binary(*result_op), Flags::default(), vec![*lv], vec![]),
+        ),
+        Reassociation::MinMax { .. } | Reassociation::IcmpAddSub { .. } | Reassociation::MulAdd { .. } => {
+            unreachable!("handled above")
+        }
     };
     let (opcode, operands, flags, name) = invariant;
     let inv = function.create_instruction(opcode, ty, operands, flags, Some(name));
@@ -185,13 +277,15 @@ fn reassociate(
     let operands = [head, vec![Operand::Value(inv_result)], tail].concat();
     // LLVM names the new GEP "gep".
     let name = match one {
-        Reassociation::BinaryOp { .. } => function
+        Reassociation::BinaryOp { .. } | Reassociation::SubAdd { .. } => function
             .instruction(old)
             .result
             .and_then(|result| function.value(result).name.clone())
             .map(|name| format!("{name}.reass")),
         Reassociation::Gep { .. } => Some("gep".to_string()),
-        Reassociation::MinMax { .. } => unreachable!("handled above"),
+        Reassociation::MinMax { .. } | Reassociation::IcmpAddSub { .. } | Reassociation::MulAdd { .. } => {
+            unreachable!("handled above")
+        }
     };
     let new = function.create_instruction(opcode, ty, operands, flags, name.as_deref());
     function.insert(new, Position::Before(old))?;
@@ -200,11 +294,49 @@ fn reassociate(
     let old_result = function.instruction(old).result.ok_or("a reassociated op with no result")?;
     let new_result = function.instruction(new).result.ok_or("a reassociated op with no result")?;
     function.replace_all_uses_with(old_result, Operand::Value(new_result));
-    for gone in std::iter::once(old).chain(one.erased()) {
+    for gone in std::iter::once(old).chain(one.erased().into_iter().map(|one| renamed.inst(one))) {
         graph.erase(function, gone);
         function.erase(gone)?;
     }
+    if let Reassociation::BinaryOp { .. } = one {
+        renamed.insts.insert(old, new);
+        renamed.values.insert(old_result, Operand::Value(new_result));
+    }
     Ok(())
+}
+
+/// What the reassociations of a loop applied so far replaced: a later decision
+/// names the instructions and values the loop had when it was made.
+#[derive(Default)]
+struct Renamed {
+    insts: IdMap<InstId, InstId>,
+    values: IdMap<ValueId, Operand>,
+}
+
+impl Renamed {
+    /// The instruction standing now for `inst`.
+    fn inst(
+        &self,
+        mut inst: InstId,
+    ) -> InstId {
+        while let Some(&to) = self.insts.get(&inst) {
+            inst = to;
+        }
+        inst
+    }
+
+    /// The operand standing now for `operand`.
+    fn value(
+        &self,
+        mut operand: Operand,
+    ) -> Operand {
+        while let Operand::Value(value) = operand
+            && let Some(&to) = self.values.get(&value)
+        {
+            operand = to;
+        }
+        operand
+    }
 }
 
 /// The edit of a [`Reassociation::MinMax`] (`hoistMinMax`): the min or max of
@@ -412,11 +544,12 @@ pub fn apply_loop(
     }
     // A reassociation goes to the preheader where the visit found it, among
     // the hoists.
+    let mut renamed = Renamed::default();
     let mut pending = reassociated.iter().peekable();
     for (at, &super::hoist::Hoist { inst, guaranteed, .. }) in hoisted.iter().enumerate() {
         while let Some((_, one)) = pending.next_if(|(after, _)| *after <= at) {
             let preheader = preheader.ok_or("a reassociation with no preheader")?;
-            reassociate(function, context, declared, graph, preheader, one)?;
+            reassociate(function, context, declared, graph, preheader, one, &mut renamed)?;
         }
         let preheader = preheader.ok_or("a hoist with no preheader")?;
         // Hoisting a call that was not guaranteed to execute strips what would
@@ -429,7 +562,7 @@ pub fn apply_loop(
     }
     for (_, one) in pending {
         let preheader = preheader.ok_or("a reassociation with no preheader")?;
-        reassociate(function, context, declared, graph, preheader, one)?;
+        reassociate(function, context, declared, graph, preheader, one, &mut renamed)?;
         changed = true;
     }
     Ok(changed)

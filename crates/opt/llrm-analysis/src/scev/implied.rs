@@ -24,7 +24,7 @@
 //! After `br (icmp ult %i, %n), loop, exit`, `%i u< %n` is guarded at the
 //! loop's entry.
 
-use llrm_mir::constantrange::ConstantRange;
+use super::ConstantRange;
 use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
@@ -39,6 +39,13 @@ const MAX_SCEV_OPERATIONS_IMPLICATION_DEPTH: u32 = 2;
 
 thread_local! {
     static GUARD_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OPERAND_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times `isImpliedCondOperands`, the costly end of a guard query,
+/// ran on this thread: a test counts what the order of the loop passes costs.
+pub fn operand_queries() -> usize {
+    OPERAND_QUERIES.with(std::cell::Cell::get)
 }
 
 /// How many function bodies were read for guard calls on this thread: a test
@@ -927,6 +934,7 @@ impl ScalarEvolution {
         found_rhs: Scev,
         ctx_i: Option<InstId>,
     ) -> bool {
+        OPERAND_QUERIES.with(|count| count.set(count.get() + 1));
         self.is_implied_cond_operands_via_ranges(cx, pred, lhs, rhs, pred, found_lhs, found_rhs)
             || self.is_implied_cond_operands_via_no_overflow(cx, pred, lhs, rhs, found_lhs, found_rhs)
             || self.is_implied_cond_operands_via_shift(cx, pred, lhs, rhs, found_lhs, found_rhs)
@@ -959,17 +967,17 @@ impl ScalarEvolution {
         // `FoundLHSRange` is the range we know `FoundLHS` to be in by virtue of
         // the antecedent "`FoundLHS` `FoundPred` `FoundRHS`".
         let found_lhs_range =
-            ConstantRange::make_exact_icmp_region(found_pred, const_found_rhs.width, const_found_rhs.bits);
+            ConstantRange::make_exact_icmp_region(found_pred, const_found_rhs.width, const_found_rhs.word());
 
         // Since `LHS` is `FoundLHS` + `Addend`, we can compute a range for
         // `LHS`:
-        let lhs_range = found_lhs_range.add(&ConstantRange::single(addend.width, addend.bits));
+        let lhs_range = found_lhs_range.add(&ConstantRange::single(addend.width, addend.word()));
 
         // We can also compute the range of values for `LHS` that satisfy the
         // consequent, "`LHS` `Pred` `RHS`". The antecedent implies the
         // consequent if every value of `LHS` that satisfies the antecedent
         // also satisfies the consequent.
-        lhs_range.icmp(pred, &ConstantRange::single(const_rhs.width, const_rhs.bits))
+        lhs_range.icmp(pred, &ConstantRange::single(const_rhs.width, const_rhs.word()))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L12591

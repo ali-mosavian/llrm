@@ -289,8 +289,40 @@ pub fn short_in_real_mode_at(
             (Some(before), Some(after)) if after.code.len() <= before.code.len()
         )
     } else {
-        emitted(bits, after).is_some()
+        awaits_frame_layout(after) || emitted(bits, after).is_some()
     }
+}
+
+/// `after` encodes in no more bytes than `before`, the frame cell that has no
+/// encoding until the layout (see below) sized through `rbp`: what differs is
+/// the opcode, not the displacement. Where bytes are strict (-O1, -Os).
+pub fn no_longer_when_strict(
+    bits: u32,
+    before: &Insn,
+    after: &Insn,
+) -> bool {
+    let sized = |one: &Insn| -> Option<usize> {
+        let mut what = one.what.clone()?;
+        for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+            if let Loc::Mem(cell) = place
+                && llrm_x86::select::awaits_frame_layout(cell)
+            {
+                cell.through = RegId::RBP;
+            }
+        }
+        select::priced_in(bits, &what, 0, None, false, false, None).map(|code| code.code.len())
+    };
+    matches!((sized(before), sized(after)), (Some(before), Some(after)) if after <= before)
+}
+
+/// A frame cell reached by a wide index has no encoding until the frame
+/// layout names the frame register; `after` is not one that cannot encode.
+fn awaits_frame_layout(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.dests.iter().chain(&what.sources).any(
+            |place| matches!(place, Loc::Mem(cell) if llrm_x86::select::awaits_frame_layout(cell)),
+        )
+    })
 }
 
 /// Both encode, in as many bytes.

@@ -1,7 +1,7 @@
 //! The pieces of the C -> ours pipeline the benchmarks and the differential
 //! tests share.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -73,8 +73,12 @@ pub fn reachable_runtime(text: &str) -> String {
     let by_name: HashMap<&str, usize> = blocks.iter().enumerate().map(|(i, (n, _))| (n.as_str(), i)).collect();
     let mut wanted = vec![false; blocks.len()];
     let mut queue: Vec<usize> = Vec::new();
+    // a name in a comment is not a reference: the comment that introduces the memory routines named them in `__ashrsi3_fast`'s block
     let tokens = |s: &str| -> Vec<usize> {
-        s.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter_map(|t| by_name.get(t).copied()).collect()
+        s.lines()
+            .flat_map(|line| line.split(';').next().unwrap_or("").split(|c: char| !(c.is_alphanumeric() || c == '_')))
+            .filter_map(|t| by_name.get(t).copied())
+            .collect()
     };
     for i in tokens(text) {
         queue.push(i);
@@ -160,10 +164,20 @@ pub fn tool(
     }
 }
 
-/// The driver, built beside its backend: `cargo build --release --bin llrm-cc
-/// --bin llrm-6502-llc`.
+/// The driver, built beside its backend: `cargo build --bin llrm-cc --bin
+/// llrm-6502-llc` into the target dir and profile this test was built in.
+/// `LLRM_CC` names another. Never a fixed path in the source tree: a stale
+/// binary from an earlier build there would be run for the code under test.
 pub fn llrm_cc() -> std::path::PathBuf {
-    std::env::var_os("LLRM_CC")
+    let path = std::env::var_os("LLRM_CC")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/release/llrm-cc"))
+        .unwrap_or_else(|| llrm_cc_beside(&std::env::current_exe().expect("the test's own path")));
+    assert!(path.exists(), "no llrm-cc at {}: build it with the same --profile and CARGO_TARGET_DIR as this test", path.display());
+    path
+}
+
+/// `llrm-cc` in the profile directory of the test executable `exe`
+/// (`<target>/<profile>/deps/<test>-<hash>`).
+pub fn llrm_cc_beside(exe: &Path) -> std::path::PathBuf {
+    exe.parent().and_then(Path::parent).expect("a test under <profile>/deps").join("llrm-cc")
 }

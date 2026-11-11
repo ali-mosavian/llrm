@@ -1,8 +1,9 @@
 //! `llvm.smul.fix.sat.i32` (clang's `_Sat` fixed-point multiply, tests/run/c
 //! `fixed_point`) stopped the legalizer with `convert node to libcall`: with no
 //! `MULHS`, no `SMUL_LOHI` and no legal `i64` multiply `forceExpandWideMUL` was
-//! not translated. The pin calls `__muldi3`; so does this, and the results are
-//! checked against a C reference under qemu.
+//! not translated. The pin calls `__muldi3`; so does the 68000 (the 68020 has
+//! `muls.l`, row M68K-WIDEMUL), and the results are checked against a C
+//! reference under qemu.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,11 +17,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn binutils(tool: &str) -> Option<Command> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return None;
-    };
+    let root = support::oracle_root()?;
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{tool}"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     Some(command)
@@ -45,10 +42,18 @@ fn text(cpu: &str) -> String {
 }
 
 #[test]
-fn a_fixed_point_multiply_calls_muldi3_as_the_pin_does() {
+fn a_fixed_point_multiply_uses_the_wide_multiply_the_cpu_has() {
     for cpu in ["68000", "68020"] {
         let out = text(cpu);
-        assert!(out.contains("__muldi3"), "no wide multiply routine on {cpu}:\n{out}");
+        // M68K-WIDEMUL (src/dagisel/widemul.rs): the 68020 has the 64-bit
+        // `muls.l`, the 68000 calls the routine
+        let wide = out.lines().any(|line| line.trim_start().starts_with("muls.l") && line.contains(':'));
+        let routine = out.contains("__muldi3");
+        assert_eq!(
+            (wide, routine),
+            (cpu == "68020", cpu == "68000"),
+            "M68K-WIDEMUL: the wide multiply on {cpu}:\n{out}"
+        );
     }
 }
 

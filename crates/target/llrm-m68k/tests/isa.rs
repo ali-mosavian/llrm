@@ -6,6 +6,8 @@ use std::process::Command;
 
 use llrm_m68k::isa::{Cpu, decode, forms};
 
+mod support;
+
 fn mnemonics(
     word: u16,
     cpu: Cpu,
@@ -39,12 +41,7 @@ fn oracle(
     cpu: Cpu,
     pairs: &[(u16, u16)],
 ) -> Option<Vec<Option<String>>> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        let skip = std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1");
-        assert!(skip, "GCC_M68K is not set: the binutils oracle cannot run (M68K_ISA_SKIP_ORACLE=1 skips it)");
-        return None;
-    };
+    let root = support::oracle_root()?;
     const RECORD: usize = 16;
     let mut image = Vec::with_capacity(pairs.len() * RECORD);
     for &(first, ext) in pairs {

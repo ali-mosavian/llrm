@@ -298,3 +298,41 @@ e:
         .with_tuning(llrm_mir::target::Tuning { keep_constant_displacements: true, ..llrm_mir::target::Tuning::PIN });
     assert_eq!(sunk_on(&keep, text).matches("= load i16").count(), 1);
 }
+
+/// x_cordic -O3 at m32 (+20% clocks against gcc): `z -= a` / `z += a` in the two
+/// arms of a diamond are `add z, -a` / `add z, a`. The pin sinks one add behind a
+/// phi of the constants, which on a 486 is a `mov imm` per arm and a taken `jmp`;
+/// where the target keeps the constants (`keep_constant_arith_operands`) the arms
+/// keep their immediate adds, except at size, where one add is smaller.
+#[test]
+fn test_adds_of_constants_stay_two_adds_where_the_target_keeps_constant_operands() {
+    let text = |attrs: &str| {
+        format!(
+            "define i32 @f(i32 %z, i1 %c) {attrs}{{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %x = add i32 %z, -3000
+  br label %e
+
+b2:
+  %y = add i32 %z, 5000
+  br label %e
+
+e:
+  %r = phi i32 [ %x, %b1 ], [ %y, %b2 ]
+  ret i32 %r
+}}
+"
+        )
+    };
+    let pin = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let keep = pin
+        .clone()
+        .with_tuning(llrm_mir::target::Tuning { keep_constant_arith_operands: true, ..llrm_mir::target::Tuning::PIN });
+    let adds = |text: &str| text.matches("= add i32").count();
+    assert_eq!(adds(&sunk_on(&pin, &text(""))), 1, "premise: the pin sinks the add");
+    assert_eq!(adds(&sunk_on(&keep, &text(""))), 2, "the constants were turned into a phi");
+    assert_eq!(adds(&sunk_on(&keep, &text("optsize "))), 1, "at size one add is smaller");
+}

@@ -14,6 +14,7 @@ pub mod mc;
 pub mod register_cost;
 pub use llrm_target::instr as parse;
 pub mod select;
+pub mod sizes;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;
@@ -30,11 +31,7 @@ pub mod calling {
 
     /// `name` (`ebx`, `si`, `st0`), as the family spells it.
     pub fn register(name: &str) -> RegId {
-        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, RegId>> =
-            std::sync::LazyLock::new(|| {
-                RegId::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
-            });
-        *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
+        RegId::named(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 
     /// The most bytes `ret imm16` (and `retf imm16`) removes: the immediate is
@@ -127,6 +124,15 @@ pub mod registers {
     pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
     }
+    /// The registers of the string instructions, by root.
+    pub const STRING_ROOTS: llrm_target::StringRoots = llrm_target::StringRoots {
+        count: RegId::ECX,
+        source: RegId::ESI,
+        destination: RegId::EDI,
+        accumulator: RegId::EAX,
+    };
+    /// The DAG's name for the top of the x87 stack (the pin's `FP0`).
+    pub const X87_TOP: RegId = RegId::MM0;
     /// The segment registers.
     pub const SEGMENTS: [RegId; 6] = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
     /// The dword registers.
@@ -210,6 +216,8 @@ pub mod registers {
 /// is made of: `[base+index+disp]` with a base from BX or BP and an index from
 /// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
+pub mod inline_asm;
+pub mod pinregs;
 pub mod helpers;
 
 pub mod addressing16 {
@@ -235,6 +243,39 @@ pub mod encoding {
         operand: i64,
     ) -> i64 {
         prefix_bytes(width, operand) + 2
+    }
+
+    /// Bytes of a register copy: `mov r, r'`, no prefix on a byte.
+    pub fn copy_move_bytes(
+        width: i64,
+        operand: i64,
+    ) -> i64 {
+        if width == 1 { 2 } else { register_bytes(width, operand) }
+    }
+
+    /// Bytes of loading `number` into a `width`-byte register: `xor r32, r32`
+    /// for zero (the pin's `MOV32r0`; a dword in real mode takes the prefix),
+    /// `mov r8, imm8` for a byte, else the opcode and an immediate of the
+    /// register's width. A qword is `mov r32, imm32` where `number` is
+    /// unsigned, REX.W and a dword immediate where it is sign-extended, else
+    /// the whole eight; a symbol's address is a `lea` off `rip`.
+    pub fn literal_move_bytes(
+        number: i64,
+        address: bool,
+        width: i64,
+        operand: i64,
+    ) -> i64 {
+        if !address && number == 0 {
+            return 2 + i64::from(operand == 2 && width > 2);
+        }
+        match width {
+            1 => 2,
+            8 if address => 7,
+            8 if u32::try_from(number).is_ok() => 5,
+            8 if i32::try_from(number).is_ok() => 7,
+            8 => 10,
+            _ => prefix_bytes(width, operand) + 1 + width,
+        }
     }
 
     /// Bytes of a shift of a `width`-byte register by `count`: `D1` for one,
@@ -270,6 +311,34 @@ pub mod encoding {
                 (2, 3, 3, 2)
             );
             assert_eq!((shift_bytes(1, 4, 4), shift_bytes(3, 2, 4), imul_immediate_bytes(446, 4, 4)), (2, 4, 6));
+            assert_eq!((copy_move_bytes(1, 4), copy_move_bytes(8, 4), copy_move_bytes(4, 4)), (2, 3, 2));
+            // recgcd -Os m64: a zero is the 2-byte `xor`, not a copy's REX
+            // byte.
+            assert_eq!((literal_move_bytes(0, false, 8, 4), register_bytes(8, 4)), (2, 3));
+            assert_eq!(
+                (
+                    literal_move_bytes(0, false, 4, 2),
+                    literal_move_bytes(7, false, 2, 2),
+                    literal_move_bytes(7, false, 4, 2)
+                ),
+                (3, 3, 6)
+            );
+            assert_eq!(
+                (
+                    literal_move_bytes(7, false, 4, 4),
+                    literal_move_bytes(7, false, 2, 4),
+                    literal_move_bytes(7, false, 1, 4)
+                ),
+                (5, 4, 2)
+            );
+            assert_eq!(
+                (
+                    literal_move_bytes(7, false, 8, 4),
+                    literal_move_bytes(-1, false, 8, 4),
+                    literal_move_bytes(1 << 40, false, 8, 4)
+                ),
+                (5, 7, 10)
+            );
         }
     }
 }

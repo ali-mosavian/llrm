@@ -1,4 +1,5 @@
 #!/bin/bash
+# The flattened library is one file: SF_CMP_SPLIT is undefined after the config (its per-entry cmp files redefined sf_cmp_un).
 # usage: [LLRM_CC=path/to/llrm-cc] tests/x86_m16_soft_float.sh [NV] [BENCH_DIR] -> bench program sfm16_float: plain float C (+ - * / compares, int<->float) over NV vectors with the
 # soft-float library flattened beside it (SF_INTABI). Build with LLRM_BENCH_FLAGS=-mno-80387; the expected output is the same program on the host FPU (SSE, round to nearest).
 set -e
@@ -13,7 +14,7 @@ printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $
   echo '#ifdef __SOFT_LIB'
   for f in include/softfloat.h include/sf_helpers.h $(tests/fp_sources.sh f32) lib/int/clzsi2.c; do
     { case $f in *clzsi2.c) echo '#ifdef SF_CLZ_CALL';; esac; python3 tests/flatten.py $f; case $f in *clzsi2.c) echo '#endif';; esac; } | sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g'
-  done | awk 'BEGIN{print "#define SF_INTABI 1"; print ENVIRON["SF_M16"]} {print}'
+  done | awk 'BEGIN{print "#define SF_INTABI 1"; print ENVIRON["SF_M16"]; print "#undef SF_CMP_SPLIT"} {print}'
   echo '#endif'
   cat $T/vectors.h
   cat <<'C'
@@ -48,7 +49,7 @@ C
 w() { [ "$TERM" = all ] || [ "$TERM" = "$1" ] && echo 1 || echo 0; }
 sed -i "s/bench_NAME/bench_$n/g" $B/$n/$n.c
 sed -i "1i #define W_ADD $(w add)\n#define W_SUB $(w sub)\n#define W_MUL $(w mul)\n#define W_DIV $(w div)\n#define W_CMP $(w cmp)\n#define W_F2I $(w f2i)\n#define W_I2F $(w i2f)" $B/$n/$n.c
-printf 'description = "%s: plain float C over %s vectors, soft-float library flattened"\nrepetitions = 1\n\n[region]\nc = "bench_%s"\n' "$n" "$NV" "$n" > $B/$n/bench.toml
+printf 'references = false\ndescription = "%s: plain float C over %s vectors, soft-float library flattened"\nrepetitions = 1\n\n[region]\nc = "bench_%s"\n' "$n" "$NV" "$n" > $B/$n/bench.toml
 sed -i '1i #define __SOFT_LIB 1' $B/$n/$n.c
 gcc -m32 -msse2 -mfpmath=sse -O0 -w -U__SOFT_LIB $B/$n/$n.c $T/rep.c -o $T/ref && $T/ref > $B/$n/$n.out
 echo "wrote $B/$n expected $(cat $B/$n/$n.out)"

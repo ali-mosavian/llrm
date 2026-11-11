@@ -14,7 +14,7 @@
 //! `MachineCSEImpl::{isCSECandidate, isProfitableToCSE, ProcessBlockCSE,
 //! PerformTrivialCopyPropagation}`, pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_mir::module::BlockId;
 
@@ -195,7 +195,7 @@ pub fn machine_cse(f: &mut Function) -> bool {
             }
         }
     }
-    let mut table: HashMap<Key, Vec<(VReg, usize)>> = HashMap::new();
+    let mut table: HashMap<Key, Vec<(VReg, usize)>> = HashMap::default();
     let mut changed = false;
     // The scope stack: the keys a block put in the table, popped on exit.
     let mut scopes: Vec<Vec<Key>> = Vec::new();

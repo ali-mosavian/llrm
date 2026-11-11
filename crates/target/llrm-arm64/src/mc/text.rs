@@ -271,6 +271,21 @@ impl fmt::Display for Inst {
                     gpr(*rm, *width, false)
                 )
             }
+            Inst::AddCarry { op, width, rd, rn, rm } => {
+                let name = match (op.subtract, op.set_flags) {
+                    (false, false) => "adc",
+                    (false, true) => "adcs",
+                    (true, false) => "sbc",
+                    (true, true) => "sbcs",
+                };
+                write!(
+                    out,
+                    "{name} {}, {}, {}",
+                    gpr(*rd, *width, false),
+                    gpr(*rn, *width, false),
+                    gpr(*rm, *width, false)
+                )
+            }
             Inst::CondCompare { negate, width, rn, rm_or_imm, nzcv, cond } => {
                 let name = if *negate { "ccmn" } else { "ccmp" };
                 let second = match rm_or_imm {
@@ -372,10 +387,40 @@ impl fmt::Display for Inst {
             Inst::VectorFill { rd, fill } => match fill {
                 Fill::Zero => write!(out, "movi.2d v{}, #0", rd.0),
                 Fill::Byte(byte) => write!(out, "movi.16b v{}, #{byte}", rd.0),
-                Fill::Gpr(source) => write!(out, "dup.16b v{}, {}", rd.0, gpr(*source, Width::W, false)),
+                Fill::Dup(arrangement, source) => {
+                    let width = if matches!(arrangement, Arrangement::D2) { Width::X } else { Width::W };
+                    write!(out, "dup.{} v{}, {}", arrangement.suffix(), rd.0, gpr(*source, width, false))
+                }
+                Fill::Imm { invert, shape, imm8 } => {
+                    let (name, arrangement, shift) = match shape {
+                        ImmShape::H8(shift) => ("lsl", "8h", shift),
+                        ImmShape::S4(shift) => ("lsl", "4s", shift),
+                        ImmShape::S2(shift) => ("lsl", "2s", shift),
+                        ImmShape::S4Msl(shift) => ("msl", "4s", shift),
+                    };
+                    let mnemonic = if *invert { "mvni" } else { "movi" };
+                    if *shift == 0 {
+                        write!(out, "{mnemonic}.{arrangement} v{}, #{imm8}", rd.0)
+                    } else {
+                        write!(out, "{mnemonic}.{arrangement} v{}, #{imm8}, {name} #{shift}", rd.0)
+                    }
+                }
+                Fill::Mask(imm8) => {
+                    let mask =
+                        (0..8).fold(0u64, |all, bit| all | if imm8 >> bit & 1 != 0 { 0xff << (8 * bit) } else { 0 });
+                    write!(out, "movi.2d v{}, #{mask:#x}", rd.0)
+                }
+                Fill::MaskD(imm8) => {
+                    let mask =
+                        (0..8).fold(0u64, |all, bit| all | if imm8 >> bit & 1 != 0 { 0xff << (8 * bit) } else { 0 });
+                    write!(out, "movi d{}, #{mask:#x}", rd.0)
+                }
             },
             Inst::FpMoveImm { size, rd, imm8 } => {
                 write!(out, "fmov {}, #{}", fpr(*rd, *size), fp_immediate_value(*imm8))
+            }
+            Inst::FpLaneToFp { signed, size, rd, rn } => {
+                write!(out, "{} {}, {}", if *signed { "scvtf" } else { "ucvtf" }, fpr(*rd, *size), fpr(*rn, *size))
             }
             Inst::FpToFp { to, from, rd, rn } => write!(out, "fcvt {}, {}", fpr(*rd, *to), fpr(*rn, *from)),
             Inst::FpInt { op, width, size, gpr: g, fpr: f } => {

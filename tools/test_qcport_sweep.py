@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import qcport_sweep as q  # noqa: E402
 
@@ -13,15 +15,15 @@ KNOWN = [{"match": "with no instruction choosing", "issue": 2454}]
 
 def test_kinds_drop_the_ids_that_differ_per_module():
     """menu (block 139) and triggers (block 73) are one bug: their messages differ in function suffixes and ids only."""
-    a = q.kind("llrm-c: @_menu_key@3: _menu_key@3: block 139 leaves for (133, 150, 156) with no instruction choosing")
-    b = q.kind("llrm-c: @_ent_lightning@3: _ent_lightning@3: block 73 leaves for (20, 77, 75) with no instruction choosing\n")
+    a = q.kind("llrm-cc: @_menu_key@3: _menu_key@3: block 139 leaves for (133, 150, 156) with no instruction choosing")
+    b = q.kind("llrm-cc: @_ent_lightning@3: _ent_lightning@3: block 73 leaves for (20, 77, 75) with no instruction choosing\n")
     assert a == b and a.endswith("with no instruction choosing")
-    assert q.kind("llrm-c: a jump to L1_125, which is nowhere") == q.kind("llrm-c: a jump to L2_7, which is nowhere") == "llrm-c: a jump to L, which is nowhere"
+    assert q.kind("llrm-cc: a jump to L1_125, which is nowhere") == q.kind("llrm-cc: a jump to L2_7, which is nowhere") == "llrm-cc: a jump to L, which is nowhere"
 
 
 def test_only_a_kind_no_known_entry_covers_is_new():
-    groups = q.grouped([("menu", "-O2", q.kind("x: block 1 leaves for (2) with no instruction choosing")), ("vid", "-Os", "llrm-c: a byte division")])
-    assert list(q.new_kinds(groups, KNOWN)) == ["llrm-c: a byte division"]
+    groups = q.grouped([("menu", "-O2", q.kind("x: block 1 leaves for (2) with no instruction choosing")), ("vid", "-Os", "llrm-cc: a byte division")])
+    assert list(q.new_kinds(groups, KNOWN)) == ["llrm-cc: a byte division"]
     assert q.new_kinds(groups, KNOWN + [{"match": "a byte division", "issue": 2456}]) == {}
 
 
@@ -37,7 +39,7 @@ def test_the_first_bad_commit_of_a_single_flip_is_found_in_log_steps():
 
 
 def test_the_issue_names_the_repro_the_head_and_the_first_bad_squash():
-    title, body = q.issue_text("llrm-c: a byte division", [("vid", "-O2"), ("vid", "-Os")], "a" * 40, ("b" * 40, "feat(x): y (#1)"))
+    title, body = q.issue_text("llrm-cc: a byte division", [("vid", "-O2"), ("vid", "-Os")], "a" * 40, ("b" * 40, "feat(x): y (#1)"))
     assert "vid -O2" in title and "aaaaaaaaa" in body and "-I $QCPORT" in body and "bbbbbbbbb feat(x): y (#1)" in body
 
 
@@ -60,7 +62,7 @@ def test_a_panic_is_keyed_by_its_place_and_message_not_by_rusts_backtrace_note()
 
 def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
     """The bisection of the 48-compile BitCast failure died on `CalledProcessError`: release/next did not build for three hours (#2544 with #2564), so the
-    middle commit of the window had no llrm-c. The first bad commit that builds is the answer."""
+    middle commit of the window had no llrm-cc. The first bad commit that builds is the answer."""
     commits = [f"c{i}" for i in range(20)]
     unbuildable = {f"c{i}" for i in range(8, 13)}
 
@@ -148,9 +150,11 @@ def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(t
 
 def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print_time(tmp_path, monkeypatch, capsys):
     """origin/release/next moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
-    binary = tmp_path / "llrm-c"
-    binary.write_text("#!/bin/sh\necho llrm-c " + "a" * 40 + "\n")
+    binary = tmp_path / "llrm-cc"
+    binary.write_text("#!/bin/sh\necho llrm-cc " + "a" * 40 + "\n")
     binary.chmod(0o755)
+    (tmp_path / "llrm-llc").write_text("#!/bin/sh\necho llrm-llc " + "a" * 40 + "\n")
+    (tmp_path / "llrm-llc").chmod(0o755)
     moved = "f" * 40
     real_run = q.subprocess.run
 
@@ -169,8 +173,8 @@ def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print
 
 
 def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
-    binary = tmp_path / "llrm-c"
-    binary.write_text("#!/bin/sh\necho usage: llrm-c [-h] source\n")
+    binary = tmp_path / "llrm-cc"
+    binary.write_text("#!/bin/sh\necho usage: llrm-cc [-h] source\n")
     binary.chmod(0o755)
     monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
     try:
@@ -184,13 +188,14 @@ def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
 def test_the_callconv_c_fixtures_are_in_the_front_end_compile_set():
     """An interrupt handler with Borland's nine register parameters was refused from 10-19 to 10-23 (`a fact of no parameter`): no sweep compiled a C file of that kind."""
     jobs = q.extra_jobs()
-    callconv = [job for job in jobs if job[0] == "llrm-c"]
+    callconv = [job for job in jobs if job[0] == "llrm-cc"]
     assert {job[1].name for job in callconv} >= {"cfcallee.c", "cncallee.c"}
     assert {job[2:] for job in callconv} == {("-m16", "-O1"), ("-m16", "-O2")}
 
 
 def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
-    """The callconv harnesses include <stdio.h>: swept without `-I`, five files at two levels failed (10 failed compiles, one new kind) at 526f94a61."""
+    """The callconv harnesses include <stdio.h>: swept without `-I`, five files at two levels failed (10 failed compiles, one new kind) at 526f94a61. Since #8011 the
+    stand-in also needs the m16 row and Borland's line: `-m16` names no target to llrm-cc, and all 42 callconv jobs failed on the host default."""
     for crate, mode in (("a", 16), ("b", 32)):
         (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
         (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
@@ -200,8 +205,8 @@ def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
     (tmp_path / "tests/run/qb").mkdir(parents=True)
     bins = tmp_path / "bins"
     bins.mkdir()
-    for tool in ("llrm-c", "llrm-qb", "llrm-nib"):
-        (bins / tool).write_text('#!/bin/sh\ncase "$*" in *"-I /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
+    for tool in ("llrm-cc", "llrm-qb", "llrm-nib"):
+        (bins / tool).write_text('#!/bin/sh\ncase "$LLRM_CC_TARGET $*" in x86_16*"-c "*"-isystem /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
         (bins / tool).chmod(0o755)
     failed = q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
     assert "harness.c" not in {program for program, _, _ in failed}, failed
@@ -214,18 +219,20 @@ def test_a_failure_is_keyed_by_its_error_not_by_a_warning_printed_after_it():
 
 
 def test_a_module_that_dies_only_at_emit_is_a_failed_compile(tmp_path):
-    """The sweep compiled to /dev/null, where llrm-c writes assembly text and never encodes the object: ui/console.c died in the encoder on m16 -O1..-O3
-    while the sweep read 0 failed of 768. The stand-in compiler dies when its output is an object, as llrm-c's encoder does."""
-    compiler = tmp_path / "llrm-c"
+    """The sweep compiled to /dev/null, where llrm-cc writes assembly text and never encodes the object: ui/console.c died in the encoder on m16 -O1..-O3
+    while the sweep read 0 failed of 768. The stand-in compiler dies when its output is an object, as llrm-cc's encoder does."""
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text(
         "#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\n"
-        "if out.endswith(('.o', '.obj')):\n    sys.exit('llrm-c: Semantics(op=BINARY, name=sub)')\n"
+        "if out.endswith(('.o', '.obj')):\n    sys.exit('llrm-cc: Semantics(op=BINARY, name=sub)')\n"
     )
     compiler.chmod(0o755)
     qcport = tmp_path / "qcport"
     for part in q.MODULES:
         (qcport / part).mkdir(parents=True)
     (qcport / "ui" / "console.c").write_text("int x;\n")
+    (qcport / "ui" / "menu.c").write_text("int y;\n")
+    compiler.write_text(compiler.read_text().replace("if out.endswith(('.o', '.obj')):", "if out.endswith(('.o', '.obj')) and 'console' in sys.argv[-3]:"))
     failed = q.sweep(compiler, qcport, tmp_path, levels=("-O1",), jobs=1)
     assert [(module, level) for module, level, _ in failed] == [("console", "-O1")]
 
@@ -241,14 +248,86 @@ def test_qcport_console_encodes_at_every_level():
     source = qcport / "ui" / "console.c"
     if not source.is_file() or not include.is_dir():
         pytest.skip("QCport is not on this host")
-    compiler = q.llrmbin.bin_dir() / "llrm-c"
+    compiler = q.llrmbin.bin_dir() / "llrm-cc"
     if not compiler.exists():
-        pytest.skip("llrm-c is not built (debt skip-qcport-console)")
-    flags = [f for part in (*q.MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+        pytest.skip("llrm-cc is not built (debt skip-qcport-console)")
+    flags = q.oracle_qcport.flags(qcport, include)
     failed = {}
     for level in q.LEVELS:
         with q.object_file() as out:
-            done = subprocess.run([str(compiler), level, *flags, str(source), "-o", out], capture_output=True, text=True)
+            done = subprocess.run([str(compiler), level, *flags, str(source), "-o", out], capture_output=True, text=True, env=q.cc_env())
             if done.returncode:
                 failed[level] = done.stderr[-200:]
     assert not failed, failed
+
+
+def _recording_compiler(tmp_path, body: str) -> Path:
+    compiler = tmp_path / "llrm-cc"
+    compiler.write_text(f"#!/usr/bin/env python3\nimport os, sys\n{body}")
+    compiler.chmod(0o755)
+    return compiler
+
+
+def _qcport_tree(tmp_path) -> Path:
+    qcport = tmp_path / "qcport"
+    for part in q.MODULES:
+        (qcport / part).mkdir(parents=True)
+    (qcport / "ui" / "console.c").write_text("int x;\n")
+    return qcport
+
+
+def test_the_sweep_compiles_for_the_m16_target_and_not_llrm_ccs_host_default(tmp_path):
+    """llrm-c defaulted to m16 and llrm-cc to x86_64-linux (#8011): the sweep kept passing no target, so every module parsed as a host program, died on
+    QCport's `far` and `interrupt`, and the table said nothing about the compiler. The stand-in compiler fails unless it is told the m16 row and the Borland line."""
+    seen = tmp_path / "seen.txt"
+    compiler = _recording_compiler(
+        tmp_path,
+        f"open({str(seen)!r}, 'w').write(os.environ.get('LLRM_CC_TARGET', '') + ' ' + ' '.join(sys.argv[1:]))\n"
+        "sys.exit(0 if os.environ.get('LLRM_CC_TARGET', '').startswith('x86_16') and '-c' in sys.argv and '-nostdinc' in sys.argv else 1)\n",
+    )
+    failed = q.sweep(compiler, _qcport_tree(tmp_path), tmp_path, levels=("-O1",), jobs=1)
+    assert failed == [], seen.read_text()
+    assert seen.read_text().startswith("x86_16") and "-fasm-blocks" in seen.read_text()
+
+
+def test_a_sweep_where_nothing_compiles_aborts_instead_of_printing_a_table(tmp_path):
+    """260 of 260 compiles failed on the host default and the run still printed its table, all in one failure kind: nothing succeeding is a wrong invocation."""
+    compiler = _recording_compiler(tmp_path, "sys.exit('llrm-cc: expected ; after top level declarator')\n")
+    with pytest.raises(q.NothingCompiled, match="0 of 1 compiles succeeded"):
+        q.sweep(compiler, _qcport_tree(tmp_path), tmp_path, levels=("-O1",), jobs=1)
+
+
+
+def test_a_sweep_of_callconv_fixtures_where_no_c_job_compiles_aborts(tmp_path):
+    """42 of 42 callconv jobs failed on llrm-cc's host default and were reported as failures of the fixtures: none compiling is a wrong invocation."""
+    for crate, mode in (("a", 16), ("b", 32)):
+        (tmp_path / f"crates/target/{crate}/src/machines").mkdir(parents=True)
+        (tmp_path / f"crates/target/{crate}/src/machines/datalayout.toml").write_text(f"mode = {mode}\n")
+    fixtures = tmp_path / "tests/fixtures/callconv/c"
+    fixtures.mkdir(parents=True)
+    (fixtures / "cfcallee.c").write_text("int f(void) { return 0; }\n")
+    (tmp_path / "tests/run/qb").mkdir(parents=True)
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    for tool in ("llrm-cc", "llrm-qb", "llrm-nib"):
+        (bins / tool).write_text("#!/bin/sh\necho 'llrm-cc: expected ; after top level declarator' >&2\nexit 1\n")
+        (bins / tool).chmod(0o755)
+    with pytest.raises(q.NothingCompiled, match="0 of 2 compiles succeeded"):
+        q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
+
+
+def test_the_header_mirror_follows_links_and_drops_the_dos_end_of_file_byte(tmp_path):
+    """qctc/inc keeps Borland's headers once, as links (`find -type f` saw none), and dos.h ends in 0x1A, which clang reads as a stray token: dbg and mdl_ai failed at every level."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "DOS.H").write_bytes(b"#define X 1\n\x1a")
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "DOS.H").symlink_to(tmp_path / "real" / "DOS.H")
+    mirrored = q.mirror_includes(tmp_path / "raw", tmp_path / "inc")
+    assert (mirrored / "dos.h").read_bytes() == b"#define X 1\n"
+
+
+def test_the_sweep_compiles_with_the_pass_checks_on(tmp_path):
+    """render/sc.c -O2/-O3 on the x86_16-dos row die in the peephole's check (`value#N is read but never defined`) and compile without it: a sweep that did not set
+    LLRM_VERIFY, as the gate's qcport-compile.sh does, read them as clean. The stand-in refuses a compile without it."""
+    compiler = _recording_compiler(tmp_path, "sys.exit(0 if os.environ.get('LLRM_VERIFY') == '1' else 1)\n")
+    assert q.sweep(compiler, _qcport_tree(tmp_path), tmp_path, levels=("-O1", "-O2"), jobs=1) == []

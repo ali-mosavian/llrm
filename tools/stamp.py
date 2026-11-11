@@ -95,3 +95,26 @@ if __name__ == "__main__":
     rest, named, allow = options(sys.argv[1:])
     for one in rest:
         check(one, named["sha"], allow)
+
+
+COMPILERS = ("llrm-nib", "llrm-qb", "llrm-llc")
+
+
+def dist_stamps(found) -> dict[str, tuple[str, str]]:
+    """{name: (sha, md5)} of each compiler in the dist `found` that is there and prints a stamp."""
+    out = {}
+    for name in COMPILERS:
+        path = Path(found) / name
+        if path.is_file():
+            out[name] = (flags(path)[0], hashlib.md5(path.read_bytes()).hexdigest())
+    return out
+
+
+def require_ancestor(found, commit, repo) -> dict[str, tuple[str, str]]:
+    """`dist_stamps(found)` when every compiler in it was built from `commit` or an ancestor of it; SystemExit naming the first that was not.
+    A table names the commit it measured: the backend's stamp alone let a frontend from before a fix pass for one built after it."""
+    recorded = dist_stamps(found)
+    for name, (sha, _) in recorded.items():
+        if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", sha, commit], capture_output=True).returncode != 0:
+            raise SystemExit(f"{found}/{name} is built from {sha}, not an ancestor of {commit}: its numbers are not that commit's")
+    return recorded

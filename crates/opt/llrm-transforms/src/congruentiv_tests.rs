@@ -13,7 +13,7 @@ fn replaced(text: &str) -> (bool, String) {
     let (layout, outer) = (layout(&module), Outer::of(&module, Some(crate::indvars::tests::m32())));
     let (context, function) = module.function_mut("f").expect("@f");
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::lcssa::closed(context, &crate::testing::layout(), function).expect("closes");
     let changed = super::replaced(context, &layout, function, &outer);
     (changed, printed(&module))
 }
