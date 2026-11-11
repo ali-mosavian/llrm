@@ -44,6 +44,10 @@ impl Target for Flat {
         root == RegId::ESP
     }
 
+    fn flags_register() -> Option<RegId> {
+        Some(RegId::EDX)
+    }
+
     fn caller_saved() -> Vec<RegId> {
         REGISTERS.to_vec()
     }
@@ -2158,4 +2162,41 @@ fn test_a_join_after_two_different_writes_is_still_refused() {
         Err(why) => why,
     };
     assert!(why.contains("is read in block 3 without a write in it"), "{why}");
+}
+
+/// `[compare (sets_flags), save (reads the flags register by name)]`: with
+/// `read` the save names it, without it nothing does.
+fn compare_then(read: bool) -> MFunction<()> {
+    let mut f = MFunction::<()>::new("flags");
+    f.classes = vec![(); 2];
+    let mut compare = op("cmp", vec![Operand::Use(v(0)), Operand::Use(v(0))]);
+    compare.sets_flags = true;
+    let save = if read {
+        op("save", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::EDX))])
+    } else {
+        op("copy_of", vec![Operand::Def(v(1)), Operand::Use(v(0))])
+    };
+    f.blocks = vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(0))]), compare, save, ret()], ..Block::default() }];
+    f
+}
+
+/// An instruction that `sets_flags` leaves the flags register a value where a
+/// later instruction of its block reads that register by name: the read saw
+/// none and was refused as crossing blocks (`CCR_SAVE` in word_compare_branches,
+/// at three levels). The value is last in the lists, after the instruction's own.
+#[test]
+fn test_a_flag_setter_leaves_the_value_a_named_read_sees() {
+    let converted = llrm_spike_mf::tolir::to_ssa_lir::<Flat>(&compare_then(true), regs()).expect("converts");
+    let insns = &converted.body.blocks[0].insns;
+    let (compare, save) = (&insns[1], &insns[2]);
+    assert_eq!(compare.defines.len(), 1, "the flags value");
+    assert_eq!(save.uses, compare.defines, "the save reads it");
+    assert_eq!(compare.delivers.len(), 1);
+}
+
+/// The control: with no named read the setter defines nothing, as before.
+#[test]
+fn test_a_flag_setter_nothing_reads_defines_nothing() {
+    let converted = llrm_spike_mf::tolir::to_ssa_lir::<Flat>(&compare_then(false), regs()).expect("converts");
+    assert!(converted.body.blocks[0].insns[1].defines.is_empty());
 }

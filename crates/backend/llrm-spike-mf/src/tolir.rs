@@ -68,6 +68,31 @@ pub fn ordinal_of(one: &Insn) -> usize {
     one.numbered.map_or((one.at / 2) as usize, |n| n as usize)
 }
 
+/// For each instruction of `block`: whether a later one reads the target's flags
+/// register by name before another writes it (a `sets_flags` instruction or a
+/// named write). Empty answers where there is no flags register or the mode
+/// models none.
+fn flags_read_after<T: Target>(
+    block: &crate::mfunc::Block,
+    ssa_pins: bool,
+) -> Vec<bool> {
+    let mut wanted = vec![false; block.insts.len()];
+    let Some(flags) = T::flags_register().filter(|_| ssa_pins) else { return wanted };
+    let root = T::root(flags);
+    let named = |reg: &Reg| matches!(reg, Reg::Phys(r) if T::root(*r) == root);
+    let mut later = false;
+    for (at, inst) in block.insts.iter().enumerate().rev() {
+        wanted[at] = later;
+        if inst.sets_flags || inst.operands.iter().any(|operand| matches!(operand, Operand::Def(reg) if named(reg))) {
+            later = false;
+        }
+        if inst.operands.iter().any(|operand| matches!(operand, Operand::Use(reg) if named(reg))) {
+            later = true;
+        }
+    }
+    wanted
+}
+
 fn numbered(
     mut one: Insn,
     ordinal: i64,
@@ -575,6 +600,7 @@ fn convert<T: Target>(
         inputs: IndexMap::default(),
         named: Vec::new(),
         crossed: None,
+        flags_wanted: false,
         marker: PhantomData::<T>,
     };
     // every physical register is a value before the first instruction, so a
@@ -607,6 +633,7 @@ fn convert<T: Target>(
         let mut insns = Vec::with_capacity(block.insts.len());
         made.block = at;
         made.current.clear();
+        let flag_reads = flags_read_after::<T>(block, ssa_pins);
         // A physical register no instruction of this block has written is the
         // value every predecessor leaves it, if they agree and all are
         // converted already (an unwritten join of a split block: the low word
@@ -629,6 +656,7 @@ fn convert<T: Target>(
         let mut position = 0;
         while reachable[at] && position < block.insts.len() {
             let inst = &block.insts[position];
+            made.flags_wanted = flag_reads[position];
             if let Some(lanes) = made.pack_lanes(inst) {
                 // one copy per part, each with the origin of the `PACK`; the
                 // part is still hinted the lane of the register its whole is
@@ -891,6 +919,9 @@ struct Made<'f, T: Target> {
     inputs: IndexMap<RegId, u32>,
     named: Vec<RegId>,
     crossed: Option<String>,
+    /// Whether an instruction after the one being converted reads the flags
+    /// register by name before another writes it (`flags_read_after`).
+    flags_wanted: bool,
     origin: Vec<(usize, usize)>,
     /// The symbols the function's operands name, in order of first use: the
     /// number a symbol's `Imm` carries as its address.
@@ -1230,6 +1261,20 @@ impl<T: Target> Made<'_, T> {
             Kind::Copy => COPY,
             Kind::Op(name) => name,
         };
+        // `implicit-def $ccr`: the flags a later instruction of the block reads by
+        // name (`CCR_SAVE`) are the value this one leaves. Last in the lists, so
+        // the operands before it keep their numbers.
+        if self.ssa_pins
+            && self.flags_wanted
+            && inst.sets_flags
+            && let Some(flags) = T::flags_register()
+        {
+            let (value, width) = self.pinned_write(flags);
+            let held = Held { value, width, offset: 0 };
+            defines.push(value);
+            delivers.push((held, flags));
+            dests.push(Loc::Held(held));
+        }
         // the machine instruction's own tied operands, in the lists' numbering: a
         // dropped operand (a reserved register) moves the ones after it
         let tied = (!inst.ties.is_empty()).then(|| {
