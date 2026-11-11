@@ -16,6 +16,7 @@ const SHT_REL: u32 = 9;
 const SHF_WRITE: u64 = 1;
 const SHF_ALLOC: u64 = 2;
 const SHF_EXECINSTR: u64 = 4;
+const SHF_MERGE: u64 = 0x10;
 const SHF_INFO_LINK: u64 = 0x40;
 const STB_LOCAL: u8 = 0;
 const STB_GLOBAL: u8 = 1;
@@ -128,6 +129,22 @@ fn put_word<M: Machine>(
     }
 }
 
+/// The mergeable constant section `section` is, and its entry size: the pin's
+/// `.rodata.cst4`, `.cst8`, `.cst16`, `.cst32` (`getSectionForConstant`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/TargetLoweringObjectFile.cpp>).
+fn constant_section(section: &Section) -> Option<(&'static str, u64)> {
+    if section.role != Role::ROData {
+        return None;
+    }
+    match section.name.as_str() {
+        ".rodata.cst4" => Some((".rodata.cst4", 4)),
+        ".rodata.cst8" => Some((".rodata.cst8", 8)),
+        ".rodata.cst16" => Some((".rodata.cst16", 16)),
+        ".rodata.cst32" => Some((".rodata.cst32", 32)),
+        _ => None,
+    }
+}
+
 /// The ELF name, type and flags of `section`.
 fn spelling<M: Machine>(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> {
     if !section.near {
@@ -138,6 +155,9 @@ fn spelling<M: Machine>(section: &Section) -> Result<(&'static str, u32, u64), U
     }
     Ok(match section.role {
         Role::Text => (".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR),
+        Role::ROData if constant_section(section).is_some() => {
+            (constant_section(section).map_or(".rodata", |one| one.0), SHT_PROGBITS, SHF_ALLOC | SHF_MERGE)
+        }
         Role::ROData => (".rodata", SHT_PROGBITS, SHF_ALLOC),
         Role::Data => (".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE),
         Role::Bss => (".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE),
@@ -225,12 +245,20 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // `ELFObjectWriter` lists them; relocations name a local through its
     // section's symbol.
     let mut locals = 0;
-    for one in &object.symbols {
+    // The local symbol of each private label in a mergeable section: a linker
+    // finds the entry a relocation means by the symbol's value, so a relocation
+    // there names the label, not the section and an offset (`.LCPI0_0`).
+    let mut entry_symbol: Vec<Option<u32>> = vec![None; object.symbols.len()];
+    for (at, one) in object.symbols.iter().enumerate() {
         if let (Definition::Defined { section, offset }, Binding::Local) = (one.definition, one.binding) {
+            let merged = constant_section(&object.sections[section]).is_some();
             // A label inside a function has no size: it is private, as `.L`
             // ones are.
-            if one.is_private() || (object.sections[section].role == Role::Text && one.size == 0) {
+            if (one.is_private() && !merged) || (object.sections[section].role == Role::Text && one.size == 0) {
                 continue;
+            }
+            if merged {
+                entry_symbol[at] = Some((2 + object.sections.len() + locals) as u32);
             }
             let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
             let name = strings.add(&one.name);
@@ -296,6 +324,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 Target::Section(index) => (2 + index as u32, 0),
                 Target::Symbol(index) => match (elf_symbol[index], object.symbols[index].definition) {
                     (Some(symbol), _) => (symbol, 0),
+                    (None, _) if entry_symbol[index].is_some() => (entry_symbol[index].unwrap_or(0), 0),
                     // A local symbol is its section's symbol and its offset.
                     (None, Definition::Defined { section, offset }) => (2 + section as u32, offset as i64),
                     (None, Definition::Undefined) => unreachable!("an undefined symbol is global"),
@@ -348,7 +377,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             link: 0,
             info: 0,
             align: alignment as u64,
-            entry: 0,
+            entry: constant_section(section).map_or(0, |one| one.1),
         });
     }
     let symtab_index = 1 + object.sections.len() + relocs.iter().filter(|one| !one.is_empty()).count() + 1;

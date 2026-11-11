@@ -396,7 +396,7 @@ mod tests {
     /// Compiles for two targets, taken turns in one thread, each ask the
     /// register file of their own body: a dword call target is a far pointer
     /// in m16 and a near one in m32. A process-wide file answered both alike
-    /// (29 of llrm-c's m16 tests failed when an m32 compile bound first).
+    /// (29 of llrm-cc's m16 tests failed when an m32 compile bound first).
     #[test]
     fn a_dword_call_target_is_far_or_near_by_the_register_file_of_its_own_body() {
         let call = Arc::new(Insn::new(
@@ -522,7 +522,7 @@ mod tests {
 
     /// `s->line(s, ..)` at m16 folded the call onto the table entry through the
     /// argument's value, which the call needs in AX: the call read `[ax+4]`, no
-    /// address register, and `llrm-c` refused `gline.c`. A base the call
+    /// address register, and `llrm-cc` refused `gline.c`. A base the call
     /// requires in a fixed register keeps the cell.
     #[test]
     fn a_far_call_keeps_its_cell_when_the_entry_base_is_an_argument() {

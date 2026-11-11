@@ -56,7 +56,7 @@ impl ScalarEvolution {
             | Kind::SequentialUMin(ops) => {
                 let mut operands: Vec<Use> = Vec::new();
                 let mut changed = false;
-                for op in ops {
+                for op in ops.iter().copied() {
                     let new_op = visit(self, op.scev);
                     changed |= op.scev != new_op;
                     operands.push(Use::of(new_op));
@@ -108,7 +108,7 @@ impl ScalarEvolution {
                     // default implementation drops.
                     let mut operands: Vec<Use> = Vec::new();
                     let mut changed = false;
-                    for op in &ops {
+                    for op in ops.iter() {
                         let new_op = self.sink_cast(cx, op.scev, target_ty, memo, create_ptr_cast);
                         changed |= op.scev != new_op;
                         operands.push(Use::of(new_op));

@@ -48,7 +48,7 @@
 //!
 //! DEVIATE LP-6 (no mid-end pin pass: SelectionDAGBuilder lowers a switch at
 //! isel (`visitSwitch`), here MIR is lowered before selection (CG1); exit: isel
-//! lowers switches and this is deleted; owner w-6; review 2026-11-20).
+//! lowers switches and this is deleted; owner w10-instcombine; review 2026-11-20).
 //!
 //! # Example
 //! Before:
@@ -75,7 +75,7 @@
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::target::OperationCosts;
@@ -119,6 +119,7 @@ impl FunctionPass for SwitchLower {
     ) -> PreservedAnalyses {
         let mut threshold = None;
         let mut costs: Option<OperationCosts> = None;
+        let shift_legal = analyses.outer().target().variable_shift_legal();
         let word = unit.layout.largest_legal_integer().min(64);
         let pointer = unit.layout.pointer(0).bits;
         let mut changed = false;
@@ -143,6 +144,7 @@ impl FunctionPass for SwitchLower {
                 word,
                 pointer,
                 threshold,
+                shift_legal,
                 costs,
                 size: self.size,
                 flip: 0,
@@ -224,6 +226,8 @@ struct Lowering<'a, 'b> {
     /// The fewest cases of a jump table, 0 where the target has none, and
     /// whether the code is tuned for size.
     threshold: i64,
+    /// `isOperationLegal(SHL, pointer)`: bit tests need it.
+    shift_legal: bool,
     /// What the target prices the operations at, in clocks or, tuned for
     /// size, bytes: asked only to decide a lookup table.
     costs: Option<OperationCosts>,
@@ -436,7 +440,7 @@ impl Lowering<'_, '_> {
             let array = self.unit.context.types.intern(Type::Array { element: cell, count: cells.len() as u64 });
             let members: Vec<ConstantId> = cells.iter().map(|&one| self.unit.context.int(cell, one as i128)).collect();
             let initial = self.unit.context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(members) });
-            let table = self.unit.declared.table("switch.table", array, initial);
+            let table = self.unit.declared.table("switch.table", array, initial, UnnamedAddr::Global);
             let base = self.unit.context.constant(Constant { ty: address, kind: ConstantKind::Global(table) });
             let place = self.put(
                 load,
@@ -576,6 +580,7 @@ impl Lowering<'_, '_> {
         self.fallthrough_unreachable = self.default_is_unreachable();
         let target = SwitchTarget {
             jump_tables: self.threshold != 0,
+            shift_legal: self.shift_legal,
             optimize_for_size: self.size,
             ..SwitchTarget::x86(self.pointer)
         };

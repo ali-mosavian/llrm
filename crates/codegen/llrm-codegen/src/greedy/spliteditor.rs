@@ -40,11 +40,10 @@
 //! shared (`Arc`), so each rewritten instruction is rebuilt
 //! (`Insn::try_renamed`, then `LiveIntervals::rewrite_instr`). The fact:
 //! d_faces -O2, 746 rewrites cost 3.9 M of 1,330 M instructions (0.3%), about 5
-//! K each. Owner of the row: splitkit-port. Exit: uselist-port's LIR operand
-//! model (mutable in-place operands with use/def lists, the backend twin of the
-//! MIR storage work); design note due 2026-10-23, then slices. The row closes
-//! when `rewrite_assigned` sets the register in place; cite the note here when
-//! it lands.
+//! K each. Owner: greedy-subreg, exit: 2026-11-20 (design note or a priced
+//! no-go). The row closes with the LIR operand model (mutable in-place
+//! operands with use/def lists, the backend twin of the MIR storage work), when
+//! `rewrite_assigned` sets the register in place; cite the note here.
 //!
 //! # Example
 //! A value live through `b1` with a use in it: `openIntv`; `enterIntvBefore`
@@ -57,6 +56,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use llrm_lir::valuelanes::ValueLanes;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_support::hash::{HashMap, HashSet};
 
@@ -365,7 +365,7 @@ impl<'d> SplitEditor<'d> {
         // starts.
         let remade = (!parent_vni.is_phi_def() && !parent_vni.is_unused())
             .then(|| cx.lis.instr(cx.lis.defining_instr(&parent_vni.def(), from)))
-            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref()));
+            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref(), reg_idx != 0));
         let copy = match remade {
             Some(made) => {
                 self.rematted.insert(parent_vni.id());
@@ -1410,24 +1410,42 @@ impl<'d> SplitEditor<'d> {
         // flagged undef reads nothing and goes where the def does (`<undef>`
         // operands "don't really read the register ... When the use operand is
         // tied to a def, we must use the same register as the def").
-        let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
+        let mut seen: Vec<(InstrKey, bool, bool, ValueLanes)> = Vec::new();
         for op in cx.lis.operands(parent_reg) {
             let (read, define) = (op.reads_reg, op.is_def || !op.reads_reg);
+            // A def that keeps the rest of the value reads the lanes it does not name.
+            let lanes = match (read, op.is_def) {
+                (false, _) => ValueLanes(0),
+                (true, true) => ValueLanes(!op.lanes.0),
+                (true, false) => op.lanes,
+            };
             match seen.iter_mut().find(|(k, ..)| *k == op.instr) {
                 Some(entry) => {
                     entry.1 |= read;
                     entry.2 |= define;
+                    entry.3 = entry.3.union(lanes);
                 }
-                None => seen.push((op.instr, read, define)),
+                None => seen.push((op.instr, read, define, lanes)),
             }
         }
 
         let mut extend: Vec<(usize, SlotIndex)> = Vec::new();
-        for (key, reads, defines) in seen {
+        for (key, reads, defines, read_lanes) in seen {
             let base = cx.lis.indexes.get_instruction_index(key);
             let block = cx.lis.indexes.get_mbb_from_index(&base);
-            // Reads look up at the instruction, defs at its register slot.
-            let read_idx = reads.then(|| self.reg_assign.lookup(base) as usize);
+            // A read of a lane the parent has not defined here is undef (the
+            // pin's `<read-undef>`): a partial def keeping nothing reads
+            // nothing, and a read has nothing to extend to.
+            let at = base;
+            let parent = self.parent();
+            let live = parent.live_at(&at)
+                && (!parent.has_sub_ranges()
+                    || parent.sub_ranges().iter().any(|sr| sr.lanes.overlaps(read_lanes) && sr.range.live_at(&at)));
+
+            // Reads look up at the instruction, defs at its register slot. A
+            // read of nothing live (the first partial def of a value) goes
+            // where the def does.
+            let read_idx = (reads && live).then(|| self.reg_assign.lookup(base) as usize);
             let def_idx = defines.then(|| self.reg_assign.lookup(base.get_reg_slot(false)) as usize);
             if let (Some(r), Some(d)) = (read_idx, def_idx) {
                 assert!(r == d, "a tied pair is split over registers {r} and {d} (D-SE5)");
@@ -1436,11 +1454,17 @@ impl<'d> SplitEditor<'d> {
             let new_reg = self.edit().get(reg_idx);
 
             let old = std::sync::Arc::clone(cx.lis.instr(key));
-            let new = old.renamed(&|v| if v == parent_reg { new_reg } else { v });
+            let mut new = old.renamed(&|v| if v == parent_reg { new_reg } else { v });
+            if reads && !live && new.partial_defs.contains(&new_reg) {
+                let mut kept = (*new).clone();
+                kept.partial_defs.retain(|&v| v != new_reg);
+                new = std::sync::Arc::new(kept);
+            }
             cx.lis.rewrite_instr(block, key, new);
 
             // Extend liveness to the instruction if it reads the register.
-            if extend_ranges && reads {
+
+            if extend_ranges && reads && live {
                 extend.push((reg_idx, base.get_reg_slot(false)));
             }
         }
@@ -2014,6 +2038,53 @@ mod tests {
         lis.remove_interval(1);
         let compared = lis.assert_intervals_equal_afresh(&lis.body_like(&body));
         assert_eq!(compared, 3, "all three new intervals were compared");
+    }
+
+    /// A pair built from bytes: `v1.hi := v2` is the first partial def and
+    /// nothing is live before it. The open register starts at that def, so the
+    /// def's implicit read of the other lanes must not look up the register
+    /// before it: `finish` panicked "a tied pair is split over registers 0 and
+    /// 1" (D-SE5) on the 6502 `__udivmod_w` at -O2.
+    #[test]
+    fn the_first_partial_def_of_a_pair_goes_where_its_def_does() {
+        let lane = |offset: u32, from: u32| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 1, offset })],
+                sources: vec![Loc::Held(Held { value: from, width: 1, offset: 0 })],
+                ..Semantics::new(Operation::Move)
+            };
+            let mut copy = Insn::new(0, None, Some(what), vec![1], vec![from]);
+            copy.def_lanes = vec![(1, llrm_lir::valuelanes::ValueLanes::at(offset, 1))];
+            if offset != 0 {
+                copy.partial_defs = vec![1];
+            }
+            Arc::new(copy)
+        };
+        let (hi, lo) = (lane(1, 2), lane(0, 3));
+        let insns = vec![insn(&[2], &[]), insn(&[3], &[]), Arc::clone(&hi), lo, insn(&[], &[1])];
+        let body = LirBody::new(
+            "pair",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let mut vrm = VirtRegMap::new();
+        let mut sa = SplitAnalysis::new(1);
+        let li = lis.interval_rc(1);
+        sa.analyze(&lis, &Env, li);
+        let mut delegate = NoDelegate;
+        let mut ed = SplitEditor::new();
+        ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
+        ed.open_intv(&mut cx);
+        let start = cx.lis.indexes.get_instruction_index(hi.id()).get_reg_slot(false);
+        let end = cx.lis.indexes.get_mbb_end_idx(0);
+        ed.use_intv(start, end);
+        ed.finish_values(&mut cx, None);
+        assert!(lis.reg_nodbg_empty(1), "nothing names the parent any more");
     }
 
     /// The spill modes copy out before the last use and recompute the ranges

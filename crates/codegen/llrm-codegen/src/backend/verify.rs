@@ -106,7 +106,7 @@ fn _flat(body: &LirBody) -> Vec<String> {
             let Some(what) = &one.what else { continue };
             for place in what.dests.iter().chain(&what.sources) {
                 let named = match place {
-                    Loc::Reg(reg) if llrm_x86::registers::SEGMENTS.contains(&reg.register) => {
+                    Loc::Reg(reg) if body.registers.is_some_and(|regs| regs.is_segment(reg.register)) => {
                         Some(format!("the segment register {:?}", reg.register))
                     }
                     Loc::Mem(cell) if cell.selector.is_some() => Some("a cell with a selector".to_owned()),
@@ -225,6 +225,20 @@ pub fn physical(
                         for (value, dest) in one.defines.iter().zip(&what.dests) {
                             if let (true, Loc::Reg(reg)) = (one.undefs.contains(value), dest) {
                                 undef = undef.or(&_lanes(regs, regs.named(reg.register, i64::from(reg.width))));
+                            }
+                        }
+                    }
+                    // An address component read as undef (a store through an undefined pointer) names the register it
+                    // was given and reads nothing; the placed cell still holds the value.
+                    if let Some(what) = one.what.as_ref() {
+                        for place in what.dests.iter().chain(&what.sources) {
+                            if let Loc::Mem(cell) = place {
+                                if let Some(base) = cell.base.filter(|base| one.undefs.contains(&base.value)) {
+                                    undef = undef.or(&_lanes(regs, regs.named(cell.through, i64::from(base.width))));
+                                }
+                                if let Some(index) = cell.index.filter(|index| one.undefs.contains(&index.value)) {
+                                    undef = undef.or(&_lanes(regs, regs.named(cell.index_through, i64::from(index.width))));
+                                }
                             }
                         }
                     }

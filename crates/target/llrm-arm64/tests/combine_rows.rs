@@ -15,7 +15,7 @@ fn asm(
     std::fs::write(&input, format!("{HEADER}{body}")).unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", level, "--isel=dag", "-o"])
+        .args(["-S", level, "-o"])
         .arg(&output)
         .arg(&input)
         .output()

@@ -99,9 +99,9 @@ B$FILL          endp
 ;;     from  (dx): near ptr.
 ;;     count (cx): bytes.
 ;;
-;; Saves:    bx cx si di es
-;; Clobbers: ax, flags
-B$COPY          proc    public uses bx cx si di es
+;; Saves:    si di es (bx and cx are scratch in this ABI: it destroys bx and keeps si and di)
+;; Clobbers: ax bx cx, flags
+B$COPY          proc    public uses si di es
 
                 push    ds
                 pop     es

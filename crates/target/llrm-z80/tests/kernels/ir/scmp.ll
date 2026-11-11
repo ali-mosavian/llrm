@@ -1,5 +1,5 @@
 source_filename = "kernels.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 target triple = "msp430"
 
 define dso_local i16 @scmp(ptr noundef %0, ptr noundef %1) #0 {
@@ -63,6 +63,5 @@ attributes #0 = { nounwind "no-trapping-math"="true" "stack-protector-buffer-siz
 !5 = !{!"omnipotent char", !6, i64 0}
 !6 = !{!"Simple C/C++ TBAA"}
 !7 = !{!5, !5, i64 0}
-!8 = distinct !{!8, !9, !10}
+!8 = distinct !{!8, !9}
 !9 = !{!"llvm.loop.mustprogress"}
-!10 = !{!"llvm.loop.unroll.disable"}

@@ -30,7 +30,7 @@
 //! `AArch64LoadStoreOpt::findMatchingUpdateInsnForward`, which merges a
 //! separate update instead, and `auto_inc_dec` in gcc.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
@@ -42,7 +42,7 @@ use crate::regalloc::Assignment;
 use crate::{REGISTER_INFO, mc, reg};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Mode {
+pub(crate) enum Mode {
     Ari,
     Arid,
     Arii,
@@ -52,16 +52,16 @@ enum Mode {
 /// how many bytes it accesses, and where in the instruction's name the letter
 /// of its mode is, if it has one.
 #[derive(Clone, Copy, Debug)]
-struct Slot {
-    mode: Mode,
-    at: usize,
-    bytes: i64,
-    letter_at: Option<usize>,
+pub(crate) struct Slot {
+    pub(crate) mode: Mode,
+    pub(crate) at: usize,
+    pub(crate) bytes: i64,
+    pub(crate) letter_at: Option<usize>,
 }
 
 impl Slot {
     /// The operand that names the base register.
-    fn base_at(self) -> usize {
+    pub(crate) fn base_at(self) -> usize {
         self.at + usize::from(self.mode != Mode::Ari)
     }
 }
@@ -85,7 +85,7 @@ fn extending_load(name: &str) -> Option<Slot> {
     Some(Slot { mode, at: 1, bytes, letter_at: Some(name.len() - width.len() - 1) })
 }
 
-fn slots(name: &str) -> Vec<Slot> {
+pub(crate) fn slots(name: &str) -> Vec<Slot> {
     if let Some(slot) = extending_load(name) {
         return vec![slot];
     }
@@ -120,7 +120,7 @@ fn slots(name: &str) -> Vec<Slot> {
 }
 
 /// `name` with the mode letter of `slot` made `to`, when the pin has that row.
-fn with_mode(
+pub(crate) fn with_mode(
     name: &str,
     slot: Slot,
     to: char,
@@ -130,7 +130,7 @@ fn with_mode(
     local::name_of(u32::from(local::code_of(&renamed)?))
 }
 
-fn base_of(
+pub(crate) fn base_of(
     inst: &Inst,
     slot: Slot,
 ) -> Option<u32> {
@@ -140,7 +140,7 @@ fn base_of(
     }
 }
 
-fn displacement(
+pub(crate) fn displacement(
     inst: &Inst,
     slot: Slot,
 ) -> Option<i64> {
@@ -247,7 +247,7 @@ fn stepped(
 }
 
 /// The access in `slot` of `inst`, the register `size` bytes on.
-fn moved_back(
+pub(crate) fn moved_back(
     inst: &Inst,
     slot: Slot,
     size: i64,

@@ -91,6 +91,32 @@ mod tests {
             assert_eq!(served(Regs(info), bits, &load).is_some(), known, "{bits} bits");
         }
     }
+    /// A frame cell reached by a 64-bit index was served as unknown (the
+    /// frame token is a word register until the layout names it): liveness
+    /// took the move as reading every register, and FixupBW kept
+    /// `mov di, word ptr [rsp+rsi*2]` for want of a dead upper half
+    /// (shellsort -O2 +25% clocks against clang).
+    #[test]
+    fn a_frame_cell_with_a_wide_index_reads_the_index_at_m64() {
+        use crate::model::ir::{Addr, Reg, Space};
+        use llrm_lir::registers::RegId;
+        let mut cell = Mem::new(Some(Addr::new(Space::Frame, -128)), 2);
+        cell.through = RegId::BP;
+        cell.index = Some(Held { value: 40, width: 8, offset: 0 });
+        cell.index_through = RegId::RAX;
+        cell.scale = 2;
+        let load = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Reg(Reg { register: RegId::DX, width: 2 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        match served(Regs(&llrm_x86_m64::REGISTER_INFO), 64, &load) {
+            Some(llrm_x86::effects::Served::Known(found)) => assert!(found.reads.contains(&RegId::RAX), "{found:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// `or eax, -1` read `eax` as `or eax, 5` does: the verifier called the
     /// -Os `mov eax, -1` it replaced a read of an undefined register.
     #[test]
@@ -111,6 +137,35 @@ mod tests {
         };
         assert!(!reads(-1) && !reads(0xffff_ffff));
         assert!(reads(5));
+    }
+
+    /// The effects memo keyed an immediate by its width and `value & 31 == 0`
+    /// only, so `or edx, -1` after an `or edx, 5` was served the reading
+    /// effect: `LLRM_VERIFY=1` failed sfm16 -Os with "@__gesf2 reads edx
+    /// before any path writes it".
+    #[test]
+    fn test_the_effects_memo_tells_or_of_all_ones_from_or_of_five() {
+        use crate::model::ir::Imm;
+        let edx = Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::EDX, width: 4 });
+        let reads = |value: i64| {
+            let or = Semantics {
+                name: Some("or".into()),
+                dests: vec![edx.clone()],
+                sources: vec![edx.clone(), Loc::Imm(Imm { value, width: 4, address: None })],
+                ..Semantics::new(Operation::Binary)
+            };
+            let (reads, _) = crate::backend::peephole::_register_effects_of_what(
+                Regs(&llrm_x86_m64::REGISTER_INFO),
+                64,
+                &or,
+                false,
+                true,
+            )
+            .expect("known");
+            !reads.is_empty()
+        };
+        assert!(reads(5));
+        assert!(!reads(-1), "or edx, -1 served the answer of or edx, 5");
     }
 
     /// `mov edi, _a+4[v*4]` before registers are chosen: the effect was

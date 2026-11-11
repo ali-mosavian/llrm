@@ -26,13 +26,18 @@
 //!   a call with 12 outgoing bytes: 24 + 12 = 36 -> 48 (16), size 44
 //! ```
 //!
-//! DEVIATE FO-1 (exit: frame indices, owner w-6, 2026-11-20): nothing calls
+//! DEVIATE FO-1 (exit: frame indices, owner llrm-target-x86-m16, 2026-11-20): nothing calls
 //! this yet. `frame::Frame` hands out a slot when the spiller asks and the
 //! displacement goes into the instruction at once; the pin names a frame index
 //! and `replaceFrameIndices` fills the offset after this runs.
 //!
-//! DEVIATE FO-2 (exit: with FO-1): the stack protector, the local stack
-//! allocation block, scavenging slots, `orderFrameObjects`,
+//! DEVIATE FO-1 also covers `order_frame_objects`
+//! (`X86FrameLowering::orderFrameObjects`): translated, used by
+//! `relayout::ordered` on the finished body, not yet between objects and
+//! `calculate_frame_object_offsets` (owner llrm-target-x86-m16, 2026-11-20).
+//!
+//! DEVIATE FO-2 (exit: with FO-1, owner llrm-target-x86-m16): the stack
+//! protector, the local stack allocation block, scavenging slots,
 //! `computeFreeStackSlots` and `StackSymbolOrdering` are not translated; i486
 //! enables none (`enableStackSlotScavenging` is false, no register scavenger,
 //! no `-fstack-protector` frontend).
@@ -124,6 +129,43 @@ pub fn calculate_frame_object_offsets(
     offset - frame.local_area
 }
 
+/// One object for [`order_frame_objects`]: `X86FrameSortingObject`.
+#[derive(Clone, Copy, Debug)]
+pub struct Sorting {
+    /// Bytes; 0 (variable size) counts as 4.
+    pub size: u64,
+    pub align: i64,
+    /// Static frame-index operands that name it.
+    pub uses: u64,
+}
+
+/// `X86FrameSortingComparator`
+/// ([X86FrameLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L4322)):
+/// ascending uses per byte, cross-multiplied; a tie by alignment.
+fn denser(
+    a: &Sorting,
+    b: &Sorting,
+) -> std::cmp::Ordering {
+    (a.uses * b.size).cmp(&(b.uses * a.size)).then(a.align.cmp(&b.align))
+}
+
+/// `X86FrameLowering::orderFrameObjects`
+/// ([X86FrameLowering.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L4370)):
+/// the indices of `objects` in the order they are laid. Stable sort by
+/// density, flipped for a frame addressed from the frame pointer so the
+/// densest object lies nearest it.
+pub fn order_frame_objects(
+    objects: &[Sorting],
+    frame_pointer: bool,
+) -> Vec<usize> {
+    let mut sorted: Vec<usize> = (0..objects.len()).collect();
+    sorted.sort_by(|&a, &b| denser(&objects[a], &objects[b]));
+    if frame_pointer {
+        sorted.reverse();
+    }
+    sorted
+}
+
 /// `LLRM_FRAME_ORACLE`: the frame area of `name` as ours lays it out (the bytes
 /// below BP, `reserve`) and as `calculate_frame_object_offsets` would lay the
 /// same objects: each selector extent and each spill slot, in the order the
@@ -170,7 +212,7 @@ pub fn oracle_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{Frame, Object, calculate_frame_object_offsets};
+    use super::{Frame, Object, Sorting, calculate_frame_object_offsets, order_frame_objects};
 
     fn object(
         size: i64,
@@ -229,6 +271,18 @@ mod tests {
         let size = calculate_frame_object_offsets(&mut objects, 1, frame());
         assert_eq!(objects.iter().map(|one| one.offset).collect::<Vec<_>>(), [-12, -24, -20, -16, 0]);
         assert_eq!(size, 20);
+    }
+
+    /// Density decides, not use count: a 16-byte object used 5 times beats four
+    /// 4-byte ones used once; a tie goes to the higher alignment; the
+    /// frame-pointer order is the reverse (densest first).
+    #[test]
+    fn denser_objects_lie_nearest_the_frame_pointer() {
+        let object = |size, align, uses| Sorting { size, align, uses };
+        let objects = [object(4, 4, 1), object(16, 4, 5), object(4, 4, 2), object(8, 8, 2), object(8, 4, 2)];
+        // Uses per byte: .25, .31, .5, .25, .25; the 8-aligned of the ties last.
+        assert_eq!(order_frame_objects(&objects, false), [0, 4, 3, 1, 2]);
+        assert_eq!(order_frame_objects(&objects, true), [2, 1, 3, 4, 0]);
     }
 
     /// The oracle lays the selector's extents and the spill slots as the

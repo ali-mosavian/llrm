@@ -10,7 +10,7 @@
 //! `WebAssemblyExplicitLocals.cpp`, pin d1106deb71cc: `explicitLocals` (L261),
 //! `findStartOfTree` (L226).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::mir::{Function, IMPLICIT_DEF, Inst, Operand, VReg, is_argument, is_copy, is_tee};
 
@@ -68,7 +68,7 @@ impl Locals {
 /// Whether anything changed.
 pub fn explicit_locals(f: &mut Function) -> bool {
     let mut changed = false;
-    let mut locals = Locals { reg_to_local: HashMap::new(), current: 0 };
+    let mut locals = Locals { reg_to_local: HashMap::default(), current: 0 };
 
     // The arguments are the first locals; their pseudos go.
     while f.blocks[0].first().is_some_and(|i| is_argument(i.opcode)) {

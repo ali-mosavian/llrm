@@ -200,16 +200,11 @@ pub fn zeroed(body: &LirBody) -> LirBody {
     let mut out = body.clone();
     let mut next = body.next_value();
     let mut changed = false;
+    let (at_of, preds) = crate::backend::ivshare::block_index(&out.blocks);
     for lp in &found {
         let inside = lp.body.to_set();
         let [latch] = lp.latches.iter().copied().collect::<Vec<_>>()[..] else { continue };
-        let at_of: HashMap<i64, usize> = out.blocks.iter().enumerate().map(|(n, b)| (b.at, n)).collect();
-        let entries: Vec<i64> = out
-            .blocks
-            .iter()
-            .filter(|b| !inside.contains(&b.at) && b.succ.contains(&lp.header))
-            .map(|b| b.at)
-            .collect();
+        let entries = crate::backend::ivshare::entries_of(&preds, &inside, lp.header);
         let [pre] = entries[..] else { continue };
         if out.blocks[at_of[&pre]].succ.len() != 1 {
             continue;

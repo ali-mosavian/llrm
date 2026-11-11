@@ -3660,7 +3660,12 @@ impl Compiler {
             storage: "static",
             symbol,
         });
-        self.far_address(Operand::Place(place), BYTE)
+        // The runtime's `ClearTable *` is a near pointer (one register); where
+        // there is one address space it is the whole address.
+        let pointer_type = self.pointer_type(BYTE);
+        let address = self.value(pointer_type);
+        self.emit("address", vec![address], vec![Operand::Place(place)]);
+        address
     }
 
     fn basic_global_name(
@@ -4130,10 +4135,10 @@ impl Compiler {
                             _ => (Operand::Constant(INTEGER, Number::Integer(0)), Number::Integer(0)),
                         };
                         let mut operands = vec![stack, Operand::Constant(INTEGER, given)];
-                        // The flat runtime zeroes the module's variables from a
-                        // table; the Microsoft one knows its
+                        // The llrm runtime zeroes the module's variables from a
+                        // table, on every target; the Microsoft one knows its
                         // own data segment.
-                        if self.options.one_space() {
+                        if self.runtime == "llrm" || self.options.one_space() {
                             let table = self.clear_table_address();
                             operands.push(Operand::Value(table));
                         }

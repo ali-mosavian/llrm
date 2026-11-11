@@ -1,5 +1,5 @@
 source_filename = "kernels.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 target triple = "msp430"
 
 define dso_local i16 @fib(i8 noundef zeroext %0) #0 {
@@ -59,6 +59,5 @@ attributes #2 = { nounwind }
 !4 = !{!"Simple C/C++ TBAA"}
 !5 = !{!6, !6, i64 0}
 !6 = !{!"int", !3, i64 0}
-!7 = distinct !{!7, !8, !9}
+!7 = distinct !{!7, !8}
 !8 = !{!"llvm.loop.mustprogress"}
-!9 = !{!"llvm.loop.unroll.disable"}

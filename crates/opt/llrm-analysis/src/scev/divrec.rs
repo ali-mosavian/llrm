@@ -3,6 +3,7 @@
 //! folds, with `getPointerBase`.
 
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use llrm_mir::module::BlockId;
 
@@ -62,7 +63,7 @@ impl ScalarEvolution {
             Key { tag: Type::AddRec, ops: Cow::Borrowed(ops), ty: None, constant: None, value: None, header: Some(l) };
         let ty = self.type_of(ops[0].scev);
         let size = self.compute_expression_size(ops);
-        let s = self.intern(key, || Kind::AddRec(ops.to_vec(), l), Some(ty), size);
+        let s = self.intern(key, || Kind::AddRec(Rc::from(ops), l), Some(ty), size);
         self.set_no_wrap_flags(s, f);
         let _ = cx;
         s
@@ -405,7 +406,7 @@ impl ScalarEvolution {
         if let Kind::AddRec(step_operands, step_loop) = self.node(step.scev).kind.clone()
             && step_loop == l
         {
-            operands.extend(step_operands);
+            operands.extend(step_operands.iter().copied());
             // The use flags describe the two-operand recurrence, not the
             // flattened one built here, so drop them just like the
             // expression's NUW/NSW.
@@ -473,7 +474,7 @@ impl ScalarEvolution {
                 !nested.contains_loop(Some(outer)) && cx.tree.dominates(l, nested_loop)
             };
             if reorder {
-                let mut nested_operands: Vec<Use> = nested_operands;
+                let mut nested_operands: Vec<Use> = nested_operands.to_vec();
                 operands[0] = Use::of(self.addrec_start(nested_ar));
                 // AddRecs require their operands be loop-invariant with respect
                 // to their loops. Don't perform this transformation if it would
@@ -682,7 +683,7 @@ impl ScalarEvolution {
         let mut add_flags = flags::NONE;
         let rhs_range_min = self.get_signed_range(cx, rhs.scev).get_signed_min();
         let bits = self.get_type_size_in_bits(cx, self.type_of(rhs.scev));
-        let rhs_is_not_min_signed = !Ap::new(bits, rhs_range_min).is_signed_min();
+        let rhs_is_not_min_signed = !Ap::from_word(bits, rhs_range_min).is_signed_min();
         if f & flags::NSW == flags::NSW {
             // Let M be the minimum representable signed value. Then (-1)*RHS
             // signed-wraps if and only if RHS is M. That can happen even for a

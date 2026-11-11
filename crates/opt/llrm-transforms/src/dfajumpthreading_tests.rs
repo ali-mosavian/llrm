@@ -241,3 +241,52 @@ fn test_a_build_for_size_threads_nothing() {
     assert_eq!(llrm_mir::print::module(&module), llrm_mir::print::module(&parsed(&text)));
     assert_ne!(run(&text), llrm_mir::print::module(&parsed(&text)), "the same machine is threaded otherwise");
 }
+
+/// The switch block is cloned for each path, and a scope it declares was in all
+/// the copies: one copy's store and another's load were called apart by
+/// `ScopedNoAliasAA`, though they are two runs of the block
+/// (`cloneAndAdaptNoAliasScopes`, DFAJumpThreading.cpp:1262).
+#[test]
+fn test_the_copies_of_the_switch_block_do_not_share_a_declared_scope() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let text = state_machine(4)
+        .replace("define i32 @f(i32 %n) {", "define i32 @f(i32 %n, ptr %p, ptr %q) {")
+        .replace(
+            "dispatch:\n  switch",
+            "dispatch:\n  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1\n  store i32 1, ptr %p, !alias.scope !1\n  %v = load i32, ptr %q, !noalias !1\n  switch",
+        );
+    let text = format!(
+        "declare void @llvm.experimental.noalias.scope.decl()\n\n{text}\n!0 = distinct !{{!0, !\"domain\"}}\n!2 = distinct !{{!2, !0, !\"scope\"}}\n!1 = !{{!2}}\n"
+    );
+    let after = run(&text);
+    let module = parsed(&after);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2;
+    let unit = Unit::of(&module, &layout, function);
+    let locations = |store: bool| -> Vec<MemoryLocation> {
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| {
+                let opcode = &function.instruction(inst).opcode;
+                if store {
+                    matches!(opcode, llrm_mir::opcode::Opcode::Store { .. })
+                } else {
+                    matches!(opcode, llrm_mir::opcode::Opcode::Load { .. })
+                }
+            })
+            .filter_map(|inst| MemoryLocation::get(&unit, inst))
+            .collect()
+    };
+    let (stores, loads) = (locations(true), locations(false));
+    assert!(stores.len() >= 2 && stores.len() == loads.len(), "{after}");
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: a copy's own pair");
+    assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{after}");
+}

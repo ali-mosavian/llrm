@@ -356,9 +356,35 @@ pub struct Object {
     /// nothing refers to them. Each has one public symbol at offset 0
     /// that names it. Indices into `sections`.
     pub omf_comdat: Vec<usize>,
+    /// COFF: the sections written as COMDAT, each the single definition of its
+    /// leader, the first symbol defined in it.
+    pub comdats: Vec<Comdat>,
     /// How to find each function's caller (`.eh_frame`'s source), whether or
     /// not `-g` is on. Empty where the format has none or nothing declared it.
     pub frames: Vec<Frame>,
+}
+
+/// How a linker chooses among the COMDAT sections of one name (the COFF
+/// `IMAGE_COMDAT_SELECT_*` values).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Selection {
+    NoDuplicates = 1,
+    Any = 2,
+    SameSize = 3,
+    ExactMatch = 4,
+    /// Kept or dropped with the section `associated` names.
+    Associative = 5,
+    Largest = 6,
+}
+
+/// A section that many objects may define: the linker keeps one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Comdat {
+    /// Index into `Object::sections`.
+    pub section: usize,
+    pub selection: Selection,
+    /// `Associative`: the index of the section this one follows.
+    pub associated: Option<usize>,
 }
 
 /// From `offset` bytes into a function's first range, until the next row: the

@@ -18,7 +18,7 @@ use std::fmt::Debug;
 
 use llrm_lir::registers::RegId;
 
-use super::dag::{SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
 
@@ -41,6 +41,14 @@ impl Ext {
     }
 }
 
+/// `ISD::ArgFlagsTy`'s `ByValSize` and `ByValAlign`: an aggregate passed by
+/// value, in the bytes of the argument area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ByVal {
+    pub size: u32,
+    pub align: u32,
+}
+
 /// An `ISD::OutputArg` with its value: a part of an argument of a call or of
 /// a returned value.
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +66,9 @@ pub struct Out {
     /// The argument is one of a call's variadic ones
     /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
     pub variadic: bool,
+    /// `ArgFlags.isByVal()`: `value` is the address of the bytes to copy into
+    /// the argument area (a target whose `byval_in_area` says so).
+    pub byval: Option<ByVal>,
 }
 
 /// An `ISD::InputArg`: a part of a formal argument or of a call's result.
@@ -74,6 +85,9 @@ pub struct In {
     /// `ArgFlags.isSExt()` / `isZExt()`: how a part narrower than its register
     /// is extended.
     pub ext: Ext,
+    /// `ArgFlags.isByVal()`: the part is the address of the bytes the caller
+    /// copied into the argument area (a target whose `byval_in_area` says so).
+    pub byval: Option<ByVal>,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
@@ -126,6 +140,27 @@ pub struct TargetIntrinsic {
     pub chained: bool,
 }
 
+/// The target-independent `LowerVASTART` of the pin's stack-walking targets (M68k's `LowerVASTART`, AVR's, MSP430's):
+/// store the address of the first variadic argument's fixed object (`VarArgsFrameIndex`) through the list.
+/// `pointer` is the target's pointer type, `align` the list's alignment in bytes. `None` where the function has no
+/// variadic frame index.
+pub fn lower_vastart_frame_index(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    pointer: EVT,
+    align: u32,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let first = dag.get_frame_index(pointer, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: pointer, align, volatile: false, base, ext: None, space: 0, ordering: None };
+    Some(dag.get_store(chain, first, list, info))
+}
+
 pub trait TargetCalling: Debug + Sync {
     /// The intrinsic this name is for the target; none: an ordinary call.
     fn intrinsic(
@@ -143,12 +178,39 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether a `byval` argument's bytes are copied into the argument area
+    /// (`CCPassByVal`), the callee reading them from there; a `byval` part
+    /// then carries its [`ByVal`] and the hook places and copies it.
+    fn byval_in_area(&self) -> bool {
+        false
+    }
+
+    /// Whether a caller with a `byval` parameter makes no tail call (the pin's `isEligibleForTailCallOptimization`:
+    /// the parameter is a pointer into the argument area a tail call would reuse).
+    fn byval_parameter_blocks_tail_call(&self) -> bool {
+        false
+    }
+
     /// Whether the hook places a call in calling convention `cc` (LLVM's
     /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
     /// as the pin's `CCAssignFnForCall` rejects what it has no table for.
     fn supports_convention(
         &self,
         _cc: u32,
+    ) -> bool {
+        true
+    }
+
+    /// Whether a direct call of an `llvm.*` function that no intrinsic, atomic
+    /// or target hook lowered is emitted as a call to a symbol of that name
+    /// (a runtime routine of the target's own). A target with none says no and
+    /// the call is refused by name: the symbol would fail only at link, or
+    /// bind to nothing meant. The same refusal, with the same wording, as
+    /// `BuilderTarget::refuse_unknown_intrinsics` (#8452) for a flow without
+    /// this hook; 6502 converges on that field with the shared flow.
+    fn calls_unlowered_intrinsic(
+        &self,
+        _name: &str,
     ) -> bool {
         true
     }
@@ -270,6 +332,17 @@ pub trait TargetCalling: Debug + Sync {
         None
     }
 
+    /// `LowerFormalArguments` of a variadic function: the offset in the stack
+    /// arguments of the first variadic one (`CreateFixedObject(1, StackSize,
+    /// true)`), which `va_start` stores the address of; none for a target that
+    /// keeps them elsewhere.
+    fn variadic_frame_offset(
+        &self,
+        _fixed: &[In],
+    ) -> Option<i64> {
+        None
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemcpy` (and `Memmove`, which
     /// the pin routes to it on wasm): the node that copies `size` bytes, or
     /// none to leave it to the inline expansion and the library call.
@@ -282,6 +355,22 @@ pub trait TargetCalling: Debug + Sync {
         _size: SDValue,
     ) -> Option<SDValue> {
         None
+    }
+
+    /// [`Self::emit_memcpy`] for a function tuned for size or not
+    /// (`hasOptSize`, which the pin's hook reads off the function): a
+    /// target that prices the two apart overrides this.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_memcpy_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+        _opt_size: bool,
+    ) -> Option<SDValue> {
+        self.emit_memcpy(dag, chain, dst, src, size)
     }
 
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemmove`; a target that has

@@ -116,6 +116,27 @@ fn test_a_volatile_load_keeps_its_register() {
     assert_eq!(names(&folded(&before)), ["mov", "push"]);
 }
 
+/// A volatile access between the load and its push or operand use is not
+/// crossed by the fold (CF3): the pin reorders volatile loads here.
+#[test]
+fn test_a_volatile_access_between_the_load_and_its_use_keeps_the_load() {
+    let mut volatile = (*load(2, 5, 1, 16)).clone();
+    volatile.volatile = true;
+    let pushed = body(vec![load(1, 2, 1, 8), Arc::new(volatile.clone()), push(3, 2)]);
+    assert_eq!(names(&folded(&pushed)), ["mov", "mov", "push"]);
+    let operand = body(vec![copy(0, 9, 8), load(1, 3, 1, 8), Arc::new(volatile), add(3, 4, 9, 3, "add")]);
+    assert_eq!(names(&folded(&operand)), ["mov", "mov", "mov", "add"]);
+}
+
+/// A volatile load is not an operand of the instruction that uses it (CF3).
+#[test]
+fn test_a_volatile_load_is_not_an_operand() {
+    let mut volatile = (*load(1, 2, 1, 8)).clone();
+    volatile.volatile = true;
+    let kept = folded(&body(vec![copy(0, 9, 8), Arc::new(volatile), add(2, 3, 9, 2, "add")]));
+    assert_eq!(names(&kept), ["mov", "mov", "add"]);
+}
+
 /// The pushes of the sequence move the stack pointer: a cell addressed through
 /// it is not the same cell at the push.
 #[test]

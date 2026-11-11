@@ -24,7 +24,7 @@
 //! # See also
 //! `WebAssemblyRegColoring.cpp`, pin d1106deb71cc: `regColoring`.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use crate::liveness::liveness;
 use crate::mir::{Function, Operand, VReg};
@@ -78,7 +78,7 @@ fn loop_depths(f: &Function) -> Vec<u32> {
     headers.sort_unstable();
     headers.dedup();
     for header in headers {
-        let mut body = HashSet::from([header]);
+        let mut body = HashSet::from_iter([header]);
         let mut work: Vec<usize> = back_edges.iter().filter(|e| e.1 == header).map(|e| e.0).collect();
         while let Some(b) = work.pop() {
             if body.insert(b) {
@@ -111,8 +111,8 @@ fn ranges(f: &Function) -> Ranges {
         let frequency = 32f64.powi(depth[b] as i32);
         // Where each live register's range, going backwards, ends; `touched`
         // are the registers this block opened or defined.
-        let mut touched: Vec<VReg> = live_out[b].iter().copied().collect();
-        for &r in &live_out[b] {
+        let mut touched: Vec<VReg> = live_out[b].iter().collect();
+        for r in live_out[b].iter() {
             open[r as usize] = Some(end);
         }
         for (i, inst) in block.iter().enumerate().rev() {

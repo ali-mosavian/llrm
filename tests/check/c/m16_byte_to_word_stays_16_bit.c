@@ -1,9 +1,9 @@
 // RUN: llrm-cc %s -m16 -march=i386 -O2 --isel=dag -S -o /dev/stdout
 // grep c m16 -O2 widened each byte table lookup: `movzx esi, byte ptr _nxt[bx+si]` (a 66h prefix, and a
-// 4-byte slot where the value spilled) for a value the program holds in 16 bits. The word form is `movzx si, ...`.
+// 4-byte slot where the value spilled) for a value the program holds in 16 bits. The word form is `movzx si, ...` (or `di`, the allocator's pick).
 // CHECK-LABEL: walk
-// CHECK: movzx si, byte ptr
-// CHECK: movzx si, byte ptr
+// CHECK: movzx {{[sd]i}}, byte ptr
+// CHECK: movzx {{[sd]i}}, byte ptr
 // CHECK: movzx cx, byte ptr
 // CHECK-NOT: movzx e
 unsigned char nxt[800], hit[80];

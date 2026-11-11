@@ -3,7 +3,7 @@ use llrm_z80::expand::{Line, price, price_in_loops};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let asm = std::fs::read_to_string(&args[1]).unwrap();
-    let counts: std::collections::HashMap<String, u64> = std::fs::read_to_string(&args[2])
+    let counts: llrm_support::hash::HashMap<String, u64> = std::fs::read_to_string(&args[2])
         .unwrap()
         .lines()
         .filter_map(|l| {

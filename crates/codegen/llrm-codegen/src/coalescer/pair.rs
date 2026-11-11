@@ -105,6 +105,19 @@ pub trait CoalescerEnv {
         true
     }
 
+    /// DEVIATE C15: among blocks the pin orders alike (same loop depth, split
+    /// edge and connectivity) it takes the lower number first. True: a block
+    /// whose copies read a value that is live at the loop header, a
+    /// loop-carried one, goes first, so the join that makes the carried value
+    /// and its update one register is tried before a join with a value born in
+    /// the loop body. `m = max(m, p[i])`: joining `m' = p[i]` first leaves a
+    /// copy on both paths; joining `m' = m` first leaves one on the path
+    /// that takes the new value. Owner: m68k. Exit: 2026-11-22, the pin's
+    /// order or a frequency-priced choice replaces it.
+    fn joins_loop_carried_first(&self) -> bool {
+        false
+    }
+
     /// DEVIATE C13: whether a copy between widths (`CP.isPartial()`) is joined.
     /// The pin always joins it (`TRI->shouldCoalesce` is the only veto,
     /// RegisterCoalescer.cpp#L2080); a target whose profitability for these
@@ -155,8 +168,15 @@ pub trait CoalescerEnv {
     }
 
     /// A build for size: a copy of a constant is made again only where that
-    /// leaves no second copy of the constant (DEVIATE C10).
+    /// leaves no second copy of the constant (DEVIATE C10), unless the target
+    /// prices it ([`CoalescerEnv::prices_remat`]).
     fn tuned_for_size(&self) -> bool {
+        false
+    }
+
+    /// Whether [`CoalescerEnv::remat_wins`] is the target's own price (its
+    /// encodings), not the default that always remakes.
+    fn prices_remat(&self) -> bool {
         false
     }
 
@@ -196,6 +216,7 @@ pub trait CoalescerEnv {
         _def: &Insn,
         _source: u32,
         _destination: u32,
+        _alone: bool,
     ) -> bool {
         true
     }
@@ -204,6 +225,10 @@ pub trait CoalescerEnv {
 /// The (destination, source) of a plain move between values of one width
 /// (`isMoveInstr` for a full copy).
 pub fn full_copy(insn: &Insn) -> Option<(Held, Held)> {
+    // A def of one lane is a sub-register copy (`isFullCopy` is false).
+    if !insn.def_lanes.is_empty() {
+        return None;
+    }
     let what = insn.what.as_ref()?;
     if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
         return None;
@@ -257,7 +282,10 @@ impl CoalescerPair {
         env: &dyn CoalescerEnv,
     ) -> Option<Self> {
         let (dst, src) = move_copy(copy)?;
-        if is_whole(dst, src) {
+        // A byte copied into the low lane of a pair is the same width as the
+        // operand it names, so only the copy's own lane def says it is a lane.
+        let lane_def = copy.def_lanes.iter().any(|(value, _)| *value == dst.value);
+        if is_whole(dst, src) && !lane_def {
             if !env.can_share(src.value, dst.value) {
                 return None;
             }
@@ -274,7 +302,10 @@ impl CoalescerPair {
         // copy goes.
         let truncates = dst.width < src.width || (dst.width == src.width && src.offset != 0);
         let (narrow, wide) = if truncates { (dst, src) } else { (src, dst) };
-        if narrow.offset != 0 || narrow.value == wide.value || (wide.offset == 0 && wide.width == narrow.width) {
+        if narrow.offset != 0
+            || narrow.value == wide.value
+            || (wide.offset == 0 && wide.width == narrow.width && !lane_def)
+        {
             return None;
         }
         let shareable = match wide.offset {

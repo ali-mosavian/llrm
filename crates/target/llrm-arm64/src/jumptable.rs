@@ -139,8 +139,8 @@ fn position(
 }
 
 /// The offset of each block's label, and of the labels inside the blocks.
-pub fn offsets(blocks: &[Lowered]) -> std::collections::HashMap<String, i64> {
-    let mut out = std::collections::HashMap::new();
+pub fn offsets(blocks: &[Lowered]) -> llrm_support::hash::HashMap<String, i64> {
+    let mut out = llrm_support::hash::HashMap::default();
     let mut at = 0i64;
     for block in blocks {
         out.insert(block.label.clone(), at);

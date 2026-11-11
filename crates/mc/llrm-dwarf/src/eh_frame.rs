@@ -38,11 +38,19 @@ pub struct EhTarget<'a> {
     pub return_saved: bool,
     /// The bytes an advance of the location is counted in.
     pub code_alignment: u64,
+    /// The bytes a save's offset from the frame address is counted in
+    /// (`MCAsmInfo::getCalleeSaveStackSlotSize`; the CIE's data alignment is
+    /// its negative).
+    pub slot: usize,
     /// The rule at a function's entry: the frame address and where the return
     /// address is.
     pub entry: FrameRow,
     /// A register's DWARF number.
     pub register: &'a dyn Fn(&str) -> Option<u64>,
+    /// The target's prologue names the frame register with its offset
+    /// (`DW_CFA_def_cfa`; arm64: `.cfi_def_cfa w29, 16`) where the pin's x86
+    /// names the register alone (`DW_CFA_def_cfa_register`).
+    pub def_cfa_on_register_change: bool,
 }
 
 /// `object` with its `.eh_frame` added.
@@ -64,7 +72,7 @@ pub fn expanded_as(
         (target.register)(name)
             .ok_or_else(|| Unsupported(format!("DWARF: register {name} has no number, which a frame rule names")))
     };
-    let alignment = -(target.address as i64);
+    let alignment = -(target.slot as i64);
     let mut buf = Buf::default();
     buf.u32(0);
     buf.u32(0);
@@ -82,11 +90,12 @@ pub fn expanded_as(
         buf.u8(DW_CFA_OFFSET | target.return_column as u8);
         buf.uleb(target.entry.cfa_offset as u64 / target.address as u64);
     }
-    pad(&mut buf, target.address);
+    // As the pin: `emitValueToAlignment(Align(IsEH ? 4 : ...))`.
+    pad(&mut buf, 4);
     buf.patch32(0, buf.at() as u32 - 4);
     let initial = FrameRow { offset: 0, saved: Vec::new(), ..target.entry.clone() };
     let mut entries = Vec::new();
-    for frame in &object.frames {
+    for (at, frame) in object.frames.iter().enumerate() {
         let start = buf.at();
         entries.push(start);
         buf.u32(0);
@@ -100,10 +109,13 @@ pub fn expanded_as(
         let mut state = &initial;
         for row in &frame.rows {
             advance(&mut buf, (row.offset - state.offset.min(row.offset)) / target.code_alignment as usize);
-            changes(&number, &mut buf, state, row, alignment)?;
+            changes(&number, &mut buf, state, row, alignment, target.def_cfa_on_register_change)?;
             state = row;
         }
-        pad(&mut buf, target.address);
+        // The pin aligns an FDE to the size of its pointer encoding, the last
+        // one to the code pointer size (the section is a multiple of it).
+        let last = at + 1 == object.frames.len();
+        pad(&mut buf, if last { target.address } else { width });
         buf.patch32(start, (buf.at() - start - 4) as u32);
     }
     let part = buf.done();

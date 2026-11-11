@@ -1,2 +1,123 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
-blessed = "2026-10-15"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "e93b050cc701e0878f159c1c52cdbf4c"
+
+[ow.O1]
+instructions = 2114949
+memory_operands = 316027
+clocks = 4059749
+code_bytes = 108
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 28.2111
+
+[ow.O2]
+instructions = 2212188
+memory_operands = 267407
+clocks = 3913884
+code_bytes = 106
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 29.5082
+
+[ow.Os]
+instructions = 2114949
+memory_operands = 316027
+clocks = 4059749
+code_bytes = 108
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 28.2111
+
+[bcc.O1]
+instructions = 2674071
+memory_operands = 194479
+clocks = 6126064
+code_bytes = 115
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 35.6693
+
+[bcc.O2]
+instructions = 2528213
+memory_operands = 194479
+clocks = 5882966
+code_bytes = 134
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 33.7237
+
+[bcc.Os]
+instructions = 2674071
+memory_operands = 194479
+clocks = 6126064
+code_bytes = 115
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 35.6693
+
+[tc.O1]
+instructions = 2625451
+memory_operands = 194480
+clocks = 5980209
+code_bytes = 100
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 35.0207
+
+[tc.O2]
+instructions = 2528213
+memory_operands = 194480
+clocks = 5299543
+code_bytes = 104
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 33.7237
+
+[tc.Os]
+instructions = 2625451
+memory_operands = 194480
+clocks = 5980209
+code_bytes = 100
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 35.0207
+
+[tcpp.O1]
+instructions = 2528216
+memory_operands = 194479
+clocks = 5299543
+code_bytes = 109
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 33.7237
+
+[tcpp.O2]
+instructions = 2528216
+memory_operands = 194479
+clocks = 5299543
+code_bytes = 111
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 33.7237
+
+[tcpp.Os]
+instructions = 2528216
+memory_operands = 194479
+clocks = 5299543
+code_bytes = 109
+helper_bytes = 0
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 33.7237

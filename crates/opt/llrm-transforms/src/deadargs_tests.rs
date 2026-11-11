@@ -255,3 +255,136 @@ b0:
 ");
     assert!(after.contains("call i16 @f(i16 12)"), "{after}");
 }
+
+const SINK: &str = "@sink = global i16 0\n";
+
+/// QB's ON ERROR handler returned a resume code every call dropped: 25 of 152
+/// corpus programs kept the `mov`/`xor` that built it and a result nobody read.
+#[test]
+fn a_return_value_no_call_reads_is_not_returned() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal void @f"), "{after}");
+    assert!(after.contains("call void @f(i16 %x)"), "{after}");
+    assert!(!after.contains("ret i16 %a"), "{after}");
+}
+
+/// One caller that reads the result keeps it for all.
+#[test]
+fn a_return_value_one_call_reads_is_kept() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define i16 @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  %s = call i16 @f(i16 %r)
+  ret i16 %s
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f"), "{after}");
+}
+
+/// A caller that returns the result on to a caller that drops it reads
+/// nothing: the chain is dead end to end.
+#[test]
+fn a_return_value_passed_on_to_a_dropped_return_is_not_returned() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define internal i16 @g(i16 %a) {{
+b0:
+  %r = call i16 @f(i16 %a)
+  ret i16 %r
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @g(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal void @f") && after.contains("define internal void @g"), "{after}");
+    assert!(after.contains("call void @f") && after.contains("call void @g"), "{after}");
+}
+
+/// The same chain read at the top keeps both.
+#[test]
+fn a_return_value_passed_on_to_a_read_return_is_kept() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define internal i16 @g(i16 %a) {{
+b0:
+  %r = call i16 @f(i16 %a)
+  ret i16 %r
+}}
+define i16 @top(i16 %x) {{
+b0:
+  %r = call i16 @g(i16 %x)
+  ret i16 %r
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f") && after.contains("define internal i16 @g"), "{after}");
+}
+
+/// A caller outside the module may read it.
+#[test]
+fn an_exported_function_keeps_its_return_value() {
+    let after = run(&format!(
+        "{SINK}define i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define i16 @f"), "{after}");
+}
+
+/// A function whose address is taken is called by whoever has it.
+#[test]
+fn a_function_whose_address_is_taken_keeps_its_return_value() {
+    let after = run(&format!(
+        "{SINK}@table = global ptr @f
+define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f"), "{after}");
+}

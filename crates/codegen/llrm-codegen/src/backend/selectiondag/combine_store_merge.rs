@@ -25,7 +25,7 @@
 //! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
 use super::actions::{Action, TargetLowering};
-use super::dag::{MemBase, MemInfo, NodeData, SDValue};
+use super::dag::{MemBase, MemInfo, MemLocation, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
 use super::lowering::TypeAction;
@@ -36,7 +36,7 @@ const MAX_SEARCH_NODES: usize = 1024;
 
 /// What an address is relative to: `BaseIndexOffset`'s base.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Base {
+pub(super) enum Base {
     Global(u32),
     Frame(i32),
     Node(u32),
@@ -61,7 +61,7 @@ struct Link {
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `BaseIndexOffset::match`: the base of `ptr` and its constant offset.
-    fn match_address(
+    pub(super) fn match_address(
         &self,
         ptr: SDValue,
     ) -> (Base, i64) {
@@ -109,11 +109,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return None;
         }
         let NodeData::Mem(load) = self.dag.node(value).data else { return None };
-        if load.volatile
-            || load.ext.is_some()
-            || load.mem_vt != info.mem_vt
-            || load.space != info.space
-            || self.dag.users(value).count() != 1
+        // An extending load is a source too (`getStoreSource` takes any
+        // `LOAD`): a promoted `i16` store is a truncating store of one.
+        if load.volatile || load.mem_vt != info.mem_vt || load.space != info.space || self.dag.users(value).count() != 1
         {
             return None;
         }
@@ -401,9 +399,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let element_bits = mem.size_in_bits();
         let total = element_bits * stores.len() as u32;
         let mask = super::fold::mask(element_bits);
-        // Little endian: the lowest address is the lowest bits.
+        // Little endian: the lowest address is the lowest bits; big endian
+        // the highest.
         let mut joined = 0u128;
-        for link in stores.iter().rev() {
+        let little = self.hooks.little_endian();
+        for at in 0..stores.len() {
+            let link = &stores[if little { stores.len() - 1 - at } else { at }];
             joined =
                 (joined << element_bits) | (self.dag.constant(self.dag.operand(link.store, 1)).unwrap_or(0) & mask);
         }
@@ -413,8 +414,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let value = self.dag.get_constant(joined, stored);
         let ptr = self.dag.operand(first, 2);
         let new = self.dag.get_store(chain, value, ptr, info);
+        // `WorklistInserter`: what the DAG makes is queued as it is made.
+        self.add_to_worklist(value.node);
+        self.add_to_worklist(new.node);
         for link in stores {
-            self.replace_value(link.store, new);
+            self.combine_store_to(link.store, new);
         }
         self.add_to_worklist(chain.node);
         true
@@ -465,20 +469,49 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         let chain = self.dag.get_token_factor(&chains);
-        let same_object = stores
-            .iter()
-            .all(
-                |link| match self.dag.node(link.store).data {
-                    NodeData::Mem(info) => info.base == first_info.base && info.base != MemBase::Unknown,
-                    _ => false,
-                },
-            );
-        let info = MemInfo {
-            mem_vt: EVT::integer(total),
-            base: if same_object { first_info.base } else { MemBase::Unknown },
-            ..first_info
+        // `hasSameUnderlyingObj`.
+        let same_object = match first_info.base {
+            MemBase::Value(_) => self.stores_share_underlying_object(stores),
+            base => stores.iter().all(|link| {
+                matches!(
+                    self.dag.node(link.store).data,
+                    NodeData::Mem(info) if info.base == base && base != MemBase::Unknown
+                )
+            }),
         };
-        (chain, info)
+        let base = if same_object { self.joined_base(first_info.base, total) } else { MemBase::Unknown };
+        (chain, MemInfo { mem_vt: EVT::integer(total), base, ..first_info })
+    }
+
+    /// `hasSameUnderlyingObj`: every store names an IR pointer, and all of
+    /// them one underlying object.
+    fn stores_share_underlying_object(
+        &self,
+        stores: &[Link],
+    ) -> bool {
+        let Some(oracle) = self.alias else { return false };
+        let mut locations = Vec::with_capacity(stores.len());
+        for link in stores {
+            let NodeData::Mem(info) = self.dag.node(link.store).data else { return false };
+            let MemBase::Value(id) = info.base else { return false };
+            locations.push(self.dag.mem_locations[id.get() as usize - 1]);
+        }
+        oracle.same_underlying_object(&locations)
+    }
+
+    /// The pointer info of a joined access of `total` bits that reuses the
+    /// first one's: its IR pointer, the joined size, no `!tbaa`
+    /// (`AAMDNodes::concat` drops it). Another base is kept as it is.
+    fn joined_base(
+        &mut self,
+        first: MemBase,
+        total: u32,
+    ) -> MemBase {
+        let MemBase::Value(id) = first else { return first };
+        let location =
+            MemLocation { tbaa: None, bytes: total.div_ceil(8), ..self.dag.mem_locations[id.get() as usize - 1] };
+        self.dag.mem_locations.push(location);
+        MemBase::Value(std::num::NonZeroU32::new(self.dag.mem_locations.len() as u32).expect("one location pushed"))
     }
 
     fn stored_load(
@@ -570,21 +603,22 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         stores: &[Link],
     ) -> bool {
-        let total = self.dag.value_type(self.stored_load(&stores[0])).size_in_bits() * stores.len() as u32;
         let first_load = self.stored_load(&stores[0]);
         let NodeData::Mem(load_info) = self.dag.node(first_load).data else { return false };
+        let total = load_info.mem_vt.size_in_bits() * stores.len() as u32;
         let (chain, store_info) = self.merged_chain_and_info(stores, total);
-        let same_object = stores
-            .iter()
-            .all(
-                |link| matches!(
+        // The joined load reuses the first load's pointer info as it is
+        // (`FirstLoad->getPointerInfo()`).
+        let same_object = matches!(load_info.base, MemBase::Value(_))
+            || stores.iter().all(|link| {
+                matches!(
                     self.dag.node(self.stored_load(link)).data,
                     NodeData::Mem(info) if info.base == load_info.base && info.base != MemBase::Unknown
-                ),
-            );
+                )
+            });
         let joint = EVT::integer(total);
-        let wide =
-            MemInfo { mem_vt: joint, base: if same_object { load_info.base } else { MemBase::Unknown }, ..load_info };
+        let base = if same_object { self.joined_base(load_info.base, total) } else { MemBase::Unknown };
+        let wide = MemInfo { mem_vt: joint, ext: None, base, ..load_info };
         let new_load = self.dag.get_load(joint, self.dag.operand(first_load, 0), self.dag.operand(first_load, 1), wide);
         let new_store = self.dag.get_store(chain, new_load, self.dag.operand(stores[0].store, 2), store_info);
         for link in stores {

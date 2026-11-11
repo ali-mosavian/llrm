@@ -47,3 +47,23 @@ def test_a_front_end_rejection_is_na_and_a_backend_refusal_is_fail_and_a_changed
     assert {"DIFF", "NA", "FAIL"} <= kinds, kinds
     assert done.returncode == 1
     assert all(row.split()[4] == row.split()[5] for row in rows if row.startswith("FAIL")), "a FAIL with equal codes on both sides is not an identity break"
+
+
+def broken_dist(root: Path, name: str, llc: str, wasm_llc: str, code: int) -> Path:
+    folder = dist(root, name, llc, wasm_llc)
+    (folder / "llrm-cc").write_text(f"#!/bin/bash\necho 'llrm-wasm-llc: boom' >&2\nexit {code}\n")
+    return folder
+
+
+def test_two_dists_whose_compiler_is_missing_on_every_source_fail_the_gate(tmp_path):
+    """Both sides exiting 127 on all 844 sources read as FAIL rows with equal codes: exit 0, an identity pass over nothing."""
+    base, head = broken_dist(tmp_path, "base", "a", "x", 127), broken_dist(tmp_path, "head", "b", "y", 127)
+    done = run(base, head, tmp_path / "out")
+    assert done.returncode == 1, done.stdout
+    assert {row.split()[0] for row in (tmp_path / "out" / "rows.txt").read_text().splitlines()} == {"FAIL"}
+
+
+def test_a_run_that_compared_nothing_fails_even_when_both_sides_only_refuse(tmp_path):
+    """No SAME row is no evidence: every source refused (exit 1) on both sides is not an identity pass."""
+    base, head = broken_dist(tmp_path, "base", "a", "x", 1), broken_dist(tmp_path, "head", "b", "y", 1)
+    assert run(base, head, tmp_path / "out").returncode == 1

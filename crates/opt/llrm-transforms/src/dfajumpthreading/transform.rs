@@ -400,7 +400,8 @@ impl TransformDfa<'_, '_, '_> {
         new_defs: &mut DefMap,
     ) -> BlockId {
         let suffix = format!(".jt{}", u64::try_from(next_state).unwrap_or(u64::MAX));
-        let function = &mut *self.run.unit.function;
+        let unit = &mut *self.run.unit;
+        let function = &mut *unit.function;
         let mut map = ValueMap::default();
         let new_bb = function.clone_block(bb, &mut map);
         if let Some(name) = function.block(bb).name.clone() {
@@ -435,6 +436,11 @@ impl TransformDfa<'_, '_, '_> {
             }
             function.remap_instruction(inst, &map);
         }
+
+        // `identifyNoAliasScopesToClone` and `cloneAndAdaptNoAliasScopes` of the
+        // copy (DFAJumpThreading.cpp:1262).
+        let scopes = crate::noaliasscopes::declared_scopes(function, copies.iter().copied());
+        crate::noaliasscopes::cloned_and_adapted(function, &scopes, &copies, "dfa", unit.metadata, &mut *unit.declared);
 
         self.update_successor_phis(bb, new_bb, next_state, &map, duplicate_map);
         self.update_predecessor(prev_bb, bb, new_bb);

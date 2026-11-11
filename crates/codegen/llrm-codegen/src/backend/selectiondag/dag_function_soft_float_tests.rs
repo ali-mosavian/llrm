@@ -331,3 +331,27 @@ num:
     );
     assert_eq!(calls, ["__unorddf2"]);
 }
+
+/// `llvm.experimental.noalias.scope.decl` (an inlined call's scope, kept by
+/// the unroller) stopped the builder at "intrinsic call": 861 of 1139 corpus
+/// programs refused on `--isel=dag`. The pin's builder returns at once.
+#[test]
+fn a_noalias_scope_decl_builds_to_nothing() {
+    let module = crate::testing::module(
+        "target datalayout = \"@m16-datalayout@\"
+declare void @llvm.experimental.noalias.scope.decl()
+define void @f(ptr %p) {
+entry:
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  store i32 1, ptr %p
+  ret void
+}
+!0 = distinct !{!0, !\"d\"}
+!1 = !{!2}
+!2 = distinct !{!2, !0, !\"s\"}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+}

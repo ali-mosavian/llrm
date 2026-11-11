@@ -90,15 +90,15 @@ fn test_the_iterations_of_an_affine_recurrence_in_a_range_are_counted() {
         let up = chain(se, cx, header, &[0, 3]);
         // 0, 3, 6, 9 are below 10; 12 is not: 4 iterations.
         let range = ConstantRange::make_exact_icmp_region(llrm_mir::opcode::IntPredicate::Ult, 32, 10);
-        let got = se.get_num_iterations_in_range(cx, up, &range);
+        let got = se.get_num_iterations_in_range(cx, up, &range.to_word());
         assert_eq!(se.as_constant(got), Some(Ap::new(32, 4)));
         // A range that does not hold zero is left on the first iteration.
         let away = ConstantRange::make_exact_icmp_region(llrm_mir::opcode::IntPredicate::Ugt, 32, 10);
-        let got = se.get_num_iterations_in_range(cx, up, &away);
+        let got = se.get_num_iterations_in_range(cx, up, &away.to_word());
         assert_eq!(se.as_constant(got), Some(Ap::new(32, 0)));
         // A full range never leaves.
         let full = ConstantRange::make_exact_icmp_region(llrm_mir::opcode::IntPredicate::Uge, 32, 0);
-        assert_eq!(se.get_num_iterations_in_range(cx, up, &full), se.get_could_not_compute());
+        assert_eq!(se.get_num_iterations_in_range(cx, up, &full.to_word()), se.get_could_not_compute());
     });
 }
 
@@ -154,7 +154,7 @@ fn test_the_iterations_of_a_quadratic_recurrence_in_a_range_are_counted() {
     with_loop(|se, cx, header| {
         let squares = chain(se, cx, header, &[0, 1, 2]);
         let range = ConstantRange::make_exact_icmp_region(llrm_mir::opcode::IntPredicate::Ult, 32, 50);
-        let got = se.get_num_iterations_in_range(cx, squares, &range);
+        let got = se.get_num_iterations_in_range(cx, squares, &range.to_word());
         assert_eq!(se.as_constant(got), Some(Ap::new(32, 8)));
     });
 }

@@ -1,69 +1,126 @@
-reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
-blessed = "2026-10-14"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "df24ad30f3b192279152757a00831b84"
+
+[ow.O1]
+instructions = 184
+memory_operands = 24
+clocks = 622
+code_bytes = 196
+helper_bytes = 24
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0034
 
 [ow.O2]
-instructions = 186
-memory_operands = 20
-code_bytes = 172
-data_bytes = 0
+instructions = 190
+memory_operands = 24
+clocks = 600
+code_bytes = 200
+helper_bytes = 24
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0038
+kernel_ms = 0.0034
 
 [ow.Os]
-instructions = 180
-memory_operands = 20
-code_bytes = 168
-data_bytes = 0
+instructions = 184
+memory_operands = 24
+clocks = 622
+code_bytes = 196
+helper_bytes = 24
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0037
+kernel_ms = 0.0034
+
+[bcc.O1]
+instructions = 73
+memory_operands = 22
+clocks = 323
+code_bytes = 166
+helper_bytes = 0
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0021
 
 [bcc.O2]
-instructions = 72
-memory_operands = 19
-code_bytes = 177
-data_bytes = 0
+instructions = 77
+memory_operands = 24
+clocks = 286
+code_bytes = 181
+helper_bytes = 0
+data_bytes = 8
 bss_bytes = 4
 kernel_ms = 0.0021
 
 [bcc.Os]
-instructions = 68
-memory_operands = 17
-code_bytes = 162
-data_bytes = 0
-bss_bytes = 4
-kernel_ms = 0.002
-
-[tc.O2]
-instructions = 219
+instructions = 73
 memory_operands = 22
-code_bytes = 193
-data_bytes = 0
+clocks = 323
+code_bytes = 166
+helper_bytes = 0
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0021
+
+[tc.O1]
+instructions = 220
+memory_operands = 27
+clocks = 682
+code_bytes = 214
+helper_bytes = 25
+data_bytes = 8
 bss_bytes = 4
 kernel_ms = 0.004
 
-[tc.Os]
-instructions = 214
-memory_operands = 22
-code_bytes = 186
-data_bytes = 0
-bss_bytes = 4
-kernel_ms = 0.0039
-
-[tcpp.O2]
-instructions = 230
-memory_operands = 26
-code_bytes = 210
-data_bytes = 0
+[tc.O2]
+instructions = 223
+memory_operands = 27
+clocks = 634
+code_bytes = 221
+helper_bytes = 25
+data_bytes = 8
 bss_bytes = 4
 kernel_ms = 0.0041
 
-[tcpp.Os]
-instructions = 224
-memory_operands = 26
-code_bytes = 206
-data_bytes = 0
+[tc.Os]
+instructions = 220
+memory_operands = 27
+clocks = 682
+code_bytes = 214
+helper_bytes = 25
+data_bytes = 8
 bss_bytes = 4
 kernel_ms = 0.004
+
+[tcpp.O1]
+instructions = 228
+memory_operands = 30
+clocks = 735
+code_bytes = 229
+helper_bytes = 23
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0041
+
+[tcpp.O2]
+instructions = 234
+memory_operands = 30
+clocks = 702
+code_bytes = 233
+helper_bytes = 23
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0042
+
+[tcpp.Os]
+instructions = 228
+memory_operands = 30
+clocks = 735
+code_bytes = 229
+helper_bytes = 23
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0041
 
 [bc.O2]
 instructions = 344

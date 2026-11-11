@@ -97,6 +97,9 @@ pub struct CalleeFacts {
     /// a double or an extended real (their 8-byte slots) and every function
     /// that calls one of them directly.
     aligned: BTreeSet<String>,
+    /// The convention (MIR's number) of each function, whose `stack_alignment`
+    /// is the alignment its callers keep at a call.
+    convention: BTreeMap<String, u32>,
     /// The functions no function of the module calls (itself included) and
     /// whose address is not taken.
     uncalled: BTreeSet<String>,
@@ -152,8 +155,17 @@ impl CalleeFacts {
             .filter(|id| !called.contains(id) && !addressed.contains(id))
             .filter_map(|id| module.global(id).name.owned())
             .collect();
+        let convention = graph
+            .bottom_up()
+            .into_iter()
+            .filter_map(|id| {
+                let global = module.global(id);
+                Some((global.name.owned()?, global.function()?.calling_convention))
+            })
+            .collect();
         (
             Self {
+                convention,
                 uncalled,
                 callees: Some(std::rc::Rc::new(llrm_mir::memory::callees(module))),
                 eligible,
@@ -172,8 +184,9 @@ impl CalleeFacts {
         self.uncalled.contains(name)
     }
 
-    /// The bytes the stack pointer is a multiple of when `name` is entered: the
-    /// target's alignment where it needs the stack aligned (a quad on its stack
+    /// The bytes the stack pointer is a multiple of when `name` is entered: its
+    /// convention's alignment (else the target's) where it needs the stack
+    /// aligned (a quad on its stack
     /// is then 8-aligned, which a 486 charges 3 clocks for otherwise: Intel486
     /// data sheet 240440-002, section 10.1 and Table 2.1), else a slot, so code
     /// that holds no double pays nothing for it.
@@ -183,10 +196,25 @@ impl CalleeFacts {
         name: &str,
     ) -> i64 {
         if self.aligned.contains(name) || arch.aligned_calls() {
-            arch.stack_alignment()
+            self.convention
+                .get(name)
+                .and_then(|&number| arch.calling().by_number(number)?.stack_alignment)
+                .unwrap_or_else(|| arch.stack_alignment())
         } else {
             arch.stack_slot_bytes()
         }
+    }
+
+    /// The most an object of `name`'s frame is aligned to: the target's own
+    /// alignment at most. A convention that keeps the stack wider pads the call
+    /// and the frame's end, not each object (`calculateFrameObjectOffsets`:
+    /// `getObjectAlign` per object, `getStackAlign` for the total).
+    pub fn object_alignment(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+    ) -> i64 {
+        self.stack_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -350,6 +378,35 @@ mod tests {
         assert!(!takes_part(cycle, "ping") && !takes_part(cycle, "pong"), "a cycle of calls");
     }
 
+    /// Every m32 function was entered at 8 whatever its convention: `-mabi=sysv`
+    /// code, whose System V convention keeps the stack 16-aligned at a call
+    /// (`calling.toml`), padded its calls to the default family's 8, and a
+    /// sysv `h` holding a double was framed for 8.
+    #[test]
+    fn a_function_is_entered_at_its_conventions_stack_alignment() {
+        let double = |cc: &str, name: &str| {
+            format!("define {cc} double @{name}(double %x) {{\nb0:\n  %r = fadd double %x, %x\n  ret double %r\n}}\n")
+        };
+        let text = [("", "plain"), ("sysvcc", "sysv"), ("watcallcc", "wat"), ("fastcc", "private")]
+            .iter()
+            .map(|&(cc, name)| double(cc, name))
+            .collect::<String>();
+        let module = parsed(&text);
+        let facts = CalleeFacts::of(&module).0;
+        let aligned = |name| facts.stack_alignment(&llrm_x86_m32::M32, name);
+        assert_eq!(
+            [aligned("plain"), aligned("sysv"), aligned("wat"), aligned("private")],
+            [8, 16, 8, 8],
+            "the stack alignment of a double-holder, by convention"
+        );
+        let objects = |name| facts.object_alignment(&llrm_x86_m32::M32, name);
+        assert_eq!(
+            [objects("plain"), objects("sysv"), objects("wat"), objects("private")],
+            [8, 8, 8, 8],
+            "a convention's wider stack pads the call, not each object"
+        );
+    }
+
     /// Callees come before their callers, which is when a caller finds the fact
     /// of what it calls.
     #[test]
@@ -387,14 +444,17 @@ mod tests {
             IndexMap::default(),
         );
         let frame = |saved: Vec<(RegId, RegId)>| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved,
             slot: 2,
             align: 2,
+            object_align: 2,
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
             free: false,
@@ -446,14 +506,17 @@ mod tests {
             IndexMap::default(),
         );
         let frame = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved: vec![],
             slot: 2,
             align: 2,
+            object_align: 2,
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
             free: false,

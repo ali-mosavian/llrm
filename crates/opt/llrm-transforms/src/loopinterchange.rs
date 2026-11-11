@@ -721,7 +721,9 @@ impl<'a, 'b> Checker<'a, 'b> {
         let function = self.function();
         // Reductions of the inner loop are found with no SCEV, as the pin's
         // `isReductionPHI(PHI, L, RD)` does.
-        let Some(rd) = ivdescriptors::is_reduction_phi(self.cx, None, phi, l) else { return false };
+        let Some(rd) = ivdescriptors::is_reduction_phi(self.cx, None, phi, l, &ivdescriptors::Analyses::NONE) else {
+            return false;
+        };
         // A floating point reduction only where it can be reordered.
         if rd.exact_fp_math_inst().is_some() {
             return false;
@@ -1522,6 +1524,7 @@ impl Run<'_, '_> {
                 memory::Unit::within(&*self.unit.context, self.unit.layout, &*self.unit.function, &self.outer);
             let mut aa = AggregateAA::new();
             aa.add_aa_result(BasicAA::new(&memory_unit));
+            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
             aa.add_aa_result(TypeBasedAA::new(&memory_unit));
             let mut info = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             if !populate_dependency_matrix(&mut matrix, depth, outermost, &mut info, se, &cx, self.options) {
@@ -1640,7 +1643,7 @@ impl FunctionPass for Interchange {
         // kept if no loops are interchanged.
         let saved = unit.function.clone();
         crate::loopsimplify::simplified(unit.function);
-        let _ = crate::lcssa::formed(unit.function);
+        let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
 
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         let tops: Vec<BlockId> = {

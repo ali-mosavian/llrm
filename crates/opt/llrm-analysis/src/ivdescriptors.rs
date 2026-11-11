@@ -16,10 +16,11 @@
 //! invariant.
 //!
 //! # Deviations from LLVM
-//! - D1: `DemandedBits`, `AssumptionCache` and `DominatorTree` are not
-//!   parameters: with none of them `computeRecurrenceType` is the type's width
-//!   rounded up to a power of two, and that is all this port computes. The only
-//!   caller (`LoopInterchange`) passes none of them.
+//! - D1: `DemandedBits`, `AssumptionCache` and `DominatorTree` are optional, as
+//!   in the pin (`isReductionPHI`'s defaults are null): [`Analyses`] holds the
+//!   demanded bits and says whether the cache and tree (always in [`Cx`]) are
+//!   given. [`Analyses::NONE`] is `LoopInterchange`'s call, where
+//!   `computeRecurrenceType` is the type's width rounded up to a power of two.
 //! - D2: `PredicatedScalarEvolution`: [`is_induction_phi`] takes the
 //!   `ScalarEvolution` overload only; the phi's SCEV is not forced into an add
 //!   recurrence under predicates.
@@ -38,8 +39,11 @@ use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::types::{Type as MirType, TypeId};
+use llrm_mir::valuetracking::known::compute_known_bits;
 use llrm_mir::valuetracking::pattern::{IntrinsicId, call_intrinsic};
+use llrm_mir::valuetracking::signbits::compute_num_sign_bits;
 
+use crate::demandedbits::{DemandedBits, Environment};
 use crate::scev::expr::{Kind, Scev};
 use crate::scev::{Cx, ScalarEvolution};
 
@@ -943,10 +947,75 @@ fn is_recurrence_instr(
     }
 }
 
+/// The optional analyses `isReductionPHI` takes: `DB` and `AC`/`DT`.
+#[derive(Clone, Copy, Default)]
+pub struct Analyses<'a> {
+    /// `DB`: the demanded bits of the function and what they read.
+    pub demanded: Option<(&'a DemandedBits, &'a Environment<'a>)>,
+    /// `AC` and `DT` given: `cx.assumptions` and `cx.tree` are used.
+    pub value_tracking: bool,
+}
+
+impl Analyses<'_> {
+    /// None of them: `LoopInterchange`'s call.
+    pub const NONE: Analyses<'static> = Analyses { demanded: None, value_tracking: false };
+}
+
+/// `DB->getDemandedBits(Exit).getActiveBits()`: how many low bits of `exit`'s
+/// result are read; none above are.
+pub fn demanded_width(
+    demanded: &DemandedBits,
+    environment: &Environment,
+    function: &Function,
+    exit: InstId,
+) -> u32 {
+    u128::BITS - demanded.demanded_bits(environment, function, exit).leading_zeros()
+}
+
+/// `computeRecurrenceType`: the smallest type (a power of two bits wide) the
+/// reduction whose exit instruction is `exit` can be truncated to, and whether
+/// it is restored with `sext`.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVDescriptors.cpp#L101>
+fn compute_recurrence_type(
+    c: &Ctx,
+    exit: InstId,
+    analyses: &Analyses,
+) -> (TypeId, bool) {
+    let exit_inst = c.instruction(exit);
+    let type_bits = c.cx.layout.size_bits(&c.cx.context.types, exit_inst.ty) as u32;
+    let mut is_signed = false;
+    let mut max_bit_width = type_bits;
+    if let Some((demanded, environment)) = analyses.demanded {
+        // The bits live out of the exit instruction, rounded up to a power of
+        // two below: a smaller width means the value is positive, since a
+        // negative one would have demanded its sign bit.
+        max_bit_width = demanded_width(demanded, environment, c.function(), exit);
+    }
+    if max_bit_width == type_bits && analyses.value_tracking {
+        // Demanded bits did not limit the width (for instance a value that may
+        // be negative): ask value tracking.
+        if let Some(result) = exit_inst.result {
+            let value = Operand::Value(result);
+            let query = c.cx.query(None);
+            let num_sign_bits = compute_num_sign_bits(&query, value, 0);
+            max_bit_width = type_bits - num_sign_bits;
+            let bits = compute_known_bits(&query, value, 0);
+            if !bits.is_non_negative() {
+                // Restored with sext, and at least one sign bit is kept.
+                is_signed = true;
+                max_bit_width += 1;
+            }
+        }
+    }
+    let width = max_bit_width.max(1).next_power_of_two();
+    (c.cx.context.types.int(width), is_signed)
+}
+
 /// `AddReductionVar`.
 fn add_reduction_var(
     c: &Ctx,
     se: &mut Option<&mut ScalarEvolution>,
+    analyses: &Analyses,
     phi: InstId,
     mut kind: RecurKind,
 ) -> Option<RecurrenceDescriptor> {
@@ -978,7 +1047,7 @@ fn add_reduction_var(
     let mut recurrence_type = phi_inst.ty;
     let mut cast_insts: Vec<InstId> = Vec::new();
     let mut start = phi;
-    let is_signed = false;
+    let mut is_signed = false;
 
     let mut visited: Vec<InstId> = Vec::new();
     let mut worklist: Vec<InstId> = Vec::new();
@@ -1227,12 +1296,14 @@ fn add_reduction_var(
     let is_ordered = check_ordered_reduction(c, kind, exact_fp_math_inst, exit_instruction, phi);
 
     if start != phi {
-        // D1: with no demanded bits, assumption cache or dominator tree the
-        // computed type is the exit instruction's width rounded up to a power
-        // of two; the starting `and` is only a type-promotion if it names that.
-        let width = c.cx.layout.size_bits(&c.cx.context.types, c.instruction(exit_instruction).ty) as u32;
-        let computed = Some(c.cx.context.types.int(width.next_power_of_two()));
-        if computed != Some(recurrence_type) {
+        // The starting value is not the phi: an `and` was looked through to see
+        // whether the reduction was type-promoted. The reduction can be carried
+        // in the narrower type if the type computed from the exit instruction
+        // is the one the `and` named; the vectorizer's InstCombine does the
+        // shrinking, and restores with `sext` when `is_signed`.
+        let (computed, signed) = compute_recurrence_type(c, exit_instruction, analyses);
+        is_signed = signed;
+        if computed != recurrence_type {
             return None;
         }
     }
@@ -1454,6 +1525,7 @@ pub fn is_reduction_phi(
     se: Option<&mut ScalarEvolution>,
     phi: InstId,
     the_loop: Loop,
+    analyses: &Analyses,
 ) -> Option<RecurrenceDescriptor> {
     let c = Ctx { cx, the_loop };
     let mut se = se;
@@ -1467,7 +1539,7 @@ pub fn is_reduction_phi(
         RecurKind::Xor,
     ];
     for kind in order {
-        if let Some(found) = add_reduction_var(&c, &mut se, phi, kind) {
+        if let Some(found) = add_reduction_var(&c, &mut se, analyses, phi, kind) {
             return Some(found);
         }
     }
@@ -1485,7 +1557,7 @@ pub fn is_reduction_phi(
         RecurKind::FMulAdd,
     ];
     for kind in order {
-        if let Some(found) = add_reduction_var(&c, &mut se, phi, kind) {
+        if let Some(found) = add_reduction_var(&c, &mut se, analyses, phi, kind) {
             return Some(found);
         }
     }

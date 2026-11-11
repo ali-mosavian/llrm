@@ -39,6 +39,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::tti::*;
 use llrm_target::Target as _;
 
+use crate::driver::Level;
 use crate::target::Z80;
 use crate::timing::cost;
 
@@ -130,8 +131,33 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "z80"
+    }
+
+    /// DEVIATE z80-lsr-drop (owner z80, exit 2026-12-15): a loop without an
+    /// address keeps its code where LSR's own model rates the rewrite worse
+    /// (`shouldDropLSRSolutionIfLessProfitable`, off in the pin's targets
+    /// but the m16 X86). switch_empty_cases -Os/-O1: a count-down counter and
+    /// the accumulator's old value for the exit took a frame (74 B, now 37 B).
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        true
+    }
+
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        true
+    }
+
+    /// `long i < 12` compares four bytes a test where a byte would do (`narrowiv`;
+    /// div_constants_short -Oz: -1189 B of 9887 with the counter an `int`).
+    fn narrows_counters(&self) -> bool {
+        true
     }
 
     fn cmp_sel_cost(
@@ -247,8 +273,9 @@ impl Tti for Z80Tti {
     ) -> bool {
         let key = |c: &LsrCost| {
             (
-                c.num_base_adds,
+                c.spills.saturating_add(c.num_base_adds),
                 c.num_regs,
+                c.spills,
                 c.insns,
                 c.add_rec_cost,
                 c.num_iv_muls,
@@ -260,6 +287,13 @@ impl Tti for Z80Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LU13: a call takes every register of the Z80, so what a loop
+    /// keeps across one is in the frame; `spills` plus the base adds (the
+    /// instructions that stand for a kept value) rank first.
+    fn lsr_call_clobbers_registers(&self) -> bool {
+        true
+    }
+
     /// The adds of a use whose fixups all lie after the loop are rated as run
     /// once (DEVIATE LU12, off in the pin): lz4 -Oz keeps 159 instructions
     /// against 168 without it.
@@ -267,19 +301,218 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// A word add, `add hl,bc`: the Z80 prices in machine cycles (and bytes),
+    /// so the expansion budget of four basic instructions counts word
+    /// operations. A 16-bit `umax` alone costs 6; the loop count of lz4c's
+    /// checksum loop (`umax` and an add) was refused, and the loop kept
+    /// `base + i` with its bound and base in the frame (132469 T).
+    fn tcc_basic(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        priced(&["add hl;bc"], kind)
+    }
+
+    /// HardwareLoops: a counted loop keeps its count in a byte register,
+    /// which `djnz` counts down. Only where the loop's own counter dies (the
+    /// byte replaces the word) and nothing in the loop calls (a call takes
+    /// every register).
+    fn is_hardware_loop_profitable(
+        &self,
+        info: &mut llrm_mir::tti::HardwareLoopTarget,
+    ) -> bool {
+        info.count_bits = 8;
+        info.counter_in_reg = true;
+        info.is_nesting_legal = true;
+        info.requires_dead_counter = true;
+        info.rejects_calls = true;
+        true
+    }
+
+    /// `memset.pattern` is 4 in the pin ("the cost of the `memset_pattern16`
+    /// libcall"), but this target has no such routine: `PreISelIntrinsicLowering`
+    /// expands it into a loop after inlining has priced it. In code size it is
+    /// that loop: a guard on the count, the pointers, a store a byte of the
+    /// pattern, the test and the branch back (a 2-word store inlined twice was
+    /// +82 B at -Os while the callees stayed).
+    ///
+    /// DEVIATE: other kinds keep the pin's 4. Reason: the unroller and the
+    /// speed bound are tuned on it. Exit: price the loop's clocks.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
+        let pattern = name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.'));
+        if let (true, CostKind::CodeSize, Some(Ty::Int(bits))) = (pattern, kind, args.get(1).copied()) {
+            let (skeleton, _) = sum(&[
+                "ld b;c", "or b", "jr nz;e", "ld hl;nn", "add hl;bc", "ld b;c", "ld b;c", "or b", "sbc hl;bc",
+                "add hl;bc", "jr nz;e",
+            ]);
+            let (each_byte, _) = sum(&["ld (hl);b", "inc bc"]);
+            let (each_word, _) = sum(&["ld bc;nn"]);
+            let bytes = i64::from(bits.div_ceil(8));
+            return Cost::of(skeleton + each_byte * bytes + each_word * ((bytes + 1) / 2));
+        }
+        let _ = ret;
+        if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
+    }
+
+    /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
+    /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        3000
+    }
+
+    /// A loop whose bound the call's constants fix unrolls and folds in the copy, which the call's latency does not
+    /// show (loop_fusion -O3 39,020 T became 299,430 T without it).
+    /// DEVIATE Z80-RATE (owner z80, exit 2026-11-21): the rate sees the call's latency and no other gain of a copy.
+    /// Two cells stay net worse at 1 B = 3 T: loop_fusion -O2 (`clear` kept as 11 calls, +40,010 T for -869 B; the
+    /// copies would meet the overwriting loops) and memmove_overlap -O3 (`fill` kept, +718 T for -100 B; the estimate
+    /// saves 57 clocks, the copies fold more).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        true
+    }
+
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE Z80-ROT (owner z80, exit 2026-11-21): -Oz keeps a counted loop proven to run bottom-tested (`djnz`, no
+    /// test above the body), as the gcc tail rotate did until its deletion (#8017): 27 -Oz cells grew, sum4 +4 B.
+    fn rotation_free_guard_at_minsize(&self) -> bool {
+        true
+    }
+
+    /// -O1 keeps the size bound's refusals but tries them as -Os does: a copy that folds (struct_odd_sizes: `fives`
+    /// -40, refused, 131 B over SDCC) leaves the caller smaller and faster.
+    fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
+    /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
+    /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
+    /// call is 3.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// Where the pin's own cost is negative the inline shrinks the caller (a
+    /// wrapper, a callee that folds away): the bound stands down.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        false
+    }
+
+    /// The pin counts a call as one unit and one per argument; here a unit is a
+    /// byte, and `call nn` is 3 with `ld rr,#nn` or a pair move 2 to 3 per
+    /// word argument: 250% makes one argument 5 B (2 units) and three 9 B (4).
+    fn call_code_size_percent(&self) -> i64 {
+        250
+    }
+
+    /// The call with what surrounds it, which inlining removes: `call nn` and
+    /// `ret`; the first three word arguments in HL, DE and BC (`ld rr,nn`, the
+    /// dearer of a constant and a move), a byte in a register (`ld r,n`), the
+    /// rest `push` and the `pop` that takes them back; a `byval` argument
+    /// copied by `ldir`; and the callee's frame, `push ix; ld ix,#0; add ix,sp`
+    /// and its undoing, with a `push` a word of locals (a frame over 6 B is
+    /// `ld iy,#-n; add iy,sp; ld sp,iy`).
+    ///
+    /// DEVIATE: the values live across the call (every register is
+    /// caller-saved, so each costs a spill and a reload, 6 B / 38 T) and the
+    /// frame the callee's own spills make are not here: the inliner does not
+    /// know them before allocation. Exit: none; the estimate is the floor.
+    /// `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and `ld ix,nn`: the
+    /// table has no form for them.
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let (mut bytes, mut clocks) = sum(&["call nn", "ret"]);
+        let mut registers = 0;
+        for argument in &shape.arguments {
+            let words = match argument.ty {
+                Some(Ty::Int(bits)) if bits <= 8 => 0,
+                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
+                Some(ty) => self.parts(ty),
+                None => 1,
+            };
+            if let Some(copied) = argument.byval_bytes {
+                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
+                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
+                bytes += b;
+                clocks += c + 21 * (copied as i64 - 1);
+            } else if words == 0 {
+                let (b, c) = sum(&["ld b;n"]);
+                bytes += b;
+                clocks += c;
+            } else {
+                for _ in 0..words {
+                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
+                    registers += 1;
+                    let (b, c) = sum(form);
+                    bytes += b;
+                    clocks += c;
+                }
+            }
+        }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
+    /// The callee's frame: `push ix; ld ix,#0; add ix,sp` and its undoing, with
+    /// a `push` a word of locals (a frame over 6 B is `ld iy,#-n; add iy,sp;
+    /// ld sp,iy`). `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and
+    /// `ld ix,nn`: the table has no form for them.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if shape.callee_frame_bytes == 0 {
+            return None;
+        }
+        let (mut bytes, mut clocks) = (0, 0);
+        let frame: &[&str] = if shape.callee_frame_bytes > 6 {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld ix;nn", "add ix;bc", "ld sp;hl", "ld sp;hl", "pop ix"]
+        } else {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld sp;hl", "pop ix"]
+        };
+        let (b, c) = sum(frame);
+        bytes += b;
+        clocks += c;
+        if shape.callee_frame_bytes <= 6 {
+            let (b, c) = sum(&["push bc"]);
+            let words = (shape.callee_frame_bytes as i64 + 1) / 2;
+            bytes += b * words;
+            clocks += c * words;
+        }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false
     }
 
-    // The runtime has no routine that leaves both quotient and remainder: a
-    // pair is two calls.
+    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
+    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
+    // pair is one call. The byte routines do not.
     fn has_div_rem_op(
         &self,
-        _bits: u32,
+        bits: u32,
         _signed: bool,
     ) -> bool {
-        false
+        matches!(bits, 16 | 32)
     }
 
     fn cast_cost(

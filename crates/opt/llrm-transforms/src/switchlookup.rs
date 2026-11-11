@@ -50,7 +50,7 @@ use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::tti::Ty;
@@ -881,7 +881,7 @@ impl Plan {
                     let array = context.types.intern(Type::Array { element: *cell, count: cells.len() as u64 });
                     let initial =
                         context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(cells.clone()) });
-                    let table = declared.table("switch.table", array, initial);
+                    let table = declared.table("switch.table", array, initial, UnnamedAddr::Global);
                     let address = context.types.ptr(0);
                     let base = context.constant(Constant { ty: address, kind: ConstantKind::Global(table) });
                     let index_bits = spec.layout.pointer(0).index_bits;

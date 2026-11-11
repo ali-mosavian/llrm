@@ -385,3 +385,31 @@ end:
     let fresh = LoopInfo::analyze(&*function, || DomTree::of(function));
     assert_eq!(held, fresh);
 }
+
+/// A loop pass manager visits sibling loops in program order, inner loops
+/// before their parent (`opt -passes='loop(indvars)' -debug-pass-manager` on
+/// four sequential loops: h0, h1, h2, h3). The indvars passes visited the
+/// last loop first, so its guards named every loop before it and the trip
+/// counts recursed through all of them: 1666 nested queries overflowed the
+/// stack at 2400 loops on a bound shared by all.
+#[test]
+fn test_loops_are_visited_in_program_order_inner_first() {
+    let mut text = String::from("define i32 @g(i32 %n) {\nentry:\n  br label %h0\n");
+    for i in 0..4 {
+        let (from, next) = (if i == 0 { "entry".to_string() } else { format!("m{}", i - 1) }, if i == 3 { "x".to_string() } else { format!("h{}", i + 1) });
+        text += &format!(
+            "h{i}:\n  %i{i} = phi i32 [ 0, %{from} ], [ %j{i}, %h{i} ]\n  %j{i} = add nsw i32 %i{i}, 1\n  %c{i} = icmp slt i32 %j{i}, %n\n  br i1 %c{i}, label %h{i}, label %m{i}\nm{i}:\n  br label %{next}\n"
+        );
+    }
+    text += "x:\n  ret i32 0\n}\n";
+    let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    let (_, _, function) = module.functions().next().unwrap();
+    let tree = DomTree::of(function);
+    let info = LoopInfo::analyze(function, || &tree);
+    let order: Vec<_> = info
+        .get_loops_in_visit_order()
+        .iter()
+        .map(|one| function.block(one.get_header()).name.clone().expect("named"))
+        .collect();
+    assert_eq!(order, ["h0", "h1", "h2", "h3"]);
+}

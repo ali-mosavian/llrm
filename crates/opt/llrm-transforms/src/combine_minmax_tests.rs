@@ -285,3 +285,25 @@ fn a_compare_with_zero_of_a_value_in_minus_one_to_one_is_the_value() {
     );
     assert!(!out.contains("call i8 @llvm.scmp"), "{out}");
 }
+
+/// `smax(0, smin(x, 255))` kept its constant first, so the clamp fold
+/// (`smax(smin(X, MinC), MaxC)`) never matched: wasm `jpeg_fixed` -O3 kept
+/// `icmp`, `smin`, `select` where the pin has `smin(smax(x, 0), 255)`.
+#[test]
+fn a_constant_first_argument_of_a_min_or_max_moves_second() {
+    let after = combined(
+        "declare i32 @llvm.smin.i32(i32, i32)
+declare i32 @llvm.smax.i32(i32, i32)
+
+define i32 @f(i32 %x) {
+b0:
+  %m = call i32 @llvm.smin.i32(i32 %x, i32 255)
+  %r = call i32 @llvm.smax.i32(i32 0, i32 %m)
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("@llvm.smax.i32(i32 %x, i32 0)"), "{after}");
+    assert!(after.contains("@llvm.smin.i32(i32 %") && after.contains(", i32 255)"), "{after}");
+    assert!(!after.contains("@llvm.smax.i32(i32 0,"), "{after}");
+}

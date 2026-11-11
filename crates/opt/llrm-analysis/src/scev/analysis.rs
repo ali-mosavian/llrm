@@ -50,11 +50,16 @@ impl std::fmt::Debug for ScevCache {
 }
 
 impl ScevCache {
+    /// `scev` as an entry's expressions.
+    pub fn of(scev: ScalarEvolution) -> Self {
+        Self(RefCell::new(scev))
+    }
+
     /// The expressions out of the entry, which is left empty: a pass that
     /// keeps them current while it edits holds them for its run and `put`s
     /// them back before it says it kept `Scevs`.
     pub fn take(&self) -> ScalarEvolution {
-        std::mem::replace(&mut *self.0.borrow_mut(), ScalarEvolution::new())
+        std::mem::replace(&mut *self.0.borrow_mut(), ScalarEvolution::placeholder())
     }
 
     /// `scev` as the entry's expressions again.
@@ -207,10 +212,20 @@ impl<'a> LazyScevView<'a> {
 /// that has no analysis manager (`exitfold`): made once, asked many times,
 /// valid while the function is not changed.
 pub struct ScevSession {
-    tree: DomTree,
-    loops: LoopInfo,
-    assumptions: AssumptionCache,
+    tree: Rc<DomTree>,
+    loops: Rc<LoopInfo>,
+    assumptions: Rc<AssumptionCache>,
     scev: ScalarEvolution,
+}
+
+thread_local! {
+    static SESSIONS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many sessions this thread made, for a test that a pass asking many
+/// questions of one function does not make a session for each.
+pub fn sessions_made() -> usize {
+    SESSIONS_MADE.with(std::cell::Cell::get)
 }
 
 impl ScevSession {
@@ -219,7 +234,7 @@ impl ScevSession {
         function: &Function,
         outer: &llrm_mir::passes::Outer,
     ) -> Self {
-        Self::within(context, &outer.globals, &outer.metadata, function)
+        Self::within_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared())
     }
 
     /// [`ScevSession::of`] for a caller that holds the module's globals and
@@ -230,10 +245,51 @@ impl ScevSession {
         metadata: &[llrm_mir::module::MetadataNode],
         function: &Function,
     ) -> Self {
+        Self::within_declared(context, globals, metadata, function, llrm_mir::valuetracking::assume_declared(globals))
+    }
+
+    /// [`ScevSession::within`], told whether the module declares `llvm.assume`:
+    /// a caller that holds the answer does not scan every global per function.
+    pub fn within_declared(
+        context: &llrm_mir::context::Context,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        declared: bool,
+    ) -> Self {
+        SESSIONS_MADE.with(|made| made.set(made.get() + 1));
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
-        let assumptions = AssumptionCache::of(context, globals, metadata, function);
-        Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
+        let assumptions = AssumptionCache::of_declared(context, globals, metadata, function, declared);
+        Self {
+            tree: Rc::new(tree),
+            loops: Rc::new(loops),
+            assumptions: Rc::new(assumptions),
+            scev: ScalarEvolution::new(),
+        }
+    }
+
+    /// A session over the manager's cached tree, loops and assumptions, as the
+    /// pin's loop passes read them from the analysis manager: nothing is
+    /// rebuilt. Not counted by [`sessions_made`]. The caller changes no edge
+    /// of the CFG while the session lives.
+    pub fn cached(
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            tree: analyses.get::<Dominators>(context, layout, function),
+            loops: analyses.get::<Loops>(context, layout, function),
+            assumptions: analyses.get::<Assumes>(context, layout, function),
+            scev: ScalarEvolution::new(),
+        }
+    }
+
+    /// The session's loops.
+    pub fn loops(&self) -> &LoopInfo {
+        &self.loops
     }
 
     /// `scev` as the session's expressions, for a session that carries on the

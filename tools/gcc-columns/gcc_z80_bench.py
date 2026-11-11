@@ -190,7 +190,7 @@ def main():
             b += tab
             rows[cell] = (b + mv[0], t - bt + mv[1], i - bi + mv[2])
             note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn (ex de,hl 4 T + store via DE 4 T)" if mv[0] else "8-bit result in A, no move"
-            if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl)\b", open(f"{w}/k.s").read()):
+            if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl|call_iy)\b", open(f"{w}/k.s").read()):
                 note = "hand helper, not codegen; " + note
             if lvl in SPEED and any(f"___{f[2:-2]}" in open(f"{w}/k.s").read() for f in sp):
                 note = f"speed helper ({', '.join(f[:-2] for f in sp)}) at {lvl}; " + note

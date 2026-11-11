@@ -30,22 +30,48 @@ fn linkage_rank(linkage: Linkage) -> i32 {
 
 /// An instruction's operands as `Instruction::getOperand` numbers them: a
 /// phi's are its values (the blocks are kept apart), and an `alloca` always
-/// has its array size.
-fn llvm_operands(
-    cx: &Cx,
+/// has its array size. Read in place: a comparison asks for them per pair.
+enum LlvmOperands<'a> {
+    Plain(&'a [Operand]),
+    /// A phi's `[value, block]` pairs: the values.
+    Phi(&'a [Operand]),
+    /// The constant 1 the C++ operand list of an `alloca` holds is the same
+    /// constant in both operands being compared: a block-free placeholder
+    /// that compares equal to itself.
+    ArraySize,
+}
+
+impl LlvmOperands<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Plain(operands) => operands.len(),
+            Self::Phi(operands) => operands.len() / 2,
+            Self::ArraySize => 1,
+        }
+    }
+
+    fn at(
+        &self,
+        at: usize,
+    ) -> Operand {
+        match self {
+            Self::Plain(operands) => operands[at],
+            Self::Phi(operands) => operands[2 * at],
+            Self::ArraySize => Operand::Block(llrm_mir::module::BlockId(u32::MAX)),
+        }
+    }
+}
+
+fn llvm_operands<'a>(
+    cx: &'a Cx,
     inst: InstId,
-) -> Vec<Operand> {
+) -> LlvmOperands<'a> {
     use llrm_mir::opcode::Opcode as O;
     let instruction = cx.function.instruction(inst);
     match instruction.opcode {
-        O::Phi => instruction.operands.chunks(2).map(|pair| pair[0]).collect(),
-        O::Alloca { .. } if instruction.operands.is_empty() => {
-            // The constant 1 the C++ operand list holds is the same constant
-            // in both operands being compared: represent it by a block-free
-            // placeholder that compares equal to itself.
-            vec![Operand::Block(llrm_mir::module::BlockId(u32::MAX))]
-        }
-        _ => instruction.operands.clone(),
+        O::Phi => LlvmOperands::Phi(&instruction.operands),
+        O::Alloca { .. } if instruction.operands.is_empty() => LlvmOperands::ArraySize,
+        _ => LlvmOperands::Plain(&instruction.operands),
     }
 }
 
@@ -133,8 +159,8 @@ impl ScalarEvolution {
             if l_ops.len() != r_ops.len() {
                 return l_ops.len() as i32 - r_ops.len() as i32;
             }
-            for (l, r) in l_ops.into_iter().zip(r_ops) {
-                let result = self.compare_value_complexity(cx, l, r, depth + 1);
+            for at in 0..l_ops.len() {
+                let result = self.compare_value_complexity(cx, l_ops.at(at), r_ops.at(at), depth + 1);
                 if result != 0 {
                     return result;
                 }
@@ -215,11 +241,20 @@ impl ScalarEvolution {
         }
 
         // Lexicographically compare n-ary-like expressions.
-        let (l_ops, r_ops) = (self.operands_of(lhs), self.operands_of(rhs));
+        // The kinds are the same: a `UDiv`'s operands are held apart from
+        // `operands`.
+        let (l_udiv, r_udiv);
+        let (l_ops, r_ops) = match (&self.node(lhs).kind, &self.node(rhs).kind) {
+            (Kind::UDiv(l_num, l_den), Kind::UDiv(r_num, r_den)) => {
+                (l_udiv, r_udiv) = ([*l_num, *l_den], [*r_num, *r_den]);
+                (&l_udiv[..], &r_udiv[..])
+            }
+            _ => (self.operands(lhs), self.operands(rhs)),
+        };
         if l_ops.len() != r_ops.len() {
             return Some(l_ops.len() as i32 - r_ops.len() as i32);
         }
-        for (l, r) in l_ops.iter().zip(&r_ops) {
+        for (l, r) in l_ops.iter().zip(r_ops) {
             let x = self.compare_scev_complexity(cx, l.scev, r.scev, depth + 1);
             if x != Some(0) {
                 return x;

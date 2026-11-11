@@ -2,6 +2,7 @@
 //! first instance of an operand.
 
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use llrm_mir::hash::HashSet;
 use llrm_mir::opcode::IntPredicate;
@@ -218,6 +219,6 @@ impl ScalarEvolution {
         // already have one, otherwise create a new one.
         let size = self.compute_expression_size(&ops);
         let key = Key { tag: kind, ops: Cow::Borrowed(&ops), ty: None, constant: None, value: None, header: None };
-        self.intern(key, || Kind::SequentialUMin(ops.clone()), Some(ty), size)
+        self.intern(key, || Kind::SequentialUMin(Rc::from(ops.as_slice())), Some(ty), size)
     }
 }

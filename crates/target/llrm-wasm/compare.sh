@@ -24,3 +24,5 @@ for f in "$@"; do
   if diff -q "$W/ref.txt" "$W/got.n" >/dev/null; then ok=$((ok+1)); else echo "DIFF $f"; diff "$W/ref.txt" "$W/got.n" | head -${LINES_SHOWN:-12}; bad=$((bad+1)); fi
 done
 echo "match $ok, differ $bad"
+# A gate reads the status: nothing compared, or any differing or failing file, is a failure.
+[ "$bad" -eq 0 ] && [ "$ok" -gt 0 ]

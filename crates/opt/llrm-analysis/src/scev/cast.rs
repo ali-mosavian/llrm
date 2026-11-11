@@ -4,7 +4,7 @@
 
 use std::borrow::Cow;
 
-use llrm_mir::constantrange::ConstantRange;
+use super::ConstantRange;
 
 use super::ap::Ap;
 use super::backedge::ExitCountKind;
@@ -176,12 +176,12 @@ impl ScalarEvolution {
         let bits = self.get_type_size_in_bits(cx, self.type_of(step));
         if self.is_known_positive(cx, step) {
             let max = self.get_signed_range(cx, step).get_signed_max();
-            let limit = Ap::signed_min(bits).sub(Ap::new(bits, max));
+            let limit = Ap::signed_min(bits).sub(Ap::from_word(bits, max));
             return Some((P::Slt, self.get_constant(limit)));
         }
         if self.is_known_negative(cx, step) {
             let min = self.get_signed_range(cx, step).get_signed_min();
-            let limit = Ap::signed_max(bits).sub(Ap::new(bits, min));
+            let limit = Ap::signed_max(bits).sub(Ap::from_word(bits, min));
             return Some((P::Sgt, self.get_constant(limit)));
         }
         None
@@ -196,7 +196,7 @@ impl ScalarEvolution {
     ) -> (llrm_mir::opcode::IntPredicate, Scev) {
         let bits = self.get_type_size_in_bits(cx, self.type_of(step));
         let max = self.get_unsigned_range(cx, step).get_unsigned_max();
-        let limit = Ap::zero(bits).sub(Ap::new(bits, max));
+        let limit = Ap::zero(bits).sub(Ap::from_word(bits, max));
         (llrm_mir::opcode::IntPredicate::Ult, self.get_constant(limit))
     }
 
@@ -678,7 +678,7 @@ impl ScalarEvolution {
                 // only traverses values in the range zext([0,UINT_MAX]).
                 if self.is_known_negative(cx, step) {
                     let min = self.get_signed_range(cx, step).get_signed_min();
-                    let n = self.get_constant(Ap::all_ones(bit_width).sub(Ap::new(bit_width, min)));
+                    let n = self.get_constant(Ap::all_ones(bit_width).sub(Ap::from_word(bit_width, min)));
                     if self.is_loop_backedge_guarded_by_cond_pred(cx, l, llrm_mir::opcode::IntPredicate::Ugt, ar, n)
                         || self.is_known_on_every_iteration(cx, llrm_mir::opcode::IntPredicate::Ugt, ar, n)
                     {
