@@ -1971,6 +1971,11 @@ impl Builder<'_> {
         {
             return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
         }
+        if let Some(global) = direct
+            && self.visit_float_libcall(instruction, info, global)?
+        {
+            return Ok(());
+        }
         if let Some(calling) = self.calling()
             && !calling.supports_convention(info.calling_convention)
         {
