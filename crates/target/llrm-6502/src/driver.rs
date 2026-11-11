@@ -497,6 +497,18 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
+    /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the soft stack is not realigned and the
+    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is clamped to it at pipeline entry, so
+    /// `ptr & 1` is no longer folded to 0 for an object on an odd frame. The pin states what a frame keeps the same
+    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and argument areas, then 2.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::STACK_ALIGN as u64)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::frame::MAX_ALLOCA_ALIGN)
+    }
+
     /// `lda (zp),y`: the index is `y`.
     fn index_register_bits(&self) -> Option<u32> {
         Some(8)
@@ -549,6 +561,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Mos6502::new()))
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::ir_lowering::MosIrLowering))
     }
 }
 
