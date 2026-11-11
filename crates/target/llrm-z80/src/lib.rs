@@ -13,6 +13,7 @@ pub mod bump;
 pub mod carry;
 pub mod commute;
 pub mod ldir;
+pub mod long_shift;
 pub mod mfunc;
 pub mod narrow;
 pub mod post_update;
