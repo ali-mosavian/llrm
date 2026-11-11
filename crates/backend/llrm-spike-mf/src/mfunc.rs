@@ -53,6 +53,11 @@ pub struct Inst {
     pub barrier: bool,
     /// It sets the status flags a later instruction may read.
     pub sets_flags: bool,
+    /// It was made again by the spiller and its original sets the flags, but
+    /// `sets_flags` is clear so the reader after the original keeps the
+    /// original's ([`Target::remade_sets_no_flags`]). The target restores the
+    /// truth once it has placed the flag readers.
+    pub remade_sets_flags: bool,
     /// It reads the status flags.
     pub reads_flags: bool,
     /// `mayLoad`, `mayStore`, `hasUnmodeledSideEffects`, `isAsCheapAsAMove`.
@@ -103,6 +108,7 @@ impl Inst {
             terminator: false,
             barrier: false,
             sets_flags: false,
+            remade_sets_flags: false,
             reads_flags: false,
             may_load: false,
             may_store: false,

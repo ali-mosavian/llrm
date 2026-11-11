@@ -21,6 +21,7 @@ for c in 68000 68020; do
   if [ $c = 68000 ]; then LLRM_CC=$D/llrm-cc tools/m68k_div64_members.sh 68000 $T/m$c; ar_objs="$ar_objs $T/m$c/muldi3.o"; fi # the mulu.w asm
   if [ $c = 68020 ]; then LLRM_CC=$D/llrm-cc tools/m68k_div64_members.sh 68020 $T/m$c; ar_objs="$ar_objs $T/m$c/udivdi3.o $T/m$c/umoddi3.o $T/m$c/divdi3.o $T/m$c/moddi3.o $T/m$c/muldi3.o"; fi # what libsf.a ships
   ds=; [ $c = 68020 ] && ds="--defsym M68020=1"
+  $B-as -m$c $ds -o $T/$c/mulsi3.o config/m68k/mulsi3.s; ar_objs="$ar_objs $T/$c/mulsi3.o" # __mulsi3 is the asm member
   $B-as -m$c $ds -o $T/$c/sf64.o config/m68k/sf64.s; ar_objs="$ar_objs $T/$c/sf64.o"
   $B-ar rcs $T/$c/ours.a $ar_objs
   gobjs=; for o in $G/${c}_double.o $G/${c}_floatex.o $G/${c}_fpg_$opt.o; do [ -f $o ] && gobjs="$gobjs $o"; done
