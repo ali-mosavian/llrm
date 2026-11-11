@@ -207,6 +207,14 @@ multiclass Shift<string n, RegisterClass rc, ValueType vt> {
 defm "" : Shift<"8", GR8, i8>;
 defm "" : Shift<"16", GR16, i16>;
 
+// A word shifted by a variable: a loop of one step and a `djnz`, the count in `a`, `b` the counter. The routines
+// `__ashlhi3`, `__lshrhi3` and `__ashrhi3` are the call form, kept in a function tuned for size.
+let Defs = [F, B], Constraints = "$d = $a" in {
+  def SHL16V : Z80Inst<(outs GR16:$d), (ins GR16:$a, ACC:$n), "shl $d, $n", [(set i16:$d, (shl i16:$a, i8:$n))]>;
+  def SRL16V : Z80Inst<(outs GR16:$d), (ins GR16:$a, ACC:$n), "srl $d, $n", [(set i16:$d, (srl i16:$a, i8:$n))]>;
+  def SRA16V : Z80Inst<(outs GR16:$d), (ins GR16:$a, ACC:$n), "sra $d, $n", [(set i16:$d, (sra i16:$a, i8:$n))]>;
+}
+
 // A constant is loaded again where it is wanted rather than kept or spilled.
 let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
 def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm:$v)]>;

@@ -238,6 +238,10 @@ impl Z80Lowering {
             }
             return Some(node);
         }
+        // a word by a variable, outside a function tuned for size, is the loop of `SHL16V`
+        if vt == EVT::I16 && !self.sized {
+            return Some(node);
+        }
         let name = match (dag.opcode(node), vt) {
             (ISD::Shl, EVT::I8) => "__ashlqi3",
             (ISD::Srl, EVT::I8) => "__lshrqi3",

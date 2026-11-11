@@ -569,6 +569,34 @@ impl Printer<'_> {
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
+            // the count in `a`: `__ashlhi3` and the others as a loop here, `inc b; jr` entering at the `djnz`
+            "SHL16V" | "SRL16V" | "SRA16V" => {
+                let pair = self.register(inst, 0)?;
+                self.push("ld b, a");
+                self.push("inc b");
+                let test = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push(format!("jr {test}"));
+                let top = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.out.push(Line::Label(top.clone()));
+                if op == "SHL16V" && pair == reg::HL {
+                    self.push("add hl, hl");
+                } else {
+                    let (lo, hi) = lanes(pair)?;
+                    let (lo, hi) = (name(lo), name(hi));
+                    match op {
+                        "SHL16V" => {
+                            self.push(format!("sla {lo}"));
+                            self.push(format!("rl {hi}"));
+                        }
+                        _ => {
+                            self.push(format!("{} {hi}", if op == "SRL16V" { "srl" } else { "sra" }));
+                            self.push(format!("rr {lo}"));
+                        }
+                    }
+                }
+                self.out.push(Line::Label(test));
+                self.push(format!("djnz {top}"));
+            }
             "SHL16" if self.register(inst, 0)? == reg::HL => {
                 for _ in 0..shift_count(inst)? {
                     self.push("add hl, hl");
