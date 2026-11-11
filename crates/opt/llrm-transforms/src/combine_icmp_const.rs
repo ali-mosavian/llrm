@@ -14,7 +14,7 @@
 //! MIRROR: the order of the folds and each condition.
 //!
 //! OWED, each at its place as a `// OWED:` comment: the other opcodes of
-//! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
+//! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`,
 //! `foldICmpSRemConstant`, `foldICmpUDivConstant`),
 //! the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
 //! truth-table fold, and the select, truncate, intrinsic and `extractvalue`
@@ -145,6 +145,15 @@ pub fn fold_icmp_inst_with_constant(
     };
     if let Some(operands) = and {
         return fold_icmp_and_constant(c, inst, pred, op0, operands, value, width);
+    }
+    let or = {
+        let q = query(c, None);
+        pattern::binary(&q, op0, BinaryOp::Or).map(|(_, or, x, y)| (or.flags, x, y))
+    };
+    if let Some((flags, x, y)) = or
+        && let Some(visit) = fold_icmp_or_constant(c, inst, pred, op0, flags, (x, y), value, width)
+    {
+        return Some(visit);
     }
     let mul = {
         let q = query(c, None);
@@ -1520,6 +1529,88 @@ fn fold_icmp_add_constant(
             };
             let bound = c.int(new_ty, bound);
             return Some(new_icmp(c, inst, equivalent, lhs, bound));
+        }
+    }
+    None
+}
+
+/// `foldICmpOrConstant`
+/// ([InstCombineCompares.cpp#L2130](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2130)):
+/// `icmp pred (or X, Y), C`. `(X | 2^k-1) == 2^k-1` is `X u<= 2^k-1`, whatever else
+/// uses the `or`; a mask of set bits is a mask of clear bits when the `or` is only
+/// this compare's; `(X | OrC)` against a non-negative constant under a signed
+/// predicate is a sign test of `X`.
+///
+/// OWED: the `signum` arm, the `ptrtoint` pair and `foldICmpOrXorSubChain`.
+#[allow(clippy::too_many_arguments)]
+fn fold_icmp_or_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    or: Operand,
+    flags: Flags,
+    (x, y): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let m = mask(width);
+    let ty = c.type_of(or);
+    let y_const = query(c, None).int_constant(y).map(|(bits, _)| bits);
+    let equality = is_equality(pred);
+    // (icmp eq/ne (or disjoint x, C0), C1) -> (icmp eq/ne x, C0^C1)
+    if equality && let Some(c0) = y_const && flags.contains(Flags::DISJOINT) {
+        let bound = c.int(ty, (c0 ^ value) & m);
+        return Some(new_icmp(c, inst, pred, x, bound));
+    }
+    if equality && let Some(mask_c) = y_const {
+        // X | C == C --> X <=u C, X | C != C --> X >u C, iff C+1 is a power of 2.
+        if mask_c == value && (value + 1) & m != 0 && ((value + 1) & m).is_power_of_two() {
+            let new_pred = if pred == IntPredicate::Eq { IntPredicate::Ule } else { IntPredicate::Ugt };
+            return Some(new_icmp(c, inst, new_pred, x, y));
+        }
+        // (X | MaskC) == C --> (X & ~MaskC) == C ^ MaskC
+        if has_one_use(c, or) {
+            let clear = c.int(ty, !mask_c & m);
+            let and = c.create_binop(inst, BinaryOp::And, x, clear, Flags::default());
+            let bound = c.int(ty, (value ^ mask_c) & m);
+            return Some(new_icmp(c, inst, pred, and, bound));
+        }
+    }
+    // (X | (X-1)) s<  0 --> X s< 1
+    // (X | (X-1)) s> -1 --> X s> 0
+    if let Some(true_if_signed) = is_sign_bit_check(pred, value, width) {
+        let q = query(c, Some(inst));
+        let minus_one = |v: Operand, of: Operand| {
+            pattern::binary(&q, v, BinaryOp::Add)
+                .filter(|&(_, _, a, ones)| a == of && q.int_constant(ones).is_some_and(|(bits, w)| bits == mask(w)))
+                .is_some()
+        };
+        let found = [(x, y), (y, x)].into_iter().find(|&(sub, plain)| minus_one(sub, plain)).map(|(_, plain)| plain);
+        if let Some(plain) = found {
+            let (new_pred, bound) =
+                if true_if_signed { (IntPredicate::Slt, 1) } else { (IntPredicate::Sgt, 0) };
+            let bound = c.int(ty, bound);
+            return Some(new_icmp(c, inst, new_pred, plain, bound));
+        }
+    }
+    // icmp(X | OrC, C) --> icmp(X, 0)
+    let signed_value = signed(value, width);
+    if signed_value >= 0
+        && let Some(or_c) = y_const
+    {
+        let or_c = signed(or_c, width);
+        let zero = c.int(ty, 0);
+        match pred {
+            // X | OrC s< C --> X s< 0 iff OrC s>= C s>= 0; likewise s>=
+            IntPredicate::Slt | IntPredicate::Sge if or_c >= signed_value => {
+                return Some(new_icmp(c, inst, pred, x, zero));
+            }
+            // X | OrC s<= C --> X s< 0 iff OrC s> C s>= 0; X | OrC s> C --> X s>= 0
+            IntPredicate::Sle | IntPredicate::Sgt if or_c > signed_value => {
+                let flipped = if pred == IntPredicate::Sle { IntPredicate::Slt } else { IntPredicate::Sge };
+                return Some(new_icmp(c, inst, flipped, x, zero));
+            }
+            _ => {}
         }
     }
     None

@@ -371,3 +371,26 @@ fn an_add_of_a_negated_operand_compared_with_zero_is_a_compare_of_the_operands()
         &["icmp eq i8 %a, %b"],
     );
 }
+
+/// known_loads_walks wasm32 -O3 (+116 B): `(or spec, 3) == 3` with a second user of the `or`
+/// stayed an `icmp eq` of the `or`, so the select it guards could not see that its false arm
+/// implies `spec != 0` and the loop kept a select, a compare and a branch the pin removes.
+/// The pin has `icmp ult spec, 4` (`foldICmpOrConstant`).
+#[test]
+fn a_low_mask_or_equal_to_the_mask_is_an_unsigned_bound_even_when_the_or_has_other_users() {
+    let mut module = parsed(
+        "define i1 @f(i8 %x, ptr %p) {\nb0:\n  %o = or i8 %x, 3\n  store i8 %o, ptr %p\n  %r = icmp eq i8 %o, 3\n  ret i1 %r\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let out = printed(&module);
+    assert!(out.contains("icmp ult i8 %x, 4") || out.contains("icmp ule i8 %x, 3"), "{out}");
+}
+
+/// `(X | OrC) s< C` is a sign test of `X` when `OrC s>= C s>= 0`.
+#[test]
+fn an_or_with_a_constant_at_least_the_bound_is_a_sign_test() {
+    check("i8 %x", "  %o = or i8 %x, 20\n  %r = icmp slt i8 %o, 10\n", &["icmp slt i8 %x, 0"]);
+}
