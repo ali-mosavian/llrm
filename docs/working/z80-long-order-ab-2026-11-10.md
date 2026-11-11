@@ -19,18 +19,32 @@ order); A needs an ARM `f64AssignAAPCS` analog and has 30 to 38 worse cells per 
 O1 clocks: `div_constants_long` (-1320 B, +10.7M T, +2.3%) and `div_constants_ulong` (-719 B, +11.1M T, +3.8%) carry the
 whole +21.6M; the O1 rule takes the smaller relative regret.
 
-## Cells worse than the base, (bytes, clocks)
+## Same-tip recheck (2026-11-11)
 
-- O2 / O3: div_constants_short (14, -359226), fixed_point (-1, 30), frameless (-18, 19735), int64_division (1, 1008),
-  licm_graph_callee_footprint (1, 6000), loop_versioning (40, 19499), recdeep (16, -92728), recmany_o1 (9, -35848),
-  rep_count (51, 60286), switch_peeled_table (8, 0), wide_shift_by_one (100, 46382), word_compare_branches (-1, 1764).
-- Os: copy_runs (-9, 348), fixed_point, frameless (-10, 19875), idioms (-80, 354936), licm_graph_callee_footprint,
-  memmove_overlap (-4, 2837), recdeep (13, 205445), recmany_o1 (10, -17848), rep_count (1, 9093), switch_jump_table (2, -28),
-  word_compare_branches (9, 13328).
-- Oz: Os less memmove_overlap and switch_jump_table, plus shrink_wrapped_frame (2, 96).
-- O1: div_constants_long, div_constants_short, div_constants_ulong, fixed_point, frameless, idioms (-78, 353610),
-  int64_division (-328, 147150), licm_graph_callee_footprint, memmove_overlap, phi_slot_unknown_arm (-7, 2942), rep_count,
-  shrink_wrapped_frame (-4, 732), switch_peeled_table, wide_shift_by_one, word_compare_branches (16, 0).
+The table above compares the tip 0db87355f6 with the PR binary; the two trees differ by more than #9013. Recheck with
+one tree: 3b47b16114 (the commit before #9013) against 7009514d87 (after), the 20 worse programs above, `sweep.py
+--ours-only`, 20 of 20 compiled per level and side. Pairs are (bytes, clocks), post minus pre.
+
+- O2 / O3 (identical): div_constants_short (14, -359226), fixed_point (-1, 30), frameless (-14, 20163), int64_division (1, 1008),
+  licm_graph_callee_footprint (1, 6000), loop_versioning (22, 8206), recdeep (36, -67189), rep_count (17, 40716),
+  switch_peeled_table (8, 0), word_compare_branches (28, 1862), idioms (77, -116133). 11 worse.
+- Os: frameless (-5, 24305), licm_graph_callee_footprint, loop_versioning (-23, 2605), rep_count (1, 9093),
+  word_compare_branches (9, 13328), copy_runs (-9, 348), idioms (-80, 354936), memmove_overlap (1, 3308),
+  switch_jump_table (2, -28). 9 worse. Oz: the same less the last two. 7 worse.
+- O1: 16 worse, div_constants_long (-1320, 10701788) and div_constants_ulong (-719, 11067860) as before; also
+  wide_shift_by_one (26, -40623), rep_count (-22, 41846), phi_slot_unknown_arm (5, 61548).
+
+Corrections to the first list: `wide_shift_by_one` is 0 B and 0 T at O2/O3 (1110 B both sides), +26 B at O1, -57 B at Os;
+the +100 B came from the older base tree, not from #9013. `rep_count` at O1 is 22 B smaller on the same tip, so it is not
+newly above its bar from #9013. `recmany_o1` is not worse. `shrink_wrapped_frame`, `int64_division` at O1 improve in bytes.
+
+## Causes
+
+`wide_shift_by_one` O1 (+26 B, -5.4% T): `main` only, 971 -> 996 B; both sides keep the call form (price call 1028 -> 1054 B,
+decomposed 892 -> 827 B; the O1 rule picks by relative regret). The delta is allocation churn around the long `fold32`
+argument and result, now HL low / DE high. Output of `LLRM_Z80_PRICE_WHY` (local instrument, not committed).
+Other cells (recdeep +36, idioms +77, word_compare_branches +28, loop_versioning +22, rep_count +17 at O2): first
+differing decision not yet read.
 
 ## Against the best SDCC (the bar), cells with a bar
 
@@ -48,21 +62,6 @@ axis, O2/O3 = clocks + 3 x bytes. Script `ab/bar.py` (base = tip 0db87355f6, B =
 The O1 clocks trade is below the bar on both axes: `div_constants_long` 15493 -> 14173 B (bar 15095) and 478.7M -> 479.7M T (bar
 991M); `div_constants_ulong` 10353 -> 9634 B (bar 10022), 290.8M -> 301.9M T (bar 656M). Both were above the bar on bytes.
 `wide_shift_by_one` +100 B stays under its bar (1110 -> 1210 vs 1567 B).
-
-## Causes (largest first)
-
-1. wide_shift_by_one +100 B (O1/O2/O3): base calls `__mulsi3` (x 514), B emits the inline shift-and-add form. Seen in the
-   asm; the price that flipped (`prefers`, DEVIATE z80-callinline-price) is not yet read. Card owed.
-2. rep_count +51 B at O1 (289 -> 340; SDCC 273; the one cell newly above the bar): `_bench` 221 -> 277 B, the pointer sums
-   change from `ld hl,#N; add hl,de` to `ld l,e; ld h,d; ld bc,#N; add hl,bc; ld bc,#0`. Probe: with `bench` returning a short
-   (same source otherwise) base and B give the same 280 B, so the long result register is the cause. Consistent with the
-   accumulator's low word now sitting in HL, which `ld a,(hl)` and `add hl,rr` need; the first differing allocation decision is
-   not yet read. Pin analog to check: greedy copy-hint weighting by block frequency (a hint from a cold return block against
-   hot loop uses).
-3. loop_versioning +40, recdeep +16, word_compare_branches +16, then the +1 to +14 B ripples: causes not yet read; cards owed
-   per row, grouped by cause.
-
-Row Z80-LONG-ORDER-WORSE in `above-main-rows.md` owns the cards (exit 2026-11-24).
 
 ## Callers and the runtime
 

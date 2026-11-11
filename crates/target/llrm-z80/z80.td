@@ -143,6 +143,9 @@ let Constraints = "$d = $a" in {
   def SUB16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b), "or a; sbc hl, $b", [(set i16:$d, i8:$f, (Z80subf i16:$a, i16:$b))]>;
   def SBC16F : Z80Inst<(outs HLR:$d, Flags:$f), (ins HLR:$a, GR16:$b, Flags:$c), "sbc hl, $b", [(set i16:$d, i8:$f, (Z80sbcf i16:$a, i16:$b, i8:$c))]>;
 }
+// `ADD16F` and `ADC16F` of one value twice, fused by `long_shift`: a long doubled, no selection pattern
+let Defs = [F], Constraints = "$lo = $a, $hi = $b" in
+  def SHL32 : Z80Inst<(outs GR16:$lo, HLR:$hi), (ins GR16:$a, HLR:$b), "sla lo; rl hi; adc hl, hl", []>;
 let Constraints = "$d = $a" in {
   def INC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "inc $d", [(set i16:$d, (add i16:$a, (i16 1)))]>;
   def DEC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "dec $d", [(set i16:$d, (add i16:$a, (i16 -1)))]>;

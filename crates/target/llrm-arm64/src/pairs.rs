@@ -1,13 +1,13 @@
 //! Adjacent loads or stores of two registers to neighbouring addresses become
 //! one `ldp`/`stp` (`AArch64LoadStoreOptimizer`'s `findMatchingInsn` and
 //! `mergePairedInsns`), when nothing between them touches the registers, the
-//! base or memory. This version looks at most `WINDOW` instructions ahead;
-//! LLVM's `LdStLimit` is 20.
+//! base or memory. It looks at most `WINDOW` instructions ahead, LLVM's
+//! `LdStLimit` of 20.
 
 use crate::frame::Lowered;
 use crate::mc::inst::*;
 
-const WINDOW: usize = 8;
+const WINDOW: usize = 20;
 
 /// A plain load or store of one register at `[base, #imm]`.
 pub(crate) struct Access {
@@ -343,6 +343,29 @@ mod tests {
         };
         let out = folded(vec![store(1, 0, 0), add, store(2, 0, 8)]);
         assert_eq!(out.len(), 2, "{out:?}");
+    }
+
+    /// `AArch64LoadStoreOptimizer` scans 20 instructions for the second access
+    /// (`LdStLimit`); a window of 8 left neighbouring spill stores 9 to 20
+    /// instructions apart as two (fpbench -O3 +8 B, jpeg_fixed -O2 +16 B).
+    #[test]
+    fn neighbouring_stores_pair_across_fifteen_instructions_but_not_twentyone() {
+        let add = |reg: u32| Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: Gpr(reg),
+            rn: Gpr(reg),
+            imm12: 1,
+            shift12: false,
+        };
+        let between = |count: u32| {
+            let mut insts = vec![store(1, 0, 0)];
+            insts.extend((0..count).map(|n| add(9 + n % 4)));
+            insts.push(store(2, 0, 8));
+            insts
+        };
+        assert_eq!(folded(between(15)).len(), 16, "paired: one store left");
+        assert_eq!(folded(between(21)).len(), 23, "21 apart is past the window");
     }
 
     fn store_to(
