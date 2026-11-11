@@ -166,7 +166,7 @@ pub fn lower_call(
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
     let runtime = match (dag.opcode(callee), dag.node(callee).data) {
         (ISD::GlobalAddress, NodeData::Global { symbol, .. }) | (ISD::ExternalSymbol, NodeData::Symbol(symbol)) => {
-            is_runtime(&dag.symbol_names[symbol as usize])
+            dag.symbol_names.get(symbol as usize).is_some_and(|name| is_runtime(name))
         }
         _ => false,
     };
