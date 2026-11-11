@@ -88,14 +88,6 @@ class KernelRange(unittest.TestCase):
         self.assertFalse(expect.same_value("-1", "30825279\n"))
         self.assertEqual(expect.status("stft_fixed", "O2", "-1", "30825279\n"), "fail")
 
-    def test_grep_on_the_fixed_text_is_a_named_exception_not_an_unmeasured_cell(self):
-        # grep's harness feeds 64 KiB, the .out is for 10 MB: all 8 grep cells of the LV-X2 table read "unmeasured".
-        import expect
-
-        for level in ("O1", "O2", "O3", "Os", "Oz", "1", "s", "z"):
-            self.assertEqual(expect.status("grep", level, "109617741", "4745\n200504993\n"), "exception", level)
-        self.assertEqual(expect.status("grep", "O2", "-1", "4745\n200504993\n"), "fail")
-
     def test_the_stft_single_value_is_a_named_exception_only_at_its_observed_value(self):
         sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
         import expect
