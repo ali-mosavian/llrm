@@ -1037,6 +1037,11 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// `adrp` + `add` for each symbol base (see the trait).
+    fn lsr_symbol_base_setup_insns(&self) -> u32 {
+        2
+    }
+
     fn is_legal_addressing_mode_at(
         &self,
         _addr_space: u32,
