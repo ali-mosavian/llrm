@@ -79,7 +79,37 @@ pub struct Arm64Machine {
     pub platform: Platform,
 }
 
+/// Whether vector values are taken (ARM64-VEC POC, DEVIATE VECT-LATE): off unless
+/// `LLRM_ARM64_VECTORS` is set, so no scalar compile can change.
+pub fn vectors_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| flag_on(std::env::var_os("LLRM_ARM64_VECTORS").as_deref()))
+}
+
+/// Unset, empty and `0` are off: `LLRM_ARM64_VECTORS=0` turned the vectors on.
+fn flag_on(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::flag_on;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn a_zero_flag_value_leaves_the_vectors_off() {
+        assert!(!flag_on(None));
+        assert!(!flag_on(Some(OsStr::new(""))));
+        assert!(!flag_on(Some(OsStr::new("0"))));
+        assert!(flag_on(Some(OsStr::new("1"))));
+    }
+}
+
 impl Machine for Arm64Machine {
+    fn has_vector_mir(&self) -> bool {
+        vectors_enabled()
+    }
+
     fn foreign_span(
         &self,
         _selectors: (i64, i64),

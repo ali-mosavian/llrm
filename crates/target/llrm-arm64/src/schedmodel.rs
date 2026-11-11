@@ -71,6 +71,10 @@ impl Arm64Model {
         insn: &Insn,
     ) -> Option<llrm_dagisel::sched::ClassData> {
         let opcode = *opcode_numbers().get(pin_opcode(insn)?)?;
+        // An opcode only the vector patterns emit has no class while the vectors are off: it was unmodeled before them.
+        if !crate::machine::vectors_enabled() && llrm_dagisel::generated::aarch64::sched::dynamic_only(opcode) {
+            return None;
+        }
         let shifted = shift_amount(insn).is_some_and(|amount| amount != 0);
         let mut holds = |pred: SchedPred| match pred {
             SchedPred::HasShiftedReg => shifted,
@@ -112,6 +116,22 @@ fn pin_opcode(insn: &Insn) -> Option<&'static str> {
     match register_offset {
         Some((row, tail)) => llvm_names(&row).iter().copied().find(|opcode| opcode.ends_with(tail)),
         None => llvm_names(name).first().copied(),
+    }
+}
+
+/// `MachineInstr::isCopy()` and which of its operands are physical, for
+/// `biasPhysReg`: a zero is `COPY $xzr` (the register is no operand of ours);
+/// a copy names a physical register as a register location where a virtual
+/// one is a held value.
+fn copy_physical(insn: &Insn) -> Option<(bool, bool)> {
+    let what = insn.what.as_ref()?;
+    match what.name.as_deref()? {
+        "Zero" => Some((false, true)),
+        "COPY" | "COPY_FPR" => Some((
+            matches!(what.dests.first(), Some(Loc::Reg(_))),
+            matches!(what.sources.first(), Some(Loc::Reg(_))),
+        )),
+        _ => None,
     }
 }
 
@@ -199,8 +219,10 @@ impl SchedulingModel for Arm64Model {
                 if class.is_some() { "hit" } else { "miss" }
             );
         }
-        let Some(class) = class else { return Unit { micro_ops: 1, ..Unit::default() } };
+        let copy_physical = copy_physical(insn);
+        let Some(class) = class else { return Unit { micro_ops: 1, copy_physical, ..Unit::default() } };
         let mut unit = Unit {
+            copy_physical,
             micro_ops: u32::from(class.num_micro_ops),
             begin_group: class.begin_group,
             end_group: class.end_group,
@@ -418,6 +440,18 @@ mod tests {
         assert_eq!((latency("FMOVSWr", wzr), latency("FMOVSWr", held(2))), (4, 3));
     }
 
+    /// `COPY $xzr` is a copy of a physical register in; a virtual copy is
+    /// none: `biasPhysReg` starts the first from the top (nbody O2).
+    #[test]
+    fn a_zero_is_a_copy_of_a_physical_register() {
+        let model = Arm64Model::generic();
+        assert_eq!(model.unit(&form("Zero", vec![])).copy_physical, Some((false, true)));
+        let phys = Loc::Reg(llrm_lir::Reg { register: crate::reg::X0, width: 8 });
+        assert_eq!(model.unit(&form("COPY", vec![phys])).copy_physical, Some((false, true)));
+        assert_eq!(model.unit(&form("COPY", vec![held(2)])).copy_physical, Some((false, false)));
+        assert_eq!(model.unit(&form("ADDXri", vec![held(2), imm(1), imm(0)])).copy_physical, None);
+    }
+
     /// A register offset is `roX` for a 64-bit index (`uxtx`, `sxtx`) and
     /// `roW` for a 32-bit one, whatever the shift: `STRX.ro30` is `STRXroX`.
     /// Only `ro21` was in the file, so every other register offset missed
@@ -468,6 +502,22 @@ mod tests {
             (model.unit(&unknown).micro_ops, model.def_latency(&unknown)),
             (1, default_def_latency(&unknown, 3))
         );
+    }
+
+    /// With the vector types live the generated tables dropped `FMOVWSr` (a
+    /// scalar float bitcast, `fmov w, s`) and gave `MOVIv2d_ns` a class: with
+    /// the vectors off the first was priced by default and the second by its
+    /// row, and `sfm16_float` scheduled its `fmov` after the `fcmp` (8 of 188
+    /// objects differed from release/next). The bitcast keeps its class; the
+    /// vector `movi` has none until the vectors are on.
+    #[test]
+    fn a_scalar_bitcast_has_a_class_and_a_vector_movi_has_none_with_the_vectors_off() {
+        assert!(!crate::machine::vectors_enabled(), "the test runs with LLRM_ARM64_VECTORS unset");
+        let model = Arm64Model::generic();
+        let bitcast = Arc::new(form("FMOVWSr", vec![held(2)]));
+        assert_ne!(model.def_latency(&bitcast), default_def_latency(&bitcast, 3), "FMOVWSr is priced by its row");
+        let movi = Arc::new(form("MOVIv2d_ns", vec![imm(0)]));
+        assert_eq!(model.def_latency(&movi), default_def_latency(&movi, 3), "MOVIv2d_ns is unmodeled");
     }
 
     /// AArch64 schedules from both ends and keeps the latency heuristic on

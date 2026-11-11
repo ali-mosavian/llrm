@@ -1047,6 +1047,15 @@ pub(crate) fn trip_clocks<'a>(
     trip_total(context, layout, function, callees, blocks, costs, true, false)
 }
 
+/// Whether `inst` is an instruction of its own in a trip's price: a phi is a register, an address
+/// an operand, a compare the flags of the branch it feeds.
+pub(crate) fn counted(
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_))
+}
+
 fn trip_total<'a>(
     context: &Context,
     layout: &DataLayout,
@@ -1062,11 +1071,7 @@ fn trip_total<'a>(
         .filter(|&inst| {
             let one = function.instruction(inst);
             let jump = one.opcode == Opcode::Br && one.operands.len() == 1;
-            (jumps || !jump)
-                && (!size || !matches!(
-                    one.opcode,
-                    Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
-                ))
+            (jumps || !jump) && (!size || counted(function, inst))
         })
         .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
         .sum()

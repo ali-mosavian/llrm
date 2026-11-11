@@ -25,6 +25,9 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// A jump table: the absolute address of each label, as 32-bit words
+    /// (`EK_BlockAddress`).
+    Table(Vec<String>),
     /// The source place of the instructions that follow (`.loc`): printed only
     /// for `-g`.
     Loc(crate::expand::Row),
@@ -302,6 +305,17 @@ pub fn items_with(
     };
     let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if llrm_support::debug::enabled("builds") {
+        eprintln!(
+            "[builds] {name} trials: return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            touched.return_dup,
+            touched.class_split,
+            touched.compare_destinations,
+            touched.carry_chain,
+            touched.global_copies,
+            touched.mul_trial
+        );
+    }
     if !touched.any() {
         return Ok(kept);
     }
@@ -317,14 +331,6 @@ pub fn items_with(
         let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
         if crate::trial::prefers_without(&kept, &plain, cpu, price) {
-            kept = plain;
-            options = without;
-        }
-    }
-    if touched.sext_adds {
-        let without = Options { sext_adds: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
-        if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
         }
@@ -418,7 +424,6 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
-    sext_adds: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -435,8 +440,7 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds
-            || self.return_dup
+        self.return_dup
             || self.class_split
             || self.compare_destinations
             || self.carry_chain
@@ -452,6 +456,7 @@ pub fn items_bytes(items: &[Item]) -> usize {
         .map(|item| match item {
             Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
             Item::Bytes(bytes) => bytes.len(),
+            Item::Table(labels) => 4 * labels.len(),
             _ => 0,
         })
         .sum()
@@ -484,6 +489,12 @@ fn items_once(
     cpu: Cpu,
     options: Options,
 ) -> Result<(Vec<Item>, Touched), String> {
+    // one full select, allocate and emit; a function with optional rewrites
+    // runs it again per trial
+    let _build = llrm_support::debug::span("m68k build");
+    if llrm_support::debug::enabled("builds") {
+        eprintln!("[builds] {name}");
+    }
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -543,12 +554,14 @@ fn items_once(
         if options.compare_destinations {
             touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
         }
+        // priced inside the pass (`Price`), so a function it changed is not
+        // built again
         if options.sext_adds {
-            touched.sext_adds = crate::sextacc::sign_extended_words(
+            crate::sextacc::sign_extended_words(
                 &mut function,
                 cpu,
                 crate::timing::Price::of(wants_size, options.strict),
-            ) > 0;
+            );
         }
         if options.class_split {
             touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
@@ -586,6 +599,7 @@ fn items_once(
     }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+    let allocating = llrm_support::debug::span("m68k allocate");
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
@@ -599,6 +613,7 @@ fn items_once(
             options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
         )?
     };
+    drop(allocating);
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
@@ -685,7 +700,47 @@ fn items_once(
             Line::Loc(place) => Item::Loc(place),
         });
     }
+    out.extend(jump_tables(&function, number));
     Ok((out, touched))
+}
+
+/// Each jump table the function dispatches through: its label, then the
+/// address of each block it goes to (`EK_BlockAddress`).
+///
+/// DEVIATE: the table follows the function in the code section; the pin puts
+/// it in `.rodata`. The bytes are the same and the object writers place one
+/// section. Exit: the data sections of the object writers take code labels.
+fn jump_tables(
+    function: &crate::mfunc::MFunction,
+    number: usize,
+) -> Vec<Item> {
+    let mut out = Vec::new();
+    let mut seen = llrm_support::hash::HashSet::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if inst.kind != crate::mfunc::Kind::Op("JMP32j") {
+            continue;
+        }
+        let Some(crate::mfunc::Operand::Symbol(table, _)) =
+            inst.operands.iter().find(|operand| matches!(operand, crate::mfunc::Operand::Symbol(..)))
+        else {
+            continue;
+        };
+        if !seen.insert(table.clone()) {
+            continue;
+        }
+        let labels = inst
+            .operands
+            .iter()
+            .filter_map(|operand| match operand {
+                crate::mfunc::Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+                _ => None,
+            })
+            .map(|at| format!(".LBB{number}_{at}"))
+            .collect();
+        out.push(Item::Label(table.clone()));
+        out.push(Item::Table(labels));
+    }
+    out
 }
 
 /// Whether `callee` is a function `module` defines that no other definition
@@ -772,6 +827,7 @@ pub fn printed(
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Table(labels) => labels.iter().for_each(|label| out.push_str(&format!("\t.long\t{label}\n"))),
             Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.

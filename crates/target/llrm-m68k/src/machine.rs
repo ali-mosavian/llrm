@@ -62,6 +62,17 @@ impl Machine for M68kMachine {
         Some(crate::frame::REALIGN_ABOVE as u64)
     }
 
+    /// DEVIATE M68K-ALLOCA-ALIGN4: a dynamic `alloca` of any alignment is
+    /// masked into place by `DYNAMIC_STACKALLOC`, which is stated against the
+    /// 4 the frames keep (the pin's `getStackAlignment` is 8, with frames that
+    /// keep 8): an align-8 request is masked here where the pin's is not.
+    /// Clamping it instead would hand back 4-aligned memory for
+    /// `__builtin_alloca_with_align(n, 64)`. Owner m68k. Exit: when the
+    /// frames keep 8, or 2026-11-30.
+    fn honors_dynamic_alloca_align(&self) -> bool {
+        true
+    }
+
     fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
         Some(Rc::new(crate::lowering::M68kLowering))
     }
@@ -101,6 +112,23 @@ impl Machine for M68kMachine {
         let scales: BTreeSet<i64> = [1].into_iter().collect();
         vec![AddressForm::new(4, scales, 0, 0, 0, false, None).expect("a well-formed address form")]
     }
+}
+
+/// Whether `(d8,An,Xn)` is dearer than `(An)` on `cpu`, read from the timing
+/// tables: clocks first, then the extension word's bytes at the CPU's price
+/// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
+pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
+    use crate::dagisel::hooks::Cpu;
+    static DEARER: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let price = |text: &str, bytes: u32| {
+                let clocks = crate::timing::cost(cpu, text, bytes, false).expect("a priced move").clocks;
+                crate::timing::order(cpu, false, clocks, bytes)
+            };
+            price("move.l (0,%a1,%d1), %d0", 4) > price("move.l (%a1), %d0", 2)
+        })
+    });
+    DEARER[cpu as usize]
 }
 
 /// The m68k `TargetTransformInfo`: the base class's answers.
@@ -414,6 +442,29 @@ impl Tti for M68k {
         }
     }
 
+    /// `getScalingFactorCost`: a second register in the address is one where
+    /// the tables say it is dearer than a plain address
+    /// ([`index_is_dearer_than_plain`]), else nothing; an illegal mode is
+    /// invalid. The pin's M68k has no override (the base class prices every
+    /// legal mode 0); x86 and arm64 state the rule
+    /// ([X86TargetTransformInfo.cpp#L8045](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8045)).
+    /// DEVIATE M68K-LSR-INDEX (owner m68k-lsr-addressing, exit none: the
+    /// table is the cause): LSR keeps a pointer where an index needs as many
+    /// registers. Closes M68K-LSR-IDX-CLOCKS.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::of(i64::from(scale != 0 && index_is_dearer_than_plain(self.cpu)))
+        } else {
+            Cost::INVALID
+        }
+    }
+
     /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
     /// limit that costs a single operation (`n - 1`) is repaid by the counter
     /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more
@@ -500,7 +551,16 @@ impl Tti for M68k {
         if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::cmp_sel(op, ty);
         }
-        Basic.cmp_sel_cost(op, ty, kind)
+        // `BasicTTIImplBase::getCmpSelInstrCost`: a legal operation costs 1
+        // times the type-legalization overhead, `LT.first`: the registers the
+        // type splits into (an `i64` or a `double` two, an `i128` four).
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1454
+        let registers = match ty {
+            Ty::Int(bits) => bits.div_ceil(32).max(1),
+            Ty::Double => 2,
+            Ty::Float | Ty::X87 | Ty::Pointer => 1,
+        };
+        Basic.cmp_sel_cost(op, ty, kind) * i64::from(registers)
     }
 
     fn memory_op_cost(

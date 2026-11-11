@@ -219,6 +219,7 @@ pub fn machine_with<'a>(
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm {
             classes: Rc::clone(classes),
+            segments: segments.clone(),
             size: target.size || target.min_size,
         }),
         // After the loop-invariant values are in the preheader: streams that

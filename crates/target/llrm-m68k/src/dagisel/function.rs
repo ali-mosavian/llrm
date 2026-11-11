@@ -1,10 +1,8 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
-//! DEVIATE: no jump tables and no live-in registers: a `switch` is a chain of
-//! compares and the C convention passes everything on the stack, so the slice
-//! (arithmetic, branches, calls) needs neither. Reason: the pin's jump tables
-//! wait for the m68k machine function's table support. Exit: M4.
+//! DEVIATE: no live-in registers: the C convention passes everything on the
+//! stack, so the slice (arithmetic, branches, calls) needs none. Exit: M4.
 
 use std::sync::LazyLock;
 
@@ -26,6 +24,12 @@ use crate::target::M68k;
 
 static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
 
+/// The DAG builder lowers the module's `switch` instructions (clusters, bit
+/// tests and jump tables, `SwitchLoweringUtils`), as the pin's does with no
+/// `LowerSwitch` pass in the codegen pipeline. The mid-end's switch lowering
+/// is off wherever this is on.
+pub const SWITCHES_IN_DAG: bool = true;
+
 /// The builder's view of m68k: 32-bit pointers, `i8` to `i32` in registers,
 /// and the `CALL`/`RET` nodes of the pin.
 pub fn builder_target() -> BuilderTarget {
@@ -38,7 +42,7 @@ pub fn builder_target() -> BuilderTarget {
             ..BuilderTarget::for_pointer_bits(32).dag
         },
         shift_amount: EVT::I32,
-        jump_tables: false,
+        jump_tables: SWITCHES_IN_DAG,
         string_instructions: false,
         // no FPU at any CPU: a float travels as the integer of its width
         soft_float: true,
@@ -92,6 +96,9 @@ pub struct Selected {
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
     pub ends_unreachable: bool,
+    /// The blocks each of the function's jump tables goes to, by table number
+    /// (`MachineJumpTableInfo`; the same on every block).
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -100,7 +107,20 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false, false, false, true, Default::default(), &Default::default(), &[])
+    select_function_with(
+        module,
+        name,
+        cpu,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        Default::default(),
+        &Default::default(),
+        &[],
+    )
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
@@ -174,6 +194,7 @@ pub fn select_function_with(
             phis: Vec::new(),
             locals: Vec::new(),
             ends_unreachable,
+            tables: Vec::new(),
         });
         for (id, mut extra) in extras {
             let units = select_block_with(
@@ -199,6 +220,7 @@ pub fn select_function_with(
                 phis: Vec::new(),
                 locals: Vec::new(),
                 ends_unreachable: false,
+                tables: Vec::new(),
             });
         }
     }
@@ -232,6 +254,9 @@ pub fn select_function_with(
     locals.sort();
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;
+    }
+    for one in &mut selected {
+        one.tables.clone_from(&info.jump_tables);
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
         for (at, &(phi, incoming)) in pending.iter().enumerate() {

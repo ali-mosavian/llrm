@@ -185,6 +185,12 @@ struct Emitter<'a> {
     saved: HashMap<u32, Reg>,
     /// Which of the pin's `InstrEmitter` shapes this emission takes.
     shape: Shape,
+    /// The blocks each jump table goes to, by table number.
+    tables: &'a [Vec<u32>],
+    /// The table whose address the block took last: the indirect jump that
+    /// ends the block goes through it (`BR_JT` expands to a load from the
+    /// table, then `BRIND`).
+    table_taken: Option<u32>,
 }
 
 impl Emitter<'_> {
@@ -220,10 +226,14 @@ impl Emitter<'_> {
             })
             .map(|user| dag.node(SDValue { node: user, res: 0 }).ops[1])
             .collect();
-        users.into_iter().find_map(|destination| match self.register(destination) {
-            Some(Reg::Virt(v)) if self.function.classes[v as usize] == class => Some(Reg::Virt(v)),
-            _ => None,
-        })
+        users
+            .into_iter()
+            .find_map(
+                |destination| match self.register(destination) {
+                    Some(Reg::Virt(v)) if self.function.classes[v as usize] == class => Some(Reg::Virt(v)),
+                    _ => None,
+                },
+            )
     }
 
     fn register(
@@ -299,6 +309,10 @@ impl Emitter<'_> {
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
                 Operand::Symbol(name.clone(), 0)
+            }
+            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => {
+                self.table_taken = Some(index);
+                Operand::Symbol(table_symbol(&self.function.name, index), 0)
             }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
             _ => match self.values.get(&(value.node, value.res)) {
@@ -511,6 +525,11 @@ impl Emitter<'_> {
             // instruction table: an undefined value, a zero until MIR has
             // `undef` (the pin's ProcessImplicitDefs drops it)
             ISD::Machine(10) => {
+                // the glue a `CALLSEQ_END` of no bytes is given
+                // (`DYNAMIC_STACKALLOC`'s expansion) is no register
+                if !is_value(n.values[0]) {
+                    return Ok(());
+                }
                 let name = match n.values[0].size_in_bits() {
                     8 => "MOVI8di",
                     16 => "MOVI16di",
@@ -544,9 +563,27 @@ impl Emitter<'_> {
                 if name == "EXTRACT_SUBREG" {
                     let dst = self.new_reg(Class::of_type(n.values[0]));
                     self.values.insert((node, 0), dst);
-                    let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                    let Some(Operand::Use(mut src)) = self.operand(n.ops[0])? else {
                         return Err("EXTRACT_SUBREG of a value that is no register".to_owned());
                     };
+                    // `ConstrainForSubReg`: only data registers have a byte or
+                    // word sub-register, so a 32-bit source is constrained to
+                    // `Dr32`, or copied into one where it cannot be.
+                    if let Reg::Virt(v) = src {
+                        if matches!(
+                            self.function.classes[v as usize],
+                            Class::Xr32 | Class::Ar32 | Class::Dr32
+                        ) {
+                            match self.function.classes[v as usize].meet(Class::Dr32) {
+                                Some(narrowed) => self.function.classes[v as usize] = narrowed,
+                                None => {
+                                    let data = self.new_reg(Class::Dr32);
+                                    into.push(Inst::copy(data, src));
+                                    src = data;
+                                }
+                            }
+                        }
+                    }
                     into.push(Inst::copy(dst, src));
                     return Ok(());
                 }
@@ -586,6 +623,14 @@ impl Emitter<'_> {
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
+                // The jump through a table names every block of it, so the
+                // passes see the successors (`MachineJumpTableInfo`).
+                if name == "JMP32j" {
+                    let table = self.table_taken.take().ok_or("an indirect jump of no jump table")?;
+                    let blocks = self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
+                    operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
+                    operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                }
                 let mut inst = op_inst(name, desc, operands);
                 // a volatile access keeps its place among the others
                 // (`hasOrderedMemoryRef`): no pass folds, moves or merges it
@@ -609,6 +654,15 @@ impl Emitter<'_> {
         }
         Ok(())
     }
+}
+
+/// The data symbol of jump table `index` of function `function`
+/// (`MachineFunction::getJTISymbol`).
+pub fn table_symbol(
+    function: &str,
+    index: u32,
+) -> String {
+    format!(".LJTI_{function}_{index}")
 }
 
 /// `InstrEmitter` for one function's blocks.
@@ -653,6 +707,8 @@ pub fn emit_with(
         save: Default::default(),
         saved: HashMap::default(),
         shape,
+        tables: &first.tables,
+        table_taken: None,
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();
@@ -660,6 +716,7 @@ pub fn emit_with(
         emitter.dag = &one.dag;
         emitter.values.clear();
         emitter.flags_from = None;
+        emitter.table_taken = None;
         emitter.saved.clear();
         emitter.save = emitter.nodes_to_save(one);
         let mut insts = Vec::new();

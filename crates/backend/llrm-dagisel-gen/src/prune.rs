@@ -29,6 +29,7 @@ impl Pruner {
         cpu: &Cpu,
         predicates: &[String],
         ids: &Ids,
+        vts: &Ids,
     ) -> Result<Pruner, String> {
         let decided = predicates
             .iter()
@@ -39,9 +40,13 @@ impl Pruner {
                     .map_err(|e| format!("pattern predicate {i}: {e}"))
             })
             .collect::<Result<_, _>>()?;
+        // `vts` names every value type by number (`GenVT.inc`): the table
+        // prints most of them as bare numbers, which `ids` does not
+        // name.
         let dead_vts = ids
             .0
             .iter()
+            .chain(vts.0.iter())
             .filter_map(|(name, &value)| name.strip_prefix("MVT::").filter(|n| cpu.dead_type(n)).map(|_| value as u16))
             .collect();
         Ok(Pruner { decided, dead_vts, open: Open::new() })
@@ -133,7 +138,7 @@ mod tests {
     fn pruner(predicates: &[&str]) -> Pruner {
         let cpu = Cpu::load(FEATURES, "i486").unwrap();
         let predicates: Vec<String> = predicates.iter().map(|p| p.to_string()).collect();
-        Pruner::new(&cpu, &predicates, &Ids::parse("MVT::i32 7\nMVT::v4i32 75\n").unwrap()).unwrap()
+        Pruner::new(&cpu, &predicates, &Ids::parse("MVT::i32 7\nMVT::v4i32 75\n").unwrap(), &Ids::default()).unwrap()
     }
 
     fn item(m: Matcher) -> Node {

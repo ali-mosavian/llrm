@@ -1429,6 +1429,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "lower-constant-intrinsics@1597",
             "rotate@1621",
             "loop-interchange@1631",
+            "loop-vectorize@1354",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
@@ -1443,6 +1444,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "mergeicmps@1672",
             "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
@@ -2259,6 +2261,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "lower-constant-intrinsics@1597",
             "rotate@1621",
             "loop-interchange@1631",
+            "loop-vectorize@1354",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
@@ -2273,6 +2276,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "mergeicmps@1672",
             "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
@@ -3204,4 +3208,35 @@ b:
     assert!(off.contains("urem"), "premise: with no passes the idiom stays\n{off}");
     let after = run(pipeline::Options::standard());
     assert!(after.contains("udiv") && !after.contains("urem"), "{after}");
+}
+
+/// `x == INT_MAX ? INT_MIN : x + 1` (`add nsw`) of `foldSelectValueEquivalence`'s
+/// own comment reached the backend as a compare and a select; -O2 makes it
+/// the add.
+#[test]
+fn test_o2_folds_a_select_guarding_an_overflow_to_the_add() {
+    let text = "define i32 @f(i32 %x) {
+b:
+  %c = icmp eq i32 %x, 2147483647
+  %a = add nsw i32 %x, 1
+  %s = select i1 %c, i32 -2147483648, i32 %a
+  ret i32 %s
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("select"), "premise: with no passes the select stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(!after.contains("select") && after.contains("add i32 %x, 1"), "{after}");
 }
