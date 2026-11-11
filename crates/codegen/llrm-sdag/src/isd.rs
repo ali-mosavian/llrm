@@ -220,6 +220,17 @@ pub enum ISD {
     IntrinsicWChain,
     IntrinsicVoid,
 
+    /// `BUILD_VECTOR`: one scalar per lane. An operand may be wider than the
+    /// lane (`PromoteIntOp_BUILD_VECTOR`): the extra bits are ignored.
+    BuildVector,
+    /// `SCALAR_TO_VECTOR`: the scalar in lane 0, the rest undefined.
+    ScalarToVector,
+    /// `INSERT_VECTOR_ELT`: `(vector, element, index)`.
+    InsertVectorElt,
+    /// `VECTOR_SHUFFLE`: `(v1, v2)` and a mask of `v1`'s lane count in
+    /// `NodeData::Shuffle`; -1 is an undefined lane, `n..2n` picks `v2`.
+    VectorShuffle,
+
     Target(u16),
     Machine(u32),
 }
@@ -407,6 +418,10 @@ impl ISD {
             IntrinsicWoChain => "intrinsic_wo_chain",
             IntrinsicWChain => "intrinsic_w_chain",
             IntrinsicVoid => "intrinsic_void",
+            BuildVector => "BUILD_VECTOR",
+            ScalarToVector => "scalar_to_vector",
+            InsertVectorElt => "insert_vector_elt",
+            VectorShuffle => "vector_shuffle",
             Target(code) => return super::target_names::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };

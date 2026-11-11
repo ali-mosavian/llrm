@@ -192,6 +192,16 @@ pub trait TargetInstrInfo {
         Vec::new()
     }
 
+    /// `getInstrCost(COPY, {to, from})`: see `GreedyEnv::copy_register_cost`.
+    fn copy_register_cost(
+        &self,
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
+
     /// `foldMemoryOperand`.
     fn fold_memory_operand(
         &self,

@@ -8,7 +8,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_text;
 
-const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     @g = global i8 7\n\
     define i8 @clr(i8 %x) {\nentry:\n  store i8 0, ptr @g\n  br label %next\nnext:\n  %v = load i8, ptr @g\n  %r = add i8 %v, %x\n  ret i8 %r\n}\n\
     define void @clrp(ptr %p) {\n  store i8 0, ptr %p\n  ret void\n}\n\
@@ -109,7 +109,7 @@ fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
 #[test]
 fn a_far_bra_in_a_function_becomes_jmp_and_runs() {
     let mut ir = String::from(
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
          define i8 @far(i8 %x) {\nentry:\n  %c = icmp eq i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  %t0 = add i8 %x, 1\n",
     );
     ir.push_str("  %t1 = add i8 %t0, %x\n");
@@ -159,7 +159,7 @@ fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
     }
 }
 
-const STEPS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+const STEPS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     define i8 @countdown(i8 %n) {\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %loop\n\
     loop:\n  %i = phi i8 [ %n, %entry ], [ %j, %loop ]\n  %steps = phi i8 [ 0, %entry ], [ %s2, %loop ]\n\
       %j = sub i8 %i, 1\n  %s2 = add i8 %steps, 3\n  %c = icmp ne i8 %j, 0\n  br i1 %c, label %loop, label %done\n\
@@ -223,7 +223,7 @@ fn a_step_of_one_is_done_in_place() {
     assert!(!cmos.contains("adc #1") && !cmos.contains("sbc #1"), "{cmos}");
 }
 
-const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n\
     define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
     define i8 @thrice(ptr %f, i8 %x) {\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}\n\
     define i8 @plus(i8 %x, i8 %y) {\n  %r = add i8 %x, %y\n  ret i8 %r\n}\n\

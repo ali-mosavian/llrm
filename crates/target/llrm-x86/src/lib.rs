@@ -14,6 +14,7 @@ pub mod mc;
 pub mod register_cost;
 pub use llrm_target::instr as parse;
 pub mod select;
+pub mod sizes;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

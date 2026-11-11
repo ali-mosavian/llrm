@@ -271,13 +271,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul
-                | ISD::Add
-                | ISD::Sub
-                | ISD::And
-                | ISD::Or
-                | ISD::SetCC
-                | ISD::GlobalAddress
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress
         )
     }
 
@@ -417,18 +411,22 @@ impl LegalizeHooks for Aarch64Lowering {
             // `LowerShiftParts`
             // ([L13980](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L13980)).
             ISD::ShlParts | ISD::SrlParts | ISD::SraParts => {
-                let (lo, hi) = llrm_codegen::backend::selectiondag::expand_funnel::expand_shift_parts(dag, node, EVT::I32);
+                let (lo, hi) =
+                    llrm_codegen::backend::selectiondag::expand_funnel::expand_shift_parts(dag, node, EVT::I32);
                 let vt = dag.value_type(lo);
                 Some(dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi]))
             }
             // `LowerLOAD` and `LowerSTORE`: an `i128` access is the pin's own
-            // only when it is volatile or atomic (`ldxp`/`stxp`, `LowerStore128`);
-            // every other is declined, and the legalizer splits it.
+            // only when it is volatile or atomic
+            // (`ldxp`/`stxp`, `LowerStore128`); every other is declined, and
+            // the legalizer splits it.
             ISD::Load | ISD::Store => match dag.node(node).data {
                 NodeData::Mem(info) if info.volatile || info.ordering.is_some() => None,
                 _ => return None,
             },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
+            ISD::BuildVector => super::vector::lower_build_vector(dag, node),
+            ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
@@ -585,7 +583,9 @@ fn actions(
     opt_for_size: bool,
 ) -> std::rc::Rc<TargetLowering> {
     let key = ([features.cssc, features.lse, features.outline_atomics, features.lse2], opt_for_size);
-    if let Some(found) = ACTIONS.with(|all| all.borrow().iter().find(|(one, _)| *one == key).map(|(_, tli)| tli.clone())) {
+    if let Some(found) =
+        ACTIONS.with(|all| all.borrow().iter().find(|(one, _)| *one == key).map(|(_, tli)| tli.clone()))
+    {
         return found;
     }
     let mut tli = TargetLowering::aarch64(features);
