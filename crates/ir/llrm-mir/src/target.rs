@@ -83,6 +83,10 @@ pub struct Tuning {
     /// its bytes nor its executed work grow (`Tti::unroll_trial_threshold`). `None`: no
     /// trial.
     pub unroll_trial_at_o1: Option<u32>,
+    /// Whether that trial takes only a step of a nest of known trips (a lone loop the -O1 rule refused
+    /// did not pay on x86-m32: 1 of 46 programs). False: any refused loop under the threshold, which
+    /// is what the 6502 and m68k trials were fit on (float_in_place_update: 9441 B at -O1 against 19 B).
+    pub unroll_trial_nests_only: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -479,6 +483,7 @@ impl Tuning {
         branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
         unroll_trial_at_o1: None,
+        unroll_trial_nests_only: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
