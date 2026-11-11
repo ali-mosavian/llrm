@@ -69,6 +69,11 @@ pub fn take() -> (Vec<String>, u64) {
     ELIGIBLE.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
+/// Puts back what [`take`] returned, for the compile whose candidates they were.
+pub fn restore(noted: (Vec<String>, u64)) {
+    ELIGIBLE.with(|list| *list.borrow_mut() = noted);
+}
+
 /// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no bytes (`added`
 /// <= 0) and costs no work (`saved` >= 0, work being what the code is expected to execute). The
 /// one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
@@ -121,4 +126,255 @@ pub const ROTATION_TRIAL_MAX_INSTRUCTIONS: usize = 4096;
 /// is smaller. A tie keeps the pass's own result.
 pub fn keeps_at_size(added: i64) -> bool {
     added < 0
+}
+
+/// The names of the functions whose finished bodies differ between two modules
+/// of one source (one that only one of them defines counts).
+pub fn differing(
+    one: &llrm_mir::module::Module,
+    other: &llrm_mir::module::Module,
+) -> std::collections::BTreeSet<String> {
+    // Printed, not compared: a constant's id means a value only within its own
+    // module.
+    let bodies = |module: &llrm_mir::module::Module| -> std::collections::BTreeMap<String, Option<String>> {
+        module
+            .globals
+            .iter()
+            .filter_map(|global| {
+                let function = global.function().filter(|one| !one.is_declaration());
+                Some((
+                    global.name.as_deref()?.to_owned(),
+                    function.map(|one| llrm_mir::print::body(&module.context, one)),
+                ))
+            })
+            .collect()
+    };
+    let (one, other) = (bodies(one), bodies(other));
+    one.keys().chain(other.keys()).filter(|name| one.get(*name) != other.get(*name)).cloned().collect()
+}
+
+/// `module` with every function outside `keep` cut to its declaration: the
+/// backend then works on `keep` alone, in a module whose other functions stand
+/// as they do in both versions.
+pub fn only(
+    module: &llrm_mir::module::Module,
+    keep: &std::collections::BTreeSet<String>,
+) -> llrm_mir::module::Module {
+    let mut cut = module.clone();
+    for global in &mut cut.globals {
+        let named = global.name.as_deref().is_some_and(|name| keep.contains(name));
+        if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind
+            && !named
+            && !function.is_declaration()
+        {
+            **function = function.declaration();
+        }
+    }
+    cut
+}
+
+/// DEVIATE OS-INLINE-TRIAL (beyond the pin; owner 6502-c, exit 2026-12-05): a call site the -Os
+/// byte model refused within its own error, to be inlined in a second compile and kept if the
+/// finished functions of its chain are smaller. The model is fit to the bytes the backend writes
+/// (`Tti::opt_size_inline_trial_by_bytes`) and is within 25% of them for two functions in three, so
+/// a copy it refuses by less than that is the backend's to decide. `caller` and `callees` are names:
+/// the compile is deterministic up to the site, so the same site is found again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Site {
+    pub caller: String,
+    pub callees: Vec<String>,
+}
+
+thread_local! {
+    /// The sites the second compile inlines, while it runs.
+    static INLINED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+    /// The sites a compile refused within the model's error.
+    static REFUSED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Runs `body` with `sites` inlined whenever the pass reaches them.
+pub fn with_inlined<T>(
+    sites: &[Site],
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = INLINED.with(|cell| cell.replace(sites.to_vec()));
+    let value = body();
+    INLINED.with(|cell| *cell.borrow_mut() = before);
+    value
+}
+
+/// Whether the trial compile in force inlines this site.
+pub(crate) fn inlines(
+    caller: &str,
+    callees: &[String],
+) -> bool {
+    INLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
+}
+
+/// Whether a trial compile is running.
+pub(crate) fn inlining() -> bool {
+    INLINED.with(|list| !list.borrow().is_empty())
+}
+
+/// Notes a site refused within the model's error.
+pub(crate) fn note_refused(site: Site) {
+    REFUSED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.contains(&site) {
+            list.push(site);
+        }
+    });
+}
+
+/// The sites noted since the last call.
+pub fn take_refused() -> Vec<Site> {
+    REFUSED.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// Which of the sites' groups the finished code keeps: sites that share a function (a caller or a
+/// callee) are one group, kept whole if the bytes of its functions are fewer in the second compile
+/// (`other`) than in the first (`kept`; a function a compile does not define is 0). A group whose
+/// caller one compile did not define is not priced: another inline took it, and its bytes went
+/// with that. Returns one flag per site.
+pub fn accepted(
+    sites: &[Site],
+    kept: &std::collections::BTreeMap<String, i64>,
+    other: &std::collections::BTreeMap<String, i64>,
+) -> Vec<bool> {
+    // union-find by shared name
+    let mut group: Vec<usize> = (0..sites.len()).collect();
+    for first in 0..sites.len() {
+        for second in first + 1..sites.len() {
+            if names(&sites[first]).iter().any(|name| names(&sites[second]).contains(name)) {
+                let (a, b) = (root(&group, first), root(&group, second));
+                group[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let roots: Vec<usize> = (0..sites.len()).map(|one| root(&group, one)).collect();
+    (0..sites.len())
+        .map(|site| {
+            let members: Vec<&Site> = (0..sites.len()).filter(|one| roots[*one] == roots[site]).map(|one| &sites[one]).collect();
+            if members.iter().any(|one| !kept.contains_key(&one.caller) || !other.contains_key(&one.caller)) {
+                return false;
+            }
+            let mut every: Vec<&str> = members.iter().flat_map(|one| names(one)).collect();
+            every.sort_unstable();
+            every.dedup();
+            let sum = |bytes: &std::collections::BTreeMap<String, i64>| -> i64 {
+                every.iter().map(|name| bytes.get(*name).copied().unwrap_or(0)).sum()
+            };
+            sum(other) < sum(kept)
+        })
+        .collect()
+}
+
+/// The caller and the callees of `site`.
+fn names(site: &Site) -> Vec<&str> {
+    std::iter::once(site.caller.as_str()).chain(site.callees.iter().map(String::as_str)).collect()
+}
+
+fn root(
+    group: &[usize],
+    mut one: usize,
+) -> usize {
+    while group[one] != one {
+        one = group[one];
+    }
+    one
+}
+
+#[cfg(test)]
+mod inline_tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn bytes(list: &[(&str, i64)]) -> BTreeMap<String, i64> {
+        list.iter().map(|(name, n)| ((*name).to_owned(), *n)).collect()
+    }
+
+    fn site(
+        caller: &str,
+        callees: &[&str],
+    ) -> Site {
+        Site { caller: caller.to_owned(), callees: callees.iter().map(|one| (*one).to_owned()).collect() }
+    }
+
+    /// memcpy_libcall -Os: the model read the copies of `same` as +52 B, the backend writes -58 B once
+    /// `same` is gone. The chain's functions are priced together; the callee's bytes leave with it.
+    #[test]
+    fn a_chain_whose_functions_are_fewer_bytes_is_kept_with_its_callee_gone() {
+        let sites = [site("main", &["same"])];
+        let kept = bytes(&[("main", 300), ("same", 80)]);
+        let other = bytes(&[("main", 322)]);
+        assert_eq!(accepted(&sites, &kept, &other), [true]);
+        assert_eq!(accepted(&sites, &kept, &bytes(&[("main", 380)])), [false], "a tie or more is put back");
+    }
+
+    /// Two callers of one callee are one group: priced apart, each would count the callee's bytes as
+    /// its own saving.
+    #[test]
+    fn callers_of_one_callee_are_priced_as_one_group() {
+        let sites = [site("a", &["h"]), site("b", &["h"])];
+        let kept = bytes(&[("a", 100), ("b", 100), ("h", 50)]);
+        let other = bytes(&[("a", 130), ("b", 130)]);
+        assert_eq!(accepted(&sites, &kept, &other), [false, false], "a +60 B, h -50 B: larger");
+        let cheaper = bytes(&[("a", 120), ("b", 120)]);
+        assert_eq!(accepted(&sites, &kept, &cheaper), [true, true]);
+    }
+
+    /// A caller another inline absorbed has no bytes of its own in one compile: that is not a saving.
+    #[test]
+    fn a_caller_a_compile_does_not_define_is_not_priced() {
+        let sites = [site("line", &["kernel"])];
+        let kept = bytes(&[("line", 100), ("kernel", 90)]);
+        assert_eq!(accepted(&sites, &kept, &bytes(&[])), [false]);
+    }
+
+    /// Sites of different chains are decided apart.
+    #[test]
+    fn unrelated_chains_are_decided_apart() {
+        let sites = [site("a", &["x"]), site("b", &["y"])];
+        let kept = bytes(&[("a", 100), ("x", 20), ("b", 100), ("y", 20)]);
+        let other = bytes(&[("a", 110), ("b", 130)]);
+        assert_eq!(accepted(&sites, &kept, &other), [true, false]);
+    }
+}
+
+#[cfg(test)]
+mod moved_tests {
+    use std::collections::BTreeSet;
+
+    use llrm_mir::module::Module;
+
+    use super::*;
+
+    fn module(first_returns: &str) -> Module {
+        llrm_mir::parse::module(&format!(
+            "define i32 @f() {{\n  ret i32 {first_returns}\n}}\ndefine i32 @g() {{\n  ret i32 7\n}}\ndeclare i32 @h()\n"
+        ))
+        .unwrap()
+    }
+
+    /// The trial's second backend run once covered the whole module, so a file
+    /// with one counted loop and 400 other functions compiled its backend
+    /// twice (memory_expansion.c -Os: 2.09x). It covers the functions whose
+    /// bodies differ, the others standing as declarations.
+    #[test]
+    fn the_second_backend_run_covers_only_the_functions_that_differ() {
+        let (one, other) = (module("1"), module("2"));
+        let cut = differing(&one, &other);
+        assert_eq!(cut, BTreeSet::from(["f".to_owned()]));
+        let kept = only(&one, &cut);
+        let defined = |name: &str| {
+            kept.globals
+                .iter()
+                .find(|g| g.name.as_deref() == Some(name))
+                .and_then(|g| g.function())
+                .is_some_and(|f| !f.is_declaration())
+        };
+        assert!(defined("f") && !defined("g"));
+        assert!(differing(&one, &module("1")).is_empty());
+    }
 }
