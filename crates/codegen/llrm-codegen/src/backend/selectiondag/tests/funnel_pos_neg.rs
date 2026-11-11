@@ -27,7 +27,6 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue, SDValue, SDValue) -> 
         branch_constant_selects: false,
         multiply_early_out: None,
         profile: None,
-        multiply_early_out: None,
     };
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
