@@ -1943,7 +1943,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `reduceLoadWidth` for `trunc (load p)` of a load nothing else reads.
+    /// `reduceLoadWidth` for `trunc (load p)` when nothing else reads the loaded
+    /// value (its chain may have users).
     fn reduce_load_width(
         &mut self,
         node: SDValue,
@@ -1957,7 +1958,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // narrower than the result stays an extending load.
         let stored = if info.ext.is_some() { info.mem_vt } else { wide };
         if info.volatile
-            || !self.dag.has_one_use(load.node)
+            || self.dag.users(load).count() != 1
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
