@@ -5253,6 +5253,28 @@ fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
     assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
 }
 
+/// COMPILE-OSROT: the rotation trial assembled the functions that differ twice and the module once
+/// more, so a module of two loop functions and a leaf that does not change cost three assemblies
+/// where two are the floor (x_jpeg_fixed -Os, 6 of 8 functions differ: 2.0x the compile time). Each
+/// of the three functions is selected once per assembly, twice in all.
+#[test]
+fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
+    let one = include_str!("tests_data/prefix_sums.ll");
+    let start = one.find("; Function Attrs").unwrap();
+    let end = one[start..].find("\n}\n").unwrap() + start + 3;
+    let function = &one[start..end];
+    let second = function.replace("@bench_prefix", "@bench_prefix2").replace("mul nsw i32 %11, 5", "mul nsw i32 %11, 7");
+    let text = format!(
+        "{}\n{second}\ndefine dso_local i32 @leaf(i32 %x) {{\n  ret i32 %x\n}}\n{}",
+        &one[..end],
+        &one[end..]
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+    compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
+    let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
+    assert_eq!(selections, 6, "{selections} selections of three functions");
+}
+
 /// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
 /// backend against it must too. `llrm-llc` ran the whole mid-end over any IR it was handed (a hand-made
 /// branch form of x_heapsort's child select compiled to the same 37,923 clk as the unedited IR), so
