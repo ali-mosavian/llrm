@@ -318,6 +318,17 @@ pub trait CombineHooks {
         false
     }
 
+    /// `isTruncateFree` as `ExtendUsesToFormExtLoad` asks it: a load another reader
+    /// takes narrow may be widened for an extension only if the truncate back is free.
+    /// The pin asks the same query as everywhere else; a target may answer it apart.
+    fn extend_uses_truncate_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.is_truncate_free(from, to)
+    }
+
     /// `TLI.isTruncateFree(from, to)`: truncating an integer needs no
     /// instruction. The pin's default is false; x86 says yes for any narrower
     /// integer.
@@ -2288,7 +2299,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         compares: &mut Vec<u32>,
     ) -> bool {
         let mut copy_to_reg = false;
-        let truncate_free = self.hooks.is_truncate_free(self.dag.value_type(node), self.dag.value_type(load));
+        let truncate_free = self.hooks.extend_uses_truncate_free(self.dag.value_type(node), self.dag.value_type(load));
         for &user in others {
             let user_value = SDValue { node: user, res: 0 };
             if op != ISD::AnyExtend && self.dag.opcode(user_value) == ISD::SetCC {
