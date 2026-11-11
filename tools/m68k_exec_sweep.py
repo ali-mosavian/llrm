@@ -68,7 +68,7 @@ def cache_dir(cc: str) -> Path:
         path = Path(cc).parent / name
         if path.exists():
             digest.update(path.read_bytes())
-    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h")]):
+    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h"), RUNTIME / "config/m68k/mulsi3.s"]):
         digest.update(source.read_bytes())
     digest.update(BUILD_FLAGS.encode())
     base = Path(os.environ.get("M68K_EXEC_CACHE") or Path.home() / ".cache/llrm-m68k-exec")
@@ -111,6 +111,11 @@ def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: s
 
         with ThreadPoolExecutor(jobs) as pool:
             objects = [o for o in pool.map(compile_one, sources) if o]
+        # __mulsi3 is hand-written (config/m68k/mulsi3.s; SF_MULSI3_EXTERNAL keeps int32.c's out)
+        mulsi3 = cache / f"rt_{cpu}_mulsi3.o"
+        defsym = ["--defsym", "M68020=1"] if cpu in ("68020", "68030", "68040", "68060") else []
+        subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-as", f"-m{cpu}", *defsym, "-o", str(mulsi3), str(RUNTIME / "config/m68k/mulsi3.s")], check=True, env=env)
+        objects.append(str(mulsi3))
         tmp = archive.with_suffix(".tmp")
         tmp.unlink(missing_ok=True)
         subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-ar", "rcs", str(tmp), *objects], check=True, env=env)
