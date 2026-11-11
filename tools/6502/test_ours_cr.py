@@ -169,6 +169,18 @@ class Members(unittest.TestCase):
         self.assertEqual([x[:2] for x in rows], [["int64_division", "ours"]], r.stdout[-200:])
         self.assertLess(int(rows[0][2]), 5000, "the generic C divide links 5519 B")
 
+    def test_a_function_main_does_not_reach_is_not_in_the_program(self):
+        """float_return -O2 was 5945 B against llvm-mos's 90: `scale` and `narrow` are external, nothing calls them, and they pulled the soft-float
+        (no section GC in the ca65/ld65 link). The ours column is compiled with -fwhole-program (2026-11-11)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "float_return"],
+                               capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            rows = [x.split("\t") for x in open(out).read().splitlines()]
+        self.assertEqual([x[:2] for x in rows], [["float_return", "ours"]], r.stdout[-200:])
+        self.assertLess(int(rows[0][2]), 1000, "the file's object keeps scale and narrow: 5945 B")
+
     def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
         """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
         compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
