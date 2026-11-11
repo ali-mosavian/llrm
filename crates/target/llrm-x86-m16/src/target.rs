@@ -368,10 +368,12 @@ impl Machine for Dos {
             // four cases over 28 values, a 56 B table, data +58 B and +60 B
             // over bcc.
             min_jump_table_density: Some(40),
-            // DEVIATE: a constant offset is a displacement of the access at
-            // m16; behind a sunk phi it costs an add and a register
-            // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
-            // select, +6 B, +36 clk).
+            // DEVIATE M16-KEEPDISP-1 (owner llrm-target-x86-m16, exit 2026-11-24):
+            // a constant offset is a displacement of the access at m16; behind
+            // a sunk phi it costs an add and a register (qbsp `r_point_leaf`:
+            // two `[bx+si+2|4]` loads became an index select, +6 B, +36 clk).
+            // SimplifyCFG's sink prices it (`displacement_sink_pays`): a long
+            // common tail still sinks (`r_recursive_world_node` 194 -> 176).
             keep_constant_displacements: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
