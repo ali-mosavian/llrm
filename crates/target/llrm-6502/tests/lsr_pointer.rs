@@ -90,3 +90,22 @@ fn a_rejected_formula_loses_without_overflow() {
     assert!(tti.is_lsr_cost_less(&ok, &loser));
     assert!(!tti.is_lsr_cost_less(&loser, &ok));
 }
+
+/// `do i++; while (i != n)` whose bound is read after the loop too. The bound
+/// is a cell the loop and the code after it share, so the count-down from it
+/// costs no cell the loop as written does not: the baseline left that cell
+/// out, the solution paid for it, and LSR dropped the count-down on the tie
+/// (known_loads_walks -O1 kept `cpx rc2`, +1,344 clocks, 2026-11-11).
+const SPIN: &str = "@g = global i8 0\n\
+    define i8 @f(i8 %n) {\nentry:\n  br label %l\n\
+    l:\n  %i = phi i8 [0, %entry], [%i1, %l]\n  store volatile i8 3, ptr @g\n  %i1 = add nuw i8 %i, 1\n  \
+    %c = icmp eq i8 %i1, %n\n  br i1 %c, label %out, label %l\n\
+    out:\n  store volatile i8 %n, ptr @g\n  ret i8 0\n}\n";
+
+#[test]
+fn a_count_down_to_a_bound_the_code_after_the_loop_reads_is_kept() {
+    let ir = format!("target datalayout = \"{}\"\n{SPIN}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    let body = text.split(".segment").next().unwrap();
+    assert!(!body.contains("cpx rc") && !body.contains("cmp rc"), "{body}");
+}

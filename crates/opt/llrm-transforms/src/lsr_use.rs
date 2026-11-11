@@ -515,9 +515,24 @@ pub struct Cost {
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_order`.
     pub size_bytes: u32,
+    /// DEVIATE LU20: the bounds of exit tests the baseline counted a register
+    /// for.
+    written_bounds: Vec<Scev>,
 }
 
 impl Cost {
+    /// DEVIATE LU21: `bound` is rated as a register of its own; LU20's stand-in
+    /// for it goes.
+    pub fn replace_written_bound(
+        &mut self,
+        bound: Scev,
+    ) {
+        if let Some(at) = self.written_bounds.iter().position(|&one| one == bound) {
+            self.written_bounds.swap_remove(at);
+            self.c.num_regs -= 1;
+        }
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -893,6 +908,9 @@ impl Cost {
                 && r.se.is_loop_invariant(r.cx, start, Some(r.l))
             {
                 self.c.num_regs += 1;
+                if let Some(bound) = exit_bound(r.se, start) {
+                    self.written_bounds.push(bound);
+                }
             }
             if loop_cost > 0 && self.size && r.tti.lsr_size_order() {
                 self.size_bytes += 3;
@@ -995,6 +1013,25 @@ fn cx_loop_contains(
     inner: BlockId,
 ) -> bool {
     cx.loops.get_loop_for(outer).is_some_and(|lp| lp.contains_loop(cx.loops.get_loop_for(inner)))
+}
+
+/// The value an exit test's folded start `c - bound` negates: `bound`.
+fn exit_bound(
+    se: &ScalarEvolution,
+    start: Scev,
+) -> Option<Scev> {
+    let negated = |se: &ScalarEvolution, s: Scev| match se.scev_type(s) {
+        Type::Mul => match se.operands(s).iter().map(|op| op.scev).collect::<Vec<_>>()[..] {
+            [a, b] if se.as_constant(a).is_some_and(|c| c.sext_value() == -1) => Some(b),
+            [a, b] if se.as_constant(b).is_some_and(|c| c.sext_value() == -1) => Some(a),
+            _ => None,
+        },
+        _ => None,
+    };
+    match se.scev_type(start) {
+        Type::Add => se.operands(start).iter().find_map(|op| negated(se, op.scev)),
+        _ => negated(se, start),
+    }
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1123

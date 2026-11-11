@@ -476,6 +476,8 @@ pub struct Collection<'a, 'b> {
     /// Interesting use types, to reuse by truncation.
     pub types: IndexSet<Ty>,
     pub baseline_cost: Cost,
+    /// The registers the baseline cost has rated.
+    pub baseline_regs: HashSet<Scev>,
     pub changed: bool,
     /// The equality compares whose operands the caller is to swap, so the
     /// operand to replace is the left one.
@@ -523,6 +525,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: self.factors.clone(),
             types: self.types.clone(),
             baseline_cost: self.baseline_cost.clone(),
+            baseline_regs: self.baseline_regs.clone(),
             changed: self.changed,
             swapped_compares: self.swapped_compares.clone(),
             insert_attempts: self.insert_attempts,
@@ -563,6 +566,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: IndexSet::default(),
             types: IndexSet::default(),
             baseline_cost: Cost::new(),
+            baseline_regs: HashSet::default(),
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
@@ -841,7 +845,6 @@ impl<'a, 'b> Collection<'a, 'b> {
         let cx = self.cx;
         let lp = cx.loops.get_loop_for(self.l).expect("a loop");
         // For the baseline cost.
-        let mut regs: HashSet<Scev> = HashSet::default();
         let visited_regs: HashSet<Scev> = HashSet::default();
         let mut visited_uses: HashSet<usize> = HashSet::default();
 
@@ -950,7 +953,14 @@ impl<'a, 'b> Collection<'a, 'b> {
                     size: self.size,
                     across_call: self.across_call,
                 };
-                self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
+                self.baseline_cost.rate_formula(
+                    &mut rating,
+                    &f,
+                    &mut self.baseline_regs,
+                    &visited_regs,
+                    &self.uses[lu_idx],
+                    None,
+                );
                 visited_uses.insert(lu_idx);
             }
 
@@ -1063,6 +1073,36 @@ impl<'a, 'b> Collection<'a, 'b> {
                         lu.all_fixups_outside_loop &= outside;
                         lu.all_fixups_unconditional &= unconditional;
                         self.insert_supplemental_formula(se, s, lu_idx);
+                        // DEVIATE LU21: the baseline pays for the value this use
+                        // pins, as the solution does (the pin's baseline leaves it
+                        // out, so a rewrite that keeps it never looks cheaper
+                        // there); it stands in for the register LU20 counted for
+                        // the same value.
+                        if self.tti.lsr_written_exit_bound_is_live() {
+                            let mut f = Formula::default();
+                            f.initial_match(se, cx, s, self.l);
+                            let mut rating = Rating {
+                                se,
+                                cx,
+                                tti: self.tti,
+                                l: self.l,
+                                hardware_loop_profitable: self.hardware_loop_profitable,
+                                as_written: true,
+                                other_register_units: self.pressure_units(),
+                                size: self.size,
+                                across_call: self.across_call,
+                            };
+                            let visited = HashSet::default();
+                            self.baseline_cost.rate_formula(
+                                &mut rating,
+                                &f,
+                                &mut self.baseline_regs,
+                                &visited,
+                                &self.uses[lu_idx],
+                                None,
+                            );
+                            self.baseline_cost.replace_written_bound(s);
+                        }
                         break;
                     }
                 }
