@@ -90,3 +90,28 @@ fn a_rejected_formula_loses_without_overflow() {
     assert!(tti.is_lsr_cost_less(&ok, &loser));
     assert!(!tti.is_lsr_cost_less(&loser, &ok));
 }
+
+/// rep_count's `for (i...) for (j...) s += g[i][j]` over rows of 54 bytes.
+/// The pin's LSR skips the outer loop, so `i * 54` fed the inner loop through
+/// `__mulhi3` on every row: rep_count -O1 kept the call (2026-11-11).
+const NEST: &str = "@g = global [16 x [54 x i8]] zeroinitializer\n\
+    define i32 @f() {\nentry:\n  br label %outer\n\
+    outer:\n  %s = phi i32 [0, %entry], [%s1, %latch]\n  %i = phi i16 [0, %entry], [%i1, %latch]\n  \
+    %row = getelementptr inbounds nuw [54 x i8], ptr @g, i16 %i\n  br label %inner\n\
+    inner:\n  %t = phi i32 [%s, %outer], [%t1, %inner]\n  %j = phi i16 [0, %outer], [%j1, %inner]\n  \
+    %p = getelementptr inbounds nuw i8, ptr %row, i16 %j\n  %v = load i8, ptr %p\n  %x = sext i8 %v to i32\n  \
+    %t1 = add nsw i32 %t, %x\n  %j1 = add nuw nsw i16 %j, 1\n  %jc = icmp samesign ult i16 %j, 53\n  \
+    br i1 %jc, label %inner, label %latch\n\
+    latch:\n  %s1 = phi i32 [%t1, %inner]\n  %i1 = add nuw nsw i16 %i, 1\n  %ic = icmp samesign ult i16 %i, 15\n  \
+    br i1 %ic, label %outer, label %out\n\
+    out:\n  ret i32 %s1\n}\n";
+
+#[test]
+fn an_outer_loops_row_address_steps_by_the_row_size_and_calls_no_multiply() {
+    let ir = format!("target datalayout = \"{}\"\n{NEST}", datalayout());
+    for level in [Level::O1, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        let body = text.split(".segment").next().unwrap();
+        assert!(!body.contains("mulhi"), "{level:?}: {body}");
+    }
+}
