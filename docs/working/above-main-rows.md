@@ -347,3 +347,4 @@ Files, one writer each (merge direction one way: m68k-machine-with branches off 
 ## N/A cells (not like)
 
 huge, lru and textfill (bench) do not compile at m68k on any CPU or level: DOS-only sources (`__huge`, `far`, the `SCREEN` macro). They are N/A in sweeps, not errors, and not counted in the cell totals (438 cells = 420 compiled + 18 N/A).
+| Z80-LONG-ORDER-O1-DIV | z80 `div_constants_long`, `div_constants_ulong` at -O1: bytes down, clocks up (list: `docs/working/z80-long-order-ab-2026-11-10.md`) | O1 | clocks | tip llc f90bb78cf92f | candidate llc 18f1eb5f2ad7 | -1320 B / +10.7M T (+2.3%) and -719 B / +11.1M T (+3.8%); both below the best-SDCC bar on both axes, both were above it on bytes | O1 relative-regret call-against-inline price; first differing decision not yet read | z80 (z80-argpush) | 2026-11-24 | |
