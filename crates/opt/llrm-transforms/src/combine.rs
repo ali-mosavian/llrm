@@ -297,14 +297,14 @@ fn handle_only_live_successor(
 }
 
 /// The inputs of `to`'s phis that come over the edge from `from` become
-/// poison. The phis that changed.
+/// poison. The phis that changed, each with the inputs it lost.
 pub(crate) fn poison_phi_inputs(
     context: &mut Context,
     function: &mut Function,
     from: BlockId,
     to: BlockId,
-) -> Vec<InstId> {
-    let mut phis = Vec::new();
+) -> Vec<(InstId, Vec<Operand>)> {
+    let mut phis: Vec<(InstId, Vec<Operand>)> = Vec::new();
     for phi in function.iter_block(to).collect::<Vec<_>>() {
         if function.instruction(phi).opcode != Opcode::Phi {
             break;
@@ -323,8 +323,9 @@ pub(crate) fn poison_phi_inputs(
                 )
             {
                 function.set_operand(phi, at * 2, poison);
-                if phis.last() != Some(&phi) {
-                    phis.push(phi);
+                match phis.last_mut() {
+                    Some((last, lost)) if *last == phi => lost.push(value),
+                    _ => phis.push((phi, vec![value])),
                 }
             }
         }

@@ -418,3 +418,16 @@ fn a_switch_that_the_run_makes_constant_cuts_its_dead_edges_too() {
     assert!(out.contains("ret i8 1"), "{out}");
     assert!(!out.contains("store"), "{out}");
 }
+
+/// A phi that only dead-edge phi inputs read is dead once they are poison
+/// (`replaceUse` queues the old input): the join kept it (known_loads_walks
+/// `f`: one dead phi left in the early InstCombine's output, +1 instruction).
+#[test]
+fn a_phi_only_dead_edges_fed_is_removed() {
+    let mut module = parsed(
+        "define i8 @f(i8 %x, i1 %k) {\nb0:\n  br i1 %k, label %l, label %r\nl:\n  br label %m\nr:\n  br label %m\nm:\n  %q = phi i8 [ 1, %l ], [ 2, %r ]\n  %c = icmp ult i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi i8 [ %q, %a ], [ 7, %b ]\n  %s = phi i8 [ %q, %a ], [ 8, %b ]\n  %t = add i8 %p, %s\n  ret i8 %t\n}\n",
+    );
+    assert!(combined(&mut module));
+    let out = printed(&module);
+    assert!(!out.contains("phi i8 [ 1, %l ]"), "{out}");
+}

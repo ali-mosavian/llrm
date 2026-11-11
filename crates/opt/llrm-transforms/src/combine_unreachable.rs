@@ -28,7 +28,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 
-use crate::combine::{Combiner, defining, poison_phi_inputs};
+use crate::combine::{Combiner, defining, handle_use_count_decrement, poison_phi_inputs};
 
 impl Combiner<'_> {
     /// `handlePotentiallyDeadSuccessors`: `block` goes to `live` only (none for
@@ -116,7 +116,11 @@ impl Combiner<'_> {
         if !self.dead_edges.insert((from, to)) {
             return;
         }
-        for phi in poison_phi_inputs(self.context, self.function, from, to) {
+        for (phi, lost) in poison_phi_inputs(self.context, self.function, from, to) {
+            // `replaceUse`: the input that was read is looked at again.
+            for old in lost {
+                handle_use_count_decrement(&mut self.worklist, self.function, old);
+            }
             self.add_to_worklist(phi);
             self.made_ir_change = true;
         }
