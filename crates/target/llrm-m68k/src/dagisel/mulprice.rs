@@ -59,17 +59,24 @@ pub enum Mode {
 #[derive(Clone, Default)]
 pub struct Chain {
     off: bool,
+    pin: bool,
     used: Rc<Cell<bool>>,
 }
 
 impl Chain {
     pub fn of(mode: Mode) -> Chain {
-        Chain { off: mode == Mode::Kept, used: Rc::default() }
+        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, used: Rc::default() }
     }
 
     /// Whether this build decomposed at least one multiply.
     pub fn used(&self) -> bool {
         self.used.get()
+    }
+
+    /// Whether a chain beyond the pin's shape may be taken: not in a build
+    /// that follows the pin, nor one that keeps the multiply.
+    pub(super) fn allows_beyond_pin(&self) -> bool {
+        !self.pin && !self.off
     }
 
     pub(super) fn allows(&self, yes: bool) -> bool {
@@ -82,7 +89,7 @@ impl Chain {
 }
 
 /// `(bytes, clocks)` of `text` on `cpu`: `bytes` are the instruction's length.
-fn one(
+pub(super) fn one(
     cpu: Cpu,
     text: &str,
     bytes: usize,
@@ -91,13 +98,13 @@ fn one(
     (bytes, clocks)
 }
 
-fn sum(parts: impl IntoIterator<Item = (usize, u32)>) -> (usize, u32) {
+pub(super) fn sum(parts: impl IntoIterator<Item = (usize, u32)>) -> (usize, u32) {
     parts.into_iter().fold((0, 0), |(b, c), (pb, pc)| (b + pb, c + pc))
 }
 
 /// A shift of a data register by `amount`: the count in the instruction up to
 /// 8, else in a register set by `moveq`.
-fn shift(
+pub(super) fn shift(
     cpu: Cpu,
     amount: u32,
 ) -> (usize, u32) {

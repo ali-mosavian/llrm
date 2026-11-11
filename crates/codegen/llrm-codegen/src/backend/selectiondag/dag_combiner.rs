@@ -53,6 +53,20 @@ pub enum CombineLevel {
     AfterLegalizeDag,
 }
 
+/// A multiply by a constant as shifts, adds and subtracts of the multiplicand
+/// (and a negate), built by the target's own search
+/// ([`CombineHooks::synth_mul_chain`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MulPlan {
+    /// The multiplicand.
+    Multiplicand,
+    /// The value shifted left by a constant.
+    Shl(Box<MulPlan>, u32),
+    Add(Box<MulPlan>, Box<MulPlan>),
+    Sub(Box<MulPlan>, Box<MulPlan>),
+    Neg(Box<MulPlan>),
+}
+
 /// The machine opcodes of a target's multiply of two half-width operands into
 /// a full-width product (`mulu.w` / `muls.w`).
 #[derive(Clone, Copy)]
@@ -240,6 +254,19 @@ pub trait CombineHooks {
     /// the pin gains it.
     fn factor_trailing_zeros_of_mul(&self) -> bool {
         false
+    }
+
+    /// DEVIATE: the cheapest chain for `x * c` by the target's own prices
+    /// (Bernstein's search), taken where the pin's `2^n +- 1` shape above does
+    /// not apply or costs more. The pin has no such search. None keeps the
+    /// multiply. Owner: llrm-target-m68k (G2). Exit: 2026-12-20, when a second
+    /// target measures it or the pin gains it.
+    fn synth_mul_chain(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> Option<MulPlan> {
+        None
     }
 
     /// DEVIATE: [`Self::decompose_mul_by_constant`] with the multiplicand, for
@@ -4133,6 +4160,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(decomposed);
                 }
             }
+            if let Some(plan) = self.hooks.synth_mul_chain(vt, c) {
+                return Some(self.build_mul_plan(&plan, n0, vt));
+            }
         }
         // `(mul (shl x, c1), c2)` is `(mul x, c2 << c1)`.
         if self.dag.opcode(n0) == ISD::Shl {
@@ -4161,6 +4191,35 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The nodes of a [`MulPlan`] over the multiplicand `x`.
+    fn build_mul_plan(
+        &mut self,
+        plan: &MulPlan,
+        x: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        match plan {
+            MulPlan::Multiplicand => x,
+            MulPlan::Shl(inner, by) => {
+                let inner = self.build_mul_plan(inner, x, vt);
+                let amount = self.shift_amount(vt, *by);
+                self.dag.get_node(ISD::Shl, vt, &[inner, amount])
+            }
+            MulPlan::Add(a, b) => {
+                let (a, b) = (self.build_mul_plan(a, x, vt), self.build_mul_plan(b, x, vt));
+                self.dag.get_node(ISD::Add, vt, &[a, b])
+            }
+            MulPlan::Sub(a, b) => {
+                let (a, b) = (self.build_mul_plan(a, x, vt), self.build_mul_plan(b, x, vt));
+                self.dag.get_node(ISD::Sub, vt, &[a, b])
+            }
+            MulPlan::Neg(inner) => {
+                let inner = self.build_mul_plan(inner, x, vt);
+                self.dag.get_negative(inner, vt)
+            }
+        }
     }
 
     /// The half-by-half multiply of `x * y`, where both are known to fit the
