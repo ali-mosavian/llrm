@@ -588,6 +588,7 @@ fn a_load_from_another_slot_is_not_ordered_after_a_store() {
         Regs(&crate::REGISTER_INFO),
         64,
         &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
     );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
@@ -625,6 +626,7 @@ fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
         registers,
         body.bits,
         &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
     );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
@@ -834,6 +836,53 @@ fn a_constant_made_in_a_loop_is_made_in_its_preheader() {
             "loop",
             vec![
                 wide(divisor, 512),
+                Op::I(Inst::Divide { op: Div::Udiv, width: WIDTHS[1], rd: quotient, rn: value, rm: divisor }),
+                Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: true, set_flags: false },
+                    width: WIDTHS[1],
+                    rd: counter,
+                    rn: counter,
+                    imm12: 1,
+                    shift12: false,
+                }),
+                Op::I(Inst::CompareBranch { nonzero: true, width: Width::X, rt: counter, target: label("loop") }),
+            ],
+        ),
+        block("done", vec![Op::Return { uses: vec![], tail: None }]),
+    ];
+    let body = to_lir(&function).expect("the forms map").body;
+    let after = hoisted(&body, &RegisterClasses::of(&crate::description::Arm64));
+    let has = |body: &LirBody, at: usize, name: &str| {
+        body.blocks[at].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(name)))
+    };
+    assert!(has(&body, 1, "MOVImm"), "the premise: the constant starts in the loop");
+    assert!(has(&after, 0, "MOVImm") && !has(&after, 1, "MOVImm"), "the constant stayed in the loop");
+}
+
+/// A constant a copy in the loop reads, and no phi takes, is made once in the
+/// preheader: `HasLoopPHIUse` looks past a copy only to a phi
+/// (MachineLICM.cpp#L1166). Any copy of the value kept it in the loop, so
+/// nbody_fixed's `movz #512` (selected as `movz; mov`) stayed in the innermost
+/// loop of the sink stage (+29997 executed instructions at -O2).
+#[test]
+fn a_constant_a_loop_copies_is_made_in_the_preheader() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::machinelicm::hoisted;
+
+    let r = |n| Gpr(Gpr::FIRST_VIRTUAL + n);
+    let (value, constant, divisor, quotient, counter) = (r(2), r(5), r(1), r(3), r(4));
+    let wide = |dst, value| Op::Imm { dst, bits: 64, value };
+    let mut function = MFunc::new("t");
+    function.next_register = Gpr::FIRST_VIRTUAL + 16;
+    let block =
+        |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    function.blocks = vec![
+        block("pre", vec![wide(value, 7), wide(counter, 9)]),
+        block(
+            "loop",
+            vec![
+                wide(constant, 512),
+                Op::Copy { dst: Reg::Gpr(divisor), src: Reg::Gpr(constant) },
                 Op::I(Inst::Divide { op: Div::Udiv, width: WIDTHS[1], rd: quotient, rn: value, rm: divisor }),
                 Op::I(Inst::AddSubImm {
                     op: AddSub { subtract: true, set_flags: false },

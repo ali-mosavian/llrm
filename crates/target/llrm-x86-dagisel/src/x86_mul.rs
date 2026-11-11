@@ -41,6 +41,20 @@ fn constant_is_wider<D: AddrDag>(
 ) -> bool {
     let Some(value) = dag.constant(c) else { return true };
     let width = llrm_dagisel::addr::vt_bits(dag.value_type(other));
+    magic_is_wider(value, width, signed, flat, dag.known_zero_bits(other))
+}
+
+/// [`constant_is_wider`] over the facts: the constant, the other operand's
+/// width and the bits known zero in it (low bits first). The caller with the
+/// DAG's own known bits is `BuildUDIV`/`BuildSDIV` (DEVIATE SD444), where the
+/// dividend still has its length.
+pub fn magic_is_wider(
+    value: i64,
+    width: u32,
+    signed: bool,
+    flat: bool,
+    known_zero: u64,
+) -> bool {
     let narrow = if width >= 64 { value } else { value & ((1i64 << width) - 1) };
     let bits = if signed {
         let shift = 64 - width.min(64);
@@ -48,7 +62,7 @@ fn constant_is_wider<D: AddrDag>(
     } else {
         (narrow as u64).checked_ilog2().map_or(0, |n| n + 1)
     };
-    let zeros = (dag.known_zero_bits(other) << (64 - width.min(64))).leading_ones();
+    let zeros = (known_zero << (64 - width.min(64))).leading_ones();
     // A signed multiplier of unknown sign has `width - 1` magnitude bits: the
     // sign is not one the early-out counts (a 31-bit `x / 5` magic against an
     // unknown `i32` was a tie it lost: the magic stayed the r/m operand, 41
