@@ -135,9 +135,10 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
-    /// A function that is not tuned for size sends a shift by a constant to the routine where this says so,
-    /// priced per site by the target (`op`, amount, width of the value).
-    priced_shift_call: Option<fn(ISD, u128, u128) -> bool>,
+    /// The shift routines are used as a function tuned for size uses them, in a
+    /// function that is not (the unsized form the caller prices against the
+    /// inline one).
+    force_shift_calls: bool,
     /// An `i64` shifted by an amount known below the half width is the routine's call, not the inline
     /// expansion the pin makes (SD241): a target whose inline policy is not priced yet keeps the call.
     libcall_for_small_variable_shift: bool,
@@ -193,7 +194,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             size_shift_call: None,
-            priced_shift_call: None,
+            force_shift_calls: false,
             libcall_for_small_variable_shift: false,
             inline_constant_mul: None,
             small_divide: false,
@@ -329,16 +330,13 @@ impl TargetLowering {
     /// the routine's call here.
     pub fn calls_for_size_shift(
         &self,
-        op: ISD,
         amount: u128,
         bits: u128,
     ) -> bool {
-        if self.opt_for_size {
-            return self.size_shift_call.is_some_and(|(granule, least)| {
+        (self.opt_for_size || self.force_shift_calls)
+            && self.size_shift_call.is_some_and(|(granule, least)| {
                 (bits / granule).saturating_sub(amount / granule) * (amount % granule) >= least
-            });
-        }
-        self.priced_shift_call.is_some_and(|calls| calls(op, amount, bits))
+            })
     }
 
     /// Whether `op` of `vt` has a routine for functions tuned for size.
@@ -409,7 +407,7 @@ impl TargetLowering {
             };
         }
         let shift = matches!(op, ISD::Shl | ISD::Srl | ISD::Sra);
-        let sized = (self.opt_for_size || (self.priced_shift_call.is_some() && shift))
+        let sized = (self.opt_for_size || (self.force_shift_calls && shift))
             .then(|| self.maps.size_libcall_names.get(&(op, vt)).copied())
             .flatten();
         sized.or_else(|| self.maps.libcall_names.get(&(op, vt)).copied())
@@ -575,13 +573,13 @@ impl TargetLowering {
         !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
     }
 
-    /// In a function not tuned for size, a shift by a constant is the size routine's call (`set_size_libcall_name`)
-    /// where `calls` says so, per site.
-    pub fn set_priced_shift_call(
+    /// Use the shift routines (`set_size_shift_call`) whether or not the
+    /// function is tuned for size.
+    pub fn set_force_shift_calls(
         &mut self,
-        calls: fn(ISD, u128, u128) -> bool,
+        force: bool,
     ) {
-        self.priced_shift_call = Some(calls);
+        self.force_shift_calls = force;
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.
@@ -1096,6 +1094,8 @@ impl TargetLowering {
                 // ANDPD simulates FABS, XORP FNEG, ANDPD and ORPD FCOPYSIGN
                 t.set_ops(&[FAbs, FNeg, FCopySign], &[vt], Custom);
                 t.set_ops(&[FAdd, FSub], &[vt], Custom);
+                // L1041: `SetFPMinMaxAction`
+                t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
             }
@@ -1159,34 +1159,36 @@ mod tests {
         assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
     }
 
-    /// A target that prices its shift calls per site (`set_priced_shift_call`) sends a shift by a constant to the
-    /// size routine where its price says so in a function that is not tuned for size; other ops keep the speed
-    /// routine, and without the price nothing changes.
+    /// z80 prices the shift routines against the inline shifts in a function
+    /// that is not tuned for size (`set_force_shift_calls`): -O1 call_keeps
+    /// 1876 B -> 1473 B. The switch is off for every other target and
+    /// for z80 outside that form; on, it makes shifts (not other ops) take the
+    /// size routine and the size threshold, as a function tuned for size
+    /// does.
     #[test]
-    fn priced_shift_calls_move_shifts_only_and_default_off_changes_nothing() {
-        let build = |priced: bool| {
+    fn forced_shift_calls_move_shifts_only_and_default_off_changes_nothing() {
+        let build = |force: bool| {
             let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+            t.set_size_shift_call(8, 10);
             t.set_libcall_name(ISD::Shl, MVT::I32, "__fast_shl");
             t.set_size_libcall_name(ISD::Shl, MVT::I32, "__small_shl");
             t.set_libcall_name(ISD::Mul, MVT::I32, "__fast_mul");
             t.set_size_libcall_name(ISD::Mul, MVT::I32, "__small_mul");
-            if priced {
-                t.set_priced_shift_call(|_, amount, _| amount == 13);
-            }
+            t.set_force_shift_calls(force);
             t
         };
         let (off, on) = (build(false), build(true));
-        assert!(!off.calls_for_size_shift(ISD::Shl, 13, 32) && on.calls_for_size_shift(ISD::Shl, 13, 32));
-        assert!(!on.calls_for_size_shift(ISD::Shl, 12, 32), "the price is per site");
+        // by 13 bits of 32 with 8-bit granules: (4 - 1) * 5 = 15 >= 10
+        assert!(!off.calls_for_size_shift(13, 32) && on.calls_for_size_shift(13, 32));
         assert_eq!(off.libcall_name(ISD::Shl, EVT::I32), Some("__fast_shl"));
         assert_eq!(on.libcall_name(ISD::Shl, EVT::I32), Some("__small_shl"));
         for t in [&off, &on] {
             assert_eq!(t.libcall_name(ISD::Mul, EVT::I32), Some("__fast_mul"), "a multiply keeps the speed routine");
         }
+        // sized functions are unchanged by the switch
         let mut sized = build(false);
-        sized.set_size_shift_call(8, 10);
         sized.set_opt_for_size(true);
-        assert!(sized.calls_for_size_shift(ISD::Shl, 13, 32));
+        assert!(sized.calls_for_size_shift(13, 32));
         assert_eq!(sized.libcall_name(ISD::Mul, EVT::I32), Some("__small_mul"));
     }
 
