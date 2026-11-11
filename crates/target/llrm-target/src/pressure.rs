@@ -93,6 +93,13 @@ pub struct ClassSpec<'a> {
 /// pin's emitter: one per class, the near-subsets pruned, the unions of
 /// overlapping sets added, pruned again, ordered by size. The classes are
 /// those of the target's allocation, in the order it states them.
+///
+/// DEVIATE PS1: every unit weighs one and a register with sub-registers has
+/// no adopted unit; the pin's x86 has both (the upper bits of `eax` are a
+/// unit of weight 0), and 49 of its 135 classes are made by tblgen's
+/// intersections, which the caller must list. So x86's own tables are not
+/// reproduced here (the z80 has neither). Exit: a target with adopted units
+/// moves onto `derive` (weighted units, then the identity test on x86).
 pub fn derive(
     registers: &[Register],
     classes: &[ClassSpec],
