@@ -132,6 +132,7 @@ fn main() {
                 // pin's order, with the target, the hooks and the action table
                 // the real route gives each stage.
                 let mut lowering = X86Lowering {
+                    multiply_early_out: None,
                     share_products: false,
                     cmov: false,
                     sse2: false,
