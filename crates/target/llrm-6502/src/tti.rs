@@ -278,6 +278,20 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// `narrowiv`: a counter of a width the datalayout does not hold (`n8`
+    /// only) whose range fits a byte is a byte counter.
+    fn narrows_counters(&self) -> bool {
+        true
+    }
+
+    /// `-Os` only: narrowed, a scaled byte index is a shift chain per trip
+    /// that the pointer recurrence did not pay (word_compares -O2 -30 B,
+    /// +9,843 clk; loop_interchange +290,829 clk), and LSR's comparator does
+    /// not price it yet.
+    fn narrows_counters_at_speed(&self) -> bool {
+        false
+    }
+
     /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
     /// LSR's own model rates the rewrite worse, as on the z80 (DEVIATE LU15):
     /// with 16-bit widths on, switch_empty_cases, switch_jump_table and
