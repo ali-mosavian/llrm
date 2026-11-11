@@ -590,7 +590,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: applied.options.prefers_size() }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
-        Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size(), speed_rate: applied.options.prices_bytes() }),
         Box::new(loopidioms::Merge { size: applied.options.prefers_size(), widen: applied.options.merge_stores }),
         Box::new(memcpyopt::MemCpyOpt),
     ];
@@ -1188,7 +1188,7 @@ pub(crate) fn llvm_order(
                         ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
                     }),
                 ),
-                slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
+                slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size, speed_rate: applied.options.prices_bytes() })),
                 slot(
                     "indvars@738",
                     Box::new(PerLoop {

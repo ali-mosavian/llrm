@@ -51,6 +51,18 @@ pub trait AaProvider {
 }
 
 /// What `LoopIdiomRecognize` holds by reference besides its own state.
+/// What prices a copy of a run-time length against the loop (DEVIATE
+/// COPY-TRIPS, `Tuning::variable_copy_trips`).
+#[derive(Clone, Copy)]
+pub struct CopyTrips<'a> {
+    /// The trips a loop of unknown count is taken to run.
+    pub trips: i64,
+    pub costs: &'a OperationCosts,
+    pub callees: &'a llrm_mir::memory::Callees,
+    /// The copy is inline `rep movs` (-O2/-O3), not a call of the library.
+    pub inline: bool,
+}
+
 pub struct Run<'a> {
     /// The function's name (`getName`).
     pub name: &'a str,
@@ -68,6 +80,9 @@ pub struct Run<'a> {
     pub clocks: Option<(&'a OperationCosts, i64)>,
     /// The target's clock prices, at speed; none at `-Os`.
     pub speed: Option<&'a OperationCosts>,
+    /// `Tti::variable_copy_trips`, the clock prices, the callees, and whether
+    /// the copy of a run-time length is inline `rep movs` (not a libcall).
+    pub copy_trips: Option<CopyTrips<'a>>,
     /// `Tuning::max_stores_per_memset`: the stores a constant fill may be
     /// inline.
     pub memset_stores: i64,
@@ -767,6 +782,34 @@ impl LoopIdiomRecognize {
         // a loop when the `rep movs` that replaces it is more bytes (no libc
         // `memcpy` to call). At speed, DEVIATE MEM-1 inlines the copy. Exit
         // 2026-11-20.
+        // DEVIATE COPY-TRIPS (owner x86-m32-c, exit 2026-12-05): the pin copies
+        // every such loop (`LoopIdiomRecognize` has no price). Here the loop
+        // stays where `trips` of it cost no more clocks than the copy: the call,
+        // or the `rep movs` start-up, is paid per run and mergesort's runs are
+        // short (x_mergesort -O1: 72428 clk with the calls, 57253 without).
+        if let Some(prices) = run.copy_trips
+            && run.se.match_apint(args.be_count).is_none()
+        {
+            let blocks = run.cur_loop.get_blocks();
+            let loop_clocks = prices.trips
+                * crate::loopidioms::trip_clocks(
+                    run.context,
+                    run.env.layout,
+                    run.function,
+                    prices.callees,
+                    blocks.iter(),
+                    prices.costs,
+                );
+            let cells = (prices.trips * store_size as i64 + 3) / 4;
+            let copy_clocks =
+                prices.costs.copy + cells * prices.costs.copy_cell + if prices.inline { 0 } else { prices.costs.copy_variable };
+            if std::env::var_os("LLRM_DEBUG_COPY").is_some() {
+                eprintln!("copy-trips: loop {loop_clocks} vs copy {copy_clocks} (copy {} cell {} variable {} cells {cells}, inline {})", prices.costs.copy, prices.costs.copy_cell, prices.costs.copy_variable, prices.inline);
+            }
+            if loop_clocks <= copy_clocks {
+                return (false, false);
+            }
+        }
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
         {

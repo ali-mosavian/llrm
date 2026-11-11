@@ -5169,3 +5169,14 @@ fn a_nest_whose_unroll_grows_the_code_stays_rolled_at_o1() {
     let instructions = listing.lines().filter(|line| line.starts_with("    ") && !line.trim_end().ends_with(':')).count();
     assert!(instructions < 250, "matmul unrolled to {instructions} instructions: {listing}");
 }
+
+/// x_mergesort's copy loops at -O1: loop idiom made each a `call memcpy`, whose entry and `rep movs` start-up cost
+/// more than the 1-8 elements a run holds (72,428 clk against 57,253 as loops; gcc 59,001). The loop of a run-time
+/// count stays (DEVIATE COPY-TRIPS) while the assumed trips cost it less than the call.
+#[test]
+fn a_short_run_time_copy_stays_a_loop_at_o1() {
+    let text = include_str!("tests_data/short_copy.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O1", "-march=i486"]), text, "copy_run").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("memcpy"), "the copy became a call: {listing}");
+}

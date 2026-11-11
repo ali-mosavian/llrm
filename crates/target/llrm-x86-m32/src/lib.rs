@@ -265,6 +265,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // no byte rate pays for the ~17 B; x_jpeg_single -O1 inlined it twice).
         // Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
+        // DEVIATE COPY-TRIPS (owner x86-m32-c, exit 2026-12-05): TEMPORARY sweep knob.
+        variable_copy_trips: std::env::var("LLRM_COPY_TRIPS").ok().and_then(|text| text.parse().ok()),
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
         // see `Tuning::ipsccp_widen_keeps_sign`.
         ipsccp_widen_keeps_sign: true,

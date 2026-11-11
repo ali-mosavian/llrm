@@ -160,9 +160,12 @@ use crate::edges;
 use crate::lcssa::{arms, from_arms, operations};
 use crate::profit::{self, OperationCosts};
 
-/// `size`: priced in code bytes, as under `-Os`.
+/// `size`: priced in code bytes, as under `-Os`. `speed_rate`: a byte of code
+/// is priced against clocks (-O2/-O3), where a target inlines a run-time copy.
+#[derive(Default)]
 pub struct LoopIdioms {
     pub size: bool,
+    pub speed_rate: bool,
 }
 
 impl FunctionPass for LoopIdioms {
@@ -184,6 +187,7 @@ impl FunctionPass for LoopIdioms {
             analyses.outer(),
             unit.declared,
             self.size,
+            self.speed_rate,
             &mut llrm_analysis::memory::Standing::held(&registers),
             &|_| true,
         );
@@ -270,6 +274,7 @@ pub fn filled(
         outer,
         declared,
         size,
+        false,
         &mut llrm_analysis::memory::Standing::underived(),
         &|_| true,
     )
@@ -287,6 +292,7 @@ pub fn filled_with(
     outer: &Outer,
     declared: &mut Declared,
     size: bool,
+    speed_rate: bool,
     standing: &mut llrm_analysis::memory::Standing,
     wanted: &dyn Fn(&Loop) -> bool,
 ) -> bool {
@@ -309,6 +315,19 @@ pub fn filled_with(
         return false;
     }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
+    // DEVIATE COPY-TRIPS (`Tuning::variable_copy_trips`, owner x86-m32-c, exit
+    // 2026-12-05): at speed a run-time copy that is a call pays its clocks
+    // (`copy_variable`) against the loop; only a target that states the
+    // assumption has them priced. Inline `rep movs` has none.
+    let costs = if size {
+        costs
+    } else {
+        let tti = outer.target().tti();
+        let by_call = tti.as_ref().is_some_and(|tti| {
+            tti.variable_copy_trips().is_some() && !(tti.inlines_variable_memcpy() && speed_rate)
+        });
+        OperationCosts { copy_variable: if by_call { costs.copy_variable } else { 0 }, ..costs }
+    };
     let bytes = outer.target().size_costs();
     let mut changed = false;
     'again: loop {
@@ -1004,15 +1023,14 @@ fn _pays(
     fills: i64,
     stored: Option<(i64, bool)>,
 ) -> bool {
-    let each = trip_cost(
-        unit.context,
-        unit.layout,
-        unit.function,
-        callees,
-        std::iter::once(&header).chain(chain),
-        costs,
-        size,
-    );
+    let blocks = std::iter::once(&header).chain(chain);
+    // A run-time copy priced in clocks (COPY-TRIPS: `copy_variable` set at
+    // speed) weighs a trip as it runs: a jump to the next block runs nothing.
+    let each = if !size && costs.copy_variable != 0 {
+        trip_clocks(unit.context, unit.layout, unit.function, callees, blocks, costs)
+    } else {
+        trip_cost(unit.context, unit.layout, unit.function, callees, blocks, costs, size)
+    };
     let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
     let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
     _cheaper_by(each, known, most, costs, size, moved, fills, stored)
@@ -1285,8 +1303,9 @@ fn _cheaper_by(
     };
     let copy = match known {
         Some(count) => copy_price(costs, count * bytes, backward),
-        None => string_copy(costs, trips * bytes, backward) + if size { costs.copy_variable } else { 0 },
+        None => string_copy(costs, trips * bytes, backward) + costs.copy_variable,
     };
+    if std::env::var_os("LLRM_DEBUG_COPY").is_some() { eprintln!("legacy: trips {trips} each {each} copy {copy} size {size} known {known:?}"); }
     trips * each > copy
 }
 

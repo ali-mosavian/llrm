@@ -1268,6 +1268,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::variable_copy_trips`.
+    fn variable_copy_trips(&self) -> Option<i64> {
+        None
+    }
+
     /// `Tuning::size_copy_price`.
     fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
         None

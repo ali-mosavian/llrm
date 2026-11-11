@@ -32,7 +32,7 @@ use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnaly
 use llrm_mir::target::OperationCosts;
 use llrm_mir::valuetracking::AssumptionCache;
 
-use super::process::{AaProvider, Run};
+use super::process::{AaProvider, CopyTrips, Run};
 use super::{Library, LoopIdiomRecognize, Options};
 
 /// BasicAA over the function as it stands at each query.
@@ -176,6 +176,12 @@ impl FunctionPass for LoopIdiom {
         .map(|(costs, rate)| (OperationCosts { memset_stores: inline_stores, ..costs }, rate))
         .filter(|(_, rate)| *rate > 0 || priced);
         let speed_costs = (!self.for_size && rate == 0 && !priced).then(|| outer.target().costs());
+        // At speed (not -Os) a target with COPY-TRIPS prices a run-time copy.
+        let copy_costs = tti
+            .as_deref()
+            .and_then(|tti| tti.variable_copy_trips())
+            .filter(|_| !self.for_size)
+            .map(|trips| (trips, outer.target().costs()));
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -200,6 +206,14 @@ impl FunctionPass for LoopIdiom {
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
                 speed: speed_costs.as_ref(),
+                copy_trips: copy_costs.as_ref().map(|(trips, costs)| CopyTrips {
+                    trips: *trips,
+                    costs,
+                    callees: outer.callees(),
+                    inline: tti.as_deref().is_some_and(|tti| tti.inlines_variable_memcpy())
+                        && self.speed_rate
+                        && !self.for_size,
+                }),
                 memset_stores: inline_stores,
                 tti: tti.as_deref(),
             };

@@ -412,6 +412,12 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE COPY-TRIPS: the trips assumed for a loop copying a length known
+    /// only at run time, when pricing the loop against the copy (libcall, or
+    /// inline `rep movs` per `inline_variable_memcpy`): the loop stays where
+    /// the assumed trips cost it less. None: the pin's rule, every such loop
+    /// is the copy (`LoopIdiomRecognize` has no price).
+    pub variable_copy_trips: Option<i64>,
     /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
     /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
     /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
@@ -541,6 +547,7 @@ impl Tuning {
         sink_select_arms: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
+        variable_copy_trips: None,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
     };

@@ -44,7 +44,7 @@ fn managed_fill_on(
 ) -> String {
     let before = parsed(&format!("{target}{text}"));
     let mut module = before.clone();
-    let after = managed(&mut module, LoopIdioms { size: false });
+    let after = managed(&mut module, LoopIdioms { size: false, ..Default::default() });
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -204,7 +204,7 @@ fn an_undeclared_memset_is_declared() {
     let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
     let before = parsed(&format!("{DOS}{}", looped("i8", "%n", body, "%e").replace(MEMSET, "")));
     let mut module = before.clone();
-    let text = managed(&mut module, LoopIdioms { size: false });
+    let text = managed(&mut module, LoopIdioms { size: false, ..Default::default() });
     assert!(
         text.contains("declare void @llvm.memset.p0.i16(ptr")
             && text.contains("call void @llvm.memset.p0.i16(ptr align 1 %p, i8 65"),
@@ -432,7 +432,7 @@ b3:
     let on_dos = |size: bool| {
         let mut module = before.clone();
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.add(LoopIdioms { size });
+        manager.add(LoopIdioms { size, ..Default::default() });
         manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
         printed(&module)
     };
@@ -476,7 +476,7 @@ b3:
     let on_dos = |size: bool| {
         let mut module = before.clone();
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.add(LoopIdioms { size });
+        manager.add(LoopIdioms { size, ..Default::default() });
         manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
         printed(&module)
     };

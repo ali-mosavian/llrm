@@ -52,7 +52,7 @@ copy_cell = rep_movs_cell
 # A copy whose length is known only at run time is a call of memcpy (flat code has no ES and no inline count loop to
 # fall back on), not the `rep movs` above: the call and the stack cleanup less the string instruction, and the two
 # ALU operations that make the count and the exit value. A byte loop of 26 stays a loop (x_jpeg_fixed `next` -Os).
-copy_variable = call_near + alu_ri - rep_movs + 2*alu_rr
+copy_variable = call_near + ret_near + 2*pop_r + jcc + 2*mov_mr + 3*mov_rm + 3*alu_rr + alu_ri
 direction = 2*alu_rr
 # The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
 # fourfold (peelsize). From LLVM's `-unroll-threshold-default` (150; -O3's 300 is twice it), whose 400% boost the
@@ -105,6 +105,7 @@ rep_movs_cell = 0
 # What differs when the sums are over bytes. A word of argument is its push and its share of the cleanup, as
 # x86-m16's: not measured on flat code.
 [size]
+copy_variable = call_near + alu_ri - rep_movs + 2*alu_rr
 # The conversion is priced in clocks only; its bytes are not a cost of the select.
 float_to_int = 0
 float_compare = 0
