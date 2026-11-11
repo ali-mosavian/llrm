@@ -20,7 +20,7 @@ def run(routine, dividend, divisor):
     if routine:
         drv += [f"\tld hl,#{divisor >> 16}", "\tpush hl", f"\tld de,#{dividend >> 16}", f"\tld hl,#{dividend & 0xFFFF}",
                 f"\tld bc,#{divisor & 0xFFFF}", f"\tcall {routine}", "\tpop af",
-                "\tld (0x8f00),de", "\tld (0x8f02),hl"]
+                "\tld (0x8f00),hl", "\tld (0x8f02),de"]
     drv += ["\thalt", "\t.area _CODE"]
     open(f"{W}/d.s", "w").write("\n".join(drv) + "\n")
     assert sh(["sdasz80", "-g", "-o", "d.rel", "d.s"]).returncode == 0

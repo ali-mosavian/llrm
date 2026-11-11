@@ -144,3 +144,17 @@ fn logical_ors_with_no_shared_operand_are_left() {
     );
     assert_eq!(after.matches(" or i1 ").count(), 2, "{after}");
 }
+
+/// jpeg_fixed -O1 (+11 B over the pin): `x >= 193 && x <= 207` in select form
+/// over `samesign` compares stayed two compares and a select, where the pin's
+/// `foldBooleanAndOr(.., IsLogical)` makes the range check `(x - 193) u< 15`
+/// (its `switch` follows). The `select c, x, false` -> `and` step does not find
+/// the poison implication of a `samesign` compare (DEVIATE 1).
+#[test]
+fn a_logical_and_of_two_range_compares_is_one_range_check() {
+    let out = combined(
+        "i32 %x",
+        "  %a = icmp samesign ugt i32 %x, 192\n  %b = icmp samesign ult i32 %x, 208\n  %r = select i1 %a, i1 %b, i1 false\n  ret i1 %r\n",
+    );
+    assert!(out.contains("add i32 %x, -193") && out.contains("icmp ult i32 %") && !out.contains("select"), "{out}");
+}

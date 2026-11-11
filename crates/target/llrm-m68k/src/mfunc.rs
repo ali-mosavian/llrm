@@ -183,6 +183,8 @@ struct Emitter<'a> {
     save: llrm_support::hash::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
+    /// Which of the pin's `InstrEmitter` shapes this emission takes.
+    shape: Shape,
 }
 
 impl Emitter<'_> {
@@ -192,6 +194,36 @@ impl Emitter<'_> {
     ) -> Reg {
         self.function.classes.push(class);
         Reg::Virt(self.function.classes.len() as u32 - 1)
+    }
+
+    /// `InstrEmitter::CreateVirtualRegisters`: a result that a `CopyToReg` of
+    /// a virtual register of the result's own class copies is defined in that
+    /// register, and the copy is not made. The pin's phi inputs and values
+    /// that leave their block are one definition, so `MachineCSE` sees a
+    /// constant and its readers, not a constant and a copy.
+    fn defined_in_copy_destination(
+        &mut self,
+        node: u32,
+        res: u8,
+        class: Class,
+    ) -> Option<Reg> {
+        if !self.shape.copy_destinations {
+            return None;
+        }
+        let value = SDValue { node, res };
+        let dag = self.dag;
+        let users: Vec<SDValue> = dag
+            .users(value)
+            .filter(|&user| {
+                dag.node(SDValue { node: user, res: 0 }).opcode == ISD::CopyToReg
+                    && dag.node(SDValue { node: user, res: 0 }).ops[2] == value
+            })
+            .map(|user| dag.node(SDValue { node: user, res: 0 }).ops[1])
+            .collect();
+        users.into_iter().find_map(|destination| match self.register(destination) {
+            Some(Reg::Virt(v)) if self.function.classes[v as usize] == class => Some(Reg::Virt(v)),
+            _ => None,
+        })
     }
 
     fn register(
@@ -447,10 +479,20 @@ impl Emitter<'_> {
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
                     return Err("CopyToReg of a value that is no register".to_owned());
                 };
-                into.push(Inst::copy(dst, src));
+                if !self.shape.copy_destinations || src != dst {
+                    into.push(Inst::copy(dst, src));
+                }
             }
             ISD::CopyFromReg => {
                 let src = self.register(n.ops[1]).ok_or("CopyFromReg of no register")?;
+                // `InstrEmitter::EmitCopyFromReg`: a virtual register is
+                // "just used directly"; only a physical one is copied. A copy
+                // here puts a value of an earlier block in a register defined
+                // inside the loop, where it is not loop-invariant.
+                if self.shape.direct_copies && matches!(src, Reg::Virt(_)) {
+                    self.values.insert((node, 0), src);
+                    return Ok(());
+                }
                 let dst = self.new_reg(Class::of_type(n.values[0]));
                 self.values.insert((node, 0), dst);
                 into.push(Inst::copy(dst, src));
@@ -469,6 +511,11 @@ impl Emitter<'_> {
             // instruction table: an undefined value, a zero until MIR has
             // `undef` (the pin's ProcessImplicitDefs drops it)
             ISD::Machine(10) => {
+                // the glue a `CALLSEQ_END` of no bytes is given
+                // (`DYNAMIC_STACKALLOC`'s expansion) is no register
+                if !is_value(n.values[0]) {
+                    return Ok(());
+                }
                 let name = match n.values[0].size_in_bits() {
                     8 => "MOVI8di",
                     16 => "MOVI16di",
@@ -481,7 +528,10 @@ impl Emitter<'_> {
                     .first()
                     .and_then(|one| Class::of_pin(one.reg_class))
                     .unwrap_or_else(|| Class::of_type(n.values[0]));
-                let dst = self.new_reg(class);
+                let dst = match self.defined_in_copy_destination(node, 0, class) {
+                    Some(own) => own,
+                    None => self.new_reg(class),
+                };
                 self.values.insert((node, 0), dst);
                 into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
             }
@@ -499,9 +549,24 @@ impl Emitter<'_> {
                 if name == "EXTRACT_SUBREG" {
                     let dst = self.new_reg(Class::of_type(n.values[0]));
                     self.values.insert((node, 0), dst);
-                    let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                    let Some(Operand::Use(mut src)) = self.operand(n.ops[0])? else {
                         return Err("EXTRACT_SUBREG of a value that is no register".to_owned());
                     };
+                    // `ConstrainForSubReg`: only data registers have a byte or
+                    // word sub-register, so a 32-bit source is constrained to
+                    // `Dr32`, or copied into one where it cannot be.
+                    if let Reg::Virt(v) = src {
+                        if matches!(self.function.classes[v as usize], Class::Xr32 | Class::Ar32 | Class::Dr32) {
+                            match self.function.classes[v as usize].meet(Class::Dr32) {
+                                Some(narrowed) => self.function.classes[v as usize] = narrowed,
+                                None => {
+                                    let data = self.new_reg(Class::Dr32);
+                                    into.push(Inst::copy(data, src));
+                                    src = data;
+                                }
+                            }
+                        }
+                    }
                     into.push(Inst::copy(dst, src));
                     return Ok(());
                 }
@@ -523,7 +588,10 @@ impl Emitter<'_> {
                         .and_then(|one| Class::of_pin(one.reg_class))
                         .unwrap_or_else(|| Class::of_type(*vt));
                     let class = extension_result(name, class);
-                    let reg = self.new_reg(class);
+                    let reg = match self.defined_in_copy_destination(node, at as u8, class) {
+                        Some(own) => own,
+                        None => self.new_reg(class),
+                    };
                     self.values.insert((node, at as u8), reg);
                     operands.push(Operand::Def(reg));
                 }
@@ -568,6 +636,33 @@ pub fn emit(
     name: &str,
     blocks: &[Selected],
 ) -> Result<MFunction, String> {
+    emit_with(name, blocks, Shape::default())
+}
+
+/// Which of the pin's `InstrEmitter` shapes an emission takes. The private
+/// passes after the emitter were tuned on the copies, so each shape is opt-in
+/// until the shared coalescer and allocator replace them (corpus 11-09/10:
+/// `direct_copies` +394 B at 68000 -O2; `copy_destinations` changes 63 cells).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shape {
+    /// `EmitCopyFromReg`: a virtual register is read where it is defined.
+    pub direct_copies: bool,
+    /// `CreateVirtualRegisters`: a result that a `CopyToReg` copies is defined
+    /// in that copy's register, and the copy is not made.
+    pub copy_destinations: bool,
+}
+
+impl Shape {
+    /// Both shapes: the pin's.
+    pub const PIN: Shape = Shape { direct_copies: true, copy_destinations: true };
+}
+
+/// [`emit`], in the given [`Shape`].
+pub fn emit_with(
+    name: &str,
+    blocks: &[Selected],
+    shape: Shape,
+) -> Result<MFunction, String> {
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter = Emitter {
         dag: &first.dag,
@@ -577,6 +672,7 @@ pub fn emit(
         flags_from: None,
         save: Default::default(),
         saved: HashMap::default(),
+        shape,
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();

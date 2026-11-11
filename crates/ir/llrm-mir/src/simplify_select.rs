@@ -167,10 +167,10 @@ fn simplify_select_with_equivalence(
     max_recurse: u32,
 ) -> Option<Operand> {
     let could_use_undef = std::mem::replace(&mut q.can_use_undef, false);
-    let simplified_false = simplify_with_ops_replaced(q, false_val, replacements, false, max_recurse);
+    let simplified_false = simplify_with_ops_replaced(q, false_val, replacements, false, None, max_recurse);
     q.can_use_undef = could_use_undef;
     let simplified_false = simplified_false.unwrap_or(false_val);
-    let simplified_true = simplify_with_ops_replaced(q, true_val, replacements, true, max_recurse).unwrap_or(true_val);
+    let simplified_true = simplify_with_ops_replaced(q, true_val, replacements, true, None, max_recurse).unwrap_or(true_val);
     (simplified_false == simplified_true).then_some(false_val)
 }
 

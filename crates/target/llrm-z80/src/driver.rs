@@ -183,16 +183,35 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    let select = |name: &str, ilp: bool| {
+    let select_form = |name: &str, ilp: bool| {
         crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
         one
     };
+    // A form whose long adds became carry ops is also selected with them left to the generic expansion, kept on the
+    // selection (`Selection::generic`): the allocated function is the cheaper of the two (`compile::lines_of`).
+    // DEVIATE Z80-CARRY-PRICE (owner z80, exit 2026-11-24): the pin's `ExpandIntRes_ADDSUB` takes the carry ops
+    // whenever `UADDO_CARRY` is legal and prices nothing; `adc hl, rr` ties each sum to `hl`, which costs spills
+    // where several longs are live (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
+    let select = |name: &str, ilp: bool| {
+        crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
+        let mut one = select_form(name, ilp);
+        if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
+            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
+            let generic = select_form(name, ilp);
+            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
+            if let (Ok(one), Ok(generic)) = (&mut one, generic) {
+                one.generic = Some(Box::new(generic));
+            }
+        }
+        one
+    };
     // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
-    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one (at -O1 only) with every multiply a
-    // call (`CALL_MULS`); the caller prices the two (`compile::decomposed_functions`).
+    // other way, a sized one with every multiply inline (`DECOMPOSE_MULS`); the caller prices the two
+    // (`compile::decomposed_functions`). At -O1 an unsized one is also selected with each shift and multiply site
+    // priced (`PRICED_SITES`); the caller keeps it where it is no worse on either axis.
     let calls_the_routine = |name: &str| -> Option<bool> {
         module.globals.iter().find_map(|global| {
             let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
@@ -214,22 +233,22 @@ pub fn selections_with_alternatives(
     let alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
-            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
-            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
-            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
-            let muls = calls_the_routine(name).filter(|sized| *sized || request.level == Level::O1);
+            let muls = calls_the_routine(name).filter(|sized| *sized);
             let fills = has_fills(name);
-            if muls.is_none() && !fills {
+            // DEVIATE z80-callinline-price: an unsized function of a module that links the long routines. One
+            // alternative per function: a function with a sized form or a fill keeps those.
+            let sites = muls.is_none() && !fills && request.level == Level::O1 && calls_the_routine(name) == Some(false);
+            if muls.is_none() && !fills && !sites {
                 return None;
             }
-            let switch = muls.map(|sized| {
-                if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS }
-            });
+            let switch = muls.map(|_| &crate::dagisel::pipeline::DECOMPOSE_MULS);
             if let Some(switch) = switch {
                 switch.with(|one| one.set(true));
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
+            crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(sites));
             let selected = (name.clone(), select(name, false), select(name, true));
+            crate::dagisel::pipeline::PRICED_SITES.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));

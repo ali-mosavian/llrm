@@ -931,7 +931,7 @@ fn simplify_with_op_replaced(
     rep_op: Operand,
     max_recurse: u32,
 ) -> Option<Operand> {
-    simplify_with_ops_replaced(q, v, &[(op, rep_op)], true, max_recurse)
+    simplify_with_ops_replaced(q, v, &[(op, rep_op)], true, None, max_recurse)
 }
 
 /// `getBinOpIdentity(Opcode, Ty, AllowRHSConstant)`, as a number: the left
@@ -967,12 +967,14 @@ fn bin_op_absorber(
 /// ([:4429](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L4429)):
 /// what `v` equals with each `ops.0` in place of `ops.1`, a refinement of it
 /// where `allow_refinement`. DEVIATE: `DropFlags` is always null; a flag that
-/// would be dropped ends the fold. Vector operands are not modelled.
-fn simplify_with_ops_replaced(
+/// would be dropped ends the fold unless `drop_flags` collects it. Vector
+/// operands are not modelled.
+pub(crate) fn simplify_with_ops_replaced(
     q: &mut Query,
     v: Operand,
     ops: &[(Operand, Operand)],
     allow_refinement: bool,
+    mut drop_flags: Option<&mut Vec<InstId>>,
     mut max_recurse: u32,
 ) -> Option<Operand> {
     for &(op, rep_op) in ops {
@@ -1004,7 +1006,7 @@ fn simplify_with_ops_replaced(
     let mut new_ops = Vec::new();
     let mut any_replaced = false;
     for inst_op in q.function.instruction(inst).operands.to_vec() {
-        match simplify_with_ops_replaced(q, inst_op, ops, allow_refinement, max_recurse) {
+        match simplify_with_ops_replaced(q, inst_op, ops, allow_refinement, drop_flags.as_deref_mut(), max_recurse) {
             Some(new_inst_op) => {
                 new_ops.push(new_inst_op);
                 any_replaced = inst_op != new_inst_op;
@@ -1042,7 +1044,7 @@ fn simplify_with_ops_replaced(
             }
             if matches!(binop, BinaryOp::And | BinaryOp::Or) && new_ops[0] == new_ops[1] {
                 if flags.contains(Flags::DISJOINT) {
-                    return None;
+                    drop_flags.as_deref_mut()?.push(inst);
                 }
                 return Some(new_ops[0]);
             }
@@ -1068,7 +1070,7 @@ fn simplify_with_ops_replaced(
             };
             if matches!(id, pattern::IntrinsicId::Scmp | pattern::IntrinsicId::Ucmp) && new_ops[0] == new_ops[1] {
                 if annotated {
-                    return None;
+                    drop_flags.as_deref_mut()?.push(inst);
                 }
                 return Some(q.int(ty, 0));
             }
@@ -1083,7 +1085,7 @@ fn simplify_with_ops_replaced(
                 };
                 if let Some(result) = result {
                     if annotated {
-                        return None;
+                        drop_flags.as_deref_mut()?.push(inst);
                     }
                     return Some(result);
                 }
@@ -1097,22 +1099,41 @@ fn simplify_with_ops_replaced(
         return simplify_instruction_with_operands(q, inst, &new_ops, max_recurse)
             .filter(|&simplified| simplified != v);
     }
-    let constants = new_ops.iter().map(|&one| q.constant(one)).collect::<Option<Vec<_>>>()?;
+    let mut constants = new_ops.iter().map(|&one| q.constant(one)).collect::<Option<Vec<_>>>()?;
     let abs = intrinsic == Some(pattern::IntrinsicId::Abs);
-    if guarantee::can_create_poison(&q.tracking(), guarantee::Operator::Instruction(inst), true) {
+    if guarantee::can_create_poison(&q.tracking(), guarantee::Operator::Instruction(inst), drop_flags.is_none()) {
         let not_min = q.number(new_ops[0]).is_some_and(|(bits, width)| bits != 1u128 << (width - 1));
         if !(abs && not_min) {
             return None;
         }
     }
-    crate::constantfolding::constant_fold_inst_operands_at(
+    // If we are going to change the poison flag of abs/ctz to false, also
+    // fold that way, so we get an integer and not a poison value.
+    if drop_flags.is_some()
+        && matches!(
+            intrinsic,
+            Some(pattern::IntrinsicId::Abs | pattern::IntrinsicId::Ctlz | pattern::IntrinsicId::Cttz)
+        )
+    {
+        let i1 = q.context.types.int(1);
+        let false_value = q.null(i1);
+        constants[1] = q.constant(false_value)?;
+    }
+    let folded = crate::constantfolding::constant_fold_inst_operands_at(
         &*q.context,
         crate::constantfolding::Env { globals: q.globals, layout: q.layout },
         q.function,
         inst,
         &constants,
     )
-    .map(Operand::Constant)
+    .map(Operand::Constant);
+    if let Some(drop_flags) = drop_flags
+        && folded.is_some()
+        && guarantee::has_poison_generating_annotations(&q.tracking(), guarantee::Operator::Instruction(inst))
+    {
+        drop_flags.push(inst);
+    }
+    folded
 }
 
 /// `m_ICmpLike`: the predicate and operands of an `icmp`, or of a `trunc nuw`
@@ -4541,6 +4562,28 @@ pub fn simplify_with_op_replaced_at(
 ) -> Option<Operand> {
     let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: true };
     simplify_with_op_replaced(&mut q, v, op, rep_op, RECURSION_LIMIT)
+}
+
+/// `simplifyWithOpReplaced(V, Op, RepOp, SQ.getWithInstruction(&cxt),
+/// AllowRefinement, &DropFlags)`: what `v` equals with `rep_op` in place of
+/// `op`; the instructions whose poison-generating flags the result needs
+/// dropped are pushed on `drop_flags`. Without refinement the query does not
+/// use undef.
+pub fn simplify_with_op_replaced_dropping_flags_at(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
+    function: &Function,
+    cxt: InstId,
+    v: Operand,
+    op: Operand,
+    rep_op: Operand,
+    allow_refinement: bool,
+    drop_flags: &mut Vec<InstId>,
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses, cxt: Some(cxt), can_use_undef: allow_refinement };
+    simplify_with_ops_replaced(&mut q, v, &[(op, rep_op)], allow_refinement, Some(drop_flags), RECURSION_LIMIT)
 }
 
 /// `simplifyInstructionWithOperands(&I, Ops, SQ.getWithInstruction(&cxt))`:

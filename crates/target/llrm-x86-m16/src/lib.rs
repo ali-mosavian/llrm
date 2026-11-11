@@ -458,6 +458,18 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// A value confined to bx, si, di (a word address) was counted against
+    /// all of GR32's registers (limit 12), so the MachineLICM gate kept a
+    /// loop-invariant `lea` in bintree -O1's loop (+6,579 clk). Its class holds
+    /// the three allocatable address registers: limit 8 - bp's 2 = 6.
+    #[test]
+    fn test_address_registers_are_their_own_pressure_class() {
+        let class = PRESSURE.class_holding(&["ebx", "esi", "edi"]).unwrap();
+        assert_eq!(class.name, "ADDR16");
+        let set = PRESSURE.sets.iter().position(|one| one.largest == "ADDR16").unwrap();
+        assert_eq!(M16::pressure_limit(set), 6);
+    }
+
     /// `object()` and the runtime tables are parsed once and kept; each must
     /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
     /// runtime table cost 3.3 M Ir of every compile).

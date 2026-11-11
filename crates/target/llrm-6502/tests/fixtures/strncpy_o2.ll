@@ -1,6 +1,6 @@
 ; ModuleID = '/home/alim/scratch/wt-remat/crates/target/llrm-6502/tests/bench/hand/strncpy.c'
 source_filename = "/home/alim/scratch/wt-remat/crates/target/llrm-6502/tests/bench/hand/strncpy.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 target triple = "mos"
 
 ; Function Attrs: nofree norecurse nosync nounwind memory(argmem: readwrite)

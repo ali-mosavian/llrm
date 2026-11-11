@@ -9,10 +9,10 @@ use llrm_mir::module::Module;
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish_with};
-use crate::flags::preserve_flags;
+use crate::flags::{preserve_flags, restore_remade_flags};
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
-use crate::mfunc::{emit, expand_cmov};
+use crate::mfunc::{Shape, emit_with, expand_cmov};
 use crate::regalloc::{
     branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink, remove_identity_copies,
     remove_redundant_copies, two_address,
@@ -119,6 +119,23 @@ pub struct Options {
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
+    /// The shared flow's `MachineCSE` runs on the function in SSA form, before
+    /// phi elimination ([`crate::regalloc::shared_cse`]). Off until its corpus
+    /// A/B has no cell worse than main (11-09: O2 68000 +542 B, 27 worse).
+    pub shared_cse: bool,
+    /// A value read in a block after an earlier one defines it is read from its
+    /// register, as in the pin's MIR: what the hosted stages (MachineLICM) need
+    /// to see it as loop-invariant ([`crate::mfunc::emit_with`]).
+    pub direct_copies: bool,
+    /// The shared flow's early `MachineLICM` runs on the function in SSA form,
+    /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
+    /// loop-invariant only where `direct_copies` made no copy of it.
+    pub shared_licm: bool,
+    /// The shared flow's `PhiElimination` and `TwoAddress` take the function
+    /// from SSA to the allocator, in place of the private `eliminate_phis`,
+    /// `commute_tied` and `two_address` ([`crate::regalloc::shared_prelude`]).
+    /// Off: the private passes are what the corpus was tuned on.
+    pub shared_prelude: bool,
     /// A small conditional block is copied into the predecessors that jump to
     /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
     pub tail_duplicate: bool,
@@ -192,6 +209,10 @@ impl Options {
         reuse_shift_flags: false,
         reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
+        shared_cse: false,
+        direct_copies: false,
+        shared_licm: false,
+        shared_prelude: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
@@ -227,6 +248,10 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
+            shared_cse: false,
+            direct_copies: false,
+            shared_licm: false,
+            shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
@@ -277,6 +302,17 @@ pub fn items_with(
     };
     let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if llrm_support::debug::enabled("builds") {
+        eprintln!(
+            "[builds] {name} trials: return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            touched.return_dup,
+            touched.class_split,
+            touched.compare_destinations,
+            touched.carry_chain,
+            touched.global_copies,
+            touched.mul_trial
+        );
+    }
     if !touched.any() {
         return Ok(kept);
     }
@@ -292,14 +328,6 @@ pub fn items_with(
         let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
         if crate::trial::prefers_without(&kept, &plain, cpu, price) {
-            kept = plain;
-            options = without;
-        }
-    }
-    if touched.sext_adds {
-        let without = Options { sext_adds: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
-        if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
         }
@@ -350,6 +378,33 @@ pub fn items_with(
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
 /// `negx` (a subtract from a constant zero high half is `negx`).
+/// A tied def and use share a register once allocated: a write-back form such
+/// as `add.w (An)+, Dn` is printed from its use, so a def allocated elsewhere
+/// would leave the pointer it should have moved where it was.
+fn verify_ties(
+    function: &crate::mfunc::MFunction,
+    assignment: &llrm_spike_mf::regalloc::Assignment,
+) -> Result<(), String> {
+    let root = |reg: &llrm_spike_mf::Reg| match reg {
+        llrm_spike_mf::Reg::Virt(v) => crate::REGISTER_INFO.root(assignment.0[*v as usize]),
+        llrm_spike_mf::Reg::Phys(id) => crate::REGISTER_INFO.root(*id),
+    };
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for &(def, used) in &inst.ties {
+            if let (llrm_spike_mf::Operand::Def(def), llrm_spike_mf::Operand::Use(used)) =
+                (&inst.operands[def], &inst.operands[used])
+                && root(def) != root(used)
+            {
+                return Err(format!(
+                    "{}: {:?} ties a def and a use allocated to different registers",
+                    function.name, inst.kind
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
     function
         .blocks
@@ -366,7 +421,6 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
-    sext_adds: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -383,8 +437,7 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds
-            || self.return_dup
+        self.return_dup
             || self.class_split
             || self.compare_destinations
             || self.carry_chain
@@ -432,6 +485,12 @@ fn items_once(
     cpu: Cpu,
     options: Options,
 ) -> Result<(Vec<Item>, Touched), String> {
+    // one full select, allocate and emit; a function with optional rewrites
+    // runs it again per trial
+    let _build = llrm_support::debug::span("m68k build");
+    if llrm_support::debug::enabled("builds") {
+        eprintln!("[builds] {name}");
+    }
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -459,7 +518,16 @@ fn items_once(
         &chain,
         &libcalls,
     )?;
-    let mut function = emit(name, &blocks)?;
+    let mut function = emit_with(
+        name,
+        &blocks,
+        Shape {
+            direct_copies: options.direct_copies,
+            // what the hosted stages read: a result is defined in its copy's
+            // register
+            copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+        },
+    )?;
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
     touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
@@ -482,12 +550,14 @@ fn items_once(
         if options.compare_destinations {
             touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
         }
+        // priced inside the pass (`Price`), so a function it changed is not
+        // built again
         if options.sext_adds {
-            touched.sext_adds = crate::sextacc::sign_extended_words(
+            crate::sextacc::sign_extended_words(
                 &mut function,
                 cpu,
                 crate::timing::Price::of(wants_size, options.strict),
-            ) > 0;
+            );
         }
         if options.class_split {
             touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
@@ -501,33 +571,47 @@ fn items_once(
     }
     function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
+    if options.shared_licm {
+        function = crate::regalloc::shared_licm(&function, wants_size)?;
+    }
+    if options.shared_cse {
+        function = crate::regalloc::shared_cse(&function)?;
+    }
     machine_sink(&mut function);
     if options.short && options.reuse_shift_out_flags {
         crate::cmpcarry::reuse_shift_out_flags(&mut function);
     }
     crate::regalloc::split_flag_edges(&mut function);
-    eliminate_phis_with(&mut function, false);
+    if !options.shared_prelude {
+        eliminate_phis_with(&mut function, false);
+    }
     fold_reserved_copies(&mut function);
     if options.short {
         crate::commutative::mark_commutative(&mut function, wants_size);
     }
-    commute_tied(&mut function);
-    two_address(&mut function);
+    if !options.shared_prelude {
+        commute_tied(&mut function);
+        two_address(&mut function);
+    }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+    let allocating = llrm_support::debug::span("m68k allocate");
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(
+        crate::regalloc::allocate_greedy_after(
             &mut function,
             wants_size,
             options.indexed,
             options.rematerialize_arguments,
             options.global_copies,
             options.loop_carried_first,
+            options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
         )?
     };
+    drop(allocating);
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
         crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
@@ -565,6 +649,7 @@ fn items_once(
         );
     }
     preserve_flags(&mut function, &assignment)?;
+    restore_remade_flags(&mut function);
     branch_fold(&mut function, &assignment);
     if options.tail_duplicate && !wants_size {
         llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);

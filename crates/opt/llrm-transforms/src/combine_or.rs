@@ -320,6 +320,9 @@ pub fn visit_or(
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
     }
+    if let Some(found) = crate::combine_and::fold_idempotent_recurrence(c, inst, BinaryOp::Or) {
+        return found;
+    }
     let (op0, op1, _) = parts(c, inst);
     if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
         return found;

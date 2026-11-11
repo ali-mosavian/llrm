@@ -129,6 +129,7 @@ pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
 pub mod combine_fcmp;
+pub mod combine_fneg;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
 pub mod combine_fpcast;
@@ -176,6 +177,7 @@ pub mod combine_select_andor;
 pub mod combine_select_bit_test;
 pub mod combine_select_bools;
 pub mod combine_select_cttz_ctlz;
+pub mod combine_select_equivalence;
 pub mod combine_select_ext_const;
 pub mod combine_select_fabs;
 pub mod combine_select_into_op;
@@ -200,6 +202,7 @@ pub mod condtocond;
 pub mod congruentiv;
 pub mod constanthoisting;
 pub mod constmerge;
+pub mod mergefunc;
 pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
@@ -306,6 +309,10 @@ pub mod loopinstsimplify;
 pub mod loopinterchange;
 pub mod loopinterchange_transform;
 pub mod looploadelim;
+pub mod loopvectorize;
+pub mod loopvectorizelegality;
+pub mod loopvectorizeplan;
+pub mod loopvectorizeskeleton;
 pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
@@ -350,6 +357,7 @@ mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
+pub mod mergeicmps;
 pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
@@ -363,6 +371,7 @@ mod pageindex_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
+pub mod partialinline;
 #[cfg(test)]
 mod pin_slots_tests;
 pub mod pipeline;

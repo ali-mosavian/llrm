@@ -15,7 +15,7 @@
 //! left out, each named where it stood: `foldSelectOfBools`,
 //! `foldSelectNegNot`, `foldSelectAndOrPowerOfTwo`, the floating-point folds
 //! (`minnum`, `canonicalize`...: need #2209; `fabs` is `combine_select_fabs`),
-//! `foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
+//! the rest of `foldSelectInstWithICmp`
 //! (its `canonicalizeSPF` step is `combine_select_spf`),
 //! `foldAddSubSelect`,
 //! `foldOverflowingAddSubSelect`, `foldSetClearBits`,
@@ -50,6 +50,7 @@ use crate::combine_select_andor::select_with_and_or_cond;
 use crate::combine_select_bit_test::{select_bit_test, select_icmp_and_and};
 use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_cttz_ctlz::select_cttz_ctlz;
+use crate::combine_select_equivalence::select_value_equivalence;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_fabs::select_fcmp_to_fabs;
 use crate::combine_select_into_op::select_into_op;
@@ -76,6 +77,7 @@ const FOLDS: &[Fold] = &[
     select_of_bools,
     bool_to_extension,
     select_fcmp_to_fabs,
+    select_value_equivalence,
     select_with_icmp,
     select_cttz_ctlz,
     select_icmp_and_and,

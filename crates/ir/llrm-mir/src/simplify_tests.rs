@@ -1322,3 +1322,21 @@ fn the_difference_of_two_offsets_from_one_global_is_their_distance() {
         define i64 @f() {\nb0:\n  %r = sub i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @s, i64 12) to i64), ptrtoint (ptr @s to i64)\n  ret i64 %r\n}\n";
     assert_eq!(simplified(text, "r").as_deref(), Some("12"));
 }
+
+/// `simplifySelectWithEquivalence` through a cast: `x == 0 ? 0 : trunc(ctpop x)`
+/// is the `trunc`. Guards the flag-free case: only the flagged one needed
+/// `foldSelectValueEquivalence` (wasm32 `ones64` +6 B).
+#[test]
+fn a_select_guarding_a_count_through_a_trunc_is_the_count() {
+    let text = "declare i64 @llvm.ctpop.i64(i64)
+define i32 @f(i64 %x) {
+b0:
+  %z = icmp eq i64 %x, 0
+  %c = call i64 @llvm.ctpop.i64(i64 %x)
+  %t = trunc i64 %c to i32
+  %r = select i1 %z, i32 0, i32 %t
+  ret i32 %r
+}
+";
+    assert_eq!(simplified(text, "r"), Some("%t".to_owned()));
+}

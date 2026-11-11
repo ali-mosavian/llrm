@@ -489,3 +489,43 @@ fn arithmetic_is_legal_on_the_registers_and_the_remainders_are_expanded() {
     }
     assert!(!arm64.is_operation_legal_or_custom(Add, 8) && !arm64.is_operation_legal_or_custom(Add, 16));
 }
+
+/// The vector costs of `opt -passes='print<cost-model>' -cost-kind=throughput` on aarch64 (the pin,
+/// both cpus): before the vector hooks existed `Tti` priced no vector at all, so no loop could be
+/// weighed against its scalar form.
+#[test]
+fn vector_memory_and_arithmetic_costs_are_the_pins() {
+    use llrm_mir::tti::{ArithOp::*, MemoryOp::*};
+    for cpu in ["generic", "apple-m1"] {
+        let tti = AArch64::of_cpu(cpu).unwrap();
+        let v = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+        let mem = |op, ty, align| tti.vector_memory_op_cost(op, ty, align, CostKind::RecipThroughput).map(|c| c.value);
+        let alu = |op, ty| tti.vector_arithmetic_cost(op, ty, CostKind::RecipThroughput).map(|c| c.value);
+        // load <8 x i16> align 2 / <16 x i16> / <4 x i16> align 1 / <16 x i8> align 1 / align 16
+        assert_eq!(mem(Load, v(16, 8), 2), Some(1), "{cpu}");
+        assert_eq!(mem(Load, v(16, 16), 2), Some(2), "{cpu}");
+        assert_eq!(mem(Load, v(16, 4), 1), Some(1), "{cpu}");
+        assert_eq!(mem(Load, v(8, 16), 1), Some(1), "{cpu}");
+        assert_eq!(mem(Load, v(16, 8), 16), Some(1), "{cpu}");
+        assert_eq!(mem(Store, v(16, 8), 2), Some(1), "{cpu}");
+        assert_eq!(mem(Store, v(16, 16), 2), Some(2), "{cpu}");
+        assert_eq!(alu(Add, v(16, 8)), Some(1), "{cpu}");
+        assert_eq!(alu(Add, v(32, 16)), Some(4), "{cpu}");
+        assert_eq!(alu(Mul, v(32, 4)), Some(1), "{cpu}");
+        assert_eq!(alu(And, v(8, 16)), Some(1), "{cpu}");
+        assert_eq!(alu(Shl, v(32, 4)), Some(1), "{cpu}");
+        assert_eq!(alu(Sub, v(64, 2)), Some(1), "{cpu}");
+        // The pin prices `mul <2 x i64>` 14; this port does not price it (DEVIATE VT3).
+        assert_eq!(alu(Mul, v(64, 2)), None, "{cpu}");
+    }
+}
+
+#[test]
+fn the_interleave_factor_and_register_counts_follow_the_cpu() {
+    let (generic, m1) = (AArch64::of_cpu("generic").unwrap(), AArch64::of_cpu("apple-m1").unwrap());
+    // getMaxInterleaveFactor: 4 for a scalar loop, else the subtarget's (2, 4 on the A14 tuning).
+    assert_eq!((generic.max_interleave_factor(1, false), generic.max_interleave_factor(8, false)), (4, 2));
+    assert_eq!((m1.max_interleave_factor(1, false), m1.max_interleave_factor(8, false)), (4, 4));
+    assert_eq!(generic.max_interleave_factor(4, true), 4);
+    assert_eq!((generic.number_of_registers(RegisterClass::Vector), generic.number_of_registers(RegisterClass::Scalar)), (32, 31));
+}
