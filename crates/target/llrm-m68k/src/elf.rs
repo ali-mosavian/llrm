@@ -15,14 +15,13 @@
 //! `llvm/lib/Target/M68k/MCTargetDesc/M68kELFObjectWriter.cpp`, pin
 //! d1106deb71cc.
 
-use llrm_support::hash::HashMap;
-
 use llrm_elf::{Machine, Relocation};
 use llrm_mir::image::{Export, Variable};
 use llrm_object::assembler::AsmBackend;
 use llrm_object::{
     Binding, Definition, Fix, FixupKind, FixupKindInfo, Object, Reloc, Role, Section, Symbol, Target, Unsupported,
 };
+use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::encode::encode;
@@ -175,6 +174,11 @@ fn place(
                 labels.push((label, code.len()));
             }
             Item::Bytes(bytes) => code.extend_from_slice(bytes),
+            Item::Table(labels) => {
+                let encoded = crate::encode::table(labels);
+                pending.push((code.len(), index, encoded.fixups));
+                code.extend_from_slice(&encoded.bytes);
+            }
             Item::Loc(_) => {}
             Item::Inst(one) => {
                 let encoded = encode(one)?;
