@@ -735,6 +735,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn cold_site_ignores_sinks(&self) -> bool {
+        self.tuning.cold_site_ignores_sinks
+    }
+
     fn unroll_object_bound(&self) -> Option<u32> {
         self.tuning.unroll_object_bound
     }

@@ -370,6 +370,8 @@ impl Machine for Dos {
             split_merged_conditions: true,
             // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
             lftr_any_stride: true,
+            // DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): see `Tuning::cold_site_ignores_sinks`.
+            cold_site_ignores_sinks: true,
             ..llrm_mir::target::Tuning::PIN
         }
         })();
