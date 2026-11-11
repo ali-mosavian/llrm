@@ -66,6 +66,10 @@ pub struct X86 {
     /// the rest (`LoopMicroOpBufferSize = -1`).
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
     pub loop_micro_op_buffer: u32,
+    /// `getSchedModel().IssueWidth`: 4 for the `SandyBridgeModel`, 0 for the
+    /// `GenericModel` of the rest.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L22
+    pub issue_width: u32,
     /// The program's code is position independent (clang's "PIC Level"); set
     /// by `Program::new`. A symbol in long mode is then `[rip + symbol]`
     /// without index or displacement.
@@ -209,6 +213,49 @@ impl X86 {
         if self.quad { 64 } else { 32 }
     }
 
+    /// Whether `inst` is a plain load whose one user, in its own block, takes
+    /// it as a memory operand beside a register: `op r,[m]` for the integer ALU
+    /// operations and the compare (the load in either place of a commutative
+    /// one, the second of `sub`), `fadd`/`fmul` for float and double.
+    fn load_folds_into_its_only_user(
+        &self,
+        context: &llrm_mir::context::Context,
+        function: &llrm_mir::module::Function,
+        inst: llrm_mir::module::InstId,
+    ) -> bool {
+        use llrm_mir::opcode::{BinaryOp, Opcode};
+        use llrm_mir::types::{FloatKind, Type};
+        let load = function.instruction(inst);
+        let (Opcode::Load { volatile: false, .. }, Some(result)) = (&load.opcode, load.result) else { return false };
+        let integer = context.types.int_bits(load.ty);
+        let float = matches!(context.types.get(load.ty), Type::Float(FloatKind::Float | FloatKind::Double));
+        if !float && !matches!(integer, Some(8 | 16 | 32)) && !(integer == Some(64) && self.native() == 64) {
+            return false;
+        }
+        let mut users = function.users(result).iter();
+        let (Some(only), None) = (users.next(), users.next()) else { return false };
+        if function.parent(only.user) != function.parent(inst) {
+            return false;
+        }
+        let place = only.index as usize;
+        // The memory form needs a register for the other operand: against an immediate
+        // `cmp [m],imm` is longer than the shared load plus `test`/`cmp r,imm`, and
+        // `add r,imm` cannot take the load at all.
+        let Some(&other) = function.instruction(only.user).operands.get(1 - place.min(1)) else { return false };
+        if !matches!(other, llrm_mir::module::Operand::Value(_)) {
+            return false;
+        }
+        match &function.instruction(only.user).opcode {
+            Opcode::Binary(BinaryOp::Add | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => integer.is_some(),
+            Opcode::Binary(BinaryOp::Mul) => matches!(integer, Some(16 | 32 | 64)),
+            Opcode::Binary(BinaryOp::Sub) => integer.is_some() && place == 1,
+            Opcode::ICmp(_) => integer.is_some(),
+            Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => float,
+            Opcode::Binary(BinaryOp::FSub | BinaryOp::FDiv) => float && place == 1,
+            _ => false,
+        }
+    }
+
     /// The profile of the baseline cpu of `triple`'s architecture: the 32-bit
     /// ones by their `-march` (`i686` is `pentiumpro`), `x86_64` long mode.
     pub fn of_triple(triple: &str) -> Option<X86> {
@@ -236,6 +283,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 0,
+                issue_width: 0,
                 position_independent: std::cell::Cell::new(true),
             }),
             "core2" => Some(X86 {
@@ -248,6 +296,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 28,
+                issue_width: 4,
                 position_independent: std::cell::Cell::new(true),
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
@@ -262,6 +311,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 28,
+                issue_width: 4,
                 position_independent: std::cell::Cell::new(true),
             }),
             _ => None,
@@ -665,20 +715,142 @@ impl Tti for X86 {
         self.tuning.unroll_never_grows_at_o1
     }
 
+    fn second_ipsccp(&self) -> bool {
+        self.tuning.second_ipsccp
+    }
+
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        self.tuning.unroll_o1_analyzed_trips
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
+    }
+
+    fn narrow_divide_live_limit(&self) -> u32 {
+        self.tuning.narrow_divide_live_limit
+    }
+
+    fn inline_never_grows_without_rate(&self) -> bool {
+        self.tuning.inline_never_grows_without_rate
+    }
+
+    fn unroll_object_bound(&self) -> Option<u32> {
+        self.tuning.unroll_object_bound
+    }
+
+    fn inline_o1_weighs_entry(&self) -> bool {
+        self.tuning.inline_o1_weighs_entry
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let tuning = &self.tuning;
+        if kind != CostKind::Latency || tuning.call_sequence_fixed_clocks == 0 {
+            return None;
+        }
+        let words: i64 = shape
+            .arguments
+            .iter()
+            .map(|argument| match (argument.byval_bytes, argument.ty) {
+                (Some(bytes), _) => (bytes as i64 + 3) / 4,
+                (None, Some(Ty::Int(bits))) => i64::from(bits.div_ceil(32).max(1)),
+                (None, Some(Ty::Double)) => 2,
+                (None, Some(Ty::X87)) => 3,
+                _ => 1,
+            })
+            .sum();
+        let pop = if words > 0 { tuning.call_sequence_pop_clocks } else { 0 };
+        Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
+    }
+
+    fn sdiv_by_magnitude(&self) -> bool {
+        self.tuning.sdiv_by_magnitude
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.tuning.speed_inline_rate_at_o1
+    }
+
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
+            (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
+        })
+    }
+
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        self.tuning.inline_hot_trial_at_o3
+    }
+
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        self.tuning.inline_hot_trial_frequency
+    }
+
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_inline_milliclocks_per_byte
+    }
+
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        self.tuning.inline_o1_unit_bytes_milli
+    }
+
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.inline_o1_milliclocks_per_byte
+    }
+
+    fn promote_va_list(&self) -> bool {
+        self.tuning.promote_va_list
+    }
+
+    fn branch_compare_trees_at_size(&self) -> bool {
+        self.tuning.branch_compare_trees_at_size
+    }
+
+    fn sink_spares_ranges(&self) -> bool {
+        self.tuning.sink_spares_ranges
     }
 
     fn divide_by_bytes(&self) -> bool {
         self.tuning.divide_by_bytes
     }
 
+    fn immediate_forms_at_size(&self) -> bool {
+        self.tuning.immediate_forms_at_size
+    }
+
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
     }
 
+    fn lftr_any_stride(&self) -> bool {
+        self.tuning.lftr_any_stride
+    }
+
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
+    }
+
+    fn push_imm_at_size(&self) -> bool {
+        self.tuning.push_imm_at_size
+    }
+
+    fn merge_functions_at_size(&self) -> bool {
+        self.tuning.merge_functions_at_size
+    }
+
+    fn sdiv_pow2_stays_at_size(&self) -> bool {
+        self.tuning.sdiv_pow2_stays_at_size
+    }
+
+    fn rep_movs_at_size(&self) -> bool {
+        self.tuning.rep_movs_at_size
+    }
+
+    fn rep_stos_at_size(&self) -> bool {
+        self.tuning.rep_stos_at_size
     }
 
     fn has_cmov(&self) -> bool {
@@ -702,6 +874,14 @@ impl Tti for X86 {
 
     fn loop_micro_op_buffer_size(&self) -> u32 {
         self.loop_micro_op_buffer
+    }
+
+    fn issue_width(&self) -> u32 {
+        self.issue_width
+    }
+
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        self.tuning.unroll_recurrence_veto
     }
 
     fn x87_stack_slots(&self) -> Option<u32> {
@@ -740,6 +920,10 @@ impl Tti for X86 {
         self.tuning.unswitch_threshold
     }
 
+    fn min_jump_table_density(&self) -> Option<u64> {
+        self.tuning.min_jump_table_density
+    }
+
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         match self.real_mode.as_ref() {
             Some(real) => real.recursive_inlining,
@@ -755,6 +939,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_growth
     }
 
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        self.tuning.recursive_inlining_depth
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }
@@ -763,12 +951,20 @@ impl Tti for X86 {
         self.tuning.peel_folded_entry
     }
 
+    fn carries_slot_indexes(&self) -> bool {
+        self.tuning.carry_slot_indexes
+    }
+
     fn sinks_select_arms(&self) -> bool {
         self.tuning.sink_select_arms
     }
 
     fn inlines_variable_memcpy(&self) -> bool {
         self.tuning.inline_variable_memcpy
+    }
+
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
     }
 
     fn ipsccp_widen_keeps_sign(&self) -> bool {
@@ -791,6 +987,12 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
     }
 
+    /// The pin's rule (`TotalAllocaSizeRecursiveCaller`) outside real mode,
+    /// where the stack is not 64 KiB shared with the data.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         self.tuning.inline_chain_trial
     }
@@ -807,6 +1009,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn lsr_size_order(&self) -> bool {
+        self.tuning.lsr_size_order
     }
 
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
@@ -955,6 +1161,10 @@ impl Tti for X86 {
     ) -> Option<Cost> {
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L5818
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
+    }
+
+    fn splits_merged_conditions(&self) -> bool {
+        self.tuning.split_merged_conditions
     }
 
     /// X86's `getJumpConditionMergingParams`: `x86-br-merging-base-cost` 2,
@@ -1213,10 +1423,18 @@ impl Tti for X86 {
             return false;
         }
         // Long mode, position independent (the PIE a default clang makes): a
-        // symbol is `[rip + symbol]`, which takes no displacement
-        // beside it and no index (the `isPositionIndependent() && is64Bit()`
-        // rule).
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
+        // symbol is `[rip + symbol]`, which takes no displacement, index or
+        // base register beside it.
+        // DEVIATE PIE64: the pin refuses only an offset or a scale above 1
+        // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
+        // address to it; the backend forms the symbol with a `lea` at every
+        // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
+        // -832 B, objects of m32 and non-PIE unchanged). 2026-11-08, same-tree
+        // A/B over 171 m64 cells with it off: 6 better (-162 B), 42 worse (+2712 B:
+        // particle O2 +396, scroll +121, stft_single +112, jpeg_single O2 +256).
+        // Exit: the backend shares one `lea sym` per loop (MachineLICM/CSE of
+        // the symbol), then the pin's legality; owner w12, exit 2026-12-15.
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }
         match scale {
@@ -1302,15 +1520,8 @@ impl Tti for X86 {
 
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
-    ///
-    /// DEVIATE LU3d: a target that states its allocatable registers
-    /// (`with_registers`: the frame and stack pointers are not among them)
-    /// keeps none back: the pin's one stands for the stack pointer its count
-    /// of eight includes, so reserving it again counts it twice (not an `i8`
-    /// counter the pin makes). owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
-    /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
-        u32::from(self.real_mode.is_none() && self.registers.is_none())
+        u32::from(self.real_mode.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
@@ -1341,12 +1552,32 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
+    /// 4 instructions in the pin's order, 2 in the other). owner:
+    /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
+    /// order-free.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
         self.real_mode.is_some()
     }
 
     fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    /// DEVIATE LS1: real mode keeps every formula of the first use in play
+    /// (A/B 2026-11-07: the pin's rule is +1..+8 B in 41 of 192 m16 cells, in
+    /// none better; m32 -37 B net, m64 0). owner: w12, exit: 2026-11-30, when
+    /// the m16 cause cards close.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        self.real_mode.is_none()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.
@@ -1432,6 +1663,20 @@ impl Tti for X86 {
     /// the multiplier's select (pack_ref -Os m16: +24 B).
     fn variable_shift_count_in_fixed_register(&self) -> bool {
         self.real_mode.is_none()
+    }
+
+    /// DEVIATE FOLD-HOIST (x87, exit 2026-11-20): the pin's X86 keeps the base
+    /// answer. A load that the arm's own user would take as a memory operand
+    /// stays in its arm: hoisted, it has two users and neither folds it, and
+    /// the register it holds across the branch is what spills
+    /// (x_cordic -O1: 2 spills a pass of the outer loop, +397 clk, +8 B).
+    fn is_profitable_to_hoist(
+        &self,
+        context: &llrm_mir::context::Context,
+        function: &llrm_mir::module::Function,
+        inst: llrm_mir::module::InstId,
+    ) -> bool {
+        !self.load_folds_into_its_only_user(context, function, inst)
     }
 
     fn arithmetic_cost(

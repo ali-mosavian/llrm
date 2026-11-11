@@ -173,6 +173,7 @@ fn umin_simplified(
             dom_conditions: None,
             cond_context: None,
             cxt: Some(parts.last),
+            pending_intrinsics: &[],
         };
         umin_match(&q, declared, parts.condition)
     };
@@ -238,6 +239,7 @@ fn default_branch_simplified(
             dom_conditions: None,
             cond_context: None,
             cxt: Some(first),
+            pending_intrinsics: &[],
         };
         compute_known_bits(&q, parts.condition, 0)
     };

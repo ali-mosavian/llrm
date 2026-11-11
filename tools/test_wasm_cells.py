@@ -36,3 +36,11 @@ def test_equal_or_better_cells_pass(tmp_path):
     out = run(tmp_path, "sieve 435 440 54723 54723 same\n", "sieve 430 440 54000 54723 same\n")
     assert out.returncode == 0
     assert "compared 1 of 1 cells" in out.stdout
+
+
+def test_a_cell_with_no_result_is_unmeasured_not_a_zero(tmp_path):
+    """jpeg_fixed read `n/a(no result)` with 0 instructions on both sides and compared as a pass."""
+    row = "jpeg_fixed 27036 27898 0 0 9457 10319 n/a(no result: llrm none, clang none)\n"
+    out = run(tmp_path, row, row)
+    assert out.returncode == 1
+    assert "UNMEASURED -O2 jpeg_fixed" in out.stdout

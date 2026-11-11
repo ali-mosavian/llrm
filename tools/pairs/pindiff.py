@@ -102,7 +102,10 @@ def pin_text_size(obj: Path) -> int:
     return elfsize.text_bytes(out)
 
 
-NOP = re.compile(r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax)\b")
+# Ours pads with the 386 multi-byte forms `lea esi,[esi+0x0]` and `lea esi,[esi+eiz*1+0x0]` as well as `nop`.
+NOP = re.compile(
+    r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax|lea\s+(?P<r>e?[sd]i),\[(?P=r)(\+eiz\*1)?\+0x0\])(\s|$)"
+)
 
 
 def nop_bytes(listing: str) -> int:
@@ -243,6 +246,14 @@ def pin_llc_datalayout(of: pin.Target) -> str:
     return found.group(1) if found else of.datalayout
 
 
+def pin_column_label(reopt: bool) -> str:
+    """What the `pin` columns are. Neither route is the pinned clang's own `-O` flow: on m32 -O1 div_constants_ulong this column is 3471 B
+    against 3771 B from the real `clang -O1` (300 B below it), so read it as a back-end-and-pipeline difference, not as the pin's size."""
+    if reopt:
+        return "pin column: RE-OPTIMISED route: clang -O IR through pin opt, then both llcs; ours re-runs its mid-end on it"
+    return "pin column: pin opt default<O> + llc on RAW clang IR (not clang's own -O flow; the matrix's pin_clang column is that)"
+
+
 def front_end_flags(level: str, reopt: bool) -> list[str]:
     """What clang is told besides the machine's flags. Raw (default): the front end's IR with no pass run, as llrm-cc writes it, so each
     side runs its whole pipeline once. `reopt`: clang's own `-O` IR, then the pin's opt, then both llcs; ours re-optimises that IR, so it
@@ -276,6 +287,8 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     if opted.returncode:
         return "pin opt: " + (opted.stderr.strip().splitlines() or ["failed"])[0]
     ours_text = opted.stdout if reopt else text
+    if not reopt:
+        irguard.check_raw(ours_text, str(raw))
     text = opted.stdout
     ours_in = work / f"{stem}.ll"
     ours_text = re.sub(r"^target triple.*\n", "", ours_text, flags=re.M)
@@ -409,6 +422,7 @@ def main(argv: list[str]) -> int:
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
     scope = " (backend only: --reopt feeds pin-optimised IR, ours' middle-end size gates do not run)" if args.reopt and args.level == "Os" else ""
+    print(f"# {pin_column_label(args.reopt)}")
     print(f"# pindiff {args.machine} -{args.level}{scope} frontend clang -fno-builtin isel=dag libgcc-divide-helpers=pin side: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
     note = layout_note(pin.target(args.machine).datalayout, pin_llc_datalayout(pin.target(args.machine)))
     if note:

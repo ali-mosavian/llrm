@@ -809,9 +809,10 @@ declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
 #[test]
 fn a_fixed_point_divide_is_selected() {
     let made = names(SDIV_FIX).unwrap_or_else(|why| panic!("{why}"));
-    // the numerator shifted up, the 64-bit divide and remainder as helper calls
+    // the numerator shifted up, the 64-bit divide and remainder as one helper call
+    // (DEVIATE DIVREM-HELPER: the routine returns both; the pin's x86 makes two)
     assert!(made.iter().any(|name| name == "shld"), "{made:?}");
-    assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
+    assert_eq!(made.iter().filter(|name| *name == "call").count(), 1, "{made:?}");
 }
 
 const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
@@ -1214,6 +1215,7 @@ entry:
         saved: vec![],
         slot: 2,
         align: 2,
+        object_align: 2,
         optional: false,
         enter: false,
         free: false,
@@ -1221,6 +1223,7 @@ entry:
         exit_cfi: true,
         saved_first: false,
         wrap_split_size: false,
+        object_aligned: false,
         red_zone: 0,
         slot_scratch: None,
     };

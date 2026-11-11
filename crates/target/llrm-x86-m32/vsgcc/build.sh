@@ -1,14 +1,17 @@
 #!/bin/bash
 # build.sh PROG: llrm (OMF; ELF as llrmElfO2/llrmElfOs), gcc and clang (ELF) at -O1, -O2, -O3 and -Os into $VSGCC_WORK, flags as tools/bench, without: wrap.py keeps the kernel a call
 set -e
+# a compile or link that fails prints its FAIL line and makes the script exit 1 at its end: a caller that reads only the exit code sees it
+FAILED=0; fail() { echo "$@"; FAILED=1; }
 P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; K=$(cd "$(dirname "$0")" && pwd)/kernels; if [ "${P#run_}" != "$P" ]; then S=$R/tests/run/c/${P#run_}.c; elif [ -d $K/$P ]; then S=$K/$P/$P.c; else S=$R/bench/$P/$P.c; fi
 LLRM=${LLRM:-$(python3 "$R/tools/llrmbin.py" bin)/llrm-cc}
-# llrm-cc takes its target as a row; the Open Watcom tree and the pin come from the environment
-export LLRM_OW=${LLRM_OW:-$HOME/scratch/ow-src}
+# llrm-cc takes its target as a row; the pin comes from the environment, the Open Watcom tree is {ow}
 mkdir -p $O/b $O/o
 ORIG=$S
 # the kernel is called through a volatile pointer in every compiler's copy: it stays a call, and the rest inlines as it would
 python3 "$(dirname "$0")/wrap.py" $P $ORIG > $O/b/$P.c
+# the flags of the program's own `// flags:` header at a level (headerflags.py): -fwrapv, -fno-inline-functions ... are its meaning, so every column gets them
+HF() { python3 "$(dirname "$0")/headerflags.py" "$1" $ORIG "$2"; }
 S=$O/b/$P.c
 # llrm side in the convention gcc and clang use, or the table measures register arguments against stack ones
 ABI=${VSGCC_ABI:-sysv}
@@ -38,27 +41,36 @@ $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -march=i486 -fobje
 WANT=8; [ $LD = 80 ] && WANT=12
 if [ -z "${VSGCC_ONLY:-}" ]; then gcc -m32 $REF_LD -c -o $O/b/ld_probe.$P.gcc.o $O/b/ld_probe.$P.c && [ "$(size_of $O/b/ld_probe.$P.gcc.o)" = $WANT ] || { echo "FAIL long double: gcc is not $WANT bytes ($LD bit) $P"; exit 1; }; fi
 [ "$(size_of $O/b/ld_probe.$P.llrm.o)" = $WANT ] || { echo "FAIL long double: llrm is $(size_of $O/b/ld_probe.$P.llrm.o) bytes, the reference $WANT ($LD bit) $P"; exit 1; }
-$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -O2 -march=i486 -c -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
-$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -Os -march=i486 -c -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
-for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -c -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || echo "FAIL llrm$o $P"; done
-[ -z "${VSGCC_ONLY:-}" ] || exit 0
+$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm O2) -mabi=$ABI $LLRM_LD -O2 -march=i486 -c -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || fail "FAIL llrm $P"
+$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm Os) -mabi=$ABI $LLRM_LD -Os -march=i486 -c -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || fail "FAIL llrmOs $P"
+for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm $o) -mabi=$ABI $LLRM_LD -$o -march=i486 -c -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || fail "FAIL llrm$o $P"; done
+[ -z "${VSGCC_ONLY:-}" ] || exit $FAILED
 cd $O/b
-# Our m32 target states a stack alignment of 4 (S32); the pin's and gcc's Linux default is 16, which keeps a reserved call frame where 4 pushes.
-F="$REF_LD -Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
+# The externals keep their Linux default stack (16): ours is `-mabi=sysv`, whose convention keeps 16 at a call (DEVIATE CF6, rewritten 2026-11-10).
+F="$REF_LD -Dfar= -m32 -march=i486 $(python3 "$R/tools/external_flags.py" --reloc=-fno-pic) ${VSGCC_GCC_EXTRA:-}"
+# VSGCC_GCC_EXTRA: one more flag on the externals' lines, spelled out only to test the flag parity refusal below
 # VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
 NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -fno-tree-slp-vectorize"; NV_CLANG="-fno-vectorize -fno-slp-vectorize"; }
+python3 "$(dirname "$0")/flagcheck.py" source $S || fail "FAIL flag parity: $P uses wchar_t"
 for o in O1 O2 O3 Os; do
-  gcc $F $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
-  $CLANG $F $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  # flag parity (flagcheck.py): a flag on one external's line only is refused, not measured (the NV_* switches are on both)
+  # the program's header flags; gcc with no spelling for one (headerflags.py exits 3) has no column here: n/a, nothing built or linked for it
+  HFC=$(HF clang $o) || fail "FAIL header flags clang$o $P"
+  GCC_NA=0; HFG=$(HF gcc $o) || { GCC_NA=1; echo "n/a gcc$o $P: no gcc spelling for its header flags"; }
+  VSGCC_SOURCE=$ORIG python3 "$(dirname "$0")/flagcheck.py" externals clang $o $F $HFC -$o || fail "FAIL flag parity clang$o $P"
+  [ $GCC_NA = 1 ] || VSGCC_SOURCE=$ORIG python3 "$(dirname "$0")/flagcheck.py" externals gcc $o $F $HFG -$o || fail "FAIL flag parity gcc$o $P"
+  [ $GCC_NA = 1 ] || gcc $F $HFG $NV_GCC -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || fail "FAIL gcc$o $P"
+  $CLANG $F $HFC $NV_CLANG -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || fail "FAIL clang$o $P"
   # the objects above carry no unwind tables, as the other columns need; the .eh_frame column reads these (llrm always writes one)
-  gcc ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.eh.o $S 2>/dev/null || echo "FAIL gcc$o eh $P"
-  $CLANG ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.eh.o $S 2>/dev/null || echo "FAIL clang$o eh $P"
-  CS="gcc clang"
+  [ $GCC_NA = 1 ] || gcc ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $HFG $NV_GCC -$o -c -o $P.gcc$o.eh.o $S 2>/dev/null || fail "FAIL gcc$o eh $P"
+  $CLANG ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $HFC $NV_CLANG -$o -c -o $P.clang$o.eh.o $S 2>/dev/null || fail "FAIL clang$o eh $P"
+  CS="gcc clang"; [ $GCC_NA = 0 ] || CS="clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
-    $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"
-    CS="gcc clang llrmElf"
+    $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} $(HF llrm $o) -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || fail "FAIL llrmElf$o $P"
+    CS="gcc clang llrmElf"; [ $GCC_NA = 0 ] || CS="clang llrmElf"
   fi
   for c in $CS; do
-    ld -m $EMU -static -e 0 -Ttext=0x10000 --just-symbols=$O/stub.elf -Map=$P.$c$o.map -o $P.$c$o.elf $P.$c$o.o $(eval echo \${RT_$c:-}) 2>$P.$c$o.lderr || echo "LINK FAIL $c$o $P: $(grep -o 'undefined reference to.*' $P.$c$o.lderr | sort -u | tr '\n' ' ')"
+    ld -m $EMU -static -e 0 -Ttext=0x10000 --just-symbols=$O/stub.elf -Map=$P.$c$o.map -o $P.$c$o.elf $P.$c$o.o $(eval echo \${RT_$c:-}) 2>$P.$c$o.lderr || fail "LINK FAIL $c$o $P: $(grep -o 'undefined reference to.*' $P.$c$o.lderr | sort -u | tr '\n' ' ')"
   done
 done
+exit $FAILED

@@ -103,6 +103,10 @@ clobbered = []
 # or `iret` restores. The one statement of the layout: the backend pushes in this order and frontends name
 # registers through it.
 interrupt_frame = [["gs", 2], ["fs", 2], ["es", 2], ["ds", 2], ["edi", 4], ["esi", 4], ["ebp", 4], ["esp", 4], ["ebx", 4], ["edx", 4], ["ecx", 4], ["eax", 4], ["ip", 2], ["cs", 2], ["flags", 2]]
+# The segments its entry pushes after PUSHAD, in push order (the frame above holds them in reverse), and the
+# registers it then loads with DGROUP's selector: the first from the group, each next from the one before.
+interrupt_saves = ["ds", "es", "fs", "gs"]
+interrupt_data = ["ds", "es"]
 
 # watcall16: Open Watcom's 16-bit register convention (`wcc -ecw`, `__watcall`), medium model, read from `bwcc`'s own output.
 # Arguments take AX, DX, BX, CX in order; a long or a far pointer (4 bytes) takes DX:AX or CX:BX (the low word, or a far

@@ -20,7 +20,7 @@ fn an_fpround_stores_and_reloads_its_value() {
         &module,
         function,
         &layout,
-        &BuilderTarget::m32(),
+        &BuilderTarget::for_pointer_bits(32),
         &llrm_x86_m32::M32,
         &convention,
         &mut info,

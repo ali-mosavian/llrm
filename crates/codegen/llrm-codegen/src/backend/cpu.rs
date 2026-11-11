@@ -50,7 +50,7 @@
 //! or `shl r,1`), [`Profile::clears_before_byte_load`] (`xor r,r; mov rl,m`
 //! or `movzx`) and [`Profile::pops_arguments`] (pops against `add sp`).
 //! `MultiplyChains` caches the constant-multiply chains found under this
-//! profile's prices (GCC's `alg_hash`); a clone starts with an empty cache.
+//! profile's prices; a clone starts with an empty cache.
 //!
 //! # Example
 //! Facts the profiles state (from the target's timing tables):
@@ -161,9 +161,13 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// `tail_dup_hot_threshold` of the target's table (DEVIATE TAILDUP-HOT).
+    pub tail_dup_hot_size: Option<usize>,
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
+    /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
+    pub share_congruent_phis: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
@@ -189,6 +193,19 @@ pub struct Profile {
     /// -O2 and -O3: the target's price of a code byte at speed counts
     /// (`Options::prices_bytes`); -O1, -Os and -Oz gate every metric alone.
     pub speed_rate: bool,
+    /// The target runs the pin's stand-alone tail duplication after
+    /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
+    /// A/B has been made (`TailDuplicate` slot).
+    pub post_ra_tail_duplicate: bool,
+    /// Equal literal stores share a register at the speed levels too
+    /// (`TimingTable::share_literal_stores`).
+    pub share_literal_stores: bool,
+    /// At -Os a 1 is `xor r,r; inc r` (`TimingTable::size_one_is_xor_inc`).
+    pub size_one_is_xor_inc: bool,
+    /// A select of two constants in a block at least this often run is a branch
+    /// on a CPU with no `cmov`; 0 is off
+    /// (`TimingTable::branch_constant_selects`).
+    pub branch_constant_selects: u32,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -200,7 +217,7 @@ pub struct Profile {
     /// prices.
     pub model: llrm_target::CostModel,
     /// The chains of shifts and adds found for constant multiplies under this
-    /// profile's prices (GCC's `alg_hash`).
+    /// profile's prices.
     pub multiplies: MultiplyChains,
 }
 
@@ -386,7 +403,9 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            tail_dup_hot_size: None,
             commute_loop_carried: false,
+            share_congruent_phis: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
             float_store: false,
@@ -394,6 +413,10 @@ impl Profile {
             stable_loads: true,
             min_size: false,
             speed_rate: true,
+            post_ra_tail_duplicate: false,
+            share_literal_stores: false,
+            size_one_is_xor_inc: false,
+            branch_constant_selects: 0,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -409,19 +432,67 @@ impl Profile {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
+    /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
+    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
+    /// register-immediate operation, and code is not tuned for size (the test
+    /// is two bytes longer).
+    pub fn tests_status_word(&self) -> bool {
+        !self.size
+            && !self.min_size
+            && matches!((self.cost("sahf"), self.cost("alu_ri")), (Ok(sahf), Ok(alu)) if alu < sahf)
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where code is tuned
     /// for size (the target's, none elsewhere).
     pub fn size_milliclocks_per_byte(&self) -> i64 {
         if self.size || self.min_size { self.target().size_milliclocks_per_byte() } else { 0 }
     }
 
+    /// Code is tuned for clocks: not -O0 (the pin's -O0 is FastISel and no DAG
+    /// combine, so nothing there trades bytes for clocks) and not for size.
+    pub fn has_speed_goal(&self) -> bool {
+        self.optimized && !(self.size || self.min_size)
+    }
+
+    /// Optimized code whose bytes are not traded for clocks: -O1 and size (no
+    /// speed rate), where a smaller routine of the same result wins.
+    pub fn bytes_strict(&self) -> bool {
+        self.optimized && (!self.has_speed_goal() || !self.speed_rate)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
-        if self.size || self.min_size || !self.speed_rate {
+        if !self.has_speed_goal() || !self.speed_rate {
             return 0;
         }
-        self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+        self.speed_milliclocks_per_byte_on(&*self.target())
+    }
+
+    /// [`Self::speed_milliclocks_per_byte`] on a cost model the caller already
+    /// has: `target` builds one (and clones the price tables) per call.
+    pub fn speed_milliclocks_per_byte_on(
+        &self,
+        machine: &dyn llrm_mir::target::Machine,
+    ) -> i64 {
+        if !self.has_speed_goal() || !self.speed_rate {
+            return 0;
+        }
+        machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// What placement's tail duplication may copy above the pin's bound
+    /// (DEVIATE TAILDUP-HOT): only where bytes are priced at speed (-O2, -O3),
+    /// by the jump a copy saves (`jmp_short`) against the rate.
+    pub fn tail_dup_hot(&self) -> Option<crate::backend::jumps::placement::HotTailDup> {
+        let size = self.tail_dup_hot_size?;
+        let per_byte = self.speed_milliclocks_per_byte();
+        let jump = self.cost("jmp_short").ok()?;
+        (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
+            size,
+            jump_clocks: jump as f64,
+            clocks_per_byte: per_byte as f64 / 1000.0,
+        })
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -438,6 +509,13 @@ impl Profile {
     /// -Os a different register choice can cost a REX byte: m64 grep +1 B).
     pub fn commutes_loop_carried(&self) -> bool {
         loop_carried_applies(self.commute_loop_carried, self.size, self.min_size)
+    }
+
+    /// DEVIATE TA-LC2 applies here: TA-LC where bytes are priced at speed
+    /// (-O2, -O3). At -O1 (strict bytes) the tie can leave the web one value
+    /// wider: x_adler -O1 gained a callee-saved register (+2 B, +5 clk).
+    pub fn commutes_loop_carried_flow(&self) -> bool {
+        self.commutes_loop_carried() && !self.bytes_strict()
     }
 
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
@@ -508,6 +586,28 @@ impl Profile {
         words: i64,
     ) -> Result<bool, String> {
         Ok(words <= 2 && (self.size || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
+    }
+
+    /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
+    /// of `sub`/`add` on the stack pointer: shorter, and where size is not
+    /// wanted, only if no slower.
+    ///
+    /// DEVIATE FRAMESLOT-PRICE (owner llrm-target-x86-m32, exit 2026-11-30):
+    /// the pin takes `push`/`pop` at every level
+    /// (`X86FrameLowering::emitSPUpdate`, `Offset == SlotSize`,
+    /// X86FrameLowering.cpp of the pin d1106deb71cc). A 486 pops in 4
+    /// clocks and adds in 1, so the pair costs +3 clocks for 4 bytes: more
+    /// than the speed rate pays (0.3125 clk/B at -O2/-O3), and a loss at -O1,
+    /// where neither axis may be worse (sfm16_dbg -O1 12,527 -> 12,530 clk).
+    /// Exit: re-measure 2026-11-30; none while a 486 pops in 4 clocks.
+    pub fn pops_frame_slot(&self) -> bool {
+        const SLOT_BYTES: i64 = 4;
+        self.size
+            || self
+                .cost("push_r")
+                .and_then(|push| Ok(push + self.cost("pop_r")? - 2 * self.cost("alu_rr")?))
+                .map(|extra| 1000 * extra <= SLOT_BYTES * self.speed_milliclocks_per_byte())
+                .unwrap_or(true)
     }
 
     /// Whether this profile has an explicit ranking for a form.
@@ -592,7 +692,13 @@ fn _profile(
         _latencies: std::sync::Arc::new(table.latency.clone()),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        share_congruent_phis: table.share_congruent_phis,
+        post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        share_literal_stores: table.share_literal_stores,
+        size_one_is_xor_inc: table.size_one_is_xor_inc,
+        branch_constant_selects: table.branch_constant_selects,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
@@ -707,14 +813,10 @@ pub fn tuned_optimizing(
 
 /// The registers a value may be placed in: the description's `gpr` class.
 fn general_registers(arch: &dyn Target) -> Vec<RegId> {
-    let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+    let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
-        .map(|name| {
-            RegId::values()
-                .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-                .unwrap_or_else(|| panic!("no register {name}"))
-        })
+        .map(|name| arch.registers().by_name(name).unwrap_or_else(|| panic!("the target names no register `{name}`")))
         .collect()
 }
 
@@ -750,6 +852,20 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    /// The general registers are named through the target's own file now; on
+    /// every x86 target they are what x86's name table gave.
+    #[test]
+    fn test_the_general_registers_are_what_the_x86_name_table_gave() {
+        let targets: [&dyn Target; 3] = [&llrm_x86_m16::M16, &llrm_x86_m32::M32, &llrm_x86_m64::M64];
+        for arch in targets {
+            let file = llrm_target::registers::file(&arch.registers_text()).unwrap();
+            let old: Vec<RegId> =
+                llrm_target::registers::of_class(&file, "gpr").into_iter().map(|name| RegId::named(name).unwrap()).collect();
+            assert!(!old.is_empty());
+            assert_eq!(general_registers(arch), old, "{}", arch.name());
+        }
+    }
 
     /// TA-4 was written as a pass's own rule for the m16 prefixed `lea`; the
     /// mode comes from the address forms, so a flat dword form, a 64-bit one
@@ -1153,5 +1269,42 @@ mod loop_carried_tests {
         assert!(!loop_carried_applies(true, true, false), "-Os");
         assert!(!loop_carried_applies(true, false, true), "-Oz");
         assert!(!loop_carried_applies(false, false, false), "no key: the pin's order");
+    }
+}
+
+#[cfg(test)]
+mod bytes_strict_tests {
+    use super::*;
+
+    /// nbody_fixed at -O1 kept a 313-byte inline divide because only `size`
+    /// asked for the small routine; -O1 trades no bytes for clocks either.
+    #[test]
+    fn o1_and_size_are_bytes_strict_and_o2_and_o0_are_not() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile { optimized, size, speed_rate, ..base.clone() };
+        assert!(at(true, false, false).bytes_strict(), "-O1: no speed rate");
+        assert!(at(true, true, true).bytes_strict(), "-Os");
+        assert!(!at(true, false, true).bytes_strict(), "-O2 and -O3 price bytes in clocks");
+        assert!(!at(false, false, false).bytes_strict(), "-O0 is not tuned");
+    }
+
+    /// x_adler -O1 with TA-LC2 on gained a callee-saved register (115 -> 117 B,
+    /// 57094 -> 57099 clk, worse on both axes where -O1 is strict): the
+    /// cross-block tie holds at -O2 and -O3 only, and only where TA-LC does.
+    #[test]
+    fn the_loop_carried_flow_commute_is_o2_and_o3_only() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile {
+            optimized,
+            size,
+            speed_rate,
+            commute_loop_carried: true,
+            ..base.clone()
+        };
+        assert!(at(true, false, true).commutes_loop_carried_flow(), "-O2 and -O3");
+        assert!(!at(true, false, false).commutes_loop_carried_flow(), "-O1");
+        assert!(!at(true, true, true).commutes_loop_carried_flow(), "-Os");
+        let without_key = Profile { commute_loop_carried: false, ..at(true, false, true) };
+        assert!(!without_key.commutes_loop_carried_flow(), "no key: the pin's order");
     }
 }

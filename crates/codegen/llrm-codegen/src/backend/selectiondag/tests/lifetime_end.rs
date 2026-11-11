@@ -31,6 +31,7 @@ fn after_store_and_end(
     let end = dag.get_node(ISD::LifetimeEnd, EVT::OTHER, &[store, frame]);
     dag.set_root(end);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: true,
@@ -40,6 +41,7 @@ fn after_store_and_end(
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

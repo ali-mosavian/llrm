@@ -6,6 +6,7 @@
 Each `report(long)` call stores its four bytes in a log the harness reads back and compares with the .out lines.
 Verdicts: PASS, WRONG (output differs), REFUSED (backend), SLOW (llc timed out), CLANG, ASM, LINK (undefined symbols named), HALT.
 """
+import signal
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,8 +15,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
-DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
-CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-S", "-emit-llvm"]
+DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"'
+sys.path.insert(0, str(ROOT / "tools"))
+import external_flags  # noqa: E402  the one neutral flag set of every external bar (tools/external_flags.py)
+
+CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *external_flags.flags("none"), "-S", "-emit-llvm"]
 LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
 CRT0 = f"""\t.module crt0
 \t.globl _main
@@ -66,6 +70,18 @@ def sh(cmd, cwd, inp=None, timeout=300):
     return subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, text=True, timeout=timeout)
 
 
+# The status of a process stopped by `ulimit -t`: SIGXCPU.
+CPU_LIMIT = -signal.SIGXCPU
+
+
+def llc_limited(llc_command, cwd, cpu_seconds):
+    """`llc_command` under 16 GB of address space and `cpu_seconds` of CPU time. The limit is CPU time, not the wall clock: the
+    load guard stops a job's process group while the machine is busy, and an llc that takes 3 s alone read as `SLOW llc over 120 s`
+    (fixed_point -O3, 2026-11-10). The wall timeout, 20 times the CPU one, is only for a process that hangs: it raises
+    `subprocess.TimeoutExpired`. A CPU overrun is a return code of `CPU_LIMIT`."""
+    return sh(["bash", "-c", f'ulimit -v 16777216; ulimit -S -t {int(cpu_seconds)}; exec "$@"', "llc", *llc_command], cwd, timeout=cpu_seconds * 20)
+
+
 def libc_library(work):
     """The library directory of LIBC's objects and those of the `Z80_LIBC_EXTRA` directories (the soft-float helpers): sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
     lib = Path(work) / "lib"
@@ -78,6 +94,14 @@ def libc_library(work):
         stems.append(s.stem)
     (lib / "libc.lib").write_text("\n".join(stems) + "\n")
     return str(lib)
+
+
+def link_detail(undefined, extra):
+    """The LINK line: the undefined names, and the unset `Z80_LIBC_EXTRA` (the soft-float library, runtime/compiler-rt/tests/z80_lib.sh) when it may be the cause."""
+    names = " ".join(undefined)
+    if undefined and not extra:
+        return f"undefined {names[:90]} and Z80_LIBC_EXTRA unset"
+    return names[:140]
 
 
 def expected(path):
@@ -99,12 +123,14 @@ def reported(out):
 
 
 def program_flags(src):
-    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types."""
+    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types: any alternative
+    of any `// flags:` line names an x86 mode (`-m32`, `-mabi=sysv`, `-march=i*`), a line `// x86-widths: WHY` says so (the
+    other tools read only `// flags:`; a `-m64` there would move a program from the default m16 to m64), or it uses `long double`."""
     text = src.read_text()
-    first = text.splitlines()[0] if text.startswith("// flags:") else ""
-    tokens = first.removeprefix("// flags:").split("|")[0].split()
-    keep = [t for t in tokens if t.startswith("-f") and not t.startswith("-fsanitize")]
-    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith("-march=i") for t in tokens) or "long double" in text
+    lines = [line.removeprefix("// flags:") for line in text.splitlines() if line.startswith("// flags:")]
+    tokens = [t for line in lines for alternative in line.split("|") for t in alternative.split()]
+    keep = [t for t in (lines[0].split("|")[0].split() if lines else []) if t.startswith("-f") and not t.startswith("-fsanitize")]
+    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith(("-march=i", "-march=pentium")) for t in tokens) or "long double" in text or "\n// x86-widths:" in text
     return keep, x86
 
 
@@ -122,11 +148,12 @@ def one(job):
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
     ll.write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
     try:
-        # a compile that runs away is stopped at 16 GB of address space, not the machine's memory
-        p = sh(["bash", "-c", 'ulimit -v 16777216; exec "$@"', "llc", args.llc, "-S", f"-O{args.llc_level or args.level}",
-                "-o", str(w / "p.s"), str(ll)], w, timeout=args.compile_timeout)
+        # a compile that runs away is stopped at 16 GB of address space and at the CPU time limit, not the machine's memory
+        p = llc_limited([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w, args.compile_timeout)
     except subprocess.TimeoutExpired:
-        return name, "SLOW", f"llc over {args.compile_timeout} s"
+        return name, "HUNG", f"llc made no progress for {args.compile_timeout * 20} s"
+    if p.returncode == CPU_LIMIT:
+        return name, "SLOW", f"llc over {args.compile_timeout} s of cpu"
     if p.returncode:
         why = [l for l in p.stderr.splitlines() if "REFUSED" in l or "llrm-z80-llc" in l]
         return name, "REFUSED", (why or [p.stderr.strip()[-100:]])[0][:140]
@@ -140,7 +167,7 @@ def one(job):
     k = sh(["sdldz80", "-i", "-m", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
     if k.returncode or "?ASlink-W-Undefined" in k.stdout + k.stderr:
         undefined = sorted(set(re.findall(r"Undefined Global (\S+)", k.stdout + k.stderr)))
-        return name, "LINK", " ".join(undefined)[:140] or (k.stdout + k.stderr)[-100:]
+        return name, "LINK", link_detail(undefined, os.environ.get("Z80_LIBC_EXTRA", "")) or (k.stdout + k.stderr)[-100:]
     try:
         r = sh(["ucsim_z80", "-t", "Z80", "-q", "-w", "x.ihx", "-c", "-"], w,
                f"sp_limit=0\n{zero_areas((w / 'x.map').read_text())}run\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
@@ -158,6 +185,13 @@ def one(job):
     return name, "WRONG", f"value {first}: got {got[first] if first < len(got) else 'none'}, want {want[first] if first < len(want) else 'none'}"
 
 
+def selected(src, names=()):
+    """The programs of `src` that are for the z80: with an expected output, named if names are given, and not tagged for other targets by `// targets:` (stackover, an x86 recursion test, ran to the timeout)."""
+    import corpus_targets
+    found = sorted(p for p in Path(src).glob("*.c") if p.with_suffix(".out").exists() and corpus_targets.applies("z80-sdcc", p.read_text()))
+    return [p for p in found if p.stem in names] if names else found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("names", nargs="*")
@@ -171,9 +205,7 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--src", default=str(ROOT / "tests/run/c"))
     args = ap.parse_args()
-    sources = sorted(p for p in Path(args.src).glob("*.c") if p.with_suffix(".out").exists())
-    if args.names:
-        sources = [p for p in sources if p.stem in args.names]
+    sources = selected(Path(args.src), args.names)
     work = tempfile.mkdtemp(prefix="z80prog-")
     try:
         args.libc = libc_library(work)
@@ -193,4 +225,5 @@ def main():
     sys.exit(1 if any(v in ("WRONG", "HALT") for _, v, _ in results) else 0)
 
 
-main()
+if __name__ == "__main__":
+    main()

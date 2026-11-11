@@ -72,16 +72,20 @@ def ledata(segment: int, length: int) -> bytes:
     return record(0xA0, bytes([segment, 0, 0]) + bytes(length))
 
 
+def stored_data(segment: int, content: bytes, at: int = 0) -> bytes:
+    return record(0xA0, bytes([segment]) + at.to_bytes(2, "little") + content)
+
+
 def lnames(*texts: str) -> bytes:
     return record(0x96, b"".join(name(one) for one in texts))
 
 
-def test_initialised_bytes_are_the_data_records_and_the_rest_of_the_segment_is_uninitialised(tmp_path):
-    """Names 1..: _TEXT CODE _DATA DATA _BSS BSS. A 40-byte data segment loaded with 25 bytes and a 16-byte BSS
-    with none read 40 initialised and 0 uninitialised when the SEGDEF length alone was counted."""
+def test_the_image_stores_every_segment_of_a_class_but_bss(tmp_path):
+    """Names 1..: _TEXT CODE _DATA DATA _BSS BSS. A 40-byte DATA segment loaded with 25 bytes is 40 bytes of the image (the linker fills the rest
+    with zeros), the 16-byte BSS segment is not stored."""
     path = tmp_path / "d.obj"
     path.write_bytes(record(0x80, name("x")) + lnames("_TEXT", "CODE", "_DATA", "DATA", "_BSS", "BSS") + segdef(10, 1, 2) + segdef(40, 3, 4) + segdef(16, 5, 6) + ledata(1, 10) + ledata(2, 25))
-    assert data_bytes(path) == (25, 31)
+    assert data_bytes(path) == (40, 16)
     assert code_bytes(path) == 10
 
 
@@ -91,6 +95,42 @@ def test_a_basic_objects_runtime_cells_are_the_programs_data(tmp_path):
     path = tmp_path / "b.obj"
     path.write_bytes(record(0x80, name("x")) + lnames("R_CODE", "BC_CODE", "BC_DATA", "BC_VARS", "BC_DS", "BC_SEGS") + segdef(50, 1, 2) + segdef(14, 3, 4) + segdef(3, 5, 6) + ledata(2, 14) + ledata(3, 3))
     assert data_bytes(path) == (17, 0)
+
+
+def test_zeros_stored_or_declared_read_as_the_same_data(tmp_path):
+    """The m16 owner table read 240 BASIC cells WORSE on `data` (fib 15 > 7 bc, jpeg_fixed 29191 > 765): llrm-qb stored BC_DATA's and its arrays'
+    zero bytes as LEDATA, bc declares them and stores none, and the linked executables are byte-identical. The same segment with its zeros
+    stored and with a hole there is the same image."""
+    def made(name, pieces):
+        path = tmp_path / name
+        path.write_bytes(record(0x80, name_("x")) + lnames("BC_DATA", "BC_VARS") + segdef(40, 1, 2) + b"".join(stored_data(1, body, at) for at, body in pieces))
+        return path
+    name_ = name
+    one, two = bytes([7, 7]), bytes([9])
+    stored_zeros = made("a.obj", [(0, one + bytes(30) + two + bytes(7))])
+    with_hole = made("b.obj", [(0, one), (32, two)])
+    assert data_bytes(stored_zeros) == data_bytes(with_hole) == (40, 0)
+
+
+def mz(image: int, header: int = 2) -> bytes:
+    """A DOS executable header of `header` paragraphs for an image of `image` bytes, then the image."""
+    size = header * 16 + image
+    return b"MZ" + (size % 512).to_bytes(2, "little") + ((size + 511) // 512).to_bytes(2, "little") + bytes(2) + header.to_bytes(2, "little") + bytes(header * 16 - 10) + bytes(image)
+
+
+def test_a_bss_segment_before_the_stack_is_stored_where_the_image_holds_it(tmp_path):
+    """49 of the Nib executables had a class-BSS `_BSS` (272-492 B) just below the stack that jwlink stored: the image ended at its end, not
+    before it. The axis counted it not stored; the linked image is the arbiter."""
+    obj = tmp_path / "n.obj"
+    obj.write_bytes(record(0x80, name("x")) + lnames("_DATA", "DATA", "_BSS", "BSS") + segdef(10, 1, 2) + segdef(30, 3, 4) + stored_data(1, bytes([1]) * 10))
+    listing = tmp_path / "n.map"
+    listing.write_text("\n Start  Stop   Length Name                   Class\n 00000H 00009H 0000AH _DATA                  DATA\n 0000AH 00027H 0001EH _BSS                   BSS\n 00030H 000FFH 000D0H STACK                  STACK\n")
+    stored, loose = tmp_path / "s.exe", tmp_path / "l.exe"
+    stored.write_bytes(mz(40))  # the image ends where _BSS does: stored
+    loose.write_bytes(mz(10))  # the image ends where _DATA does: _BSS is the loader's
+    assert data_bytes(obj, stored, listing) == (40, 0)
+    assert data_bytes(obj, loose, listing) == (10, 30)
+    assert data_bytes(obj) == (10, 30), "without an image the class decides"
 
 
 def test_the_stack_and_debug_records_are_not_the_programs_data(tmp_path):
@@ -207,11 +247,11 @@ def test_sizes_reports_bytes_and_no_cost_estimate(monkeypatch, tmp_path, capsys)
 
 def test_the_isel_variable_reaches_the_compiler_command(monkeypatch):
     """`LLRM_ISEL=dag python3 tools/sizes.py` measured the old selector twice (185238 -> 185238 bytes): the variable was never passed on."""
-    command = ["llrm-c", "x.c", "-Os"]
+    command = ["llrm-cc", "x.c", "-Os"]
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     assert selected(command) == command
     monkeypatch.setenv("LLRM_ISEL", "dag")
-    assert selected(command) == ["llrm-c", "--isel=dag", "x.c", "-Os"]
+    assert selected(command) == ["llrm-cc", "--isel=dag", "x.c", "-Os"]
 
 
 def test_a_basic_program_takes_the_excess_precision_a_pair_names(tmp_path, monkeypatch):
@@ -223,7 +263,7 @@ def test_a_basic_program_takes_the_excess_precision_a_pair_names(tmp_path, monke
 
 
 def test_a_c_program_is_built_by_llrm_cc_to_an_object_on_a_watcom_row(tmp_path):
-    """sizes.py ran bins/llrm-c, which is gone: every C program read as failing to compile and tests/test_programs_compile.py went red once
+    """sizes.py ran bins/llrm-cc, which is gone: every C program read as failing to compile and tests/test_programs_compile.py went red once
     its binary list named llrm-cc instead."""
     import sizes
 
@@ -259,6 +299,17 @@ def test_multibyte_nops_and_register_self_moves_are_padding_in_32_bit_code(tmp_p
     assert (got.code, got.align) == (2, 15)
 
 
+def test_a_dword_register_self_move_is_code_in_64_bit_and_padding_in_32_bit():
+    """`mov eax,eax` clears rax's upper half at 64 bits: it was read as padding where it ended on a boundary, so a layout shift moved bytes
+    between code and padding (m64 -Os jpeg_single +3 B code from one shorter instruction)."""
+    from sizes import padding
+
+    move = b"\x89\xc0"  # mov eax,eax
+    code = b"\x31\xc0" + move + b"\xc3"  # xor eax,eax; mov eax,eax; ret: the move ends at 4
+    assert padding(code, 64)[0] == 0
+    assert padding(code, 32)[0] == 2
+
+
 def test_a_nop_run_that_does_not_end_on_a_boundary_or_fills_one_stays_counted(tmp_path):
     """An instruction run that looks like padding is code unless it ends where an alignment would end it and is shorter than that alignment."""
     assert code_size(code_object(tmp_path, RET + NOP * 4 + RET)) == sizes.CodeSize(6, 0, 0)  # ends at 5
@@ -283,3 +334,35 @@ def test_the_library_functions_an_object_calls_are_named(tmp_path):
     path = tmp_path / "c.obj"
     path.write_bytes(object_with(10, record(0x8C, name("__I4D") + b"\0" + name("_report@3") + b"\0")))
     assert externs(path) == ["__I4D", "_report@3"]
+
+
+def test_every_no_nopl_pad_form_of_1_to_15_bytes_reads_as_padding():
+    """The 486/Pentium pad (`nops` in llrm-x86 `mc/backend.rs`, `longest` 1) is GNU as's `mov esi,esi` / `lea esi,[esi+0]` forms, 7 bytes at most an
+    instruction. The size judge must read all of a pad of any length as padding, or a loop's alignment reads as growth. The byte forms are those of
+    `NOPS_NO_NOPL`."""
+    from sizes import padding
+
+    forms = [
+        bytes([0x90]),
+        bytes([0x89, 0xF6]),
+        bytes([0x8D, 0x76, 0x00]),
+        bytes([0x8D, 0x74, 0x26, 0x00]),
+        bytes([0x90, 0x8D, 0x74, 0x26, 0x00]),
+        bytes([0x8D, 0xB6, 0, 0, 0, 0]),
+        bytes([0x8D, 0xB4, 0x26, 0, 0, 0, 0]),
+    ]
+
+    def pad(count):
+        out = b""
+        while count:
+            this = min(count, len(forms))
+            out += forms[this - 1]
+            count -= this
+        return out
+
+    for count in range(1, 16):
+        code = b"\x31\xc0" * ((16 - count) // 2) + (b"\x40" if (16 - count) % 2 else b"")  # xor eax,eax; inc eax: code, not pad
+        content = code + pad(count)
+        assert len(content) == 16
+        found, skipped = padding(content + b"\xc3", 32)
+        assert (found, skipped) == (count, 0), (count, found, skipped)

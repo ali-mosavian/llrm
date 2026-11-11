@@ -37,7 +37,7 @@ x_mergesort clocks -25.6% at -O1..-O3, -25.0% -Os (code -9.8% -Os), x_rle
 -Os 260284 -> 260240 (-44 bytes); above base: host +7 (0.028%), `lights` +3
 (0.708%: `sete; movzx` of a 6-byte pair became `mov cx, 1; jne` and a
 second `mov`, a branch the cycle table prices cheaper that is not shorter).
-Row LIGHTS-OS-1, owner llrm-w-2, 2026-11-06: the gate prices bytes too
+Row LIGHTS-OS-1, owner w12, 2026-11-06: the gate prices bytes too
 (encoded size of the forms, from the description) so the chain stays where
 it is shorter at -Os. Compare of operands wider than a register, a chain a
 branch reads, and an `and` with a non-compare side are left alone (each

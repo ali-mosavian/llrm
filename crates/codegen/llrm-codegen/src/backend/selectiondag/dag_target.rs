@@ -7,7 +7,7 @@
 //! matcher ([`DagTarget::preprocess`]), `DoInstructionSelection` through
 //! [`DagTarget::select`], the target's rewrites of what it selected
 //! ([`DagTarget::postprocess`]), then schedule. What follows is the target's:
-//! x86 emits LIR from the units ([`super::dag_select::select_block`]), another
+//! x86 emits LIR from the units ([`select_block`](super::dag_select)), another
 //! target emits into its own machine function.
 //!
 //! # See also
@@ -23,7 +23,6 @@ use super::dag_select::{Refusal, do_instruction_selection_with, legalized_with};
 use super::dagisel_adapter::{DagisAdapter, PinRegisters};
 use super::legalize_dag;
 use super::schedule::{SchedInfo, Unit, schedule};
-use super::x86_preprocess::FrameObjects;
 
 /// The borrows legalization needs at once.
 pub struct Phases<'a, L> {
@@ -31,6 +30,9 @@ pub struct Phases<'a, L> {
     pub lowering: &'a mut L,
     /// The target whose inline routines the `i128` divide calls, if it has any.
     pub arch: Option<&'a dyn llrm_target::Target>,
+    /// `OptLevel == CodeGenOptLevel::None`: the combiner skips the chain, store
+    /// and load combines.
+    pub opt_none: bool,
 }
 
 /// What picks the instruction for a node: the target's `Select`.
@@ -40,6 +42,19 @@ pub trait Select {
         adapter: &mut DagisAdapter<'_>,
         node: u32,
     ) -> Outcome;
+}
+
+/// `CreateStackTemporary`: where the stack slots come from.
+pub trait FrameObjects {
+    /// How many frame objects there are: the index the next one gets.
+    fn objects(&self) -> i32;
+
+    /// A new frame object of `size` bytes, aligned to `align`; its index.
+    fn create_stack_temporary(
+        &mut self,
+        size: u32,
+        align: u32,
+    ) -> i32;
 }
 
 /// A target of the DAG path: its lowering, its instruction selector and its
@@ -99,7 +114,9 @@ pub fn select_units<T: DagTarget>(
     dag.first_temporary = temporaries.objects();
     target.prepare(dag);
     let phases = target.phases();
-    let legal = crate::support::debug::timed("dag legalize", || legalized_with(dag, phases.tli, phases.lowering, phases.arch));
+    let legal = crate::support::debug::timed("dag legalize", || {
+        legalized_with(dag, phases.tli, phases.lowering, phases.arch, phases.opt_none)
+    });
     legal.map_err(|why| target.legalize_failed(why))?;
     for (at, (size, align)) in std::mem::take(&mut dag.temporaries).into_iter().enumerate() {
         let made = temporaries.create_stack_temporary(size, align);

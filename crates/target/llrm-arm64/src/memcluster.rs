@@ -65,7 +65,7 @@ fn cluster(mut ops: OpList) -> OpList {
                             || touch(between).is_some_and(|other| commutes(&touch_of(&first), &other)))
                 }
                 Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
-                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } => false,
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::Phi { .. } => false,
             };
             if !passable || defs.contains(&base) || defs.contains(&source) {
                 break;
@@ -80,14 +80,18 @@ fn cluster(mut ops: OpList) -> OpList {
 /// is `slot + offset`, and no instruction changes it, so a stand-in register
 /// that nothing defines names the slot.
 fn access_of(inst: &Inst) -> Option<Access> {
-    let (Inst::Load { mem, addr: Addr::Slot { slot, offset }, mmo } | Inst::Store { mem, addr: Addr::Slot { slot, offset }, mmo }) =
-        inst
+    let (Inst::Load { mem, addr: Addr::Slot { slot, offset }, mmo }
+    | Inst::Store { mem, addr: Addr::Slot { slot, offset }, mmo }) = inst
     else {
         return access(inst);
     };
     let addr = Addr::Offset { base: Gpr(SLOT_BASE | slot), imm: *offset };
     let (mem, mmo) = (*mem, mmo.clone());
-    access(&if matches!(inst, Inst::Load { .. }) { Inst::Load { mem, addr, mmo } } else { Inst::Store { mem, addr, mmo } })
+    access(&if matches!(inst, Inst::Load { .. }) {
+        Inst::Load { mem, addr, mmo }
+    } else {
+        Inst::Store { mem, addr, mmo }
+    })
 }
 
 /// Register numbers of the stand-ins for frame slots: above any virtual one.
@@ -104,19 +108,23 @@ fn passes(
     moved: &Access,
     value: Reg,
 ) -> bool {
-    between.into_iter().all(|k| {
-        let (defs, uses) = ops[k].defs_and_uses();
-        let passable = match &ops[k] {
-            Op::I(inst) => {
-                !leaves_the_block(inst)
-                    && (!crate::pairs::is_memory(inst)
-                        || touch(inst).is_some_and(|other| commutes(&touch_of(moved), &other)))
-            }
-            Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
-            Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } => false,
-        };
-        passable && !defs.contains(&base) && !defs.contains(&value) && !uses.contains(&value)
-    })
+    between
+        .into_iter()
+        .all(
+            |k| {
+                let (defs, uses) = ops[k].defs_and_uses();
+                let passable = match &ops[k] {
+                    Op::I(inst) => {
+                        !leaves_the_block(inst)
+                            && (!crate::pairs::is_memory(inst)
+                                || touch(inst).is_some_and(|other| commutes(&touch_of(moved), &other)))
+                    }
+                    Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
+                    Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::Phi { .. } => false,
+                };
+                passable && !defs.contains(&base) && !defs.contains(&value) && !uses.contains(&value)
+            },
+        )
 }
 
 /// A load moves up to right after the load of the neighbouring slot from the

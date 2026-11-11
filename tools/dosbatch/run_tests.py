@@ -276,7 +276,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         level = program.flags[0] if program.flags else "-O2"
         try:
-            # Its own files, as Nib's: a C file by llrm-c, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
+            # Its own files, as Nib's: a C file by llrm-cc, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
             others = []
             for at, source in enumerate(one for one in linked(program, target) if one.name != Path(dosbatch.target_link(target)["last"][0]).name):
                 extra = work / f"{stem}F{at}.obj"

@@ -159,6 +159,12 @@ class ServiceTests(unittest.TestCase):
         result = self.run_body("    mov ah, 19h\n    int 21h\n    mov bl, al\n    mov al, bl")
         self.assertEqual((result.error, result.exit_code), ("", 2))
 
+    def test_a_program_that_asks_for_the_free_disk_space_runs_to_its_exit(self):
+        """`int 21h ah=36h` (pds71 and vbdos runtimes of grep, stft_fixed and stft_single) stopped the run with `int 21h ah=0x36`:
+        six reference cells had no clock row. The drive has room: AX is the sectors per cluster, not 0FFFFh (invalid drive)."""
+        result = self.run_body("    mov ah, 36h\n    mov dl, 0\n    int 21h\n    mov bl, 0\n    cmp ax, 0FFFFh\n    je done\n    mov bl, 5\ndone:\n    mov al, bl")
+        self.assertEqual((result.error, result.exit_code), ("", 5))
+
     def test_a_file_opened_by_its_drive_and_root_path_is_found_in_the_programs_directory(self):
         """QuickBASIC names a file `C:\\DATA.BIN` once the drive is known: the emulator looked for a file of that very name, opened
         nothing and the program printed 0 where stft_single.bas and grep.bas want 78803551 and 4745."""
@@ -217,8 +223,6 @@ class MapTests(unittest.TestCase):
         self.assertIsNone(maps.find(table, "bench_crc"))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 
@@ -241,3 +245,50 @@ def test_a_program_that_never_resets_the_fpu_starts_at_dos_control_word(tmp_path
     subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path}/F.OBJ", str(tmp_path / "F.ASM")], check=True)
     subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(tmp_path / "F.EXE"), "file", str(tmp_path / "F.OBJ")], check=True)
     assert icount.run(tmp_path / "F.EXE", None, tmp_path, whole=True).output == b"\x7f\x03"
+
+
+def test_the_default_limit_admits_the_slowest_reference_run():
+    """Turbo C's jpeg_fixed runs 431,861,107 instructions; the 400 M limit left tc and tcpp jpeg_fixed unmeasured (REFERENCE BROKEN) in the m16 bless."""
+    assert icount.LIMIT >= 431_861_107 or os.environ.get("LLRM_ICOUNT_LIMIT")
+
+
+FARCALL = """\
+.model small
+.386
+.stack 256
+.code
+f proc near
+    ret
+f endp
+start:
+    db 0Eh
+{pad}    call f
+{after}    mov ax, 4C00h
+    int 21h
+end start
+"""
+
+
+def farcall(directory: Path, pad: str, after: str) -> Path:
+    (directory / "F.ASM").write_text(FARCALL.format(pad=pad, after=after))
+    subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{directory}/F.OBJ", str(directory / "F.ASM")], check=True)
+    subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "F.EXE"), "file", str(directory / "F.OBJ")], check=True)
+    return directory / "F.EXE"
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+class FarCallPadTests(unittest.TestCase):
+    def test_the_pad_nop_of_a_rewritten_far_call_is_counted_apart_from_the_clocks(self):
+        """M16-CLOCK-FARCALL-PAD: jwlink pads `push cs; call near` with a `nop` at an even offset and a `ds` prefix at an odd one, so a
+        one-byte shift earlier in the segment moved 1 clk x the call's executions between sites (jpeg_fixed +172, jpeg_single -170 clk
+        on #8545 with the same code). `layout_clocks` is the same for both layouts; the raw clocks differ by the nop."""
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            even = icount.run(farcall(directory, "", "    nop\n"), None, directory, whole=True)
+            odd = icount.run(farcall(directory, "    db 3Eh\n", ""), None, directory, whole=True)
+        self.assertEqual((even.region.pad_nops, odd.region.pad_nops), (1, 0))
+        self.assertEqual(even.region.layout_clocks, odd.region.layout_clocks, "the nop is the only difference between the layouts")
+
+
+if __name__ == "__main__":
+    unittest.main()

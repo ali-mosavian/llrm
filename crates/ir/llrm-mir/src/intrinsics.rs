@@ -187,6 +187,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llrm.vararg.address`: the address of the calling function's first
+    /// variadic argument, the value `va_start` writes into a list that is one
+    /// pointer (DEVIATE VASTART-PROMOTE).
+    VarargAddress,
     /// `llvm.va_end`: the list its argument points to is no longer read. It
     /// does nothing where the list owns no resource.
     VaEnd,
@@ -564,7 +568,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 85] = [
+const TABLE: [Spec; 86] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -864,6 +868,14 @@ const TABLE: [Spec; 85] = [
         own: None,
     },
     Spec {
+        name: "llrm.vararg.address",
+        intrinsic: Intrinsic::VarargAddress,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
         name: "llvm.va_end",
         intrinsic: Intrinsic::VaEnd,
         overloads: &[Kind::Pointer],
@@ -950,7 +962,14 @@ fn from_intrinsics_td(
 ) {
     let Some(set) = table_set(name) else { return };
     let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
-    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).into())).collect();
+    // DEVIATE: the declaration does not carry `nocreateundeforpoison`; see
+    // `never_creates_undef_or_poison`.
+    function.attrs = set
+        .function
+        .iter()
+        .filter(|&&one| one != "nocreateundeforpoison")
+        .map(|one| Attribute::Flag((*one).into()))
+        .collect();
     if !set.memory.is_empty() {
         function.attrs.push(Attribute::Memory(
             set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -996,6 +1015,12 @@ pub(crate) fn table_set(name: &str) -> Option<&'static intrinsic_attrs::Set> {
     }
 }
 
+/// `IntrNoCreateUndefOrPoison`: whether `Intrinsics.td` says the intrinsic
+/// `name` names never creates undef or poison from defined operands.
+pub fn never_creates_undef_or_poison(name: &str) -> bool {
+    table_set(name).is_some_and(|set| set.function.contains(&"nocreateundeforpoison"))
+}
+
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for
 /// its target's intrinsics.
 /// `Intrinsic::Window`'s name, from `huge` pointers to `far` ones.
@@ -1020,7 +1045,7 @@ pub fn is_wide_divide(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.

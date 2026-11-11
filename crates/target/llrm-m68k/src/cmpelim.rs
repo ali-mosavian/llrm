@@ -26,6 +26,13 @@
 //! writeback load (`move.b (%a0)+,%d1`, `MOV8do_WB`) stand in for the `tst`,
 //! which the instruction's name hid from the table. Off for `Options::PINNED`.
 //!
+//! The definition may not be one the allocator makes again where its register
+//! is read and drops where none is: a rematerializable instruction, or a load
+//! of a frame slot while [`Options::rematerialize_arguments`] is on. The `tst`
+//! was the only reader (a `beq` on the codes of a load nothing emitted,
+//! spill_store_order -O2 on the 68000: `pack_ref` returned at once for mode
+//! 0x10).
+//!
 //! # See also
 //! `X86InstrInfo::optimizeCompareInstr`.
 
@@ -34,6 +41,7 @@ use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 use crate::ccr;
 use crate::dagisel::local;
 use crate::mfunc::MFunction;
+use crate::regalloc::Assignment;
 
 /// The mnemonic and operand size letter of the instruction `name`, from its
 /// assembly text: `move.l` is `("move", Some('l'))`.
@@ -46,7 +54,7 @@ fn mnemonic(name: &str) -> Option<(&'static str, Option<char>)> {
 }
 
 /// The register a `tst` of a register reads.
-fn tested(inst: &Inst) -> Option<(u32, Option<char>)> {
+pub(crate) fn tested(inst: &Inst) -> Option<(u32, Option<char>)> {
     let Kind::Op(name) = inst.kind else { return None };
     let (mnemonic, size) = mnemonic(name)?;
     match (mnemonic, &inst.operands[..]) {
@@ -79,6 +87,22 @@ fn leaves_codes_of_test(
     needed: u32,
     writeback: bool,
 ) -> bool {
+    let result = matches!(
+        def.operands.first(),
+        Some(Operand::Def(Reg::Virt(d))) if *d == v
+    );
+    leaves_codes(def, result, size, needed, writeback)
+}
+
+/// [`leaves_codes_of_test`] for a `def` already known to define (`result`) or
+/// not the register tested.
+fn leaves_codes(
+    def: &Inst,
+    result: bool,
+    size: Option<char>,
+    needed: u32,
+    writeback: bool,
+) -> bool {
     let Kind::Op(name) = def.kind else { return false };
     // a writeback (`MOV8do_WB`) prints as its base row (`MOV8do`)
     let name = if writeback { name.strip_suffix("_WB").unwrap_or(name) } else { name };
@@ -88,10 +112,6 @@ fn leaves_codes_of_test(
         return false;
     }
     let Some((mnemonic, def_size)) = mnemonic(name) else { return false };
-    let result = matches!(
-        def.operands.first(),
-        Some(Operand::Def(Reg::Virt(d))) if *d == v
-    );
     // `swap` has no size letter and works on the long
     let same_size = def_size.or(Some('l')) == size;
     result && same_size && ccr::like_test(mnemonic).is_some_and(|same| needed & !same == 0)
@@ -103,6 +123,7 @@ fn leaves_codes_of_test(
 pub fn eliminate_tests(
     function: &mut MFunction,
     hoist: bool,
+    argument_remat: bool,
 ) {
     for block in &mut function.blocks {
         let mut at = 0;
@@ -111,7 +132,7 @@ pub fn eliminate_tests(
                 at += 1;
                 continue;
             };
-            let Some((def, setters)) = droppable(&block.insts, at, v, size, hoist) else {
+            let Some((def, setters)) = droppable(&block.insts, at, v, size, hoist, argument_remat) else {
                 at += 1;
                 continue;
             };
@@ -119,6 +140,55 @@ pub fn eliminate_tests(
             let mut moved: Vec<Inst> = setters.iter().rev().map(|&one| block.insts.remove(one)).collect();
             moved.reverse();
             block.insts.splice(def..def, moved);
+        }
+    }
+}
+
+/// Whether `inst` loads a frame slot: the loads the allocator may make again
+/// where they are read.
+fn is_frame_load(inst: &Inst) -> bool {
+    matches!(inst.kind, Kind::Op("MOV32rp")) && inst.operands.iter().any(|one| matches!(one, Operand::Frame(_)))
+}
+
+/// After allocation: a `tst` right after the instruction that set the codes
+/// for its register goes. The allocator makes a frame load again where its
+/// register is read, so the load now stands beside the `tst`
+/// ([`eliminate_tests`] keeps the `tst` of such a register for that reason).
+pub fn eliminate_adjacent_tests(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let physical = |register: Reg| match register {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(p) => p,
+    };
+    for block in &mut function.blocks {
+        let mut at = 1;
+        while at < block.insts.len() {
+            let drop = (|| {
+                let Kind::Op(name) = block.insts[at].kind else { return false };
+                let (mnemonic, size) = mnemonic(name).unwrap_or(("", None));
+                let [Operand::Use(tested)] = block.insts[at].operands[..] else { return false };
+                let before = &block.insts[at - 1];
+                let result = matches!(
+                    before.operands.first(),
+                    Some(Operand::Def(def)) if physical(*def) == physical(tested)
+                );
+                // a load of a frame slot the allocator made again is a `move`,
+                // which sets the codes in hardware though the
+                // allocator does not count it as the setter
+                mnemonic == "tst"
+                    && (before.sets_flags || is_frame_load(before))
+                    && flags_read_after(&block.insts, at)
+                        .is_some_and(|needed| leaves_codes(before, result, size, needed, false))
+            })();
+            if drop {
+                // the reader now reads the load's codes: it is the setter
+                block.insts[at - 1].sets_flags = true;
+                block.insts.remove(at);
+            } else {
+                at += 1;
+            }
         }
     }
 }
@@ -131,6 +201,7 @@ fn droppable(
     v: u32,
     size: Option<char>,
     hoist: bool,
+    argument_remat: bool,
 ) -> Option<(usize, Vec<usize>)> {
     let mut def = None;
     let mut setters = Vec::new();
@@ -150,6 +221,9 @@ fn droppable(
         }
     }
     let def = def.filter(|&index| insts[index].sets_flags)?;
+    if insts[def].rematerializable || (argument_remat && is_frame_load(&insts[def])) {
+        return None;
+    }
     setters.reverse();
     if !setters.is_empty() {
         setters = with_producers(insts, def, at, setters);

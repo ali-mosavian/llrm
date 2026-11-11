@@ -67,7 +67,7 @@ def test_the_cpusets_match_the_machines_sibling_pairs():
 
 
 def test_the_workspace_is_the_hosted_one():
-    """The target cache from a hosted build holds /home/runner/work paths in llrm-c; on tinytim's /home/runner/_work every wccq spawn failed
+    """The target cache from a hosted build holds /home/runner/work paths in llrm-cc; on tinytim's /home/runner/_work every wccq spawn failed
     "No such file or directory" (30 python-group test files red)."""
     assert supervisor.WORK == "work"
 

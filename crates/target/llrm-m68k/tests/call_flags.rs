@@ -75,7 +75,7 @@ fn the_flags_a_branch_reads_are_set_after_the_call_before_it() {
         let mask = dag.get_register_mask_clobbering(&mask);
         let call = machine(&mut dag, ids::CALLb, &[EVT::OTHER], &[entry, SDValue { node: add.node, res: 0 }, mask]);
         let branch = machine(&mut dag, ids::Beq8, &[EVT::OTHER], &[call, SDValue { node: to_flags.node, res: 1 }]);
-        let order = schedule(&dag, branch, &M68kSched { source_order });
+        let order = schedule(&mut dag, branch, &M68kSched { source_order });
         let adds: Vec<usize> = (0..order.len()).filter(|&at| order[at].nodes.contains(&add.node)).collect();
         let (at_call, at_branch) = (position(&order, call), position(&order, branch));
         let last_add = *adds.last().expect("the add is scheduled");

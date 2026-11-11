@@ -604,7 +604,7 @@ end:
 }
 
 /// `-fno-jump-tables` reached the switch-to-lookup conversion only as the
-/// "no-jump-tables" attribute clang writes, which llrm-c never did:
+/// "no-jump-tables" attribute clang writes, which llrm-cc never did:
 /// x_switch_dense at -O2 with `-fno-tree-switch-conversion -fno-jump-tables`
 /// had 2 compares where the pin's has 28.
 #[test]

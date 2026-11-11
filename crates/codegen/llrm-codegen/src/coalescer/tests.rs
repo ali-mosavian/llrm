@@ -252,7 +252,7 @@ fn priority(
     is_split: bool,
     connectivity: usize,
 ) -> MbbPriority {
-    MbbPriority { block, depth, is_split, connectivity }
+    MbbPriority { block, depth, is_split, connectivity, carried: 0 }
 }
 
 /// `compareMBBPriority`: the deeper loop, then the split edge, then the better
@@ -268,6 +268,18 @@ fn test_blocks_are_ordered_by_depth_then_split_edge_then_connectivity_then_numbe
     ];
     blocks.sort_by(compare_mbb_priority);
     assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![2, 3, 4, 1, 0]);
+}
+
+/// DEVIATE C15: of two blocks the pin orders alike, the one that reads more
+/// loop-carried values goes first; depth, split edge and connectivity still
+/// rank above it.
+#[test]
+fn test_a_carried_value_breaks_only_a_tie_of_depth_split_edge_and_connectivity() {
+    let carried =
+        |block, depth, connectivity, carried| MbbPriority { carried, ..priority(block, depth, false, connectivity) };
+    let mut blocks = vec![carried(1, 1, 2, 0), carried(2, 1, 2, 3), carried(3, 1, 4, 0), carried(4, 0, 2, 9)];
+    blocks.sort_by(compare_mbb_priority);
+    assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![3, 2, 1, 4]);
 }
 
 /// A chain of copies in one block is all joined by one round: one value stays.
@@ -686,10 +698,12 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let mut lis = LiveIntervals::new(&was);
     let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
@@ -726,10 +740,12 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let mut lis = LiveIntervals::new(&was);
     join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
@@ -801,6 +817,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
@@ -814,6 +831,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -1160,17 +1178,15 @@ fn test_a_target_can_leave_every_copy_between_widths_unjoined() {
     assert_eq!(result, JoinResult::Rejected);
 }
 
-/// With the joins between widths off, the driver sees no copy between widths:
-/// before, such a copy sat in the work lists and the terminal rule counted
-/// it, which moved a register choice in m68k's phi_slot_unknown_arm (-O1)
-/// though no join differed.
+/// The driver sees a copy between widths whatever the target says (#7968):
+/// `join_copy` decides, so a narrow copy that lies inside its wide value joins
+/// even with the joins between widths off.
 #[test]
-fn test_with_the_joins_between_widths_off_the_driver_sees_no_such_copy() {
+fn test_with_the_joins_between_widths_off_the_driver_still_sees_the_copy() {
     let (narrow, same) = (copy_at((2, 2), (1, 4)), copy_at((3, 4), (1, 4)));
-    let pick = super::driver::pick_of(&NoSubRegisterJoins);
-    assert!(pick(&narrow).is_none() && pick(&same).is_some());
-    let pick = super::driver::pick_of(&SubRegisters);
-    assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    for pick in [super::driver::pick_of(&NoSubRegisterJoins), super::driver::pick_of(&SubRegisters)] {
+        assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    }
 }
 
 /// `v1:4 := def; v2:2 := mov v1:4; read v2:2`, the truncating copy of a
@@ -1268,6 +1284,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: true,
+        joins_loop_carried_first: false,
         aliases: Default::default(),
         should_join: None,
         freq: Vec::new(),
@@ -1275,6 +1292,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
         remat: None,
         remat_wins: None,
     }
@@ -1328,10 +1346,12 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
             check_kinds: false,
+            free_when_unnarrowed: false,
             remat: None,
             remat_wins: None,
         };
@@ -1695,7 +1715,9 @@ fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
 /// `TargetEnv::should_coalesce` built a `Join` (two palette clones, use-kind
 /// sums) for every copy and handed it to a `should_join` that said yes: 13 M of
 /// the 88 M the coalescer costs on jpeg_fixed (1839 calls, 7 K instructions
-/// each). A target with no opinion builds none.
+/// each), and on arm64 shellsort 17.6 M of 41 M (571 joins, 31 K each). A
+/// target with no opinion builds none, and neither does a join that leaves
+/// both values the registers they had (it prices 0, so the rule says yes).
 #[test]
 fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
     use std::collections::BTreeSet;
@@ -1703,13 +1725,13 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
     use llrm_lir::registers::RegId;
 
     use super::env::{JOINS_BUILT, TargetEnv};
-    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>| {
+    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>, free: bool, narrows: bool| {
         let c = copy(2, 1);
         let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
         let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+        let narrower: BTreeSet<RegId> = if narrows { [RegId::AX].into_iter().collect() } else { palette.clone() };
         let env = TargetEnv {
-            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))])
-                .into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette)), (2, std::rc::Rc::new(narrower))]).into(),
             pins: IndexMap::default(),
             size: false,
             keep_pinned: false,
@@ -1722,10 +1744,12 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
             joins_pinned_copies: true,
             joins_sub_registers: true,
             joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
             check_kinds: false,
+            free_when_unnarrowed: free,
         };
         let mut lis = LiveIntervals::new(&was);
         let before = JOINS_BUILT.with(std::cell::Cell::get);
@@ -1733,8 +1757,11 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
         assert_eq!(result, JoinResult::Joined);
         JOINS_BUILT.with(std::cell::Cell::get) - before
     };
-    assert_eq!(run(Some(Box::new(|_| true))), 1, "premise: an opinion is built a join for");
-    assert_eq!(run(None), 0);
+    let yes = || Some(Box::new(|_: &super::env::Join| true) as Box<dyn Fn(&super::env::Join) -> bool>);
+    assert_eq!(run(yes(), false, false), 1, "premise: an opinion is built a join for");
+    assert_eq!(run(None, false, false), 0);
+    assert_eq!(run(yes(), true, false), 0, "a join that narrows nothing is priced 0 and taken unbuilt");
+    assert_eq!(run(yes(), true, true), 1, "a join that takes a register away is priced");
 }
 
 /// `v := implicit_def`: the value a phi's predecessor gets where the phi's
@@ -1858,10 +1885,12 @@ fn size_copy_of_def_is_remade_after(
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let mut lis = LiveIntervals::new(&was);
     let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());

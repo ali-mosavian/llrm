@@ -248,7 +248,15 @@ impl std::fmt::Debug for ProductPrice {
 /// than read from a global.
 #[derive(Clone, Debug)]
 pub struct DagConfig {
+    /// The target nodes the shared passes recognize or create; the backend's
+    /// own where one is installed.
+    pub nodes: super::builder::LoweringNodes,
     pub boolean_contents: BooleanContents,
+    /// A boolean sign-extends cheaper than it zero-extends (z80: the carry flag is `sbc a, a`, a zero extension is a
+    /// branch or a shift), so `add (sext i1 c), x` stays an add where the pin makes it `sub x, (zext i1 c)`
+    /// (`visitADDLikeCommutative`, which x86 prices with `sbb`), for types up to this many bits; 0 is the pin.
+    /// DEVIATE Z80-SEXT-BOOL / 6502-SEXT-BOOL-ADD: a target fact the pin has no hook for. Exit 2026-12-15.
+    pub sext_bool_add_max_bits: u32,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
     /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
@@ -260,6 +268,10 @@ pub struct DagConfig {
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
     pub dso_local_symbols: bool,
+    /// A symbol defined in this module is `dso_local` (clang -fPIE marks
+    /// definitions, not declarations) although `dso_local_symbols` is off.
+    /// Set for the 64-bit PIE only.
+    pub defined_dso_local: bool,
     /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
     /// index in its address at 64 bits, as an absolute `disp32`, where
     /// position-independent code reaches it from `%rip` alone.
@@ -268,12 +280,22 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
+    pub div_live_limit: u32,
+    /// The values live across the narrow divides of the block this DAG is of.
+    pub div_live: u32,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
     pub div_prices: Option<DivPrices>,
     /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
     /// `sdiv` by a power of two stays an `sdiv`.
     pub sdiv_pow2_stays: bool,
+    /// A signed divide by a negative constant is the negation of the divide by
+    /// its magnitude (gcc's `expand_divmod`; the pin's `BuildSDIV` multiplies
+    /// by the negative divisor's own magic), so the quotient and the
+    /// remainder (`x % -c` is `x % c`) share one multiply-high. DEVIATE
+    /// SD-DIVMAG.
+    pub sdiv_by_magnitude: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
@@ -323,15 +345,21 @@ impl Default for DagConfig {
     /// for the default PIC model).
     fn default() -> DagConfig {
         DagConfig {
+            nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
+            sext_bool_add_max_bits: 0,
             offset_folding: false,
             global_addresses_constant: false,
             dso_local_symbols: false,
+            defined_dso_local: false,
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_live_limit: 0,
+            div_live: 0,
             div_prices: None,
             sdiv_pow2_stays: false,
+            sdiv_by_magnitude: false,
             fp_extended: false,
             fp_stack: true,
             known_bits_for_target_node: None,
@@ -610,6 +638,15 @@ impl SelectionDAG {
         }
     }
 
+    /// DEVIATE DIV-LIVE: the most values live across a narrow divide of this
+    /// block.
+    pub fn set_divide_live(
+        &mut self,
+        live: u32,
+    ) {
+        self.config.div_live = live;
+    }
+
     /// The jump table is position independent (`EK_LabelDifference32`, its
     /// address a symbol operand folded into the jump's address): 64-bit code
     /// with the "PIC Level" flag. Without it the table is the pin's static
@@ -703,14 +740,16 @@ impl SelectionDAG {
             }
             // Chain and glue nodes stay: the builder keeps handles on some
             // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
-            // token factor goes like any node (`RemoveDeadNodes`): kept, it
-            // stays a user of its operands, `visitTokenFactor` cannot merge
-            // them and the chains nest past `GatherAllAliases` depth 18.
+            // token factor or load goes like any node (`RemoveDeadNodes`):
+            // kept, it stays a user of its operands, `visitTokenFactor` cannot
+            // merge them and the chains nest past `GatherAllAliases` depth 18;
+            // a load the legalizer replaced kept its chain shared, and the
+            // tail of a copy run never merged.
             if n == self.root.node
                 || n == self.entry.node
                 || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
-                || (self.nodes[n as usize].opcode != ISD::TokenFactor
+                || (!matches!(self.nodes[n as usize].opcode, ISD::TokenFactor | ISD::Load)
                     && self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE))
             {
                 continue;
@@ -1195,7 +1234,7 @@ impl SelectionDAG {
         self.constant(value) == Some(0)
     }
 
-    pub(super) fn width(
+    pub fn width(
         &self,
         value: SDValue,
     ) -> u32 {
@@ -1204,7 +1243,7 @@ impl SelectionDAG {
 
     /// `lookupNode` then `newSDNode`: one node per (opcode, types, operands,
     /// data); glue is never shared.
-    pub(super) fn intern(
+    pub fn intern(
         &mut self,
         opcode: ISD,
         values: &[EVT],
@@ -1843,6 +1882,7 @@ impl SelectionDAG {
     /// DGROUP, where the near data is, when it names none.
     pub fn get_segment_of(
         &mut self,
+        segment_of: ISD,
         symbol: Option<u32>,
     ) -> SDValue {
         // The global is an operand, not the node's data: selection morphs the
@@ -1850,7 +1890,7 @@ impl SelectionDAG {
         // no operands would be one.
         let ops: Vec<SDValue> =
             symbol.map(|symbol| self.get_target_global_address(EVT::I16, symbol, 0)).into_iter().collect();
-        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &ops, SDNodeFlags::default(), NodeData::None)
+        self.intern(segment_of, &[EVT::I16], &ops, SDNodeFlags::default(), NodeData::None)
     }
 
     pub fn get_jump_table(

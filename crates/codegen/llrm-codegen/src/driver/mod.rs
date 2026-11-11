@@ -6,6 +6,7 @@
 pub mod basic;
 mod data;
 pub mod flags;
+pub mod policy;
 
 use std::path::PathBuf;
 
@@ -71,7 +72,7 @@ pub struct Options {
     /// rounds to its type.
     pub float_store: bool,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
-    /// `rounds_float_spills`): set by llrm-c, which follows the pin.
+    /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
     /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
     /// `spills_extended`): set by llrm-qb, which follows real BC.
@@ -565,14 +566,14 @@ pub fn optimized(
         program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
-        let inline_variable = options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
+        let inline_variable = !options.cpu()?.bytes_strict()
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
+        let rep_movsb = options.cpu()?.min_size
+            || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         timed("mir memcpy calls", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(
-                    |module| crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable),
-                )
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable, rep_movsb)
+            })
         })?;
     }
     timed("mir constant intrinsics", || {
@@ -655,7 +656,19 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is bytes.
+                let trees = |ty: &str| {
+                    options.pipeline.prefers_size()
+                        && tti.branch_compare_trees_at_size()
+                        && layout.expands_for("select", ty)
+                };
+                crate::backend::selects::priced_with_trees(
+                    module,
+                    &*tti,
+                    &wanted,
+                    &|name| profile.cost(name).ok(),
+                    &trees,
+                )
             })
         })?;
     }

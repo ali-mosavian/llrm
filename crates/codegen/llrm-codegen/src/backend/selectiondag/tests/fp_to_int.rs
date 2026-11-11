@@ -15,6 +15,7 @@ fn converted(
         &mut dag,
         &tli,
         &mut X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -24,6 +25,7 @@ fn converted(
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -76,6 +78,7 @@ fn an_unsigned_i64_conversion_subtracts_two_to_the_63_and_flips_the_sign() {
     let x = dag.get_register(EVT::Simple(MVT::F64), 5);
     let converted = dag.get_node(ISD::FpToUInt, EVT::I64, &[x]);
     let root = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: false,
@@ -85,6 +88,7 @@ fn an_unsigned_i64_conversion_subtracts_two_to_the_63_and_flips_the_sign() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     }
     .lower_operation(&mut dag, converted)
@@ -112,6 +116,7 @@ fn an_i64_result_is_lowered_by_the_target_then_split() {
     let low = dag.get_node(ISD::Truncate, EVT::I32, &[converted]);
     dag.set_root(low);
     let mut hooks = X86Lowering {
+        multiply_early_out: None,
         imul_if_smaller: false,
         share_products: false,
         cmov: false,
@@ -121,6 +126,7 @@ fn an_i64_result_is_lowered_by_the_target_then_split() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);
@@ -148,6 +154,7 @@ fn an_unsigned_conversion_from_sse_is_a_small_and_a_big_under_the_sign_mask() {
         let x = dag.get_register(EVT::Simple(float), 5);
         let converted = dag.get_node(ISD::FpToUInt, to, &[x]);
         let root = X86Lowering {
+            multiply_early_out: None,
             imul_if_smaller: false,
             share_products: false,
             cmov: false,
@@ -157,6 +164,7 @@ fn an_unsigned_conversion_from_sse_is_a_small_and_a_big_under_the_sign_mask() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         }
         .lower_operation(&mut dag, converted)

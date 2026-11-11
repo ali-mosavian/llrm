@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/aggressive_instcombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/aggressive_instcombine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/aggressive_instcombine.rs sha256:044b1198ef1a79fe46ba4ac3cd2111bfc35ec73e0f6862ec413e5b3a2ded7f13 -->
+<!-- src: crates/opt/llrm-transforms/src/aggressive_instcombine.rs sha256:354e16afd1e437a87d7b313881c3fd2b30fe9a9128f8ad55412d242340040edb -->
 
 # aggressive_instcombine
 
@@ -45,6 +45,16 @@ DEVIATE (anything MIR or Rust lacks), numbered after `trunc_inst_combine`'s:
     run's base. The pass `Unit` carries no module globals, so a callee's own
     attributes are not seen either. Sound, merges less. Owner: w2. Exit:
     2026-11-21, with deviation 38's `AliasQuery`.
+42. `tryToRecognizeTableBasedCttz` marks the select it makes for a table
+    whose zero entry is not the width with unlikely branch weights; MIR has
+    no `!prof` on a select here, so none is set. Owner: w2. Exit:
+    2026-11-21, with select weights.
+43. `tryToRecognizeTableBasedLog2` asks the target's `getIntrinsicInstrCost`
+    for `ctlz`; a pass run with no `tti` has no answer and does not fold.
+    Owner: w2. Exit: 2026-11-21.
+49. `tryToFPToSat` is not translated: MIR has no `llvm.fptosi.sat` (no
+    interpreter or lowering) and no target prices it. Owner: w2. Exit:
+    2026-11-30, when a corpus cell needs it.
 
 ## Example
 The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.

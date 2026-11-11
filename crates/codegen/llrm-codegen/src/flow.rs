@@ -54,13 +54,13 @@ pub fn machine<'a>(
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         crate::backend::shadow::Selector::Old,
+        &[],
     )
 }
 
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: &[&str] = &[
     "EarlyTailDuplicate",
-    "Peephole",
     "LoopSlots",
     "Scheduler",
     "Coalescer",
@@ -76,6 +76,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
+    "BreakFalseDeps",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
@@ -85,7 +86,22 @@ const UNOPTIMIZED: &[&str] = &[
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
+    "StatusWordTest",
     "CallFrameOpt",
+    "TailDuplicate",
+    // The pin's -O0 `addMachinePasses` has none of these (TargetPassConfig.cpp
+    // d1106deb71cc): `addMachineSSAOptimization` (DeadMachineInstructionElim)
+    // and `addOptimizedRegAlloc` (ProcessImplicitDefs) are O>0 only, as is
+    // `addMachineLateOptimization` (BranchFolder); the float and leaf rewrites
+    // are ours alone. `ControlFlow` stays: it also drops the jump to the next
+    // block, which the pin's FastISel never emits (gated, div_constants_short
+    // -O0 had 318 `jmp` against 132).
+    "DeadMachineInstructionElim",
+    "ProcessImplicitDefs",
+    "LeafFold",
+    "FloatUnhoist",
+    "FloatFold",
+    "FloatSink",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -94,6 +110,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FarIndirectCalls", "farcall@1"),
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
+    ("StatusWordTest", "statustest@5"),
     ("OptimizePHIs", "optimizephis@1"),
     ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
@@ -135,8 +152,10 @@ const SLOTS: &[(&str, &str)] = &[
     ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
+    ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
+    ("BreakFalseDeps", "breakfalsedeps@19"),
 ];
 
 /// `machine`, its peephole made of the rules `rules` holds.
@@ -153,6 +172,7 @@ pub fn machine_with<'a>(
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
     selector: crate::backend::shadow::Selector,
+    omitted: &[&str],
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -209,17 +229,24 @@ pub fn machine_with<'a>(
         // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
         // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
-            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
+            // A profile that states neither clock (the target prices through its cost
+            // model) gets no pass, not a free one.
+            clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
-        Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::precse::MachineCse {
+            classes: Rc::clone(classes),
+            keep_compare: classes.cse_keeps_compare_with_live_minuend,
+            constrain: None,
+        }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink {
             size: target.size,
             limit: classes.available.len(),
             classes: Rc::clone(classes),
+            spare_ranges: target.size && target.target().tti().is_some_and(|tti| tti.sink_spares_ranges()),
         }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
@@ -252,40 +279,43 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination),
+        Box::new(phielim::PhiElimination { unoptimized: !target.optimized, share_congruent: target.share_congruent_phis }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        Box::new(crate::backend::fixupsetcc::FixupSetCc { strict: !target.speed_rate, status_word: classes.status_word() }),
         // A float load a loop only reads is made again where it is read (so
         // the next step can fold it).
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
+        Box::new(crate::backend::floatfold::FloatFold {
+            cpu: target,
+            pool: pool.clone(),
+            registers: classes.available.len(),
+        }),
         // A float load waits for its reader where that saves an exchange.
         Box::new(crate::backend::floatsink::FloatSink { cpu: target, basic_semantics }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
-            pool,
+            pool: pool.clone(),
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target), pool }),
         Box::new(twoaddr::TwoAddress {
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
+            loop_carried_flow: target.commutes_loop_carried_flow(),
+            unoptimized: !target.optimized,
         }),
-        Box::new(Coalescer {
-            size: target.size,
-            moves: target.move_bytes,
-            ..Coalescer::new(None, segments, classes)
-        }),
+        Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
             classes: Rc::clone(classes),
             segments: segments.clone(),
+            model: Rc::new(crate::backend::schedmodel::GenericModel),
         }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
@@ -317,6 +347,8 @@ pub fn machine_with<'a>(
         // After frame finalization, as the pin: a constant loaded again where
         // the allocator or rematerialization left it.
         Box::new(crate::backend::latecleanup::LateCleanup),
+        // DEVIATE X87-FCMP-AH: after the stackifier made the `sahf`.
+        Box::new(crate::backend::statustest::StatusWordTest),
         Box::new(peephole::Peephole::with_rules(
             frame.clone(),
             target,
@@ -328,8 +360,10 @@ pub fn machine_with<'a>(
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw {
             size: target.size,
-            widens_byte: target.widens_load(1)?,
-            widens_word: target.widens_load(2)?,
+            // A CPU that states no clocks widens nothing: the rewrite is priced
+            // against the load it replaces, and there is no price.
+            widens_byte: target.widens_load(1).unwrap_or(false),
+            widens_word: target.widens_load(2).unwrap_or(false),
             strict_bytes: target.size || target.min_size || !target.speed_rate,
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
@@ -342,12 +376,41 @@ pub fn machine_with<'a>(
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
+        // The pin's TailDuplicatePass: after allocation, before placement.
+        Box::new(crate::backend::latetaildup::TailDuplicate {
+            size: target.size || target.min_size,
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            free: registers.free,
+            pointer: registers.pointer,
+        }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
-        Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
+        Box::new(jumps::ControlFlow {
+            cpu: target,
+            calls: calls.cloned(),
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            free: registers.free,
+            pointer: registers.pointer,
+        }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
+        // The pin's pre-emit pass: the distances are those of the final order.
+        Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
+    // A target's own phase list (the pin's TargetPassConfig): what it names is
+    // left out, and a name that is no phase is an error, not a silent no-op.
+    for name in omitted {
+        if !phases.iter().any(|phase| phase.class_name() == *name) {
+            return Err(format!("the target omits {name:?}, which is no machine phase here (or is named twice)"));
+        }
+        phases.retain(|phase| phase.class_name() != *name);
+    }
+    if !target.post_ra_tail_duplicate {
+        phases.retain(|phase| phase.class_name() != "TailDuplicate");
+    }
+    if !target.tests_status_word() || classes.status_word().is_none() {
+        phases.retain(|phase| phase.class_name() != "StatusWordTest");
+    }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
@@ -364,8 +427,9 @@ pub fn machine_with<'a>(
         // must be, and none of those is.
         let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
         let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
-        let off: Vec<&str> =
+        let mut off: Vec<&str> =
             if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        off.extend(omitted.iter().map(|one| slot_of(one)));
         llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)
@@ -523,6 +587,34 @@ mod tests {
     use crate::model::lir::{Insn, LirBlock};
     use crate::support::hash::IndexMap;
 
+    /// A target's omitted phase that is no phase (a typo, or a phase renamed)
+    /// was a silent no-op; it is an error, and an x86 target omits none.
+    #[test]
+    fn test_an_omitted_phase_that_does_not_exist_is_an_error() {
+        let build = |omitted: &[&str]| {
+            machine_with(
+                &IndexMap::default(),
+                None,
+                None,
+                None,
+                false,
+                "486",
+                &crate::backend::target::BUILT_IN,
+                &crate::backend::classes::RegisterClasses::m16(),
+                &crate::backend::targets::x86_m16::RULES,
+                &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+                crate::backend::shadow::Selector::Old,
+                omitted,
+            )
+            .map(|phases| phases.iter().map(|phase| phase.class_name()).collect::<Vec<_>>())
+        };
+        let all = build(&[]).unwrap();
+        assert!(llrm_target::Target::omitted_phases(&llrm_x86_m16::M16).is_empty());
+        let without = build(&["FlagsCopy"]).unwrap();
+        assert_eq!(without.len() + 1, all.len());
+        assert!(build(&["NoSuchPhase"]).unwrap_err().contains("NoSuchPhase"));
+    }
+
     struct LosesDefinition;
 
     impl LIRTransform for LosesDefinition {
@@ -591,7 +683,7 @@ mod tests {
     /// The pin folds a once-read load into `ADD32rm` in selection, before the
     /// combiner. Folded after it, the combiner saw `add rr` for a stack
     /// argument and rebuilt a six-term sum as a tree: `mov eax, edx` and a
-    /// different register order in two llrm-c listings.
+    /// different register order in two llrm-cc listings.
     #[test]
     fn test_a_load_is_folded_before_the_combiner_sees_the_chain() {
         let names: Vec<&'static str> =
@@ -744,6 +836,24 @@ mod tests {
             let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
             assert!(line.contains(": &["), "{line}");
         }
+    }
+
+    /// The pin's -O0 `addMachinePasses` runs no `DeadMachineInstructionElim`
+    /// (`addMachineSSAOptimization` is O>0 only), no `ProcessImplicitDefs`
+    /// (`addOptimizedRegAlloc`: the fast allocator takes `addFastRegAlloc`) and
+    /// no tail duplication (`addMachineLateOptimization`).
+    /// Ours ran them at -O0: 12 M Ir of 78 M on div_constants_short.
+    #[test]
+    fn test_the_o0_pipeline_has_none_of_the_phases_the_pin_runs_only_when_optimizing() {
+        let o0 =
+            crate::backend::cpu::Profile { optimized: false, ..crate::backend::cpu::named("486").unwrap().clone() };
+        let phases = machine(&IndexMap::default(), None, None, None, false, &o0, &crate::backend::target::BUILT_IN)
+            .expect("the phases");
+        let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
+        for gone in ["DeadMachineInstructionElim", "ProcessImplicitDefs", "LeafFold", "FloatUnhoist", "TailDuplicate"] {
+            assert!(!names.contains(&gone), "{gone} runs at -O0: {names:?}");
+        }
+        assert!(names.contains(&"ControlFlow"), "the jump to the next block is dropped at -O0: {names:?}");
     }
 
     /// Every phase `-O0` leaves out is a phase with a slot.

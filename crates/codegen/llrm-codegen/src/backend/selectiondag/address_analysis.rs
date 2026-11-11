@@ -29,7 +29,6 @@ use llrm_analysis::placealias::{Object, alias_of};
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::known_bits::masked_value_is_zero;
-use super::x86_lowering::x86isd;
 
 /// `BaseIndexOffset`; no `base` is a failed match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +66,11 @@ fn unwrap(
     dag: &SelectionDAG,
     value: SDValue,
 ) -> SDValue {
-    if matches!(dag.opcode(value), x86isd::WRAPPER | x86isd::WRAPPER_RIP) { dag.operand(value, 0) } else { value }
+    if [dag.config().nodes.wrapper, dag.config().nodes.wrapper_rip].contains(&Some(dag.opcode(value))) {
+        dag.operand(value, 0)
+    } else {
+        value
+    }
 }
 
 fn is_any_add(

@@ -1508,7 +1508,7 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
     let join = || vec![_move(30, imm(3)), _return(31)];
     let speed = placed(&diamond_joined(0.9, join())).unwrap();
     assert!(speed.blocks.iter().all(|one| one.at != 30), "copied for speed");
-    let size = _placed(&diamond_joined(0.9, join()), true, false, None).unwrap();
+    let size = _placed(&diamond_joined(0.9, join()), true, false, None, None, 0).unwrap();
     assert!(size.blocks.iter().any(|one| one.at == 30), "kept for size");
 }
 
@@ -1517,9 +1517,9 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
 #[test]
 fn test_at_o3_a_join_of_four_instructions_is_copied() {
     let join = || vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _return(33)];
-    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None).unwrap();
+    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None, None, 0).unwrap();
     assert!(o2.blocks.iter().any(|one| one.at == 30), "kept at -O2");
-    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None).unwrap();
+    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None, None, 0).unwrap();
     assert!(o3.blocks.iter().all(|one| one.at != 30), "copied at -O3");
 }
 
@@ -1529,10 +1529,63 @@ fn test_at_o3_a_join_of_four_instructions_is_copied() {
 #[test]
 fn test_a_target_threshold_keeps_a_join_the_pin_copies() {
     let join = || vec![_move(30, imm(3)), _return(31)];
-    let pin = _placed(&diamond_joined(0.9, join()), false, false, None).unwrap();
+    let pin = _placed(&diamond_joined(0.9, join()), false, false, None, None, 0).unwrap();
     assert!(pin.blocks.iter().all(|one| one.at != 30), "copied by the pin's bound");
-    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1)).unwrap();
+    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1), None, 0).unwrap();
     assert!(target.blocks.iter().any(|one| one.at == 30), "kept at the target's bound");
+}
+
+/// DEVIATE TAILDUP-HOT. x_cordic -O3 ran a jump per step over the next step's
+/// six-instruction head (31734 clk against gcc's 26743): the pin copies up to
+/// four instructions, gcc eight. A target's hot bound copies a longer join where
+/// the jump saved, at the join's frequency, outweighs the bytes of the copy.
+#[test]
+fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
+    use super::placement::HotTailDup;
+    let join = || (30..36).map(|id| _move(id, imm(3))).chain([_return(36)]).collect::<Vec<_>>();
+    let placed_with = |hot: Option<HotTailDup>, per_byte: f64| {
+        let hot = hot.map(|one| HotTailDup { clocks_per_byte: per_byte, ..one });
+        _placed(&diamond_joined(0.9, join()), false, true, None, hot, 0).unwrap()
+    };
+    let bound = Some(HotTailDup { size: 8, jump_clocks: 3.0, clocks_per_byte: 0.0 });
+    assert!(placed_with(None, 0.0).blocks.iter().any(|one| one.at == 30), "premise: the pin keeps seven instructions");
+    assert!(placed_with(bound, 0.01).blocks.iter().all(|one| one.at != 30), "a cheap copy of a hot join is made");
+    assert!(placed_with(bound, 0.312).blocks.iter().any(|one| one.at == 30), "run once, the jump does not pay for it");
+}
+
+/// The loop's latch is not copied above the pin's bound: x_jpeg_fixed -O2 ran
+/// 137354 clocks longer when `inc; jne` latches went into their predecessors.
+#[test]
+fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
+    use super::placement::HotTailDup;
+    let hot = Some(HotTailDup { size: 8, jump_clocks: 3.0, clocks_per_byte: 0.01 });
+    let looped = |latch_back: bool| {
+        let to_header = if latch_back { 2 } else { 50 };
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 2)], vec![2]).into(),
+                block(2, vec![_compare(3), _branch(4, "je", 20)], vec![20, 10]).into(),
+                block(10, vec![_move(10, imm(1)), _jump(11, 30)], vec![30]).into(),
+                block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]).into(),
+                block(
+                    30,
+                    vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _move(33, imm(6)), _compare(34), _branch(35, "jne", to_header)],
+                    vec![to_header, 40],
+                )
+                .into(),
+                block(40, vec![_return(41)], vec![]).into(),
+                block(50, vec![_return(51)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((2, 10), fixed(0.5));
+        made.odds.taken.insert((2, 20), fixed(0.5));
+        _placed(&made, false, false, None, hot, 0).unwrap()
+    };
+    assert!(looped(true).blocks.iter().any(|one| one.at == 30), "the latch is kept");
+    assert!(looped(false).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that
@@ -1588,7 +1641,7 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
     let order =
-        |body: LirBody| _placed(&body, true, false, None).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+        |body: LirBody| _placed(&body, true, false, None, None, 0).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
@@ -2543,7 +2596,7 @@ fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare(
 }
 
 /// The pin copies propagation twice, again after tail duplication and block
-/// placement (row 84): the phases end `ControlFlow`, `CopyPropagation`.
+/// placement (row 84): `ControlFlow`, `CopyPropagation`, then `BreakFalseDeps`.
 #[test]
 fn test_copy_propagation_runs_again_after_the_control_flow() {
     let names = |cpu: &str| -> Vec<&'static str> {
@@ -2562,7 +2615,7 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
         .collect()
     };
     let optimized = names("386");
-    assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
+    assert_eq!(&optimized[optimized.len() - 3..], ["ControlFlow", "CopyPropagation", "BreakFalseDeps"]);
 }
 
 fn dword() -> Loc {
@@ -2708,4 +2761,28 @@ fn the_tail_merge_digest_ignores_what_is_no_operand_and_sees_what_is() {
     assert_ne!(base, with(&|what| what.sources = vec![imm(4)]), "an immediate is an operand");
     assert_ne!(base, with(&|what| what.dests = vec![bx()]), "a register is an operand");
     assert_ne!(base, with(&|what| what.name = Some("add".into())), "the opcode is hashed");
+}
+
+/// x_prefix -Os (m32): `jle` into an edge block holding an identity copy's
+/// anchor and a `jmp` stayed `jle L; ...; L: jmp M`, 2 B and a taken jump more.
+/// `threaded` keeps the anchor's dataflow; the late pass, past every reader of
+/// values, goes round it.
+#[test]
+fn test_a_branch_into_an_identity_copy_anchor_and_a_jump_goes_to_the_jump_target_late() {
+    let anchor = {
+        let one = _inserted(nothing(7, None));
+        Arc::new(Insn { defines: vec![500], uses: vec![600], ..(*one).clone() })
+    };
+    let blocks = || -> Vec<Block> {
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+            block(4, vec![Arc::new(Insn { uses: vec![500], ..(*_move(4, cx())).clone() }), _return(5)], vec![]).into(),
+            block(7, vec![Arc::clone(&anchor), _inserted(_jump(8, 9))], vec![9]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ]
+    };
+    let early = threaded(&body("f", 1, blocks()));
+    assert!(early.blocks[0].succ.contains(&7), "the anchor keeps the edge block while values are read");
+    let late = threaded_late(&body("f", 1, blocks()));
+    assert!(late.blocks[0].succ.contains(&9) && !late.blocks[0].succ.contains(&7), "{:?}", late.blocks[0].succ);
 }

@@ -52,7 +52,7 @@ def test_a_named_selector_is_kept_and_both_means_old_and_dag():
 
 
 def test_the_selector_reaches_the_compile(tmp_path):
-    stub = tmp_path / "llrm-c"
+    stub = tmp_path / "llrm-cc"
     stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "%s" "$*" > "$a"; next=; };; esac; done; exit 0\n')
     stub.chmod(0o755)
     data, why = objsweep.compile_one(str(stub), tmp_path / "x.c", "m32", "O2", tmp_path / "x.o", "dag")
@@ -112,7 +112,7 @@ def test_a_changed_debug_byte_is_a_changed_object(tmp_path):
 
 
 def test_an_llrm_cc_is_asked_for_an_object_and_given_its_target(tmp_path, monkeypatch):
-    """objsweep ran llrm-cc as it ran llrm-c: m64 linked ("ld returned 1") and m32/m16 had no LLRM_CC_TARGET, so all 852 compiles failed on both sides and the sweep read "0 objects changed"."""
+    """objsweep ran llrm-cc as it ran llrm-cc: m64 linked ("ld returned 1") and m32/m16 had no LLRM_CC_TARGET, so all 852 compiles failed on both sides and the sweep read "0 objects changed"."""
     stub = tmp_path / "llrm-cc"
     stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "%s|%s|%s" "$*" "$LLRM_CC_TARGET" "$LLRM_CLANG_M16" > "$a"; next=; };; esac; done; exit 0\n')
     stub.chmod(0o755)
@@ -203,3 +203,48 @@ def test_a_sweep_leaves_no_scratch_directory_behind(tmp_path, monkeypatch):
     args = type("A", (), {"old": stub, "new": _stub(tmp_path, "other", "R_386_PC32"), "targets": "m32", "levels": "O2", "jobs": 1})()
     objsweep.sweep(args, [tmp_path / "x.c"], "old")
     assert made and not any(Path(one).exists() for one in made), made
+
+
+def _selector_stub(tmp_path, refuses):
+    """A compiler that writes an object unless it is given `--isel=<refuses>`; arm64's llc takes hand, dag and shadow, not old."""
+    stub = tmp_path / "cc"
+    stub.write_text(
+        f'#!/bin/sh\nfor a in "$@"; do [ "$a" = "--isel={refuses}" ] && {{ echo "choose hand, dag or shadow" >&2; exit 1; }}; done\n'
+        'for a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "obj" > "$a"; next=; };; esac; done\nexit 0\n'
+    )
+    stub.chmod(0o755)
+    return str(stub)
+
+
+def test_a_selector_the_target_refuses_is_a_fault_not_untested_programs(tmp_path, capsys):
+    """The a64 sweep took --isel=old, which arm64's llc refuses: 355 cells read "failed on both sides" and the objects went uncompared."""
+    (tmp_path / "x.c").write_text("")
+    stub = _selector_stub(tmp_path, "old")
+    args = type("A", (), {"old": stub, "new": stub, "targets": "m32", "levels": "O2", "jobs": 1})()
+    assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 2
+    out = capsys.readouterr().out
+    assert "SELECTOR FAULT x m32 -O2" in out and "NOT TESTED" in out
+
+
+def test_the_result_line_counts_the_cells_not_tested_and_names_every_one(tmp_path, capsys):
+    """A sweep that failed on 55 of 355 cells named 10 of them and said "identical" for the rest."""
+    for name in "abcdefghijklm":
+        (tmp_path / f"{name}.c").write_text("")
+    stub = tmp_path / "cc"
+    stub.write_text("#!/bin/sh\necho 'error: boom' >&2\nexit 1\n")
+    stub.chmod(0o755)
+    args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m32", "levels": "O2", "jobs": 1})()
+    objsweep.sweep(args, sorted(tmp_path.glob("*.c")), "old")
+    out = capsys.readouterr().out
+    assert "13 cells NOT TESTED" in out and out.count("failed on both") >= 13
+
+
+def test_a_program_for_other_targets_is_not_a_cell(tmp_path, capsys):
+    """lru (`far` pointers, `// targets: dos`) was swept on arm64, m68k, 6502, wasm and z80 and counted as 5 cells failed on both sides each."""
+    (tmp_path / "lru.c").write_text("// targets: dos\nint x;\n")
+    (tmp_path / "ok.c").write_text("int y;\n")
+    stub = _selector_stub(tmp_path, "none")
+    args = type("A", (), {"old": stub, "new": stub, "targets": "m64", "levels": "O2", "jobs": 1})()
+    assert objsweep.sweep(args, sorted(tmp_path.glob("*.c")), "dag") == 0
+    out = capsys.readouterr().out
+    assert "1 identical" in out and "0 cells NOT TESTED" in out and "1 n/a by // targets:" in out

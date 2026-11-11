@@ -263,6 +263,8 @@ struct Folder {
     next: i64,
     minimum: usize,
     size: bool,
+    /// `AfterPlacement`: the layout is final, so the rules that read it hold.
+    after_placement: bool,
     entry: i64,
     /// The candidates now being merged: seen without their jump to `onward`.
     stripped: HashSet<i64>,
@@ -438,7 +440,7 @@ impl Folder {
             return (None, "none");
         }
         let (full_one, full_other) = (length == one.seq.items.len(), length == other.seq.items.len());
-        if (Some(one.at) == pred || Some(other.at) == pred) && self.successors(one.at) == 1 {
+        if (Some(one.at) == pred || Some(other.at) == pred) && (!self.after_placement || self.successors(one.at) == 1) {
             let terms = if Some(one.at) == pred { other.seq.terms } else { one.seq.terms };
             if length > terms {
                 return (Some(length), "pred");
@@ -453,7 +455,7 @@ impl Folder {
         if self.after(other.at) == Some(one.at) && full_one {
             return (Some(length), "layout-successor");
         }
-        if full_one && full_other {
+        if self.after_placement && full_one && full_other {
             let both = |at: i64| {
                 if !self.block(at).succ.is_empty() && !self.falls(at) {
                     return false;
@@ -465,7 +467,11 @@ impl Folder {
             }
         }
         let mut effective = length;
-        if onward.is_some() && Some(one.at) != pred && Some(other.at) != pred && self.successors(one.at) == 1 {
+        if onward.is_some()
+            && Some(one.at) != pred
+            && Some(other.at) != pred
+            && (self.successors(one.at) == 1 || !self.after_placement)
+        {
             effective += 1;
         }
         if effective >= self.minimum {
@@ -882,14 +888,17 @@ impl Folder {
             // Merging predecessors that are in the loop of the block would
             // make its header's neighbour the common tail; those of another
             // loop change that loop.
+            // `cyclic` serves D1 below, placed or not.
             self.loops();
-            if self.headers.contains(&ibb) {
-                index += 1;
-                continue;
+            if self.after_placement {
+                if self.headers.contains(&ibb) {
+                    index += 1;
+                    continue;
+                }
+                let inner = self.inner.as_ref().expect("the loops were found above");
+                let loop_of = inner.get(&ibb).copied();
+                pots.retain(|pot| inner.get(&pot.at).copied() == loop_of);
             }
-            let inner = self.inner.as_ref().expect("the loops were found above");
-            let loop_of = inner.get(&ibb).copied();
-            pots.retain(|pot| inner.get(&pot.at).copied() == loop_of);
             // D1: a block on a cycle that ends in a branch is kept whole for
             // speed: dropped, its branch moves behind a jump it pays every
             // trip.
@@ -948,6 +957,18 @@ pub fn merged(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
 ) -> Result<Option<LirBody>, masm::Unprintable> {
+    merged_in(body, size, calls, true)
+}
+
+/// `merged`, before placement when `after_placement` is false: the layout is
+/// the order the blocks were made in, and the rules that read it are LLVM's
+/// for `BranchFolder` as a pass of its own, ahead of `MachineBlockPlacement`.
+pub fn merged_in(
+    body: &LirBody,
+    size: bool,
+    calls: Option<&IndexMap<i64, String>>,
+    after_placement: bool,
+) -> Result<Option<LirBody>, masm::Unprintable> {
     // A body presented before `_placed` has jumps that are fall-throughs.
     for block in &body.blocks {
         if masm::_falls_to(block, &body.name)?.is_some() {
@@ -976,6 +997,7 @@ pub fn merged(
         next: body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1,
         minimum: if size { 2 } else { 3 },
         size,
+        after_placement,
         entry: body.entry,
         stripped: HashSet::default(),
         changed: false,

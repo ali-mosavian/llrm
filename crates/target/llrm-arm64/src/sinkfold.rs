@@ -46,7 +46,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
-use crate::prepass::{cfg, definitions, live_in, peak_pressure};
+use crate::prepass::{Cfg, definitions, live_in, peak_pressure};
 
 type At = (usize, usize);
 
@@ -56,9 +56,12 @@ struct Site {
     replacement: Op,
 }
 
-pub fn run(function: &mut MFunc) {
+pub fn run(
+    function: &mut MFunc,
+    graph: &Cfg,
+) {
     for _ in 0..4 {
-        if !round(function) {
+        if !round(function, graph) {
             return;
         }
     }
@@ -105,7 +108,10 @@ fn candidate(op: &Op) -> Option<(Reg, bool)> {
     (def.is_virtual() && !uses.contains(def)).then_some((*def, cheap))
 }
 
-fn round(function: &mut MFunc) -> bool {
+fn round(
+    function: &mut MFunc,
+    graph: &Cfg,
+) -> bool {
     let defined = definitions(function);
     let mut readers: HashMap<Reg, Vec<At>> = HashMap::default();
     for (b, block) in function.blocks.iter().enumerate() {
@@ -115,8 +121,7 @@ fn round(function: &mut MFunc) -> bool {
             }
         }
     }
-    let graph = cfg(function);
-    let live = live_in(function, &graph);
+    let live = live_in(function, graph);
     let mut peak: HashMap<usize, usize> = HashMap::default();
     let limit = crate::regalloc::pool::GPR_CALLEE_SAVED.len() + crate::lir_view::gpr_caller_saved_count();
 
@@ -190,7 +195,7 @@ fn round(function: &mut MFunc) -> bool {
             if far.iter().any(|&block| {
                 let held = *peak
                     .entry(block)
-                    .or_insert_with(|| peak_pressure(function, &[block], &graph, &live, &HashMap::default()).0);
+                    .or_insert_with(|| peak_pressure(function, &[block], graph, &live, &HashMap::default()).0);
                 held + from.len() > limit
             }) {
                 continue;

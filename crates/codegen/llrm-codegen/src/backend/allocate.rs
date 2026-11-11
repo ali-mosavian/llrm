@@ -303,14 +303,25 @@ pub fn greedy_rewritten(
         order: &|value| target::order(confined.get(&value), segments, classes),
         pins,
         unspillable: &unspill,
-        data: Some(segments.data),
+        data: segments.data,
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
-        tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
+        tii: &crate::greedy::tii::X86InstrInfo {
+            bits: current.bits,
+            classes,
+            basic_semantics,
+            address_reference_milliweight: targets::profile(cpu)
+                .map_or(1000, |profile| profile.target().tuning().address_reference_milliweight),
+        },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
         lane_pins: false,
+        carry_slot_indexes: targets::profile(cpu).map_or(true, |profile| {
+            // m16 states its table on the machine, m32 and m64 on the TTI.
+            let machine = profile.target();
+            machine.tuning().carry_slot_indexes && machine.tti().map_or(true, |tti| tti.carries_slot_indexes())
+        }),
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);

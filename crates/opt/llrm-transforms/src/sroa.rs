@@ -32,7 +32,7 @@
 //!   the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
 //!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
 //!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
-//!   `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
+//!   `Declare` that carries a fragment; owner anyisa; review 2026-11-14.
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
@@ -109,8 +109,9 @@ impl FunctionPass for SroaModifyCfg {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let before = unit.function.mark();
         let changed = State::new(unit, analyses, false).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 
@@ -137,8 +138,9 @@ impl FunctionPass for Sroa {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let before = unit.function.mark();
         let changed = State::new(unit, analyses, true).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 

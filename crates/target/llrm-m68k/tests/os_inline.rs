@@ -42,7 +42,13 @@ fn calls(
 ) -> usize {
     let source = EIGHT_CALLS.replace("ATTR", if optsize { "#0" } else { "" });
     let out = assembly(&source, cpu_of(cpu).unwrap(), level).expect("compiles");
-    out.lines().filter(|line| line.trim_start().starts_with("jsr\th")).count()
+    out.lines()
+        .filter(|line| {
+            // a helper called often is called through a register
+            let line = line.trim_start();
+            line.starts_with("jsr\th") || line.starts_with("jsr\t(%a")
+        })
+        .count()
 }
 
 #[test]

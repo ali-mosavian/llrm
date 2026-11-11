@@ -69,6 +69,30 @@ fn a_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_8() {
     assert!(!text.contains("pushd"), "{text}");
 }
 
+/// System V keeps the stack a multiple of 16 at a call (`calling.toml`'s
+/// `sysv32`); `-mabi=sysv` code kept the default family's 8: `f` below was
+/// entered at 8 mod 16 (three pushes and `sub esp, 24` where the pin has 32).
+/// `MODULE`'s `f` is 16-aligned by luck, so this one calls three functions.
+#[test]
+fn a_sysv_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_16() {
+    let text = listing(
+        "extern int g(int);\nextern int h3(int, int, int);\ndouble h(int x) { return x * 2.5 + 1.0; }\nint f(int a) { return g(a) + h3(a, 2, 3) + (int)h(a); }\n",
+    );
+    assert_eq!(entry_bytes(&text, "_f") % 16, 0, "{text}");
+}
+
+/// Only the call and the frame's end take the wider alignment, not each
+/// object: a 24-byte array and a double lie on their own 8, and the frame is
+/// the pin's 44 (+4 for the return address = 48), not the 60 an object cap of 16
+/// gave.
+#[test]
+fn a_wider_call_alignment_does_not_widen_the_objects_of_the_frame() {
+    let text = listing(
+        "extern void use(double *);\ndouble f(double a) { volatile double t = a; double u[3]; u[0] = t; use(u); return u[1] + t; }\n",
+    );
+    assert_eq!(entry_bytes(&text, "_f"), 48, "{text}");
+}
+
 /// A module that holds no double pays nothing for it: no pad, no rounding.
 #[test]
 fn a_module_of_integers_pays_nothing_for_it() {

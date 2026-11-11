@@ -18,6 +18,7 @@ pub mod routines;
 pub mod runtime;
 pub mod timings;
 pub mod tune;
+pub mod testing;
 
 use std::rc::Rc;
 
@@ -52,6 +53,17 @@ pub struct StringRegisters {
     pub destination_segment: RegId,
     /// A data register a tail's byte count rides in.
     pub tail: RegId,
+}
+
+/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by its
+/// root: the view of the pointer's width is the operand (`cx`, `ecx`, `rcx`).
+#[derive(Clone, Copy, Debug)]
+pub struct StringRoots {
+    pub count: RegId,
+    pub source: RegId,
+    pub destination: RegId,
+    /// The data register a store or compare is made through (`al`, `ax`, `eax`, `rax`).
+    pub accumulator: RegId,
 }
 
 /// A flat platform's foreign linear ranges, read when a constant address is
@@ -361,6 +373,19 @@ pub trait BuilderArch {
     /// The address-space roles (`layout().spaces.roles`).
     fn roles(&self) -> llrm_mir::spaces::Spaces;
     fn full(&self) -> Option<&dyn Target>;
+    /// The stack pointer at the pointer width of the target's code: the
+    /// register file's stack root unless the target says otherwise.
+    fn stack_pointer(&self) -> RegId {
+        self.registers().stack
+    }
+    /// The registers of the target's string instructions, if it has them.
+    fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+    /// The DAG's name for the top of the x87 stack, if the target has one.
+    fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
 }
 
 impl<T: Target> BuilderArch for T {
@@ -385,6 +410,15 @@ impl<T: Target> BuilderArch for T {
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
     }
+    fn stack_pointer(&self) -> RegId {
+        Target::stack_pointer(self)
+    }
+    fn string_roots(&self) -> Option<StringRoots> {
+        Target::string_roots(self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(self)
+    }
 }
 
 impl BuilderArch for &dyn Target {
@@ -405,6 +439,15 @@ impl BuilderArch for &dyn Target {
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
         Target::address_roles(*self)
+    }
+    fn stack_pointer(&self) -> RegId {
+        Target::stack_pointer(*self)
+    }
+    fn string_roots(&self) -> Option<StringRoots> {
+        Target::string_roots(*self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -431,6 +474,17 @@ pub enum Allocator {
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
+/// x86's `isAsCheapAsAMove` of a constant: `MOV64ri` (`movabs`), an immediate
+/// that neither a sign-extended nor a zero-extended dword makes, is
+/// rematerializable but not cheap (X86InstrMisc.td, outside the `MOV8ri`..
+/// `MOV64ri32` block).
+pub fn x86_cheap_move_immediate(
+    bytes: u8,
+    value: i64,
+) -> bool {
+    !(bytes == 8 && !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&value))
+}
+
 pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
@@ -482,17 +536,24 @@ pub trait Target {
         self.layout().expands(operation)
     }
 
-    /// The processors this target prices, as a platform description names them.
-    fn cpus(&self) -> &'static [&'static str];
+    /// The processors this target prices, as a platform description names them;
+    /// none: any `-mcpu` is refused.
+    fn cpus(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// The CPU gcc's `-march=NAME` names, from the target's `timings.times`.
     fn march(
         &self,
-        name: &str,
-    ) -> Option<&'static str>;
+        _name: &str,
+    ) -> Option<&'static str> {
+        None
+    }
 
-    /// The names `-march` and `-mtune` take.
-    fn marches(&self) -> Vec<&'static str>;
+    /// The names `-march` and `-mtune` take; none where it has no table.
+    fn marches(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 
     /// The data layout programs are built under and the address spaces a
     /// frontend's addresses are.
@@ -533,6 +594,14 @@ pub trait Target {
         false
     }
 
+    /// The machine phases (`flow::machine_with`'s class names) this target does
+    /// not run, each with why. The pin's `TargetPassConfig` adds each target's
+    /// own passes while the phase list here is x86's, so a target names what
+    /// its pin has no pass for. An unknown name is an error in `machine_with`.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
@@ -540,6 +609,24 @@ pub trait Target {
     /// (LEAF-FOLD-OS).
     fn leaf_fold_at_size(&self) -> bool {
         false
+    }
+
+    /// MachineCSE keeps a compare whose difference nothing reads apart from the
+    /// same difference made in a later block, when that difference overwrites
+    /// an operand still live (CSE-CMP): sharing them moves the subtract in
+    /// front of the branch and adds a copy of the operand. The pin shares.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
+        false
+    }
+
+    /// `TargetInstrInfo::isAsCheapAsAMove` for a constant: whether a
+    /// `bytes`-wide register can be given `value` by one move that is as
+    /// cheap as a copy (MachineSink, MachineCSE and MachineLICM leave it
+    /// where it is). The default is x86's: every immediate but a `movabs`.
+    /// AArch64 asks whether the constant takes two instructions or fewer
+    /// (`AArch64InstrInfo.cpp#L1385`).
+    fn cheap_move_immediate(&self) -> fn(u8, i64) -> bool {
+        x86_cheap_move_immediate
     }
 
     /// The pressure sets of the register classes and each set's limit, for a
@@ -582,6 +669,17 @@ pub trait Target {
         None
     }
 
+    /// The registers of this target's string instructions, where it has them.
+    fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+
+    /// The register the DAG names the top of the x87 stack by (the pin's
+    /// `FP0`), where the target has an x87 unit.
+    fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
+
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(RegId, RegId)>;
@@ -611,8 +709,10 @@ pub trait Target {
     /// target prices it.
     fn cpu_table(
         &self,
-        name: &str,
-    ) -> Option<timings::CpuTable>;
+        _name: &str,
+    ) -> Option<timings::CpuTable> {
+        None
+    }
 
     /// The target's register file, in `registers.regs`'s format.
     fn registers_text(&self) -> String;
@@ -630,15 +730,19 @@ pub trait Target {
     /// The inline routine that fills `cell`-byte cells through a huge pointer.
     fn huge_fill_routine(
         &self,
-        cell: u32,
-    ) -> Result<routines::HugeString, String>;
+        _cell: u32,
+    ) -> Result<routines::HugeString, String> {
+        Err(format!("{}: huge_fill_routine: the target has no huge pointers", self.name()))
+    }
 
     /// The inline routine that copies through huge pointers, upward or, `down`,
     /// from the last byte.
     fn huge_copy_routine(
         &self,
-        down: bool,
-    ) -> Result<routines::HugeString, String>;
+        _down: bool,
+    ) -> Result<routines::HugeString, String> {
+        Err(format!("{}: huge_copy_routine: the target has no huge pointers", self.name()))
+    }
 
     /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
     /// has none: the natural logarithm and the exponentials are x87
@@ -651,9 +755,11 @@ pub trait Target {
     /// one.
     fn divide_routine(
         &self,
-        signed: bool,
-        wide_divisor: bool,
-    ) -> Result<routines::Divide, String>;
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<routines::Divide, String> {
+        Err(format!("{}: divide_routine: the target states no inline divide", self.name()))
+    }
 
     /// `divide_routine` for a caller that reads only `used` of the results: a
     /// target may have a shorter routine that leaves the rest unfixed.
@@ -666,12 +772,31 @@ pub trait Target {
         self.divide_routine(signed, wide_divisor)
     }
 
+    /// `divide_routine_used` for code built for size: a target may have a
+    /// routine shorter than the speed one; it refuses where it has none.
+    fn divide_routine_small(
+        &self,
+        _signed: bool,
+        _wide_divisor: bool,
+        _used: routines::Used,
+    ) -> Result<routines::Divide, String> {
+        Err("no size divide routine".into())
+    }
+
+    /// Whether -O1 code (bytes and clocks both strict) takes the size divide
+    /// too: only where its clocks stay under the bar; -Os always does.
+    fn small_divide_at_o1(&self) -> bool {
+        false
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(
         &self,
         bytes: u32,
-    ) -> u32;
+    ) -> u32 {
+        bytes
+    }
 
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(
@@ -820,10 +945,12 @@ pub trait Target {
             vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
+            object_align: self.stack_alignment(),
             optional: self.frame_optional(),
             saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
+            object_aligned: self.frame_object_aligned(),
             red_zone: self.frame_red_zone(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
@@ -866,7 +993,22 @@ pub trait Target {
         None
     }
 
+    /// `frame_slot_scratch` for a function of `convention`, where the target's
+    /// frames differ by convention (m32's DOS ones keep Watcom's layout).
+    fn frame_slot_scratch_of(
+        &self,
+        _convention: &crate::calling::Convention,
+    ) -> Option<(RegId, RegId)> {
+        self.frame_slot_scratch()
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
+        false
+    }
+
+    /// Whether the frame aligns its locals to the widest object
+    /// (`calling.toml`'s `frame_object_aligned`).
+    fn frame_object_aligned(&self) -> bool {
         false
     }
 
@@ -895,6 +1037,9 @@ pub struct FrameRegisters {
     /// assumes it (its frame cells then sit on their alignments): a slot's
     /// worth where the target says no more.
     pub align: i64,
+    /// The most an object of the frame is aligned to: `align`, but for a
+    /// convention that keeps the stack wider than the target's objects need.
+    pub object_align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
     /// The registers are pushed before the locals' space even where nothing is
@@ -904,6 +1049,8 @@ pub struct FrameRegisters {
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
+    /// The locals' base takes the widest object's alignment (`frame_object_aligned`).
+    pub object_aligned: bool,
     /// The bytes below the stack pointer a leaf function's locals may use
     /// without a `sub`; 0 where the ABI has no red zone.
     pub red_zone: i64,
