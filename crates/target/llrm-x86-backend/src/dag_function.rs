@@ -682,6 +682,81 @@ fn arrived_width(
 /// integer is the builder's: 16 bits was assumed at m16 after `i32` became
 /// legal there, so an `i32` got two cells and an `i64` one, and the second half
 /// of an `i64` argument was read from the next parameter's cell.
+/// The locals the entry block fills from a stack-passed argument that stand for
+/// the argument's slot: the alloca's fixed object (as the builder numbers the
+/// stack parameters), and the store and the argument noted in `info`.
+fn elide_argument_copies(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    layout: &DataLayout,
+    convention: &llrm_codegen::backend::isel::Convention,
+    arch: &dyn Target,
+    widest: u32,
+    info: &mut FunctionLoweringInfo,
+) -> Vec<(llrm_mir::module::ValueId, i32)> {
+    let types = &module.context.types;
+    let candidates = llrm_codegen::backend::selectiondag::function_lowering::argument_copy_candidates(
+        module,
+        function,
+        layout,
+        |value| info.static_allocas.contains_key(&value),
+    );
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    // The fixed object each stack parameter starts at (`-1`, `-2`, ... in
+    // parameter order, as `stack_cells`).
+    let mut firsts: Vec<Option<(i32, i64)>> = Vec::new();
+    let mut next = 0i32;
+    for (at, parameter) in convention.parameters.iter().enumerate() {
+        match parameter {
+            Parameter::Bytes(_) => {
+                firsts.push(None);
+                next += 1;
+            }
+            Parameter::Cell(disp) => {
+                firsts.push(Some((-(next + 1), *disp)));
+                let two = function
+                    .parameters()
+                    .get(at)
+                    .is_some_and(
+                        |arg| matches!(
+                            types.get(function.value(*arg).ty),
+                            llrm_mir::types::Type::Int(bits) if *bits == 2 * widest
+                        ),
+                    );
+                next += if two { 2 } else { 1 };
+            }
+            Parameter::Registers(_) => firsts.push(None),
+        }
+    }
+    let stack = arch.stack_alignment().max(1) as u64;
+    let mut done = Vec::new();
+    for one in candidates {
+        let Some(&Some((index, disp))) = firsts.get(one.position) else { continue };
+        let ValueDef::Instruction(def) = function.value(one.alloca).def else { continue };
+        let llrm_mir::opcode::Opcode::Alloca { allocated, align, .. } = function.instruction(def).opcode else {
+            continue;
+        };
+        // `MFI.getObjectAlign(FixedIndex) < AI->getAlign()`: the fixed object
+        // is aligned as its offset in the argument area allows
+        // (`CreateFixedObject`)
+        let offset = (disp - arch.first_argument_offset(false)).unsigned_abs();
+        let fixed = if offset == 0 { stack } else { stack.min(offset & offset.wrapping_neg()) };
+        let wanted = align.map_or_else(
+            || llrm_codegen::backend::isel::natural_align(types, layout, allocated) as u64,
+            |one| one as u64,
+        );
+        if fixed < wanted {
+            continue;
+        }
+        info.elided_stores.insert(one.store);
+        info.elided_args.insert(one.arg);
+        done.push((one.alloca, index));
+    }
+    done
+}
+
 pub(super) fn stack_cells(
     module: &Module,
     function: &llrm_mir::module::Function,
@@ -1040,10 +1115,11 @@ fn selected_in(
         // open, exit 2026-11-20 (kept by measurement 2026-11-06). m16 -Os was
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
-        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_int_div_cheap(cpu.size || cpu.min_size || cpu.bytes_strict() && arch.small_divide_at_o1())
         .with_sdiv_pow2_stays(
-            (cpu.size || cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize"))
-                && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size()),
+            cpu.min_size
+                || llrm_mir::memory::has(&function.attrs, "minsize")
+                || (cpu.size && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size())),
         )
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
@@ -1097,12 +1173,24 @@ fn selected_in(
         }
     }
     let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
+    // `findArgumentCopyElisionCandidates` and `tryToElideArgumentCopy` with
+    // X86's `LowerMemArgument`: a local the entry block fills from a
+    // stack-passed argument is that argument's slot. (DEVIATE: not at m16,
+    // whose frame the contract lays out; the pin has it. Exit with the m16
+    // -O0 pipeline.)
+    let mut elided: Vec<(llrm_mir::module::ValueId, i32)> = Vec::new();
+    if !m16 {
+        elided = elide_argument_copies(module, function, &layout, &convention, arch, widest, &mut info);
+    }
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
     // type's alignment. Locals whose lifetime markers say they are never live
     // together are one object (StackColoring).
     let mut sizes: Vec<(llrm_mir::module::ValueId, i64, i64)> = Vec::new();
     for (value, _) in info.static_allocas.iter() {
+        if elided.iter().any(|(alloca, _)| *alloca == value) {
+            continue;
+        }
         let ValueDef::Instruction(def) = function.value(value).def else {
             return refuse("an alloca that is not an instruction");
         };
@@ -1139,6 +1227,10 @@ fn selected_in(
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
     let objects = llrm_codegen::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
+    // the elided locals are the fixed objects of their arguments
+    for (alloca, index) in &elided {
+        info.static_allocas.insert(*alloca, *index);
+    }
     let alloca_count = objects.len() as i32;
     // A local above the alignment the stack keeps realigns it: the pin's
     // `MaxAlignment > StackAlignment`
@@ -1158,6 +1250,10 @@ fn selected_in(
     if m64 && module.signature(function.ty).2 && positional.is_none() {
         info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
+    let multiply_early_out = llrm_codegen::backend::timing::signed_multiply(cpu, 4, false)
+        .ok()
+        .flatten()
+        .is_some_and(|clocks| clocks.minimum < clocks.maximum);
     let mut hooks = X86Hooks::new(Options {
         cpu: if m16 {
             Cpu::M16
@@ -1170,10 +1266,7 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
-        multiply_early_out: llrm_codegen::backend::timing::signed_multiply(cpu, 4, false)
-            .ok()
-            .flatten()
-            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
+        multiply_early_out,
         address_mode,
     })
     .with_shared_immediates_in_registers(!machine.tti().is_some_and(|tti| tti.immediate_forms_at_size()));
@@ -1414,6 +1507,7 @@ fn selected_in(
                 &mut built.dag,
                 &tli,
                 &mut X86Lowering {
+                    multiply_early_out: multiply_early_out.then_some(address_mode != llrm_dagisel::addr::AddrMode::Real16),
                     cmov: tli.can_use_cmov(),
                     share_products: machine.tti().is_some_and(|tti| tti.x87_share_negated_products()),
                     sse2,

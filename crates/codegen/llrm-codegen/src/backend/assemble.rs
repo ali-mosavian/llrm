@@ -422,7 +422,10 @@ pub fn assembled_by(
                     // A global of this module is called by the name it is
                     // defined or declared as.
                     let linked = match module.named(callee) {
-                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        Some(id) => names
+                            .get(&(globals::space(module, id), i64::from(id.0)))
+                            .cloned()
+                            .ok_or_else(|| format!("{callee}: a call to an intrinsic this target does not lower"))?,
                         None => abi.linked(callee),
                     };
                     referenced.insert(linked.clone(), far.contains(at));
@@ -1316,6 +1319,7 @@ fn staged(
         slot_scratch: entry
             .and_then(|one| target.arch.frame_slot_scratch_of(one))
             .or(base.slot_scratch)
+            .filter(|_| target.cpu.pops_frame_slot())
             .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
         ..base
     };
@@ -1332,6 +1336,7 @@ fn staged(
         registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
+    registers.object_align = target.facts.object_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
     // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
@@ -1416,6 +1421,7 @@ fn staged(
         timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.align = registers.align.max(registers.slot).max(frame.align);
+    frame.object_align = Some(registers.object_align.max(registers.slot));
     frame.hole = hole;
     frame.alloca_align = alloca_align;
     frame.extents = extents;

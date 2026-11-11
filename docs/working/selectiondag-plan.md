@@ -186,7 +186,10 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD10 | sdag-a | no `SDLoc` | `selectiondag.rs` |
 | SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
-| SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
+| SD13 | sdag-a | no vector types or nodes, but the four 128-bit integer vectors of `LLRM_ARM64_VECTORS` (2026-11-10) | `selectiondag.rs` |
+| VEC1 | llrm-arm64-vec | arm64 `LowerBUILD_VECTOR`/`LowerVECTOR_SHUFFLE`: constant splats and scalar splats only | `llrm-arm64/src/dag/vector.rs` |
+| VEC2 | llrm-arm64-vec | `visitINSERT_VECTOR_ELT`: the insert chain into a `BUILD_VECTOR` only | `selectiondag/combine_vector.rs` |
+| VEC3 | llrm-arm64-vec | LoopVectorize remainder is the scalar loop only: no epilogue vectorization (`vec.epilog.*`, `EpilogueVectorizationMinVF`) | `llrm-transforms/src/loopvectorizeplan.rs`, exit LV-X3 2026-11-20 |
 | SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-sdag/src/lowering.rs` |
 | SD15 | sdag-a | `FindMergedConditions` ported without edge probabilities | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |
@@ -264,7 +267,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD238 | sdag-b | the vector registers' half of the variadic register save area (48..176) is left unwritten until floating point is selected at m64: a `double` passed to such a function is not read back | `selectiondag/builder.rs` |
 | SD239 | sdag-b | where the pointer is a word (m16) an `i16` select stays a word: widened to `i32` every move takes an operand-size prefix. Exit: none (machine fact) | `selectiondag/x86_lowering.rs` |
 | SD240 | sdag-b | `isMultiStoresCheaperThanBitsMerge` is true for two integer halves at m16 (the pin: a float and an integer half only): a far pointer or `long` is two word stores, not `shl; movzx; add`. Exit: none while the DAG keeps `BUILD_PAIR` | `x86/dag/actions.rs` |
-| SD241 | sdag-b | `ExpandShiftWithKnownAmountBit`: a clear amount bit without a legal or custom funnel shift stays a parts node (the pin shifts, subtracts and ors) | `selectiondag/legalize_types.rs` |
+| SD241 | sdag-b | `ExpandShiftWithKnownAmountBit`: z80 and 6502 keep the shift routine for a variable amount known below the half width (target field `libcall_for_small_variable_shift`; the pin shifts inline, ahead of the parts node and the call, with no hook). Owners: z80 llrm-target-z80 exit 2026-11-24 (inline policy priced with harness bytes+T, then the line goes or stays with the numbers); 6502 llrm-target-6502 exit 2026-12-01 (priced per site, size+clock, or kept as a documented decision). Inline grew 6502 call_cleanup_keeps_pair +1146 B -O2 / +861 B -Os (shuttle_value -227 B), z80 +192/+541 B and shift_int64_masked_amount +620/+605 B; clocks unmeasured | `selectiondag/legalize_types.rs` |
 | SD242 | sdag-b | `combineCarryThroughADD`: the `COND_A` form (a swapped `sub`) is not translated; nothing produces it at 32 bits yet. Exit: with `combineSBB`'s remaining folds | `selectiondag/x86_lowering.rs` |
 | SD247 | sdag-b | `LowerFunnelShift`: the `isSHLDSlow` expansion of an `i16` funnel shift is not translated (no target of ours sets it) | `selectiondag/x86_lowering.rs` |
 | SD249 | sdag-b | `reduceLoadWidth` of a constant `srl`/`sra`/`and` of a load only; no `freeze` look-through, no `shl` opening; every x86 narrow access is taken as legal (`isLegalNarrowLdSt`). Exit: none while x86 loads stay unaligned-legal | `selectiondag/reduce_load_width.rs` |

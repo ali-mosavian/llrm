@@ -671,6 +671,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("adce@815", "adce"),
     ("memcpyopt@818", "memcpyopt"),
     ("licm@823", "licm"),
+    ("loop-vectorize@1354", "loopvectorize"),
     ("drop-unnecessary-assumes@1360", "dropunnecessaryassumes"),
     ("drop-unnecessary-assumes@1577", "dropunnecessaryassumes"),
     ("infer-alignment@1362", "inferalignment"),

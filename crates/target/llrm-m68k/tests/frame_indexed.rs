@@ -317,12 +317,14 @@ fn the_largest_folded_frame_runs() {
     }
 }
 
-/// The range proof assumes the stack pointer moves only for pushed arguments.
-/// A dynamic `alloca` moves it by a run-time amount and is refused today; the
-/// fold must be revisited (frame-pointer addressing, no fold) the day it is
-/// not.
+/// The range proof assumes the stack pointer moves only for pushed arguments. A
+/// dynamic `alloca` moves it by a run-time amount, so the function gets a frame
+/// pointer and its locals are addressed through it, below the saved `%a6` and
+/// the return address. The frame-pointer slot sits after the fixed objects in
+/// the layout and every local's index was one short of it: the 32-byte array
+/// was addressed `(0,%a6,%d0)`, over the saved `%a6`.
 #[test]
-fn a_dynamic_alloca_is_refused_so_the_fold_never_sees_a_moving_stack_pointer() {
+fn a_dynamic_alloca_addresses_locals_below_the_frame_pointer() {
     let ir = r#"target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16"
 declare void @sink(ptr)
 define i32 @f(i32 %n, i32 %k) {
@@ -330,10 +332,25 @@ define i32 @f(i32 %n, i32 %k) {
   %d = alloca i32, i32 %n, align 4
   call void @sink(ptr %d)
   %p = getelementptr inbounds [8 x i32], ptr %a, i32 0, i32 %k
-  store i32 7, ptr %p
-  %v = load i32, ptr %p
+  store volatile i32 7, ptr %p
+  %v = load volatile i32, ptr %p
   ret i32 %v
 }"#;
-    let why = assembly(ir, cpu_of("68000").unwrap(), Level::O2).expect_err("refused");
-    assert!(why.contains("DynamicStackAlloc"), "{why}");
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(ir, cpu_of("68000").unwrap(), level).expect("compiles");
+        assert!(text.contains("link.w"), "{text}");
+        // `(disp,%a6...)` with a displacement of 0 (the saved `%a6`) to 7 (the
+        // return address): no local lives there
+        let over_the_frame = text
+            .lines()
+            .any(
+                |line| line.find(",%a6").is_some_and(|end| {
+                    let head = &line[..end];
+                    head.rfind('(')
+                        .and_then(|start| head[start + 1..].parse::<i64>().ok())
+                        .is_some_and(|disp| (0..8).contains(&disp))
+                }),
+            );
+        assert!(!over_the_frame, "a local addressed over the saved frame pointer or the return address:\n{text}");
+    }
 }

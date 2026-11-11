@@ -60,9 +60,13 @@
 //! makes them. Exit: with `computeKnownBits` (sdag-b, B2). Owner sdag-a.
 //! Review 2026-11-13.
 //!
-//! DEVIATE SD13: no vector types or nodes (`BUILD_VECTOR`, `SPLAT_VECTOR`,
-//! `VSCALE`, ...). Reason: no vectors until 32-bit parity. Exit: with
-//! vector MIR. Owner sdag-a. Review 2026-11-13.
+//! DEVIATE SD13: no vector types or nodes (`SPLAT_VECTOR`, `VSCALE`,
+//! floating-point and 64-bit vectors, vector arithmetic), except the four
+//! 128-bit integer vectors `v16i8`, `v8i16`, `v4i32`, `v2i64` of the arm64
+//! flag `LLRM_ARM64_VECTORS`: their `BUILD_VECTOR`, `INSERT_VECTOR_ELT`,
+//! `SCALAR_TO_VECTOR`, splat `VECTOR_SHUFFLE`, loads and stores exist since
+//! 2026-11-10 (VEC1, VEC2). Exit: the rest, with the arm64 vectorizer's
+//! pieces. Owner llrm-arm64-vec. Review 2026-11-12.
 //!
 //! DEVIATE SD15: `FindMergedConditions` is ported (`builder/mergedcond.rs`)
 //! without the edge probabilities (`TProb`/`FProb`) the pin keeps on the blocks
@@ -121,6 +125,7 @@ pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
+pub mod combine_vector;
 pub mod ctcount_combine;
 pub mod dag;
 pub mod dag_combiner;
@@ -180,9 +185,6 @@ pub mod target_calling;
 #[path = "../../../../target/llrm-x86-backend/src/unfold.rs"]
 pub mod unfold;
 #[cfg(test)]
-#[path = "../../../../target/llrm-x86-backend/src/x86isd.rs"]
-pub mod x86isd;
-#[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/x86_carry.rs"]
 pub mod x86_carry;
 #[cfg(test)]
@@ -191,6 +193,9 @@ pub mod x86_lowering;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
 pub mod x86_nodes;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86isd.rs"]
+pub mod x86isd;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{

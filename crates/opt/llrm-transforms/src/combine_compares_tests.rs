@@ -991,3 +991,43 @@ fn a_sub_and_an_add_without_the_flag_of_the_predicate_stay() {
         "  %sub = sub nuw i8 %a, %b\n  %add = add nuw i8 %a, %b\n  %cmp = icmp sge i8 %add, %sub\n  ret i1 %cmp\n";
     sub_add("nuw", "nuw", "sge", true, kept);
 }
+
+/// `icmp-samesign-canonicalize.ll`, scalar cases: `x` against `c` under a
+/// `samesign` predicate.
+fn samesign(
+    pred: &str,
+    c: i32,
+    after: &str,
+) {
+    let body = format!("  %cmp = icmp samesign {pred} i8 %x, {c}\n  ret i1 %cmp\n");
+    check("i8 %x", &body, after);
+}
+
+/// `samesign uge x, 42` lost the flag (`icmp ugt x, 41`); the pin keeps it.
+#[test]
+fn canonicalizing_a_samesign_compare_keeps_samesign() {
+    samesign("uge", 42, "  %0 = icmp samesign ugt i8 %x, 41\n  ret i1 %0\n");
+    samesign("sge", 42, "  %0 = icmp samesign sgt i8 %x, 41\n  ret i1 %0\n");
+}
+
+/// A constant whose step crosses the sign boundary keeps its predicate:
+/// `samesign sge x, 0` was `sgt x, -1`.
+#[test]
+fn a_samesign_compare_is_not_canonicalized_across_the_sign_boundary() {
+    let kept = |pred: &str, c: i32| {
+        let body = format!("  %cmp = icmp samesign {pred} i8 %x, {c}\n  ret i1 %cmp\n");
+        check("i8 %x", &body, &body);
+    };
+    kept("sge", 0);
+    kept("sle", -1);
+}
+
+/// Both sides of an unsigned `samesign` compare share a sign: `ule x, 127`
+/// is true, `uge x, 127` is `x == 127`, `uge x, -128` is true. All three
+/// stayed compares.
+#[test]
+fn an_unsigned_samesign_compare_shares_the_known_sign_between_its_sides() {
+    samesign("ule", 127, "  ret i1 true\n");
+    samesign("uge", 127, "  %0 = icmp eq i8 %x, 127\n  ret i1 %0\n");
+    samesign("uge", -128, "  ret i1 true\n");
+}

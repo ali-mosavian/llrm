@@ -414,7 +414,25 @@ impl<T: Target> Converted<T> {
                             reads.extend(memory.iter().copied());
                         }
                         let mut made = (**one).clone().standing_for(one);
-                        if let Some(form) = inst.form.as_ref().and_then(|form| in_body_values::<T>(form, inst, one)) {
+                        // The form names register 31 as the zero register
+                        // wherever it is the stack pointer; the decoded
+                        // semantics name `sp`, which `boundary` needs
+                        // (`sub sp, sp, #16` moved below the stores it makes
+                        // room for: `vla_call` printed 918, not 1213).
+                        let writes_sp = one
+                            .what
+                            .as_ref()
+                            .is_some_and(
+                                |what| what.dests
+                                    .iter()
+                                    .any(|place| matches!(place, Loc::Reg(reg) if registers.is_stack(reg.register))),
+                            );
+                        if let Some(form) = inst
+                            .form
+                            .as_ref()
+                            .filter(|_| !writes_sp)
+                            .and_then(|form| in_body_values::<T>(form, inst, one))
+                        {
                             made.what = Some(form);
                         }
                         made.volatile = made.volatile || inst.side_effects;
@@ -1105,6 +1123,16 @@ impl<T: Target> Made<'_, T> {
                 }
                 Operand::Def(Reg::Phys(register)) => {
                     if T::reserved(T::root(*register)) {
+                        // The stack pointer has no value to hold, but a write
+                        // of it is named so `boundary`
+                        // sees it
+                        // (`modifiesRegister(SP)`): without it `sub sp, sp,
+                        // #16` moved below the stores
+                        // it makes room for.
+                        if self.registers.is_stack(*register) {
+                            let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
+                            dests.push(Loc::Reg(llrm_lir::Reg { register: *register, width }));
+                        }
                         continue;
                     }
                     let (value, width) = self.pinned_write(*register);
@@ -1763,6 +1791,11 @@ fn buffer_loads<T: Target>(
 /// load of it follows that call in its block with no call between, so a value
 /// loaded is the object's content wherever the value lives, and a load made
 /// again where it is read gives the same value.
+///
+/// Worse row (owner greedy-subreg, exit 2026-11-28): z80 `float_in_memory_loop`
+/// -Os 326 -> 332 B. A remade load splits one value into two pieces and the
+/// allocation after it shifts; no single defect.
+/// z80 `fcmp_all` -O2 23661 -> 23670 B, clocks unpriced.
 fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
     let mut found = BTreeSet::new();
     let mut frames: BTreeSet<i32> = BTreeSet::new();
@@ -1980,6 +2013,15 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         one: &Insn,
     ) -> Vec<(u32, RegId)> {
         self.operands_of(one).into_iter().filter_map(|(value, info)| Some((value, info.hint?))).collect()
+    }
+
+    fn copy_register_cost(
+        &self,
+        to: RegId,
+        from: RegId,
+        size: bool,
+    ) -> u32 {
+        T::copy_register_cost(to, from, size)
     }
 
     fn operand_orders(
@@ -2828,6 +2870,7 @@ pub fn from_lir<T: Target>(
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
             if insn.rematerialized && T::remade_sets_no_flags() {
+                made.remade_sets_flags = made.sets_flags;
                 made.sets_flags = false;
             }
             // a branch `PhiElimination` pointed at the block of an edge

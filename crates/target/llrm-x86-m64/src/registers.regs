@@ -9,6 +9,8 @@
 #
 # @scratch: the words a pass may borrow for a moment, most preferred first.
 @scratch ecx edx eax
+# @lanes: x86's lane table (`llrm_codegen::backend::lanes`).
+@lanes x86
 #
 # name  bits root lane classes dwarf codeview
 eax   32 eax   0 gpr,byte,base,index,int  0 17

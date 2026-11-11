@@ -468,21 +468,23 @@ fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
 
 /// The pin's -O1 pipeline has no JumpThreadingPass (JUMPTHREAD-O1), so clang's
 /// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
-/// clk against gcc's 614). The m68k rows give their backend `-fthread-jumps`
-/// at -O1, unless the command line states either spelling; no other row, and
-/// no other level, does.
+/// clk against gcc's 614; shift_int32_variable m32 -O1: 8942 clk against gcc's
+/// 7784). The m68k and m32 rows give their backend `-fthread-jumps` at -O1,
+/// unless the command line states either spelling; no other row, and no other
+/// level, does.
 #[test]
-fn m68k_rows_thread_jumps_at_o1_unless_told_otherwise() {
+fn m68k_and_m32_rows_thread_jumps_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
-    for row in table.keys().filter(|row| row.starts_with("m68k-")) {
+    let threads = |row: &str| row.starts_with("m68k-") || row.starts_with("x86_32-");
+    for row in table.keys().filter(|row| threads(row)) {
         assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
         for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
             assert!(!has(&llc(row, line)), "{row} {line}");
         }
     }
-    for row in table.keys().filter(|row| !row.starts_with("m68k-")) {
+    for row in table.keys().filter(|row| !threads(row)) {
         assert!(!has(&llc(row, "-O1 -c x.c")), "{row} as before");
     }
 }
