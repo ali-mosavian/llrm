@@ -56,8 +56,18 @@ fn run_example(
 ) -> (String, Vec<String>) {
     let tmp = support::unique_path("scratch-tmpdir");
     std::fs::create_dir_all(&*tmp).unwrap();
-    let exe = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("examples").join(name);
-    assert!(exe.exists(), "{} is not built: cargo build -p llrm-m68k --example {name}", exe.display());
+    let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+    let exe = profile_dir.join("examples").join(name);
+    if !exe.exists() {
+        // `cargo test --test scratch` builds no examples; only a full `cargo test` does.
+        let profile = profile_dir.file_name().unwrap().to_string_lossy().into_owned();
+        let mut build = std::process::Command::new(env!("CARGO"));
+        build.args(["build", "-p", "llrm-m68k", "--example", name]);
+        if profile != "debug" {
+            build.args(["--profile", &profile]);
+        }
+        assert!(build.status().unwrap().success(), "cargo build -p llrm-m68k --example {name} failed");
+    }
     let out =
         std::process::Command::new(&exe).args(args).envs(envs.iter().copied()).env("TMPDIR", &*tmp).output().unwrap();
     let left = std::fs::read_dir(&*tmp)

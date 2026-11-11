@@ -251,6 +251,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// DEVIATE SD242: the pin matches the unfolded shape only, so a constant `x1` loses the
     /// `shld`. A folded `srl` is `x1 >> 1` for an `x1` whose low bit never reaches the
     /// result (the shift by `xor y, w-1` leaves at most `w-1` bits of it); a folded `shl` likewise.
+    /// That bit is free, so the constant is the one the DAG already holds, shared with its other users.
     fn shifted_by_one_or_folded(
         &mut self,
         value: SDValue,
@@ -262,11 +263,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(value);
         let bits = vt.size_in_bits();
         let folded = self.dag.constant(value)?;
-        let unfolded = match op {
-            ISD::Srl if bits < 128 && folded >> (bits - 1) == 0 => folded << 1,
-            ISD::Shl if folded & 1 == 0 => folded >> 1,
+        // the bit the fold dropped is free: take the constant another user already holds
+        let candidates = match op {
+            ISD::Srl if folded >> (bits - 1) == 0 => [folded << 1, folded << 1 | 1],
+            ISD::Shl if folded & 1 == 0 => [folded >> 1, folded >> 1 | 1 << (bits - 1)],
             _ => return None,
         };
+        let unfolded = candidates.into_iter().find(|&c| self.dag.find_constant(c, vt).is_some()).unwrap_or(candidates[0]);
         Some(self.dag.get_constant(unfolded, vt))
     }
 
