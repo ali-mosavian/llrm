@@ -495,6 +495,13 @@ impl Printer<'_> {
                 let source = name_of(self, 3)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
+            // a long doubled: the low word in its pair, the high word in hl
+            "SHL32" => {
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                self.push(format!("sla {}", name(lo)));
+                self.push(format!("rl {}", name(hi)));
+                self.push("adc hl, hl");
+            }
             "SUB16F" => {
                 let source = name_of(self, 3)?;
                 self.push("or a, a");

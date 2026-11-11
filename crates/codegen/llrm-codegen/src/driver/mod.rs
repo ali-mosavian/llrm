@@ -89,6 +89,11 @@ pub struct Options {
     pub stack_check: bool,
     /// `--isel=`: the instruction selector.
     pub isel: crate::backend::shadow::Selector,
+    /// `--no-midend`: the pipeline's passes do not run, so the backend takes
+    /// the module as it is given: the instrument for pricing the backend alone
+    /// on an IR the mid-end already made (the pin's `llc` takes its input as it
+    /// is).
+    pub no_midend: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention (LLVM's number) a call of it is made in: `memcpy` is a call
     /// where it is named, the selector's `rep movs` where not; and the symbol
@@ -127,6 +132,7 @@ impl Options {
             no_inline: Vec::new(),
             stack_check: false,
             isel,
+            no_midend: false,
             libcalls: Vec::new(),
             wasm_exceptions: false,
         }
@@ -414,7 +420,7 @@ pub fn assembled_module(
             &crate::abi::llvm::LlvmAbi {
                 stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
             },
-            &format!("{}_TEXT", name.to_uppercase()),
+            &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", name.to_uppercase())),
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
@@ -571,7 +577,9 @@ pub fn optimized(
         llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
     // The pipeline sees an atomic access as a call it cannot move.
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
-    timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    if !options.no_midend {
+        timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    }
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
@@ -687,7 +695,8 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is bytes.
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is
+                // bytes.
                 let trees = |ty: &str| {
                     options.pipeline.prefers_size()
                         && tti.branch_compare_trees_at_size()

@@ -372,9 +372,25 @@ fn items_trials(
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
     if touched.mul_trial {
-        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
+        use crate::dagisel::mulprice::Mode;
+        let without = Options { mul: Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
-        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
+        if touched.mul_synthesized {
+            // DEVIATE G2: the pin's shapes are judged as before (clocks
+            // count wherever they run); a chain beyond them only against
+            // that winner, and its clocks only inside loops
+            let shapes = Options { mul: Mode::TrialPinShapes, ..options };
+            let (pin, _) = items_once(module, name, cpu, shapes)?;
+            let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
+                (plain, without)
+            } else {
+                (pin, shapes)
+            };
+            if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+                kept = base;
+                options = base_options;
+            }
+        } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
             kept = plain;
             options = without;
         }
@@ -493,6 +509,10 @@ struct Touched {
     mul_trial: bool,
     /// The build widened the class of a pass-through copy temp.
     relax_classes: bool,
+    /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
+    /// trial credits clocks only inside loops, since a straight-line multiply
+    /// may never run.
+    mul_synthesized: bool,
 }
 
 impl Touched {
@@ -504,7 +524,6 @@ impl Touched {
             || self.carry_chain
             || self.global_copies
             || self.mul_trial
-            || self.relax_classes
     }
 }
 
@@ -594,6 +613,7 @@ fn items_once(
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
     touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
+    touched.mul_synthesized = chain.synthesized();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {

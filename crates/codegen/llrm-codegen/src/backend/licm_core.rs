@@ -358,6 +358,12 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                         hoisted_values.extend(load.defines().iter().copied());
                         any = true;
                         moved.push(load);
+                        // The unfolded half reads the load's new value: a later
+                        // rename of that value finds it (`readers` was built
+                        // before the unfold).
+                        rest.each_value(|used| {
+                            readers.entry(used).or_default().insert(number);
+                        });
                         keep.push(rest);
                     } else {
                         keep.push(one.clone());
