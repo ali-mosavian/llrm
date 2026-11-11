@@ -895,6 +895,7 @@ impl llrm_codegen::backend::selectiondag::emit_api::ConstantCells for PoolCells<
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
+    max_bits: u32,
 ) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
@@ -907,7 +908,7 @@ fn narrow_divide_live(
                 op.operands.get(1),
                 Some(llrm_mir::module::Operand::Constant(_))
             )
-            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits < 32)
+            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits <= max_bits)
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
@@ -1121,7 +1122,10 @@ fn selected_in(
                 || llrm_mir::memory::has(&function.attrs, "minsize")
                 || (cpu.size && machine.tti().is_some_and(|tti| tti.sdiv_pow2_stays_at_size())),
         )
-        .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
+        .with_div_live_limit(
+            if cpu.bytes_strict() { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 },
+            machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits()),
+        )
         .with_div_prices(div_prices(cpu, &*machine, bitness))
         .with_sdiv_by_magnitude(
             cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()),
@@ -1451,8 +1455,8 @@ fn selected_in(
                 );
             llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
         });
-    let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
+    let div_live = if cpu.bytes_strict() { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function, machine.tti().map_or(31, |tti| tti.narrow_divide_live_max_bits())) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {

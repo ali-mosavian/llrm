@@ -737,6 +737,10 @@ impl Tti for X86 {
         self.tuning.narrow_divide_live_limit
     }
 
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        self.tuning.narrow_divide_live_max_bits
+    }
+
     /// DEVIATE INL-O1 SIZE: the inliner counts a callee in bytes of code.
     fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
         (self.tuning.inline_size_bytes && !self.size_bytes)

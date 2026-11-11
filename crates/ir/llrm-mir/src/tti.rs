@@ -1106,6 +1106,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::narrow_divide_live_max_bits`.
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        31
+    }
+
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
         false

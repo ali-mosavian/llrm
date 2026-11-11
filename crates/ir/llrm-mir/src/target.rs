@@ -50,6 +50,10 @@ pub struct Tuning {
     /// `div` pins eax, edx and the divisor's register, the narrow multiply
     /// sequence none.
     pub narrow_divide_live_limit: u32,
+    /// The widest divide (in bits) `narrow_divide_live_limit` governs: 31 is
+    /// "narrower than a word" on a 32-bit target; a 16-bit target whose `div
+    /// edx:eax` pins the same registers at 32 bits sets 32.
+    pub narrow_divide_live_max_bits: u32,
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
     /// leaves an instruction where it is when moving it would replace its one
     /// result by more operands that die at it, across a later instruction that
@@ -432,6 +436,7 @@ impl Tuning {
         multiply_by_clocks: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
+        narrow_divide_live_max_bits: 31,
         sink_spares_ranges: false,
         promote_va_list: false,
         branch_compare_trees_at_size: false,
