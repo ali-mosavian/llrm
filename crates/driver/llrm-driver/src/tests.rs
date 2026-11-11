@@ -1842,6 +1842,43 @@ fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
     assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
 }
 
+const SMALL_STRUCT_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out) addrspace(1) {\n  store i8 7, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// clang returns `struct { char x; }` through an `sret` pointer; Borland's
+/// cdecl returns it in AL. The call pushed the address of a temporary and the
+/// callee wrote through it, so a BCC callee (which returns AL) left the
+/// caller's copy unwritten: cfaggee's `r_s1` read 2F, not 11 (callconv CFLB).
+#[test]
+fn a_one_byte_struct_result_comes_back_in_al_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), SMALL_STRUCT_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov al, 7"), "the callee returns the byte in AL\n{listing}");
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
+/// The call through a function pointer carries its convention, so a call that
+/// passed the `sret` address to a callee returning AL left the result unwritten
+/// with no diagnostic.
+#[test]
+fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { i8 }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
 /// `-fno-inline=sum5` named the function as the source does, but the module
 /// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
 /// looked up: "the program defines no function of that name", so
