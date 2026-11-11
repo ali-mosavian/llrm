@@ -551,6 +551,13 @@ impl Lftr<'_> {
             if phi_width < bc_width || !self.layout.legal_integer(phi_width) {
                 continue;
             }
+            // DEVIATE LFTR1 reaches only a counter the test needs no
+            // truncation for: a stride other than one is not the pin's, and
+            // comparing a wider counter by `trunc` costs a mask where the
+            // original test (on the widened counter) cost none.
+            if phi_width > bc_width && !self.has_unit_step(phi_value) {
+                continue;
+            }
             // Avoid reusing a potentially undef value to compute other values
             // that may have originally had a concrete definition.
             if !self.has_concrete_def(phi_value) {
