@@ -120,7 +120,8 @@ pub struct Options {
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
     /// A small conditional block is copied into the predecessors that jump to
-    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build, and
+    /// kept only where the build with the copies beats the build without.
     pub tail_duplicate: bool,
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
@@ -312,6 +313,14 @@ pub fn items_with(
             options = without;
         }
     }
+    if touched.tail_dup {
+        let without = Options { tail_duplicate: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.return_dup {
         let without = Options { return_dup: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -367,6 +376,9 @@ pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
 #[derive(Clone, Copy, Default)]
 struct Touched {
     sext_adds: bool,
+    /// A block was copied into the arms that jump to it
+    /// ([`llrm_spike_mf::taildup::tail_duplicate`]).
+    tail_dup: bool,
     return_dup: bool,
     class_split: bool,
     /// A compare's destination was left to the allocator's choice of an
@@ -384,6 +396,7 @@ struct Touched {
 impl Touched {
     fn any(self) -> bool {
         self.sext_adds
+            || self.tail_dup
             || self.return_dup
             || self.class_split
             || self.compare_destinations
@@ -566,8 +579,11 @@ fn items_once(
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
-    if options.tail_duplicate && !wants_size {
-        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+    if !wants_size {
+        if options.tail_duplicate {
+            touched.tail_dup =
+                llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+        }
         if options.return_dup {
             touched.return_dup = llrm_spike_mf::taildup::duplicate_returns(&mut function, 2);
         }
