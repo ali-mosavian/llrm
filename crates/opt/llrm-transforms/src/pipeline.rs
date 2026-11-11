@@ -1601,7 +1601,10 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
-    if applied.options.second_inline && applied.options.inline.limit != 0 {
+    let target_wants_round = !applied.options.prices_bytes()
+        && !applied.options.prefers_size()
+        && program.target.tti().is_some_and(|tti| tti.inline_second_round_at_o1());
+    if (applied.options.second_inline || target_wants_round) && applied.options.inline.limit != 0 {
         manager.compute::<GlobalsAA>();
         manager.compute::<GlobalsModRefAnalysis>();
         let mut simplify = Fixed::linear(&walked("walk2"), Phase::Simplify);

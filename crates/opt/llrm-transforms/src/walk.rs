@@ -543,7 +543,7 @@ impl ProgramPass for Walk {
                             // the Simplify list, which runs again;
                             // it stays if the body is smaller. The callee stays
                             // either way.
-                            let mut best = body_size(module, &program.layout, tti, id);
+                            let mut best = body_size(module, &program.layout, tti, id, size == crate::inlinecost::CallerSize::Speed);
                             let site_frequencies =
                                 crate::inlinecost::call_frequencies(module, &program.layout, &before);
                             // The sites of a private callee that goes with its
@@ -572,7 +572,7 @@ impl ProgramPass for Walk {
                                     && !addressed.contains(&callee)
                                     && left == calls.len() as i64;
                                 if goes {
-                                    units.push((calls, body_size(module, &program.layout, tti, callee)));
+                                    units.push((calls, body_size(module, &program.layout, tti, callee, size == crate::inlinecost::CallerSize::Speed)));
                                 } else if tti.inline_trial_groups_sites() && calls.len() > 1 {
                                     units.push((calls, 0));
                                 } else {
@@ -685,7 +685,7 @@ impl ProgramPass for Walk {
                                         module.global(callee).function().is_some_and(|body| !crate::inlinecost::loop_headers(body).is_empty())
                                     }));
                                 (self.simplify)(module, &mut modules[at], id, if light { TRIAL_LIGHT } else { "walk.trial." });
-                                let tried = body_size(module, &program.layout, tti, id);
+                                let tried = body_size(module, &program.layout, tti, id, size == crate::inlinecost::CallerSize::Speed);
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
                                 // clocks it saves are worth the growth.
@@ -1578,14 +1578,19 @@ fn function_clocks(
 /// kept on the corpus, 14 save one unit and the rest more.
 const GUARD: i64 = 1;
 
-/// SZ2: the code size of body `id`, by the target's cost model for bytes.
+/// SZ2: the code size of body `id`, by the target's cost model for bytes (its
+/// size view, in encoded bytes, where it has one).
 fn body_size(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     tti: &dyn llrm_mir::tti::Tti,
     id: GlobalId,
+    speed: bool,
 ) -> i64 {
-    sized(module, layout, tti, id, true)
+    // Only the measured view, and only for a speed caller: the 6502 and m68k
+    // views stay out of the trials, as at the tip.
+    let view = tti.inline_size_view().filter(|_| speed && tti.inline_size_view_is_measured());
+    sized(module, layout, view.as_deref().unwrap_or(tti), id, true)
 }
 
 /// [`body_size`] with or without its phis: a phi is a copy the allocator

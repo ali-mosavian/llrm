@@ -1784,6 +1784,8 @@ impl<'a> Analyzer<'a> {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
                 self.size_units += self.code_size_of(inst);
+            } else if self.free_but_encoded(inst) {
+                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -2040,12 +2042,44 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    /// Whether an instruction the analyzer prices at nothing still encodes
+    /// bytes in the spliced body. The pin counts phis, jumps, the first
+    /// return and free casts as free because they cost no work, not because
+    /// they vanish; only a folded result (a known constant, an SROA'd
+    /// address) vanishes. The byte view prices what stays.
+    fn free_but_encoded(&self, inst: InstId) -> bool {
+        let operation = self.callee.instruction(inst);
+        let stays = match &operation.opcode {
+            Opcode::Phi | Opcode::Cast(_) => true,
+            Opcode::Br => operation.operands.len() == 1,
+            Opcode::Ret => true,
+            _ => false,
+        };
+        stays
+            && self.measured()
+            && operation.result.is_none_or(|result| self.simplified.get(&result).is_none() && self.offsets.get(&result).is_none())
+    }
+
+    /// The target's byte view of the callee's code, for a speed caller only: a
+    /// size caller keeps the units its -Os bound was fitted in (DEVIATE
+    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14).
+    fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        let tti = self.site.tti?;
+        tti.inline_size_view().filter(|_| !tti.inline_size_view_is_measured() || self.site.caller_size == CallerSize::Speed)
+    }
+
+    /// Whether the size view is the measured one (`inline_size_view_is_measured`)
+    /// and serves this caller.
+    fn measured(&self) -> bool {
+        self.size_view().is_some() && self.site.tti.is_some_and(|tti| tti.inline_size_view_is_measured())
+    }
+
     fn code_size_of(
         &self,
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         llrm_mir::instructioncost::instruction_cost(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2066,7 +2100,7 @@ impl<'a> Analyzer<'a> {
         if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
             return sequence;
         }
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let size = llrm_mir::instructioncost::instruction_cost(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2077,7 +2111,8 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
-        (size * tti.call_code_size_percent() + 50) / 100 + self.byval_copy_size()
+        let percent = if self.measured() { view.as_deref().unwrap_or(tti).call_code_size_percent() } else { tti.call_code_size_percent() };
+        (size * percent + 50) / 100 + self.byval_copy_size()
     }
 
     /// The by-value arguments' copy onto the stack, which the call's flat
@@ -2191,7 +2226,7 @@ impl<'a> Analyzer<'a> {
     /// marker: any other use keeps the stores.
     fn folded_caller_stores(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let caller = self.site.caller;
         let mut total = 0;
         for root in self.enabled_sroa.iter() {
@@ -2270,7 +2305,7 @@ impl<'a> Analyzer<'a> {
             return None;
         }
         let tti = self.site.tti?;
-        let view = tti.inline_size_view();
+        let view = self.size_view();
         let caller = self.site.caller;
         let callee_id = llrm_mir::memory::callee(self.context, caller, call)?;
         let llrm_mir::module::GlobalKind::Function(callee) = &self.site.module.global(callee_id).kind else { return None };
@@ -3240,6 +3275,30 @@ pub fn decide(
             describe(&cost),
             site.relative_frequency
         );
+        // The callee's whole body in the size view's units (bytes where the
+        // target has a byte view): what the estimate is checked against the
+        // callee's symbol size with.
+        if let Some(tti) = context.tti {
+            let view = tti.inline_size_view();
+            let bytes: i64 = callee
+                .layout()
+                .iter()
+                .flat_map(|&block| callee.iter_block(block))
+                .map(|inst| {
+                    llrm_mir::instructioncost::instruction_cost(
+                        view.as_deref().unwrap_or(tti),
+                        &module.context,
+                        layout,
+                        &module.globals,
+                        callee,
+                        inst,
+                        llrm_mir::tti::CostKind::CodeSize,
+                    )
+                    .value
+                })
+                .sum();
+            eprintln!("inline:   callee-size {} {bytes}", callee_global.name.as_deref().unwrap_or("?"));
+        }
     }
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.

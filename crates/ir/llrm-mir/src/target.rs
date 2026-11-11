@@ -71,6 +71,11 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
+    /// counts a callee in bytes of encoded code by instruction kind
+    /// (`Tti::inline_size_view`), not in the pin's units of one per
+    /// instruction. false: the pin's units.
+    pub inline_size_bytes: bool,
     /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
@@ -440,6 +445,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
+        inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
