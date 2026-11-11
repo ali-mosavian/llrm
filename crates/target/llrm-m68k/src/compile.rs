@@ -611,6 +611,9 @@ fn items_once(
         commute_tied(&mut function);
         two_address(&mut function);
     }
+    if options.indexed && !options.shared_prelude {
+        crate::regalloc::relax_copy_only_classes(&mut function);
+    }
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     let allocating = llrm_support::debug::span("m68k allocate");
