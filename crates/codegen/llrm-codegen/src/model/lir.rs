@@ -201,6 +201,11 @@ pub struct Insn {
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
+    /// The number the converter gave the instruction it was made from
+    /// (`tolir`'s ordinal: `at / 2` when numbered). It is the key back to the
+    /// function's own instructions and survives a pass that moves the
+    /// instruction and sets `at` to keep a block in order (`MachineSink`).
+    pub numbered: Option<u32>,
     /// What the target says it reads and writes, as lanes: the decoder answers
     /// with it before it looks at the instruction's name. A target whose
     /// instructions the decoder cannot read (arm64's, which the spike
@@ -581,6 +586,7 @@ impl Insn {
             disjoint,
             line,
             debug,
+            numbered,
             declared,
             what: _,
             effect: _,
@@ -620,6 +626,7 @@ impl Insn {
             disjoint: disjoint.clone(),
             line: line.clone(),
             debug: debug.clone(),
+            numbered: *numbered,
             declared: declared.clone(),
             what,
             effect: Derived::default(),
@@ -820,6 +827,7 @@ impl Insn {
             disjoint: false,
             line: None,
             debug: DebugTags::default(),
+            numbered: None,
             declared: None,
             effect: Derived::default(),
             register_effects: Default::default(),

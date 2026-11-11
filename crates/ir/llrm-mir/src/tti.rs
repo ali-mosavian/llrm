@@ -602,6 +602,19 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER: whether reducing a multiply of the outer loop's
+    /// counter (by `multiplier`, none: not a constant) to a counter stepped by
+    /// it pays: the clocks of the cheaper of the multiply and its shift-and-add
+    /// chain against what a counter held across the inner loop costs each trip.
+    /// false: the pin's, which leaves a loop with a subloop alone.
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let _ = multiplier;
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
@@ -1110,6 +1123,14 @@ pub trait Tti {
     /// refused is unrolled on trial: the function is simplified and priced
     /// whole, and the unroll stays only if it pays. `None`: no trial.
     fn unroll_trial_threshold(&self) -> Option<u32> {
+        None
+    }
+
+    /// DEVIATE OS-INLINE-TRIAL: the limits of the Os inline trial, which prices a copy the byte model refuses
+    /// by the finished code. `(band, instructions)`: a refusal is tried if it is within `band` percent of the
+    /// caller's bytes, in a module of at most `instructions` instructions (it compiles the mid-end twice). None:
+    /// no trial, as on every target but the 6502.
+    fn opt_size_inline_trial_limits(&self) -> Option<(i64, usize)> {
         None
     }
 
@@ -2059,6 +2080,16 @@ pub trait Tti {
     /// register serves.
     fn address_registers(&self) -> u32 {
         self.number_of_gpr_registers()
+    }
+
+    /// DEVIATE LG3: instructions one base register that names a global's address
+    /// costs in the preheader (arm64: `adrp` + `add`, and a symbol plus a
+    /// constant is a new pair, not the pair the pin's bases already hold). LSR
+    /// keeps the pin's solution over the end-biased one when those new bases
+    /// outweigh the loop instructions the latter saves over the trips the loop
+    /// is known to run. 0: bases are not priced (the pin's rule).
+    fn lsr_symbol_base_setup_insns(&self) -> u32 {
+        0
     }
 
     /// Whether a one-register formula of the first use makes its register a

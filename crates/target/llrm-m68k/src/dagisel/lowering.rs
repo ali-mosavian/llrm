@@ -268,6 +268,24 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         self.mul.allows(super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c))
     }
 
+    /// DEVIATE G2: the cheapest shift/add chain for any constant, priced
+    /// ([`super::synth`]).
+    fn synth_mul_chain(
+        &self,
+        vt: EVT,
+        c: u128,
+    ) -> Option<llrm_codegen::backend::selectiondag::dag_combiner::MulPlan> {
+        if !self.mul.allows_beyond_pin() {
+            return None;
+        }
+        let plan = super::synth::plan(self.cpu, self.price, vt.size_in_bits(), c)?;
+        let taken = self.mul.allows(true).then_some(plan);
+        if taken.is_some() {
+            self.mul.note_synthesized();
+        }
+        taken
+    }
+
     fn sub_of_sign_extended_bool(&self) -> bool {
         self.short
     }
