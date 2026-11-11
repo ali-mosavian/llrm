@@ -1,6 +1,7 @@
 //! The Ext-TSP block layout: `computeExtTspLayout` and `calcExtTspScore` of
 //! [CodeLayout.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CodeLayout.cpp),
-//! which `MachineBlockPlacement::applyExtTsp` runs at `-apply-ext-tsp-for-size`.
+//! which `MachineBlockPlacement::applyExtTsp` runs at
+//! `-apply-ext-tsp-for-size`.
 //!
 //! # How it works
 //! Every block is a chain. Chains are merged in three passes: blocks that are
@@ -81,12 +82,7 @@ fn score_of_jump(
 ) -> f64 {
     let end = src_addr + src_size;
     if end == dst_addr {
-        return jump_score(
-            0,
-            1,
-            count,
-            if conditional { FALLTHROUGH_WEIGHT_COND } else { FALLTHROUGH_WEIGHT_UNCOND },
-        );
+        return jump_score(0, 1, count, if conditional { FALLTHROUGH_WEIGHT_COND } else { FALLTHROUGH_WEIGHT_UNCOND });
     }
     if end < dst_addr {
         return jump_score(
@@ -329,16 +325,8 @@ impl Layout {
                 hot_chains.push(node.index);
             }
         }
-        let mut layout = Layout {
-            nodes,
-            jumps,
-            chains,
-            edges: Vec::new(),
-            succ_nodes,
-            pred_nodes,
-            hot_chains,
-            addr: vec![0; n],
-        };
+        let mut layout =
+            Layout { nodes, jumps, chains, edges: Vec::new(), succ_nodes, pred_nodes, hot_chains, addr: vec![0; n] };
         // Chain edges.
         for pred in 0..n {
             for jump in layout.nodes[pred].out_jumps.clone() {
@@ -349,15 +337,19 @@ impl Layout {
                     continue;
                 }
                 let edge = layout.edges.len();
-                layout.edges.push(ChainEdge {
-                    src: from,
-                    dst: to,
-                    jumps: vec![jump],
-                    forward: MergeGain::none(),
-                    backward: MergeGain::none(),
-                    forward_valid: false,
-                    backward_valid: false,
-                });
+                layout
+                    .edges
+                    .push(
+                        ChainEdge {
+                            src: from,
+                            dst: to,
+                            jumps: vec![jump],
+                            forward: MergeGain::none(),
+                            backward: MergeGain::none(),
+                            forward_valid: false,
+                            backward_valid: false,
+                        },
+                    );
                 layout.chains[from].edges.push((to, edge));
                 layout.chains[to].edges.push((from, edge));
             }
@@ -546,7 +538,8 @@ impl Layout {
         let mut gain = MergeGain::none();
         // Concatenation without splitting.
         gain.update_if_less_than(self.merge_gain(pred, succ, &jumps, 0, MergeType::XY));
-        // Attach (a part of) the first chain before the first node of the second.
+        // Attach (a part of) the first chain before the first node of the
+        // second.
         let first = self.chains[succ].nodes[0];
         for jump in self.nodes[first].in_jumps.clone() {
             let source = self.jumps[jump].source;
@@ -749,7 +742,8 @@ pub(super) fn apply_for_size(
     if blocks.len() < 3 || entry != 0 {
         return None;
     }
-    let sizes: Vec<u64> = blocks.iter().map(|block| 4 * block.insns.iter().filter(|insn| !insn.is_meta()).count() as u64).collect();
+    let sizes: Vec<u64> =
+        blocks.iter().map(|block| 4 * block.insns.iter().filter(|insn| !insn.is_meta()).count() as u64).collect();
     let counts = vec![1; blocks.len()];
     let mut edges = Vec::new();
     for (src, block) in blocks.iter().enumerate() {
@@ -776,7 +770,10 @@ pub(super) fn apply_for_size(
 mod tests {
     use super::*;
 
-    fn edge(src: usize, dst: usize) -> EdgeCount {
+    fn edge(
+        src: usize,
+        dst: usize,
+    ) -> EdgeCount {
         EdgeCount { src, dst, count: 100 }
     }
 

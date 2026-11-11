@@ -206,7 +206,15 @@ pub fn optimized_with(
     let hoisted = _hoisted(body);
     let (early, any_early) = tails_merged(hoisted.clone(), size, calls, false)?;
     let start = if any_early { early.with_blocks(_explicit(&early)?) } else { hoisted };
-    let mut placed = threaded(&_placed_ext(&start, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot(), epilogue, cpu.operations.ext_tsp_for_size)?);
+    let mut placed = threaded(&_placed_ext(
+        &start,
+        size,
+        cpu.aggressive,
+        cpu.tail_dup_threshold,
+        cpu.tail_dup_hot(),
+        epilogue,
+        cpu.operations.ext_tsp_for_size,
+    )?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
@@ -218,7 +226,15 @@ pub fn optimized_with(
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
         // tail merging creates/removes/moves blocks."
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        placed = threaded(&_placed_ext(&explicit, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot(), epilogue, cpu.operations.ext_tsp_for_size)?);
+        placed = threaded(&_placed_ext(
+            &explicit,
+            size,
+            cpu.aggressive,
+            cpu.tail_dup_threshold,
+            cpu.tail_dup_hot(),
+            epilogue,
+            cpu.operations.ext_tsp_for_size,
+        )?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
@@ -520,7 +536,9 @@ fn _placed_ext(
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
-    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue, ext_tsp);
+    let (blocks, odds) = placement::order(
+        &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue, ext_tsp,
+    );
     Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }
 
