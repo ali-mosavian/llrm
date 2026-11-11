@@ -112,3 +112,63 @@ fn a_byte_slot_saved_from_one_half_and_reloaded_into_the_other_stays_a_slot() {
     assert!(!frameless_slots_are_a_stack(&mut f, &Assignment(Vec::new())));
     assert_eq!(f.blocks[0].insts[0].kind, Kind::Op("SPILL8"));
 }
+
+/// huffman_decode -O1: a loop counter spilled from `c` and reloaded into `b`
+/// stayed in the frame (`DifferentLane`, 6 B of IX loads and stores a round
+/// trip). `push bc` / `pop bc` brings the low byte back into `c`, so the
+/// reload into `b` is the pop and `ld b, c` (3 B), with `c`, which the pop
+/// overwrites, dead afterwards.
+#[test]
+fn a_byte_loaded_into_the_other_half_of_a_pair_is_a_pop_and_a_copy() {
+    let save = || Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::C))]);
+    let load = || Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Phys(reg::B)), Operand::Frame(0)]);
+    let body = |tail: Inst| {
+        let mut f = MFunction::new("f");
+        let insts = vec![save(), Inst::new(Kind::Op("DEF"), vec![Operand::Def(Reg::Phys(reg::E)), Operand::Imm(0)]), load(), tail];
+        f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+        f
+    };
+    let mut f = body(Inst::new(Kind::Op("USE"), vec![Operand::Use(Reg::Phys(reg::B))]));
+    assert!(slots_are_a_stack(&mut f, &Assignment(Vec::new())));
+    let insts = &f.blocks[0].insts;
+    assert_eq!(insts[0].kind, Kind::Op("PUSHP"));
+    assert_eq!(insts[2].kind, Kind::Op("POPP"));
+    assert_eq!(insts[3].kind, Kind::Copy);
+    assert_eq!(insts[3].operands, [Operand::Def(Reg::Phys(reg::B)), Operand::Use(Reg::Phys(reg::C))]);
+    // `c` live after the reload: the pop would overwrite it
+    let mut live = body(Inst::new(Kind::Op("USE"), vec![Operand::Use(Reg::Phys(reg::C))]));
+    assert!(!slots_are_a_stack(&mut live, &Assignment(Vec::new())));
+    assert_eq!(live.blocks[0].insts[0].kind, Kind::Op("SPILL8"));
+}
+
+/// Two stores from different halves reach one load: no pop can bring back both.
+#[test]
+fn a_byte_slot_stored_from_both_halves_stays_in_the_frame() {
+    let mut f = MFunction::new("f");
+    let insts = vec![
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::C))]),
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::B))]),
+        Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Phys(reg::B)), Operand::Frame(0)]),
+    ];
+    f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+    assert!(!slots_are_a_stack(&mut f, &Assignment(Vec::new())));
+}
+
+/// overflow_builtins -O1 (+249 B, +11,934 T) when the slots that need a copy
+/// joined the others in the conflict count: they displaced slots that were
+/// pushes. They are tried after the others and kept only where they take none.
+#[test]
+fn a_slot_that_needs_a_copy_never_takes_another_slot_from_the_stack() {
+    let mut f = MFunction::new("f");
+    let insts = vec![
+        Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(0), Operand::Use(Reg::Phys(reg::DE))]),
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(1), Operand::Use(Reg::Phys(reg::C))]),
+        // slot 0 is read with slot 1 on top of it
+        Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(Reg::Phys(reg::HL)), Operand::Frame(0)]),
+        Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Phys(reg::B)), Operand::Frame(1)]),
+    ];
+    f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+    let report = stack_slot_report_by(&mut f, &Assignment(Vec::new()), false, false);
+    assert_eq!(report.pushed, [0]);
+    assert_eq!(f.blocks[0].insts[1].kind, Kind::Op("SPILL8"));
+}

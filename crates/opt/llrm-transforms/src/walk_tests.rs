@@ -3545,3 +3545,12 @@ fn a_trial_decided_by_bytes_keeps_the_copies_that_shrink_the_module() {
     assert!(!super::trial_accepted(false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400), "larger: refused whatever the units say");
     assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "no gain: refused");
 }
+
+/// Two Os trials that tie to the byte were both refused, whatever the copies save: a tied pair is
+/// decided by the clocks, and a tie that saves none stays as written. Bytes never lose to clocks.
+#[test]
+fn a_trial_whose_bytes_tie_is_decided_by_the_clocks_it_saves() {
+    assert!(super::trial_accepted(false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400), "tied, faster: kept");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "tied, no faster: refused");
+    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400), "larger by a byte: refused however fast");
+}

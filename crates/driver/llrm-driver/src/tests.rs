@@ -5194,3 +5194,60 @@ fn a_masked_byte_wanted_past_a_call_stays_a_movzx_at_o2() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("movzx"), "the extension was made a mask: {listing}");
 }
+
+/// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
+/// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
+/// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
+#[test]
+fn counted_loops_that_are_smaller_unrotated_stay_unrotated_at_os() {
+    let text = include_str!("tests_data/prefix_sums.ll");
+    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
+    let object = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "prefix_sums.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    assert!(object.len() < 310, "{} bytes: {}", object.len(), llrm_codegen::backend::masm::text(&built).unwrap());
+}
+
+/// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B
+/// longer in code (the padding between functions moved). The trial compares the bytes without
+/// padding, so the rotated loops stay.
+#[test]
+fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
+    let text = include_str!("tests_data/bubble_sort.ll");
+    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_x_bubble").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
+        &built,
+        "bubble_sort.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
+}
+
+/// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
+/// backend against it must too. `llrm-llc` ran the whole mid-end over any IR it was handed (a hand-made
+/// branch form of x_heapsort's child select compiled to the same 37,923 clk as the unedited IR), so
+/// "the pin's code on our IR" could not be isolated. With the switch a slot that mem2reg promotes stays
+/// a stack slot.
+#[test]
+fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+        define i32 @f(i32 %x) {\n  %p = alloca i32, align 4\n  store i32 %x, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  ret i32 %v\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-m32", "-O2", "-march=i486"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), text, "slot").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let optimized = listing(&[]);
+    let given = listing(&["--no-midend"]);
+    assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
+    assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
+}

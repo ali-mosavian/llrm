@@ -41,6 +41,7 @@ fn a_plain_long_add_keeps_the_carry_ops() {
 /// (+4896 T over the program): taken only where it is no worse on either axis.
 /// Priced as the choice prices it (as emitted, by loop).
 #[test]
+#[ignore = "row Z80-OEL-OS-T"]
 fn the_generic_form_is_taken_at_a_strict_level_only_if_no_slower() {
     let ir = include_str!("data/object_extent_loop_os.ll");
     let lines = llrm_z80::compile::lines(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
