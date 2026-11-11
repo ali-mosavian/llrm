@@ -9,7 +9,8 @@
 //! on by default).
 //!
 //! # How it works
-//! Machine form, virtual registers, before allocation. A `cbz`, `cbnz`,
+//! Machine form, virtual registers in SSA (before phi elimination, as the
+//! pin), before allocation. A `cbz`, `cbnz`,
 //! `tbz` or `tbnz` (the last two only on the sign bit) that ends a block tests
 //! a register defined once, earlier in the same block, by an add, subtract,
 //! `and` or `bic` (or their flag-setting forms). Nothing between the two may

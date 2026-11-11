@@ -237,6 +237,10 @@ fn lower_function(
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
         crate::lir_body::stages::observe(&machine)?;
     }
+    // The pin runs it in SSA, before PHIElimination: a loop counter's
+    // `sub` is its register's one definition there.
+    crate::condbrtuning::run(&mut machine);
+    dump("CondBrTuning", &machine);
     crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
@@ -256,8 +260,6 @@ fn lower_function(
                 llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
             ),
         );
-    crate::condbrtuning::run(&mut machine);
-    dump("CondBrTuning", &machine);
     crate::prepass::run(&mut machine, optsize);
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
