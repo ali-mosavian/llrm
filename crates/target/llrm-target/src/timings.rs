@@ -66,6 +66,9 @@ pub struct CpuTable {
     /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
     /// `MOV32mi`s.
     pub share_literal_stores: bool,
+    /// DEVIATE SD408 (owner greedy-os-causes, exit 2026-12-05): the source-order
+    /// scheduler puts the one user of a call's result next to that call.
+    pub consume_call_results_early: bool,
     /// At `-Os` a register set to 1 is `xor r,r; inc r` (three bytes, the pin's
     /// `MOV32r1`: `OptForSize, Not64BitMode`, [X86InstrCompiler.td#L335]).
     ///
@@ -229,6 +232,7 @@ impl Timings {
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "consume_call_results_early") => table.consume_call_results_early = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
                     ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),

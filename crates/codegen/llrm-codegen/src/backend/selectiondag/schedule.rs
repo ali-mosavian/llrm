@@ -50,6 +50,16 @@
 //! (select_of_constants -Os, 19672 B against 16916 without the multiply hook)
 //! is the pin's own choice. Owner: m68k. Exit 2026-11-23.
 //!
+//! DEVIATE SD408: under the source-order queue the pin leaves the one user of
+//! a call's result where the IR has it, after the next call, so the result is
+//! copied out or spilled across that call (`s = g(a) + g(b) + t`: recgcd -O1,
+//! `mov [esp], eax` after the first call). With the target's
+//! `consume_call_results_early` the unit goes next to its call
+//! (`consume_call_results_early`). Reason: the pin has no call-crossing rule
+//! in `src_ls_rr_sort`/`BURRSort` (its one call rule, `BURRSort`'s, is the
+//! opposite: keep call operands below a previous call). Owner:
+//! greedy-os-causes. Exit 2026-12-05.
+//!
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
 //! `Interferences`, `releaseInterferences`) and the call-frame resource are
@@ -109,6 +119,11 @@ pub trait SchedInfo {
     ) -> bool;
     /// Whether the target runs the pin's source-order queue by default.
     fn source_order(&self) -> bool {
+        false
+    }
+    /// DEVIATE SD408 on: under the source-order queue a unit that is the one
+    /// user of a call's result goes next to that call.
+    fn consume_call_results_early(&self) -> bool {
         false
     }
     /// Which of the pin's DAG schedulers the target gets:
@@ -283,6 +298,9 @@ struct SUnit {
     queue_id: u32,
     is_call: bool,
     is_call_op: bool,
+    /// DEVIATE SD408: the source-order key of a unit that goes right after the
+    /// call whose result it uses.
+    order_key: Option<u32>,
     is_schedule_low: bool,
     has_phys_reg_defs: bool,
     has_phys_reg_clobbers: bool,
@@ -310,6 +328,7 @@ impl SUnit {
             queue_id: 0,
             is_call: false,
             is_call_op: false,
+            order_key: None,
             is_schedule_low: false,
             has_phys_reg_defs: false,
             has_phys_reg_clobbers: false,
@@ -2032,6 +2051,9 @@ impl Queue {
         if preference(graph.info) == Preference::Burr {
             self.preschedule_nodes_with_multiple_uses(graph, topo);
         }
+        if preference(graph.info) == Preference::Source && graph.info.consume_call_results_early() {
+            Self::consume_call_results_early(graph);
+        }
         self.sethi_ullman = vec![0; graph.sus.len()];
         for su in 0..graph.sus.len() {
             self.calc_sethi_ullman(&graph.sus, su);
@@ -2196,7 +2218,66 @@ impl Queue {
         graph: &Graph<'_>,
         su: usize,
     ) -> u32 {
-        graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
+        if let Some(key) = graph.sus[su].order_key {
+            return key;
+        }
+        graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order.saturating_mul(2)
+    }
+
+    /// DEVIATE SD408: a unit that is the only user of a call's result goes
+    /// right after that call, not after the next one, where the source order
+    /// has it: the result sits in a register the next call clobbers, so it is
+    /// copied out or spilled across that call. A unit moves only when every
+    /// operand it kills is known to die here (a value this block makes with it
+    /// as its one user; a live-in may be wanted later) and it leaves no more
+    /// values live than it kills. The source-order key becomes the call's, so
+    /// the unit is next to it; only the queue's order changes, no edge.
+    fn consume_call_results_early(graph: &mut Graph<'_>) {
+        let base = |graph: &Graph<'_>, su: usize| graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order;
+        let calls: Vec<u32> =
+            (0..graph.sus.len()).filter(|&su| graph.sus[su].is_call).map(|su| base(graph, su)).collect();
+        for su in 0..graph.sus.len() {
+            let unit = &graph.sus[su];
+            let plain = unit.nodes.len() == 1
+                && !unit.is_call
+                && !unit.is_call_op
+                && !unit.is_schedule_low
+                && !unit.preds.iter().chain(&unit.succs).any(|dep| dep.is_ctrl())
+                && !matches!(
+                    graph.opcode(unit.node()),
+                    ISD::CopyToReg | ISD::CopyFromReg | ISD::TokenFactor
+                )
+                && !graph.machine(unit.node()).is_some_and(|op| graph.info.is_call(op));
+            if !plain || unit.preds.is_empty() {
+                continue;
+            }
+            // A block live-in (`CopyFromReg` of a virtual register) is ready at
+            // the top: its order is its user's.
+            let live_in = |graph: &Graph<'_>, o: usize| {
+                graph.sus[o].nodes.len() == 1
+                    && graph.sus[o].preds.is_empty()
+                    && graph.opcode(graph.sus[o].node()) == ISD::CopyFromReg
+            };
+            let operands: Vec<usize> = unit.preds.iter().map(|dep| dep.su).collect();
+            let latest = operands.iter().filter(|&&o| !live_in(graph, o)).map(|&o| base(graph, o)).max().unwrap_or(0);
+            let mine = base(graph, su);
+            if mine == 0 || !calls.iter().any(|&call| call > latest && call < mine) {
+                continue;
+            }
+            let dies_here = |graph: &Graph<'_>, o: usize| {
+                let mut users: Vec<usize> =
+                    graph.sus[o].succs.iter().filter(|dep| !dep.is_ctrl()).map(|dep| dep.su).collect();
+                users.sort_unstable();
+                users.dedup();
+                users == [su] && !live_in(graph, o)
+            };
+            let call_result = operands.iter().any(|&o| graph.sus[o].is_call && dies_here(graph, o));
+            let dying = operands.iter().filter(|&&o| dies_here(graph, o)).count();
+            let results = usize::from(graph.sus[su].succs.iter().any(|dep| !dep.is_ctrl()));
+            if call_result && dying >= results {
+                graph.sus[su].order_key = Some(latest.saturating_mul(2) + 1);
+            }
+        }
     }
 
     /// `bu_ls_rr_sort`, `src_ls_rr_sort` or `ilp_ls_rr_sort`: whether `right`

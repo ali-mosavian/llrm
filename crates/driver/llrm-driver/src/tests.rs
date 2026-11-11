@@ -5264,3 +5264,30 @@ fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
     assert!(!optimized.contains("[esp"), "the mid-end keeps the slot: {optimized}");
     assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
 }
+
+/// `s = g(a) + g(b) + t` in a loop: the source-order queue left the sum of
+/// the first call's result and `t` after the second call, so the result was
+/// spilled across it (recgcd -O1: `mov [esp], eax` ... `add esi, [esp]`, +2 B
+/// over main). The sum goes next to its call (DEVIATE SD408).
+#[test]
+fn m32_a_call_result_is_used_before_the_next_call() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+        declare i32 @g(i32, i32)\n\
+        define i32 @f(i32 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n  %i = phi i32 [ 1, %entry ], [ %i1, %loop ]\n  %t = phi i32 [ 0, %entry ], [ %t2, %loop ]\n  \
+        %a = call i32 @g(i32 %i, i32 7)\n  %b = call i32 @g(i32 %i, i32 9)\n  \
+        %s = add i32 %a, %t\n  %t2 = add i32 %s, %b\n  %i1 = add i32 %i, 1\n  \
+        %c = icmp eq i32 %i, %n\n  br i1 %c, label %done, label %loop\n\
+        done:\n  ret i32 %t2\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O1"]), text, "hoist").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let calls: Vec<usize> = (0..lines.len()).filter(|&at| lines[at].starts_with("call ")).collect();
+    assert_eq!(calls.len(), 2, "{listing}");
+    let between = &lines[calls[0] + 1..calls[1]];
+    assert!(
+        between.iter().any(|line| (line.starts_with("add ") || line.starts_with("lea ")) && line.contains("eax")),
+        "the first call's result is only copied out, not used, before the second call: {listing}"
+    );
+}

@@ -64,6 +64,8 @@ use super::x86_lowering::X86Lowering;
 struct Info {
     source_order: bool,
     m64: bool,
+    /// DEVIATE SD408, from the CPU's table.
+    call_results_early: bool,
 }
 
 impl SchedInfo for Info {
@@ -90,6 +92,10 @@ impl SchedInfo for Info {
 
     fn source_order(&self) -> bool {
         self.source_order
+    }
+
+    fn consume_call_results_early(&self) -> bool {
+        self.call_results_early
     }
 
     fn unfold_memory_operand(
@@ -1510,7 +1516,7 @@ fn selected_in(
         let done = if fast_ids.contains(&block.0) {
             llrm_codegen::backend::selectiondag::dag_select::select_block_fast(
                 &mut built.dag,
-                &Info { source_order: true, m64 },
+                &Info { source_order: true, m64, call_results_early: cpu.consume_call_results_early },
                 &ctx,
                 &mut state,
                 block_at[&block.0],
@@ -1571,7 +1577,7 @@ fn selected_in(
                 },
                 &selector,
                 &mut hooks,
-                &Info { source_order: true, m64 },
+                &Info { source_order: true, m64, call_results_early: cpu.consume_call_results_early },
                 &ctx,
                 &mut state,
                 block_at[&block.0],
