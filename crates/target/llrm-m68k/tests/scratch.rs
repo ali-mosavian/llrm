@@ -103,3 +103,22 @@ fn cycles_leaves_no_scratch_directory_when_it_panics() {
     assert!(!stderr.is_empty(), "the run stopped silently:\n{stderr}");
     assert_eq!(left, Vec::<String>::new(), "left in $TMPDIR");
 }
+
+/// Symptom: `MATRIX_CPUS=68010,68030` named columns the table did not have and
+/// the run printed nothing and exited 0, so a sweep of two CPUs read as "no
+/// worse cells".
+#[test]
+fn matrix_stops_on_a_cpu_it_has_no_column_for() {
+    let (stderr, _) = run_example(
+        "matrix",
+        &["kernels"],
+        &[
+            ("LLRM_PIN_CLANG", "/nonexistent"),
+            ("LLRM_CC", "/nonexistent"),
+            ("LLVM_M68K", "/nonexistent"),
+            ("GCC_M68K", "/nonexistent"),
+            ("MATRIX_CPUS", "68099"),
+        ],
+    );
+    assert!(stderr.contains("MATRIX_CPUS: no column"), "the run did not name the bad column:\n{stderr}");
+}

@@ -264,3 +264,25 @@ fn an_or_recurrence_with_an_invariant_step_is_or_of_start_and_step() {
     assert_eq!(got.matches("phi").count(), 1, "only the counter keeps a phi: {got}");
     assert!(got.contains("or i8 %b0, %c"), "{got}");
 }
+
+/// `p = phi [a, r]; q = phi [b, r]; r = p & q` in one block: `foldBinOpIntoSelectOrPhi` (:2784) makes `r` a phi of the `and` of each
+/// incoming pair, which `r & r` then folds (`opt` agrees: `a & b` in the entry, no `and` in the loop). `visitAnd` skipped that call: the pair
+/// stayed, and `b = c & b; c = b` under a loop (`known_loads_walks`, `i49`) cost +128 B at wasm32 -O3 (432 B to the pin's 289 B).
+#[test]
+fn an_and_of_two_phis_of_one_block_fed_by_it_folds_into_one_phi() {
+    let text = "define i8 @f(i8 %a, i8 %b, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i.next, %loop ]\n  \
+                %p = phi i8 [ %a, %entry ], [ %r, %loop ]\n  %q = phi i8 [ %b, %entry ], [ %r, %loop ]\n  %r = and i8 %p, %q\n  \
+                %i.next = add i8 %i, 1\n  %t = icmp ult i8 %i.next, %n\n  br i1 %t, label %loop, label %exit\nexit:\n  ret i8 %r\n}\n";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let only_and = |c: &mut Combiner, inst: InstId| match c.function.instruction(inst).opcode {
+        Opcode::Binary(BinaryOp::And) => visit_and(c, inst),
+        _ => Visit::None,
+    };
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, only_and);
+    let got = printed(&module);
+    assert!(got.contains("and i8 %a, %b"), "the `and` of the start values is in the entry: {got}");
+    assert_eq!(got.matches(" and ").count(), 1, "no `and` stays in the loop: {got}");
+}

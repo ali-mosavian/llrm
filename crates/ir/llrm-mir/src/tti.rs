@@ -2192,6 +2192,19 @@ pub trait Tti {
         0
     }
 
+    /// Whether the loop as written keeps the bound of its exit test live next
+    /// to the counter. LSR rates an exit test against a variable bound as one
+    /// add-recurrence, `{-bound,+,1}` compared with zero (`getUse`, ICmpZero:
+    /// `N - other`), so the baseline holds one register where the written
+    /// loop holds two (`i` and `bound`) and any rewrite that keeps the bound
+    /// in a register looks one register dearer; with `should_drop_lsr_
+    /// solution_if_less_profitable` the tie then drops the rewrite. The rating
+    /// of the baseline adds a register for it. DEVIATE LU20 (`lsr_use.rs`);
+    /// false where a register is not the scarce thing.
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        false
+    }
+
     /// Multiplies the loop as written does to form an induction variable that
     /// steps by `step` (`bits` wide) and is not a phi of its own: `i * 54`
     /// where the loop only has `i`. LSR's baseline sees one add-recurrence
