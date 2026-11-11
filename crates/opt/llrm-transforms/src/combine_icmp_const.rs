@@ -620,6 +620,12 @@ fn fold_icmp_bin_op_equality_with_constant(
             // Replace ((add A, B) != 0) with (A != -B) if A or B is efficiently
             // invertible, or if the add has just this one use.
             if value == 0 {
+                if let Some(neg) = crate::combine_muldivrem::dyn_cast_neg_val(c, y) {
+                    return Some(new_icmp(c, inst, pred, x, neg));
+                }
+                if let Some(neg) = crate::combine_muldivrem::dyn_cast_neg_val(c, x) {
+                    return Some(new_icmp(c, inst, pred, neg, y));
+                }
                 if has_one_use(c, bo) {
                     // (add nuw A, B) != 0 -> (or A, B) != 0
                     if bo_inst.contains(Flags::NUW) {
