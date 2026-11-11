@@ -1,7 +1,7 @@
 """The files a bench program opens, and the emulation of the file API stub.s holds (bench_io_shim.h, grep's `input_read`).
 
 A program's `// data:` line names them as tools/m68k_exec_sweep.py reads it: `@signal` (SIGNAL, generated), `@dickens` (standard input,
-the first `ci_bytes` of bench.toml: the cut the default bench times, with `NAME.ci.out` as its answer), else a path relative to the source.
+the first `ci_bytes` of bench.toml: the cut the default bench times, with `NAME.ci.out` as its answer), else a path relative to the source (or, for a kernel `x_NAME`, to bench/NAME).
 """
 import hashlib
 import re
@@ -29,6 +29,8 @@ def inputs(source: Path) -> tuple[dict[str, bytes], bytes | None]:
         cut = tomllib.loads((source.parent / "bench.toml").read_text())["ci_bytes"]
         return {}, corpus.path("dickens").read_bytes()[:cut]
     target = (source.parent / what).resolve()
+    if not target.is_file():   # a kernel x_NAME is a copy of bench/NAME: its data stayed there
+        target = (REPO / "bench" / source.stem.removeprefix("x_") / what).resolve()
     return {target.name.upper(): target.read_bytes()}, None
 
 
