@@ -1849,6 +1849,10 @@ fn try_to_unroll_loop(
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            // The pin hands `UnrollLoop` the one `ScalarEvolution` the count
+            // was worked out in: an earlier loop's remainder guard, read while
+            // counting this loop, is a value its expansion reuses.
+            session.adopt(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             let mut env = crate::loopunrollruntime::Env {
                 context: &mut *run.context,
                 layout: run.layout,
@@ -1866,6 +1870,7 @@ fn try_to_unroll_loop(
                 use_epilog,
             );
             let Some(epilog) = done else {
+                run.scev = session.into_scev();
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
             };
@@ -2533,14 +2538,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
-            // `LoopUnrollPass` does); the loops the peeled copy holds are
-            // new siblings, visited next.
-            let mut fresh: Vec<BlockId> =
-                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
-            fresh.reverse();
-            for one in fresh {
-                work.push_front(one);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled; the
+            // loops the peeled copy holds are new siblings, visited next
+            // (`addSiblingLoops`). `LoopUnrollPass` walks the loops it began
+            // with: it adds none.
+            if !run.options.target_unrolling {
+                let mut fresh: Vec<BlockId> =
+                    siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+                fresh.reverse();
+                for one in fresh {
+                    work.push_front(one);
+                }
             }
             continue;
         }
@@ -2612,8 +2620,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for &one in &fresh {
-            work.push_front(one);
+        if !run.options.target_unrolling {
+            for &one in &fresh {
+                work.push_front(one);
+            }
         }
         revisited.extend(fresh);
     }

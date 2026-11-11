@@ -440,7 +440,7 @@ def render_model(model, wanted, sub, wpr, wl, ra, kinds, pools, pool_names):
     )
 
 
-def render(models, cpu_models, instrs, sub, numbers, unsupported=None, regen="tools/dagisel/regen-target.sh"):
+def render(models, cpu_models, instrs, sub, numbers, unsupported=None, regen="tools/dagisel/regen-target.sh", dynamic_only=()):
     """The text of `sched.rs`: `numbers` {opcode name: opcode number}, `cpu_models` {cpu: model name},
     `unsupported` {model name: opcodes whose writes the model marks Unsupported}."""
     unsupported = unsupported or {}
@@ -477,6 +477,13 @@ def render(models, cpu_models, instrs, sub, numbers, unsupported=None, regen="to
     for name in sorted(numbers, key=numbers.get):
         out.append(f"    ({numbers[name]}, {instrs[name].sched_class}),\n")
     out.append("];\n\n")
+    out.append("/// Opcodes only a pattern of a live type or under a dynamic atom (`[types] live`, `[dynamic]` in the record) emits: a target that has the atom\n")
+    out.append("/// false (the vector flag off) leaves them unmodeled, as when the pattern was pruned.\n")
+    out.append(f"static DYNAMIC_ONLY: [u16; {len(dynamic_only)}] = [\n")
+    for number in dynamic_only:
+        out.append(f"    {number},\n")
+    out.append("];\n\n")
+    out.append("pub fn dynamic_only(opcode: u16) -> bool {\n    DYNAMIC_ONLY.binary_search(&opcode).is_ok()\n}\n\n")
     pools = Pools()
     pool_names = ("WRITE_PROC_RES", "WRITE_LATENCY", "READ_ADVANCE", "VARIANT_ARMS", "CLASS_ROWS")
     rendered = []
@@ -538,6 +545,7 @@ def main():
     parser = argparse.ArgumentParser()
     for flag in ("subtarget", "instrinfo", "json", "mcschedule", "dir", "out"):
         parser.add_argument(f"--{flag}", required=True)
+    parser.add_argument("--baseline", help="a generation with every dynamic atom false and no live types: opcodes it lacks are DYNAMIC_ONLY")
     parser.add_argument("cpus", nargs="+")
     args = parser.parse_args()
     sub = Path(args.subtarget).read_text()
@@ -548,7 +556,11 @@ def main():
     instrs = parse_instr_classes(Path(args.instrinfo).read_text())
     numbers = opcode_numbers(Path(args.dir), instrs)
     unsupported = unsupported_opcodes(data, set(cpu_models.values()), numbers)
-    Path(args.out).write_text(render(models, cpu_models, instrs, sub, numbers, unsupported))
+    dynamic_only = []
+    if args.baseline:
+        base = {int(m.group(1)) for m in re.finditer(r"^\s+\((\d+), InstrDesc ", (Path(args.baseline) / "instrinfo.rs").read_text(), re.M)}
+        dynamic_only = sorted(n for n in numbers.values() if n not in base)
+    Path(args.out).write_text(render(models, cpu_models, instrs, sub, numbers, unsupported, dynamic_only=dynamic_only))
 
 
 if __name__ == "__main__":

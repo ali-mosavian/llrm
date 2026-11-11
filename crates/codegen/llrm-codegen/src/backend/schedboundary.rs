@@ -122,6 +122,10 @@ pub struct Unit {
     pub is_unbuffered: bool,
     /// Uses a resource whose buffer size is 0 (`SU->hasReservedResource`).
     pub has_reserved_resource: bool,
+    /// `MachineInstr::isCopy()` with a physical operand: whether its
+    /// destination and its source are physical registers (`biasPhysReg`).
+    /// `None` for anything but such a copy.
+    pub copy_physical: Option<(bool, bool)>,
     pub depth: u32,
     pub height: u32,
     pub top_ready_cycle: u32,

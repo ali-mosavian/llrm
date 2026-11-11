@@ -9,6 +9,8 @@ pub struct Cpu {
     atoms: BTreeMap<String, AtomRule>,
     dynamic: BTreeMap<String, String>,
     dead_type_prefixes: Vec<String>,
+    /// Types a dead prefix would drop that selection does produce (`[types] live`).
+    live_types: Vec<String>,
     node_predicates: BTreeMap<String, String>,
 }
 
@@ -70,6 +72,14 @@ impl Cpu {
             .flatten()
             .filter_map(|p| p.as_str().map(str::to_string))
             .collect();
+        let live_types = doc
+            .get("types")
+            .and_then(|t| t.get("live"))
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect();
         let node_predicates = doc
             .get("node_predicate")
             .and_then(|d| d.as_table())
@@ -77,7 +87,7 @@ impl Cpu {
             .flatten()
             .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
             .collect();
-        Ok(Cpu { features, atoms, dynamic, dead_type_prefixes, node_predicates })
+        Ok(Cpu { features, atoms, dynamic, dead_type_prefixes, live_types, node_predicates })
     }
 
     /// The verdict of one atom; an atom nothing states is an error, not a
@@ -129,6 +139,9 @@ impl Cpu {
         &self,
         mvt_name: &str,
     ) -> bool {
+        if self.live_types.iter().any(|live| live == mvt_name) {
+            return false;
+        }
         self.dead_type_prefixes.iter().any(|p| {
             mvt_name.strip_prefix(p.as_str()).and_then(|rest| rest.bytes().next()).is_some_and(|b| b.is_ascii_digit())
         })
@@ -156,6 +169,15 @@ mod tests {
         let cpu = Cpu::load(TEXT, "i486").unwrap();
         assert!(cpu.dead_type("v4i32") && cpu.dead_type("nxv2f32"));
         assert!(!cpu.dead_type("i32") && !cpu.dead_type("f80"));
+    }
+
+    /// A `[types] live` entry kept its dead `v` prefix: the arm64 vector loads and stores had no
+    /// pattern ("CannotSelect Store" on a `<8 x i16>` copy).
+    #[test]
+    fn a_live_type_overrides_a_dead_prefix() {
+        let text = TEXT.replace("[types]", "[types]\nlive = [\"v8i16\"]");
+        let cpu = Cpu::load(&text, "i486").unwrap();
+        assert!(!cpu.dead_type("v8i16") && cpu.dead_type("v4i32"));
     }
 
     #[test]

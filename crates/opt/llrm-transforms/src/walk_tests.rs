@@ -3299,6 +3299,51 @@ fn test_free_intrinsics_are_priced_only_where_a_target_asks() {
     assert_eq!(priced(false) - priced(true), 5 + 2 * 2, "the marker call and its two arguments");
 }
 
+/// `llvm.smul.fix.sat` was priced as a call (12 B) at every CPU while it expands to a widening multiply, shifts, compares
+/// and selects: fixed_point's objects are 2.9 kB at the 68000 and 1.6 kB at the 68020 against an estimate of 1.6 kB at
+/// both. A target that opts in prices it on its own table, the product from `multiply_widening`.
+#[test]
+fn test_fixed_point_intrinsics_are_priced_as_their_expansion_where_a_target_asks() {
+    let module = parsed(
+        "declare i32 @llvm.smul.fix.sat.i32(i32, i32, i32 immarg)\ndefine i32 @f(i32 %a, i32 %b) {\n  %r = call i32 @llvm.smul.fix.sat.i32(i32 %a, i32 %b, i32 8)\n  ret i32 %r\n}\n",
+    );
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap().2;
+    let layout = llrm_mir::datalayout::DataLayout::parse("E-m:e-p:32:16:32-i32:16:32-n8:16:32").unwrap();
+    let priced = |expanded_intrinsics, multiply_widening| {
+        let costs = llrm_mir::target::OperationCosts {
+            call: 5,
+            argument: 2,
+            add: 2,
+            shift: 2,
+            extend: 2,
+            branch: 2,
+            r#move: 2,
+            multiply: 14,
+            multiply_widening,
+            expanded_intrinsics,
+            ..Default::default()
+        };
+        crate::walk::function_bytes(&module, &layout, &costs, function)
+    };
+    let as_a_call = priced(false, 0);
+    assert!(priced(true, 8) > as_a_call, "the expansion is more than a call and its three arguments");
+    assert_eq!(priced(true, 160) - priced(true, 8), 160 - 8, "the product is the table's `multiply_widening`");
+}
+
+/// A product of two values extended from the word is the CPU's widening multiply, not a double-word product: the walker
+/// prices `mul i64 (sext i32), (sext i32)` at `multiply_widening` and a plain `mul i64` at `multiply_wide`.
+#[test]
+fn test_a_product_of_two_extended_words_is_the_widening_product() {
+    let module = parsed(
+        "define i64 @f(i32 %a, i32 %b) {\n  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %r = mul i64 %x, %y\n  ret i64 %r\n}\ndefine i64 @g(i64 %a, i64 %b) {\n  %r = mul i64 %a, %b\n  ret i64 %r\n}\n",
+    );
+    let by_name = |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
+    let layout = llrm_mir::datalayout::DataLayout::parse("E-m:e-p:32:16:32-i32:16:32-n8:16:32").unwrap();
+    let costs = llrm_mir::target::OperationCosts { extend: 2, multiply_wide: 100, multiply_widening: 10, ..Default::default() };
+    let (widening, wide) = (crate::walk::function_bytes(&module, &layout, &costs, by_name("f")), crate::walk::function_bytes(&module, &layout, &costs, by_name("g")));
+    assert_eq!(widening - wide, 2 * 2 + 10 - 100, "two extensions and the widening product, against the wide product");
+}
+
 /// jpeg_fixed Nib at m16 -O2: `next_byte` is a few hot instructions and a long
 /// cold refill block; inlined at 36 loop sites (#7817) the code went 4305 ->
 /// 9398 B and the clocks rose 561k, for the call it saved. The cold block's

@@ -398,7 +398,10 @@ pub fn assembled_by(
                     // A global of this module is called by the name it is
                     // defined or declared as.
                     let linked = match module.named(callee) {
-                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        Some(id) => names
+                            .get(&(globals::space(module, id), i64::from(id.0)))
+                            .cloned()
+                            .ok_or_else(|| format!("{callee}: a call to an intrinsic this target does not lower"))?,
                         None => abi.linked(callee),
                     };
                     referenced.insert(linked.clone(), far.contains(at));
@@ -1292,6 +1295,7 @@ fn staged(
         slot_scratch: entry
             .and_then(|one| target.arch.frame_slot_scratch_of(one))
             .or(base.slot_scratch)
+            .filter(|_| target.cpu.pops_frame_slot())
             .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
         ..base
     };

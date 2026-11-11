@@ -25,12 +25,15 @@ fn test_m64_branches_to_a_tail_call_jump_to_the_callee() {
     assert!(!text.contains("jmp other"), "{text}");
 }
 
-/// The block keeps its epilogue (`pop ecx`): the pin folds only a block that
-/// starts with the tail call.
+/// The block keeps its epilogue (`add esp, 4`): the pin folds only a block
+/// that starts with the tail call. The fixture has a frame slot; without one
+/// (as #8976 left the first fixture) there is no epilogue to keep.
 #[test]
 fn test_m32_block_with_an_epilogue_before_the_tail_call_is_not_folded() {
     let text = compiled("cond_tail_call_m32.ll");
-    assert!(text.contains("pop ecx\n    jmp other_"), "{text}");
+    assert!(text.contains("sub esp, 4"), "premise: the function has a frame\n{text}");
+    assert!(text.contains("add esp, 4\n    jmp other_"), "{text}");
+    assert!(!text.contains("je other_") && !text.contains("jb other_"), "{text}");
 }
 
 /// 16-bit code is outside the fold (a `jcc` to an external near symbol has no
