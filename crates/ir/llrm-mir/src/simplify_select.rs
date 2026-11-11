@@ -199,6 +199,124 @@ fn is_abs_of(
     pattern::intrinsic_call(&tracking, value, "llvm.abs").is_some_and(|(_, args)| args.first() == Some(&x))
 }
 
+/// What the logical-operation identities of a select settle.
+enum Settled {
+    Value(Operand),
+    True,
+    False,
+}
+
+/// The other operand of `pair` when `x` is one of its two
+/// (`m_c_LogicalOr(m_Specific(x), m_Value())`).
+fn other_than(
+    pair: Option<(Operand, Operand)>,
+    x: Operand,
+) -> Option<Operand> {
+    let (a, b) = pair?;
+    if a == x {
+        Some(b)
+    } else if b == x {
+        Some(a)
+    } else {
+        None
+    }
+}
+
+/// `pair` is `{x, y}` in either order.
+fn is_pair(
+    pair: Option<(Operand, Operand)>,
+    x: Operand,
+    y: Operand,
+) -> bool {
+    pair.is_some_and(|(a, b)| (a == x && b == y) || (a == y && b == x))
+}
+
+/// `simplifySelectInst`'s identities of a select whose condition has the arms'
+/// type, `i1`
+/// ([:5130](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L5130)):
+/// every shape of `select` that is a logical and or or of two values that
+/// reduces to one of them or a constant.
+pub(super) fn simplify_select_of_bools(
+    q: &mut Query,
+    cond: Operand,
+    true_val: Operand,
+    false_val: Operand,
+) -> Option<Operand> {
+    let ty = q.ty(cond);
+    let (true_is_one, false_is_zero, true_is_zero) = (q.is_one(true_val), q.is_zero(false_val), q.is_zero(true_val));
+    let settled = {
+        let t = q.tracking();
+        let and_of = |v: Operand| pattern::logical_and(&t, v);
+        let or_of = |v: Operand| pattern::logical_or(&t, v);
+        // `m_Not(m_c_LogicalOr(m_Specific(x), m_Value()))` (and its and twin).
+        let not_or_with = |v: Operand, x: Operand| pattern::not(&t, v).and_then(|inner| other_than(or_of(inner), x));
+        let not_and_with = |v: Operand, x: Operand| pattern::not(&t, v).and_then(|inner| other_than(and_of(inner), x));
+        // `m_c_LogicalOr(m_Value(x), m_Not(m_Value(y)))`: each (x, y) it reads
+        // as.
+        let or_with_not = |v: Operand| {
+            let mut found = Vec::new();
+            if let Some((a, b)) = or_of(v) {
+                for (x, negated) in [(a, b), (b, a)] {
+                    if let Some(y) = pattern::not(&t, negated) {
+                        found.push((x, y));
+                    }
+                }
+            }
+            found
+        };
+        if true_is_one && false_is_zero {
+            Some(Settled::Value(cond))
+        } else if is_pair(and_of(cond), true_val, false_val) {
+            // (X && Y) ? X : Y --> Y (commuted 2 ways)
+            Some(Settled::Value(false_val))
+        } else if is_pair(or_of(cond), true_val, false_val) {
+            // (X || Y) ? X : Y --> X (commuted 2 ways)
+            Some(Settled::Value(true_val))
+        } else if true_is_zero && other_than(or_of(cond), false_val).is_some() {
+            // (X || Y) ? false : X --> false (commuted 2 ways)
+            Some(Settled::False)
+        } else if false_is_zero {
+            // The patterns that end in a logical and.
+            if not_or_with(cond, true_val).is_some() || not_or_with(true_val, cond).is_some() {
+                // !(X || Y) && X, X && !(X || Y) --> false
+                Some(Settled::False)
+            } else if other_than(or_of(cond), true_val).is_some() {
+                // (X || Y) && Y --> Y (commuted 2 ways)
+                Some(Settled::Value(true_val))
+            } else if other_than(or_of(true_val), cond).is_some() {
+                // Y && (X || Y) --> Y (commuted 2 ways)
+                Some(Settled::Value(cond))
+            } else {
+                // (X || Y) && (X || !Y) --> X (commuted 8 ways)
+                let by_cond = or_with_not(cond).into_iter().find(|&(x, y)| is_pair(or_of(true_val), x, y));
+                let by_true = or_with_not(true_val).into_iter().find(|&(x, y)| is_pair(or_of(cond), x, y));
+                by_cond.or(by_true).map(|(x, _)| Settled::Value(x))
+            }
+        } else if true_is_one {
+            // The patterns that end in a logical or.
+            if not_and_with(cond, false_val).is_some() || not_and_with(false_val, cond).is_some() {
+                // !(X && Y) || X, X || !(X && Y) --> true
+                Some(Settled::True)
+            } else if other_than(and_of(cond), false_val).is_some() {
+                // (X && Y) || Y --> Y (commuted 2 ways)
+                Some(Settled::Value(false_val))
+            } else if other_than(and_of(false_val), cond).is_some() {
+                // Y || (X && Y) --> Y (commuted 2 ways)
+                Some(Settled::Value(cond))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    Some(match settled? {
+        Settled::Value(v) => v,
+        Settled::True => q.int(ty, 1),
+        Settled::False => q.null(ty),
+    })
+}
+
 /// `simplifySelectWithICmpCond`.
 pub(super) fn simplify_select_with_icmp_cond(
     q: &mut Query,
