@@ -1827,6 +1827,21 @@ fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
     }
 }
 
+/// The pair a divide routine leaves (quotient in `de`, remainder in `hl`) is the registers of a long result, so
+/// its low word, the first part, is the one in `hl`. The lowering took the quotient as the first part: with a long
+/// result low in `hl`, div_constants_short returned 17761 where 0 was expected.
+#[test]
+fn a_word_divide_and_remainder_call_hands_back_the_quotient_from_de() {
+    for (op, rem, call) in [("udiv", "urem", "call __udivhi3"), ("sdiv", "srem", "call __divremhi4")] {
+        let ir = format!(
+            "@g = global i16 0\ndefine i16 @f(i16 %a, i16 %b) {{\n  %q = {op} i16 %a, %b\n  %r = {rem} i16 %a, %b\n  store i16 %r, ptr @g\n  ret i16 %q\n}}"
+        );
+        let out = compiled(&ir, "f");
+        let after = out.split(call).nth(1).unwrap_or_else(|| panic!("{call}: {out}"));
+        assert!(!after.contains("ex de, hl") && !after.contains("ld e, l"), "{op}: the quotient moved out of de: {out}");
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
@@ -2353,6 +2368,7 @@ fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
     let ir = include_str!("kernels/ir/long_compare_folded_borrow.ll");
     for level in [Level::O1, Level::O2, Level::Os] {
         let out = text(ir, "sign_branch", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(out.contains("bit 7, d"), "{level:?}: {out}");
+        // the register is the convention's business (the high word of `a` is on the stack, loaded into bc)
+        assert!(out.contains("bit 7, ") && !out.contains("sbc"), "{level:?}: {out}");
     }
 }
