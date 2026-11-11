@@ -1948,6 +1948,12 @@ impl Builder<'_> {
         {
             return Err(Refused("a calling convention the target's hook does not place"));
         }
+        if let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+            && self.calling().is_some_and(|calling| !calling.calls_unlowered_intrinsic(&name))
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
+        }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
             && direct
@@ -2407,6 +2413,11 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
+        // This call's own state, taken before the byval copies below: a copy that is a library call is itself a
+        // `lower_call_with` and would otherwise take it (a variadic call's unnamed-argument state sent the
+        // `memcpy` count and source to the stack, and left the call it was for a fixed one).
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2438,8 +2449,6 @@ impl Builder<'_> {
             *value = copy_to;
         }
         let mut outs = Vec::new();
-        let variadic = std::mem::take(&mut self.variadic_call);
-        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
@@ -4045,7 +4054,10 @@ impl Builder<'_> {
         inst: llrm_mir::module::InstId,
         pointer: Operand,
     ) -> MemInfo {
-        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+        // A global is recorded too: the pin's pointer info always carries `V`,
+        // and alias analysis needs it to compare a global with a pointer
+        // computed from another.
+        if !self.dag.config().use_aa || !matches!(info.base, MemBase::Unknown | MemBase::Global(_)) {
             return info;
         }
         let location = super::dag::MemLocation {

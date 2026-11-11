@@ -1,5 +1,5 @@
-reason = "store reference clocks and the stamp (m16 corpus, one run)"
-blessed = "2026-11-08"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
 corpus = "eb383f0f0548ff64ed7bdba1160a0d4d"
 
 [bcc.O1]
@@ -7,6 +7,7 @@ instructions = 59110805
 memory_operands = 22602916
 clocks = 293949463
 code_bytes = 1224
+helper_bytes = 0
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 820.7552
@@ -16,6 +17,7 @@ instructions = 38476628
 memory_operands = 21472587
 clocks = 240986211
 code_bytes = 1190
+helper_bytes = 0
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 545.3988
@@ -25,18 +27,21 @@ instructions = 59110805
 memory_operands = 22602916
 clocks = 293949463
 code_bytes = 1224
+helper_bytes = 0
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 820.6329
 
 [tcpp.O2]
-code_bytes = 1597
+code_bytes = 1826
+helper_bytes = 229
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 9900.6248
 
 [tcpp.Os]
-code_bytes = 1579
+code_bytes = 1808
+helper_bytes = 229
 data_bytes = 15
 bss_bytes = 5122
 kernel_ms = 9900.6027

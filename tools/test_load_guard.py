@@ -388,6 +388,24 @@ class TermInsideTheQueue(Env, unittest.TestCase):
         return True
 
 
+class ScanLines(unittest.TestCase):
+    def awk(self, text):
+        """Runs the awk program of `scan_holders` over find's `%l %p` lines."""
+        source = open(GUARD).read()
+        program = re.search(r"awk '(NF == 2 \{.*?\})'", source) or re.search(r"awk '(\{ split.*?\})'", source)
+        return subprocess.run(["awk", program.group(1)], input=text, capture_output=True, text=True).stdout
+
+    def test_a_link_that_vanished_before_find_printed_it_gives_no_line(self):
+        """An empty %l left `/proc/5/fd/3` as $1 and no $2: awk printed one space, `read` gave an empty slot and bash printed `slot_pids: bad array subscript` twice."""
+        self.assertEqual(self.awk(" /proc/5/fd/3\n"), "")
+
+    def test_a_slot_file_without_a_number_gives_no_line(self):
+        self.assertEqual(self.awk("/x/slots/slot. /proc/5/fd/3\n"), "")
+
+    def test_a_held_slot_gives_its_number_and_the_holder(self):
+        self.assertEqual(self.awk("/x/slots/slot.3 /proc/5/fd/3\n"), "3 5\n")
+
+
 class Cancel(Env, unittest.TestCase):
     """--cancel JOBID kills exactly the recorded process group. Pattern kills (pgrep -f / pkill -f) took out three sessions' builds on 2026-11-10."""
 

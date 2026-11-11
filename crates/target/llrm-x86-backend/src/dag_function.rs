@@ -1158,6 +1158,10 @@ fn selected_in(
     if m64 && module.signature(function.ty).2 && positional.is_none() {
         info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
+    let multiply_early_out = llrm_codegen::backend::timing::signed_multiply(cpu, 4, false)
+        .ok()
+        .flatten()
+        .is_some_and(|clocks| clocks.minimum < clocks.maximum);
     let mut hooks = X86Hooks::new(Options {
         cpu: if m16 {
             Cpu::M16
@@ -1170,12 +1174,10 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
-        multiply_early_out: llrm_codegen::backend::timing::signed_multiply(cpu, 4, false)
-            .ok()
-            .flatten()
-            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
+        multiply_early_out,
         address_mode,
-    });
+    })
+    .with_shared_immediates_in_registers(!machine.tti().is_some_and(|tti| tti.immediate_forms_at_size()));
     let selector = Selector::new(if m16 {
         x86_m16::TABLE
     } else if m64 {
@@ -1413,6 +1415,7 @@ fn selected_in(
                 &mut built.dag,
                 &tli,
                 &mut X86Lowering {
+                    multiply_early_out: multiply_early_out.then_some(address_mode != llrm_dagisel::addr::AddrMode::Real16),
                     cmov: tli.can_use_cmov(),
                     share_products: machine.tti().is_some_and(|tti| tti.x87_share_negated_products()),
                     sse2,

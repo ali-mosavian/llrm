@@ -3113,3 +3113,95 @@ fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_a
     assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
     assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
 }
+
+/// `icmp sgt (sub nsw a, b), (add nsw a, b)` of the pin's `icmp-subadd.ll`
+/// reached the backend as a `sub`, an `add` and a compare; -O2 makes it
+/// `icmp slt b, 0`.
+#[test]
+fn test_o2_folds_a_compare_of_a_sub_and_an_add_to_b_against_zero() {
+    let text = "define i1 @f(i8 %a, i8 %b) {
+b:
+  %sub = sub nsw i8 %a, %b
+  %add = add nsw i8 %a, %b
+  %cmp = icmp sgt i8 %sub, %add
+  ret i1 %cmp
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("sub nsw"), "premise: with no passes the sub stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("icmp slt i8 %b, 0") && !after.contains("sub nsw"), "{after}");
+}
+
+/// `icmp samesign uge i8 %x, 127` of the pin's
+/// `icmp-samesign-canonicalize.ll` reached the backend as an unsigned
+/// compare; -O2 makes it `icmp eq i8 %x, 127`.
+#[test]
+fn test_o2_folds_an_unsigned_samesign_compare_with_a_known_sign() {
+    let text = "define i1 @f(i8 %x) {
+b:
+  %cmp = icmp samesign uge i8 %x, 127
+  ret i1 %cmp
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("samesign uge"), "premise: with no passes the compare stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("icmp eq i8 %x, 127"), "{after}");
+}
+
+/// The div_ceil idiom of the pin's `divceil.ll` reached `visitAdd` in the
+/// -O2 pipeline unfolded: the backend divided twice (`udiv` and `urem`).
+#[test]
+fn test_o2_folds_the_div_ceil_idiom_to_one_udiv() {
+    let text = "define i8 @f(i8 range(i8 0, 101) %x, i8 range(i8 1, 11) %y) {
+b:
+  %q = udiv i8 %x, %y
+  %r = urem i8 %x, %y
+  %c = icmp ne i8 %r, 0
+  %z = zext i1 %c to i8
+  %res = add i8 %q, %z
+  ret i8 %res
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("f".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        crate::testing::printed(&module)
+    };
+    let off = run(pipeline::Options::none());
+    assert!(off.contains("urem"), "premise: with no passes the idiom stays\n{off}");
+    let after = run(pipeline::Options::standard());
+    assert!(after.contains("udiv") && !after.contains("urem"), "{after}");
+}

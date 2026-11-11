@@ -14,6 +14,7 @@
 //! Built once per target, read by LegalizeDAG and by `Lowering`.
 
 pub mod actions;
+pub mod intrinsic_cost;
 pub mod isd;
 pub mod libcalls;
 pub mod lowering;

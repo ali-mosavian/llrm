@@ -2175,12 +2175,20 @@ impl<'a> TypeLegalizer<'a> {
         Ok((both, SDValue { node: both.node, res: 1 }))
     }
 
-    /// `ExpandShiftWithKnownAmountBit`: bit `log2(half)` of the amount is
-    /// known, so the shift is one half-width shift (set) or a shift and a
-    /// funnel shift (clear). DEVIATE SD241: a clear bit without a legal or
-    /// custom funnel shift stays a parts node (the pin shifts, subtracts and
-    /// selects). Exit: with the generic `Amt == 0` expansion. Owner sdag-b.
-    /// Review 2026-12-10.
+    /// `ExpandShiftWithKnownAmountBit`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L3409>),
+    /// which the pin runs before the parts node and the library call
+    /// (`ExpandIntRes_Shift`, :5063) with no target hook. DEVIATE SD241: a
+    /// target that sets `libcall_for_small_variable_shift` (z80, 6502) keeps
+    /// the call for the all-clear case until its owner prices an inline
+    /// policy; the base did the same for every target without a funnel
+    /// shift. Exit: z80 2026-11-24, 6502 2026-12-01: each prices an inline
+    /// policy. Owner sdag-b (z80, 6502 consume it). Review 2026-11-24.
+    ///
+    /// the bits of the amount from `log2(half)` up decide whether it is below
+    /// `half`. Any of them set: one half-width shift of the other half. All of
+    /// them clear: no select is needed, the bits that cross the halves come
+    /// from `(x >> 1) >> (amount ^ (half - 1))`, which is defined at amount 0.
     fn expand_shift_with_known_amount_bit(
         &mut self,
         op: ISD,
@@ -2188,36 +2196,42 @@ impl<'a> TypeLegalizer<'a> {
         amount: SDValue,
         half: EVT,
     ) -> Option<(SDValue, SDValue)> {
-        let high = 1u128 << half.size_in_bits().ilog2();
+        let shift_vt = self.dag.value_type(amount);
+        let half_bits = half.size_in_bits();
+        let high_mask = super::fold::mask(shift_vt.size_in_bits()) & !u128::from(half_bits - 1);
         let known = super::known_bits::known_bits(self.dag, amount);
-        let (set, clear) = (known.one & high != 0, known.zero & high != 0);
-        let funnel = if op == ISD::Shl { ISD::FShl } else { ISD::FShr };
-        if !set && !(clear && self.tli.is_operation_legal_or_custom(funnel, half)) {
+        if (known.zero | known.one) & high_mask == 0 {
             return None;
         }
-        if set {
-            let shift_vt = self.dag.value_type(amount);
-            let keep = self.dag.get_constant(!high & super::fold::mask(shift_vt.size_in_bits()), shift_vt);
+        if known.one & high_mask != 0 {
+            let keep = self.dag.get_constant(!high_mask & super::fold::mask(shift_vt.size_in_bits()), shift_vt);
             let rest = self.dag.get_node(ISD::And, shift_vt, &[amount, keep]);
             return Some(match op {
                 ISD::Shl => (self.dag.get_constant(0, half), self.dag.get_node(ISD::Shl, half, &[lo, rest])),
                 ISD::Srl => (self.dag.get_node(ISD::Srl, half, &[hi, rest]), self.dag.get_constant(0, half)),
                 _ => {
-                    let sign = self.shift_const(u128::from(half.size_in_bits() - 1), half);
+                    let sign = self.dag.get_constant(u128::from(half_bits - 1), shift_vt);
                     (self.dag.get_node(ISD::Sra, half, &[hi, rest]), self.dag.get_node(ISD::Sra, half, &[hi, sign]))
                 }
             });
         }
-        Some(match op {
-            ISD::Shl => (
-                self.dag.get_node(ISD::Shl, half, &[lo, amount]),
-                self.dag.get_node(ISD::FShl, half, &[hi, lo, amount]),
-            ),
-            _ => (
-                self.dag.get_node(ISD::FShr, half, &[hi, lo, amount]),
-                self.dag.get_node(if op == ISD::Srl { ISD::Srl } else { ISD::Sra }, half, &[hi, amount]),
-            ),
-        })
+        if known.zero & high_mask != high_mask || self.tli.libcall_for_small_variable_shift() {
+            return None;
+        }
+        // 31-x rather than 32-x, which would shift by the width at x = 0; xor
+        // is exact because x is below the width
+        let last = self.dag.get_constant(u128::from(half_bits - 1), shift_vt);
+        let inverse = self.dag.get_node(ISD::Xor, shift_vt, &[amount, last]);
+        let (towards, away) = if op == ISD::Shl { (ISD::Shl, ISD::Srl) } else { (ISD::Srl, ISD::Shl) };
+        // right shifts mirror the arithmetic of the halves
+        let (near, far) = if op == ISD::Shl { (lo, hi) } else { (hi, lo) };
+        let one = self.dag.get_constant(1, shift_vt);
+        let by_one = self.dag.get_node(away, half, &[near, one]);
+        let crossing = self.dag.get_node(away, half, &[by_one, inverse]);
+        let near_part = self.dag.get_node(op, half, &[near, amount]);
+        let moved = self.dag.get_node(towards, half, &[far, amount]);
+        let far_part = self.dag.get_node(ISD::Or, half, &[moved, crossing]);
+        Some(if op == ISD::Shl { (near_part, far_part) } else { (far_part, near_part) })
     }
 
     /// `ExpandShiftByConstant`.

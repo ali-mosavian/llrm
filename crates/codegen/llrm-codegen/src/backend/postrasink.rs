@@ -417,8 +417,14 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 continue;
             }
             let both = written.or(&read);
+            // A later instruction that names no register (a copy of a value to its
+            // coalesced twin) still reads the value the copy defines: left behind,
+            // it would read a value defined in another block.
             if insns[&at][index + 1..].iter().any(|other| {
-                touches(regs, body.bits, other, &both, false) || touches(regs, body.bits, other, &written, true)
+                touches(regs, body.bits, other, &both, false)
+                    || touches(regs, body.bits, other, &written, true)
+                    || other.uses.iter().any(|value| one.defines.contains(value))
+                    || other.requires.iter().any(|(held, _)| one.defines.contains(&held.value))
             }) {
                 continue;
             }
@@ -687,6 +693,33 @@ mod tests {
         let body = shape(false, false);
         let after = sunk(&body);
         assert_eq!((copies_in(&after, 1), copies_in(&after, 9)), (0, 1));
+    }
+
+    /// qcport render/sc.c -O2 x86_16-dos: `mov si, cx` sank past a register-less copy
+    /// of its value, which then read it from the other block: "value is read but
+    /// never defined".
+    #[test]
+    fn test_a_copy_stays_ahead_of_a_later_reader_of_its_value() {
+        let mut body = shape(false, false);
+        let blocks: Vec<_> = body
+            .blocks
+            .iter()
+            .map(|b| {
+                if b.at != 1 {
+                    return b.clone();
+                }
+                let mut mov = Arc::unwrap_or_clone(Arc::clone(&b.insns[0]));
+                mov.defines = vec![10].into();
+                let twin = Arc::new(Insn::new(7, None, Some(Semantics::new(Operation::Nothing)), vec![11], vec![10]));
+                let mut insns = b.insns.to_vec();
+                insns[0] = Arc::new(mov);
+                insns.insert(1, twin);
+                b.with_insns(insns)
+            })
+            .collect();
+        body = body.with_blocks(blocks);
+        let after = sunk(&body);
+        assert_eq!((copies_in(&after, 1), copies_in(&after, 9)), (1, 0));
     }
 
     #[test]
