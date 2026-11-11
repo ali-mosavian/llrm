@@ -125,6 +125,63 @@ pub fn run_with(
     asm: &mut Asm,
     known_loads: bool,
 ) {
+    // DEVIATE 6502-RET-TAIL (owner 6502-selectjoin, exit 2026-11-20: the shared
+    // post-allocation `latetaildup` on the 6502 flow, step 5): the pin's late
+    // TailDuplicate copies a return block into the block that falls into it;
+    // that block's code is only known here, so the copy is kept when the whole
+    // pass list leaves fewer bytes.
+    let mut copied = asm.clone();
+    if duplicate_return_tail_into_fall_through(&mut copied) {
+        run_passes(&mut copied, known_loads);
+        run_passes(asm, known_loads);
+        if code_bytes(&copied) < code_bytes(asm) {
+            *asm = copied;
+        }
+        return;
+    }
+    run_passes(asm, known_loads);
+}
+
+fn code_bytes(asm: &Asm) -> usize {
+    asm.lines.iter().filter_map(Line::inst).map(Inst::bytes).sum()
+}
+
+/// A label whose block is one straight instruction and an `rts`, reached by
+/// falling into it: the block is copied ahead of the label, so the fall-through
+/// path returns by itself. One instruction is the pin's size-optimising limit
+/// (`MaxDuplicateCount = 1`,
+/// [TailDuplicator.cpp#L582](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L582)).
+fn duplicate_return_tail_into_fall_through(asm: &mut Asm) -> bool {
+    let mut changed = false;
+    let mut at = 1;
+    while at + 2 < asm.lines.len() {
+        let (Line::Label(_), Some(Line::Inst(first)), Some(Line::Inst(last))) =
+            (&asm.lines[at], asm.lines.get(at + 1), asm.lines.get(at + 2))
+        else {
+            at += 1;
+            continue;
+        };
+        let straight = matches!(first.op, Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Lda | Op::Ldx | Op::Ldy);
+        let falls_in = matches!(
+            &asm.lines[at - 1],
+            Line::Inst(before) if !matches!(before.op, Op::Jmp | Op::Bra | Op::Rts)
+        );
+        if straight && last.op == Op::Rts && falls_in {
+            let tail = [asm.lines[at + 1].clone(), asm.lines[at + 2].clone()];
+            asm.lines.splice(at..at, tail);
+            at += 3;
+            changed = true;
+        } else {
+            at += 1;
+        }
+    }
+    changed
+}
+
+fn run_passes(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     fold_known_cells(asm);
     hoist_common_successor_code(asm);
     branch_over_jump(asm);
@@ -1168,7 +1225,14 @@ fn walk<'a>(
             (Op::Ldx | Op::Inx | Op::Dex, ..) => state[1] = None,
             (Op::Ldy | Op::Iny | Op::Dey, ..) => state[2] = None,
             (Op::Txa, ..) => state[0] = state[1],
-            (Op::Tya, ..) => state[0] = state[2],
+            // `x` holds the constant `y` does: the transfer from `x` leaves the
+            // load of `y` dead
+            (Op::Tya, ..) => {
+                if matches!(state[2], Some(Value::Imm(_))) && state[1] == state[2] {
+                    transfers.push((at, Op::Txa));
+                }
+                state[0] = state[2];
+            }
             (Op::Tax, ..) => state[1] = state[0],
             (Op::Tay, ..) => state[2] = state[0],
             // a register's value survives what neither writes it nor leaves
@@ -1302,7 +1366,10 @@ fn load_straight_once(asm: &mut Asm) -> bool {
     let label_at = |name: &str| lines.iter().position(|line| matches!(line, Line::Label(l) if l == name));
     let mut drops: Vec<(usize, usize)> = Vec::new();
     for (at, line) in lines.iter().enumerate() {
-        let Line::Inst(Inst { op: load @ (Op::Ldx | Op::Ldy), operand: from @ Operand::Direct(_), .. }) = line else {
+        let Line::Inst(Inst {
+            op: load @ (Op::Ldx | Op::Ldy), operand: from @ (Operand::Direct(_) | Operand::Imm(_)), ..
+        }) = line
+        else {
             continue;
         };
         let (transfer, register) = if *load == Op::Ldx { (Op::Txa, Registers::X) } else { (Op::Tya, Registers::Y) };

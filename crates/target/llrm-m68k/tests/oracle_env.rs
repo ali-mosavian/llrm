@@ -19,6 +19,19 @@ fn the_explicit_skip_prints_a_visible_line() {
 }
 
 #[test]
-fn a_set_root_is_used() {
-    assert_eq!(oracle_with(Some("/x"), Some("1")), Ok(Oracle::Root("/x".to_owned())));
+fn a_root_without_the_assembler_fails_naming_the_missing_tool() {
+    // Pointing GCC_M68K one level too high gave 44 opaque `NotFound` unwraps.
+    let why = oracle_with(Some("/nonexistent-gcc-m68k"), Some("1")).unwrap_err();
+    assert!(why.contains("/nonexistent-gcc-m68k/usr/bin/m68k-linux-gnu-as") && why.contains("usr/"), "{why}");
+}
+
+#[test]
+fn a_set_root_with_the_assembler_is_used() {
+    let root = std::env::temp_dir().join(format!("llrm-m68k-oracle-root-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/bin/m68k-linux-gnu-as"), "").unwrap();
+    let root_str = root.to_str().unwrap().to_owned();
+    let got = oracle_with(Some(&root_str), Some("1"));
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(got, Ok(Oracle::Root(root_str)));
 }

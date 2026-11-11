@@ -35,7 +35,7 @@ use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::valuetracking::pattern::phi_incoming;
 
 #[cfg(test)]
@@ -238,6 +238,13 @@ impl IvUsers {
         let ty = cx.function.operand_type(cx.context, value).and_then(|ty| se.ty_of(cx, ty)).expect("a SCEVable type");
         let width = se.get_type_size_in_bits(cx, ty);
         if width > 64 || !(cx.layout.legal_integer(width) || env.native_widths.contains(&width)) {
+            return false;
+        }
+        // DEVIATE LU19: a width the target declares native (and the layout does
+        // not) is for induction variables of that width, not for a narrower
+        // one an extension widens: `arr[zext i8 i]` stays an index (`adc
+        // arr,x`), not a 16-bit pointer walk.
+        if !cx.layout.legal_integer(width) && matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt)) {
             return false;
         }
         // An ephemeral value is removed later anyway.

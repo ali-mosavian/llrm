@@ -39,6 +39,13 @@
 //! LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16,
 //! review 2026-11-20.
 //!
+//! DEVIATE CF3 (owner x86-m32, exit: never; upstream-report candidate): as
+//! `pushfold.rs`'s CF2, a volatile load is not folded into `push [m]`, nor is
+//! one moved past another volatile access. The pin's `canFoldIntoRegPush` asks
+//! only `isLoadFoldBarrier`, so it loads `p[0]`, `p[1]` (the IR's last reads)
+//! before `pushl 28(%esp)` six times (the first reads). Cost:
+//! os_locals_between_pushes -O2 m32 +29 B (226 vs 197).
+//!
 //! [L147]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
 //! [L205]:
@@ -865,6 +872,29 @@ mod tests {
         let push = &after.blocks[0].insns[2];
         assert!(matches!(push.what.as_ref().unwrap().sources.as_slice(), [Loc::Mem(_)]), "{push:?}");
         assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![8], vec![7]), "{push:?}");
+    }
+
+    /// `f(a, v)` with `v` volatile folded `mov eax,[v]` into `push [v]` and
+    /// moved the access past the other loads: the program's volatile order
+    /// changed (CF3). A volatile load, or any volatile access between the load
+    /// and the frame, keeps the load where it is.
+    #[test]
+    fn a_volatile_access_is_not_moved_into_a_push() {
+        let cell = Mem { through: RegId::DI, offset: 0, ..Mem::new(None, 4) };
+        let plain = || (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())], vec![1], vec![8])).clone();
+        let frame = |first: Arc<Insn>, between: Option<Arc<Insn>>| {
+            let mut insns = vec![first];
+            insns.extend(between);
+            insns.extend([setup(8), store(4, imm(4), vec![]), store(0, held(1), vec![1]), call(), destroy(8)]);
+            names(&pass().run(&body(insns)))
+        };
+        let kept = ["mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"];
+        let mut volatile_load = plain();
+        volatile_load.volatile = true;
+        assert_eq!(frame(Arc::new(volatile_load), None), kept);
+        let mut volatile_between = (*insn(5, Operation::Move, "mov", vec![held(2)], vec![Loc::Mem(cell.clone())], vec![2], vec![8])).clone();
+        volatile_between.volatile = true;
+        assert_eq!(frame(Arc::new(plain()), Some(Arc::new(volatile_between))), ["mov", "mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"]);
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.

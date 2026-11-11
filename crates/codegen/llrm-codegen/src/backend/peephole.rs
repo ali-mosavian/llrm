@@ -395,6 +395,7 @@ impl Peephole {
                 ),
             ),
         );
+        let body = swapped_registers(self.rules, &body, &self.cpu);
         let body = loaded_segments(self.rules, &body);
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
@@ -611,6 +612,9 @@ pub fn zeroed_loads(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
+    if rules.zeroed_loads.is_none() {
+        return Ok(body.clone());
+    }
     cpu.clears_before_byte_load()?;
     Ok(peep::rewritten(rules.zeroed_loads, body, &Facts::new(body, Some(cpu))))
 }
@@ -1164,6 +1168,16 @@ pub fn restored_copies(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
+}
+
+/// `mov t,a; mov a,b; mov b,t` as `xchg a,b` where the code is for size
+/// (`peephole.peep`, `swapped_registers`).
+pub fn swapped_registers(
+    rules: &peep::Rules,
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    peep::rewritten(rules.swapped_registers, body, &Facts::new(body, Some(cpu)))
 }
 
 /// Drop the reload of a scalar float into the register that filled the cell
@@ -2467,6 +2481,12 @@ pub fn doubled(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
+    // The clocks are asked for the rule that uses them, not for the pass: a
+    // target with no such rule, or that prices through its cost model, states
+    // none (a missing clock is an error where a rule needs it, never 0).
+    if rules.doubled.is_none() {
+        return Ok(body.clone());
+    }
     cpu.doubling()?;
     Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
 }

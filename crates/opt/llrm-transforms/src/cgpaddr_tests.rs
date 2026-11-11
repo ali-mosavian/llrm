@@ -212,6 +212,7 @@ impl llrm_mir::target::Machine for Flat {
             loop_micro_op_buffer: 0,
             issue_width: 0,
             position_independent: std::cell::Cell::new(true),
+            size_bytes: false,
         }))
     }
 }

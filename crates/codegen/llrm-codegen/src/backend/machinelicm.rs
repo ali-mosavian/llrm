@@ -89,12 +89,18 @@ use std::sync::Arc;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::licm_core as licm;
 use crate::backend::liveness;
+use crate::backend::regpressure::Model;
+use crate::backend::target::Segments;
 use crate::model::ir::{Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::{HashMap, HashSet};
 
 pub struct MachineLicm {
     pub classes: Rc<RegisterClasses>,
+    /// The segment registers, to find each value's register class for the
+    /// pressure it counts.
+    pub segments: Segments,
     /// -Os, -Oz: a carried constant costs the `fstp` that ends it (DEVIATE X1
     /// is off).
     pub size: bool,
@@ -113,7 +119,7 @@ impl LIRTransform for MachineLicm {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(hoisted_sized(&body, &self.classes, self.size))
+        Ok(hoisted_sized(&body, &self.classes, self.size, &self.segments))
     }
 }
 
@@ -408,7 +414,287 @@ thread_local! {
 
 /// The x86 half of the pass: which instructions move (`IsLICMCandidate`,
 /// `IsProfitableToHoist`, the x87 constants, the flags).
+/// `MachineLICM`'s register pressure (`InitRegPressure` L933,
+/// `UpdateRegPressure` L952, `calcRegisterCost` L970, `CanCauseHighRegPressure`
+/// L1235, `UpdateBackTraceRegPressure` L1259 of the pin's
+/// [MachineLICM.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp)):
+/// the weight each value of a class adds to the pressure sets of the class,
+/// counted over the loop's preheader and its blocks in dominator order. A
+/// value counts where it is defined, where it is read first (a live-in, in
+/// the preheader), and not again where the read is its last.
+///
+/// DEVIATE ML1, exit 2026-11-20 (owner x86-m32): the pin's walk is of the
+/// instructions as `Hoist` leaves them; here the pressure of a loop is counted
+/// ahead of its hoists, and again after each (a hoisted instruction is left
+/// out and its cost added to every block: `UpdateBackTraceRegPressure`). The
+/// children of a dominator node are taken in layout order, and a value's last
+/// read is the only read in the function (`hasOneNonDBGUse`), not a kill flag.
+struct Pressure {
+    model: Model,
+    /// How many operands read each value, in the function.
+    reads: HashMap<u32, u32>,
+    sets: usize,
+    /// For each block of the loop, the most each set has been at the entry of
+    /// the blocks that dominate it and of itself (`BackTrace`).
+    path: HashMap<i64, Vec<i32>>,
+    /// What the loop's hoists add to every block
+    /// (`UpdateBackTraceRegPressure`).
+    added: Vec<i32>,
+    dirty: bool,
+}
+
+impl Pressure {
+    fn new(
+        body: &LirBody,
+        model: Model,
+    ) -> Self {
+        let mut reads: HashMap<u32, u32> = HashMap::default();
+        for block in &body.blocks {
+            for one in &block.insns {
+                for &used in &one.uses {
+                    *reads.entry(used).or_default() += 1;
+                }
+            }
+            for phi in &block.phis {
+                for (_, value) in &phi.incoming {
+                    *reads.entry(*value).or_default() += 1;
+                }
+            }
+        }
+        let sets = model.limits.len();
+        Self { model, reads, sets, path: HashMap::default(), added: vec![0; sets], dirty: true }
+    }
+
+    /// A loop is about to be walked.
+    fn begin(&mut self) {
+        self.added.iter_mut().for_each(|slot| *slot = 0);
+        self.dirty = true;
+    }
+
+    /// `calcRegisterCost`: what `one` adds to each set. A definition adds its
+    /// class's weight. A read that is the value's only one takes it away,
+    /// unless `seen` has not met the value (`ConsiderSeen`), when it is a
+    /// live-in that adds it for `unseen_as_def`.
+    fn cost(
+        &self,
+        one: &Insn,
+        mut seen: Option<&mut HashSet<u32>>,
+        unseen_as_def: bool,
+    ) -> Vec<i32> {
+        let mut cost = vec![0i32; self.sets];
+        let mut count = |value: u32, defined: bool, seen: &mut Option<&mut HashSet<u32>>| {
+            let Some((weight, sets)) = self.model.weight(value) else { return };
+            let new = seen.as_mut().is_some_and(|seen| seen.insert(value));
+            let kill = self.reads.get(&value).copied() == Some(1);
+            let by = if defined {
+                weight as i32
+            } else if new && !kill && unseen_as_def {
+                weight as i32
+            } else if !new && kill {
+                -(weight as i32)
+            } else {
+                0
+            };
+            if by != 0 {
+                for &set in sets {
+                    cost[set] += by;
+                }
+            }
+        };
+        for &value in &one.defines {
+            count(value, true, &mut seen);
+        }
+        for &value in &one.uses {
+            count(value, false, &mut seen);
+        }
+        cost
+    }
+
+    fn update(
+        &self,
+        pressure: &mut [i32],
+        cost: &[i32],
+    ) {
+        for (at, &weight) in cost.iter().enumerate() {
+            if pressure[at] < -weight {
+                pressure[at] = 0;
+            } else {
+                pressure[at] += weight;
+            }
+        }
+    }
+
+    /// `HoistOutOfLoop`'s counting: the preheader, then the loop's blocks down
+    /// the dominator tree from the header, the pressure at the entry of each
+    /// kept on a stack (`BackTrace`) of which `path` keeps the largest.
+    fn rebuild(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+    ) {
+        self.path.clear();
+        self.dirty = false;
+        let blocks = facts.blocks;
+        let by_at: HashMap<i64, usize> = blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
+        let into = |at: i64| blocks.iter().filter(move |block| block.succ.contains(&at));
+        let Some(header) = facts
+            .members
+            .iter()
+            .map(|&number| &blocks[number])
+            .find(|block| into(block.at).any(|from| !facts.inside.contains(&from.at)))
+        else {
+            return;
+        };
+        let Some(preheader) = into(header.at).find(|from| !facts.inside.contains(&from.at)) else { return };
+        let mut pressure = vec![0i32; self.sets];
+        let mut seen: HashSet<u32> = HashSet::default();
+        // `InitRegPressure`: the preheader and, while one block falls into
+        // it, that block.
+        let mut chain = vec![preheader.at];
+        while let [.., last] = chain[..] {
+            let from: Vec<i64> = into(last).map(|block| block.at).collect();
+            match from[..] {
+                [only] if !chain.contains(&only) && blocks[by_at[&only]].succ.len() == 1 => chain.push(only),
+                _ => break,
+            }
+        }
+        for &at in chain.iter().rev() {
+            for one in &blocks[by_at[&at]].insns {
+                let cost = self.cost(&one.0, Some(&mut seen), true);
+                self.update(&mut pressure, &cost);
+            }
+        }
+        // The dominator tree of the loop from its header.
+        let members: Vec<i64> = facts.members.iter().map(|&number| blocks[number].at).collect();
+        let order = reverse_post_order(blocks, &by_at, facts.inside, header.at);
+        let position: HashMap<i64, usize> = order.iter().enumerate().map(|(at, &block)| (block, at)).collect();
+        let mut idom: HashMap<i64, i64> = HashMap::default();
+        idom.insert(header.at, header.at);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &at in order.iter().skip(1) {
+                let mut new: Option<i64> = None;
+                for from in into(at).map(|block| block.at).filter(|from| idom.contains_key(from)) {
+                    new = Some(match new {
+                        None => from,
+                        Some(mut left) => {
+                            let mut right = from;
+                            while left != right {
+                                while position[&left] > position[&right] {
+                                    left = idom[&left];
+                                }
+                                while position[&right] > position[&left] {
+                                    right = idom[&right];
+                                }
+                            }
+                            left
+                        }
+                    });
+                }
+                if let Some(new) = new
+                    && idom.get(&at) != Some(&new)
+                {
+                    idom.insert(at, new);
+                    changed = true;
+                }
+            }
+        }
+        let mut children: HashMap<i64, Vec<i64>> = HashMap::default();
+        for &at in &members {
+            if at != header.at
+                && let Some(&parent) = idom.get(&at)
+            {
+                children.entry(parent).or_default().push(at);
+            }
+        }
+        // Depth first, a block's children in layout order.
+        let mut stack: Vec<(i64, Vec<i32>)> = Vec::new();
+        let mut work = vec![header.at];
+        while let Some(at) = work.pop() {
+            let parent = idom.get(&at).copied().filter(|_| at != header.at);
+            while stack.last().is_some_and(|(top, _)| Some(*top) != parent) {
+                stack.pop();
+            }
+            stack.push((at, pressure.clone()));
+            let mut most = vec![0i32; self.sets];
+            for (_, snapshot) in &stack {
+                for (slot, &value) in most.iter_mut().zip(snapshot) {
+                    *slot = (*slot).max(value);
+                }
+            }
+            self.path.insert(at, most);
+            for one in &blocks[by_at[&at]].insns {
+                let cost = self.cost(&one.0, Some(&mut seen), false);
+                self.update(&mut pressure, &cost);
+            }
+            if let Some(below) = children.get(&at) {
+                work.extend(below.iter().rev());
+            }
+        }
+    }
+
+    /// `CanCauseHighRegPressure` for hoisting `one` out of block `at`: some
+    /// set that `one` adds to would reach its limit at the entry of a block on
+    /// the way down from the header.
+    fn high(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+        at: i64,
+        one: &Insn,
+    ) -> bool {
+        if self.dirty {
+            self.rebuild(facts);
+        }
+        let Some(path) = self.path.get(&at) else { return false };
+        let cost = self.cost(one, None, false);
+        cost.iter()
+            .enumerate()
+            .any(|(set, &weight)| weight > 0 && path[set] + self.added[set] + weight >= self.model.limits[set] as i32)
+    }
+
+    /// `UpdateBackTraceRegPressure`: `one` leaves the loop.
+    fn hoisted(
+        &mut self,
+        one: &Insn,
+    ) {
+        let cost = self.cost(one, None, false);
+        for (set, weight) in cost.into_iter().enumerate() {
+            self.added[set] += weight;
+        }
+        self.dirty = true;
+    }
+}
+
+/// The blocks of the loop in reverse post order from `header`.
+fn reverse_post_order(
+    blocks: &[licm::Block<Wrapped>],
+    by_at: &HashMap<i64, usize>,
+    inside: &std::collections::BTreeSet<i64>,
+    header: i64,
+) -> Vec<i64> {
+    let mut order = Vec::new();
+    let mut visited: HashSet<i64> = HashSet::default();
+    let mut stack: Vec<(i64, usize)> = vec![(header, 0)];
+    visited.insert(header);
+    while let Some((at, next)) = stack.pop() {
+        let succ = &blocks[by_at[&at]].succ;
+        if let Some(&to) = succ.get(next) {
+            stack.push((at, next + 1));
+            if inside.contains(&to) && visited.insert(to) {
+                stack.push((to, 0));
+            }
+        } else {
+            order.push(at);
+        }
+    }
+    order.reverse();
+    order
+}
+
 struct X86<'a> {
+    pressure: Pressure,
+    /// The values the loop names (`Target::hoist_by_pressure` false).
+    named: usize,
     body: &'a LirBody,
     classes: &'a RegisterClasses,
     regs: llrm_lir::registers::Regs,
@@ -417,7 +703,6 @@ struct X86<'a> {
     /// The loop being walked.
     calls: bool,
     floats_named: usize,
-    named: usize,
     /// The most general registers live at once in the loop, once asked for.
     peak: Option<usize>,
     live_out: Option<crate::backend::liverows::Live>,
@@ -555,6 +840,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
         facts: &licm::Facts<'_, Wrapped>,
     ) {
         self.peak = None;
+        self.pressure.begin();
         self.named = facts.named.iter().filter(|value| !self.floating.contains(value)).count();
         self.floats_named = facts.named.iter().filter(|value| self.floating.contains(value)).count();
         // An x87 value cannot be live across a call (`floatassign` does not
@@ -629,16 +915,20 @@ impl licm::Policy<Wrapped> for X86<'_> {
             return true;
         }
         let loads_here = self.loads && (facts.every_trip)(at);
-        let limit = self.classes.available.len();
         // `IsProfitableToHoist`'s high-pressure branch lets an
         // `isDereferenceableInvariantLoad` through: the allocator can load it
         // again where it wants it.
         // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1386-L1392>
         let invariant_load = loaded(one).is_some() && one.invariant();
+        let limit = self.classes.available.len();
         let facts_every_trip = (facts.every_trip)(at);
         let mut movable = candidate(one, self.classes, loads_here)
             && value.is_some_and(|value| !self.floating.contains(&value))
-            && (self.named < limit || invariant_load)
+            && (if self.classes.hoist_by_pressure {
+                !self.pressure.high(facts, at, one)
+            } else {
+                self.named < limit
+            } || invariant_load)
             && (invariant_load || facts_every_trip || self.peak_pressure(facts) < limit);
         // `IsProfitableToHoist`: "Trivially rematerializable instructions
         // should always be hoisted providing the register allocator can just
@@ -657,6 +947,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
                 && crate::greedy::remat::is_trivially_re_materializable(one, false)
         });
         if constant && !movable {
+            self.pressure.hoisted(one);
             return true;
         }
         if movable {
@@ -691,6 +982,9 @@ impl licm::Policy<Wrapped> for X86<'_> {
                 }
             }
         }
+        if movable {
+            self.pressure.hoisted(one);
+        }
         movable
     }
 }
@@ -700,7 +994,17 @@ pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> LirBody {
-    hoisted_sized(body, classes, false)
+    let Some(registers) = body.registers else { return body.clone() };
+    // A flat machine: no selector to place, as `Segments::of` makes for one.
+    let flat = Segments {
+        selectors: Vec::new(),
+        data: registers.data_segment,
+        through: None,
+        huge_shift: None,
+        offset_bytes: 0,
+        registers,
+    };
+    hoisted_sized(body, classes, false, &flat)
 }
 
 /// `hoisted`, where `size` keeps the x87 pool constants in their loops.
@@ -708,6 +1012,7 @@ pub fn hoisted_sized(
     body: &LirBody,
     classes: &RegisterClasses,
     size: bool,
+    segments: &Segments,
 ) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
     let control_word_written = body
@@ -737,15 +1042,19 @@ pub fn hoisted_sized(
             insns: block.insns.iter().cloned().map(Wrapped).collect(),
         })
         .collect();
+    let floating = crate::backend::regclass::floating(body);
+    let model =
+        crate::backend::machinesched::pressure_model(body, classes, segments, &|value| !floating.contains(&value));
     let mut policy = X86 {
+        pressure: Pressure::new(body, model),
+        named: 0,
         body,
         classes,
         regs,
-        floating: crate::backend::regclass::floating(body),
+        floating,
         control_word_written,
         calls: false,
         floats_named: 0,
-        named: 0,
         peak: None,
         live_out: None,
         loads: false,
@@ -772,6 +1081,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    /// `hoisted` on the built-in (m16) machine's segments.
+    fn hoisted(
+        body: &LirBody,
+        classes: &RegisterClasses,
+    ) -> LirBody {
+        hoisted_sized(body, classes, false, &crate::backend::target::BUILT_IN)
+    }
     use crate::model::ir::{Held, Semantics};
     use crate::model::lir::LirBlock;
     use crate::support::hash::IndexMap;
@@ -828,6 +1145,91 @@ mod tests {
         };
         assert_eq!(names(0), ["add", "jmp"]);
         assert_eq!(names(1), ["mov", "jcxz"]);
+    }
+
+    /// `IsProfitableToHoist`: a sum made in a branch of a loop whose header
+    /// holds `limit - 1` values at once was hoisted because only 3 values
+    /// were named in the loop (`named < limit`), adding a register held across
+    /// the loop (rectwo -O1, +291,719 clk). It stays where the pressure
+    /// reaches the limit (`CanCauseHighRegPressure`).
+    #[test]
+    fn test_a_sum_stays_in_a_loop_whose_header_holds_the_limit_of_values() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let narrow = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
+        let run = |held_in_header: u32, by_pressure: bool| {
+            let live: Vec<u32> = (0..held_in_header).map(|at| 20 + at).collect();
+            let mut header: Vec<Arc<Insn>> = live
+                .iter()
+                .map(|&value| {
+                    insn(
+                        value as i64,
+                        Operation::Binary,
+                        "add",
+                        vec![narrow(value)],
+                        vec![narrow(5), narrow(5)],
+                        vec![value],
+                        vec![5, 5],
+                    )
+                })
+                .collect();
+            header.push(branch(60));
+            let sum =
+                insn(70, Operation::Binary, "add", vec![narrow(50)], vec![narrow(2), narrow(3)], vec![50], vec![2, 3]);
+            let mut inside: Vec<Arc<Insn>> = live
+                .iter()
+                .map(|&value| {
+                    insn(
+                        value as i64 + 100,
+                        Operation::Move,
+                        "mov",
+                        vec![narrow(value + 100)],
+                        vec![narrow(value)],
+                        vec![value + 100],
+                        vec![value],
+                    )
+                })
+                .collect();
+            inside.push(sum);
+            inside.push(jump(73));
+            let exit = insn(72, Operation::Return, "ret", vec![], vec![], vec![], vec![2, 3]);
+            let mut head = block(1, vec![2, 3], header);
+            head.phis = vec![crate::model::lir::Phi { result: 5, incoming: vec![(0, 1), (2, 50)] }].into();
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    head.into(),
+                    block(2, vec![1], inside).into(),
+                    block(3, vec![], vec![exit]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2, 3].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let mut classes = (*RegisterClasses::m16()).clone();
+            classes.hoist_by_pressure = by_pressure;
+            let done = hoisted(&body, &classes);
+            done.blocks[0].insns.iter().any(|one| one.defines.contains(&50))
+        };
+        assert!(run(1, true), "a header that holds one value leaves room");
+        assert!(!run(4, true), "four values of weight 2 and the sum reach the limit 10 of the set");
+        assert!(run(1, false), "the count rule: a header that holds one value leaves room");
+        assert!(
+            !run(4, false),
+            "the count rule passes (3 values named), but the sum is in a block that is not on every trip and the peak pressure is at the registers: no speculating hoist (#7821)"
+        );
+    }
+
+    /// m16 gates hoists by pressure again: its address registers are their
+    /// own class (ADDR16), so the pin's per-set limit answers.
+    #[test]
+    fn test_m16_gates_hoists_by_pressure() {
+        assert!(crate::backend::classes::RegisterClasses::m16().hoist_by_pressure);
     }
 
     /// `EliminateCSE` renamed the readers of one duplicate at a time, each
@@ -1241,7 +1643,7 @@ mod tests {
             body.inputs = [1].into_iter().collect();
             body.float_stack = 8;
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size, &crate::backend::target::BUILT_IN);
             done.blocks[0]
                 .insns
                 .iter()
@@ -1327,7 +1729,7 @@ mod tests {
             body.inputs = [1].into_iter().chain(100..100 + others).collect();
             body.float_stack = 8;
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size, &crate::backend::target::BUILT_IN);
             done.blocks[0]
                 .insns
                 .iter()

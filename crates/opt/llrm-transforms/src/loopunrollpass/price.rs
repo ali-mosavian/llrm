@@ -182,7 +182,7 @@ fn project_nest(
 
 /// The outermost loop above `lp`, itself included, whose chain down to `lp`
 /// runs known trips.
-fn known_root<'a>(
+pub(super) fn known_root<'a>(
     run: &Run,
     se: &mut ScalarEvolution,
     analyzed: &Analyzed,
@@ -248,6 +248,53 @@ fn root_pays(
     let rate = run.tti.unroll_milliclocks_per_byte();
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
     Some(priced_verdict(run, se, analyzed, root, up, trips, &uce, None, Some(&projection), prices_nest, memory_aware, rate))
+}
+
+/// Whether `lp` is a step of a nest of known trips whose whole unroll is under `limit` units: the
+/// root's body at the copies the inner unrolls make (`project_nest`), once more for each of its
+/// trips, as the pin's threshold counts the outermost loop after the inner ones are gone. The
+/// loops DEVIATE UNROLL-O1-TRIAL compiles again for: a loop that is no nest step goes alone, and a
+/// nest the pin's own threshold refuses is not unrolled by the trial either.
+pub(super) fn nest_unroll_fits(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    up: &UnrollingPreferences,
+    limit: u32,
+) -> bool {
+    let root = known_root(run, se, analyzed, lp);
+    if root.get_header() == lp.get_header() {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let trips = se.get_small_constant_trip_count(&cx, root.get_header());
+    let Some(projection) = (trips != 0).then(|| project_nest(run, se, analyzed, root)).flatten() else { return false };
+    let eph = ephemeral_values(run, analyzed, root);
+    let uce = cost_estimator(run, root, &eph, up.be_insns);
+    if !uce.can_unroll() {
+        return false;
+    }
+    let bytes = run.outer.target().byte_costs();
+    let blocks = root.get_blocks();
+    let once = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true).max(1);
+    let mut projected = 0;
+    for block in blocks.iter() {
+        projected += projection.of(*block)
+            * trip_cost(run.context, run.layout, run.function, run.callees, std::iter::once(block), &bytes, true);
+    }
+    let units = (i64::from(uce.rolled_loop_size().max(1)) * projected.max(1) / once).max(1);
+    let unrolled = ((units - i64::from(up.be_insns)).max(0)) * i64::from(trips) + i64::from(up.be_insns);
+    unrolled < i64::from(limit)
 }
 
 /// The profit rule of a priced unroll of `lp` by `trips`, from the loop's
@@ -342,6 +389,7 @@ fn priced_verdict(
     }
     let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
     let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
+    let credited_operands = if analysis.is_none() && run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => {
@@ -369,7 +417,48 @@ fn priced_verdict(
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
     // to save 44 clocks a run ran 92 more: 14 more stores, 17 more exchanges).
     let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
-    let saved = (saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs;
+    // DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): see `throughput`. A target with a throughput
+    // model prices a trip at the larger of its resource and chain bounds, and the unroll saves the
+    // resources it removes only where the trip is bound by them.
+    // A trip that calls a function the inliner takes next is outside the model: the copies make its arguments
+    // constants and the callee folds on them, work the trip's own instructions do not show (dot -O3 m64: the
+    // 40-trip loop around `dot(a, b)` saved "0 clk", and rolled left the callee's 48 products unfolded, +306 B
+    // and 87 -> 170 clocks a call). Such a trip is priced serially.
+    // Only a target with the model asks: the other targets' pricing is untouched.
+    let sees_trip = |_: &_| {
+        !blocks.iter().any(|&block| {
+            run.function.iter_block(block).any(|inst| {
+                matches!(run.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+                    && call_inlined_next(run, inst)
+            })
+        })
+    };
+    let (saved, bound) = match run.outer.target().throughput().filter(sees_trip) {
+        None => ((saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs, (0, 0)),
+        Some(tp) => {
+            let weight = |block: BlockId| projection.map_or(1, |projection| projection.of(block));
+            let trip = throughput::trip(run, &blocks, tp, &weight);
+            let (trips, be) = (i64::from(trips), i64::from(up.be_insns));
+            let units = rolled_units.max(1);
+            let removed: Vec<i64> = tp
+                .resources
+                .iter()
+                .zip(&trip.load)
+                .map(|(resource, load)| {
+                    let costs = &resource.costs;
+                    let unit = load / units;
+                    let control = (trips - 1) * costs.branch + trips * 2 * costs.add;
+                    let averaged = trips * (be + 1) * unit;
+                    saved_units * unit
+                        + (control - averaged).max(0)
+                        + trips * promoted_runs * costs.load
+                        + trips * credited_operands * costs.r#move
+                })
+                .collect();
+            let milli = throughput::saved(tp, &trip, trips, &removed);
+            (((milli + 500) / 1000 - spill_clocks) * runs, (throughput::resource_bound(tp, &trip.load), trip.chain))
+        }
+    };
     why(
         run,
         lp,
@@ -387,6 +476,12 @@ fn priced_verdict(
             spilled,
             float_file: run.outer.target().float_registers(),
             rate,
+            saved_units,
+            unit_clocks: body_clocks / rolled_units,
+            constant_clocks,
+            runs,
+            resource: bound.0,
+            chain: bound.1,
         }
         .line(),
     );
@@ -448,12 +543,20 @@ pub(super) struct Priced {
     pub spilled: i64,
     pub float_file: i64,
     pub rate: i64,
+    /// The terms of `saved`: units the analysis folds, the body's clocks a unit, the clocks the control and the promoted loads add, the runs.
+    pub saved_units: i64,
+    pub unit_clocks: i64,
+    pub constant_clocks: i64,
+    pub runs: i64,
+    /// The trip's resource and chain bounds in milli-clocks (0 where the target states no throughput model).
+    pub resource: i64,
+    pub chain: i64,
 }
 
 impl Priced {
     pub(super) fn line(&self) -> String {
         format!(
-            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}",
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}; saved units {} at {} clk, constant {} clk, runs {}; trip resource {} chain {} mclk",
             self.trips,
             self.saved,
             self.added,
@@ -466,7 +569,13 @@ impl Priced {
             self.rmw,
             self.spilled,
             self.float_file,
-            self.rate
+            self.rate,
+            self.saved_units,
+            self.unit_clocks,
+            self.constant_clocks,
+            self.runs,
+            self.resource,
+            self.chain
         )
     }
 }
@@ -741,7 +850,7 @@ fn promoted_accesses(
                         if loaded.contains(&root) && written.contains(&root) {
                             rmw.insert(root);
                         }
-                    } else {
+                    } else if !immediate_store(run, se, analyzed, one, known) {
                         ints.insert(root);
                     }
                 }
@@ -749,6 +858,45 @@ fn promoted_accesses(
         }
     }
     (found, runs, ints.len(), floats.len(), rmw)
+}
+
+/// A store of an integer that is a constant in each copy (a constant, or a value of the counters alone) and
+/// fits the target's store immediate (`Tti::unroll_store_immediate_bits`; none: never): the reader takes it as
+/// an immediate, so the element holds no register. UP1-REG counts the elements that do: a float is loaded from
+/// the constant pool, an element the loop also loads is a live value, a constant outside the immediate's range
+/// is loaded into a register first.
+fn immediate_store(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    inst: &llrm_mir::module::Instruction,
+    known: &IdSet<ValueId>,
+) -> bool {
+    let bits = run.tti.unroll_store_immediate_bits();
+    let operand = inst.operands[0];
+    let constant = match operand {
+        Operand::Constant(_) => true,
+        Operand::Value(value) => known.contains(&value),
+        Operand::Block(_) => false,
+    };
+    if bits == 0 || !matches!(inst.opcode, Opcode::Store { .. }) || !constant {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    if !se.is_value_scevable(&cx, operand) {
+        return false;
+    }
+    let scev = se.get_scev(&cx, operand);
+    se.get_signed_range(&cx, scev).get_min_signed_bits() <= bits
 }
 
 /// Whether a local array keeps its memory after the full unroll of `lp`: some
@@ -1223,6 +1371,10 @@ fn reads_outer_counter(
                 // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
                 // where the rolled loop is 68 B and 4,181).
                 let mut sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
+                // A constant passed to a call nothing will inline folds in no copy: the
+                // call still runs and takes its arguments in registers (huffman_decode
+                // -O2 m64: `report(decode(t))` in a 12 x 4 nest, 850 B against gcc's 212).
+                sink &= !matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_)) || call_may_fold_arguments(run, inst);
                 // DEVIATE ARM64-UNROLL-PRICE: nor a store into a local array that
                 // stays in memory, which the copies still run (matmul -O2: `a` and
                 // `b` filled by `(i + j) % 3`, read by the rolled `k` loop).
@@ -1255,6 +1407,38 @@ fn reads_outer_counter(
             one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))
         })
     })
+}
+
+/// Whether the arguments of the call `inst` can fold once they are constants:
+/// an intrinsic folds them, a function with a body does where the inliner still
+/// runs and may take it, and any other callee (a declaration, a `noinline`
+/// function, an indirect call's target) runs on its arguments as they come.
+fn call_may_fold_arguments(
+    run: &Run,
+    inst: InstId,
+) -> bool {
+    let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
+    // A callee declared after the pass's snapshot of the module is past `run.globals`.
+    let Some(global) = run.globals.get(id.0 as usize) else { return false };
+    if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.")) {
+        return true;
+    }
+    call_inlined_next(run, inst)
+}
+
+/// Whether the call `inst` is to a function with a body that the inliner, still to run, may take.
+fn call_inlined_next(
+    run: &Run,
+    inst: InstId,
+) -> bool {
+    let Some(id) = llrm_mir::memory::callee(run.context, run.function, inst) else { return false };
+    let Some(global) = run.globals.get(id.0 as usize) else { return false };
+    let llrm_mir::module::GlobalKind::Function(callee) = &global.kind else { return false };
+    // The late pass runs after the inliner took what it would take of this function's calls.
+    run.options.inliner_follows
+        && !run.options.target_unrolling
+        && run.callees.get(&id).is_some_and(|summary| summary.defined)
+        && llrm_mir::facts::Facts::of(&callee.attrs).inline() != Some(llrm_mir::facts::Inlining::Never)
 }
 
 /// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a

@@ -1,7 +1,7 @@
 ; binary32 add, subtract, multiply and divide for the Z80 (sdasz80), round to nearest even, denormals, inf, NaN. The llrm-z80 convention:
 ; first float in HL (low) and DE (high), second float's low word in BC and its high word on the stack above the return
-; address, popped by the caller; result low word in DE... as a long: HL low, DE high is the argument layout, and the
-; result comes back as a long: low word in DE, high word in HL. Changes A BC DE HL IY and the flags; keeps IX and SP.
+; address, popped by the caller; the result, a long, comes back in the registers of the first argument: low word in HL,
+; high word in DE. Changes A BC DE HL IY and the flags; keeps IX and SP.
 ; Every NaN result is the quiet NaN 0x7fc00000. The work is done in a 24-byte frame addressed through IY:
 ;   0..3 a   4..7 b   8 ea  9 eb  10 sign of a / of the result  11 sign of b  12 b's sign mask / na
 ;   13 quotient group count  14..15 product low bytes  20 nb  21 operation  22..23 mul/div exponent
@@ -74,8 +74,7 @@ fsign:	bit	0,c
 	ld	a,#0
 	sbc	a,d
 	ld	d,a
-fret:	ex	de,hl
-	ret
+fret:	ret
 funs:	bit	7,c
 	jr	z,fret
 fzero:	ld	hl,#0
@@ -91,14 +90,14 @@ fbig:	inc	a		; NaN gives 0
 	jr	nz,fzero
 fsat:	bit	7,c
 	jr	nz,5$
-	ld	hl,#0x7fff		; the largest: 0x7fffffff, or 0xffffffff unsigned
+	ld	de,#0x7fff		; the largest: 0x7fffffff, or 0xffffffff unsigned
 	bit	0,c
 	jr	nz,6$
-	ld	h,l
-6$:	ld	de,#0xffff
+	ld	d,e
+6$:	ld	hl,#0xffff
 	ret
 5$:	bit	0,c		; negative: 0x80000000, or 0 unsigned
 	jr	z,fzero
-	ld	hl,#0x8000
-	ld	de,#0
+	ld	de,#0x8000
+	ld	hl,#0
 	ret
