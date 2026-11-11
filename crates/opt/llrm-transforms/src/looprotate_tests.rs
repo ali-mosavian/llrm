@@ -747,3 +747,16 @@ fn test_a_trial_leaves_a_counted_loop_rs1_rotates() {
     );
     assert!(crate::trial::take_rotated().is_empty());
 }
+
+/// ROTATION-TRIAL on a function of over 4096 instructions: known_loads_walks.c -Os (one 6219-instruction
+/// `main`) compiled 2.27x as long for a trial it lost. A big function is not noted and the trial compile
+/// rotates its counted loop as the first.
+#[test]
+fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
+    let padding: String = (0..4200).map(|at| format!("  %p{at} = add i16 %n, {at}\n")).collect();
+    let big = COUNTED.replacen("b0:\n", &format!("b0:\n{padding}"), 1);
+    let _ = crate::trial::take_rotated();
+    assert!(rotated_guard_must_fold_trying(&big, true));
+    assert!(crate::trial::take_rotated().is_empty(), "a big function is not noted");
+    assert!(crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(&big, true)), "the trial rotates it too");
+}

@@ -838,14 +838,17 @@ fn rotate_loop(
         if !header_exit_count_known(run, lp, orig_header) {
             return None;
         }
-        // A counted loop: rotated, unless the trial compile leaves it.
-        if run.options.rotation_trial {
+        // A counted loop: rotated, unless the trial compile leaves it (a big function is rotated in both).
+        if run.options.rotation_trial && run.function.instruction_count() <= trial::ROTATION_TRIAL_MAX_INSTRUCTIONS {
             if trial::unrotated() {
                 return None;
             }
             if let Some(this) = run.this
                 && let Some(name) = run.globals[this.0 as usize].name.as_deref()
             {
+                if llrm_support::debug::enabled("trial") {
+                    eprintln!("trial noted {name}: {} instructions", run.function.instruction_count());
+                }
                 trial::note_rotated(name);
             }
         }

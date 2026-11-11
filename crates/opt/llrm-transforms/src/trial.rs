@@ -111,6 +111,12 @@ pub fn take_rotated() -> Vec<String> {
     ROTATED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
+/// A function of more instructions than this is not priced twice: the second compile of a big function
+/// costs more than the loops in it can save (known_loads_walks.c -Os: one 6219-instruction `main`, 2.27x the
+/// compile time, put back). The functions the trial leaves unrotated hold up to 2038
+/// (x_jpeg_fixed -Os, -213 B), so 1024 gave that away.
+pub const ROTATION_TRIAL_MAX_INSTRUCTIONS: usize = 4096;
+
 /// Whether the unrotated trial is kept at -Os, where bytes are the one strict axis: it
 /// is smaller. A tie keeps the pass's own result.
 pub fn keeps_at_size(added: i64) -> bool {
