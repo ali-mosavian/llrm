@@ -47,6 +47,7 @@ use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
 fn computed_by_priced_multiply(
     tti: &dyn Tti,
     context: &Context,
+    layout: &DataLayout,
     function: &Function,
     operand: Operand,
     depth: u32,
@@ -65,10 +66,23 @@ fn computed_by_priced_multiply(
             };
             tti.reduces_outer_multiply(constant)
         }
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => inst
-            .operands
-            .iter()
-            .any(|&one| computed_by_priced_multiply(tti, context, function, one, depth - 1)),
+        // An index of a GEP is multiplied by the size of the element it steps
+        // over: `g[i]` over rows of 54 bytes is `i * 54`.
+        Opcode::GetElementPtr { source } => {
+            let size = layout.alloc_size(&context.types, source);
+            let scaled = size > 1
+                && matches!(inst.operands.get(1), Some(Operand::Value(_)))
+                && tti.reduces_outer_multiply(Some(u128::from(size)));
+            scaled
+                || depth > 0
+                    && inst
+                        .operands
+                        .iter()
+                        .any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+        }
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => {
+            inst.operands.iter().any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+        }
         _ => false,
     }
 }
@@ -304,7 +318,8 @@ fn plan_loop(
     // by 300. gcc's ivopts does this on every loop (named behaviour only, its code is
     // not translated). x_cordic -O1: 200 `imul` x 19 clocks.
     if !lp.is_innermost()
-        && !(!size && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, function, one.operand, 3)))
+        && !(!size
+            && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
     {
         return planned(None);
     }

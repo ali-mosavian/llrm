@@ -3415,6 +3415,32 @@ fn unique_directory(tag: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
 }
 
+/// Borland's `interrupt` takes the registers it saved as parameters
+/// (`bp, di, si, ds, es, dx, cx, bx, ax`). They were read as the frame's words
+/// in address order, so `ax` was the high half of EDI and the harness cell
+/// CFLL saw `bp = 0, di = 0, si = ES, ds = DS` for a handler that was given
+/// BP = 0xB0B0. The description names each parameter's slot; `ax` is the low
+/// word of EAX.
+#[test]
+fn an_interrupt_handler_parameter_is_the_low_word_of_the_register_slot_it_names() {
+    let directory = unique_directory("intr");
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("isr.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+         @g = global i16 0\n\
+         define x86_intrcc void @isr(i16 %bp, i16 %di, i16 %si, i16 %ds, i16 %es, i16 %dx, i16 %cx, i16 %bx, i16 %ax) {\n  store i16 %ax, ptr @g\n  ret void\n}\n",
+    )
+    .unwrap();
+    let output = directory.join("isr.s");
+    crate::llc::compile(&flags(&["-m16", "-S", "-O0", "-o", output.to_str().unwrap()]), &source, None).unwrap();
+    let text = std::fs::read_to_string(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    // gs fs es ds (2 each), edi esi ebp esp ebx edx ecx (4 each): EAX is 36 bytes up the frame, past BP.
+    assert!(text.contains("word ptr [bp+38]"), "{text}");
+}
+
 #[test]
 fn concurrent_omf_of_calls_with_the_same_arguments_do_not_share_files() {
     assert_ne!(unique_directory("t"), unique_directory("t"));
