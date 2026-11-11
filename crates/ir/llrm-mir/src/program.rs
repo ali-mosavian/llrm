@@ -91,6 +91,7 @@ impl Exports {
     }
 }
 
+#[derive(Clone)]
 pub struct Program {
     pub modules: Vec<Module>,
     pub layout: DataLayout,
