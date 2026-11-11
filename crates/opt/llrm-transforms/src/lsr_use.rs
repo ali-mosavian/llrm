@@ -883,6 +883,17 @@ impl Cost {
                 let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
                 self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
             }
+            // DEVIATE LU20: the loop as written keeps the bound of its exit
+            // test next to the counter; the folded `{-bound,+,1}` counts one.
+            if r.as_written
+                && lu.kind == Kind::ICmpZero
+                && r.tti.lsr_written_exit_bound_is_live()
+                && let Some((start, _, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+            {
+                self.c.num_regs += 1;
+            }
             if loop_cost > 0 && self.size && r.tti.lsr_size_order() {
                 self.size_bytes += 3;
             }
