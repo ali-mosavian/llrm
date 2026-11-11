@@ -27,7 +27,7 @@ The two differ: unroll is late and body-local, so a resume point is cheap and cl
 
 ## Captured state
 - The `Program`: modules, `Context`, target. Cloned once at the snapshot point.
-- Not cloned, recomputed in the tail: every cached analysis (`GlobalsAA`, `GlobalsModRefAnalysis`, `Summaries`, `ProgramSummaries`): the tail manager `require`s/`recompute`s them as the builder already does at that point; `freeze::<Summaries>` happens inside the tail.
+- Analyses, NOT simply recomputed: the pipeline keeps some module-level results stale on purpose (`GlobalsAA` and `GlobalsModRefAnalysis` are made at `compute`/`recompute` and read cached in between; `freeze::<Summaries>`). A tail that rebuilt them fresh would see fresher facts than the continuing run and change the output. So the snapshot forks `ModuleAnalyses` shallowly: the module-level `results`/`dropped`/`stateless`/`required` entries are `Rc` handles shared by the fork (results are read-only), the per-function caches are dropped (they are kept only when equal to a fresh computation: `check_kept`). `ProgramAnalyses` is forked the same way. This is the riskiest part; the md5 identity and the negative control test it.
 - Pass-object state: the Late list is `Fixed::linear(applied, Phase::Late)` built from `Applied` alone; it holds no `Rc` shared with the head (`cloning`, `fused` belong to `ModuleIpo`/`Interprocedural`/`PerLoop`). To check for each pass in the tail by reading, not assuming; the check goes in the PR.
 - Thread-locals: ~280 exist, nearly all counters for `LLRM_DEBUG=time`. State that reads: `TRIGGER` (cleared between passes), the trial notes (`take`/`with`), `FACTS`, `SEEN`, and the id counters (`NEXT_LINEAGE`, `NAMES_MADE`). Today's second compile runs after the first in the same thread with whatever the first left, so no output may depend on them; the md5 identity run is the proof, and the PR lists the readers found.
 - Dump directory: off for the second run, as today (`again.dump = None`).
@@ -43,6 +43,15 @@ The two differ: unroll is late and body-local, so a resume point is cheap and cl
 - Compile time down on x_jpeg_fixed, x_idioms, huge_runs.c, known_loads_walks (`instructions:u`, before/after, per level where a trial fires); no kernel up.
 - Tests (fail-first): a `PassManager::run_from` test (tail from index equals the full run's result on a snapshot); a driver test that a noted trial compiles the head once (counter of head runs 1, tail runs 2).
 - PR body: Pass:/Translation:/General solution: at the top; Translation: none, LLVM has no trial; General solution: resume of a function-pass pipeline from a state snapshot, for any pass that wants a trial.
+
+## S2 measurement (what the head before the walk is, `mir pipeline` total ms, Os, llrm-cc, `LLRM_BISECT` stopped before the walk vs full)
+| kernel | head | full | head share |
+|---|---|---|---|
+| x_jpeg_fixed | 10.4 | 88.5 | 11.8% |
+| x_idioms | 5.5 | 93.2 | 5.9% |
+| huge_runs.c | 4.0 | 37.6 | 10.7% |
+| known_loads_walks.c | 8.6 | 53.5 | 16.1% |
+The head is an upper bound on what S2 saves (the first `rotate@728` runs inside the walk, after it). Around the 10% line: two kernels above, one at it, one well below. Method: a temporary `manager.bisect` from `LLRM_BISECT` (not committed); the walk is the pass run numbered by the `BISECT:` lines.
 
 ## Open questions
 1. S1 first or S1+S2 in one PR? S2's saving is small; recommendation S1 alone, S2 if its measured saving is above 10% of the mid-end on the trial kernels.
