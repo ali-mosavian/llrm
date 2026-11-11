@@ -2224,10 +2224,16 @@ mod tests {
         assert_eq!(target, symbols["_b"].1, "the displacement {rel} must reach _b");
     }
 
-    /// Past the 64K segment no displacement reaches the callee.
+    /// The limit is the segment: 65_534 bytes ahead wraps to -2 and lands on the
+    /// callee, 65_536 is back at the call and cannot. (The distance is the pad
+    /// plus the caller's `ret`.)
     #[test]
-    fn a_near_call_a_segment_or_more_ahead_is_still_refused() {
-        assert!(call_across(65_600).is_err());
+    fn a_near_call_reaches_65534_bytes_and_refuses_65536() {
+        let (segment, symbols) = call_across(65_533).expect("65534 bytes ahead is encodable");
+        let at = symbols["_a"].1;
+        let rel = i16::from_le_bytes([segment.image[at + 2], segment.image[at + 3]]);
+        assert_eq!((at + 4).wrapping_add_signed(isize::from(rel)) & 0xFFFF, symbols["_b"].1 & 0xFFFF);
+        assert!(call_across(65_535).is_err());
     }
 
     /// `object_of` looked each symbol up in the module's public list, a
