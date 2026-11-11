@@ -94,3 +94,23 @@ fn a_right_pair_whose_shl_of_a_constant_folded_is_a_right_funnel_shift() {
     assert_eq!(dag.opcode(root), ISD::FShr);
     assert_eq!(dag.constant(dag.operand(root, 0)), Some(0x3a5c_0f10 >> 1));
 }
+
+/// The folded constant leaves one bit free; x86_16 -Os `call_cleanup_keeps_pair` took the
+/// even one while the shl side held the odd constant, so the pair needed a second `mov` of
+/// 32 bits: 316 B against 307 B before the fold. The free bit follows a constant already in the DAG.
+#[test]
+fn a_folded_constant_takes_the_free_bit_of_a_constant_already_in_the_dag() {
+    let (dag, root) = combined(|dag, x, _, y| {
+        let last = dag.get_constant(31, EVT::I8);
+        let shared = dag.get_constant(0x74b8_1e23, EVT::I32);
+        let folded = dag.get_constant(0x74b8_1e23 >> 1, EVT::I32);
+        let high = dag.get_node(ISD::Shl, EVT::I32, &[x, y]);
+        let inverse = dag.get_node(ISD::Xor, EVT::I8, &[y, last]);
+        let low = dag.get_node(ISD::Srl, EVT::I32, &[folded, inverse]);
+        let pair = dag.get_node(ISD::Or, EVT::I32, &[high, low]);
+        dag.get_node(ISD::Add, EVT::I32, &[pair, shared])
+    });
+    let funnel = dag.operand(root, 0);
+    assert_eq!(dag.opcode(funnel), ISD::FShl);
+    assert_eq!(dag.constant(dag.operand(funnel, 1)), Some(0x74b8_1e23));
+}
