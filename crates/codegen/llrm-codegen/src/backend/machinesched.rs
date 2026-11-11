@@ -483,6 +483,7 @@ pub fn graph(
     regs: Regs,
     bits: u32,
     model: &dyn SchedulingModel,
+    exit: Option<&Insn>,
 ) -> Graph {
     let n = insns.len();
     let mut effects: Vec<_> = insns.iter().map(|one| liveness::effect(regs, bits, one)).collect();
@@ -679,19 +680,36 @@ pub fn graph(
         }
         since.push(later);
     }
+    // `ExitSU` is the instruction that ends the region: what it reads is held
+    // for the latency of its def (`addVRegUseDeps`, `addPhysRegDeps`).
+    let mut exit_latency = vec![0u32; n];
+    if let (true, Some(exit)) = (model.exit_edges(), exit) {
+        let mut read = |def: usize| {
+            register_succ[def] = true;
+            exit_latency[def] = exit_latency[def].max(model.def_latency(&insns[def]));
+        };
+        for value in &exit.uses {
+            if let Some((Some(def), _)) = by_value.get(value) {
+                read(*def);
+            }
+        }
+        if let Some(effect) = liveness::effect(regs, bits, exit) {
+            for bit in bits_of(effect.all_reads().mask() & !memory_lane) {
+                if let Some(&def) = by_lane[bit].defs.last() {
+                    read(def);
+                }
+            }
+        }
+    }
     // `buildSchedGraph`: a def with no reader in the region, slower than one
     // cycle, holds `latency - 1` to the region end.
-    let exit_latency: Vec<u32> = (0..n)
-        .map(|node| {
-            let one = &insns[node];
-            let latency = model.def_latency(one);
-            if model.exit_edges() && !register_succ[node] && latency > 1 && (!one.defines.is_empty() || memory(one).0) {
-                latency - 1
-            } else {
-                0
-            }
-        })
-        .collect();
+    for node in 0..n {
+        let one = &insns[node];
+        let latency = model.def_latency(one);
+        if model.exit_edges() && !register_succ[node] && latency > 1 && (!one.defines.is_empty() || memory(one).0) {
+            exit_latency[node] = latency - 1;
+        }
+    }
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (later, before) in preds.iter().enumerate() {
         for &earlier in before {
@@ -1409,7 +1427,7 @@ pub fn scheduled(
                         let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
                         Tracking { model, live_out, live_thru }
                     });
-                    let mut deps = graph(slice, regs, bits, sched);
+                    let mut deps = graph(slice, regs, bits, sched, insns.get(region.end).map(|one| &**one));
                     if trace() {
                         let held: Vec<_> = deps.exit_latency.iter().enumerate().filter(|(_, l)| **l > 0).collect();
                         eprintln!("machinesched exit edges {held:?}");
@@ -1520,7 +1538,7 @@ mod tests {
             .collect();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         let started = std::time::Instant::now();
-        let found = graph(&insns, regs, 16, &GenericModel);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(found.preds.len(), insns.len());
         assert!(started.elapsed().as_millis() < 1000, "{:?} for 40,000 adds", started.elapsed());
     }
@@ -1547,7 +1565,7 @@ mod tests {
             ));
         }
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16, &GenericModel);
+        let mut found = graph(&insns, regs, 16, &GenericModel, None);
         let started = std::time::Instant::now();
         copy_constrain(&insns, &mut found, &|_| false);
         assert!(started.elapsed().as_millis() < 1000, "{:?} to constrain 6,000 copies", started.elapsed());
@@ -1570,7 +1588,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16, &GenericModel);
+        let mut found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(
             order_region(&insns, &found, None, &GenericModel),
             [0, 1, 2, 3],
@@ -1596,7 +1614,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16, &GenericModel);
+        let mut found = graph(&insns, regs, 16, &GenericModel, None);
         copy_constrain(&insns, &mut found, &|value| value == 1);
         assert!(found.weak_preds.iter().all(Vec::is_empty), "{:?}", found.weak_preds);
     }
@@ -1608,7 +1626,7 @@ mod tests {
     fn test_the_graph_orders_data_and_a_load_before_a_store_and_nothing_else() {
         let insns = body();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16, &GenericModel);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(found.preds[1], [0], "the add reads the first load");
         assert!(found.preds[2].is_empty(), "the second load is ordered with nothing before it: {:?}", found.preds);
         assert_eq!(found.preds[3], [0, 1, 2], "the store follows both loads and the add");
@@ -1644,7 +1662,7 @@ mod tests {
     #[test]
     fn test_accesses_to_different_slots_are_not_ordered_by_the_memory_lane() {
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let order = |insns: Vec<Arc<Insn>>| graph(&insns, regs, 16, &GenericModel).preds;
+        let order = |insns: Vec<Arc<Insn>>| graph(&insns, regs, 16, &GenericModel, None).preds;
         // No operand: the lane alone, a store then a load are ordered.
         assert_eq!(order(vec![access(0, true, None), access(1, false, None)])[1], [0]);
         // The operand says another slot: no edge.
@@ -1706,7 +1724,7 @@ mod tests {
             insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16, &GenericModel);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         let model = one_set(2);
         let tracking = super::Tracking { model: &model, live_out: vec![6], live_thru: vec![] };
         assert_eq!(order_region(&insns, &found, Some(&tracking), &GenericModel), [0, 1, 3, 2, 4, 5]);
@@ -1804,7 +1822,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(3), imm(1)]), vec![4], vec![3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16, &GenericModel);
+        let found = graph(&insns, regs, 16, &GenericModel, None);
         assert_eq!(found.latencies[3], [4], "the reader still waits four cycles for the load");
         assert_eq!(order_region(&insns, &found, None, &GenericModel), [0, 1, 2, 3]);
     }
@@ -1821,7 +1839,7 @@ mod tests {
             insn(1, semantics(Operation::Binary, "add", vec![held(3)], vec![held(2), held(2)]), vec![3], vec![2]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        assert_eq!(graph(&insns, regs, 16, &GenericModel).preds[1], [0], "the zero stays before the add");
+        assert_eq!(graph(&insns, regs, 16, &GenericModel, None).preds[1], [0], "the zero stays before the add");
     }
 
     /// Flags no one reads before the next flag writer are a dead def, and the
@@ -1838,7 +1856,7 @@ mod tests {
             insn(2, semantics(Operation::Binary, "add", vec![held(4)], vec![held(2), held(3)]), vec![4], vec![2, 3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 32, &GenericModel);
+        let found = graph(&insns, regs, 32, &GenericModel, None);
         assert!(found.preds[1].is_empty(), "the second add waits for the first only through flags: {:?}", found.preds);
         assert_eq!(found.preds[2], [0, 1], "the third reads both");
     }
@@ -1862,7 +1880,7 @@ mod tests {
         let carry =
             insn(1, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(6)]), vec![5], vec![5, 6]);
         let insns = vec![compare, carry, add(2, 10, 11, 12), add(3, 13, 14, 15), add(4, 16, 17, 18)];
-        let g = graph(&insns, regs, 32, &GenericModel);
+        let g = graph(&insns, regs, 32, &GenericModel, None);
         assert!(g.preds[3].contains(&1), "the second dead write stays after the adc: {g:?}");
     }
 
@@ -1945,7 +1963,7 @@ mod tests {
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![wide(1), wide(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Binary, "adc", vec![held(3)], vec![held(3), held(4)]), vec![3], vec![3, 4]),
         ];
-        assert_eq!(graph(&insns, regs, 16, &GenericModel).preds[1], [0], "the adc stays after the fcom");
+        assert_eq!(graph(&insns, regs, 16, &GenericModel, None).preds[1], [0], "the adc stays after the fcom");
         for name in ["fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "ftst", "fxam"] {
             let one = insn(0, semantics(Operation::Compare, name, vec![], vec![]), vec![], vec![]);
             assert!(x87_compare(&one), "{name}");
@@ -1978,7 +1996,7 @@ mod tests {
             insn(1, semantics(Operation::Unary, "seta", vec![byte], vec![]), vec![3], vec![]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
-        assert_eq!(graph(&insns, regs, 32, &GenericModel).preds[1], [0], "the set stays after the fcom");
+        assert_eq!(graph(&insns, regs, 32, &GenericModel, None).preds[1], [0], "the set stays after the fcom");
     }
 
     /// The audit of the two effects the re-land left unchecked. A shift by `cl`
@@ -1997,7 +2015,7 @@ mod tests {
         let flags = crate::backend::peephole::Lanes::flags(ARITHMETIC_FLAGS);
         let shift_effect = liveness::effect(regs, 32, &shift).expect("a shift by cl has a decoded effect");
         assert!(!shift_effect.writes.is_disjoint(&flags), "the shl writes the flags");
-        let g = graph(&[compare.clone(), shift, carry], regs, 32, &GenericModel);
+        let g = graph(&[compare.clone(), shift, carry], regs, 32, &GenericModel, None);
         assert!(g.preds[2].contains(&1), "adc stays after the shl: {g:?}");
         let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let fcmov = insn(1, semantics(Operation::Move, "fcmove", vec![wide(7)], vec![wide(8)]), vec![7], vec![7, 8]);
@@ -2005,7 +2023,7 @@ mod tests {
         // compare set.
         let known = liveness::effect(regs, 32, &fcmov).map(|effect| !effect.all_reads().is_disjoint(&flags));
         assert!(known.is_none_or(|reads| reads), "an fcmov with a known effect reads the flags");
-        let g = graph(&[compare, fcmov], regs, 32, &GenericModel);
+        let g = graph(&[compare, fcmov], regs, 32, &GenericModel, None);
         assert_eq!(g.preds[1], [0], "the fcmov stays after the cmp: {g:?}");
     }
 
@@ -2024,7 +2042,7 @@ mod tests {
             insn(3, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(4)]), vec![5], vec![5, 4]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
-        let found = graph(&insns, regs, 32, &GenericModel);
+        let found = graph(&insns, regs, 32, &GenericModel, None);
         assert!(found.preds[1].contains(&0), "the add stays after the or: {found:?}");
     }
 
@@ -2220,7 +2238,7 @@ mod tests {
                     insn(k as i64, semantics(Operation::Binary, "add", vec![held(value)], sources), vec![value], uses)
                 })
                 .collect();
-            let found = super::graph(&insns, regs, 16, &GenericModel);
+            let found = super::graph(&insns, regs, 16, &GenericModel, None);
             let model = one_set(1 + next(4) as u32);
             let tracking = super::Tracking { model: &model, live_out: vec![n as u32], live_thru: vec![] };
             let order = super::order_region(&insns, &found, Some(&tracking), &GenericModel);
@@ -2276,7 +2294,7 @@ mod tests {
             insn(1, semantics(Operation::Move, "mov", vec![held(5)], vec![held(3)]), vec![5], vec![3]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let found = graph(&insns, regs, 16, &Both);
+        let found = graph(&insns, regs, 16, &Both, None);
         // Only the add writes flags: the nodes are independent.
         assert_eq!((&found.preds[0][..], &found.preds[1][..]), (&[][..], &[][..]));
         let model = one_set(2);
@@ -2395,7 +2413,7 @@ mod tests {
             insn(3, semantics(Operation::Move, "mov", vec![held(4)], vec![held(2)]), vec![4], vec![2]),
         ];
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let mut found = graph(&insns, regs, 16, &Pairs);
+        let mut found = graph(&insns, regs, 16, &Pairs, None);
         let apart = super::order_region(&insns, &found, None, &Pairs);
         let distance = |order: &[usize]| {
             let at = |node: usize| order.iter().position(|&each| each == node).unwrap();
@@ -2405,5 +2423,73 @@ mod tests {
         super::cluster_mem_ops(&insns, &mut found, &Pairs);
         let together = super::order_region(&insns, &found, None, &Pairs);
         assert_eq!(distance(&together), 1, "the loads are adjacent, {together:?}");
+    }
+
+    /// A model with the region-end edges and a four-cycle def.
+    struct Exiting;
+
+    impl crate::backend::schedmodel::SchedulingModel for Exiting {
+        fn machine(&self) -> crate::backend::schedboundary::Machine {
+            GenericModel.machine()
+        }
+
+        fn policy(&self) -> RegionPolicy {
+            GenericModel.policy()
+        }
+
+        fn unit(
+            &self,
+            insn: &Insn,
+        ) -> crate::backend::schedboundary::Unit {
+            GenericModel.unit(insn)
+        }
+
+        fn def_latency(
+            &self,
+            _: &Insn,
+        ) -> u32 {
+            4
+        }
+
+        fn exit_edges(&self) -> bool {
+            true
+        }
+    }
+
+    /// pin: what the instruction that ends the region reads is held for the
+    /// latency of its def (`ExitSU`'s data edges), so the compare that feeds a
+    /// branch is not ready the moment the bottom zone starts. Without the
+    /// edge arm64 `mandel` placed the counter's `add` before the `cmp` and
+    /// copied the counter back (5 copies; the pin has the `cmp` first).
+    /// A def nothing reads holds one cycle less; a def the end reads, the
+    /// whole latency.
+    #[test]
+    fn test_what_the_region_end_reads_is_held_for_its_defs_latency() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+        ];
+        let end = insn(2, semantics(Operation::Move, "mov", vec![cell(8)], vec![held(1)]), vec![], vec![1]);
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let none = graph(&insns, regs, 16, &Exiting, None);
+        assert_eq!(none.exit_latency, [3, 3], "no end: both unread defs hold latency less one");
+        let read = graph(&insns, regs, 16, &Exiting, Some(&*end));
+        assert_eq!(read.exit_latency, [4, 3], "the end reads the first: it holds the whole latency");
+    }
+
+    /// Every target but arm64 keeps `exit_edges()` off: the region end must not
+    /// change its graph (x86, m68k, 6502, z80 and wasm are bit-identical).
+    #[test]
+    fn test_a_model_without_exit_edges_ignores_the_region_end() {
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![cell(0)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![cell(4)]), vec![2], vec![]),
+        ];
+        let end = insn(2, semantics(Operation::Move, "mov", vec![cell(8)], vec![held(1)]), vec![], vec![1]);
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let none = graph(&insns, regs, 16, &GenericModel, None);
+        let read = graph(&insns, regs, 16, &GenericModel, Some(&*end));
+        assert_eq!(read.exit_latency, none.exit_latency, "the end's reads are not held");
+        assert_eq!(read.preds, none.preds);
     }
 }

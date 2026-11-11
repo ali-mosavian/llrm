@@ -130,6 +130,18 @@ class Members(unittest.TestCase):
                 rows = open(out).read().splitlines()
             self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
 
+    def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
+        """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
+        compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        self.assertEqual((index["__mulsf3"], index["__divsf3"]), ("config/6502/sf32_6502.c",) * 2)
+        text = crlib.member(rt, CC, "config/6502/sf32_6502.c", ["-Os"])
+        for name in ("__mulsf3", "__divsf3"):
+            self.assertIn(name + ":", text)
+
     def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
         import crlib

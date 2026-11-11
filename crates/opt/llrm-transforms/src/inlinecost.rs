@@ -93,7 +93,8 @@
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
+//! - D10 (`-finline-recursive`; on by default at -O2 and -O3 where the target
+//!   states bounds (x86), `-fno-inline-recursive` turns it off): a callee that calls itself is
 //!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
 //!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
 //!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,

@@ -241,27 +241,19 @@ impl Tti for M68k {
         kind: CostKind,
     ) -> Cost {
         if let Some(Ty::Int(bits)) = ret {
-            thread_local! {
-                static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
-                    const { std::cell::RefCell::new(Vec::new()) };
-            }
-            let lowering = LOWERING.with(|cache| {
-                let mut cache = cache.borrow_mut();
-                if let Some((_, one)) = cache.iter().find(|(cpu, _)| *cpu == self.cpu) {
-                    return one.clone();
-                }
-                let made = Rc::new(crate::dagisel::lowering::target_lowering_with(self.cpu, true));
-                cache.push((self.cpu, made.clone()));
-                made
-            });
-            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review 2026-12-20): the pin
-            // prices an expansion at 1 under `TCK_CodeSize` (one call); the loop unroller asks
-            // that kind, so a `smul.fix.sat` that expands to dozens of instructions read as
-            // one and the 3x3 loops of `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
+            let lowering = lowering_of(self.cpu);
+            // DEVIATE M68K-INTRINSIC-EXPANSION (owner m68k-68020, review
+            // 2026-12-20): the pin prices an expansion at 1 under
+            // `TCK_CodeSize` (one call); the loop unroller asks
+            // that kind, so a `smul.fix.sat` that expands to dozens of
+            // instructions read as one and the 3x3 loops of
+            // `fixed_point` unrolled (-O2 1644 -> 3604 B at the 68020).
             // Here an expansion costs the same under every kind.
             let _ = kind;
             let code_size = false;
-            if let Some(cost) = llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size) {
+            if let Some(cost) =
+                llrm_codegen::backend::selectiondag::intrinsic_cost::cost(&lowering, name, bits, code_size)
+            {
                 return Cost::of(cost);
             }
         }
@@ -628,17 +620,69 @@ impl Tti for M68k {
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
         // line). Past 32 bits the m68k makes a library call of it, and the
         // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
-        // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
+        // `__mulsi3` calls for a loop of 16. Only the call is priced so: a
+        // multiply `ExpandIntRes_MUL` makes of 32-bit `UMUL_LOHI`s
+        // (`mulu.l`, 68020), or `visitMUL` makes of shifts and an add, is the
+        // pin's one operation. Exit: none, a target's prices.
         if matches!(
             op,
             ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
         )
             && matches!(ty, Ty::Int(bits) if bits > 32)
+            && !(op == ArithOp::Mul && self.multiply_makes_no_call(left, right))
         {
             return Cost::EXPENSIVE;
         }
         Basic.arithmetic_cost(op, ty, kind, left, right)
     }
+}
+
+impl M68k {
+    /// Whether the lowering writes a wide multiply of `left` by `right` with no
+    /// library call: from 32-bit `UMUL_LOHI`s when the target has them
+    /// (`ExpandIntRes_MUL`), else only a power of two, its negation, or a
+    /// positive constant of shifts and an add
+    /// ([`crate::dagisel::mulprice::chain`]; any other negative one is a call).
+    fn multiply_makes_no_call(
+        &self,
+        left: OperandInfo,
+        right: OperandInfo,
+    ) -> bool {
+        use llrm_codegen::backend::selectiondag::{
+            Action,
+            isd::ISD,
+            mvt::{EVT, MVT},
+        };
+        let wide = lowering_of(self.cpu).operation_action(ISD::UMulLoHi, EVT::Simple(MVT::I32));
+        if matches!(wide, Action::Legal | Action::Custom | Action::Promote) {
+            return true;
+        }
+        [left, right].into_iter().any(|operand| {
+            operand.power_of_two
+                || operand.negated_power_of_two
+                || operand
+                    .value
+                    .and_then(|value| i32::try_from(value).ok())
+                    .is_some_and(|value| value > 0 && crate::dagisel::mulprice::chain(self.cpu, value as u32).is_some())
+        })
+    }
+}
+
+/// The CPU's SelectionDAG lowering, built once per thread.
+fn lowering_of(cpu: crate::dagisel::hooks::Cpu) -> Rc<llrm_codegen::backend::selectiondag::TargetLowering> {
+    thread_local! {
+        static LOWERING: std::cell::RefCell<Vec<(crate::dagisel::hooks::Cpu, Rc<llrm_codegen::backend::selectiondag::TargetLowering>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    LOWERING.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((_, one)) = cache.iter().find(|(known, _)| *known == cpu) {
+            return one.clone();
+        }
+        let made = Rc::new(crate::dagisel::lowering::target_lowering_with(cpu, true));
+        cache.push((cpu, made.clone()));
+        made
+    })
 }
 
 #[cfg(test)]

@@ -199,6 +199,7 @@ pub mod condtocond;
 pub mod congruentiv;
 pub mod constanthoisting;
 pub mod constmerge;
+pub mod mergefunc;
 pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
