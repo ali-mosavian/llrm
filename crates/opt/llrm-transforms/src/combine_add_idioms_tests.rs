@@ -300,10 +300,10 @@ fn the_div_ceil_idiom_through_a_zext_is_a_zext_of_the_udiv() {
 /// `X + (Y-1)` able to wrap, so the idiom stays.
 #[test]
 fn the_div_ceil_idiom_stays_where_the_add_can_wrap() {
-    for params in ["i8 range(i8 0, 101) %x, i8 %y", "i8 %x, i8 range(i8 1, 11) %y"] {
+    // Flag inference marks the final add `nuw` only where `X` is bounded.
+    for (params, inferred) in [("i8 range(i8 0, 101) %x, i8 %y", true), ("i8 %x, i8 range(i8 1, 11) %y", false)] {
         let body = div_ceil_body("i8", "i8", false);
-        // Flag inference still marks the final add `nuw` (a quotient plus a bit).
-        let kept = body.replace("%result = add i8", "%result = add nuw i8");
+        let kept = if inferred { body.replace("%result = add i8", "%result = add nuw i8") } else { body.clone() };
         check("i8", params, &body, &kept);
     }
 }
