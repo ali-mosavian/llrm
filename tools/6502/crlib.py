@@ -47,7 +47,8 @@ def member(rt, cc, file, flags, target="6502-sim65"):
     """ca65 text of `file` compiled for the 6502 with `flags` (the program's level), cached. Exports are cut to the globals the index names:
     llrm-cc exports statics too, and two members would then define the same helper."""
     if file in asm_members(rt):
-        return (rt / file).read_text()
+        # ca65 runs in the work directory: an .include is pasted in
+        return re.sub(r'^\s*\.include\s+"([^"]+)"', lambda m: (rt / file).parent.joinpath(m.group(1)).read_text(), (rt / file).read_text(), flags=re.M)
     key = (rt, cc, file, tuple(flags), target)
     with _LOCK:
         if key in _MEMBERS:
