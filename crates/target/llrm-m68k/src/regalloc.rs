@@ -463,10 +463,19 @@ pub fn commute_tied(function: &mut MFunction) {
 /// `DR32`, and with `s` and `i` three values needed the two scratch data
 /// registers: the counter took `d2` (a push and a pop, +4 B against gcc's `a0`
 /// for `a`). Owner: m68k. Exit: 2026-11-28. Off for `Options::PINNED`.
-pub fn relax_copy_only_classes(function: &mut MFunction) {
+pub fn relax_copy_only_classes(function: &mut MFunction) -> bool {
+    let mut changed = false;
     let count = function.classes.len();
     let mut wanted = vec![Class::Xr32; count];
     let mut fixed = vec![false; count];
+    let (mut defs, mut uses) = (vec![0u32; count], vec![0u32; count]);
+    for operand in function.blocks.iter().flat_map(|block| &block.insts).flat_map(|inst| &inst.operands) {
+        match operand {
+            Operand::Def(Reg::Virt(v)) => defs[*v as usize] += 1,
+            Operand::Use(Reg::Virt(v)) => uses[*v as usize] += 1,
+            _ => {}
+        }
+    }
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         if inst.kind == Kind::Copy {
             // a copy to or from a byte or word view reads that view of the
@@ -510,10 +519,12 @@ pub fn relax_copy_only_classes(function: &mut MFunction) {
         }
     }
     for v in 0..count {
-        if !fixed[v] && function.classes[v] == Class::Dr32 && wanted[v] == Class::Xr32 {
+        if !fixed[v] && defs[v] == 1 && uses[v] == 1 && function.classes[v] == Class::Dr32 && wanted[v] == Class::Xr32 {
             function.classes[v] = Class::Xr32;
+            changed = true;
         }
     }
+    changed
 }
 
 /// `MachineCopyPropagation`'s spurious copies; the 8 and 16-bit classes copy

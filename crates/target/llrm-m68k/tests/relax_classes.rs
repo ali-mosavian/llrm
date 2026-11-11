@@ -52,3 +52,19 @@ fn a_value_a_flag_setter_defines_stays_a_data_value() {
     relax_copy_only_classes(&mut f);
     assert_eq!(f.classes[1], Class::Dr32, "a move into an address register sets no codes");
 }
+
+/// A value several copies read joins them all: widened, it moves between
+/// register kinds around each (`quicksort` -O2 68000: +4 B and +4096 clk).
+#[test]
+fn a_value_copied_to_several_places_keeps_its_class() {
+    let mut f = function(
+        vec![Class::Xr32, Class::Dr32, Class::Xr32, Class::Xr32],
+        vec![
+            Inst::copy(Reg::Virt(1), Reg::Virt(0)),
+            Inst::copy(Reg::Virt(2), Reg::Virt(1)),
+            Inst::copy(Reg::Virt(3), Reg::Virt(1)),
+        ],
+    );
+    relax_copy_only_classes(&mut f);
+    assert_eq!(f.classes[1], Class::Dr32);
+}
