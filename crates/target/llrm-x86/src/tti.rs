@@ -1112,6 +1112,10 @@ impl Tti for X86 {
         self.tuning.lsr_size_order
     }
 
+    fn lsr_complexity_limit(&self) -> usize {
+        self.tuning.lsr_complexity_limit
+    }
+
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }

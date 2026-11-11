@@ -345,6 +345,8 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_order`.
     pub lsr_size_order: bool,
+    /// `Tti::lsr_complexity_limit`.
+    pub lsr_complexity_limit: usize,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -538,6 +540,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_complexity_limit: 65535,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_trial_at_size: false,

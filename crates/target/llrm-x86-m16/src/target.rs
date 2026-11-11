@@ -305,6 +305,13 @@ impl Machine for Dos {
             // `isIntDivCheap` is `minsize` alone
             // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
             divide_by_bytes: true,
+            // DEVIATE LU16 (owner m16, exit 2026-11-24): the pin narrows LSR's search
+            // space past 65535 solutions by the register most uses share, without
+            // costing it. Where a scaled index is an instruction (real mode) that pick
+            // forced `a[i][j]` and `b[i][j]` onto one `j` scaled by 2 (`lea bx,[cx+cx]`
+            // per trip); searched whole, LSR takes the step-2 index both stores share.
+            // matmul -Os 289 -> 270 B, -4% clk; no other of 54 C cells moves (2026-11-11).
+            lsr_complexity_limit: 1 << 20,
             // DEVIATE DIV-LIVE-M16 (owner m16, exit 2026-12-01; no pin hook, as DIV-LIVE): at
             // -O1 and -Os a divide by a constant keeps its `div` only while at most three
             // 16-bit words are live across it (six registers less the three it pins); `div` pins eax, edx and a divisor register, the

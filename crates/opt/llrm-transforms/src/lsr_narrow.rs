@@ -31,21 +31,19 @@ use crate::lsr_collect::Collection;
 use crate::lsr_formula::{Formula, Immediate};
 use crate::lsr_use::{Cost, Kind, is_legal_use};
 
-/// `ComplexityLimit` (`-lsr-complexity-limit`).
-const COMPLEXITY_LIMIT: usize = u16::MAX as usize;
-
 impl Collection<'_, '_> {
     /// `EstimateSearchSpaceComplexity`: the worst-case number of solutions the
     /// solver might consider, capped at the limit.
     pub fn estimate_search_space_complexity(&self) -> usize {
+        let limit = self.tti.lsr_complexity_limit();
         let mut power = 1usize;
         for lu in &self.uses {
             let size = lu.formulae.len();
-            if size >= COMPLEXITY_LIMIT {
-                return COMPLEXITY_LIMIT;
+            if size >= limit {
+                return limit;
             }
             power *= size;
-            if power >= COMPLEXITY_LIMIT {
+            if power >= limit {
                 break;
             }
         }
@@ -53,7 +51,7 @@ impl Collection<'_, '_> {
     }
 
     fn too_complex(&self) -> bool {
-        self.estimate_search_space_complexity() >= COMPLEXITY_LIMIT
+        self.estimate_search_space_complexity() >= self.tti.lsr_complexity_limit()
     }
 
     /// `NarrowSearchSpaceByDetectingSupersets`: a formula with a constant or a
