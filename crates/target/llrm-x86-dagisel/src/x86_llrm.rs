@@ -53,6 +53,13 @@ pub const LLRM_PORT: u16 = 24586;
 /// The machine opcode `LLRM_PORT` becomes.
 pub const PORT_OPCODE: u16 = 30014;
 
+/// `X86ISD::LLRM_PUSHF` (x86-m16): `pushf` before a call of an interrupt
+/// function.
+pub const LLRM_PUSHF: u16 = 24588;
+
+/// The machine opcode `LLRM_PUSHF` becomes.
+pub const PUSHF_OPCODE: u16 = 30027;
+
 /// `X86ISD::LLRM_TC_RETURN` (sdag-a): `TC_RETURN` at m16, where the pin has no
 /// pattern for it (a far callee is jumped to, `jmp far`).
 pub const LLRM_TC_RETURN: u16 = 24587;
@@ -86,6 +93,7 @@ pub fn llrm_opcode(node: u16) -> Option<u16> {
         LLRM_FARCALL => Some(FARCALL_OPCODE),
         LLRM_CODE => Some(CODE_OPCODE),
         LLRM_PORT => Some(PORT_OPCODE),
+        LLRM_PUSHF => Some(PUSHF_OPCODE),
         LLRM_TC_RETURN => Some(TC_RETURN_OPCODE),
         n if LLRM_NODES.contains(&n) => Some(LLRM_ASM_OPCODE),
         _ => None,
