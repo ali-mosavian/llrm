@@ -5,7 +5,7 @@
 //! # How it works
 //! A byte argument takes the first free of `a l h e d c b`, a word the first
 //! free pair of `hl de bc`, as `Convention::place` says. A byte result leaves
-//! in `a`, a word in the pair `de`, a long in `de` then `hl`. The values arrive
+//! in `a`, a word in the pair `de`, a long in `hl` then `de` (the order of the argument registers). The values arrive
 //! already split into legal `i8` and `i16` parts, so an `i32` is two words.
 //!
 //! An argument that fits no register goes on the stack at the offset
