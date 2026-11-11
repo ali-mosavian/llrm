@@ -74,9 +74,9 @@ thread_local! {
     /// selected the second time, with the shifts and adds of `x * (2^k +- 1)`
     /// kept (`driver::selections_with_alternatives`).
     pub static DECOMPOSE_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// An unsized function's long shifts by a constant and long multiplies by `2^k +- 1` are each priced as a
-    /// site (`site_price`), the routine's call or the inline form, whichever costs less.
-    pub static PRICED_SITES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Every long multiply of an unsized function is the `__mulsi3` call, the near-power constants included
+    /// (the form `DECOMPOSE_MULS` is the inline counterpart of, for a sized one).
+    pub static CALL_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function with a constant-count `memset` is selected the second time, each such fill an
     /// inline `ldir` fill (`Z80Calling::emit_memset`) where the first selection calls `__memseta`; the caller
     /// prices the two with the routine linked once (`compile::decomposed_functions`).
@@ -173,8 +173,6 @@ pub enum Refusal {
 struct Z80Combines {
     /// The size routine `__mulsi3` is this function's long multiply.
     long_multiply: bool,
-    /// The long multiplies are priced per site (`site_price::mul_inline`).
-    priced: bool,
 }
 
 /// `2^k +- 1` (k up to 8): shifts and one add (`decompose_mul_by_constant`).
@@ -220,7 +218,6 @@ impl CombineHooks for Z80Combines {
     ) -> bool {
         match vt {
             EVT::I8 | EVT::I16 => true,
-            EVT::I32 if self.priced => crate::site_price::mul_inline(c),
             EVT::I32 => !self.long_multiply && near_power_factor(c),
             _ => false,
         }
@@ -356,19 +353,19 @@ pub fn select_block(
     // a long multiply is a call (`RTLIB::MUL_I32`) in a module with enough of
     // them to pay for the routine (`prepare::mark_long_multiplies`), at every
     // level: four word multiplies inline cost more bytes and more T-states
-    let priced = PRICED_SITES.with(std::cell::Cell::get) && !sized && long_multiply;
-    if priced {
-        tli.set_priced_shift_call(crate::site_price::shift_calls);
-    }
+    let all_calls = CALL_MULS.with(std::cell::Cell::get);
+    tli.set_force_shift_calls(all_calls && !sized);
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
         if !sized {
             tli.set_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
-            tli.set_inline_constant_mul(if priced { crate::site_price::mul_inline } else { near_power_factor });
+            if !all_calls {
+                tli.set_inline_constant_mul(near_power_factor);
+            }
         }
     }
     let mut lowering = Z80Lowering { sized };
-    let mut combines = Z80Combines { long_multiply: sized && long_multiply, priced };
+    let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
