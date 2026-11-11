@@ -691,6 +691,13 @@ pub trait Machine {
         self.size_costs()
     }
 
+    /// The prices of the Os inline trial's byte estimate (`function_bytes`),
+    /// which may be calibrated against the bytes written where `size_costs`
+    /// is not. By default `size_costs`.
+    fn trial_costs(&self) -> OperationCosts {
+        self.size_costs()
+    }
+
     /// Whether a division by a constant stays a divide instruction on
     /// `bits`-bit values, `size` saying the build is for size
     /// (`isIntDivCheap`, read the other way): the remainder is then the
@@ -1050,6 +1057,9 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// Whether `function_bytes` scales the prices by [`OperationCosts::words`] (an `i32` add on an 8-bit machine is
+    /// four byte adds). False: one price per operation, the table the other byte decisions read.
+    pub width_scaled: bool,
     /// Whether a GEP with only constant indices costs nothing: the displacement is part of the load or store that
     /// reads the address (`ldy #offset`, an absolute address plus a constant). False: priced as `address`.
     pub constant_offsets_fold: bool,
@@ -1235,6 +1245,7 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            width_scaled: false,
             constant_offsets_fold: false,
             branch_in_compare: false,
             direct_load: 0,

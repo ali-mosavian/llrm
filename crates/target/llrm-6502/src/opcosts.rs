@@ -78,7 +78,13 @@ pub fn clocks(cpu: Cpu) -> OperationCosts {
 
 /// Prices in code bytes.
 pub fn bytes(cpu: Cpu) -> OperationCosts {
-    let mut costs = table(cpu, |(_, bytes)| bytes);
+    table(cpu, |(_, bytes)| bytes)
+}
+
+/// The prices of the Os inline trial's byte estimate: [`bytes`] refit to the
+/// bytes the backend writes.
+pub fn trial_bytes(cpu: Cpu) -> OperationCosts {
+    let mut costs = bytes(cpu);
     calibrate(&mut costs);
     costs
 }
@@ -93,6 +99,7 @@ pub fn bytes(cpu: Cpu) -> OperationCosts {
 /// 6502. Exit: a generated scheduling description of the instruction tables
 /// (2026-11-20).
 fn calibrate(costs: &mut OperationCosts) {
+    costs.width_scaled = true;
     // A load or store from a global or a stack slot is an absolute address;
     // through a pointer it is `(zp),y`.
     costs.direct_load = 2;

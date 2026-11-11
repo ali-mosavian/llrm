@@ -749,7 +749,7 @@ impl ProgramPass for Walk {
                                     // kernel's copy
                                     // 19 B under its 180 (+5 B built; qmove
                                     // -Os).
-                                    let costs = program.target.size_costs();
+                                    let costs = program.target.trial_costs();
                                     let now = module.global(id).function().expect("a body");
                                     // DEVIATE (owner softfloat, exit 2026-11-20): the callee's bytes are summed per
                                     // site off the byte gate's targets, as the x86 model was fit with.
@@ -811,7 +811,7 @@ impl ProgramPass for Walk {
                                 // pairs saved on every call, +441k
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
-                                let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
+                                let kept_bytes = function_bytes(module, &program.layout, &program.target.trial_costs(), &kept);
                                 if trial_accepted(tti.opt_size_inline_byte_gate(), tti.opt_size_inline_trial_by_bytes(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
@@ -1389,7 +1389,7 @@ pub fn operation_counts(
     use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
     use llrm_mir::tti::Ty;
     let words = |ty: Option<llrm_mir::types::TypeId>| match ty.and_then(|ty| Ty::of(&module.context.types, ty)) {
-        Some(Ty::Int(bits)) => costs.words(bits),
+        Some(Ty::Int(bits)) if costs.width_scaled => costs.words(bits),
         _ => 1,
     };
     let mut c = std::collections::BTreeMap::<&str, i64>::new();
@@ -1495,7 +1495,7 @@ pub fn function_bytes(
     // A target with a native width states its prices per native word (`OperationCosts::words`): an `i32` add on an
     // 8-bit machine is four byte adds. 1 where it states none.
     let words = |ty: Option<llrm_mir::types::TypeId>| match ty.and_then(|ty| Ty::of(&module.context.types, ty)) {
-        Some(Ty::Int(bits)) => costs.words(bits),
+        Some(Ty::Int(bits)) if costs.width_scaled => costs.words(bits),
         _ => 1,
     };
     // The access names its object: a global, or a stack slot, through constant offsets only.

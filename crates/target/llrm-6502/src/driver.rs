@@ -248,7 +248,7 @@ pub fn size_audit(
     request: &Request,
 ) -> Result<Vec<SizeRow>, String> {
     let built = program(text, request)?;
-    let costs = built.target.size_costs();
+    let costs = built.target.trial_costs();
     let module = &built.modules[0];
     let mut rows: Vec<SizeRow> = module
         .functions()
@@ -593,6 +593,11 @@ impl llrm_mir::target::Machine for Mos6502Machine {
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
         BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
+    fn trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::trial_bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
     /// The bytes the allocator can put a value in on the smallest zero page
