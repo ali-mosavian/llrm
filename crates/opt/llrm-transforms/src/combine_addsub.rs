@@ -52,6 +52,7 @@ use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::range::{
     OverflowResult, compute_overflow_for_signed_add, compute_overflow_for_signed_sub,
+    compute_overflow_for_unsigned_add,
 };
 use llrm_mir::valuetracking::{Query, known, nonzero, pattern};
 
@@ -709,7 +710,45 @@ pub fn visit_add(
         let one = c.int(ty, 1);
         return c.replace_with_binop(inst, BinaryOp::Shl, lhs, one, wrap_of(flags));
     }
-    fold_add_rest(c, inst)
+    match fold_add_rest(c, inst) {
+        Visit::None => infer_add_wrap_flags(c, inst),
+        found => found,
+    }
+}
+
+/// The `Changed` steps of `visitAdd` (:1977-:2052): `nsw` and `nuw` set when
+/// the operands prove them, and, for an add recurrence, the users of its phi
+/// queued again since their known bits may now be provable.
+fn infer_add_wrap_flags(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    let (lhs, rhs, flags) = parts(c, inst);
+    let mut inferred = flags;
+    {
+        let q = query(c, Some(inst));
+        if !flags.contains(Flags::NSW) && compute_overflow_for_signed_add(&q, lhs, rhs) == OverflowResult::NeverOverflows
+        {
+            inferred.insert(Flags::NSW);
+        }
+        if !flags.contains(Flags::NUW)
+            && compute_overflow_for_unsigned_add(&q, lhs, rhs) == OverflowResult::NeverOverflows
+        {
+            inferred.insert(Flags::NUW);
+        }
+    }
+    if inferred == flags {
+        return Visit::None;
+    }
+    c.function.set_flags(inst, inferred);
+    let phi = pattern::match_simple_recurrence_of(&query(c, Some(inst)), inst).map(|(phi, ..)| phi);
+    if let Some(result) = phi.and_then(|phi| c.function.instruction(phi).result) {
+        let users: Vec<InstId> = c.function.users(result).iter().map(|one| one.user).collect();
+        for user in users {
+            c.worklist.push(user);
+        }
+    }
+    Visit::Changed
 }
 
 #[cfg(test)]
