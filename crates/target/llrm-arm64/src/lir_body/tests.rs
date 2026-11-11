@@ -583,7 +583,13 @@ fn a_load_from_another_slot_is_not_ordered_after_a_store() {
     };
     let lowered = to_lir(&function(vec![store(1), load(2, 2), load(1, 3)])).expect("maps");
     let _file = enter(Regs(&crate::REGISTER_INFO));
-    let graph = llrm_codegen::backend::machinesched::graph(&lowered.body.blocks[0].insns, Regs(&crate::REGISTER_INFO), 64);
+    let graph = llrm_codegen::backend::machinesched::graph(
+        &lowered.body.blocks[0].insns,
+        Regs(&crate::REGISTER_INFO),
+        64,
+        &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
+    );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
 }
@@ -615,7 +621,13 @@ fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
     let converted = llrm_spike_mf::tolir::to_lir::<crate::lir_view::Arm64>(&view, registers).expect("converts");
     let _file = enter(registers);
     let body = converted.with_effects(&view, registers);
-    let graph = llrm_codegen::backend::machinesched::graph(&body.blocks[0].insns, registers, body.bits);
+    let graph = llrm_codegen::backend::machinesched::graph(
+        &body.blocks[0].insns,
+        registers,
+        body.bits,
+        &llrm_codegen::backend::schedmodel::GenericModel,
+        None,
+    );
     assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
 }

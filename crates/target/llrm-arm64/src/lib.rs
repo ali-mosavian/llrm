@@ -32,6 +32,7 @@ pub mod pairs;
 pub mod postrasink;
 pub mod prepass;
 pub mod regalloc;
+pub mod schedmodel;
 pub mod shrinkwrap;
 pub mod sibcall;
 pub mod sinkfold;

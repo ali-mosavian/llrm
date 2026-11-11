@@ -407,3 +407,33 @@ fn a_ctpop_guarded_against_zero_is_the_count_alone() {
         assert!(!out.contains("select"), "{cmp}: the select is left\n{out}");
     }
 }
+
+/// wasm32 known_loads_walks: `umax(x, 1) - 1` became `usub.sat(x, 1)` in the
+/// same run that declared `llvm.usub.sat`; the compare against it was then
+/// left (`icmp ult usub.sat(x, 1), 7`, the pin's `icmp ult x, 8`) because a
+/// match by callee name did not see a declaration this run made, so the
+/// output differed from a second run of the same pass (+9 B at O2).
+#[test]
+fn a_saturating_subtract_the_run_made_is_folded_into_its_compare() {
+    let mut module = parsed(
+        "declare i8 @llvm.umax.i8(i8, i8)\ndefine i1 @f(i8 %x) {\nb0:\n  %y = call i8 @llvm.umax.i8(i8 %x, i8 1)\n  %a = add i8 %y, -1\n  %r = icmp ult i8 %a, 7\n  ret i1 %r\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        crate::combine::visit,
+        &mut declared,
+    );
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    // The dead calls stay: this driver has no callee attributes to drop them
+    // by.
+    assert!(out.contains("icmp ult i8 %x, 8") && !out.contains("icmp ult i8 %0"), "{out}");
+}
