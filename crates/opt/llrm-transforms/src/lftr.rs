@@ -24,7 +24,7 @@
 //! The test it replaces is left to `dead`.
 //!
 //! DEVIATE LFTR1 (owner w12; review 2026-12-20; `Tuning::lftr_any_stride`, x86
-//! m16/m32/m64 only; the pin's `isLoopCounter` (IndVarSimplify.cpp#L913,
+//! m16/m32/m64 and wasm32; the pin's `isLoopCounter` (IndVarSimplify.cpp#L913,
 //! `m_scev_One`) takes a step of one): a loop that steps by two, `for (o = 0;
 //! o <= 3998; o += 2)`, kept `ult` for the pin's LSR, which turns only equality
 //! tests into zero-ending counters. A step that cannot wrap reaches `start +
@@ -33,7 +33,9 @@
 //! 2026-11-09 and is worse on x86: m64 jpeg_single +16 B (O1, O2, O3), m16
 //! jpeg_fixed/single +4 B (all four levels), m32 heapsort +1.8% clk,
 //! ld_horner +2.7%, with idioms -16 B and x_idioms -455 clk the only gains;
-//! other targets get the pin (wasm `scroll_down` -29 B). Fail-first tests:
+//! other targets get the pin. A wider counter with a step other than one is
+//! skipped (wasm32 `idioms` +77 B at -O2: a `trunc` and mask the narrow test
+//! never paid). Fail-first tests:
 //! strides 2, 3, 4, 8 and -2 in `lftr_tests.rs` with the knob on, and the
 //! pin's refusal with it off.
 //!
