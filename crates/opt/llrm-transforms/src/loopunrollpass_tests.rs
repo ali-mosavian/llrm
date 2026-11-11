@@ -1466,17 +1466,17 @@ done:
 }}
 "
     ));
-    unroll_on_core(&mut module, throughput, !call, 2);
+    unroll_on_core(&mut module, throughput, !call, 2, 0, 600);
     !printed(&module).contains("%i = phi")
 }
 
-/// The unroll pass on `@f` of `module` for x86-64 at 600 milliclocks a byte (the test's knob), with or without
+/// The unroll pass on `@f` of `module` for x86-64 at `rate` milliclocks a byte (the test's knob), with or without
 /// the SandyBridge throughput model.
-fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool, opt_level: u32) {
+fn unroll_on_core(module: &mut Module, throughput: bool, target_unrolling: bool, opt_level: u32, immediate_bits: u32, rate: i64) {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
-    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: 600, unroll_promotion_fits_registers: true, ..llrm_mir::target::Tuning::PIN };
+    let tuning = llrm_mir::target::Tuning { unroll_milliclocks_per_byte: rate, unroll_promotion_fits_registers: true, unroll_store_immediate_bits: immediate_bits, ..llrm_mir::target::Tuning::PIN };
     let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
     let options = Options {
         opt_level,
@@ -1528,42 +1528,49 @@ fn test_a_loop_calling_a_function_the_inliner_takes_is_priced_serially_on_a_core
     assert!(fill_unrolled(true, true), "the callee folds on the copies' constants: not a trip the resources show");
 }
 
-/// A local array filled by one loop from its counter and read by the next: the fill loop (`%i`) after the unroll
-/// pass, with or without the SandyBridge throughput model. The reader multiplies by a loop-invariant argument.
-fn array_fill_unrolled(throughput: bool) -> bool {
-    let mut module = parsed(
-        "define i32 @f(i32 %k) {
+/// A local array of `ty` filled by one loop from its counter (`step` times it) and read by the next: the fill loop
+/// (`%i`) after the unroll pass at -O3, on a core with the SandyBridge throughput model and a store immediate of
+/// `immediate_bits` signed bits (0: none). The reader multiplies by a loop-invariant argument.
+fn array_fill_unrolled(ty: &str, step: u64, immediate_bits: u32) -> bool {
+    let conv = match ty {
+        "i64" => "zext i32 %i to i64",
+        "i16" => "trunc i32 %i to i16",
+        _ => "add i32 %i, 0",
+    };
+    let mut module = parsed(&format!(
+        "define {ty} @f({ty} %k) {{
 entry:
-  %b = alloca [48 x i32]
+  %b = alloca [48 x {ty}]
   br label %i.loop
 
 i.loop:
   %i = phi i32 [ 0, %entry ], [ %in, %i.loop ]
-  %v = mul i32 %i, 7
-  %w = sub i32 100, %v
-  %p = getelementptr [48 x i32], ptr %b, i32 0, i32 %i
-  store i32 %w, ptr %p
+  %iw = {conv}
+  %v = mul {ty} %iw, {step}
+  %w = sub {ty} 100, %v
+  %p = getelementptr [48 x {ty}], ptr %b, i32 0, i32 %i
+  store {ty} %w, ptr %p
   %in = add i32 %i, 1
   %c = icmp ne i32 %in, 48
   br i1 %c, label %i.loop, label %j.loop
 
 j.loop:
   %j = phi i32 [ 0, %i.loop ], [ %jn, %j.loop ]
-  %s = phi i32 [ 0, %i.loop ], [ %sn, %j.loop ]
-  %q = getelementptr [48 x i32], ptr %b, i32 0, i32 %j
-  %x = load i32, ptr %q
-  %m = mul i32 %x, %k
-  %sn = add i32 %s, %m
+  %s = phi {ty} [ 0, %i.loop ], [ %sn, %j.loop ]
+  %q = getelementptr [48 x {ty}], ptr %b, i32 0, i32 %j
+  %x = load {ty}, ptr %q
+  %m = mul {ty} %x, %k
+  %sn = add {ty} %s, %m
   %jn = add i32 %j, 1
   %d = icmp ne i32 %jn, 48
   br i1 %d, label %j.loop, label %done
 
 done:
-  ret i32 %sn
-}
-",
-    );
-    unroll_on_core(&mut module, throughput, true, 3);
+  ret {ty} %sn
+}}
+"
+    ));
+    unroll_on_core(&mut module, true, true, 3, immediate_bits, 1000);
     !printed(&module).contains("%i = phi")
 }
 
@@ -1573,8 +1580,16 @@ done:
 /// rolled, and the function grew 817 -> 1123 B (87 -> 170 clk).
 #[test]
 fn test_a_local_array_filled_with_constants_is_unrolled_for_the_reader_that_folds_it() {
-    assert!(array_fill_unrolled(false), "premise: priced serially, the fill is unrolled");
-    assert!(array_fill_unrolled(true), "constants stored to a local array are immediates in the reader, not registers");
+    assert!(array_fill_unrolled("i32", 7, 32), "constants stored to a local array are immediates in the reader, not registers");
+    assert!(array_fill_unrolled("i16", 7, 32), "a narrower constant is an immediate as well");
+    assert!(array_fill_unrolled("i64", 7, 32), "an i64 constant in the sign-extended imm32 range is an immediate");
+}
+
+/// The same fill where the constant is not an immediate: 48 live values for the registers, the fill stays rolled.
+#[test]
+fn test_a_fill_of_constants_the_store_cannot_take_as_immediates_keeps_counting_registers() {
+    assert!(!array_fill_unrolled("i64", 1 << 33, 32), "an i64 beyond imm32 is loaded into a register first");
+    assert!(!array_fill_unrolled("i32", 7, 0), "a target with no store immediate (arm64) is unchanged");
 }
 
 /// memfuncs_runtime arm64 -O2/-O3: a call in a loop named a callee the pipeline had declared after the pass's snapshot

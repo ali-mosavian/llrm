@@ -439,6 +439,8 @@ impl llrm_target::Target for M64 {
                             unroll_milliclocks_per_byte: 312,
                             unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
+                            // `mov m64, imm32`: sign-extended.
+                            unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed

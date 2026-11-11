@@ -803,7 +803,7 @@ fn promoted_accesses(
                         if loaded.contains(&root) && written.contains(&root) {
                             rmw.insert(root);
                         }
-                    } else if !immediate_store(one, known) {
+                    } else if !immediate_store(run, se, analyzed, one, known) {
                         ints.insert(root);
                     }
                 }
@@ -813,19 +813,43 @@ fn promoted_accesses(
     (found, runs, ints.len(), floats.len(), rmw)
 }
 
-/// A store of an integer that is a constant in each copy (a constant, or a value of the counters alone): the
-/// reader takes it as an immediate, so the element holds no register. UP1-REG counts the elements that do: a
-/// float is loaded from the constant pool, an element the loop also loads is a live value.
+/// A store of an integer that is a constant in each copy (a constant, or a value of the counters alone) and
+/// fits the target's store immediate (`Tti::unroll_store_immediate_bits`; none: never): the reader takes it as
+/// an immediate, so the element holds no register. UP1-REG counts the elements that do: a float is loaded from
+/// the constant pool, an element the loop also loads is a live value, a constant outside the immediate's range
+/// is loaded into a register first.
 fn immediate_store(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
     inst: &llrm_mir::module::Instruction,
     known: &IdSet<ValueId>,
 ) -> bool {
-    matches!(inst.opcode, Opcode::Store { .. })
-        && match inst.operands[0] {
-            Operand::Constant(_) => true,
-            Operand::Value(value) => known.contains(&value),
-            Operand::Block(_) => false,
-        }
+    let bits = run.tti.unroll_store_immediate_bits();
+    let operand = inst.operands[0];
+    let constant = match operand {
+        Operand::Constant(_) => true,
+        Operand::Value(value) => known.contains(&value),
+        Operand::Block(_) => false,
+    };
+    if bits == 0 || !matches!(inst.opcode, Opcode::Store { .. }) || !constant {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    if !se.is_value_scevable(&cx, operand) {
+        return false;
+    }
+    let scev = se.get_scev(&cx, operand);
+    se.get_signed_range(&cx, scev).get_min_signed_bits() <= bits
 }
 
 /// Whether a local array keeps its memory after the full unroll of `lp`: some

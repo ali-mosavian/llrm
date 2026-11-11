@@ -693,6 +693,11 @@ pub trait Tti {
         false
     }
 
+    /// The signed bits of the immediate a store takes; 0: none (the stored constant needs a register).
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        0
+    }
+
     /// The same for the floats of an x87 target, against the stack's slots.
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         false

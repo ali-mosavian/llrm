@@ -1007,6 +1007,10 @@ impl Tti for X86 {
         self.tuning.unroll_promotion_fits_registers
     }
 
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        self.tuning.unroll_store_immediate_bits
+    }
+
     fn lsr_size_order(&self) -> bool {
         self.tuning.lsr_size_order
     }

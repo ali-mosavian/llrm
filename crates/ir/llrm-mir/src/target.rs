@@ -298,6 +298,10 @@ pub struct Tuning {
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// The signed width of the immediate a store of an integer takes (x86-64: 32, sign-extended to the
+    /// store's width); 0: the target has no store-immediate form. A full unroll's constants that fit it
+    /// are instruction bytes, not live values (`Tti::unroll_store_immediate_bits`).
+    pub unroll_store_immediate_bits: u32,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_order`.
     pub lsr_size_order: bool,
@@ -474,6 +478,7 @@ impl Tuning {
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
+        unroll_store_immediate_bits: 0,
         lsr_size_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
