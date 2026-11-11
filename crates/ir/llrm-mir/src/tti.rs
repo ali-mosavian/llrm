@@ -630,6 +630,14 @@ pub trait Tti {
         }
     }
 
+    /// Whether isel selects a load or store of an integer whose byte size is no register or
+    /// power of two (an `i24`: SROA cuts a three-byte slice into one, as the pin does). DEVIATE
+    /// (default no): SROA keeps such a slice whole, where a target's isel has no lowering for
+    /// the width (the x87 `long double` slices). Exit: every target that lowers odd widths says yes.
+    fn selects_odd_sized_integers(&self) -> bool {
+        false
+    }
+
     /// Whether a callee that allocates may be copied into a recursive caller,
     /// as the pin's `getInlineCost` allows up to 1024 bytes of it
     /// (`TotalAllocaSizeRecursiveCaller`). DEVIATE (default no): a recursion's
