@@ -72,6 +72,13 @@ fn defines(
     inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == register))
 }
 
+fn reads(
+    inst: &Inst,
+    register: Reg,
+) -> bool {
+    inst.operands.iter().any(|o| matches!(o, Operand::Use(r) if *r == register))
+}
+
 fn mentions(
     inst: &Inst,
     register: Reg,
@@ -114,7 +121,10 @@ fn source(
             return (need == Reg::Phys(reg::A) && converts(inst)).then_some((at, loads));
         }
         match inst.kind {
-            Kind::Copy => {}
+            // Only a copy of the tested byte: any other copy becomes a load once allocated (`ldx`, `lda`), which sets
+            // N and Z from its own byte, so the branch would read that and not the byte the setter made. x86's `mov`
+            // leaves the flags alone, which is what the pin's backward scan relies on.
+            Kind::Copy if reads(inst, need) => {}
             Kind::Op("LDI") => loads.push(at),
             _ => return None,
         }
