@@ -1081,7 +1081,11 @@ impl<T: Target> Made<'_, T> {
         let (mut target, mut symbol) = (None, false);
         // Reads before writes: a physical register read and rewritten by one
         // instruction is read as it was.
-        for operand in &inst.operands {
+        // where each operand stands in `sources` / `dests`, for the pairs it ties
+        let mut source_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
+        let mut dest_at: Vec<Option<usize>> = vec![None; inst.operands.len()];
+        for (index, operand) in inst.operands.iter().enumerate() {
+            let before = sources.len();
             match operand {
                 Operand::Use(Reg::Virt(v)) => {
                     let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
@@ -1125,8 +1129,12 @@ impl<T: Target> Made<'_, T> {
                 }
                 Operand::Def(_) => {}
             }
+            if sources.len() > before {
+                source_at[index] = Some(before);
+            }
         }
-        for operand in &inst.operands {
+        for (index, operand) in inst.operands.iter().enumerate() {
+            let before = dests.len();
             match operand {
                 Operand::Def(Reg::Virt(v)) => {
                     let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
@@ -1154,6 +1162,9 @@ impl<T: Target> Made<'_, T> {
                     dests.push(Loc::Held(held));
                 }
                 _ => {}
+            }
+            if dests.len() > before {
+                dest_at[index] = Some(before);
             }
         }
         // An immediate or a frame cell is as wide as the value it meets.
@@ -1193,7 +1204,12 @@ impl<T: Target> Made<'_, T> {
             Kind::Copy => COPY,
             Kind::Op(name) => name,
         };
-        let what = Semantics { name: Some(name.into()), dests, sources, target, ..Semantics::new(op) };
+        // the machine instruction's own tied operands, in the lists' numbering: a
+        // dropped operand (a reserved register) moves the ones after it
+        let tied = (!inst.ties.is_empty()).then(|| {
+            inst.ties.iter().filter_map(|&(def, used)| Some((source_at[used]?, dest_at[def]?))).collect::<Vec<_>>()
+        });
+        let what = Semantics { name: Some(name.into()), dests, sources, target, tied, ..Semantics::new(op) };
         let mut insn = Insn::new(at, Some((at, at + 1)), Some(what), defines, uses);
         insn.requires = requires;
         insn.delivers = delivers;

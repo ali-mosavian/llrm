@@ -167,7 +167,7 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
             stem = file.replace("/", "_")[:-2]
             text = crlib.member(RTDIR, cc, file, flags)
             have.add(file); (w / (stem + ".s")).write_text(".autoimport +\n" + text); mods += text
-            a = sh(["ca65", "-t", SIM, "-o", stem + ".o", stem + ".s"], w)
+            a = sh(["ca65", "-t", SIM, "-I", str(RTDIR / "config/6502"), "-o", stem + ".o", stem + ".s"], w)
             if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
             objs.append(stem + ".o")
     return objs, "no fixpoint"

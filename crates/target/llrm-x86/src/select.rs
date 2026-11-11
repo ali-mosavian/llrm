@@ -960,6 +960,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         table_id: None,
         repeat: false,
         pops: None,
+        tied: None,
     };
     let (push, pop) = (
         |source: &Loc| step(Operation::Push, "push", vec![], vec![source.clone()]),
@@ -3263,6 +3264,7 @@ mod sweep_support {
             repeat: false,
             table_id: None,
             pops: None,
+            tied: None,
         }
     }
 
