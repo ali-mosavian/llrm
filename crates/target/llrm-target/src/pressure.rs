@@ -100,6 +100,7 @@ pub struct ClassSpec<'a> {
 /// intersections, which the caller must list. So x86's own tables are not
 /// reproduced here (the z80 has neither). Exit: a target with adopted units
 /// moves onto `derive` (weighted units, then the identity test on x86).
+/// Owner llrm-greedy-anyisa, by 2026-11-24 (after Z80S1 step 2).
 pub fn derive(
     registers: &[Register],
     classes: &[ClassSpec],
