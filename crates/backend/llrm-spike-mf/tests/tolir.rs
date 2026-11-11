@@ -2077,3 +2077,38 @@ fn test_a_call_with_known_callee_writes_clobbers_only_those() {
     let call = &converted.body.blocks[2].insns[0];
     assert_eq!(call.clobbers.iter().copied().collect::<Vec<_>>(), vec![RegId::EBX], "{call:?}");
 }
+
+/// An instruction `[Def, Use(reserved), Use]` whose tie row numbers the address
+/// as the pin does: the reserved register is no source here, so the pair must
+/// move with it. Unfixed the pair named source 1 of one source and the tie went
+/// unseen (nbody_single's `MOV32jo_WB`, three cells refused).
+#[test]
+fn test_a_tie_is_numbered_after_a_dropped_reserved_operand() {
+    let mut write_back = op("wb", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::ESP)), Operand::Use(v(1))]);
+    write_back.ties = vec![(0, 2)];
+    let mut f = MFunction::<()>::new("wb");
+    f.classes = vec![(); 2];
+    f.blocks = vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(1))]), write_back, ret()], ..Block::default() }];
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let what = converted.body.blocks[0].insns[1].what.as_ref().expect("semantics");
+    assert_eq!(what.sources.len(), 1, "the reserved register is no source");
+    assert_eq!(what.tied, Some(vec![(0, 0)]));
+}
+
+/// The control: with nothing dropped the pair is the operand positions, as the
+/// description's row has it.
+#[test]
+fn test_a_tie_with_nothing_dropped_keeps_its_operand_numbers() {
+    let mut add = op("add", vec![Operand::Def(v(0)), Operand::Use(v(1)), Operand::Use(v(2))]);
+    add.ties = vec![(0, 2)];
+    let mut f = MFunction::<()>::new("add");
+    f.classes = vec![(); 3];
+    f.blocks = vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(1))]), op("load", vec![Operand::Def(v(2))]), add, ret()], ..Block::default() }];
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let what = converted.body.blocks[0].insns[2].what.as_ref().expect("semantics");
+    assert_eq!(what.tied, Some(vec![(1, 0)]));
+    let plain = op("copy_like", vec![Operand::Def(v(0)), Operand::Use(v(1))]);
+    f.blocks[0].insts[2] = plain;
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    assert_eq!(converted.body.blocks[0].insns[2].what.as_ref().expect("semantics").tied, None, "no ties: the rows say");
+}

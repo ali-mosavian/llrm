@@ -130,6 +130,31 @@ class Members(unittest.TestCase):
                 rows = open(out).read().splitlines()
             self.assertEqual([x.split("\t")[:2] for x in rows], [["float_in_place_update", "ours"]], f"{cpu}: {rows or r.stdout[-200:]}")
 
+    def test_the_int64_divides_and_multiply_come_from_the_asm_members(self):
+        """The generic C __udivdi3/__divdi3/__umoddi3/__moddi3/__muldi3 were linked although config/6502/di64.s and umod64.s define them:
+        int64_division -O2 was 5519 B / 1,508,261 clocks and is 4076 B / 994,717 with the asm, output-identical (2026-11-11)."""
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        index = crlib.index(rt)
+        for name in ("__muldi3", "__udivdi3", "__divdi3"):
+            self.assertEqual(index[name], "config/6502/di64.s", name)
+        for name in ("__umoddi3", "__moddi3"):
+            self.assertEqual(index[name], "config/6502/umod64.s", name)
+        text = crlib.member(rt, CC, "config/6502/di64.s", ["-Os"])
+        self.assertNotIn(".include", text)  # ca65 runs in the work directory, where the .inc files are not
+        self.assertIn("__udivdi3:", text)
+
+    def test_int64_division_links_the_asm_divide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "int64_division"],
+                               capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            rows = [x.split("\t") for x in open(out).read().splitlines()]
+        self.assertEqual([x[:2] for x in rows], [["int64_division", "ours"]], r.stdout[-200:])
+        self.assertLess(int(rows[0][2]), 5000, "the generic C divide links 5519 B")
+
     def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
         """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
         compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
