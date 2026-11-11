@@ -735,7 +735,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
-        remat_wins: Some(Box::new(|_, _, _, _, _| false)),
+        remat_wins: Some(Box::new(|_, _, _, _, _, _| false)),
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
@@ -1910,6 +1910,16 @@ fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it
     assert!(!size_copy_of_constant_is_remade(0, 4, price()), "a tie keeps the copy");
     assert!(!size_copy_of_constant_is_remade(7, 2, price()), "5 B against a 3 B copy");
     assert!(!size_copy_of_constant_is_remade(0, 8, price()), "a qword zero may spill (C13)");
+}
+
+/// switch m64 -Os: a zero defined by `xor r32` and copied as a qword stayed
+/// `mov rsi, rcx` (REX.W, 3 B) against the 2 B `xor`, because the copy was
+/// priced at the definition's width (a dword, 2 B: a tie). +1 B over the
+/// two-copy form the pin remakes.
+#[test]
+fn test_for_size_a_dword_zero_copied_as_a_qword_is_made_again() {
+    let price = Some(super::pass::remat_priced(flat_bytes()));
+    assert!(size_copy_of_def_is_remade(constant_of(1, 0, 4), 8, price), "xor 2 B against a 3 B qword copy");
 }
 
 /// A target that states no price keeps DEVIATE C10: at size no copy of a

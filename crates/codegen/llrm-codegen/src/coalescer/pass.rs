@@ -140,7 +140,7 @@ impl LIRTransform for Coalescer {
 /// dearer than a register stored), or any, where the source's own definition
 /// goes. At speed the pin's choice stands: always.
 pub(super) fn remat_priced(bytes: llrm_target::MoveBytes) -> crate::coalescer::env::RematWins {
-    Box::new(move |def, _, _, size, alone| {
+    Box::new(move |def, _, _, size, alone, copy_width| {
         if !size || alone {
             return true;
         }
@@ -156,7 +156,7 @@ pub(super) fn remat_priced(bytes: llrm_target::MoveBytes) -> crate::coalescer::e
         if width > bytes.plain {
             return false;
         }
-        (bytes.literal)(literal.value, literal.address.is_some(), width, bytes.plain) < (bytes.copy)(width, bytes.plain)
+        (bytes.literal)(literal.value, literal.address.is_some(), width, bytes.plain) < (bytes.copy)(copy_width, bytes.plain)
     })
 }
 

@@ -262,9 +262,11 @@ impl TargetEnv {
 }
 
 /// See [`TargetEnv::remat_wins`].
-/// `(definition, source's registers, destination's, size build, alone)`:
-/// `alone` is that the source has no other reader, so its own definition goes.
-pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool, bool) -> bool>;
+/// `(definition, source's registers, destination's, size build, alone, copy width)`:
+/// `alone` is that the source has no other reader, so its own definition goes;
+/// the copy width is the bytes the copy moves, which can exceed the definition's
+/// (`xor r32` defines a qword).
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool, bool, i64) -> bool>;
 
 /// One side of a copy about to be joined.
 pub struct JoinSide {
@@ -335,13 +337,14 @@ impl CoalescerEnv for TargetEnv {
         source: u32,
         destination: u32,
         alone: bool,
+        copy_width: i64,
     ) -> bool {
         let palettes = self.palettes.borrow();
         let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
         else {
             return true;
         };
-        wins(def, from, to, self.size, alone)
+        wins(def, from, to, self.size, alone, copy_width)
     }
 
     fn keeps(

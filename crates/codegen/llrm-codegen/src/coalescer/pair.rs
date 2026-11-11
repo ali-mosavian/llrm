@@ -217,6 +217,7 @@ pub trait CoalescerEnv {
         _source: u32,
         _destination: u32,
         _alone: bool,
+        _copy_width: i64,
     ) -> bool {
         true
     }

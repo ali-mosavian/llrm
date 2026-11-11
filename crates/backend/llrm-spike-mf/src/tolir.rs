@@ -171,7 +171,7 @@ impl<T: Target> Converted<T> {
                 })
             })),
             Some(Box::new(|one: &Insn| is_cheap_move::<T>(one))),
-            Some(Box::new(|literal, source, destination, size, alone| {
+            Some(Box::new(|literal, source, destination, size, alone, _| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
                     (source.iter().copied().collect(), destination.iter().copied().collect());
                 literal_remat_wins::<T>(literal, &source, &destination, size, alone)

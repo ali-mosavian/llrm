@@ -626,7 +626,7 @@ fn re_materialize_def(
     if env.tuned_for_size() && !env.prices_remat() && !alone {
         return false;
     }
-    if !env.remat_wins(&def_insn, src.value, dst.value, alone) {
+    if !env.remat_wins(&def_insn, src.value, dst.value, alone, i64::from(dst.width)) {
         return false;
     }
     let block = lis.indexes.get_mbb_from_index(&at);
