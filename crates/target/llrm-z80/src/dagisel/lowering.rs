@@ -160,6 +160,10 @@ pub fn target_lowering() -> TargetLowering {
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__ashlsi3", "__lshrsi3", "__ashrsi3"]) {
         tl.set_size_libcall_name(op, MVT::I32, name);
     }
+    // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
+    for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
+        tl.set_size_variable_libcall_name(op, MVT::I64, name);
+    }
     tl.set_size_shift_call(8, 10);
     // the long divide has a smaller routine for a function tuned for size
     // (one step per dividend bit, registers alone: 76 B against 391)

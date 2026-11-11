@@ -1842,6 +1842,43 @@ fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
     assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
 }
 
+const SMALL_STRUCT_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    define void @make(ptr sret(%struct.T) align 1 %out) addrspace(1) {\n  store i8 7, ptr %out, align 1\n  ret void\n}\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  \
+    call addrspace(1) void @make(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+
+/// clang returns `struct { char x; }` through an `sret` pointer; Borland's
+/// cdecl returns it in AL. The call pushed the address of a temporary and the
+/// callee wrote through it, so a BCC callee (which returns AL) left the
+/// caller's copy unwritten: cfaggee's `r_s1` read 2F, not 11 (callconv CFLB).
+#[test]
+fn a_one_byte_struct_result_comes_back_in_al_under_borland_cdecl() {
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), SMALL_STRUCT_RESULT, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov al, 7"), "the callee returns the byte in AL\n{listing}");
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
+/// The call through a function pointer carries its convention, so a call that
+/// passed the `sret` address to a callee returning AL left the result unwritten
+/// with no diagnostic.
+#[test]
+fn a_one_byte_struct_result_through_a_function_pointer_comes_back_in_al_too() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+        target triple = \"i386-unknown-unknown-code16\"\n\
+        %struct.T = type { i8 }\n\
+        @fp = external global ptr addrspace(1)\n\
+        define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  %p = load ptr addrspace(1), ptr @fp, align 4\n  \
+        call addrspace(1) void %p(ptr sret(%struct.T) align 1 %t)\n  %x = load i8, ptr %t, align 1\n  \
+        %w = zext i8 %x to i16\n  ret i16 %w\n}\n";
+    let (built, _) = compiled(&flags(&["-mabi=cdecl", "-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("lea ") && !listing.contains("add sp, 2"), "no address is pushed for the result\n{listing}");
+}
+
 /// `-fno-inline=sum5` named the function as the source does, but the module
 /// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
 /// looked up: "the program defines no function of that name", so
@@ -3413,6 +3450,32 @@ fn unique_directory(tag: &str) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!("{tag}-{}-{call}", std::process::id()))
+}
+
+/// Borland's `interrupt` takes the registers it saved as parameters
+/// (`bp, di, si, ds, es, dx, cx, bx, ax`). They were read as the frame's words
+/// in address order, so `ax` was the high half of EDI and the harness cell
+/// CFLL saw `bp = 0, di = 0, si = ES, ds = DS` for a handler that was given
+/// BP = 0xB0B0. The description names each parameter's slot; `ax` is the low
+/// word of EAX.
+#[test]
+fn an_interrupt_handler_parameter_is_the_low_word_of_the_register_slot_it_names() {
+    let directory = unique_directory("intr");
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("isr.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+         @g = global i16 0\n\
+         define x86_intrcc void @isr(i16 %bp, i16 %di, i16 %si, i16 %ds, i16 %es, i16 %dx, i16 %cx, i16 %bx, i16 %ax) {\n  store i16 %ax, ptr @g\n  ret void\n}\n",
+    )
+    .unwrap();
+    let output = directory.join("isr.s");
+    crate::llc::compile(&flags(&["-m16", "-S", "-O0", "-o", output.to_str().unwrap()]), &source, None).unwrap();
+    let text = std::fs::read_to_string(output).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    // gs fs es ds (2 each), edi esi ebp esp ebx edx ecx (4 each): EAX is 36 bytes up the frame, past BP.
+    assert!(text.contains("word ptr [bp+38]"), "{text}");
 }
 
 #[test]
@@ -5251,6 +5314,28 @@ fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
     )
     .unwrap();
     assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
+}
+
+/// COMPILE-OSROT: the rotation trial assembled the functions that differ twice and the module once
+/// more, so a module of two loop functions and a leaf that does not change cost three assemblies
+/// where two are the floor (x_jpeg_fixed -Os, 6 of 8 functions differ: 2.0x the compile time). Each
+/// of the three functions is selected once per assembly, twice in all.
+#[test]
+fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
+    let one = include_str!("tests_data/prefix_sums.ll");
+    let start = one.find("; Function Attrs").unwrap();
+    let end = one[start..].find("\n}\n").unwrap() + start + 3;
+    let function = &one[start..end];
+    let second = function.replace("@bench_prefix", "@bench_prefix2").replace("mul nsw i32 %11, 5", "mul nsw i32 %11, 7");
+    let text = format!(
+        "{}\n{second}\ndefine dso_local i32 @leaf(i32 %x) {{\n  ret i32 %x\n}}\n{}",
+        &one[..end],
+        &one[end..]
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+    compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
+    let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
+    assert_eq!(selections, 6, "{selections} selections of three functions");
 }
 
 /// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
