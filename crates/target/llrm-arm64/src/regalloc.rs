@@ -829,11 +829,11 @@ pub(crate) fn spill_access(
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
         Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
     };
-    Op::I(if load {
-        Inst::Load { mem, addr, mmo: MemOperand::default() }
-    } else {
-        Inst::Store { mem, addr, mmo: MemOperand::default() }
-    })
+    // The frame object itself (`getFixedStack`): a spill is disjoint from every
+    // other object, so the pair pass moves one past a global's load or a store
+    // through a pointer (`MachineInstr::mayAlias`).
+    let mmo = MemOperand { object: MemObject::Slot(slot), offset: Some(0), volatile: false };
+    Op::I(if load { Inst::Load { mem, addr, mmo } } else { Inst::Store { mem, addr, mmo } })
 }
 
 #[cfg(test)]
