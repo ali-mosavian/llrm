@@ -1,20 +1,23 @@
-//! `site_price`: the tabulated inline costs are the lowering's, and each long shift or multiply at -O1 takes
-//! the form its own price names.
+//! `site_price`: the tabulated inline costs are the lowering's, and each long
+//! shift or multiply at -O1 takes the form its own price names.
 use llrm_z80::compile::{lines, text};
 use llrm_z80::driver::{Level, Request};
-use llrm_z80::expand::price_emitted;
 use llrm_z80::expand::Line;
+use llrm_z80::expand::price_emitted;
 use llrm_z80::site_price::{CALL_MINUS_INLINE_SHIFT, INLINE_MUL, INLINE_SHIFT};
 
 fn cost(body: &str) -> (u32, u64) {
-    let ir = format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ndefine i32 @f(i32 %x) {{\n{body}}}\n");
+    let ir = format!(
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ndefine i32 @f(i32 %x) {{\n{body}}}\n"
+    );
     let request = Request::new(Level::O2);
     let lines = lines(&ir, "f", 0, &request).expect("compiles");
     price_emitted(&lines, true)
 }
 
-/// The call form's cost less the inline form's, or `NEVER` where the call form does not compile (a shift by one is
-/// `add x, x` before the call is considered).
+/// The call form's cost less the inline form's, or `NEVER` where the call form
+/// does not compile (a shift by one is `add x, x` before the call is
+/// considered).
 fn delta(
     op: &str,
     n: u32,
@@ -27,8 +30,9 @@ fn delta(
 
 const NEVER: (i64, i64) = (0, 1_000_000);
 
-/// Two functions of one long shift each (the routine is not the sole use) beside one with two long multiplies by constants (so the routine is linked), in the form
-/// `call` (or inline), priced as the sweep prices it.
+/// Two functions of one long shift each (the routine is not the sole use)
+/// beside one with two long multiplies by constants (so the routine is linked),
+/// in the form `call` (or inline), priced as the sweep prices it.
 fn at_o1(
     op: &str,
     n: u32,
@@ -67,7 +71,8 @@ define i32 @g(i32 %z, i32 %w) {{
     if !out.status.success() {
         return None;
     }
-    let lines: Vec<Line> = std::fs::read_to_string(&output).expect("the assembly")
+    let lines: Vec<Line> = std::fs::read_to_string(&output)
+        .expect("the assembly")
         .lines()
         .filter(|line| !line.trim_start().starts_with('.'))
         .map(|line| match line.strip_suffix(':').or_else(|| line.strip_suffix("::")) {
@@ -82,9 +87,7 @@ define i32 @g(i32 %z, i32 %w) {{
 #[ignore]
 fn dump_call_minus_inline() {
     for op in ["shl", "lshr", "ashr"] {
-        let row: Vec<String> = (1..32)
-            .map(|n| format!("{:?}", delta(op, n)))
-            .collect();
+        let row: Vec<String> = (1..32).map(|n| format!("{:?}", delta(op, n))).collect();
         println!("{op}: [{}]", row.join(", "));
     }
 }
@@ -100,8 +103,9 @@ fn the_tabulated_call_minus_inline_costs_are_what_the_lowering_emits() {
 
 const RET: (u32, u64) = (1, 10);
 
-/// The inline shift and multiply costs `site_price` prices against the calls: a table that has drifted from the
-/// lowering prices a site by a form it no longer takes.
+/// The inline shift and multiply costs `site_price` prices against the calls: a
+/// table that has drifted from the lowering prices a site by a form it no
+/// longer takes.
 #[test]
 fn the_tabulated_inline_costs_are_what_the_lowering_emits() {
     for (row, op) in ["shl", "lshr", "ashr"].into_iter().enumerate() {
@@ -116,10 +120,12 @@ fn the_tabulated_inline_costs_are_what_the_lowering_emits() {
     }
 }
 
-/// call_keeps -O1 chose a form for the whole function (every long shift inline, or the routine for all the heavy
-/// ones by a fixed threshold, on a 1.6% margin of the function's price): `x << 3` (32 B, 148 T inline against a
-/// 5 B call) stayed 27 B too big while `x << 9` (42 B, 167 T against 426 T) was the routine's. Each site is
-/// priced alone: `<< 3` is the call, `<< 9` stays inline, in one function.
+/// call_keeps -O1 chose a form for the whole function (every long shift inline,
+/// or the routine for all the heavy ones by a fixed threshold, on a 1.6% margin
+/// of the function's price): `x << 3` (32 B, 148 T inline against a
+/// 5 B call) stayed 27 B too big while `x << 9` (42 B, 167 T against 426 T) was
+/// the routine's. Each site is priced alone: `<< 3` is the call, `<< 9` stays
+/// inline, in one function.
 #[test]
 fn at_o1_each_long_shift_takes_the_form_its_own_price_names() {
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"
@@ -138,4 +144,3 @@ define i32 @f(i32 %x, i32 %y, i32 %z, i32 %w) {
     assert_eq!(text.matches("call __ashlsi3").count(), 1, "one shift is the routine's:\n{text}");
     assert_eq!(text.matches("call __mulsi3").count(), 1, "z * 1000 is the routine's, w * 3 is not:\n{text}");
 }
-
