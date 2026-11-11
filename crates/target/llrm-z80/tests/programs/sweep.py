@@ -69,6 +69,33 @@ def sdcc_preinclude(clang, path):
     return [f"-Wp-include,{path}", "-D__inline=", "-D__inline__="]
 
 
+CONDITIONAL = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b(.*)$", re.M)
+DEFINED = re.compile(r"#define ([A-Za-z_]\w*) (.+)")
+
+
+def predefined_values(clang):
+    """Every object-like macro the corpus's clang predefines, as `{name: value}`."""
+    out = run.sh([clang, "-target", "msp430", "-dM", "-E", "-"], run.ROOT, inp="").stdout
+    return {m.group(1): m.group(2) for m in map(DEFINED.fullmatch, out.splitlines()) if m}
+
+
+def branch_macros(source, defined):
+    """The macros a program's `#if`/`#ifdef`/`#elif` lines name that the corpus's clang defines: SDCC must see them too, or it
+    builds the other branch of the same file (variadic took `#else`, hand `va_arg` macros, on SDCC and `__clang__` on ours:
+    331 B against 547 B was two different programs)."""
+    named = set(re.findall(r"[A-Za-z_]\w*", " ".join(CONDITIONAL.findall(source))))
+    return {name: defined[name] for name in sorted(named) if name in defined}
+
+
+def branch_header(source, defined, path):
+    """The force-included header that gives SDCC the branch macros of `source`; its flags, or none for a source with no such macro."""
+    macros = branch_macros(source, defined)
+    if not macros:
+        return []
+    path.write_text("".join(f"#ifndef {n}\n#define {n} {v}\n#endif\n" for n, v in macros.items()))
+    return [f"-Wp-include,{path}"]
+
+
 class Void(Exception):
     """A cell without a row; the message is the reason that is written next to it."""
 
@@ -138,10 +165,11 @@ def ours_cell(path, w, ctx, want):
     ll.write_text(run.DATALAYOUT + "\n" + "\n".join(text) + "\n")
     flags = run.program_flags(path)[0] if ctx.program_flags_to_llc else []
     try:
-        p = run.sh(["bash", "-c", 'ulimit -v 16777216; exec "$@"', "llc", ctx.llc, "-S", f"-O{ctx.level}", *flags, "-o", str(w / "p.s"), str(ll)],
-                   w, timeout=ctx.compile_timeout)
+        p = run.llc_limited([ctx.llc, "-S", f"-O{ctx.level}", *flags, "-o", str(w / "p.s"), str(ll)], w, ctx.compile_timeout)
     except subprocess.TimeoutExpired:
-        raise Void(f"SLOW llc over {ctx.compile_timeout} s")
+        raise Void(f"HUNG llc made no progress for {ctx.compile_timeout * 20} s")
+    if p.returncode == run.CPU_LIMIT:
+        raise Void(f"SLOW llc over {ctx.compile_timeout} s of cpu")
     if p.returncode:
         raise Void("COMPILE " + (p.stderr.strip()[-100:] or "llc failed"))
     (w / "rt.s").write_text(run.RUNTIME.read_text())
@@ -160,7 +188,8 @@ def sdcc_cell(path, w, tag, flags, ctx, want):
     d.mkdir()
     assemble(d, REPORT_SDCC, CRT0_SDCC)
     try:
-        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, str(path), "-o", "p.rel"], d, timeout=300)
+        branch = branch_header(path.read_text(errors="replace"), ctx.predefined, d / "branch.h")
+        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, *branch, str(path), "-o", "p.rel"], d, timeout=300)
     except subprocess.TimeoutExpired:
         raise Void("SDCC timeout")
     if s.returncode or not (d / "p.rel").exists():
@@ -219,6 +248,7 @@ def main():
     try:
         ctx.libc = run.libc_library(work)
         ctx.defines = sdcc_preinclude(ctx.clang, Path(work) / "predefined.h")
+        ctx.predefined = predefined_values(ctx.clang)
         ctx.graph = measure.runtime_calls(str(run.RUNTIME))
         ctx.harness_ours = harness(run.REPORT, run.CRT0)
         ctx.harness_sdcc = harness(REPORT_SDCC, CRT0_SDCC)

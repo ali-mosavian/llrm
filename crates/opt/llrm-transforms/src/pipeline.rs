@@ -1033,6 +1033,7 @@ pub(crate) fn llvm_order(
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
+                    inliner_follows: true,
                     created: Default::default(),
                     decided: Default::default(),
                 }),
@@ -1144,6 +1145,7 @@ pub(crate) fn llvm_order(
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
+                    inliner_follows: applied.options.inline.limit > 0 || applied.options.inline.last,
                     created: std::rc::Rc::clone(&created),
                     decided: std::rc::Rc::clone(&decided),
                 })
@@ -1377,6 +1379,7 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
 /// the explicit one, else the type's, as known-bits reads it.
 pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
     let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
+    let realigned_above = program.target.realigned_above();
     if kept.is_none() && max.is_none() {
         return Ok(());
     }
@@ -1407,7 +1410,8 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                             "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"
                         ));
                     }
-                    if let Some(kept) = kept.filter(|kept| wanted > *kept) {
+                    let realigned = realigned_above.is_some_and(|above| wanted > above);
+                    if let Some(kept) = kept.filter(|kept| wanted > *kept && !realigned) {
                         function.set_alloca_align(inst, kept);
                     }
                 }
@@ -1436,6 +1440,8 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
+    // The clones of the step before the walk and of the one after it share a bound.
+    let cloning = crate::ipacp::Shared::default();
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
     // `RecomputeGlobalsAAPass` alone, read cached in between.
     manager.require_cached::<GlobalsAA>();
@@ -1493,7 +1499,7 @@ pub fn recorded(
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
         if at == 0 {
-            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
+            manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline, cloning: cloning.clone() });
         }
     }
     // Once every body has reached its own fixed point, as the old Nib
@@ -1528,6 +1534,7 @@ pub fn recorded(
     });
     manager.add_program(Interprocedural {
         late,
+        cloning,
         pipeline: Box::new(move |module, analyses, id, stage| {
             // The pin runs nothing over a body `DeadArgumentEliminationPass`
             // changed: the late function pipeline, which every body goes

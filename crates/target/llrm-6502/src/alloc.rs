@@ -3591,6 +3591,9 @@ fn emit_with<const STACK: bool>(
     keep_carry_in_c(&mut function);
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
+    if crate::cmpzero::drop_zero_compares(&mut function) {
+        remove_dead(&mut function);
+    }
     reschedule_kills::<Mos<STACK>>(&mut function);
     commute_accumulator::<Mos<STACK>>(&mut function);
     two_address(&mut function);

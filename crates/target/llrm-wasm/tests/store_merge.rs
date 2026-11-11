@@ -51,3 +51,12 @@ fn a_replaced_load_does_not_stop_the_tail_of_a_copy_run_from_merging() {
     let wide = i64_loads_backend_only("copy_run_merge.ll");
     assert!(wide >= 9, "{wide} i64.load");
 }
+
+/// The store merged from two `@a` stores lost its pointer info, so the `@b`
+/// store after it looked aliased and stayed apart: pattern_fill's zeroing loop
+/// made 3 `i64.store` (the pin's merges give 4) and 2 `i32.store` of `@b` more.
+#[test]
+fn a_merged_store_keeps_its_object_so_the_other_arrays_stores_merge() {
+    let wide = i64_stores("store_merge_ptrinfo.ll");
+    assert!(wide >= 4, "{wide} i64.store");
+}

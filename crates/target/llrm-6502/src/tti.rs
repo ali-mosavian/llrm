@@ -166,6 +166,26 @@ impl Tti for Mos6502 {
         up.threshold = FULL_UNROLL_UNITS;
     }
 
+    /// DEVIATE 6502-UNROLL-O1 (owner llrm-target-6502, exit 2026-11-27, with
+    /// the rows' `unroll_at_o1` and x86-m32's UNROLL-O1): at -O1, which is
+    /// strict on bytes, a full unroll is made only where the copies cost no
+    /// more than the rolled loop, by size or by the cost the analysis finds
+    /// once the trip's constants fold. clang marks every loop
+    /// `unroll.disable` at -O1, so 6502 -O1 kept float_in_place_update's
+    /// two-trip loop (9441 B against 19 B at -Os); the bare
+    /// `-funroll-loops` grew byval_struct +178 B, frameless +27 B,
+    /// loop_fusion +10 B and shrank double_to_int64 -1466 B.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        true
+    }
+
+    /// 6502-UNROLL-O1: no peeling at -O1. `-funroll-loops` turned it on there
+    /// and known_loads_walks grew +4 B (6502) and +47 B (65C02) for -94k
+    /// clocks; -O1 is strict on bytes.
+    fn peels_at_o1(&self) -> bool {
+        false
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code. The pin's
     /// `OptSizeThreshold` 50 inlines a 27-instruction `chrget` into nine
     /// callers, 84 bytes each against a 3-byte call.
@@ -211,8 +231,72 @@ impl Tti for Mos6502 {
     /// multiply per trip, 56k of its 64k clocks). Not 16: with it the
     /// switch_* and byval_inline cells grew on both axes (DEVIATE LSR-N,
     /// exit 2026-11-20).
+    ///
+    /// 16 since 2026-11-10: `n8` made LSR leave every `p16` pointer and index,
+    /// so `g[i]` over 54-byte rows called `__mulhi3` each trip (rep_count at
+    /// -O1: 147,011 clocks, 133,095 now). The wider LSR needs the cost model
+    /// below (`is_lsr_cost_less`, the immediates, the drop hooks); without it
+    /// switch_*, function_table and byval_inline grew. Cells still above the
+    /// tip: row 6502-LSR-WORSE (owner 6502-d, exit 2026-11-24).
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
-        &[32]
+        &[16, 32]
+    }
+
+    /// `isLSRCostLess` with the target's own instruction counts, the shape of
+    /// the pin's x86 override ("instruction number 1st priority",
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7202)
+    /// but with the terms weighed. LSR counts a 16-bit counter step and a
+    /// 16-bit base add as one instruction each; here a step is `inc; bne;
+    /// inc` (3), an add of two cells seven, a multiply a call (40), an
+    /// immediate added four. Zero-page cells are cheap: registers come after.
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            // u64: a rejected formula carries `u32::MAX` terms.
+            let work = 3 * u64::from(c.add_rec_cost)
+                + 7 * u64::from(c.num_base_adds)
+                + 40 * u64::from(c.num_iv_muls)
+                + 4 * u64::from(c.imm_cost);
+            (work, c.num_regs, c.scale_cost, c.setup_cost)
+        };
+        key(a) < key(b)
+    }
+
+    /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
+    /// LSR's own model rates the rewrite worse, as on the z80 (DEVIATE LU15):
+    /// with 16-bit widths on, switch_empty_cases, switch_jump_table and
+    /// function_table grew by an extra counter (owner 6502-d, exit 2026-11-24).
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        true
+    }
+
+    /// A loop with an address use keeps LSR's solution (DEVIATE LU15): the
+    /// baseline prices every address as one register, so the pointer that
+    /// replaces `base + i * size` always looks worse than the multiply it
+    /// removes.
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        true
+    }
+
+    /// `adc #k` and `cmp #k` take any constant a byte at a time. The pin's
+    /// base answer is "none", which made LSR bake every offset into a counter
+    /// of its own (switch_jump_table: a second counter for the exit test).
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// See [`Self::is_legal_add_immediate`]: `cmp #k` per byte.
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
     }
 
     /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).
@@ -323,7 +407,14 @@ impl Tti for Mos6502 {
         base: bool,
         scale: i64,
     ) -> bool {
-        Basic.is_legal_addressing_mode(gv, offset, base, scale)
+        // `(zp),y` with a constant `y` (a pointer cell and 0..=255), or an
+        // absolute `lda g+k`; no scaled index (a 16-bit add is not an address).
+        match (gv, base) {
+            _ if scale != 0 => false,
+            (false, true) => (0..=255).contains(&offset),
+            (true, true) => false,
+            _ => (0..=0xFFFF).contains(&offset),
+        }
     }
 
     // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so

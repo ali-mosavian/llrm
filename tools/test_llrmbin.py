@@ -301,3 +301,46 @@ def test_a_misspelled_target_name_raises_instead_of_reading_as_no_own_backend():
         with pytest.raises(SystemExit, match="unknown target"):
             llrmbin.backends_of(typo)
     assert llrmbin.backends_of("arm64-linux") == ("llrm-llc", "llrm-arm64-llc")
+
+
+def test_llrm_llc_in_the_environment_makes_two_sides_one_backend_and_is_refused(tmp_path, monkeypatch, capsys):
+    """z80 identity #8527 compared one llrm-llc with itself: LLRM_LLC names the default backend of both sides, so the llrm-llc beside each llrm-cc was never run and every row read SAME.
+    The guard resolves the backend as llrm-cc does, prints cc and llc md5 per side, and refuses two sides that resolve to one llc unless same_llc."""
+    import pytest
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder in (base, head):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(folder.name.encode())
+        (folder / "llrm-llc").write_bytes(b"llc " + folder.name.encode())
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    out = capsys.readouterr().err
+    assert "base:" in out and "head:" in out and "llc" in out, out
+    monkeypatch.setenv("LLRM_LLC", str(base / "llrm-llc"))
+    monkeypatch.setenv("AB_ALLOW_ENV", "")
+    with pytest.raises(SystemExit, match="same llrm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", same_llc=True)
+
+
+def test_the_sides_command_exits_2_on_one_llc_and_0_with_same_ok(tmp_path):
+    import subprocess, sys
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder in (base, head):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(folder.name.encode())
+        (folder / "llrm-llc").write_bytes(b"one llc")
+    run = lambda *extra: subprocess.run([sys.executable, str(Path(llrmbin.__file__)), "sides", str(base / "llrm-cc"), str(head / "llrm-cc"), *extra], capture_output=True, text=True)
+    refused = run()
+    assert refused.returncode == 2 and "same llrm-llc" in refused.stderr, refused
+    allowed = run("--same-ok")
+    assert allowed.returncode == 0 and "md5" in allowed.stderr, allowed
+
+
+def test_the_compiler_environment_keeps_the_cache_dir_that_names_the_open_watcom_tree(monkeypatch):
+    """bench/widths ran llrm-cc without HOME: `{ow}` resolved to a relative `.cache/llrm/ow-src-*`, "the Open Watcom tree is missing", and both test_widths tests failed."""
+    monkeypatch.setenv("HOME", "/home/someone")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/cache")
+    env = llrmbin.cc_environment()
+    assert env["HOME"] == "/home/someone" and env["XDG_CACHE_HOME"] == "/cache"
