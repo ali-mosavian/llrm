@@ -61,16 +61,26 @@ pub struct Chain {
     off: bool,
     pin: bool,
     used: Rc<Cell<bool>>,
+    synthesized: Rc<Cell<bool>>,
 }
 
 impl Chain {
     pub fn of(mode: Mode) -> Chain {
-        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, used: Rc::default() }
+        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, used: Rc::default(), synthesized: Rc::default() }
     }
 
     /// Whether this build decomposed at least one multiply.
     pub fn used(&self) -> bool {
         self.used.get()
+    }
+
+    /// Whether this build took a chain beyond the pin's shape (DEVIATE G2).
+    pub fn synthesized(&self) -> bool {
+        self.synthesized.get()
+    }
+
+    pub(super) fn note_synthesized(&self) {
+        self.synthesized.set(true);
     }
 
     /// Whether a chain beyond the pin's shape may be taken: not in a build

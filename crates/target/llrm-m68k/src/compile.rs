@@ -291,7 +291,7 @@ pub fn items_with(
     if touched.mul_trial {
         let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
-        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
+        if crate::trial::prefers_without(&kept, &plain, cpu, price, !touched.mul_synthesized) {
             kept = plain;
             options = without;
         }
@@ -379,6 +379,10 @@ struct Touched {
     global_copies: bool,
     /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
     mul_trial: bool,
+    /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
+    /// trial credits clocks only inside loops, since a straight-line multiply
+    /// may never run.
+    mul_synthesized: bool,
 }
 
 impl Touched {
@@ -463,6 +467,7 @@ fn items_once(
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
     touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
+    touched.mul_synthesized = chain.synthesized();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {

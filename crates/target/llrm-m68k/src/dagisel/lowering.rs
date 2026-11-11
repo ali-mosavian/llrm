@@ -273,7 +273,11 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
             return None;
         }
         let plan = super::synth::plan(self.cpu, self.price, vt.size_in_bits(), c)?;
-        self.mul.allows(true).then_some(plan)
+        let taken = self.mul.allows(true).then_some(plan);
+        if taken.is_some() {
+            self.mul.note_synthesized();
+        }
+        taken
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
