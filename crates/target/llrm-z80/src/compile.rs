@@ -303,6 +303,11 @@ fn allocated_with(
     expand::BYTES_FIRST.with(|one| one.set(!matches!(request.level, Level::O2 | Level::O3 | Level::Omax)));
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
+    crate::long_shift::fuse(&mut function);
+    crate::long_shift::sink(&mut function);
+    if std::env::var("LLRM_Z80_DUMP_SSA").is_ok_and(|one| one == name) {
+        dump(&function);
+    }
     eliminate_phis_with(&mut function, false);
     merge_lone_constant_stores(&mut function);
     let mut hoisted = function.clone();
@@ -2198,6 +2203,9 @@ fn use_lanes_once(
 fn dump(function: &MFunction) {
     for block in &function.blocks {
         eprintln!("bb{}:", block.id);
+        for phi in &block.phis {
+            eprintln!("  phi {:?} {:?}", phi.result, phi.incoming);
+        }
         for inst in &block.insts {
             eprintln!(
                 "  {:?} {:?}{}{}",
