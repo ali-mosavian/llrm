@@ -251,6 +251,29 @@ pub enum MemoryOp {
     Store,
 }
 
+/// How a load or store names its memory, for the bytes its address takes in
+/// code (`Tti::access_address_cost`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AddressForm {
+    pub base: AddressBase,
+    /// The offset from the base is a constant of this many bytes' encoding:
+    /// 0 none, 1 a byte, 4 a word.
+    pub displacement_bytes: u8,
+    /// A register scaled into the address.
+    pub indexed: bool,
+}
+
+/// What an address starts from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddressBase {
+    /// A global's own address: the access names it absolutely.
+    Global,
+    /// A stack slot of the function.
+    Frame,
+    /// A pointer in a register.
+    Register,
+}
+
 /// The instruction a constant is an operand of (`getIntImmCostInst`'s opcodes).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImmUser {
@@ -632,6 +655,54 @@ pub trait Tti {
         None
     }
 
+    /// What the address of a load or store adds to its `CodeSize`, beyond
+    /// the access itself (`memory_op_cost`): the bytes of a global's absolute
+    /// address, a frame slot's, a displacement or a scaled index. Free: the
+    /// access is priced alone, as the pin does.
+    fn access_address_cost(
+        &self,
+        form: AddressForm,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = (form, kind);
+        Cost::FREE
+    }
+
+    /// What a `memcpy`, `memmove` or `memset` of `length` bytes (none: not a
+    /// constant) costs under `kind`, where the target expands it inline or
+    /// into a call by its length. None: `intrinsic_cost` answers.
+    fn memory_intrinsic_cost(
+        &self,
+        family: &str,
+        length: Option<u64>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (family, length, kind);
+        None
+    }
+
+    /// What computing an address that no addressing mode holds costs (a
+    /// `lea` or an add): one unit, as the pin prices it.
+    fn address_computation_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = kind;
+        Cost::BASIC
+    }
+
+    /// What a call of a function the target lowers to a call, with
+    /// `arguments` arguments, costs: one unit for the call and one per
+    /// argument, as the pin's `TargetTransformInfoImplBase` prices it.
+    fn direct_call_cost(
+        &self,
+        arguments: i64,
+        kind: CostKind,
+    ) -> Cost {
+        let _ = kind;
+        Cost::BASIC * (arguments + 1)
+    }
+
     /// What one call costs the caller and the callee together, in `kind`:
     /// the call and return, the arguments' setup (a by-value copy, a push
     /// past the argument registers), and the frame the callee builds and tears
@@ -717,6 +788,23 @@ pub trait Tti {
         false
     }
 
+    /// Whether the inliner's size view is measured in encoded bytes: it also
+    /// prices what the pin counts free (phis, jumps, the first return, casts)
+    /// and the call by its whole sequence, and it serves speed callers only,
+    /// a size caller keeping the units its bound was fitted in (DEVIATE
+    /// INL-O1 SIZE). False: the view, where there is one, prices every
+    /// caller as it did.
+    fn inline_size_view_is_measured(&self) -> bool {
+        false
+    }
+
+    /// Whether the -O1 pipeline walks the call graph a second time after the
+    /// dead globals and loops are gone, repricing a callee the folds emptied
+    /// (`Options::second_inline`, which a driver may turn on at every level).
+    fn inline_second_round_at_o1(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
     /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
     /// bound's verdict stands.
@@ -796,6 +884,11 @@ pub trait Tti {
     /// as free only while its elements fit the registers (UP1).
     fn unroll_promotion_fits_registers(&self) -> bool {
         false
+    }
+
+    /// The signed bits of the immediate a store takes; 0: none (the stored constant needs a register).
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        0
     }
 
     /// The same for the floats of an x87 target, against the stack's slots.
@@ -1016,6 +1109,16 @@ pub trait Tti {
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
     fn narrow_divide_live_limit(&self) -> u32 {
         0
+    }
+
+    /// `Tuning::narrow_divide_live_max_bits`.
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        31
+    }
+
+    /// `Tuning::narrow_divide_live_at_size`.
+    fn narrow_divide_live_at_size(&self) -> bool {
+        true
     }
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
@@ -2222,6 +2325,21 @@ pub trait Tti {
         &self,
         _ty: Ty,
     ) -> bool {
+        false
+    }
+
+    /// `isFCmpOrdCheaperThanFCmpZero`
+    /// ([TargetTransformInfoImpl.h:581](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L581)):
+    /// whether `fcmp ord v, v` is cheaper than `fcmp oge v, 0.0` (X86: no).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        true
+    }
+
+    /// `Tuning::partial_libcalls_skip_at_size`.
+    fn partial_libcalls_skip_at_size(&self) -> bool {
         false
     }
 
