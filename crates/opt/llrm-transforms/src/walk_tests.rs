@@ -3554,3 +3554,17 @@ fn a_trial_whose_bytes_tie_is_decided_by_the_clocks_it_saves() {
     assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400), "tied, no faster: refused");
     assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400), "larger by a byte: refused however fast");
 }
+
+/// DEVIATE INL-SPEED-OS: jpeg_fixed -Os `receive` and `extend` (two sites each, 200,699 runs a call, +1 and -1 bytes):
+/// the latency model priced each call as its callee's body, so the trial read 0 clocks saved and stayed refused, 375 k
+/// calls left. The call and the return the copy drops count; a cold site, or one that grows the code past 4 B a site,
+/// still does not.
+#[test]
+fn a_hot_copy_the_model_prices_at_nothing_is_kept_for_the_call_it_drops() {
+    use super::speed_keeps_at_size;
+    assert!(speed_keeps_at_size(16, 200_699.5, 0, 2, 1));
+    assert!(speed_keeps_at_size(16, 200_699.5, 0, 2, -1));
+    assert!(!speed_keeps_at_size(16, 1.0, 0, 2, 1), "a cold site");
+    assert!(!speed_keeps_at_size(16, 200_699.5, 0, 2, 9), "9 B for two sites");
+    assert!(!speed_keeps_at_size(16, 200_699.5, -4, 2, 1), "the copy costs clocks");
+}
