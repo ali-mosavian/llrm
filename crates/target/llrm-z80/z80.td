@@ -207,6 +207,11 @@ multiclass Shift<string n, RegisterClass rc, ValueType vt> {
 defm "" : Shift<"8", GR8, i8>;
 defm "" : Shift<"16", GR16, i16>;
 
+// A word shifted right by one with the low bit of another word shifted in at the top (`fshr`, the low word of a long
+// shifted right by one): that bit goes through the carry, `ld a, hi.lo; rra; rr d.hi; rr d.lo`.
+let Defs = [A, F], Constraints = "$d = $a" in
+  def FSHR1 : Z80Inst<(outs GR16:$d), (ins GR16:$a, GR16:$b), "fshr1 $d, $b", [(set i16:$d, (fshr i16:$b, i16:$a, (i8 1)))]>;
+
 // A constant is loaded again where it is wanted rather than kept or spilled.
 let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
 def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm:$v)]>;
