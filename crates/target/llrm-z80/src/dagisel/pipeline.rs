@@ -343,7 +343,7 @@ pub fn select_block(
     cpu: Cpu,
     info: &mut FunctionLoweringInfo,
     optimize: bool,
-    (sized, long_multiply): (bool, bool),
+    (sized, long_multiply, cold): (bool, bool, bool),
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering();
     if GENERIC_CARRY.with(std::cell::Cell::get) {
@@ -365,6 +365,13 @@ pub fn select_block(
                 tli.set_inline_constant_mul(near_power_factor);
             }
         }
+    }
+    // the product of two zero-extended words is a call in a block that runs
+    // once (`block_frequencies` at most 1): 15 B against 216 B of partial
+    // products for a few hundred T-states more; in a loop the products stay
+    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
+    if cold && !sized {
+        tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized };
     let mut combines = Z80Combines { long_multiply: (sized || all_calls) && long_multiply };

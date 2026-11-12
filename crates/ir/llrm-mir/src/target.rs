@@ -450,6 +450,9 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
+    /// are widened like illegal ones, for the operand-size prefix.
+    pub prefixed_16_bit_counters: bool,
     /// DEVIATE PIL-OS (owner alim, exit 2026-11-27): PartiallyInlineLibCalls
     /// leaves a call in a function tuned for size (`optsize`, `minsize`)
     /// alone. false: the pin's, which splits it there too and grows the code
@@ -606,6 +609,7 @@ impl Tuning {
         unroll_prices_nest: false,
         phi_constant_chains: false,
         sink_select_arms: false,
+        prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
         size_copy_price: None,
