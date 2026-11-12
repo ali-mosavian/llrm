@@ -253,6 +253,70 @@ fn a_target_that_does_not_ask_keeps_the_two_byte_stores() {
     assert!(!is_one_halfword_store(&dag));
 }
 
+/// `*(i8*)(q) = *(i8*)(p); *(i8*)(q+1) = *(i8*)(p+1)`: two byte loads off one chain, each stored.
+fn two_byte_copies(dag: &mut SelectionDAG) {
+    let (src, dst, chain) = (dag.get_register(EVT::I64, 7), dag.get_register(EVT::I64, 8), dag.entry_node());
+    let info = |base| MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(base),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let one = dag.get_constant(1, EVT::I64);
+    let (src1, dst1) = (dag.get_node(ISD::Add, EVT::I64, &[src, one]), dag.get_node(ISD::Add, EVT::I64, &[dst, one]));
+    let (lo, hi) = (dag.get_load(EVT::I8, chain, src, info(0)), dag.get_load(EVT::I8, chain, src1, info(1)));
+    let first = dag.get_store(chain, lo, dst, info(2));
+    let second = dag.get_store(first, hi, dst1, info(3));
+    dag.set_root(second);
+}
+
+fn is_one_extending_load_and_truncating_store(dag: &SelectionDAG) -> bool {
+    let root = dag.get_root();
+    let NodeData::Mem(store) = dag.node(root).data else { return false };
+    let value = dag.operand(root, 1);
+    let NodeData::Mem(load) = dag.node(value).data else { return false };
+    dag.opcode(root) == ISD::Store
+        && store.mem_vt == EVT::I16
+        && dag.value_type(value) == EVT::I32
+        && load.mem_vt == EVT::I16
+        && load.ext == Some(LoadExt::ExtLoad)
+}
+
+/// Two adjacent byte copies stayed four memory operations on a target with no 16-bit register (wasm32 `stack_arrays_copy`: the merge of
+/// loads found no legal width, `last_legal` = 1, because the pin's `TypePromoteInteger` branch of `tryStoreMergeOfLoads` was missing):
+/// the pin joins them into one `i16` extending load and one truncating `i16` store of the promoted `i32`.
+#[test]
+fn two_byte_copies_are_one_extending_halfword_load_and_truncating_store() {
+    let tli = no_halfword_register();
+    let mut dag = dag();
+    two_byte_copies(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(is_one_extending_load_and_truncating_store(&dag));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_two_byte_copies() {
+    let tli = no_halfword_register();
+    let mut dag = dag();
+    two_byte_copies(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(!is_one_extending_load_and_truncating_store(&dag));
+}
+
+/// An extending load the target cannot do keeps the copies as they are: the pin asks `isLoadLegal` for all three kinds.
+#[test]
+fn two_byte_copies_stay_when_the_extending_load_is_not_legal() {
+    let mut tli = no_halfword_register();
+    tli.set_load_ext_action(LoadExt::ZExtLoad, MVT::I32, MVT::I16, Action::Expand);
+    let mut dag = dag();
+    two_byte_copies(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(!is_one_extending_load_and_truncating_store(&dag));
+}
+
 /// Declines the bitwise form of a logic of compares, as AArch64 does.
 struct Declines;
 
