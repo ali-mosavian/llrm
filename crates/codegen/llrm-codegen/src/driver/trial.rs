@@ -111,7 +111,7 @@ impl Trial {
 /// the backend on the functions whose bodies differ twice (cut out of the
 /// module) and on the whole module once, so its cost grows with the loops
 /// noted, not with the module.
-pub fn compiled_module_trying(
+fn compiled_module_trying_once(
     module: llrm_mir::module::Module,
     name: &str,
     options: &Options,
@@ -222,4 +222,65 @@ pub fn compiled_module_trying(
 /// Whether the module is assembled with and without LEAF-FOLD-OS: a size build on a target that folds.
 fn leaf_fold_trial(options: &Options) -> bool {
     options.cpu().is_ok_and(|cpu| cpu.size) && options.arch.leaf_fold_at_size()
+}
+
+/// [`compiled_module_trying`], and at -Os on a target with the rotation trial, DEVIATE ROTATION-HOT (owner
+/// x86-m32, exit 2026-11-24): where RS1 left a loop unrotated whose guard does not fold and whose trips are not
+/// counted, the module is compiled again with those loops rotated as the pin does, and that is kept if the
+/// finished code executes less for a few bytes a loop (`trial::keeps_rotation_hot`). The pass notes the loops it
+/// left; a module with none is compiled once.
+pub fn compiled_module_trying(
+    module: llrm_mir::module::Module,
+    name: &str,
+    options: &Options,
+    bytes: &dyn Fn(&masm::Module) -> Option<i64>,
+    unpadded: &dyn Fn(&masm::Module) -> Option<i64>,
+) -> Result<masm::Module, String> {
+    let hot = matches!(Trial::of(options), Some(Trial::Rotation));
+    let _ = trial::take_left();
+    let first = compiled_module_trying_once(module.clone(), name, options, bytes, unpadded)?;
+    if !hot {
+        return Ok(first);
+    }
+    let (left, loops) = trial::take_left();
+    if left.is_empty() {
+        return Ok(first);
+    }
+    let mut again = options.clone();
+    again.dump = None;
+    let second =
+        trial::with_more_rotation(|| compiled_module_trying_once(module, name, &again, bytes, unpadded))?;
+    // Instructions and memory operands as `executed::work`, the branches and jumps at their clocks on the CPU: a
+    // rotation trades a taken `jmp` for a copied guard, which the work alone does not see.
+    let cpu = options.cpu()?;
+    let work = |built: &masm::Module| {
+        built
+            .procedures
+            .iter()
+            .map(|one| {
+                let done = executed::executed(&one.body)?;
+                let jumps = done.jump_cycles(cpu).ok()?;
+                Some(done.instructions - done.branches - done.jumps + done.memory + jumps)
+            })
+            .sum::<Option<f64>>()
+    };
+    let pays = match (work(&first), work(&second), unpadded(&first), unpadded(&second)) {
+        (Some(was), Some(now), Some(before), Some(after)) => {
+            trial::keeps_rotation_hot((was - now).round() as i64, after - before, loops)
+        }
+        _ => false,
+    };
+    if llrm_support::debug::enabled("trial") {
+        eprintln!(
+            "trial rotation-hot: {loops} loops in {left:?}, work {:?} -> {:?}, {:?} -> {:?} bytes: {}",
+            work(&first),
+            work(&second),
+            unpadded(&first),
+            unpadded(&second),
+            if pays { "kept" } else { "put back" }
+        );
+    }
+    let chosen = if pays { second } else { first };
+    stage_files(options, "", &chosen)?;
+    Ok(chosen)
 }

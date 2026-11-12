@@ -30,6 +30,11 @@ thread_local! {
     /// The functions with a loop that ROTATION-TRIAL rotated and a trial may
     /// leave unrotated.
     static ROTATED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of ROTATION-HOT runs: a loop whose copied guard does not fold and whose
+    /// trips are not counted is rotated as well.
+    static MORE: Cell<bool> = const { Cell::new(false) };
+    /// The functions, and loops together, ROTATION-HOT left unrotated.
+    static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
 }
 
 /// The trial threshold in force, if a trial compile is running.
@@ -114,6 +119,51 @@ pub(crate) fn note_rotated(function: &str) {
 /// The functions noted by [`note_rotated`] since the last call.
 pub fn take_rotated() -> Vec<String> {
     ROTATED.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE ROTATION-HOT (beyond the pin; owner x86-m32, exit 2026-11-24): whether the trial compile
+/// that also rotates the loops of an unfolded guard and uncounted trips is running. The pin rotates them
+/// at -Os; RS1 leaves them, and the finished code decides which pays (hot loops: fewer executed
+/// instructions for a few bytes).
+pub fn rotates_more() -> bool {
+    MORE.with(Cell::get)
+}
+
+/// Runs `body` with those loops rotated as well.
+pub fn with_more_rotation<T>(body: impl FnOnce() -> T) -> T {
+    let before = MORE.with(|cell| cell.replace(true));
+    let value = body();
+    MORE.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that `function` has a loop RS1 left unrotated that [`with_more_rotation`] would rotate.
+pub(crate) fn note_left(function: &str) {
+    LEFT.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.0.iter().any(|one| one == function) {
+            list.0.push(function.to_owned());
+        }
+        list.1 += 1;
+    });
+}
+
+/// The functions and loops noted by [`note_left`] since the last call.
+pub fn take_left() -> (Vec<String>, usize) {
+    LEFT.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare and a jump).
+pub const ROTATION_HOT_BYTES_PER_LOOP: i64 = 4;
+
+/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the code by no more than a
+/// few bytes for each loop it rotated.
+pub fn keeps_rotation_hot(
+    saved: i64,
+    added: i64,
+    loops: usize,
+) -> bool {
+    saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * loops as i64
 }
 
 /// A function of more instructions than this is not priced twice: the second compile of a big function
