@@ -2581,6 +2581,13 @@ pub trait Tti {
         0
     }
 
+    /// The width of the narrow divide instruction, where an unsigned divide or remainder whose
+    /// operands ScalarEvolution proves that narrow is done in the narrow type (`narrowrange`);
+    /// none: the pass does not run.
+    fn range_narrowing_width(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether the loop as written keeps the bound of its exit test live next
     /// to the counter. LSR rates an exit test against a variable bound as one
     /// add-recurrence, `{-bound,+,1}` compared with zero (`getUse`, ICmpZero:
