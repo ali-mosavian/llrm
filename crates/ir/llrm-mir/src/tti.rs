@@ -861,6 +861,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INL-SPEED-OS (owner w11, exit 2026-12-05): at a size build an SZ2 trial the byte count refuses is
+    /// kept where its sites run at least this many times per call of the caller and the copies save clocks, for at
+    /// most `INLINE_SPEED_BYTES_PER_SITE` bytes a site. The pin's `OptSizeThreshold` and gcc's `-Os` inline a small
+    /// callee in a hot loop (jpeg_single -Os: `clamp`, 1.18 M calls, 7% of the instructions). None: bytes alone.
+    fn inline_trial_speed_at_size(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
     fn inline_hot_trial_at_o3(&self) -> bool {
         false
@@ -1315,6 +1323,11 @@ pub trait Tti {
 
     /// `Tuning::merge_functions_at_size`.
     fn merge_functions_at_size(&self) -> bool {
+        false
+    }
+
+    /// Drop the local functions that are the same code at -O1 (`MergeLocalFunctions`); no thunk is written.
+    fn merge_local_functions_at_o1(&self) -> bool {
         false
     }
 
