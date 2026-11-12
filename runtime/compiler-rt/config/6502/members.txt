@@ -7,6 +7,8 @@
 config/6502/mul32x32.s
 config/6502/di64.s
 config/6502/umod64.s
+config/6502/cmp64.s
+config/6502/cmp32.s
 config/6502/sf32.s
 config/6502/sf32_muldiv.s
 config/6502/sf32_conv.s
