@@ -34,3 +34,32 @@ fn a_constant_divisor_is_priced_as_it_is_lowered() {
     assert_eq!(price(ArithOp::SDiv, Ty::Int(32), OperandInfo::constant(8, 32), true, true), 18);
     assert_eq!(price(ArithOp::UDiv, Ty::Int(16), five, false, true), 10);
 }
+
+const COUNTED_REMAINDER_LOOP: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+define i32 @sum(i32 %n) {\n\
+entry:\n  br label %loop\n\
+loop:\n  %i = phi i32 [ %n, %entry ], [ %next, %loop ]\n  %acc = phi i32 [ 0, %entry ], [ %add, %loop ]\n\
+  %m = mul i32 %i, 3\n  %r = srem i32 %m, 11\n  %add = add i32 %acc, %r\n  %next = sub i32 %i, 1\n\
+  %done = icmp eq i32 %next, 0\n  br i1 %done, label %out, label %loop\n\
+out:\n  ret i32 %add\n}\n\
+define i32 @k() {\n  %1 = call i32 @sum(i32 2000)\n  %2 = add i32 %1, 1\n  ret i32 %2\n}\n";
+
+/// `recsum` -O2 kept its call (the trial saw 4 clocks once through, 38 B for
+/// them): the loop's remainder is unsigned once the counter is known positive,
+/// 12 clocks a trip over 2000.
+#[test]
+fn a_speed_caller_inlines_a_loop_whose_constant_remainder_it_narrows() {
+    let asm =
+        assembly(COUNTED_REMAINDER_LOOP, cpu_of("68020").unwrap(), Level::O2).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(count_calls(&asm), 0, "{asm}");
+}
+
+/// The MIR latency of `% 11` was one basic operation either signedness: a loop
+/// that narrowed it to unsigned (12 clocks a trip) showed no gain.
+#[test]
+fn a_signed_remainder_costs_more_clocks_than_an_unsigned_one() {
+    let cpu = cpu_of("68020").unwrap();
+    let eleven = OperandInfo::constant(11, 32);
+    let clocks = |op| llrm_m68k::sizes::constant_division_clocks(cpu, op, Ty::Int(32), eleven, true).unwrap();
+    assert!(clocks(ArithOp::SRem) >= clocks(ArithOp::URem) + 10, "{} {}", clocks(ArithOp::SRem), clocks(ArithOp::URem));
+}

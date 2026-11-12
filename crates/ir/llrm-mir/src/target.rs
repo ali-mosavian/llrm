@@ -40,6 +40,11 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE PO1 (owner x86-m32-b, exit 2026-11-24 for the targets that keep it):
+    /// at -Os the arguments of a call are popped into a dead register in place
+    /// of `add sp,N` (one byte shorter, up to 7 clocks slower a call). false:
+    /// the pin's, which pops only at `minsize` (X86FrameLowering.cpp:4116).
+    pub pops_arguments_at_size: bool,
     /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
@@ -97,6 +102,9 @@ pub struct Tuning {
     /// carries more bytes than its units where an argument is several words (x86-m16:
     /// QCport `pl_box_axis`, 21 units, ~70 B a copy, three copies +181 B).
     pub inline_dying_credit_at_os: bool,
+    /// `Tti::inline_trial_keeps_shrinking_copy`: a priced inline trial keeps a copy that
+    /// leaves the module no larger and saves clocks, though no callee goes with it.
+    pub inline_trial_keeps_shrinking_copy: bool,
     /// DEVIATE INL-O1 SIZE (owner m32-o1-small, exit 2026-11-14): the inliner
     /// counts a callee in bytes of encoded code by instruction kind
     /// (`Tti::inline_size_view`), not in the pin's units of one per
@@ -530,6 +538,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        pops_arguments_at_size: true,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         narrow_divide_live_max_bits: 31,
@@ -542,6 +551,7 @@ impl Tuning {
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
         inline_dying_credit_at_os: true,
+        inline_trial_keeps_shrinking_copy: false,
         inline_never_grows_without_rate: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -832,6 +842,13 @@ pub trait Machine {
     /// copied before the result is made.
     fn two_address(&self) -> bool {
         false
+    }
+
+    /// Whether a call followed by a return can be emitted as a tail call
+    /// (LLVM's `TargetLowering::mayBeEmittedAsTailCall`), which is what makes
+    /// `CodeGenPrepare` copy the return into the call's block. Not wasm.
+    fn may_be_emitted_as_tail_call(&self) -> bool {
+        true
     }
 
     /// Whether the target has several registers a comparison's result can

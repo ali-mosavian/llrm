@@ -105,6 +105,27 @@ def run(cmd, **kw):
     return done
 
 
+def llrm_environment() -> dict:
+    """What llrm-cc needs to compile `-m32`: the pinned clang and the target. With `PATH` alone it fell back to the system clang,
+    refused its datalayout (exit 1) and the map measured the loader: 10.8 M of "compile", rows 0.0% of the thread, llrm 0.0x gcc."""
+    return {"PATH": os.environ["PATH"], "LLRM_PIN_CLANG": pin_clang.path(), "LLRM_CC_TARGET": "x86_32-linux", **llrmbin.cc_environment()}
+
+
+def llrm_command(llrm, level, out, source) -> list:
+    """llrm-cc's compile of `source`, with the flags gcc and clang get (`FOREIGN`): the Borland keywords defined away, -march=i486, no
+    warnings. Without the keywords clang stopped on `void far *` at qcshared.h:28 and the compile never ran."""
+    return [str(llrm), *KEYWORDS, "-m32", "-march=i486", "-w", level, *INCLUDES, *out, str(source)]
+
+
+def checked(cmd, env=None):
+    """`run`, exiting with the tool's first line when it fails: a compile that failed has no instruction count worth printing."""
+    done = run(cmd, env=env)
+    if done.returncode:
+        first = next((line for line in done.stderr.splitlines() if line.strip()), "no output")
+        sys.exit(f"the compile failed ({done.returncode}), nothing to measure: {cmd[0]}: {first}")
+    return done
+
+
 def instructions(cmd, env=None):
     """User-space instructions of one run (perf stat, children included)."""
     done = run(["perf", "stat", "-e", "instructions:u", "-x,", *cmd], env=env)
@@ -220,12 +241,13 @@ def build_map(args) -> dict:
     import atexit, shutil
     atexit.register(shutil.rmtree, outdir, True)
     llrm_out, foreign_out = output_args(args.output, outdir)
-    base = [str(llrm), "-m32", args.level, *INCLUDES, *llrm_out, str(source)]
-    env = {"PATH": os.environ["PATH"]}
+    base = llrm_command(llrm, args.level, llrm_out, source)
+    env = llrm_environment()
+    checked(base, env)
     total = instructions(base, env)
     timing = {"llrm": cycles(base, env)}
     timed_env = {**env, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "1000"}
-    timed = run(base, env=timed_env)
+    timed = checked(base, timed_env)
     instrumented = instructions(base, timed_env)
     with tempfile.TemporaryDirectory() as empty_dir:  # what a compile of nothing costs: loader, runtime start, exit
         empty = Path(empty_dir) / "empty.c"

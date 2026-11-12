@@ -4,9 +4,10 @@
 //! that remark).
 
 use llrm_arm64::tti::AArch64;
-use llrm_mir::tti::{ArithOp, Ty};
+use llrm_mir::opcode::FloatPredicate;
+use llrm_mir::tti::{ArithOp, CastKind, CmpSel, MemoryOp, Predicate, Ty};
 
-use super::{LoopFacts, Plan, Recipe, choose, plan};
+use super::{LoopFacts, Plan, Recipe, choose, iteration_cost, pin_may_vectorize, plan};
 
 fn facts(
     lane_bits: u32,
@@ -79,8 +80,8 @@ fn the_factors_are_the_pins() {
 }
 
 /// The pin vectorizes a loop whose trip count VF x IC does not divide, or that
-/// is not constant, with a scalar epilogue; this planner refused both ("A scalar
-/// epilogue would remain", "The trip count is not a known constant").
+/// is not constant, with a scalar epilogue; this planner refused both ("A
+/// scalar epilogue would remain", "The trip count is not a known constant").
 #[test]
 fn a_remainder_or_an_unknown_trip_count_is_planned() {
     let tti = AArch64::of_cpu("generic").unwrap();
@@ -113,15 +114,78 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
 }
 
-/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) took VF 8 for a loop
-/// storing `i16` and `i64`: a `<8 x i64>` the backend cannot split, so arm64
-/// refused the whole function ("vector with no register class"); at VF 2 the
-/// `<2 x i16>` has no register either. With no VF filling a register for every
-/// type, the loop stays scalar (LV-SPLIT).
+/// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) took VF 8 for a
+/// loop storing `i16` and `i64`: a `<8 x i64>` the backend cannot split, so
+/// arm64 refused the whole function ("vector with no register class"); at VF 2
+/// the `<2 x i16>` has no register either. With no VF filling a register for
+/// every type, the loop stays scalar (LV-SPLIT).
 #[test]
 fn a_loop_whose_types_fill_no_common_register_is_not_vectorized() {
     let tti = AArch64::of_cpu("generic").unwrap();
     let store = |bits: u32| Recipe::Store { lane: Ty::Int(bits), align: u64::from(bits / 8) };
     let mixed = LoopFacts { recipes: vec![store(16), store(64)], ..facts(16, 64, false) };
     assert!(plan(&tti, &mixed).is_err(), "{:?}", plan(&tti, &mixed));
+}
+
+fn loop_of(recipes: Vec<Recipe>) -> LoopFacts {
+    LoopFacts { recipes, ..facts(32, 400, false) }
+}
+
+/// `opt -passes=loop-vectorize -debug-only=loop-vectorize` on `fp_canon_sum.ll`
+/// (sfm16_float_add): scalar loop costs 11, `Cost for VF 2: 26`, `VF 4: 48`,
+/// "not beneficial", interleave count 4. The scalar cost was the count of a
+/// loop's phi, add, compare and branch plus its recipes (4 + 1 + ...: 14 here,
+/// a load 1 not 2), and no vector cost of a float, a compare, a select or a
+/// cast was priced: the loop could not be weighed, so `sfm16_float_add` ran
+/// 3,609 instructions against clang's 2,721.
+#[test]
+fn a_loop_of_scattered_floats_is_priced_as_the_pin_prices_it() {
+    let tti = AArch64::of_cpu("apple-m1").unwrap();
+    let uno = FloatPredicate::Uno;
+    let recipes = vec![
+        Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
+        Recipe::Scalarized { op: MemoryOp::Load, lane: Ty::Float },
+        Recipe::Binary { op: ArithOp::FAdd, lane: Ty::Float },
+        Recipe::Compare { op: CmpSel::FCmp, lane: Ty::Float, predicate: Predicate::Float(uno) },
+        Recipe::Cast { kind: CastKind::BitCast, dst: Ty::Int(32), src: Ty::Float, folded: false },
+        Recipe::Select { lane: Ty::Int(32), predicate: Some(Predicate::Float(uno)) },
+        Recipe::Binary { op: ArithOp::Add, lane: Ty::Int(32) },
+    ];
+    let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();
+    assert_eq!((costs(1), costs(2), costs(4)), (11, 26, 48));
+    let looped = loop_of(recipes);
+    // 12 a lane at VF 4 against the scalar 11: the pin keeps the loop scalar.
+    assert!(!pin_may_vectorize(&tti, &looped));
+}
+
+/// `fp_scale.ll` (`b[i] = a[i] * 2.0f`): scalar 8, `VF 2: 6`, `VF 4: 6`,
+/// vectorized at VF 4.
+#[test]
+fn a_loop_of_consecutive_floats_is_priced_as_the_pin_prices_it() {
+    let tti = AArch64::of_cpu("apple-m1").unwrap();
+    let recipes = vec![
+        Recipe::Load { lane: Ty::Float, align: 4 },
+        Recipe::Binary { op: ArithOp::FMul, lane: Ty::Float },
+        Recipe::Store { lane: Ty::Float, align: 4 },
+    ];
+    let costs = |vf| iteration_cost(&tti, &recipes, vf, false, false).unwrap();
+    assert_eq!((costs(1), costs(2), costs(4)), (8, 6, 6));
+    assert!(pin_may_vectorize(&tti, &loop_of(recipes)));
+}
+
+/// A recipe the port cannot price as a vector counts nothing in a lower bound:
+/// the loop the pin vectorizes stays the pin's (`quicksort`, `histo`,
+/// `particle`, `scroll` kept their interleave in the corpus when casts gained
+/// prices, and `sfm16_float` is left to a widening it has not got).
+#[test]
+fn an_unpriced_recipe_never_makes_a_loop_look_costlier_than_it_is() {
+    let tti = AArch64::of_cpu("apple-m1").unwrap();
+    let recipes = vec![
+        Recipe::Load { lane: Ty::Int(32), align: 4 },
+        Recipe::Unpriced { scalar_cost: 3 },
+        Recipe::Store { lane: Ty::Int(32), align: 4 },
+    ];
+    assert!(iteration_cost(&tti, &recipes, 4, false, false).is_err());
+    assert_eq!(iteration_cost(&tti, &recipes, 4, false, true), Ok(4));
+    assert!(pin_may_vectorize(&tti, &loop_of(recipes)));
 }

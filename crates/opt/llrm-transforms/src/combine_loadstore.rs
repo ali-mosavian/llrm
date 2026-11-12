@@ -65,6 +65,9 @@
 //! instructions before it in its block stored (`FindAvailableLoadedValue`) is
 //! that value, cast to the load's type.
 //!
+//! `combineLoadToOperationType` (:691): a load read once by a `bitcast` loads
+//! the cast's type.
+//!
 //! DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
 //! of `FindAvailableLoadedValue` (an earlier load of the address) is left to
 //! GVN: the combine holds no metadata to merge (`combineMetadataForCSE`).
@@ -107,6 +110,24 @@ const MAX_ALLOC_SITE_REMOVABLE_USERS: usize = 128;
 /// looks at.
 const SCAN_INSTS: u32 = 6;
 
+/// The kinds `copyMetadataForLoad` copies as they are (`dbg` is the builder's).
+const COPIED_LOAD_METADATA: &[&str] = &[
+    "tbaa",
+    "prof",
+    "fpmath",
+    "tbaa_struct",
+    "invariant.load",
+    "alias.scope",
+    "noalias",
+    "nontemporal",
+    "mem.cache_hint",
+    "llvm.mem.parallel_loop_access",
+    "llvm.access.group",
+    "noundef",
+    "noalias_addrspace",
+    "invariant.group",
+];
+
 impl Combiner<'_> {
     /// The instruction that defines `v`, when it is in the body.
     fn instruction_of(
@@ -144,11 +165,57 @@ impl Combiner<'_> {
             && a.is_identical_to_when_defined(b)
     }
 
-    /// `visitLoadInst`, the store-to-load forwarding only: DEVIATE 8.
+    /// `combineLoadToOperationType`
+    /// ([:691](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L691)):
+    /// a load read once, by a `bitcast`, loads the cast's type instead. A
+    /// pointer cast to an integer is punning and stays. Metadata that holds
+    /// for any type is copied (`copyMetadataForLoad`); `range`, `nonnull`,
+    /// `align`, `dereferenceable` and `nofpclass` describe the old type and
+    /// are dropped (no pointer or same-type case reaches here).
+    fn combine_load_to_operation_type(
+        &mut self,
+        load: InstId,
+    ) -> Visit {
+        let Opcode::Load { align, volatile: false } = self.function.instruction(load).opcode else {
+            return Visit::None;
+        };
+        let Some(result) = self.function.instruction(load).result else { return Visit::None };
+        let users = self.function.users(result);
+        if !users.has_one_use() {
+            return Visit::None;
+        }
+        let Some(cast) = users.iter().next().map(|one| one.user) else { return Visit::None };
+        let Opcode::Cast(CastOp::BitCast) = self.function.instruction(cast).opcode else { return Visit::None };
+        let ty = self.function.instruction(cast).ty;
+        let is_pointer = |c: &Self, ty| matches!(c.context.types.get(ty), Type::Pointer(_));
+        if is_pointer(self, ty) != is_pointer(self, self.function.instruction(load).ty) {
+            return Visit::None;
+        }
+        let pointer = self.function.instruction(load).operands.clone();
+        let metadata = self.function.instruction(load).metadata.clone();
+        let new = self.insert_before(load, Opcode::Load { align, volatile: false }, ty, pointer, Flags::default());
+        for (kind, node) in metadata {
+            if COPIED_LOAD_METADATA.contains(&kind.as_str()) {
+                self.function.annotate(new, &kind, node);
+            }
+        }
+        let new_value = self.value_of(new);
+        self.replace_inst_with(cast, new_value);
+        self.erase(cast);
+        self.erase(load);
+        Visit::Erased
+    }
+
+    /// `visitLoadInst`: `combineLoadToOperationType` and the store-to-load
+    /// forwarding (DEVIATE 8).
     pub fn visit_load(
         &mut self,
         load: InstId,
     ) -> Visit {
+        match self.combine_load_to_operation_type(load) {
+            Visit::None => {}
+            done => return done,
+        }
         let available = {
             let context: &llrm_mir::context::Context = &*self.context;
             let function = &*self.function;
