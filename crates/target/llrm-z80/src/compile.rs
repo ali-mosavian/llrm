@@ -415,6 +415,7 @@ fn allocated_with(
     duplicate: bool,
 ) -> Result<Allocated, String> {
     let done = allocated_choosing(selected, name, request, duplicate);
+    HOT_LOOP_FOLD.with(|one| one.set(true));
     // what the later prices of this function weigh by: the blocks as the kept
     // allocation has them
     if let Ok((.., Some(own))) = &done {
@@ -441,11 +442,14 @@ fn allocated_choosing(
     }
     eliminate_phis_with(&mut function, false);
     merge_lone_constant_stores(&mut function);
+    let (joins, plain_first) = repeating_loop_fold_wins(&function, name, request.level);
+    HOT_LOOP_FOLD.with(|one| one.set(joins));
     let mut hoisted = function.clone();
     // the third choice: also the constant stores in loops from a register (`split_loop_constant_stores`)
     let mut split = function.clone();
     let splits = split_loop_constant_stores(&mut split) && hoist_constants(&mut split);
     let base = if hoist_constants(&mut hoisted) {
+<<<<<<< /tmp/cur.rs
         // the allocator does not see that a byte of a pair is read in place, so a
         // constant kept across a loop can cost more than making it there, or less:
         // the hoisted loop stays unless the plain one is cheaper by the loop's
@@ -453,6 +457,18 @@ fn allocated_choosing(
         // the plain one's (exploring only the better first allocation made it 442
         // B against 427).
         match (allocate(function.clone(), name, request.level), allocate(hoisted, name, request.level)) {
+=======
+        // the allocator does not see that a byte of a pair is read in place, so
+        // a constant kept across a loop can cost more than making it
+        // there, or less: the hoisted loop stays unless the plain one
+        // is cheaper by the loop's weighted cost. The other choices are
+        // explored on both: lz4c -O2 wants the plain one's (exploring
+        // only the better first allocation made it 442 B against 427).
+        match (
+            allocate_from(function.clone(), name, request.level, plain_first),
+            allocate(hoisted, name, request.level),
+        ) {
+>>>>>>> /tmp/f1.rs
             (Ok(plain), Ok(with)) => {
                 match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
                     (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
@@ -463,7 +479,7 @@ fn allocated_choosing(
             (plain, Err(_)) => plain,
         }
     } else {
-        allocate(function, name, request.level)
+        allocate_from(function, name, request.level, plain_first)
     };
     if !splits {
         return base;
@@ -652,10 +668,21 @@ fn allocate(
     name: &str,
     level: Level,
 ) -> Result<Allocated, String> {
-    LOOPS_FOLDED.with(|one| one.set(false));
-    let first = allocate_first(function.clone(), name, level)?;
-    let folded = LOOPS_FOLDED.with(|one| one.get());
-    let best = improved(first, folded, function.clone(), name, level);
+    allocate_from(function, name, level, None)
+}
+
+/// [`allocate`], from the first allocation of `function` where one is at hand.
+fn allocate_from(
+    function: MFunction,
+    name: &str,
+    level: Level,
+    first: Option<First>,
+) -> Result<Allocated, String> {
+    let first = match first {
+        Some(first) => first,
+        None => allocate_first(function.clone(), name, level)?,
+    };
+    let best = improved(first, function.clone(), name, level);
     // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
     // slots are all frame cells, so it folds every spilled read. Here a slot
     // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
@@ -666,11 +693,7 @@ fn allocate(
         return Ok(best);
     }
     crate::regalloc::NO_FOLD.with(|one| one.set(true));
-    LOOPS_FOLDED.with(|one| one.set(false));
-    let other = allocate_first(function.clone(), name, level).map(|first| {
-        let folded = LOOPS_FOLDED.with(|one| one.get());
-        improved(first, folded, function, name, level)
-    });
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
     crate::regalloc::NO_FOLD.with(|one| one.set(false));
     Ok(match other {
         Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
@@ -679,6 +702,39 @@ fn allocate(
         },
         Err(_) => best,
     })
+}
+
+/// Whether joining the guard and latch of the repeating loops stays for this
+/// function: decided once, on the first allocation of each, so the variants
+/// below all run in the one mode. Joined, the allocator can spill and place
+/// slots worse; the function as it was wins where it prices cheaper (DEVIATE
+/// Z80T1).
+fn repeating_loop_fold_wins(
+    function: &MFunction,
+    name: &str,
+    level: Level,
+) -> (bool, Option<First>) {
+    if matches!(level, Level::Os | Level::Oz) {
+        return (true, None);
+    }
+    LOOPS_FOLDED.with(|one| one.set(false));
+    let Ok(joined) = allocate_first(function.clone(), name, level) else { return (true, None) };
+    if !LOOPS_FOLDED.with(|one| one.get()) {
+        return (true, Some(joined));
+    }
+    HOT_LOOP_FOLD.with(|one| one.set(false));
+    let apart = allocate_first(function.clone(), name, level);
+    HOT_LOOP_FOLD.with(|one| one.set(true));
+    let Ok(apart) = apart else { return (true, Some(joined)) };
+    // the allocation kept is the first of the plain function in the chosen mode
+    if matches!(
+        (priced_in_loops(&joined.0, level), priced_in_loops(&apart.0, level)),
+        (Some(now), Some(then)) if cheaper(level, then, now)
+    ) {
+        (false, Some(apart))
+    } else {
+        (true, Some(joined))
+    }
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
@@ -719,7 +775,6 @@ fn allocate_with(
 /// `a` and in a register of its own loaded through `a` or through `hl`.
 fn improved(
     (mut best, held, explore): First,
-    folded: bool,
     function: MFunction,
     name: &str,
     level: Level,
@@ -741,20 +796,6 @@ fn improved(
         if let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
             if cheaper(level, then, now) {
                 best = other;
-            }
-        }
-    }
-    if folded {
-        // The fold's new shape can allocate worse (more spills): the function
-        // as it was stays if it prices cheaper.
-        HOT_LOOP_FOLD.with(|one| one.set(false));
-        let other = allocate_with(None, true, function, name, level);
-        HOT_LOOP_FOLD.with(|one| one.set(true));
-        if let Ok((other, _)) = other {
-            if let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
-                if cheaper(level, then, now) {
-                    best = other;
-                }
             }
         }
     }
