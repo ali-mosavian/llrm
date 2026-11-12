@@ -1611,3 +1611,12 @@ def test_every_twin_in_the_tree_prints_what_its_program_prints():
             assert twin.stem in bench.TWINS, f"{twin}: not a semantic of TWINS"
             assert (directory / f"{directory.name}.out").exists(), directory
             assert (directory / f"{directory.name}.nib").exists(), f"{twin}: a twin is the bar of a Nib program"
+
+
+def test_a_m16_file_programs_counted_source_keeps_the_dos_file_api(tmp_path):
+    """#9040 pasted vsgcc's `vs_*` externs into every wrapped file program: the m16 build of jpeg and stft (12 cells) failed to link, E2028 `_vs_close@3`."""
+    variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
+    _, (_, arguments, _) = bench.compiles(variant, "Os", tmp_path, "stft")
+    text = Path(arguments[0]).read_text()
+    assert '#include "../bench_io.h"' in text and "vs_open_read" not in text
+    assert "vs_open_read" in bench.kept_a_call(variant, tmp_path, "stft")[0].read_text()
