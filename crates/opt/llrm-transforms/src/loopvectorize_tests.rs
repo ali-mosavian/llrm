@@ -295,3 +295,100 @@ fn a_splat_is_made_in_the_vector_preheader() {
     assert!(at("vector.ph:") < splat && splat < at("\nloop:"), "{text}");
     assert_eq!(count(&text, "store <2 x i64> %broadcast.splat"), 2, "{text}");
 }
+
+const SUM: &str = include_str!("../tests/lv/sum_sext.ll");
+const SUM_REMAINDER: &str = include_str!("../tests/lv/sum_sext_rem.ll");
+
+/// A sum of sign-extended loads stayed one scalar loop ("Reductions are not
+/// widened yet"); the pin keeps the loop scalar and interleaves it four times
+/// (`-force-vector-width=1`: "interleaved loop (interleaved count: 4)"): four
+/// copies of the body on their own accumulators, `index + k`, the step 4 and
+/// three `bin.rdx` in the middle block.
+#[test]
+fn a_sum_is_interleaved_four_times_on_separate_accumulators() {
+    let text = run(SUM);
+    assert_eq!(count(&text, "load i16"), 4, "{text}");
+    // The index and the sum, three more sums, and the exit's.
+    assert_eq!(count(&text, "= phi i64"), 6, "{text}");
+    assert_eq!(count(&text, "= add i64 %sum"), 3, "{text}");
+    assert!(text.contains("%bin.rdx2 = add i64 %sum.3, %bin.rdx1"), "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 4"), "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
+}
+
+/// A trip count the copies do not divide leaves a remainder that resumes the
+/// sum from `bc.merge.rdx` and hands its own last value to the exit.
+#[test]
+fn an_interleaved_sum_with_a_remainder_resumes_from_the_folded_value() {
+    let text = run(SUM_REMAINDER);
+    assert_eq!(count(&text, "= add i64 %sum"), 3, "{text}");
+    assert_eq!(count(&text, "load i16"), 5, "{text}");
+    // The remainder starts from the folded sum; a constant trip count has no scalar.ph.
+    assert!(text.contains("%s.scalar = phi i64 [ %bin.rdx2, %middle.block ]"), "{text}");
+    assert!(!text.contains("bc.merge.rdx"), "{text}");
+    assert!(text.contains("%r = phi i64 [ %sum.scalar, %loop.scalar ]"), "{text}");
+}
+
+const SUM_N: &str = include_str!("../tests/lv/sum_sext_n.ll");
+
+/// A run-time trip count checks `min.iters.check`, and the remainder resumes the
+/// sum from `bc.merge.rdx` (the folded value, or the start where the interleaved
+/// loop was skipped), as the pin's (IC 4).
+#[test]
+fn an_interleaved_sum_of_a_run_time_count_merges_the_sum_at_scalar_ph() {
+    let text = run(SUM_N);
+    assert!(text.contains("min.iters.check"), "{text}");
+    assert!(text.contains("%bc.merge.rdx = phi i64 [ %bin.rdx2, %middle.block ], [ 0, %entry ]"), "{text}");
+    assert!(text.contains("%s.scalar = phi i64 [ %bc.merge.rdx, %scalar.ph ]"), "{text}");
+    assert!(text.contains("%r = phi i64 [ %bin.rdx2, %middle.block ], [ %sum.scalar, %loop.scalar ]"), "{text}");
+}
+
+const SUM_STEP_USED: &str = include_str!("../tests/lv/sum_step_used.ll");
+
+/// The body read the induction's step (`counts[i] * (i + 1)`, histo): the
+/// interleaver rewrote that `add` to step by 4, so every product was by
+/// `i + 4` and the sum came out wrong (histo -O2 gave 535552). The step stays
+/// `i + 1` for the body and the induction gets its own `index.next`.
+#[test]
+fn an_induction_step_the_body_reads_keeps_its_value() {
+    let text = run(SUM_STEP_USED);
+    assert!(text.contains("%next = add nuw nsw i64 %i, 1"), "{text}");
+    assert!(text.contains("%index.next = add i64 %i, 4"), "{text}");
+    assert!(text.contains("%done = icmp eq i64 %index.next, 256"), "{text}");
+    assert!(text.contains("%i = phi i64 [ 0, %entry ], [ %index.next, %loop ]"), "{text}");
+}
+
+const SUM_PLAIN: &str = include_str!("../tests/lv/sum_plain.ll");
+
+/// A sum the pin vectorizes (VF 8: the loads and the add have vector forms)
+/// is not interleaved alone: its widening is the pin's answer, and four scalar
+/// copies add a remainder and a fold the loop does not need (huge -O2 ran
+/// 12,213 more instructions).
+#[test]
+fn a_sum_a_vector_factor_takes_is_not_interleaved_alone() {
+    let text = run(SUM_PLAIN);
+    assert_eq!(count(&text, "load i16"), 1, "{text}");
+    assert!(!text.contains("bin.rdx"), "{text}");
+}
+
+const REM_STORE: &str = include_str!("../tests/lv/rem_store.ll");
+
+/// A remainder by a constant stored per element is vectorized by the pin
+/// (huge -O2: VF 8); the target prices no vector division here, which read as
+/// "the pin stays scalar" and interleaved the loop alone (+31,612 instructions).
+#[test]
+fn a_remainder_the_pin_may_vectorize_is_not_interleaved_alone() {
+    let text = run(REM_STORE);
+    assert_eq!(count(&text, "urem i32"), 1, "{text}");
+}
+
+const DOT_SEXT: &str = include_str!("../tests/lv/dot_sext.ll");
+
+/// A dot product of extended shorts is vectorized by the pin (dot -O2: VF 8,
+/// widening multiplies); the `i64` multiply has no vector price here, which
+/// read as scalarized and interleaved the loop alone (+160 instructions).
+#[test]
+fn a_dot_product_of_extended_values_is_not_interleaved_alone() {
+    let text = run(DOT_SEXT);
+    assert!(!text.contains("bin.rdx"), "{text}");
+}

@@ -2889,16 +2889,7 @@ pub fn caller_frequencies(
     layout: &DataLayout,
     caller: &Function,
 ) -> llrm_analysis::blockfreq::BlockFrequencies {
-    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
-        llrm_analysis::bpi::Module {
-            context: &module.context,
-            declarations: &module.globals,
-            metadata: &module.metadata,
-            layout,
-        },
-        caller,
-    );
-    llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
+    llrm_analysis::entryweight::caller_frequencies(module, layout, caller)
 }
 
 /// The frequency of each instruction of `function` over its entry's; none
@@ -2933,63 +2924,17 @@ fn relative_to_entry(
     frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
     block: BlockId,
 ) -> Option<f64> {
-    (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.relative_to_entry(block))
+    llrm_analysis::entryweight::relative_to_entry(frequencies, block)
 }
 
-/// How many times `function` runs per run of the program, estimated from the
-/// calls to it: the sum over its direct call sites of the site's frequency
-/// over its function's entry, times that function's own count, up to
-/// `ENTRY_DEPTH` calls. A function with an outside caller (not local, or its
-/// address taken) or none runs at least once. Capped at `ENTRY_CAP`.
+/// [`llrm_analysis::entryweight::entry_weight`].
 fn caller_entry_weight(
     module: &Module,
     layout: &DataLayout,
     function: GlobalId,
     addressed: &BTreeSet<GlobalId>,
 ) -> f64 {
-    const ENTRY_DEPTH: usize = 8;
-    const ENTRY_CAP: f64 = 256.0;
-    let mut frequencies: HashMap<GlobalId, llrm_analysis::blockfreq::BlockFrequencies> = HashMap::default();
-    fn weight(
-        module: &Module,
-        layout: &DataLayout,
-        function: GlobalId,
-        addressed: &BTreeSet<GlobalId>,
-        depth: usize,
-        visiting: &mut Vec<GlobalId>,
-        frequencies: &mut HashMap<GlobalId, llrm_analysis::blockfreq::BlockFrequencies>,
-    ) -> f64 {
-        let outside = !local_linkage(module.global(function).linkage) || addressed.contains(&function);
-        if depth == 0 {
-            return 1.0;
-        }
-        visiting.push(function);
-        let mut total = 0.0;
-        for (at, global) in module.globals.iter().enumerate() {
-            let caller_id = GlobalId(at as u32);
-            let GlobalKind::Function(caller) = &global.kind else { continue };
-            if visiting.contains(&caller_id) || caller.layout().is_empty() {
-                continue;
-            }
-            let sites: Vec<InstId> = caller
-                .walk()
-                .map(|(_, inst)| inst)
-                .filter(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(function))
-                .collect();
-            if sites.is_empty() {
-                continue;
-            }
-            let inner = weight(module, layout, caller_id, addressed, depth - 1, visiting, frequencies);
-            let table = frequencies.entry(caller_id).or_insert_with(|| caller_frequencies(module, layout, caller));
-            for call in sites {
-                let local = caller.parent(call).and_then(|block| relative_to_entry(table, block)).unwrap_or(1.0);
-                total += local * inner;
-            }
-        }
-        visiting.pop();
-        if outside || total == 0.0 { total.max(1.0) } else { total }
-    }
-    weight(module, layout, function, addressed, ENTRY_DEPTH, &mut Vec::new(), &mut frequencies).min(ENTRY_CAP)
+    llrm_analysis::entryweight::entry_weight(module, layout, function, addressed)
 }
 
 fn caller_global_name(

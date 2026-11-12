@@ -68,9 +68,10 @@ use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::tti::{ArithOp, Ty};
 use llrm_mir::types::{Type, TypeId};
 
+use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step};
-use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, plan};
-use crate::loopvectorizeskeleton::{self as skeleton, Shape};
+use crate::loopvectorizeplan::{LoopFacts, Plan, Recipe, ScalarFacts, choose_interleave, pin_may_vectorize, plan};
+use crate::loopvectorizeskeleton::{self as skeleton, Shape, Skeleton};
 
 /// `LoopVectorizePass`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -149,6 +150,28 @@ fn element_ty(
     }
 }
 
+/// The integer induction that steps by one and its step instruction.
+pub(crate) fn primary_and_step(
+    se: &mut ScalarEvolution,
+    legality: &Legality,
+) -> Result<(InstId, InstId), Skipped> {
+    let primary = legality
+        .inductions
+        .iter()
+        .find(|(_, descriptor)| {
+            descriptor.kind == InductionKind::Int && const_int_step(se, descriptor).is_some_and(|step| step.is_one())
+        })
+        .map(|(phi, _)| *phi)
+        .ok_or(Skipped("No integer induction that steps by one"))?;
+    let step = legality
+        .inductions
+        .iter()
+        .find(|(phi, _)| *phi == primary)
+        .and_then(|(_, descriptor)| descriptor.induction_bin_op)
+        .ok_or(Skipped("The induction has no step instruction"))?;
+    Ok((primary, step))
+}
+
 /// The recipes of `header`'s loop, and what the transform rewrites (LVP3), or
 /// why not.
 fn extract(
@@ -161,24 +184,11 @@ fn extract(
     let header = the_loop.get_header();
     // The pin's VPlan makes its own canonical IV, so the original induction may
     // start anywhere: an integer one stepping by one is all the widening needs.
-    let primary = legality
-        .inductions
-        .iter()
-        .find(|(_, descriptor)| {
-            descriptor.kind == InductionKind::Int && const_int_step(se, descriptor).is_some_and(|step| step.is_one())
-        })
-        .map(|(phi, _)| *phi)
-        .ok_or(Skipped("No integer induction that steps by one"))?;
+    let (primary, step) = primary_and_step(se, legality)?;
     if !legality.reductions.is_empty() {
         return Err(Skipped("Reductions are not widened yet"));
     }
     let primary_phi = Operand::Value(function.instruction(primary).result.expect("a phi"));
-    let step = legality
-        .inductions
-        .iter()
-        .find(|(phi, _)| *phi == primary)
-        .and_then(|(_, descriptor)| descriptor.induction_bin_op)
-        .ok_or(Skipped("The induction has no step instruction"))?;
     let index_ty = function.instruction(primary).ty;
     let strides = SymbolicStrideMap::default();
     let preheader = the_loop.get_loop_preheader(function).ok_or(Skipped("The loop has no preheader"))?;
@@ -698,40 +708,103 @@ impl FunctionPass for LoopVectorize {
                     }
                 };
                 let trip_count = u64::from(se.get_small_constant_trip_count(&cx, header));
-                let (recipes, widening) = match extract(&cx, se, found, &legality) {
-                    Ok(found) => found,
+                let dep = lai.dep_checker();
+                let vector = match extract(&cx, se, found, &legality) {
+                    Ok((recipes, widening)) => {
+                        let facts = LoopFacts {
+                            recipes,
+                            trip_count,
+                            max_safe_width_in_bits: dep.max_safe_vector_width_in_bits(),
+                            safe_for_any_vector_width: dep.is_safe_for_any_vector_width(),
+                            store_load_forward_bits: (!dep.is_safe_for_any_store_load_forward_distances())
+                                .then(|| dep.store_load_forward_safe_distance_in_bits()),
+                            widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
+                            opt_size,
+                        };
+                        match plan(&*tti, &facts) {
+                            Ok(chosen) => Some(Planned::Vector(chosen, widening)),
+                            Err(not) => {
+                                why(unit, &outer, header, &format!("plan: {not:?}"));
+                                None
+                            }
+                        }
+                    }
                     Err(Skipped(reason)) => {
                         why(unit, &outer, header, &format!("recipes: {reason}"));
-                        continue;
-                    }
-                };
-                let dep = lai.dep_checker();
-                let facts = LoopFacts {
-                    recipes,
-                    trip_count,
-                    max_safe_width_in_bits: dep.max_safe_vector_width_in_bits(),
-                    safe_for_any_vector_width: dep.is_safe_for_any_vector_width(),
-                    store_load_forward_bits: (!dep.is_safe_for_any_store_load_forward_distances())
-                        .then(|| dep.store_load_forward_safe_distance_in_bits()),
-                    widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
-                    opt_size,
-                };
-                match plan(&*tti, &facts) {
-                    Ok(chosen) => Some((chosen, widening, trip_count)),
-                    Err(not) => {
-                        why(unit, &outer, header, &format!("plan: {not:?}"));
                         None
                     }
+                };
+                // `computeBestVF` chose VF 1 (or the widening is not translated):
+                // the loop may still be interleaved (L8067).
+                vector.or_else(|| {
+                    let (primary, step) = primary_and_step(se, &legality).ok()?;
+                    let extracted = match interleave::extract(&cx, found, &legality, &*tti, primary, step) {
+                        Ok(extracted) => extracted,
+                        Err(Skipped(reason)) => {
+                            why(unit, &outer, header, &format!("interleave: {reason}"));
+                            return None;
+                        }
+                    };
+                    // LVI4: where a vector factor takes the loop, the pin
+                    // vectorizes it; the widening is not translated here.
+                    let priced = LoopFacts {
+                        recipes: extracted.priced.clone(),
+                        trip_count,
+                        max_safe_width_in_bits: dep.max_safe_vector_width_in_bits(),
+                        safe_for_any_vector_width: dep.is_safe_for_any_vector_width(),
+                        store_load_forward_bits: (!dep.is_safe_for_any_store_load_forward_distances())
+                            .then(|| dep.store_load_forward_safe_distance_in_bits()),
+                        widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
+                        opt_size,
+                    };
+                    if extracted.widening_mul || pin_may_vectorize(&*tti, &priced) {
+                        why(unit, &outer, header, "interleave: the pin may vectorize this loop (casts, reductions and some operations are not widened yet)");
+                        return None;
+                    }
+                    let facts = ScalarFacts {
+                        cost: extracted.cost,
+                        loads: extracted.loads,
+                        stores: extracted.stores,
+                        users: extracted.users,
+                        invariants: extracted.invariants,
+                        has_reductions: !extracted.interleaving.reductions.is_empty(),
+                        nested: found.get_loop_depth() > 1,
+                        trip_count,
+                        safe_for_any_vector_width: dep.is_safe_for_any_vector_width(),
+                        opt_size,
+                    };
+                    match choose_interleave(&*tti, &facts) {
+                        Ok(ic) => Some(Planned::Interleave(ic, extracted)),
+                        Err(not) => {
+                            why(unit, &outer, header, &format!("interleave plan: {not:?}"));
+                            None
+                        }
+                    }
+                })
+            };
+            let Some(planned) = planned else { continue };
+            let (lanes, shape, reduced) = match &planned {
+                Planned::Vector(chosen, widening) => {
+                    (u64::from(chosen.vf) * u64::from(chosen.ic), widening.shape, Vec::new())
+                }
+                Planned::Interleave(ic, extracted) => {
+                    let latches = extracted.interleaving.reductions.iter().map(|one| one.latch).collect();
+                    (u64::from(*ic), extracted.interleaving.shape, latches)
                 }
             };
-            let Some((chosen, widening, trip_count)) = planned else { continue };
-            let lanes = u64::from(chosen.vf) * u64::from(chosen.ic);
+            let trip_count = {
+                let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
+                let cx = env.cx(&*unit.context, &*unit.function);
+                u64::from(se.get_small_constant_trip_count(&cx, header))
+            };
             // A constant trip count the lanes divide needs no remainder (LVP1).
-            let splat_block = if trip_count != 0 && trip_count % lanes == 0 {
+            let with_middle = !reduced.is_empty();
+            let skeleton = if trip_count != 0 && trip_count % lanes == 0 {
                 let branch = unit.function.terminator(header).expect("a terminated loop");
                 skeleton::mark_vectorized(unit.context, unit.declared, unit.metadata, unit.function, branch);
-                widening.shape.preheader
-            } else if !exit_phis_are_invariant(unit.function, widening.shape) {
+                let middle = with_middle.then(|| skeleton::add_middle(unit.function, shape));
+                Skeleton { vector_ph: shape.preheader, middle, scalar_ph: None, remainder: None }
+            } else if !exit_phis_are_invariant(unit.function, shape, &reduced) {
                 why(unit, &outer, header, "recipes: An exit phi of a value the loop defines");
                 continue;
             } else {
@@ -740,38 +813,63 @@ impl FunctionPass for LoopVectorize {
                     unit.function,
                     unit.declared,
                     unit.metadata,
-                    widening.shape,
+                    shape,
                     lanes,
+                    with_middle,
                 ) {
-                    Some(block) => block,
+                    Some(skeleton) => skeleton,
                     None => {
                         why(unit, &outer, header, "plan: The loop runs fewer iterations than one vector iteration");
                         continue;
                     }
                 }
             };
-            why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
-            execute(unit.context, unit.function, &widening, chosen, splat_block);
+            match planned {
+                Planned::Vector(chosen, widening) => {
+                    why(unit, &outer, header, &format!("vectorized VF {} IC {}", chosen.vf, chosen.ic));
+                    execute(unit.context, unit.function, &widening, chosen, skeleton.vector_ph);
+                }
+                Planned::Interleave(ic, extracted) => {
+                    why(unit, &outer, header, &format!("interleaved IC {ic}"));
+                    interleave::execute(unit.context, unit.function, &extracted.interleaving, ic, &skeleton);
+                }
+            }
             changed = true;
             // The loop's body is new: the expressions are stale.
             session = ScevSession::of(unit.context, unit.function, &outer);
+        }
+        if changed && llrm_support::debug::enabled("loop-vectorize-ir-after") {
+            eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
+/// What the pass does to a loop.
+enum Planned {
+    /// Widen by VF lanes, interleaved IC times.
+    Vector(Plan, Widening),
+    /// Copy the body IC times (VF 1).
+    Interleave(u32, Extracted),
+}
+
 /// The exit block's phis read values the loop does not define (LVS3): a remainder
-/// adds an arm from the middle block, which has no iteration's value to give.
+/// adds an arm from the middle block, which has no iteration's value to give,
+/// but for the last value of a reduction (`reductions`, the updates) that block
+/// computes.
 fn exit_phis_are_invariant(
     function: &Function,
     shape: Shape,
+    reductions: &[InstId],
 ) -> bool {
     crate::edges::phis(function, shape.exit).into_iter().all(|phi| {
         crate::lcssa::arms(function, phi).into_iter().all(|(value, from)| {
             from != shape.header
                 || match value {
                     Operand::Value(value) => match function.value(value).def {
-                        llrm_mir::module::ValueDef::Instruction(def) => function.parent(def) != Some(shape.header),
+                        llrm_mir::module::ValueDef::Instruction(def) => {
+                            function.parent(def) != Some(shape.header) || reductions.contains(&def)
+                        }
                         _ => true,
                     },
                     _ => true,
