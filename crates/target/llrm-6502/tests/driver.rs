@@ -3151,3 +3151,18 @@ fn a_product_of_two_words_calls_the_widening_multiply() {
         }
     }
 }
+
+/// A multiplier whose high byte is known zero takes the entry that walks to its
+/// last set bit: fcmp_all's `(F) * (k + 1)` was 414 clocks a call (2026-11-12).
+#[test]
+fn a_product_by_a_byte_calls_the_byte_entry() {
+    let product = |x: &str| {
+        module(&format!(
+            "define i32 @f(i16 %a, i8 %b) {{\n  %x = {x} i16 %a to i32\n  %y = zext i8 %b to i32\n  %m = mul i32 %x, %y\n  ret i32 %m\n}}"
+        ))
+    };
+    for (x, routine) in [("zext", "__umulhisi3_byte"), ("sext", "__mulhisi3_byte")] {
+        let text = assembly(&product(x), &Request::new(Level::O2)).unwrap();
+        assert!(text.contains(&format!("jsr {routine}")), "{x}:\n{text}");
+    }
+}
