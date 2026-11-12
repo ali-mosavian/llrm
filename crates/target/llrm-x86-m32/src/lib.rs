@@ -121,6 +121,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // smaller. Os, 98 cells, unrotated everywhere: 21 smaller (x_jpeg_fixed -213 B, x_radix -20,
         // x_idioms -16, x_prefix -12), 64 larger (x_transpose +34, x_matmul_f +29, x_life +25).
         rotation_trial_at_size: true,
+        // DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01): see `Tti::load_pre_off_at_size`.
+        load_pre_off_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.

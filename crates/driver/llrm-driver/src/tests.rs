@@ -1214,6 +1214,30 @@ fn a_remainder_of_counters_at_m32_os_stays_signed() {
     assert!(speed.contains("div") && !speed.contains("idiv"), "-O2: {speed}");
 }
 
+/// GVN's load PRE put a load of `*p` into the call path so the join's own load became a phi: a `mov` in the path and
+/// an `add reg, reg` where gcc and the unpre'd code fold the load into the `add` (x_jpeg_fixed -Os +28 B, lru +28 B, x_bubble
+/// -7.9% clk once off). At m32 -Os the load stays in the join, folded; at -O2 PRE still runs. DEVIATE GVN-PRE-OPTSIZE.
+#[test]
+fn load_pre_is_off_at_m32_os() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                declare void @g()\n\
+                define i32 @f(ptr %p, i32 %c) ATTR {\n\
+                entry:\n  %t = icmp ne i32 %c, 0\n  br i1 %t, label %then, label %else\n\
+                then:\n  %a = load i32, ptr %p\n  br label %join\n\
+                else:\n  call void @g()\n  br label %join\n\
+                join:\n  %x = phi i32 [ %a, %then ], [ 0, %else ]\n  %b = load i32, ptr %p\n  %s = add i32 %x, %b\n  ret i32 %s\n}\n";
+    let listing = |level: &str, attr: &str| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", level]), &text.replace("ATTR", attr), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let folded = |text: &str| text.lines().any(|line| line.trim_start().starts_with("add ") && line.contains("ptr ["));
+    let os = listing("-Os", "optsize");
+    assert!(folded(&os), "-Os keeps the join's load, folded into the add: {os}");
+    let speed = listing("-O2", "");
+    assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
+}
+
 /// A signed divide by 1024 is `idiv` at m32 -Oz and in a `minsize` function only (the pin's `isIntDivCheap`); at -Os it is the
 /// `sar; shr; add; sar` sequence. The tip kept `idiv` at -Os: stft_fixed -Os ran 188.9M clk against main's 96.8M (+95%).
 #[test]
