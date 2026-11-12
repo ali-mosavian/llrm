@@ -1583,6 +1583,73 @@ shiftdi:
 	pop	ix
 	ret
 
+; The same shifts for a function tuned for size: the operand is written to the result, then shifted one bit at a time,
+; the count byte at 8(ix) times (a = 0, 1, 2 as above; no whole-byte moves, so a long count is slow). Frame: -2,-1
+; the result pointer, -3 mode.
+	.globl __s_ashldi3
+__s_ashldi3:
+	xor	a
+	jr	sshiftdi
+	.globl __s_lshrdi3
+__s_lshrdi3:
+	ld	a,#1
+	jr	sshiftdi
+	.globl __s_ashrdi3
+__s_ashrdi3:
+	ld	a,#2
+sshiftdi:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	hl
+	push	af
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	inc	hl
+	ld	(hl),c
+	inc	hl
+	ld	(hl),b
+	inc	hl
+	ex	de,hl
+	push	ix
+	pop	hl
+	ld	bc,#4
+	add	hl,bc
+	ldir
+1$:	ld	a,8(ix)
+	or	a,a
+	jr	z,9$
+	dec	a
+	ld	8(ix),a
+	ld	l,-2(ix)
+	ld	h,-1(ix)
+	ld	b,#7
+	ld	a,-3(ix)
+	or	a,a
+	jr	nz,3$
+	sla	(hl)
+2$:	inc	hl
+	rl	(hl)
+	djnz	2$
+	jr	1$
+3$:	ld	de,#7
+	add	hl,de
+	dec	a
+	jr	nz,4$
+	srl	(hl)
+	jr	5$
+4$:	sra	(hl)
+5$:	dec	hl
+	rr	(hl)
+	djnz	5$
+	jr	1$
+9$:	ld	e,-2(ix)
+	ld	d,-1(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+
 ; ---- the compiler's library calls -----------------------------------------------------------------
 ; Reserved `__` names: a program may define its own strlen, memcpy, memmove or memset and none of them clashes.
 ; tests/programs/libc/ has the C library entries over these.

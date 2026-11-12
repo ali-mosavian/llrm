@@ -222,6 +222,8 @@ pub struct LoweringNodes {
     /// The flags a call leaves, read back.
     pub call_flags: Option<ISD>,
     pub port_io: Option<ISD>,
+    /// The flags pushed before a call of an interrupt function.
+    pub push_flags: Option<ISD>,
     pub copy128: Option<ISD>,
     pub move128: Option<ISD>,
     pub zero128: Option<ISD>,
@@ -780,6 +782,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            interrupt_call: false,
             variadic_count: None,
             win64_va: false,
             variadic_shadows: Vec::new(),
@@ -829,6 +832,9 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The call `visit_call` is lowering is to an interrupt function, which
+    /// returns by `iret`: `lower_call` pushes the flags it pops.
+    interrupt_call: bool,
     /// The convention of the variadic call being lowered counts its vector
     /// registers in `al` (SysV); Win64 has no count.
     /// The register a variadic call sets to the number of vector registers it
@@ -2164,6 +2170,7 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.interrupt_call = info.calling_convention == llrm_mir::opcode::X86_INTR;
         let found = self.full_arch().ok().and_then(|arch| arch.calling().by_number(info.calling_convention));
         self.variadic_count = found
             .and_then(|found| found.variadic_vector_register.as_deref())
@@ -2853,6 +2860,18 @@ impl Builder<'_> {
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
         }
+        // The handler is entered as an interrupt enters it, with the flags
+        // pushed for its `iret` (net stack effect none).
+        if std::mem::take(&mut self.interrupt_call) && !sibling {
+            let node = self
+                .dag
+                .get_node_multi(
+                    LoweringNodes::need(self.target.dag.nodes.push_flags, "flags push")?,
+                    &[EVT::OTHER],
+                    &[chain],
+                );
+            chain = SDValue { node: node.node, res: 0 };
+        }
         let mut glue: Option<SDValue> = None;
         for (reg, value) in &copies {
             let copy = self.dag.get_copy_to_phys_reg(chain, *reg, *value, glue);
@@ -3481,7 +3500,49 @@ impl Builder<'_> {
             return self.copy_aggregate_to_registers(operand, reg);
         }
         let value = self.non_register_value(operand)?;
+        let extend = match operand {
+            Operand::Value(result) if extend == ISD::AnyExtend => self.preferred_extend(result),
+            _ => extend,
+        };
         self.copy_leaf_to_register(value, reg, extend)
+    }
+
+    /// `PreferredExtendType[V]` (`getPreferredExtendForValue`,
+    /// FunctionLoweringInfo.cpp#L59), which `CopyValueToVirtualRegister`
+    /// takes over `ANY_EXTEND`: a value its other blocks compare or
+    /// pass signed more often than unsigned is exported sign-extended. Set for
+    /// instructions only and not at -O0.
+    fn preferred_extend(
+        &self,
+        result: ValueId,
+    ) -> ISD {
+        if !self.target.switch_optimize || !matches!(self.function.value(result).def, ValueDef::Instruction(_)) {
+            return ISD::AnyExtend;
+        }
+        let (mut signed, mut unsigned) = (0usize, 0usize);
+        for one in self.function.users(result).iter() {
+            let user = self.function.instruction(one.user);
+            match &user.opcode {
+                Opcode::ICmp(predicate) => {
+                    signed += usize::from(predicate.is_signed());
+                    unsigned += usize::from(predicate.is_unsigned());
+                }
+                Opcode::Call(info) | Opcode::Invoke(info) if (one.index as usize) + 1 < user.operands.len() => {
+                    let site = info.argument_attrs.get(one.index as usize);
+                    let callee = llrm_mir::memory::callee(&self.module.context, self.function, one.user)
+                        .and_then(|global| self.module.global(global).function())
+                        .and_then(|callee| callee.parameter_attrs.get(one.index as usize));
+                    let has = |name| {
+                        site.is_some_and(|attrs| llrm_mir::memory::has(attrs, name))
+                            || callee.is_some_and(|attrs| llrm_mir::memory::has(attrs, name))
+                    };
+                    unsigned += usize::from(has("zeroext"));
+                    signed += usize::from(has("signext"));
+                }
+                _ => {}
+            }
+        }
+        if signed > unsigned { ISD::SignExtend } else { ISD::AnyExtend }
     }
 
     /// `copy_value_to_register` of one scalar value.
@@ -3649,9 +3710,11 @@ impl Builder<'_> {
         let mut rhs = self.get_value(instruction.operands[1])?;
         let mut flags = flags_of(instruction.flags);
         if matches!(opcode, ISD::Shl | ISD::Srl | ISD::Sra) {
-            // visitShift: the amount in the target's shift type, and only these
-            // flags
-            rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount_for(self.dag.value_type(lhs)));
+            // visitShift: the amount in the target's shift type (a scalar
+            // shift's: "!I.getType()->isVectorTy()"), and only these flags
+            if !self.dag.value_type(lhs).is_vector() {
+                rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount_for(self.dag.value_type(lhs)));
+            }
             flags = SDNodeFlags(
                 flags.0 & (SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0),
             );

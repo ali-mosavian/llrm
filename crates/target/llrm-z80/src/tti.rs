@@ -131,9 +131,28 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it): `va_list` is `char *`, so `va_start` is a
+    /// store of the first variadic argument's address and the list lives in a register, as SDCC has it.
+    fn promote_va_list(&self) -> bool {
+        true
+    }
+
+    /// `va_arg` is an IR instruction on this target's clang. The z80 aligns nothing past a byte (`a:8`) and sets no
+    /// minimum stack-argument alignment, so the selector's `expandVAArg` steps by the value's size: slot 1 writes
+    /// exactly that.
+    fn va_arg_slot(&self) -> Option<u32> {
+        Some(1)
+    }
+
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
     /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
     fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE MERGEFUNC-OS (owner z80, exit 2026-11-24; x86 joins it): `MergeFunctions` is off in the pin's
+    /// pipeline; at -Os/-Oz two functions of one body are one (shl_long_by_one: `twice` and `twice_signed`).
+    fn merge_functions_at_size(&self) -> bool {
         true
     }
 
@@ -546,6 +565,15 @@ impl Tti for Z80Tti {
         second: OperandInfo,
     ) -> Cost {
         use ArithOp::*;
+        // `BasicTTIImpl::getArithmeticInstrCost` hands every kind but throughput to the base class's unit costs, so the
+        // loop unroller and SimplifyCFG (`SizeAndLatency`) weigh an add and a 32-bit multiply alike.
+        // DEVIATE: code size, latency and throughput keep the z80 forms below.
+        if kind == CostKind::SizeAndLatency {
+            return match op {
+                UDiv | URem | SDiv | SRem | FDiv | FRem => Cost::EXPENSIVE,
+                _ => Cost::BASIC,
+            };
+        }
         let parts = self.parts(ty);
         let byte = self.is_byte(ty);
         let bits = if byte { 8 } else { 16 * parts };

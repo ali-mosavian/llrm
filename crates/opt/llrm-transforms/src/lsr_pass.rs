@@ -28,10 +28,11 @@
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
-use llrm_analysis::scev::expr::Scev;
-use llrm_mir::context::Context;
+use llrm_analysis::scev::expr::{Scev, Type};
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Function, InstId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::tti::Tti;
 
@@ -39,6 +40,52 @@ use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
 use crate::lsr_implement::{Implement, Plan, split_phi_edges};
 use crate::lsr_prepare::{self, ExitEdit, ShadowEdit};
+
+/// Whether `operand` is computed with a multiply the target prices as worth
+/// reducing in an outer loop (`Tti::reduces_outer_multiply`), through adds,
+/// subtracts and casts to `depth` levels.
+fn computed_by_priced_multiply(
+    tti: &dyn Tti,
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    operand: Operand,
+    depth: u32,
+) -> bool {
+    let Operand::Value(value) = operand else { return false };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+    let inst = function.instruction(inst);
+    match inst.opcode {
+        Opcode::Binary(BinaryOp::Mul) => {
+            let constant = match inst.operands.get(1) {
+                Some(&Operand::Constant(constant)) => match context.get(constant).kind {
+                    ConstantKind::Int(bits) => Some(bits),
+                    _ => None,
+                },
+                _ => None,
+            };
+            tti.reduces_outer_multiply(constant)
+        }
+        // An index of a GEP is multiplied by the size of the element it steps
+        // over: `g[i]` over rows of 54 bytes is `i * 54`.
+        Opcode::GetElementPtr { source } => {
+            let size = layout.alloc_size(&context.types, source);
+            let scaled = size > 1
+                && matches!(inst.operands.get(1), Some(Operand::Value(_)))
+                && tti.reduces_outer_multiply(Some(u128::from(size)));
+            scaled
+                || depth > 0
+                    && inst
+                        .operands
+                        .iter()
+                        .any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+        }
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(_) if depth > 0 => {
+            inst.operands.iter().any(|&one| computed_by_priced_multiply(tti, context, layout, function, one, depth - 1))
+        }
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -51,8 +98,12 @@ const MAX_IV_USERS: usize = 200;
 
 /// LLVM's loop strength reduction. `size`: the compile is for size, which the
 /// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
+/// `bytes_strict`: code bytes outrank clocks (-O1, -Os), which DEVIATE LG3's
+/// keep rule reads: a base added outside the loop counts against the
+/// instructions it saves once, not once a trip.
 pub struct LoopStrengthReduce {
     pub size: bool,
+    pub bytes_strict: bool,
 }
 
 impl FunctionPass for LoopStrengthReduce {
@@ -101,6 +152,7 @@ impl FunctionPass for LoopStrengthReduce {
             &*tti,
             false,
             self.size,
+            self.bytes_strict,
             Some(held.take()),
         );
         let kept = scev.is_some();
@@ -170,9 +222,6 @@ fn nearest_common_dominator(
 /// changes the IR that `IvUsers` was built over. Cost: d_faces -O2, 38
 /// constructions against the pin's 32, about 0.5 M of 16.8 M instructions (3%).
 /// Exit: reuse `IvUsers` across the IR edit. Owner w-5. Review 2026-11-19.
-/// A compare the edit moved or copied is a use of its own: the set is no longer
-/// carried then (`carry_exit_test` judged it against program order, which the
-/// walk no longer uses).
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
 /// the plan, or none where the loop is left as it is. `marked` are the exit
 /// tests already edited to take the post-incremented value; none until the
@@ -199,6 +248,7 @@ fn plan_loop(
     shadowed: bool,
     stress_chains: bool,
     size: bool,
+    bytes_strict: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
@@ -227,6 +277,7 @@ fn plan_loop(
         // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
         // wide loop grew tail_calls by 354 bytes.
         native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+        use_list_order: tti.lsr_users_in_use_list_order(),
     };
     let mut users = match carried {
         Some(users) => {
@@ -266,7 +317,19 @@ fn plan_loop(
     // Skip nested loops until we can model them better with formulae: the
     // shadow variables and the exit tests above are made on every loop, as the
     // pin's constructor does before it looks at the nesting.
-    if !lp.is_innermost() {
+    // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop
+    // that has a subloop): where the target prices it
+    // (`Tti::reduces_outer_multiply`: the multiply's clocks against a
+    // counter held across the inner loop) and not at -Os, an outer loop
+    // that computes an affine value with a multiply is reduced as
+    // an inner loop is, so `i * 300` feeding the inner loop becomes a counter
+    // stepped by 300. gcc's ivopts does this on every loop (named behaviour
+    // only, its code is not translated). x_cordic -O1: 200 `imul` x 19
+    // clocks.
+    if !lp.is_innermost()
+        && !(!size
+            && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
+    {
         return planned(None);
     }
 
@@ -349,14 +412,37 @@ fn plan_loop(
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
         let spent = cost.c.insns + cost.c.setup_cost;
         let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
+        // DEVIATE LG3: the `spent` against `saved` test above, over the trips
+        // the loop is known to run, with the symbol bases the end-biased
+        // solution adds to the pin's priced as the target's setup says
+        // (`setup_cost` counts each as one instruction). Where bytes outrank
+        // clocks (-O1, -Os) the loop is counted once, whatever its trips: an
+        // instruction saved in it is one instruction of code, as a base is.
+        let symbol_setup = tti.lsr_symbol_base_setup_insns();
+        let symbols_outweigh_saving = symbol_setup != 0 && {
+            let new_bases = symbol_bases(se, &lsr, &solution);
+            let pin_bases = symbol_bases(se, &pin, &pin_solution);
+            let added = new_bases.iter().filter(|base| !pin_bases.contains(base)).count() as u32;
+            let trips = if bytes_strict { 1 } else { u64::from(se.get_small_constant_max_trip_count(&cx, header)) };
+            let total = |insns: u32, setup: u32| trips * u64::from(insns) + u64::from(setup);
+            trips != 0
+                && total(cost.c.insns, cost.c.setup_cost) + u64::from(added * (symbol_setup - 1))
+                    > total(pin_cost.c.insns, pin_cost.c.setup_cost)
+        };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
+                || symbols_outweigh_saving
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
                         || spent > saved
                         || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
+        llrm_support::debug!(
+            "lsr",
+            "  pin's space solved: kept {kept} (bytes {} against the pin's {})",
+            cost.bytes,
+            pin_cost.bytes
+        );
         if kept {
             lsr = pin;
             solution = pin_solution;
@@ -371,6 +457,39 @@ fn plan_loop(
     plan.end_biased_differs = differs;
     plan.chains = chains.chains;
     planned(Some(plan))
+}
+
+/// The distinct base registers of `solution`'s formulae that name a global's
+/// address.
+fn symbol_bases(
+    se: &ScalarEvolution,
+    lsr: &Collection,
+    solution: &[usize],
+) -> Vec<Scev> {
+    fn names_global(
+        se: &ScalarEvolution,
+        lsr: &Collection,
+        s: Scev,
+        depth: u32,
+    ) -> bool {
+        match se.scev_type(s) {
+            Type::Unknown => lsr.global_of(se, s).is_some(),
+            _ if depth == 0 => false,
+            Type::Add | Type::Mul | Type::AddRec => {
+                se.operands(s).iter().any(|operand| names_global(se, lsr, operand.scev, depth - 1))
+            }
+            _ => false,
+        }
+    }
+    let mut bases = Vec::new();
+    for (lu, &chosen) in lsr.uses.iter().zip(solution) {
+        for &base in &lu.formulae[chosen].base_regs {
+            if !bases.contains(&base) && names_global(se, lsr, base, 4) {
+                bases.push(base);
+            }
+        }
+    }
+    bases
 }
 
 /// `ReduceLoopStrength` over every loop of `function`, innermost first;
@@ -397,7 +516,7 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
-    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, None).0
+    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, false, None).0
 }
 
 /// [`reduced_with`], continuing the expressions `held` of the passes before;
@@ -412,6 +531,7 @@ pub fn reduced_held(
     tti: &dyn Tti,
     stress_chains: bool,
     size: bool,
+    bytes_strict: bool,
     held: Option<ScalarEvolution>,
 ) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
@@ -432,6 +552,19 @@ pub fn reduced_held(
     if let (Some(scev), true) = (held, stable) {
         session.adopt(scev);
     }
+    // Beyond the pin: a remainder by a constant that the target keeps as a
+    // divide is one instruction (the divide's own remainder); read as
+    // `x - (x / c) * c` it splits into the address's other terms, and the
+    // divide is paid beside a multiply and an induction variable per use.
+    let divide_kept = remainders_kept_as_divides(context, function, outer, size);
+    let mark_opaque = |session: &mut ScevSession, context: &Context, function: &Function| {
+        for &value in &divide_kept {
+            session.ask(context, layout, function, outer, |se, cx| {
+                se.set_opaque(cx, llrm_mir::module::Operand::Value(value), true)
+            });
+        }
+    };
+    mark_opaque(&mut session, context, function);
     // Where the function stood when the expressions were last made current.
     let mut mark = function.mark();
     let headers: Vec<BlockId> = {
@@ -470,23 +603,23 @@ pub fn reduced_held(
                     shadowed,
                     stress_chains,
                     size,
+                    bytes_strict,
                 ) {
                     Outcome::Planned(None) => break,
-                    Outcome::Edit(edits, users) => {
+                    Outcome::Edit(edits, mut users) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         let applied = lsr_prepare::apply(function, &context.types, header, &edits);
-                        // An edit that moves or copies no compare leaves the
-                        // uses as they were. A compare
-                        // it moved or copied changed its operand's
-                        // use list, so the uses are made again over the edited
-                        // loop.
-                        if edits.iter().all(|edit| edit.max.is_none())
-                            && applied.moved.is_empty()
-                            && applied.copied.is_empty()
-                        {
-                            carried = Some(users);
+                        marked = Some(applied.marked.clone());
+                        // A moved or copied test is the same use; `OptimizeMax`
+                        // makes a new compare, so its users are made again.
+                        if edits.iter().all(|edit| edit.max.is_none()) {
+                            let ok = applied.moved.iter().all(|&test| users.carry_exit_test(function, test, None))
+                                && applied
+                                    .copied
+                                    .iter()
+                                    .all(|&(old, copy)| users.carry_exit_test(function, old, Some(copy)));
+                            carried = ok.then_some(users);
                         }
-                        marked = Some(applied.marked);
                         changed = true;
                         continue;
                     }
@@ -581,6 +714,7 @@ pub fn reduced_held(
                 stable = false;
                 session = new_session(context, function);
                 mark = function.mark();
+                mark_opaque(&mut session, context, function);
             }
         }
         // `Rewriter.replaceCongruentIVs(L, &DT, DeadInsts, &TTI)`: after the
@@ -645,9 +779,36 @@ pub fn reduced_held(
             }
         }
     }
-    if !stable {
+    // The expressions made with those values read as unknown are not handed on.
+    if !stable || !divide_kept.is_empty() {
         return (changed, None);
     }
     session.forget_since_keeping(context, layout, &outer.globals, &outer.metadata, function, mark, true);
     (changed, Some(session.into_scev()))
+}
+
+/// The results of the `urem` and `srem` by a constant that is not a power of
+/// two, on a width where `keeps_division` says the target keeps the divide.
+fn remainders_kept_as_divides(
+    context: &Context,
+    function: &Function,
+    outer: &Outer,
+    size: bool,
+) -> Vec<llrm_mir::module::ValueId> {
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    let target = outer.target();
+    function
+        .walk()
+        .map(|(_, inst)| function.instruction(inst))
+        .filter(|one| matches!(one.opcode, Opcode::Binary(BinaryOp::URem | BinaryOp::SRem)))
+        .filter(|one| {
+            let Some(llrm_mir::module::Operand::Constant(divisor)) = one.operands.get(1).copied() else { return false };
+            let llrm_mir::context::ConstantKind::Int(divisor) = context.get(divisor).kind else { return false };
+            let Some(bits) = one.result.and_then(|value| context.types.int_bits(function.value(value).ty)) else {
+                return false;
+            };
+            divisor > 1 && !divisor.is_power_of_two() && target.keeps_division(bits, size)
+        })
+        .filter_map(|one| one.result)
+        .collect()
 }

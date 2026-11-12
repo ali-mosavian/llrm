@@ -175,6 +175,35 @@ fn without_reserved_symbols(
     out
 }
 
+/// `-fwhole-program`: the module is the whole link but its runtime.
+fn whole_program(request: &Request) -> bool {
+    request.passes.iter().rev().find_map(|flag| match flag.as_str() {
+        "-fwhole-program" => Some(true),
+        "-fno-whole-program" => Some(false),
+        _ => None,
+    }) == Some(true)
+}
+
+/// What LTO does to a whole program before its optimizer runs:
+/// everything but `main` becomes internal (`Internalize`), so `GlobalOpt` can
+/// make a global nothing stores to a constant and fold its loads.
+fn whole_program_internalized(
+    program: &mut Program,
+    main: &str,
+) -> Result<(), String> {
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_program(llrm_transforms::internalize::Internalize::new([main.to_owned()]));
+    manager.run(program).map(|_| ())
+}
+
+/// What a linker's `--gc-sections` does for a whole program: what nothing
+/// live names is deleted (`GlobalDCE`), after the mid-end.
+fn whole_program_swept(program: &mut Program) -> Result<(), String> {
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_program(llrm_transforms::globaldce::GlobalDce);
+    manager.run(program).map(|_| ())
+}
+
 /// `text` through the mid-end at the request's level.
 fn program(
     text: &str,
@@ -192,6 +221,10 @@ fn program(
         None => return Err(format!("the module states no datalayout; the 6502's is `{layout}`")),
     }
     let mut program = Program::new(vec![module], machine())?;
+    let main = format!("{}main", request.platform.c_symbol_prefix);
+    if whole_program(request) {
+        whole_program_internalized(&mut program, &main)?;
+    }
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
@@ -201,7 +234,8 @@ fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer, not `base + i * size` every trip
+        // the 6502 has no scaled or indexed 16-bit address: a stepping pointer,
+        // not `base + i * size` every trip
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
@@ -213,6 +247,9 @@ fn program(
     }
     // The pin lowers `llvm.is.constant` and `llvm.objectsize` at every level.
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
+    if whole_program(request) {
+        whole_program_swept(&mut program)?;
+    }
     Ok(program)
 }
 
@@ -223,7 +260,125 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let built = program(text, request)?;
-    trial_unrolled(built, text, request)
+    let (built, inlined) = trial_inlined(built, text, request)?;
+    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, text, request))
+}
+
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os byte model
+/// refused within its error, inlined in a second compile and kept per chain (caller and callees)
+/// if the backend writes those functions in fewer bytes. The model is within 25% of the written
+/// bytes for two functions in three, so a refusal that close is the backend's to decide.
+///
+/// Compile time: a program with no such refusal compiles once. One with some runs the mid-end
+/// twice and the backend on the functions whose bodies differ twice (`trial::differing`),
+/// never on the whole program; a chain set that is only partly kept compiles the mid-end a third
+/// time.
+fn trial_inlined(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<(Program, Vec<llrm_transforms::trial::Site>), String> {
+    use llrm_transforms::trial;
+    let sites = trial::take_refused();
+    let limit = built.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions);
+    if request.level != Level::Os || sites.is_empty() {
+        return Ok((built, Vec::new()));
+    }
+    if instructions(&built) > limit {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial inline: skipped, {} sites in {} instructions (limit {limit})", sites.len(), instructions(&built));
+        }
+        return Ok((built, Vec::new()));
+    }
+    let kept_unroll = trial::take();
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let chain = |program: &Program, cut: &std::collections::BTreeSet<String>| -> Option<std::collections::BTreeMap<String, i64>> {
+        let mut only = program.clone();
+        only.modules[0] = trial::only(&program.modules[0], cut);
+        let rows = tail(only, request, false, true).ok()?.functions;
+        Some(rows.into_iter().filter(|(name, _)| cut.contains(name)).collect())
+    };
+    let Ok(other) = trial::with_inlined(&sites, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let other_unroll = trial::take();
+    let cut = trial::differing(&built.modules[0], &other.modules[0]);
+    let (Some(kept_bytes), Some(other_bytes)) = (chain(&built, &cut), chain(&other, &cut)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let flags = trial::accepted(&sites, &kept_bytes, &other_bytes);
+    if debug {
+        eprintln!("trial inline: {} sites, {} kept; {} functions differ; {} instructions", sites.len(), flags.iter().filter(|one| **one).count(), cut.len(), instructions(&built));
+    }
+    if flags.iter().all(|one| !one) {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    }
+    if flags.iter().all(|one| *one) {
+        trial::restore(other_unroll);
+        return Ok((other, sites));
+    }
+    let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
+    let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return Ok((built, Vec::new()));
+    };
+    let third_unroll = trial::take();
+    let cut = trial::differing(&built.modules[0], &third.modules[0]);
+    let pays = match (chain(&built, &cut), chain(&third, &cut)) {
+        (Some(kept), Some(third)) => third.values().sum::<i64>() < kept.values().sum::<i64>(),
+        _ => false,
+    };
+    if pays {
+        trial::restore(third_unroll);
+        Ok((third, chosen))
+    } else {
+        trial::restore(kept_unroll);
+        Ok((built, Vec::new()))
+    }
+}
+
+/// One function of [`size_audit`].
+pub struct SizeRow {
+    pub name: String,
+    /// `function_bytes` of the function the backend gets.
+    pub model: i64,
+    /// The bytes it is written as (`timing::estimate` of its text).
+    pub written: i64,
+    /// Its operations by class (`walk::operation_counts`), for the fit of
+    /// `opcosts::calibrate`.
+    pub counts: String,
+}
+
+/// The size audit of one program: per function, the bytes `function_bytes` says
+/// it will be against the bytes it is written as. The instrument
+/// `tests/size_calibration.rs` brackets: the SZ2 inline trial decides by the
+/// first.
+pub fn size_audit(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<SizeRow>, String> {
+    let built = program(text, request)?;
+    let costs = built.target.trial_costs();
+    let module = &built.modules[0];
+    let mut rows: Vec<SizeRow> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .map(|(_, global, function)| SizeRow {
+            name: global.name.as_deref().unwrap_or("?").to_owned(),
+            model: llrm_transforms::walk::function_bytes(module, &built.layout, &costs, function),
+            written: 0,
+            counts: llrm_transforms::walk::operation_counts(module, &built.layout, function, &costs),
+        })
+        .collect();
+    for (name, bytes) in tail(built, request, false, true)?.functions {
+        if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+            row.written = bytes;
+        }
+    }
+    Ok(rows)
 }
 
 thread_local! {
@@ -242,6 +397,8 @@ struct Assembled {
     text: String,
     clocks: i64,
     bytes: i64,
+    /// Each function's bytes, when asked for (`size_audit`).
+    functions: Vec<(String, i64)>,
 }
 
 /// The assembly of `program`: every function selected (the copies as loops and
@@ -250,7 +407,9 @@ fn tail(
     mut program: Program,
     request: &Request,
     price: bool,
+    audit: bool,
 ) -> Result<Assembled, String> {
+    crate::routines::set_aligned_divides(false);
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -289,6 +448,11 @@ fn tail(
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
     let data = data_text(module, &program.layout)?;
+    crate::dagisel::function::set_widen_products(if matches!(request.level, Level::O2 | Level::O3 | Level::Omax) {
+        crate::dagisel::function::Widen::Unsized
+    } else {
+        crate::dagisel::function::Widen::Off
+    });
     let mut selections = Vec::new();
     let mut from_module = Vec::new();
     // The module each function was selected from: its blocks are the text's.
@@ -325,6 +489,7 @@ fn tail(
         sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
+    crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
@@ -333,19 +498,31 @@ fn tail(
         selection.source = file.clone().map(|file| (file, scope));
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
-    let pieces = module_text(module, &parts)?;
+    let mut pieces = module_text(module, &parts)?;
+    let sites = crate::mulimage::aligned_divide_sites(module, &names, &selections, &from_module, &program.layout, request);
+    if let Some(sites) = sites {
+        let weights = estimate_weights(module, &names, &sources, &program.layout);
+        let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
+        if crate::mulimage::pays_by_share(sites, run, size) {
+            crate::routines::set_aligned_divides(true);
+            let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
+            pieces = module_text(module, &parts)?;
+        }
+    }
+    let functions = if audit {
+        names
+            .iter()
+            .zip(&pieces)
+            .filter_map(|(name, piece)| {
+                crate::timing::estimate(request.cpu, piece).ok().map(|priced| (name.clone(), i64::from(priced.bytes)))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let (mut clocks, mut bytes) = (0i64, 0i64);
     if price {
-        let weights: Vec<Vec<u64>> = names
-            .iter()
-            .zip(&sources)
-            .map(|(name, source)| {
-                let from = source.unwrap_or(module);
-                let function = from.named(name).and_then(|id| from.global(id).function());
-                function
-                    .map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, &program.layout))
-            })
-            .collect();
+        let weights = estimate_weights(module, &names, &sources, &program.layout);
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
         (clocks, bytes) = (run as i64, size as i64);
     }
@@ -354,7 +531,7 @@ fn tail(
         text = text.replace(name.as_str(), label);
     }
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
-    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes })
+    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
 /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the program
@@ -377,11 +554,11 @@ fn trial_unrolled(
     use llrm_transforms::loopunrollpass::trial;
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
-        return Ok(tail(built, request, false)?.text);
+        return Ok(tail(built, request, false, false)?.text);
     };
     let (eligible, units) = trial::take();
     if !matches!(request.level, Level::O1 | Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
-        return Ok(tail(built, request, false)?.text);
+        return Ok(tail(built, request, false, false)?.text);
     }
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
@@ -393,9 +570,9 @@ fn trial_unrolled(
         if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
             eprintln!("trial unroll: {growth} instructions more: put back unpriced");
         }
-        return Ok(tail(built, request, false)?.text);
+        return Ok(tail(built, request, false, false)?.text);
     }
-    let (kept, tried) = (tail(built, request, true)?, tail(other, request, true)?);
+    let (kept, tried) = (tail(built, request, true, false)?, tail(other, request, true, false)?);
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
     let pays = trial_pays(request.level, rate, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
@@ -537,6 +714,11 @@ impl llrm_mir::target::Machine for Mos6502Machine {
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
         BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
+    fn trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::trial_bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
     /// The bytes the allocator can put a value in on the smallest zero page
@@ -714,4 +896,22 @@ fn write_constant(
         }
         _ => Err("a global initializer that is not an integer, pointer, array or struct".into()),
     }
+}
+
+/// The trips each block of each function runs, from the module a function was selected from.
+fn estimate_weights(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    sources: &[Option<&llrm_mir::module::Module>],
+    layout: &llrm_mir::datalayout::DataLayout,
+) -> Vec<Vec<u64>> {
+    names
+        .iter()
+        .zip(sources)
+        .map(|(name, source)| {
+            let from = source.unwrap_or(module);
+            let function = from.named(name).and_then(|id| from.global(id).function());
+            function.map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, layout))
+        })
+        .collect()
 }

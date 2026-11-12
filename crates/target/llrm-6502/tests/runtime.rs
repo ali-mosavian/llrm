@@ -202,10 +202,19 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (65535, 32768, 1, 32767),
         (65535, 65535, 1, 0),
         (40000, 0, 65535, 40000),
+        (7, 2, 3, 1),
+        (999, 1000, 0, 999),
+        (1000, 999, 1, 1),
+        (32768, 32768, 1, 0),
+        (65535, 2, 32767, 1),
+        (65535, 16385, 3, 16380),
     ] {
         let n = format!("c{a}-{b}");
-        assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
-        assert_eq!(word(&format!("umodhic-{n}"), &two_words(a, b), "__umodhi3c"), remainder, "{a} % {b}");
+        for suffix in ["c", "a"] {
+            let (div, rem) = (format!("__udivhi3{suffix}"), format!("__umodhi3{suffix}"));
+            assert_eq!(word(&format!("udivhi{suffix}-{n}"), &two_words(a, b), &div), quotient, "{a} / {b} {div}");
+            assert_eq!(word(&format!("umodhi{suffix}-{n}"), &two_words(a, b), &rem), remainder, "{a} % {b} {rem}");
+        }
     }
 }
 
@@ -241,8 +250,11 @@ fn compact_signed_word_division_matches_the_fast_routines() {
         (30000, 300, 100, 0),
     ] {
         let n = format!("{a}-{b}");
-        assert_eq!(word(&format!("divhic-{n}"), &two_words(a, b), "__divhi3c"), quotient, "{a} / {b}");
-        assert_eq!(word(&format!("modhic-{n}"), &two_words(a, b), "__modhi3c"), remainder, "{a} % {b}");
+        for suffix in ["c", "a"] {
+            let (div, rem) = (format!("__divhi3{suffix}"), format!("__modhi3{suffix}"));
+            assert_eq!(word(&format!("divhi{suffix}-{n}"), &two_words(a, b), &div), quotient, "{a} / {b} {div}");
+            assert_eq!(word(&format!("modhi{suffix}-{n}"), &two_words(a, b), &rem), remainder, "{a} % {b} {rem}");
+        }
         assert_eq!(word(&format!("divhif-{n}"), &two_words(a, b), "__divhi3"), quotient, "{a} / {b} fast");
         assert_eq!(word(&format!("modhif-{n}"), &two_words(a, b), "__modhi3"), remainder, "{a} % {b} fast");
     }
@@ -319,6 +331,39 @@ fn multiply_longs_stops_when_the_multiplier_is_spent() {
             assert_eq!(long(&format!("mulsi-exit-{a}-{b}{routine}"), routine, a, b), a.wrapping_mul(b), "{routine}: {a} * {b}");
         }
     }
+}
+
+/// The 16 x 16 -> 32 products: unsigned 65535 * 65535 = 0xFFFE0001, signed
+/// -32768 * -32768 = 0x40000000, -3 * 7 = -21, 0x7FFF * 0x8001 (= -32767)
+/// negative; a multiplier under 256 ends after its first byte (0xFFFF * 0xFF, 0x8000 * 0x80). The signed routine takes the unsigned product less the other
+/// operand from the high word for each negative operand.
+#[test]
+fn widening_multiplies_give_the_32_bit_product() {
+    for (a, b) in [(0u32, 0u32), (1, 0xFFFF), (0xFFFF, 0xFFFF), (0x8000, 0x8000), (0x7FFF, 0x8001), (0xFFFD, 7), (0xFFFF, 0xFF), (0x1234, 0x0100), (0x8000, 0x0080)] {
+        assert_eq!(long(&format!("umulhisi-{a}-{b}"), "__umulhisi3", a, b), a * b, "{a} * {b}");
+        let signed = i32::from(a as u16 as i16) * i32::from(b as u16 as i16);
+        assert_eq!(long(&format!("mulhisi-{a}-{b}"), "__mulhisi3", a, b), signed as u32, "{a} * {b} signed");
+    }
+}
+
+/// A multiplier under 256 is added for each set bit and the walk ends with its
+/// last (fcmp_all: 384 calls of `(F) * (k + 1)`, 414 clocks each): the carries
+/// run through all three product bytes (0xFFFF * 0xFF), and a multiplier of 3
+/// costs 194 clocks, not the 419 of 16 bits. The signed entry takes the byte from the high
+/// word of a negative multiplicand.
+#[test]
+fn a_byte_multiplier_ends_with_its_last_set_bit() {
+    for (a, b) in [(0xFFFFu32, 0xFFu32), (0xABCD, 0x55), (0x1234, 0)] {
+        assert_eq!(long(&format!("umulbyte-{a}-{b}"), "__umulhisi3_byte", a, b), a * b, "{a} * {b}");
+    }
+    for (a, b) in [(0xFFFFu32, 0xFFu32), (0xABCD, 0x55), (0x7FFF, 0x81)] {
+        let signed = i32::from(a as u16 as i16) * b as i32;
+        assert_eq!(long(&format!("mulbyte-{a}-{b}"), "__mulhisi3_byte", a, b), signed as u32, "{a} * {b} signed");
+    }
+    let setup = "  lda #0\n  sta __sa+1\n  sta __sb+1\n  lda #100\n  sta __sa\n  lda #3\n  sta __sb\n";
+    let with = common::cycles_with("umulbyte-clocks", &format!("{setup}  jsr __umulhisi3_byte\n"), "");
+    let without = common::cycles_with("umulbyte-clocks-none", setup, "");
+    assert!(with - without < 250, "{} clocks", with - without);
 }
 
 /// `x * 15` walked all 32 bits of the multiplier: 2054 clocks, 10x gcc's loop
@@ -772,4 +817,55 @@ fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
         shapes.iter().map(|&(a, b)| clocks("__udivsi3_fast_small", a, b) - clocks("__udivsi3_fast", a, b)).sum();
     let mean = saved as f64 / shapes.len() as f64;
     assert!(mean >= llrm_6502::hotdivision::SAVED_CLOCKS * 0.9, "the wide path saves {mean} clocks a call");
+}
+
+/// `hotmultiply::SAVED_CLOCKS`: what `__mulsi3_fast` saves a call, averaged over
+/// multipliers of one to four bytes, in sim65 clocks.
+#[test]
+fn the_fast_multiply_saves_what_hotmultiply_prices() {
+    let call = |routine: &str, b: u32| {
+        let mut setup = String::from("  lda #0\n  sta __sa+1\n  sta __sa+2\n  sta __sa+3\n  lda #100\n  sta __sa\n");
+        for at in 0..4 {
+            setup += &format!("  lda #{}\n  sta __sb+{at}\n", (b >> (8 * at)) & 0xFF);
+        }
+        common::cycles_with(&format!("mulsave-{routine}-{b}"), &format!("{setup}  jsr {routine}\n"), "")
+            - common::cycles_with(&format!("mulsave-none-{b}"), &setup, "")
+    };
+    let shapes = [25u32, 0x1234, 0x0019_660D, 0x9E37_79B9];
+    let saved: Vec<i64> = shapes.iter().map(|&b| call("__mulsi3", b) - call("__mulsi3_fast", b)).collect();
+    let mean = saved.iter().sum::<i64>() as f64 / saved.len() as f64;
+    assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
+}
+
+/// The compact word divide (`__umodhi3c`) ran its 16 bit steps whatever the quotient: `gcd`'s `a % b` (quotients of one or
+/// two bits) took about 430 clocks a call, 2.2x llvm-mos's loop around it (idiv_loop_os -Os: 2,374,468
+/// clocks against 1,083,830, 2026-11-12). The aligned one (`__umodhi3a`, called where the module pays for it) runs for the quotient's bits.
+#[test]
+fn an_aligned_word_modulo_runs_for_the_quotients_bits() {
+    let clocks = |name: &str, a: u16, b: u16| {
+        let setup = two_words(a, b);
+        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __umodhi3a\n"), "");
+        with - common::cycles_with(&format!("{name}-none"), &setup, "")
+    };
+    let (one, two) = (clocks("umodc-q1", 1000, 600), clocks("umodc-q2", 2300, 1000));
+    assert!(one < 200, "1000 % 600: {one} clocks");
+    assert!(two < 300, "2300 % 1000: {two} clocks");
+}
+
+/// A divide-remainder pair is one `__udivhi3` call that leaves the remainder in `rc6:rc7`; at -Os that call
+/// may be `__udivhi3a`, which must too (the aligned loop keeps the remainder in `rc2:rc3`).
+#[test]
+fn the_aligned_unsigned_divide_leaves_the_remainder_in_rc6_rc7() {
+    for (a, b, remainder) in [(50000, 7, 6), (2300, 1000, 300), (7, 2, 1), (999, 1000, 999), (65535, 16385, 16380)] {
+        let n = format!("rem{a}-{b}");
+        let low = common::run_with_runtime(
+            &format!("{n}-lo"),
+            &format!("{}  jsr __udivhi3a\n  lda rc6\n", two_words(a, b)),
+        );
+        let high = common::run_with_runtime(
+            &format!("{n}-hi"),
+            &format!("{}  jsr __udivhi3a\n  lda rc7\n", two_words(a, b)),
+        );
+        assert_eq!(high << 8 | low, remainder, "{a} % {b}");
+    }
 }

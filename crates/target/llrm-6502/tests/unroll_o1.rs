@@ -50,3 +50,32 @@ fn an_o1_loop_is_not_peeled() {
     let stores = text.lines().filter(|l| l.trim().starts_with("sta (rc")).count();
     assert_eq!(stores, 1, "the first iteration was peeled\n{text}");
 }
+
+/// #9101 made every target's -O1 trial nest-only: float_in_place_update's lone loop stayed rolled,
+/// 19 B -> 9441 B. The 6502 trial takes any loop under its size.
+#[test]
+fn the_6502_unroll_trial_is_not_limited_to_nests() {
+    let tti = llrm_6502::driver::machine().tti().expect("a Tti");
+    assert!(tti.unroll_trial_threshold().is_some());
+    assert!(!tti.unroll_trial_nests_only());
+}
+
+/// #9334 gave -Os the x86-m32 size bar, which the 6502 states none of: its -Os trial noted nothing and
+/// float_in_memory_loop went 21 B -> 4,988 B, byval_struct 51 B -> 466 B (33 cells, 2026-11-12).
+/// float_in_place_update's loop must fold at -Os as it does at -O1.
+#[test]
+fn a_float_loop_the_trial_folds_is_unrolled_at_os() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndeclare void @report(i32)\ndefine i16 @main() {{\n  br label %1\n1:\n  \
+         %2 = phi double [ 1.000000e+00, %0 ], [ %13, %12 ]\n  %3 = phi double [ 0.000000e+00, %0 ], [ %9, %12 ]\n  \
+         %4 = phi double [ undef, %0 ], [ %7, %12 ]\n  %5 = phi i1 [ true, %0 ], [ false, %12 ]\n  \
+         %6 = phi i1 [ false, %0 ], [ true, %12 ]\n  %7 = fmul double %2, %2\n  %8 = fdiv double %7, %4\n  \
+         %9 = select i1 %5, double %3, double %8\n  %10 = fcmp oeq double %9, 1.000000e+00\n  \
+         br i1 %10, label %11, label %12\n11:\n  call void @report(i32 -1)\n  br label %12\n12:\n  \
+         %13 = fmul double %2, 5.000000e-01\n  br i1 %6, label %14, label %1\n14:\n  \
+         call void @report(i32 7)\n  ret i16 0\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("jsr __"), "the soft-float calls stay: {} lines\n{text}", text.lines().count());
+}

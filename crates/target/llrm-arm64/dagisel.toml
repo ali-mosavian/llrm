@@ -28,6 +28,7 @@ extra_symbols = [
   "AArch64::LDRSBXpre",
   "AArch64::LDRSBWpre",
   "AArch64::LDRBBpre",
+  "AArch64::LDRBpre",
   "AArch64::LDRHpre",
   "AArch64::LDRSpre",
   "AArch64::LDRDpre",
@@ -41,6 +42,7 @@ extra_symbols = [
   "AArch64::LDRSBXpost",
   "AArch64::LDRSBWpost",
   "AArch64::LDRBBpost",
+  "AArch64::LDRBpost",
   "AArch64::LDRHpost",
   "AArch64::LDRSpost",
   "AArch64::LDRDpost",
@@ -79,6 +81,7 @@ extra_symbols = [
   "AArch64::MOVIv16b_ns",
   "AArch64::MOVIv2d_ns",
   "AArch64::MOVKWi",
+  "AArch64::MVNIv2i32",
   "AArch64::MOVNWi",
   "AArch64::MOVNXi",
   "AArch64::MOVZWi",
@@ -104,6 +107,13 @@ extra_symbols = [
   "AArch64::SUBXri",
   "AArch64::SUBXrx",
   "TargetOpcode::JUMP_TABLE_DEBUG_INFO",
+]
+# Selected by hand when the vectors are live (a 64-bit `mvni`, a byte load for a lane): the tables before
+# the vectors leave them out, so the scheduling model prices them only then.
+dynamic_extra_symbols = [
+  "AArch64::LDRBpost",
+  "AArch64::LDRBpre",
+  "AArch64::MVNIv2i32"
 ]
 # Opcodes the hand code selects (a bitcast, a float round) that kept a scheduling class only through patterns of vector
 # types now pruned: they keep their row in instrinfo.rs and sched.rs.
@@ -254,4 +264,3 @@ trunc_isWorthFoldingALU = "has_one_use"
 neg_cheaper_imm32 = "negated_immediate_cheaper"
 alignedglobal = "aligned_global_literal"
 fpimm16 = "f16_immediate"
-sve_incdec_imm = "sve_increment"

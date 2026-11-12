@@ -14,6 +14,8 @@ OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty p
 CORPUS = Path(os.environ.get("OURS_CORPUS", HERE.parents[1] / "tests" / "run" / "c"))
 def src_of(name):
     return OVERLAY / f"{name}.c" if (OVERLAY / f"{name}.c").exists() else CORPUS / f"{name}.c"
+# the ours column is a linked program, as llvm-mos's is (--gc-sections): functions main does not reach are not in it (OURS_WHOLE_PROGRAM=0: the object of the file)
+WHOLE = [] if os.environ.get("OURS_WHOLE_PROGRAM") == "0" else ["-fwhole-program"]
 ZP = 26
 LOG = 0xF000
 EXTRA = os.environ.get("G6_EXTRA", "").split()
@@ -167,7 +169,7 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
             stem = file.replace("/", "_")[:-2]
             text = crlib.member(RTDIR, cc, file, flags)
             have.add(file); (w / (stem + ".s")).write_text(".autoimport +\n" + text); mods += text
-            a = sh(["ca65", "-t", SIM, "-o", stem + ".o", stem + ".s"], w)
+            a = sh(["ca65", "-t", SIM, "-I", str(RTDIR / "config/6502"), "-o", stem + ".o", stem + ".s"], w)
             if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
             objs.append(stem + ".o")
     return objs, "no fixpoint"
@@ -184,7 +186,7 @@ def one(job):
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, f"--target={CPU}-sim65", flag, "-S", "-w", *CORPUS_COMMON, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, f"--target={CPU}-sim65", flag, "-S", "-w", *CORPUS_COMMON, *WHOLE, *program_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:

@@ -73,7 +73,17 @@ pub fn magic_is_wider(
     // costs 17), so a constant one bit short of it goes to EAX too: DEVIATE
     // SD444 widened to the unsigned case, flat targets only (m16 unmeasured).
     let sign = u32::from(zeros == 0 && (signed || flat));
-    bits >= (width - zeros.min(width)).saturating_sub(sign)
+    let longest = width - zeros.min(width);
+    // DEVIATE SD444-HALF (owner x86-m32, exit 2026-11-24), flat targets: a variable whose
+    // length is not known is priced at half its width, the mean of a log-uniform length,
+    // so a constant of that many bits goes to EAX. One bit short of the full width left
+    // `x % 7`'s 30-bit magic the r/m operand, 40 clocks where the variable costs 10 + its
+    // own bits: recmany -O2 187010 -> 156108 clk, recsum -32%, x_rle -21%, x_loop_interchange
+    // -10%. A wrong guess costs at most the constant's bits less the variable's.
+    if flat {
+        return bits >= longest.div_ceil(2);
+    }
+    bits >= longest.saturating_sub(sign)
 }
 
 /// `orderRegForMul`: swap so the operand already in `lo` is the implicit one.
@@ -230,4 +240,21 @@ pub fn select_mul_flags<D: AddrDag>(
     }
     dag.remove_dead_node(node);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::magic_is_wider;
+
+    /// `x % 7`'s 30-bit magic against an unsigned `x` of unknown length stayed the r/m operand:
+    /// `mul` read 10 + 30 clocks on the 486 where the variable is the shorter. recmany -O2
+    /// 187010 clk. A short constant stays the r/m operand; m16 keeps its rule.
+    #[test]
+    fn a_magic_of_half_the_width_or_more_goes_to_eax_against_a_variable_of_unknown_length() {
+        assert!(magic_is_wider(613_566_757, 32, false, true, 0), "30 bits against 32");
+        assert!(magic_is_wider(1 << 15, 32, false, true, 0), "16 bits is half of 32");
+        assert!(!magic_is_wider((1 << 15) - 1, 32, false, true, 0), "15 bits stays the r/m operand");
+        assert!(!magic_is_wider(10, 32, false, true, 0), "a short constant stays the r/m operand");
+        assert!(!magic_is_wider(613_566_757, 32, false, false, 0), "real mode keeps its rule");
+    }
 }

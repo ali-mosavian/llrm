@@ -56,6 +56,49 @@ const TYPICAL_SHIFT: u32 = 8;
 const ASHLSI3_BASE: u32 = 55;
 const ASHLSI3_PER: u32 = 40;
 const LSHRSI3_BASE: u32 = 55;
+/// The count assumed for a 64-bit shift routine, which gets it on the stack and
+/// never in sight. Not 8: the speed routine moves whole bytes, so 8 bits is one
+/// cheap byte move and any other count is dearer.
+pub const TYPICAL_WIDE_SHIFT: u32 = 12;
+
+/// The 64-bit divide and remainder routines' clocks, the call instruction
+/// through the return: (routine, base, a bit of the dividend). Measured as
+/// whole programs in ucsim (a volatile 64-bit dividend of 3, 24, 40 and 63 bits
+/// over divisors of 2 to 31 bits; the run less the run that copies the operand,
+/// less the argument set-up): the speed family does a step per dividend bit,
+/// 186 T a bit; the size family does 64 steps whatever the operands, 98k to
+/// 106k T. The divisor is on the stack and never in sight: the typical dividend
+/// (`TYPICAL_WIDE_DIVIDEND`) is priced.
+const WIDE_DIVIDES: [(&str, u32, u32); 8] = [
+    ("__udivdi3", 10900, 186),
+    ("__umoddi3", 10900, 186),
+    ("__divdi3", 10900, 186),
+    ("__moddi3", 10900, 186),
+    ("__s_udivdi3", 99000, 0),
+    ("__s_umoddi3", 99000, 0),
+    ("__s_divdi3", 99000, 0),
+    ("__s_moddi3", 99000, 0),
+];
+
+/// The dividend bits assumed for a 64-bit divide.
+const TYPICAL_WIDE_DIVIDEND: u32 = 32;
+
+/// The 64-bit shift routines' clocks, the call instruction through the return:
+/// (routine, base, a whole byte of the count, a bit beyond them). Measured as
+/// whole programs in ucsim (a volatile count of 0, 1, 4, 8, 9, 16, 17, 24, 32,
+/// 40; the run with the routine less the run of a program that copies the
+/// operand, less the argument set-up): the speed routine moves a byte per 8
+/// bits of the count (`ldir`) and loops the rest at 360 T a bit; the size
+/// routine loops every bit at 388 T.
+const WIDE_SHIFTS: [(&str, u32, u32, u32); 6] = [
+    ("__ashldi3", 660, 331, 360),
+    ("__lshrdi3", 660, 331, 360),
+    ("__ashrdi3", 660, 331, 360),
+    ("__s_ashldi3", 650, 3104, 388),
+    ("__s_lshrdi3", 650, 3104, 388),
+    ("__s_ashrdi3", 650, 3104, 388),
+];
+
 const LSHRSI3_PER: u32 = 45;
 const ASHRSI3_BASE: u32 = 55;
 const ASHRSI3_PER: u32 = 45;
@@ -126,24 +169,13 @@ const TRAMPOLINES: [(&str, u32); 1] = [("__call_iy", 8)];
 const INTERNAL: [&str; 9] =
     ["__dvr_core", "__dvr_ep", "__s_dvcore", "__s_slow", "__udivmodsi4", "absal", "abshlde", "negde", "__rt_end"];
 
-/// Runtime routines compiled code calls whose clocks are not modeled (0 T beyond the call), each named with its owner
-/// and exit date; a routine of `z80_rt.s` that is neither modeled, internal nor named here fails
-/// `every_runtime_routine_is_priced_internal_or_named`. The soft-float library (`__addsf3`, `__muldf3`, ...) comes
-/// from the C library, outside `z80_rt.s`, and is not priced either: owner z80, exit 2026-11-30.
-pub const UNPRICED: [(&str, &str); 12] = [
-    ("__umulhisi3", "16 x 16 -> 32 multiply: z80, 2026-11-30"),
-    ("__ashldi3", "64-bit shift: z80, 2026-11-30"),
-    ("__lshrdi3", "64-bit shift: z80, 2026-11-30"),
-    ("__ashrdi3", "64-bit shift: z80, 2026-11-30"),
-    ("__udivdi3", "64-bit divide: z80, 2026-11-30"),
-    ("__umoddi3", "64-bit divide: z80, 2026-11-30"),
-    ("__divdi3", "64-bit divide: z80, 2026-11-30"),
-    ("__moddi3", "64-bit divide: z80, 2026-11-30"),
-    ("__s_udivdi3", "64-bit divide: z80, 2026-11-30"),
-    ("__s_umoddi3", "64-bit divide: z80, 2026-11-30"),
-    ("__s_divdi3", "64-bit divide: z80, 2026-11-30"),
-    ("__s_moddi3", "64-bit divide: z80, 2026-11-30"),
-];
+/// Runtime routines compiled code calls whose clocks are not modeled (0 T
+/// beyond the call), each named with its owner and exit date; a routine of
+/// `z80_rt.s` that is neither modeled, internal nor named here fails
+/// `every_runtime_routine_is_priced_internal_or_named`. The soft-float library
+/// (`__addsf3`, `__muldf3`, ...) comes from the C library, outside `z80_rt.s`,
+/// and is not priced either: owner z80, exit 2026-11-30.
+pub const UNPRICED: [(&str, &str); 1] = [("__umulhisi3", "16 x 16 -> 32 multiply: z80, 2026-11-30")];
 
 /// The dividend and divisor bit lengths assumed for a long divide whose operand is not a constant in sight.
 const TYPICAL_DIVIDEND_BITS: u32 = 24;
@@ -206,6 +238,10 @@ pub fn routine_clocks(
             if let Some(&(_, base, per)) = DIVIDES.iter().find(|(name, ..)| *name == routine) {
                 let divisor_bits = immediate("bc").map_or(TYPICAL_DIVISOR_BITS, |divisor| u32::BITS - divisor.leading_zeros());
                 base + per * TYPICAL_DIVIDEND_BITS.saturating_sub(divisor_bits) - CALL
+            } else if let Some(&(_, base, per)) = WIDE_DIVIDES.iter().find(|(name, ..)| *name == routine) {
+                base + per * TYPICAL_WIDE_DIVIDEND - CALL
+            } else if let Some(&(_, base, byte, bit)) = WIDE_SHIFTS.iter().find(|(name, ..)| *name == routine) {
+                base + byte * (TYPICAL_WIDE_SHIFT / 8) + bit * (TYPICAL_WIDE_SHIFT % 8) - CALL
             } else if let Some(&(_, base, per, register, typical)) = LINEAR.iter().find(|(name, ..)| *name == routine) {
                 let count = if register.is_empty() { typical } else { immediate(register).unwrap_or(typical) };
                 base + per * count - CALL
@@ -272,6 +308,14 @@ mod tests {
         assert_eq!(routine_clocks("call __mulsi3", &variable), mulsi3_clocks(TYPICAL_MULTIPLIER) - 17);
         assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5", "xor a, c"]), 55 + 40 * TYPICAL_SHIFT - 17);
         // a long shifted by 5: 55 + 40 * 5 = 255 T for the call (ucsim), 238 of them the routine
+        // a 64-bit shift's count is on the stack: the typical one is priced,
+        // the speed routine by bytes and bits
+        assert_eq!(routine_clocks("call __ashldi3", &[]), 660 + 331 + 360 * 4 - 17);
+        // a 64-bit divide: 186 T a dividend bit for the speed family, 64 steps
+        // for the size one (ucsim)
+        assert_eq!(routine_clocks("call __udivdi3", &[]), 10900 + 186 * 32 - 17);
+        assert_eq!(routine_clocks("call __s_moddi3", &["ld bc, #5"]), 99000 - 17);
+        assert_eq!(routine_clocks("call __s_lshrdi3", &["ld a, #5"]), 650 + 388 * TYPICAL_WIDE_SHIFT - 17);
         assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5"]), 55 + 40 * 5 - 17);
         assert_eq!(routine_clocks("call __lshrsi3", &["ld a, #5"]), 55 + 45 * 5 - 17);
     }

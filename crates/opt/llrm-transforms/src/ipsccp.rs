@@ -112,27 +112,33 @@ use crate::sccpsolver::{ModuleEnv, Results, Solver, is_replaceable_constant};
 
 /// `runIPSCCP` over each module of `program`; the bodies it changed.
 pub fn run_ipsccp(program: &mut Program) -> BTreeSet<Defined> {
-    solved_each(program, |program, at| Rc::new(Outer::of(&program.modules[at], Some(Rc::clone(&program.target)))))
+    solved_each(program, false, |program, at| Rc::new(Outer::of(&program.modules[at], Some(Rc::clone(&program.target)))))
 }
 
 /// [`run_ipsccp`], each module's outer view the one `modules` holds. The
-/// caller reports the bodies it changed.
+/// caller reports the bodies it changed. `size`: the code is sized for bytes
+/// (-Os), where a target may turn its sign-keeping widening (REC5-1) off.
 pub fn run_ipsccp_with(
     program: &mut Program,
     modules: &mut [ModuleAnalyses],
+    size: bool,
 ) -> BTreeSet<Defined> {
-    solved_each(program, |program, at| modules[at].outer(&program.modules[at]))
+    solved_each(program, size, |program, at| modules[at].outer(&program.modules[at]))
 }
 
 fn solved_each(
     program: &mut Program,
+    size: bool,
     mut outer_of: impl FnMut(&Program, usize) -> Rc<Outer>,
 ) -> BTreeSet<Defined> {
     let mut changed = BTreeSet::new();
     for at in 0..program.modules.len() {
         let private = crate::interprocedural::private(program, at);
         let outer = outer_of(program, at);
-        let keeps_sign = program.target.tti().is_some_and(|tti| tti.ipsccp_widen_keeps_sign());
+        let keeps_sign = program
+            .target
+            .tti()
+            .is_some_and(|tti| tti.ipsccp_widen_keeps_sign() && (!size || tti.ipsccp_widen_keeps_sign_at_size()));
         let Program { modules, layout, .. } = &mut *program;
         for id in run_on_module(&mut modules[at], layout, &outer, &private, keeps_sign) {
             changed.insert((at, id));

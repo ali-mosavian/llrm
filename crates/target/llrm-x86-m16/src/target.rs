@@ -300,6 +300,11 @@ impl Machine for Dos {
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             price_fills: true,
+            // DEVIATE LSR-SIZE (owner m16, exit 2026-11-24): at -Os LSR orders formulae by
+            // x86 bytes, as m32 does (`Tuning::lsr_size_order`). A global's base with the
+            // field offset in the displacement (`[bx+4]`) over a biased base (`_V+4`)
+            // saved 3 to 6 B in 11 -Os objects, none larger.
+            lsr_size_order: true,
             // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
             // its bytes at the rate against the multiply-high sequence; the pin's
             // `isIntDivCheap` is `minsize` alone
@@ -368,11 +373,16 @@ impl Machine for Dos {
             // four cases over 28 values, a 56 B table, data +58 B and +60 B
             // over bcc.
             min_jump_table_density: Some(40),
-            // DEVIATE: a constant offset is a displacement of the access at
-            // m16; behind a sunk phi it costs an add and a register
-            // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
-            // select, +6 B, +36 clk).
+            // M16-KEEPDISP-1 (closed: the blanket refusal is gone): a constant
+            // offset is a displacement of the access at m16; behind a sunk phi
+            // it costs an add and a register (qbsp `r_point_leaf`: two
+            // `[bx+si+2|4]` loads became an index select, +6 B, +36 clk). The
+            // flag tells SimplifyCFG's sink the offsets fold; the sink prices
+            // it (`displacement_sink_pays`), so a long common tail still sinks
+            // (`r_recursive_world_node` 194 -> 176).
             keep_constant_displacements: true,
+            frame_slot_is_free_base: true,
+            lsr_address_fewest_registers: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the
@@ -380,6 +390,8 @@ impl Machine for Dos {
             split_merged_conditions: true,
             // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
             lftr_any_stride: true,
+            // D13: the units undercount a 16-bit copy (inlinecost.rs).
+            inline_dying_credit_at_os: false,
             // DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): see `Tuning::cold_site_ignores_sinks`.
             cold_site_ignores_sinks: true,
             ..llrm_mir::target::Tuning::PIN

@@ -76,6 +76,9 @@ struct Printer<'a> {
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
+    /// The same for a word reloaded into a pair that an `and`/`or`/`xor` of
+    /// words reads: the cell of each byte.
+    folded_word: Option<(RegId, [String; 2])>,
     /// Instructions after the current one that were printed with it.
     skip: usize,
     /// Bytes of stack arguments reserved below the frame, while a call is being
@@ -495,6 +498,20 @@ impl Printer<'_> {
                 let source = name_of(self, 3)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
+            // a long doubled in the pairs of its words: the carry runs from the low word's bytes into the high's;
+            // `hl` doubles in one instruction
+            "SHL32" => {
+                for (word, first) in [(0, true), (1, false)] {
+                    let pair = self.register(inst, word)?;
+                    if pair == reg::HL {
+                        self.push(if first { "add hl, hl" } else { "adc hl, hl" });
+                    } else {
+                        let (low, high) = lanes(pair)?;
+                        self.push(format!("{} {}", if first { "sla" } else { "rl" }, name(low)));
+                        self.push(format!("rl {}", name(high)));
+                    }
+                }
+            }
             "SUB16F" => {
                 let source = name_of(self, 3)?;
                 self.push("or a, a");
@@ -555,6 +572,15 @@ impl Printer<'_> {
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
+            // the low bit of the second word through the carry into the top of the first: `a` is read, not kept
+            "FSHR1" => {
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                let (from, _) = lanes(self.register(inst, 2)?)?;
+                self.push(format!("ld a, {}", name(from)));
+                self.push("rra");
+                self.push(format!("rr {}", name(hi)));
+                self.push(format!("rr {}", name(lo)));
+            }
             "SHL16" if self.register(inst, 0)? == reg::HL => {
                 for _ in 0..shift_count(inst)? {
                     self.push("add hl, hl");
@@ -716,6 +742,10 @@ impl Printer<'_> {
                 let source = name_of(self, 1)?;
                 self.push(format!("bit 7, {source}"));
             }
+            "BIT8" => {
+                let (source, bit) = (name_of(self, 1)?, self.immediate(inst, 2, 7)?);
+                self.push(format!("bit {}, {source}", &bit[1..]));
+            }
             "BIT7_16" => {
                 let (_, hi) = lanes(self.register(inst, 1)?)?;
                 self.push(format!("bit 7, {}", name(hi)));
@@ -768,6 +798,43 @@ impl Printer<'_> {
                 self.push("inc de");
                 self.push("ldir");
             }
+            // eight bytes at hl shifted in place a bit a trip, count in
+            // bc: `inc b` and the jump to the test make a count of zero no trip
+            // (the test is `dec b; jp nz`, which the relax pass makes `djnz`);
+            // the bytes chain through the carry from the low one (left) or the
+            // high one (right), hl kept across the trip
+            "WSHIFT" => {
+                let Some(Operand::Imm(kind)) = inst.operands.get(2) else {
+                    return Err("a wide shift with no kind".to_owned());
+                };
+                let (first, step, next) = match kind {
+                    0 => ("sla (hl)", "inc hl", "rl (hl)"),
+                    1 => ("srl (hl)", "dec hl", "rr (hl)"),
+                    _ => ("sra (hl)", "dec hl", "rr (hl)"),
+                };
+                let lines = |out: &[Line]| out.iter().filter(|line| !matches!(line, Line::Loc(_))).count();
+                let start = lines(&self.out);
+                // the names are the line counts at the labels: the loop's after
+                // `inc b; jp`, the test's after the body
+                let (again, test) = (format!("{}$", start + 3), format!("{}$", start + 21));
+                self.push("ld b, c");
+                self.push("inc b");
+                self.push(format!("jp {test}"));
+                self.out.push(Line::Label(again.clone()));
+                self.push("push hl");
+                self.push(first);
+                for _ in 0..7 {
+                    self.push(step);
+                    self.push(next);
+                }
+                self.push("pop hl");
+                if lines(&self.out) != start + 21 {
+                    return Err("a wide shift body of another length".to_owned());
+                }
+                self.out.push(Line::Label(test));
+                self.push("dec b");
+                self.push(format!("jp nz, {again}"));
+            }
             "LDIRG" => {
                 let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
                 self.push("ld a, b");
@@ -806,7 +873,17 @@ impl Printer<'_> {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
-                for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                let cells = match self.folded_word.take() {
+                    Some((one, cells)) if one == self.register(inst, 2)? => Some(cells),
+                    _ => None,
+                };
+                for (lane, (d, x, y)) in [(dl, al, bl), (dh, ah, bh)].into_iter().enumerate() {
+                    if let Some(cells) = &cells {
+                        self.push(format!("ld a, {}", name(x)));
+                        self.push(format!("{mnemonic} a, {}", cells[lane]));
+                        self.push(format!("ld {}, a", name(d)));
+                        continue;
+                    }
                     // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
                     let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
                     if mnemonic == "and" && (zero_x || zero_y) {
@@ -1083,6 +1160,9 @@ impl Printer<'_> {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
+                if op == "RELOAD16" && self.stepped_word_in_place(inst, rest)? {
+                    return Ok(());
+                }
                 if op == "RELOAD16"
                     && self.call_bytes == 0
                     && self.spill_bytes == 0
@@ -1108,6 +1188,10 @@ impl Printer<'_> {
                     if just_reloaded(&self.out, &loaded) {
                         return Ok(());
                     }
+                }
+                if op == "RELOAD16" && self.reload_is_operand(inst, rest) && slots.iter().all(|slot| slot.ends_with("(ix)")) {
+                    self.folded_word = Some((self.register(inst, 0)?, [slots[0].clone(), slots[1].clone()]));
+                    return Ok(());
                 }
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
@@ -1627,9 +1711,79 @@ impl Printer<'_> {
         Ok(true)
     }
 
+    /// A `RELOAD16` of a frame cell, a step of the pair (`INC16`, or `INC16c` that steps when its condition holds) and
+    /// the `SPILL16` back to the same cell, with nothing else reading the pair, is `inc d(ix)`, a `jr nz` over `inc
+    /// d+1(ix)`: the carry runs through the cell and no register holds the word (`foldMemoryOperand` of the frame
+    /// cell, `X86InstrInfo::foldMemoryOperandImpl` for `INC`; 15 B and 88 T became 10 B and 12 to 59 T in
+    /// div_constants_short's carry steps). The memory step sets the flags the register step left alone, so they
+    /// must be dead after. Prints it and reports whether it did.
+    fn stepped_word_in_place(
+        &mut self,
+        reload: &Inst,
+        rest: &[Inst],
+    ) -> Result<bool, String> {
+        let (Some(Operand::Def(loaded @ Reg::Virt(_))), Some(Operand::Frame(cell))) =
+            (reload.operands.first(), reload.operands.get(1))
+        else {
+            return Ok(false);
+        };
+        let register = self.physical(*loaded);
+        let [step, back, tail @ ..] = rest else { return Ok(false) };
+        let Kind::Op(op @ ("INC16" | "INC16c")) = step.kind else { return Ok(false) };
+        let steps_in_place = matches!(
+            &step.operands[..],
+            [Operand::Def(d), Operand::Use(u), ..] if self.physical(*d) == register && self.physical(*u) == register
+        );
+        let spills = back.kind == Kind::Op("SPILL16")
+            && matches!(
+                &back.operands[..],
+                [Operand::Frame(one), Operand::Use(r)] if one == cell && self.physical(*r) == register
+            );
+        if !steps_in_place || !spills || !self.flags_dead(tail) {
+            return Ok(false);
+        }
+        // nothing else reads the loaded value, the stepped value or the pair after the spill
+        let stepped = match back.operands.get(1) {
+            Some(Operand::Use(Reg::Virt(v))) => Some(*v),
+            _ => None,
+        };
+        let loaded_reads = match loaded {
+            Reg::Virt(v) => self.reads.get(v).copied().unwrap_or(0),
+            Reg::Phys(_) => return Ok(false),
+        };
+        let step_reads = match step.operands.first() {
+            Some(Operand::Use(Reg::Virt(v)) | Operand::Def(Reg::Virt(v))) => self.reads.get(v).copied().unwrap_or(0),
+            _ => 0,
+        };
+        let stepped_reads = stepped.map_or(0, |v| self.reads.get(&v).copied().unwrap_or(0));
+        if loaded_reads > 1 || step_reads > 1 || stepped_reads != 1 || !self.dead_after(register, tail) {
+            return Ok(false);
+        }
+        let opposite = if op == "INC16c" {
+            let Some(Operand::Imm(cond)) = step.operands.get(2) else { return Ok(false) };
+            Some(*["z", "nz", "c", "nc"].get(*cond as usize).ok_or("a conditional step on an unknown condition")?)
+        } else {
+            None
+        };
+        let slots = self.frame_slots(*cell, 0, 2)?;
+        let count = || self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count();
+        let skip = format!("{}$", count());
+        if let Some(opposite) = opposite {
+            self.push(format!("jr {opposite}, {skip}"));
+        }
+        self.push(format!("inc {}", slots[0]));
+        self.push(format!("jr nz, {skip}"));
+        self.push(format!("inc {}", slots[1]));
+        self.out.push(Line::Label(skip));
+        self.skip = 2;
+        Ok(true)
+    }
+
     /// Whether the instruction after a `RELOAD8` is an ALU op or compare that
     /// reads the reloaded byte, which nothing else reads: it may take the frame
-    /// cell as its operand (`sub a, d(ix)`) and the reload goes.
+    /// cell as its operand (`sub a, d(ix)`) and the reload goes. The same for a
+    /// `RELOAD16` and the `and`/`or`/`xor` of words that reads the pair, byte
+    /// by byte.
     fn reload_is_operand(
         &self,
         reload: &Inst,
@@ -1640,7 +1794,7 @@ impl Printer<'_> {
         };
         matches!(
             next.kind,
-            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r")
+            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
         )
             && matches!(
                 next.operands.get(2),
@@ -2137,6 +2291,7 @@ pub fn finish(
         tables: Vec::new(),
         reads,
         folded: None,
+        folded_word: None,
         skip: 0,
         call_bytes: 0,
         spill_bytes: 0,
@@ -2190,9 +2345,37 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_overwritten_byte_stores(
+    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(drop_overwritten_byte_stores(
         forward_byte_copies(forward_high_bytes(cancel_steps(lines))),
-    ))))
+    )))))
+}
+
+/// `ld r, a` then `ld a, r` (or the reverse) leaves both holding one value: the second load is nothing, and neither
+/// touches the flags. `push` drops the pair when it prints it; a dead load between them that
+/// `drop_overwritten_byte_stores` removes later brings the two together (`xor a, b; ld b, a; ld a, b; rrca`, 42 sites in
+/// div_constants_long -O2). Registers only: a memory cell may be volatile. Not while pricing, as in `push`.
+fn drop_reloaded_accumulator(lines: Vec<Line>) -> Vec<Line> {
+    if PRICING.with(|one| one.get()) {
+        return lines;
+    }
+    // `ld r, a` as `r`, or `ld a, r` as `r`: the byte register the accumulator is copied to or from
+    let with_a = |line: Option<&Line>, into_a: bool| -> Option<String> {
+        let Some(Line::Inst(text)) = line else { return None };
+        let (to, from) = text.strip_prefix("ld ")?.split_once(", ")?;
+        let (r, a) = if into_a { (from, to) } else { (to, from) };
+        (a == "a" && r.len() == 1 && "bcdehl".contains(r)).then(|| r.to_owned())
+    };
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let again = [false, true].into_iter().any(|into_a| {
+            let first = with_a(out.last(), into_a);
+            first.is_some() && first == with_a(Some(&line), !into_a)
+        });
+        if !again {
+            out.push(line);
+        }
+    }
+    out
 }
 
 /// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an indirect jump or a block of ours.
@@ -2827,8 +3010,9 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
     let (mut bytes, mut clocks) = (0, 0.0);
     let weighted = weighted(lines, &frequencies);
+    let trips = local_loop_trips(lines);
     let mut before: Vec<&str> = Vec::new();
-    for (line, weight) in &weighted {
+    for ((line, weight), trips) in weighted.iter().zip(&trips) {
         let Line::Inst(text) = line else {
             before.clear();
             continue;
@@ -2836,10 +3020,39 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
         let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
         // the routine a call reaches runs too (`runtime_size::routine_clocks`: `__mulsi3` is 120 T a multiplier bit)
-        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight;
+        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight * trips;
         before.push(text);
     }
     (bytes, clocks.round() as u64)
+}
+
+/// How often each line runs per pass of the block it is in: the typical shift
+/// count for a line inside a loop of an expansion (a numeric local label, `N$`,
+/// jumped back to: the 64-bit shift loop, `WSHIFT`), 1 for the rest.
+/// The IR loops are weighted by their blocks' frequencies ([`weighted`]); an
+/// expansion's own loop has no block.
+fn local_loop_trips(lines: &[Line]) -> Vec<f64> {
+    let local = |name: &str| name.strip_suffix('$').is_some_and(|digits| digits.bytes().all(|b| b.is_ascii_digit()));
+    let mut trips = vec![1.0; lines.len()];
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let (mnemonic, rest) = text.split_once(' ').unwrap_or((text.as_str(), ""));
+        if !matches!(mnemonic, "jp" | "jr" | "djnz") {
+            continue;
+        }
+        let target = rest.rsplit(',').next().unwrap_or("").trim();
+        if !local(target) {
+            continue;
+        }
+        let Some(head) = lines[..at].iter().rposition(|line| matches!(line, Line::Label(name) if name == target))
+        else {
+            continue;
+        };
+        for one in &mut trips[head..=at] {
+            *one = f64::from(crate::runtime_size::TYPICAL_WIDE_SHIFT);
+        }
+    }
+    trips
 }
 
 /// [`price_in_loops`] of the lines as emitted: after branch relaxation, which
@@ -3274,6 +3487,44 @@ mod tests {
         assert_eq!(push_places(&[area(2), store(reg::BC, 0)], 0, &a), None);
     }
 
+    /// The 64-bit shift loop (`WSHIFT`) is a loop of the expansion, not of the
+    /// IR: its lines ran once in the price, so a shift by 30 bits read as
+    /// one trip and the inline form beat the routine (shift_int64_variable -O2
+    /// +57 B, +2.6M T).
+    #[test]
+    fn a_local_loop_of_an_expansion_is_priced_by_the_typical_count() {
+        let loop_of = |back: &str| {
+            vec![Line::Label("5$".to_owned()), Line::Inst("sla (hl)".to_owned()), Line::Inst(back.to_owned())]
+        };
+        let trips = u64::from(crate::runtime_size::TYPICAL_WIDE_SHIFT);
+        assert_eq!(price_in_loops(&loop_of("djnz 5$")), (4, (15 + 13) * trips));
+        // a forward jump to a local label is no loop
+        let forward =
+            vec![Line::Inst("jr z, 5$".to_owned()), Line::Inst("sla (hl)".to_owned()), Line::Label("5$".to_owned())];
+        let alone = |text: &str| price_in_loops(&[Line::Inst(text.to_owned())]).1;
+        assert_eq!(price_in_loops(&forward).1, alone("jr z, 5$") + alone("sla (hl)"));
+    }
+
+    /// `push hl`, `pop hl`, `dec hl` and the `(hl)` rotates had no row, so each
+    /// was priced as an unknown form (2 B, 8 T): the 64-bit shift loop
+    /// (seven `rl (hl)` at 15 T) read as 56 T a trip less than it runs, and the
+    /// inline form won call_cleanup_keeps_pair and shift_int64_variable -O2
+    /// (+57 B, +2.6M T) against the routine.
+    #[test]
+    fn the_hl_stack_and_memory_rotate_forms_are_priced_from_the_table() {
+        for (text, bytes, clocks) in [
+            ("push hl", 1, 11),
+            ("pop hl", 1, 10),
+            ("dec hl", 1, 6),
+            ("rl (hl)", 2, 15),
+            ("rr (hl)", 2, 15),
+            ("srl (hl)", 2, 15),
+            ("sra (hl)", 2, 15),
+        ] {
+            assert_eq!(price(&[Line::Inst(text.to_owned())]), (bytes, clocks), "{text}");
+        }
+    }
+
     /// `form` spelled a register copy `ld b;b`, a key the table lacks, so
     /// every copy was priced as an unknown form (2 B, 8 T) instead of
     /// 1 B, 4 T, and the choice between allocations over-counted copies.
@@ -3353,6 +3604,19 @@ mod tests {
                   store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
         let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();
         assert!(out.contains("srl c") && !out.contains("ld c, b\n\tsrl"), "{out}");
+    }
+
+    /// `xor a, b; ld b, a; ld c, l; ld a, b; rrca; ld c, e` lost its dead middle load and kept `ld b, a; ld a, b` (div_constants_long -O2: 42
+    /// bytes of `ld a, r` after `ld r, a`; the copy through `a` of a byte just stored from it).
+    #[test]
+    fn a_byte_loaded_back_into_the_accumulator_it_came_from_is_not_loaded() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = ["xor a, b", "ld b, a", "ld c, l", "ld a, b", "rrca", "ld c, e"].map(inst).to_vec();
+        assert_eq!(tidy(lines), ["xor a, b", "ld b, a", "rrca", "ld c, e"].map(inst).to_vec());
+        let lines = ["ld a, d", "ld d, a", "ld (hl), a"].map(inst).to_vec();
+        assert_eq!(tidy(lines), ["ld a, d", "ld (hl), a"].map(inst).to_vec());
+        let lines = ["ld b, a", "ld a, (hl)", "ld a, b"].map(inst).to_vec();
+        assert_eq!(tidy(lines.clone()), lines, "a memory cell may be volatile");
     }
 
     /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte shifted through `a`) read the copy

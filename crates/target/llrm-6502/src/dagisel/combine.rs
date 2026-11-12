@@ -136,7 +136,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Shl | ISD::Truncate | ISD::Or | ISD::SetCC)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -165,6 +165,7 @@ impl CombineHooks for MosCombines {
                 .or_else(|| low_bit_in_carry(dag, node)),
             ISD::Sub => borrow_of_ult(dag, node).or_else(|| word_with_loaded_byte(dag, node)),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
+            ISD::Shl => shifted_byte_in_pieces(dag, node),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
             ISD::Mul => decompose_mul(dag, node, self.sized, self.synthesize),
@@ -496,6 +497,37 @@ fn word_with_loaded_byte(
         EVT::I16,
         &[SDValue { node: low.node, res: 0 }, SDValue { node: high.node, res: 0 }],
     ))
+}
+
+/// `(zext x) << c` of a byte `x` to a word, `c` of 6 or 7: the pieces are
+/// `x << c` and `x >> (8 - c)`, eight single-bit steps in all (and for 7 the
+/// `lowbit`/`topbit` forms), where a word shift is `c` passes over two bytes.
+/// `y << 7` for a row of 128 bytes was a loop of seven `asl; rol`.
+///
+/// DEVIATE 6502-SHL-PIECES (owner llrm-target-6502, exit 2026-12-15): the pin
+/// leaves a word shift to the legalizer, whose steps are the word's; it has no
+/// byte lanes to split into.
+fn shifted_byte_in_pieces(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (extended, amount) = (dag.operand(node, 0), dag.constant(dag.operand(node, 1))?);
+    if dag.value_type(node) != EVT::I16
+        || dag.opcode(extended) != ISD::ZeroExtend
+        || dag.value_type(dag.operand(extended, 0)) != EVT::I8
+        || !(6..=7).contains(&amount)
+    {
+        return None;
+    }
+    let x = dag.operand(extended, 0);
+    let (up, down) = (dag.get_constant(amount, EVT::I8), dag.get_constant(8 - amount, EVT::I8));
+    let low = dag.get_node(ISD::Shl, EVT::I8, &[x, up]);
+    let high = dag.get_node(ISD::Srl, EVT::I8, &[x, down]);
+    let low = dag.get_node(ISD::ZeroExtend, EVT::I16, &[low]);
+    let high = dag.get_node(ISD::ZeroExtend, EVT::I16, &[high]);
+    let eight = dag.get_constant(8, EVT::I8);
+    let high = dag.get_node(ISD::Shl, EVT::I16, &[high, eight]);
+    Some(dag.get_node(ISD::Or, EVT::I16, &[low, high]))
 }
 
 /// One half of a `BuildPair`: `trunc` of it is the low piece, and `srl` of it

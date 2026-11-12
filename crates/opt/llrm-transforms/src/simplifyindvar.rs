@@ -1162,7 +1162,10 @@ fn visit_masked_extensions(
     let Some(result) = one.result else { return };
     let narrow_ty = e.function.instruction(wi.narrow_iv).ty;
     let Some(width) = e.context.types.int_bits(narrow_ty) else { return };
-    if e.layout.legal_integer(width) || !e.outer.target().tti().is_some_and(|tti| tti.indvars_widens_narrow_counter_through_masks()) {
+    let taxed = e.outer.target().tti().is_some_and(|tti| tti.narrow_counter_is_taxed(width));
+    if (e.layout.legal_integer(width) && !taxed)
+        || !e.outer.target().tti().is_some_and(|tti| tti.indvars_widens_narrow_counter_through_masks())
+    {
         return;
     }
     let casts: Vec<InstId> = e
@@ -1210,10 +1213,12 @@ fn visit_iv_cast(
     // ADD is required to increment the induction variable. We could compute
     // more comprehensively the cost of all instructions on the induction
     // variable when necessary.
-    // DEVIATE 18: no widening past the pointer's index width (the 16-bit
-    // target's): its arithmetic on a wider type costs more, and `n32` states
-    // `i32` legal there, so the X86 model prices the add alike.
-    if width > e.layout.pointer(0).index_bits {
+    // DEVIATE 18: no widening past the pointer's index width where that is under
+    // 32 bits (the 16-bit targets): their arithmetic on a wider type costs more,
+    // and `n32` states `i32` legal there, so the X86 model prices the add alike.
+    // A 32-bit pointer with a legal `i64` (wasm32) widens a counter to `i64`, as the pin.
+    let index_bits = e.layout.pointer(0).index_bits;
+    if width > index_bits && index_bits < 32 {
         return;
     }
     if let Some(tti) = e.outer.target().tti() {

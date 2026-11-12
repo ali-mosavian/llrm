@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,7 +124,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("loop-interchange", |options, on| options.interchange = on),
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-ch", |options, on| options.copy_headers = on),
-    ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
+    ("ipa-cp-clone", |options, on| options.inline.cp_clone = Some(on)),
     ("inline-recursive", |options, on| options.inline.recursive = Some(on)),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
@@ -270,6 +270,9 @@ pub struct Flags {
     pub no_inline: Vec<String>,
     /// `--isel=`: the instruction selector.
     pub isel: Option<Selector>,
+    /// `--no-midend`: the mid-end pipeline is skipped, the backend taking the
+    /// module as given.
+    pub no_midend: bool,
 }
 
 impl Default for Flags {
@@ -306,6 +309,7 @@ impl Default for Flags {
             stack_limit: None,
             no_inline: Vec::new(),
             isel: None,
+            no_midend: false,
         }
     }
 }
@@ -393,6 +397,7 @@ impl Flags {
                 );
             }
             "--isel" => self.isel = Some(Selector::parse(&value("--isel")?)?),
+            "--no-midend" => self.no_midend = true,
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if Self::mode_flag(flag).is_some() => self.set_mode(Self::mode_flag(flag), flag)?,
@@ -601,6 +606,7 @@ impl Flags {
             no_inline: self.no_inline.clone(),
             stack_check: self.sanitize.stack,
             isel: self.isel.unwrap_or_else(|| Selector::for_target(&*arch)),
+            no_midend: self.no_midend,
             abi: self.abi.clone(),
             float_store: self.float_store,
             code_segment: self.code_segment.clone(),

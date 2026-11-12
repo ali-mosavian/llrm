@@ -30,6 +30,7 @@ mod m68030;
 mod m68040;
 mod m68060;
 mod table;
+pub use table::keys_made;
 
 use crate::dagisel::hooks::Cpu as SelectCpu;
 use crate::isa::Cpu;
@@ -339,7 +340,7 @@ pub fn trade_passes(
 }
 
 /// What a choice between two priced candidates minimizes: the level's price.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum Price {
     /// Bytes, then clocks (`-Os`).
     Size,

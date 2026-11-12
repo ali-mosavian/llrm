@@ -831,12 +831,33 @@ fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let tti = X86::of_cpu("i486").unwrap();
-    let (_, kept) =
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, None);
+    let (_, kept) = crate::lsr_pass::reduced_held(
+        context,
+        &layout,
+        function,
+        &mut declared,
+        &outer,
+        &tti,
+        false,
+        false,
+        false,
+        None,
+    );
     let kept = kept.expect("no edge was split");
     let mut nodes = |held| {
         let before = get(Event::ScevNodes);
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, held);
+        crate::lsr_pass::reduced_held(
+            context,
+            &layout,
+            function,
+            &mut declared,
+            &outer,
+            &tti,
+            false,
+            false,
+            false,
+            held,
+        );
         get(Event::ScevNodes) - before
     };
     let (cold, warm) = (nodes(None), nodes(Some(kept)));
@@ -1050,7 +1071,18 @@ exit:
         let mut declared = llrm_mir::passes::Declared::of(&module);
         let (context, function) = module.function_mut("f").expect("@f");
         let tti = X86::of_cpu("i486").unwrap();
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, None);
+        crate::lsr_pass::reduced_held(
+            context,
+            &layout,
+            function,
+            &mut declared,
+            &outer,
+            &tti,
+            false,
+            size,
+            false,
+            None,
+        );
         declared.place(&mut module).expect("the declarations");
         printed(&module).split("loop:").nth(1).unwrap().split("exit:").next().unwrap().matches("phi").count()
     };
@@ -1285,7 +1317,7 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
 fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
     let mut module = parsed(&format!("{DOS}{DOT}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
@@ -1300,7 +1332,7 @@ fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
 fn the_temporaries_of_the_body_count_against_the_registers() {
     let mut module = parsed(&format!("{DOS}{SHELLSORT_INIT}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     // At LU3c the live count is exact at m16, so the offset that ends at zero
@@ -1340,7 +1372,7 @@ b6:
 fn at_size_a_word_copy_keeps_the_counter_and_does_not_double_the_limit() {
     let mut module = parsed(&format!("{DOS}{COPY}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("shl i16"), "{after}");
@@ -1424,7 +1456,7 @@ fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
 fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero() {
     let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains(", 0\n") && !after.contains("257"), "{after}");
@@ -1462,7 +1494,7 @@ exit:
 fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
     let mut module = parsed(&format!("{DOS}{BLOCK_LOOP}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr"), "{after}");
@@ -1477,7 +1509,7 @@ fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
 fn at_size_a_fitting_solution_does_not_cost_an_instruction_more() {
     let mut module = parsed(include_str!("lsr_stft_rev.ll"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr [ %") && after.contains("@$var_rev, i16 128"), "{after}");
@@ -1541,7 +1573,7 @@ exit:
 fn frame_arrays_share_one_index_under_pressure() {
     let mut module = parsed(&format!("{DOS}{FRAME_LOOP}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi ptr"), "{after}");
@@ -1629,7 +1661,7 @@ e:
 ";
     let mut module = parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
@@ -1888,4 +1920,162 @@ exit:
     );
     let _ = changed;
     assert!(!after.contains("-4"), "{after}");
+}
+
+/// A nested loop whose outer loop feeds the inner one `i * 300 - 30000`.
+const OUTER_MULTIPLY: &str = "define i32 @f(i32 %n) {
+entry:
+  br label %outer
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i1, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %latch ]
+  %m = mul nuw nsw i32 %i, 300
+  %z0 = add nsw i32 %m, -30000
+  br label %inner
+inner:
+  %k = phi i32 [ 0, %outer ], [ %k1, %inner ]
+  %z = phi i32 [ %z0, %outer ], [ %z1, %inner ]
+  %t = xor i32 %z, %k
+  %z1 = add i32 %t, 7
+  %k1 = add nuw nsw i32 %k, 1
+  %c = icmp eq i32 %k1, 4
+  br i1 %c, label %latch, label %inner
+latch:
+  %acc1 = add i32 %acc, %z1
+  %i1 = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %i1, %n
+  br i1 %e, label %exit, label %outer
+exit:
+  ret i32 %acc1
+}
+";
+
+/// DEVIATE LSR-OUTER. x_cordic -O1 kept `imul ebx, ecx, 300` in its outer
+/// loop (200 executions, 19 clocks each: 3,800 clocks, +7.5% over gcc) because
+/// the pin's LSR skips a loop with a subloop. Where the target prices a
+/// multiply in clocks the outer loop is reduced, the multiply gone; the pin's
+/// target keeps it.
+#[test]
+fn an_outer_loops_multiply_is_a_counter_where_the_target_prices_multiplies() {
+    let run = |tuning: llrm_mir::target::Tuning| {
+        let mut module = parsed(&format!("{FLAT}{OUTER_MULTIPLY}"));
+        let before = module.clone();
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let mut tti = X86::of_cpu("i486").unwrap();
+        tti.tuning = tuning;
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+        let after = printed(&module);
+        let inputs: &[&[i128]] = &[&[1], &[2], &[5]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        after
+    };
+    // a multiply left in the preheader runs once; one in the loop, every trip
+    let in_loop = |text: &str| text[text.find("outer:").expect("the outer loop")..].contains(" mul ");
+    let priced =
+        run(llrm_mir::target::Tuning { multiply_clocks: 19, loop_carried_clocks: 2, ..llrm_mir::target::Tuning::PIN });
+    assert!(!in_loop(&priced), "{priced}");
+    let pin = run(llrm_mir::target::Tuning::PIN);
+    assert!(in_loop(&pin), "{pin}");
+}
+
+/// A remainder by a constant that feeds addresses, at -Os on a target that
+/// keeps the divide.
+const REMAINDER_INDEX: &str = "@V = global [400 x [16 x i32]] zeroinitializer
+
+define i32 @f(i32 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %in, %loop ]
+  %acc = phi i32 [ 0, %entry ], [ %an, %loop ]
+  %r = urem i32 %i, 400
+  %p0 = getelementptr [16 x i32], ptr @V, i32 %r, i32 0
+  %p1 = getelementptr [16 x i32], ptr @V, i32 %r, i32 1
+  %p2 = getelementptr [16 x i32], ptr @V, i32 %r, i32 2
+  %a = load i32, ptr %p0
+  %b = load i32, ptr %p1
+  %c = load i32, ptr %p2
+  %s = add i32 %a, %b
+  %t = add i32 %s, %c
+  %an = add i32 %acc, %t
+  %in = add i32 %i, 1
+  %done = icmp ult i32 %in, %n
+  br i1 %done, label %loop, label %exit
+
+exit:
+  ret i32 %an
+}
+";
+
+fn reduced_for_size(
+    text: &str,
+    size: bool,
+) -> String {
+    let mut module = parsed(&format!("{FLAT}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, size, None);
+    printed(&module)
+}
+
+/// x_crt_i2d at m32 -Os: `V[i % 400].f` was strength-reduced through
+/// `i - (i / 400) * 400` into three field pointers plus a multiply by
+/// -25600, 152 B of loop where gcc's `idiv` and one scaled index took 99.
+#[test]
+fn test_a_kept_divides_remainder_is_not_split_into_the_addresses() {
+    let text = reduced_for_size(REMAINDER_INDEX, true);
+    assert!(text.contains("urem i32"), "{text}");
+    assert!(!text.contains("udiv"), "{text}");
+}
+
+const NEXT_CONVERTED: &str = "define double @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi double [ 0.0, %entry ], [ %s3, %loop ]
+  %d = sitofp i32 %i to double
+  %next = add nuw nsw i32 %i, 1
+  %e = sitofp i32 %next to double
+  %q = fdiv double 1.0, %e
+  %s2 = fadd double %s, %d
+  %s3 = fadd double %s2, %q
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret double %s3
+}
+";
+
+fn reduced_next_converted(x87: bool) -> String {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: x87.then_some(8), ..llrm_mir::target::Tuning::PIN };
+    let mut module = parsed(&format!("{FLAT}{NEXT_CONVERTED}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+    printed(&module)
+}
+
+/// `1.0 / (double)(i + 1)` beside `(double)i`: x_ldmath at O2 kept an `fadd`
+/// counter and also converted `i + 1` (an `fidiv` of the integer) every trip,
+/// +400 clk against gcc's one `fild` shared by both.
+#[test]
+fn test_a_conversion_of_the_increment_is_the_double_counters_increment() {
+    let after = reduced_next_converted(true);
+    assert!(!after.contains("sitofp"), "{after}");
+}
+
+/// Off the x87 stack the conversion stays: 6502 x_ldmath grew 32 B with the
+/// counter's next value kept live across the soft-float calls.
+#[test]
+fn test_a_conversion_of_the_increment_stays_off_the_x87_stack() {
+    let after = reduced_next_converted(false);
+    assert!(after.contains("sitofp"), "{after}");
 }

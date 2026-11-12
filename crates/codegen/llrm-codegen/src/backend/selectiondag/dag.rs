@@ -295,6 +295,9 @@ pub struct DagConfig {
     pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
+    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0 where none was
+    /// computed. DEVIATE DIV-HOT reads it.
+    pub block_frequency: f64,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
     pub div_prices: Option<DivPrices>,
@@ -345,6 +348,9 @@ pub struct DagConfig {
     /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
     /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
+    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the pin always does). DEVIATE: off by
+    /// default so the other targets' output stays as it was until their owners judge it. Exit: all targets judged.
+    pub known_bits_of_build_pair: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -370,6 +376,7 @@ impl Default for DagConfig {
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,
+            block_frequency: 0.0,
             div_prices: None,
             sdiv_pow2_stays: false,
             sdiv_by_magnitude: false,
@@ -382,6 +389,7 @@ impl Default for DagConfig {
             narrow_divrem: None,
             narrow_srem_overflow_defined: false,
             use_aa: false,
+            known_bits_of_build_pair: false,
         }
     }
 }
@@ -650,6 +658,7 @@ impl SelectionDAG {
         &mut self,
         frequency: f64,
     ) {
+        self.config.block_frequency = frequency;
         if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
             bytes.frequency = frequency;
         }

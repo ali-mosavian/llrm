@@ -2366,6 +2366,12 @@ impl Emitter<'_, '_> {
             let [_, by] = self.dag.node(inserted).ops[..] else { return None };
             return matches!(self.dag.node(by).data, NodeData::Const { bits: 16, .. }).then_some(inserted);
         }
+        // A selector loaded or widened as a word (`zext`/extending load of an
+        // i16, which the combiner now folds after legalization too): the low
+        // word of the dword is the selector.
+        if self.is_machine_named(inserted, "MOVZX32rm16") || self.is_machine_named(inserted, "MOVZX32rr16") {
+            return Some(inserted);
+        }
         if !self.is_machine_named(inserted, "INSERT_SUBREG") {
             return None;
         }
@@ -2604,6 +2610,11 @@ impl Emitter<'_, '_> {
                 );
                 self.calls.push((at, callee));
                 self.inline_places.push((at, patched));
+                return Ok(Some(()));
+            }
+            // The flags an interrupt function's `iret` pops.
+            "PUSH_FLAGS" => {
+                self.push(Operation::Nothing, "pushf", Vec::new(), Vec::new());
                 return Ok(Some(()));
             }
             // `llrm.ia16.in`/`out`: a barrier the later passes give `in`/`out`

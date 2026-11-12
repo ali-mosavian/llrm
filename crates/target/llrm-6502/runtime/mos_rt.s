@@ -207,6 +207,51 @@ udivmod16c:
   bne @next
   rts
 
+; the compact divide, rs1 / rs2: the quotient in rc6:rc7, the remainder in rc2:rc3 (the dividend, taken
+; down in place). The quotient is as many steps as it has bits, not 16: the divisor is shifted left
+; while it stays at or under the remainder, then each step takes it off if it fits and shifts it back
+; down. A quotient of one or two bits (Euclid's) is two or three steps. Uses A and X only: the signed
+; entries hold their sign in Y.
+udivmod16a:
+  lda #0
+  sta rc6
+  sta rc7
+  tax
+@align:
+  lda rc5
+  bmi @step
+  asl rc4
+  rol rc5
+  inx
+  cpx #16                       ; a divisor of 0 stops here
+  bcs @step
+  lda rc2
+  cmp rc4
+  lda rc3
+  sbc rc5
+  bcs @align
+  dex                           ; the divisor overshot the remainder: back one
+@back:
+  lsr rc5
+  ror rc4
+@step:
+  asl rc6
+  rol rc7
+  lda rc2
+  cmp rc4
+  lda rc3
+  sbc rc5                       ; the high byte of the difference, kept if it fits
+  bcc @keep
+  sta rc3
+  lda rc2
+  sbc rc4
+  sta rc2
+  inc rc6
+@keep:
+  dex
+  bpl @back
+  rts
+
 .export __udivqi3
 __udivqi3:                      ; rc2 / rc3 -> A
   jsr udivmod8
@@ -251,6 +296,25 @@ __umodhi3c:                     ; rs1 % rs2 -> A:X
   jsr udivmod16c
   lda rc6
   ldx rc7
+  rts
+
+; the same over the aligned loop (`[aligned]` in routines.toml): called at -Os where the module's divides pay for the bytes
+.export __udivhi3a
+__udivhi3a:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+  jsr udivmod16a
+  lda rc6                       ; the quotient to A:X, the remainder to where udivmod16 leaves it
+  ldx rc7
+  ldy rc2
+  sty rc6
+  ldy rc3
+  sty rc7
+  rts
+
+.export __umodhi3a
+__umodhi3a:                     ; rs1 % rs2 -> A:X
+  jsr udivmod16a
+  lda rc2
+  ldx rc3
   rts
 
 ; ---- signed divide: divide the magnitudes, then give the result its sign -------------------------
@@ -379,6 +443,34 @@ __modhi3c:                       ; rs1 % rs2 -> A:X, compact
 @done:
   lda rc6
   ldx rc7
+  rts
+
+.export __divhi3a
+__divhi3a:                       ; rs1 / rs2 -> A:X, compact
+  lda rc3
+  eor rc5
+  tay
+  jsr abs16_pair
+  jsr udivmod16a
+  cpy #0
+  bpl @done
+  neg16 rc6, rc7
+@done:
+  lda rc6
+  ldx rc7
+  rts
+
+.export __modhi3a
+__modhi3a:                       ; rs1 % rs2 -> A:X, compact
+  ldy rc3
+  jsr abs16_pair
+  jsr udivmod16a
+  cpy #0
+  bpl @done
+  neg16 rc2, rc3
+@done:
+  lda rc2
+  ldx rc3
   rts
 
 ; ---- shifts by a variable count: rs1 or rc2 shifted by rc4 or rc3 ---------------------------------
@@ -562,6 +654,156 @@ __mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
   bne @byte
 @done:
   jmp copy_st_to_sa
+
+; 16 x 16 -> 32: __sa and __sb low words in, the product in __sa. The product is built
+; in __st:__sb, the multiplier shifting out of __sb as the low half shifts in. A multiplier
+; whose high byte is zero is spent after 8 bits: the product is then the 32 bits shifted
+; down a byte.
+.export __umulhisi3
+__umulhisi3:
+  lda #0
+  sta __st
+  sta __st+1
+  ldy #2
+@pass:
+  ldx #8
+@next:
+  lda __sb
+  lsr a
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+@skip:
+  ror __st+1
+  ror __st
+  ror __sb+1
+  ror __sb
+  dex
+  bne @next
+  dey
+  beq @long
+  lda __sb
+  bne @pass
+  lda __sb+1
+  sta __sa
+  lda __st
+  sta __sa+1
+  lda __st+1
+  sta __sa+2
+  lda #0
+  sta __sa+3
+  rts
+@long:
+  lda __sb
+  sta __sa
+  lda __sb+1
+  sta __sa+1
+  lda __st
+  sta __sa+2
+  lda __st+1
+  sta __sa+3
+  rts
+
+; the signed product: the unsigned one less the other operand from the high word for each
+; negative operand
+.export __mulhisi3
+__mulhisi3:
+  lda __sa
+  sta __sr
+  lda __sa+1
+  sta __sr+1
+  lda __sb
+  sta __sr+2
+  lda __sb+1
+  sta __sr+3
+  jsr __umulhisi3
+  lda __sr+1
+  bpl @a
+  sec
+  lda __sa+2
+  sbc __sr+2
+  sta __sa+2
+  lda __sa+3
+  sbc __sr+3
+  sta __sa+3
+@a:
+  lda __sr+3
+  bpl @done
+  sec
+  lda __sa+2
+  sbc __sr
+  sta __sa+2
+  lda __sa+3
+  sbc __sr+1
+  sta __sa+3
+@done:
+  rts
+
+; the same for a multiplier under 256 (its high byte known zero at the call): the multiplicand shifts
+; left into 24 bits and is added for each set bit, and the walk ends with the multiplier's last set bit
+.export __umulhisi3_byte
+__umulhisi3_byte:
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __sa+2
+@bit:
+  lsr __sb
+  bcc @no
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc __sa+2
+  sta __st+2
+@no:
+  lda __sb
+  beq @out
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  jmp @bit
+@out:
+  lda __st
+  sta __sa
+  lda __st+1
+  sta __sa+1
+  lda __st+2
+  sta __sa+2
+  lda #0
+  sta __sa+3
+  rts
+
+; the signed multiplicand by a byte: the unsigned product less the byte from the high word if the
+; multiplicand is negative
+.export __mulhisi3_byte
+__mulhisi3_byte:
+  lda __sb
+  sta __sr
+  lda __sa+1
+  sta __sr+1
+  jsr __umulhisi3_byte
+  lda __sr+1
+  bpl @done
+  sec
+  lda __sa+2
+  sbc __sr
+  sta __sa+2
+  lda __sa+3
+  sbc #0
+  sta __sa+3
+@done:
+  rts
 
 .macro cmp_sub_32
   sec

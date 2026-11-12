@@ -31,6 +31,10 @@ struct Target {
     /// Symbols the target's hand code names (`ISD::ATOMIC_CMP_SWAP`,
     /// `M68k::PC`).
     extra_symbols: Vec<String>,
+    /// `extra_symbols` only the dynamic atoms and live types reach: the baseline
+    /// generation (the tables before the vectors) leaves them out, so the
+    /// scheduling model can tell the opcodes only the vectors use.
+    dynamic_extra_symbols: Vec<String>,
     /// Qualified instruction names the hand code selects that need a scheduling row.
     sched_symbols: Vec<String>,
     /// Registers the target's hand code maps by name (`X0`), without `ns`;
@@ -72,6 +76,7 @@ impl Target {
             sched_cpus: strings(table, "sched_cpus")?,
             hw_modes: strings(table, "hw_modes")?,
             extra_symbols: strings(table, "extra_symbols")?,
+            dynamic_extra_symbols: strings(table, "dynamic_extra_symbols")?,
             sched_symbols: strings(table, "sched_symbols")?,
             registers: strings(table, "registers")?,
             predicates: table.get("predicates").and_then(|v| v.as_str()).map(str::to_string),
@@ -144,7 +149,13 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
     );
     let mut emitted = BTreeSet::new();
     // The hand-selected instructions: named in `MACHINE_OPCODES` whether or not a pattern emits them.
-    let extras: Vec<String> = target.extra_symbols.iter().chain(&target.sched_symbols).cloned().collect();
+    let extras: Vec<String> = target
+        .extra_symbols
+        .iter()
+        .chain(&target.dynamic_extra_symbols)
+        .chain(&target.sched_symbols)
+        .cloned()
+        .collect();
     for cpu_name in &target.cpus {
         let cpu = Cpu::load(&text, cpu_name)?;
         let mut pruner = prune::Pruner::new(&cpu, &parsed.pattern_predicates, &ids, &vts)?;
@@ -187,7 +198,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions, &extras, &target.registers)?,
     )?;
     // A hand-selected opcode (`extra_symbols`) has a descriptor and a scheduling class too.
-    emitted.extend(target.extra_symbols.iter().filter_map(|name| ids.0.get(name).map(|&value| value as u16)));
+    emitted.extend(target.extra_symbols.iter().chain(&target.dynamic_extra_symbols).filter_map(|name| ids.0.get(name).map(|&value| value as u16)));
     write("instrinfo.rs", emit::render_instr_info(inputs.instrinfo, &ids, &emitted, &style)?)?;
     if !target.sched_cpus.is_empty() {
         modules.push_str("pub mod sched;\n");

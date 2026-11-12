@@ -19,9 +19,11 @@
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
-use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
+use llrm_codegen::backend::selectiondag::known_bits::{masked_value_is_zero, num_sign_bits};
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{
+    Action, LoadExt, MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG,
+};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -33,6 +35,8 @@ pub mod mosisd {
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const MUL32: ISD = ISD::Target(ids::MUL32);
+    pub const UMULW16: ISD = ISD::Target(ids::UMULW16);
+    pub const SMULW16: ISD = ISD::Target(ids::SMULW16);
     pub const UDIV32: ISD = ISD::Target(ids::UDIV32);
     pub const SDIV32: ISD = ISD::Target(ids::SDIV32);
     pub const UREM32: ISD = ISD::Target(ids::UREM32);
@@ -178,7 +182,11 @@ pub fn target_lowering() -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct MosLowering;
+pub struct MosLowering {
+    /// A product of two words is a widening multiply (not in a function tuned
+    /// for size: the two routines add bytes).
+    pub widen_products: bool,
+}
 
 impl Hooks for MosLowering {
     fn lower_operation(
@@ -203,7 +211,7 @@ impl Hooks for MosLowering {
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
-                lower_long(dag, node)
+                lower_long(dag, node, self.widen_products)
             }
             _ => None,
         }
@@ -332,6 +340,7 @@ fn lower_rotate(
 fn lower_long(
     dag: &mut SelectionDAG,
     node: SDValue,
+    widen_products: bool,
 ) -> Option<SDValue> {
     let opcode = match dag.opcode(node) {
         ISD::Mul => mosisd::MUL32,
@@ -343,6 +352,12 @@ fn lower_long(
         ISD::Srl => mosisd::SRL32,
         _ => mosisd::SRA32,
     };
+    if opcode == mosisd::MUL32
+        && widen_products
+        && let Some(widened) = lower_widening_multiply(dag, node)
+    {
+        return Some(widened);
+    }
     let shift = matches!(opcode, mosisd::SHL32 | mosisd::SRL32 | mosisd::SRA32);
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
     if shift && dag.constant(b).is_some() {
@@ -359,6 +374,56 @@ fn lower_long(
         operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[value]));
         operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[high]));
     }
+    let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I32,
+        &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
+    ))
+}
+
+/// Whether a 32-bit value is a sign extension of its low word: 17 sign bits,
+/// or a zero extension that the IR says is not negative (`zext nneg`, which
+/// leaves the word's top bit zero).
+fn fits_signed_word(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    num_sign_bits(dag, value) >= 17
+        || (dag.opcode(value) == ISD::ZeroExtend
+            && dag.node(value).flags.has(SDNodeFlags::NON_NEG)
+            && masked_value_is_zero(dag, value, 0xFFFF_0000))
+}
+
+/// A product of two operands that each fit in 16 bits is one 16 x 16 -> 32
+/// multiply of their low words, whatever 32-bit multiplier they went through:
+/// GCC's widening multiply (`convert_mult_to_widen`,
+/// <https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/tree-ssa-math-opts.cc>,
+/// the `umulhisi3`/`mulhisi3` optabs) and LLVM's `SMUL_LOHI`/`UMUL_LOHI` of
+/// the halves. Unsigned when both upper words are known zero, signed when both
+/// have 17 sign bits; a mix of the two is a long multiply.
+fn lower_widening_multiply(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // a constant factor is the combiner's to shift and add, or a call kept for size
+    if dag.constant(a).is_some() || dag.constant(b).is_some() {
+        return None;
+    }
+    // the factor with a zero high byte walks the fewer bits: it is the multiplier
+    let narrow = |dag: &SelectionDAG, v| masked_value_is_zero(dag, v, 0xFF00);
+    let (a, b) = if narrow(dag, a) && !narrow(dag, b) { (b, a) } else { (a, b) };
+    let upper = 0xFFFF_0000;
+    let opcode = if masked_value_is_zero(dag, a, upper) && masked_value_is_zero(dag, b, upper) {
+        mosisd::UMULW16
+    } else if fits_signed_word(dag, a) && fits_signed_word(dag, b) {
+        mosisd::SMULW16
+    } else {
+        return None;
+    };
+    let low = |dag: &mut SelectionDAG, value| dag.get_node(ISD::Truncate, EVT::I16, &[value]);
+    let operands = [low(dag, a), low(dag, b)];
     let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
     Some(dag.get_node(
         ISD::BuildPair,

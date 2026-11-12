@@ -9,7 +9,7 @@ savedsp dw ?
 handler dd ?
 after dw ?
 .code PROBE_TEXT
-public _trash, _arm, _verify, _intcall
+public _trash, _arm, _arm_nosidi, _verify, _verify_nosidi, _intcall
 
 _trash proc far
     mov ax, 0BAD0h
@@ -41,6 +41,16 @@ _arm proc far
     mov di, 0A5A5h
     ret
 _arm endp
+
+; _arm_nosidi: _arm without the SI and DI canaries. A caller llrm compiled may keep a value in SI or DI across arm() (the shared copy of
+; SS pushed for each hidden result pointer): cdecl lets it, and _arm's canaries made it a wild segment (r_s5, r_s7, r_s8).
+_arm_nosidi proc far
+    mov savedbp, bp
+    mov ax, sp
+    add ax, 4
+    mov savedsp, ax
+    ret
+_arm_nosidi endp
 
 ; Bit 0 SI, 1 DI, 2 BP, 3 SP, 4 DS, 5 DF.
 _verify proc far
@@ -80,6 +90,46 @@ _verify proc far
 done:
     ret
 _verify endp
+; _verify_nosidi: _verify without the SI and DI bits, for a caller llrm compiled: its own code may use SI and DI between arm() and
+; verify() (a `rep movsd` copy of an argument), which is legal, so a "lost" SI or DI there is not the callee's. BP, SP, DS and DF stay checked.
+_verify_nosidi proc far
+    xor cx, cx
+    cmp si, 5A5Ah
+    je @F
+    or cx, 1
+@@: cmp di, 0A5A5h
+    je @F
+    or cx, 2
+@@: mov ax, ds
+    mov bx, DGROUP
+    mov ds, bx
+    cmp bp, savedbp
+    je @F
+    or cx, 4
+@@: mov dx, sp
+    add dx, 6
+    cmp dx, savedsp
+    je @F
+    or cx, 8
+@@: cmp ax, bx
+    je @F
+    or cx, 16
+@@: pushf
+    pop ax
+    test ax, 400h
+    jz @F
+    or cx, 32
+    cld
+@@: and cx, 0FFFCh
+    jcxz done_nosidi
+    mov bx, sp
+    push cx
+    push word ptr ss:[bx+4]
+    call _probe_failed
+    add sp, 4
+done_nosidi:
+    ret
+_verify_nosidi endp
 ; intcall(handler, before, after): each register set, `handler` entered
 ; as an interrupt, what each held on return. Order AX BX CX DX SI DI BP DS
 ; ES in both arrays; DS stays DGROUP.

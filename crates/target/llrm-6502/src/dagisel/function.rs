@@ -138,6 +138,30 @@ pub fn select_function(
     select_function_with(module, name, cpu, false)
 }
 
+/// Where a product of two words is a widening multiply (two routines that add bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Widen {
+    /// Nowhere.
+    Off,
+    /// In functions not tuned for size: a level that prices a clock above a byte.
+    Unsized,
+    /// Everywhere: the module-level trial of 6502-WIDEN-IMAGE.
+    Always,
+}
+
+thread_local! {
+    static WIDEN_PRODUCTS: std::cell::Cell<Widen> = const { std::cell::Cell::new(Widen::Off) };
+}
+
+/// Set by the driver for each compile.
+pub fn set_widen_products(on: Widen) {
+    WIDEN_PRODUCTS.with(|f| f.set(on));
+}
+
+pub(super) fn widen_products() -> Widen {
+    WIDEN_PRODUCTS.with(|f| f.get())
+}
+
 /// Whether `function` is tuned for size (`optsize` or `minsize`).
 pub fn is_sized(function: &Function) -> bool {
     ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name))

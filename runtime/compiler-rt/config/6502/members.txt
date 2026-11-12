@@ -1,0 +1,15 @@
+# The 6502 runtime members that are hand-written assembly, one file per line (read by tools/6502/crlib.py, so ours_cr.py and mkrt.py agree).
+# Each exported symbol replaces the generic C member of the same name; later lines win over earlier ones (sf32_abi.s last: its public
+# __addsf3/__subsf3/__mulsf3/__divsf3 shims wrap the sf32.s and sf32_muldiv.s cores, whose own __addsf3.. exist only under STACKB).
+# Non-reentrant: sf32.inc and mul32x32.s keep their working cells in static storage. A float or 32x32 multiply from an interrupt
+# handler or from a recursive call chain that is already inside one is unsupported (llrm-target-6502 decides how it is refused).
+# Bit-exact against the host FPU on sim65: tests/asm6502/run.sh 4500 (OLDSHIM=1, with and without EDGE=1).
+config/6502/mul32x32.s
+config/6502/di64.s
+config/6502/umod64.s
+config/6502/cmp64.s
+config/6502/cmp32.s
+config/6502/sf32.s
+config/6502/sf32_muldiv.s
+config/6502/sf32_conv.s
+config/6502/sf32_abi.s

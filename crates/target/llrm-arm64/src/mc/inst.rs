@@ -393,6 +393,90 @@ impl Arrangement {
     }
 }
 
+/// The three-register integer vector operations (the "three same" class).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorOp {
+    Add,
+    Sub,
+    Mul,
+    And,
+    Bic,
+    Orr,
+    Orn,
+    Eor,
+    /// `ushl`/`sshl`: a shift by each lane's own (signed) amount.
+    Ushl,
+    Sshl,
+}
+
+impl VectorOp {
+    /// (`U`, `opcode`, `size` for the logical forms) of the encoding.
+    pub(super) fn fields(self) -> (u32, u32, Option<u32>) {
+        match self {
+            VectorOp::Add => (0, 0b10000, None),
+            VectorOp::Sub => (1, 0b10000, None),
+            VectorOp::Mul => (0, 0b10011, None),
+            VectorOp::Ushl => (1, 0b01000, None),
+            VectorOp::Sshl => (0, 0b01000, None),
+            VectorOp::And => (0, 0b00011, Some(0)),
+            VectorOp::Bic => (0, 0b00011, Some(1)),
+            VectorOp::Orr => (0, 0b00011, Some(2)),
+            VectorOp::Orn => (0, 0b00011, Some(3)),
+            VectorOp::Eor => (1, 0b00011, Some(0)),
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            VectorOp::Add => "add",
+            VectorOp::Sub => "sub",
+            VectorOp::Mul => "mul",
+            VectorOp::And => "and",
+            VectorOp::Bic => "bic",
+            VectorOp::Orr => "orr",
+            VectorOp::Orn => "orn",
+            VectorOp::Eor => "eor",
+            VectorOp::Ushl => "ushl",
+            VectorOp::Sshl => "sshl",
+        }
+    }
+
+    /// Whether the operation is the bitwise `.16b` form whatever the lanes.
+    pub fn is_logical(self) -> bool {
+        matches!(self, VectorOp::And | VectorOp::Bic | VectorOp::Orr | VectorOp::Orn | VectorOp::Eor)
+    }
+}
+
+/// The shifts of a vector by an immediate.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VectorShift {
+    Shl,
+    Ushr,
+    Sshr,
+}
+
+impl Arrangement {
+    /// The lane size in bits.
+    pub fn lane_bits(self) -> u32 {
+        match self {
+            Arrangement::B16 => 8,
+            Arrangement::H8 => 16,
+            Arrangement::S4 => 32,
+            Arrangement::D2 => 64,
+        }
+    }
+
+    /// `size` of the three-same encodings.
+    pub(super) fn size(self) -> u32 {
+        match self {
+            Arrangement::B16 => 0,
+            Arrangement::H8 => 1,
+            Arrangement::S4 => 2,
+            Arrangement::D2 => 3,
+        }
+    }
+}
+
 /// How a `movi`/`mvni` places its byte: `lsl` into a halfword or word lane, or
 /// `msl` (shifting ones in).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -779,6 +863,28 @@ pub enum Inst {
     VectorFill {
         rd: Vreg,
         fill: Fill,
+    },
+    /// A 16-byte integer vector operation on every lane: `add v.8h, v.8h,
+    /// v.8h`. The logical operations ignore `lanes` (they are `.16b`).
+    VectorBinary {
+        op: VectorOp,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
+    /// A 16-byte integer vector shifted by an immediate: `shl v.8h, v.8h, #3`.
+    VectorShift {
+        op: VectorShift,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        amount: u8,
+    },
+    /// `not v.16b` (`mvn`).
+    VectorNot {
+        rd: Vreg,
+        rn: Vreg,
     },
     Svc {
         imm16: u16,

@@ -94,6 +94,9 @@ fn straight(op: Op) -> bool {
 /// reads nothing new. A call, a raw line or an instruction not listed is not
 /// known to leave it dead.
 ///
+/// A scratch cell (`rc16`..) is clobbered by a call, which reads none of them: a store followed by a
+/// `jsr` before any read is dead.
+///
 /// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store to it is dead only
 /// when a write to it (the epilogue's restore) comes before every `rts`, and a call neither reads
 /// nor changes it (the callee saves it on entry and restores it), so the scan goes on past a `jsr`.
@@ -132,6 +135,16 @@ fn cell_dead_from(
             return !callee_saved && !results.contains(cell);
         }
         if inst.op == Op::Jsr && callee_saved {
+            continue;
+        }
+        // a call clobbers the scratch cells above the callee-saved ones and reads none of them
+        if inst.op == Op::Jsr && n >= 16 {
+            return true;
+        }
+        // a call of a routine that names no cell reads none of them
+        if inst.op == Op::Jsr
+            && matches!(&inst.operand, Operand::Direct(routine) if crate::routines::leaves_cells_alone(routine))
+        {
             continue;
         }
         let label = |inst: &Inst| {
@@ -842,9 +855,12 @@ fn forward_once(
     if load.op != Op::Lda || store.op != Op::Sta || s == t || cell_number(s).is_none() || cell_number(t).is_none() {
         return false;
     }
-    let mut lines = asm.lines.clone();
-    let mut changed = false;
-    for line in lines.iter_mut().skip(at + 2) {
+    let (s, t) = (s.clone(), t.clone());
+    // The reads are rewritten where they stand and put back if the copy stays
+    // (cloning the function per `lda; sta` pair was quadratic: 15x the cost of
+    // the whole compile of a nest of fills).
+    let mut rewritten: Vec<(usize, Operand)> = Vec::new();
+    for (index, line) in asm.lines.iter_mut().enumerate().skip(at + 2) {
         let Line::Inst(inst) = line else { break };
         if !straight(inst.op) {
             break;
@@ -856,26 +872,29 @@ fn forward_once(
             // an index reaches the cells above its base; a pointer reads two
             Operand::Indexed(c, _) if cell_number(c).is_some() => break,
             Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c)
-                if pointer_pair(c, t) || pointer_pair(c, s) =>
+                if pointer_pair(c, &t) || pointer_pair(c, &s) =>
             {
                 break;
             }
-            Operand::Direct(c) if c == t => {
+            Operand::Direct(c) if *c == t => {
                 if !reads_only(inst.op) {
                     break;
                 }
-                inst.operand = Operand::Direct(s.clone());
-                changed = true;
+                rewritten.push((index, std::mem::replace(&mut inst.operand, Operand::Direct(s.clone()))));
             }
-            Operand::Direct(c) if c == s && !reads_only(inst.op) => break,
+            Operand::Direct(c) if *c == s && !reads_only(inst.op) => break,
             _ => {}
         }
     }
-    if !changed || !cell_dead_from(&lines, at + 2, t, &asm.result_cells, &mut BTreeSet::new()) {
+    if rewritten.is_empty() || !cell_dead_from(&asm.lines, at + 2, &t, &asm.result_cells, &mut BTreeSet::new()) {
+        for (index, operand) in rewritten {
+            if let Line::Inst(inst) = &mut asm.lines[index] {
+                inst.operand = operand;
+            }
+        }
         return false;
     }
-    lines.remove(at + 1);
-    asm.lines = lines;
+    asm.lines.remove(at + 1);
     true
 }
 

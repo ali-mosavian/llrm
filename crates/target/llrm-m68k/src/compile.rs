@@ -123,8 +123,10 @@ pub struct Options {
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
-    /// phi elimination ([`crate::regalloc::shared_cse`]). Off until its corpus
-    /// A/B has no cell worse than main (11-09: O2 68000 +542 B, 27 worse).
+    /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
+    /// changed is also built without it and the cheaper kept
+    /// ([`crate::trial`]): shared values live longer, and across calls they
+    /// spill (11-12 corpus: 222 cells larger, 136 smaller, without the trial).
     pub shared_cse: bool,
     /// A value read in a block after an earlier one defines it is read from its
     /// register, as in the pin's MIR: what the hosted stages (MachineLICM) need
@@ -183,6 +185,13 @@ pub struct Options {
     /// tuning); a function that saved a register is also built without, and
     /// the cheaper kept. False is the pin's M68k.
     pub global_copies: bool,
+    /// A pass-through copy temp takes either register kind
+    /// ([`crate::regalloc::relax_copy_only_classes`], DEVIATE C17); a function
+    /// that saved a callee-saved register is also built with it, and the
+    /// cheaper kept.
+    pub relax_classes: bool,
+    /// Make a `moveq` constant again where it is read ([`crate::moveqremat`]).
+    pub remat_constants: bool,
     /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
     /// [`crate::dagisel::mulprice`]).
     pub mul: crate::dagisel::mulprice::Mode,
@@ -228,6 +237,8 @@ impl Options {
         compare_destinations: false,
         carry_chain: true,
         global_copies: true,
+        relax_classes: false,
+        remat_constants: false,
         mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
@@ -252,7 +263,7 @@ impl Default for Options {
             reuse_shift_flags: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
-            shared_cse: false,
+            shared_cse: true,
             direct_copies: false,
             shared_licm: false,
             shared_prelude: false,
@@ -267,6 +278,8 @@ impl Default for Options {
             compare_destinations: true,
             carry_chain: true,
             global_copies: true,
+            relax_classes: true,
+            remat_constants: true,
             mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
@@ -291,6 +304,13 @@ pub fn items(
 /// cheaper kept (`crate::trial`): each is priced before the code is known. A
 /// function that saved a register is last built with the pin's join order,
 /// which replaces the tuned one only when cheaper.
+///
+/// A function that saved a callee-saved register is also built once more with
+/// the class relaxation ([`Options::relax_classes`]) on the choices the trials
+/// made, and the relaxed build kept only where cheaper: the relaxation exists
+/// to free a scratch register for a value, so a build that saves none has
+/// nothing to gain. One extra build, not the sequence again: the sequence
+/// cost a corpus 1.64 times the instructions, one file twice.
 pub fn items_with(
     module: &Module,
     name: &str,
@@ -304,42 +324,96 @@ pub fn items_with(
     } else {
         module
     };
-    let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
-    let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    let options = Options { mid_end: false, global_copies: options.global_copies, ..options };
+    let wants_size = size_build(module, name, options);
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    // The relaxation is the last choice of a build, so it is made before the
+    // two builds of the shared `MachineCSE` are compared.
+    let prefixes = Prefixes::default();
+    let finished = |options: Options| -> Result<(Vec<Item>, bool), String> {
+        let (plain, saved, chosen, shared) =
+            items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
+        if !options.relax_classes || !saved {
+            return Ok((plain, shared));
+        }
+        let (relaxed, touched) = items_once(module, name, cpu, Options { relax_classes: true, ..chosen }, &prefixes)?;
+        let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
+        Ok((if relax { relaxed } else { plain }, shared))
+    };
+    let (with, shared) = finished(options)?;
+    // The shared `MachineCSE` lengthens live ranges, and across calls they
+    // spill. A function it changed is built through the whole sequence both
+    // ways (the other trials' choices depend on the shape), the cheaper kept.
+    if shared {
+        let (without, _) = finished(Options { shared_cse: false, ..options })?;
+        if !crate::trial::keeps(&with, &without, cpu, price) {
+            return Ok(without);
+        }
+    }
+    Ok(with)
+}
+
+/// The trials of [`items_with`] on a module the mid-end has run on: the items,
+/// whether the first build saved a callee-saved register, and the options the
+/// trials ended on.
+fn items_trials(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
+    prefixes: &Prefixes,
+) -> Result<(Vec<Item>, bool, Options, bool), String> {
+    let mut options = options;
+    let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
+    let saved = touched.global_copies;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {} shared_cse {}",
             touched.tail_dup,
             touched.return_dup,
             touched.class_split,
             touched.compare_destinations,
             touched.carry_chain,
             touched.global_copies,
-            touched.mul_trial
+            touched.mul_trial,
+            touched.remat_constants,
+            touched.shared_cse
         );
     }
     if !touched.any() {
-        return Ok(kept);
+        return Ok((kept, saved, options, touched.shared_cse));
     }
-    let wants_size = options.size
-        || module
-            .named(name)
-            .and_then(|id| module.global(id).function())
-            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    let wants_size = size_build(module, name, options);
     let price = crate::timing::Price::of(wants_size, options.strict);
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
     if touched.mul_trial {
-        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
-        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
+        use crate::dagisel::mulprice::Mode;
+        let without = Options { mul: Mode::Kept, ..options };
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        if touched.mul_synthesized {
+            // DEVIATE G2: the pin's shapes are judged as before (clocks
+            // count wherever they run); a chain beyond them only against
+            // that winner, and its clocks only inside loops
+            let shapes = Options { mul: Mode::TrialPinShapes, ..options };
+            let (pin, _) = items_once(module, name, cpu, shapes, prefixes)?;
+            let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
+                (plain, without)
+            } else {
+                (pin, shapes)
+            };
+            if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+                kept = base;
+                options = base_options;
+            }
+        } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
             kept = plain;
             options = without;
         }
     }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -347,7 +421,7 @@ pub fn items_with(
     }
     if touched.tail_dup {
         let without = Options { tail_duplicate: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -355,7 +429,7 @@ pub fn items_with(
     }
     if touched.return_dup {
         let without = Options { return_dup: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -364,16 +438,24 @@ pub fn items_with(
     if touched.global_copies {
         // the default stands unless the other join order is cheaper
         let other = Options { global_copies: false, ..options };
-        let (items, _) = items_once(module, name, cpu, other)?;
+        let (items, _) = items_once(module, name, cpu, other, prefixes)?;
         if crate::trial::keeps(&items, &kept, cpu, price) {
             kept = items;
             options = other;
         }
     }
+    if touched.remat_constants {
+        let without = Options { remat_constants: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     // last: the two builds compared are final, the other choices made
     if touched.carry_chain {
         let without = Options { carry_chain: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
@@ -381,12 +463,12 @@ pub fn items_with(
     }
     if touched.compare_destinations {
         let without = Options { compare_destinations: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
         }
     }
-    Ok(kept)
+    Ok((kept, saved, options, touched.shared_cse))
 }
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
@@ -449,6 +531,17 @@ struct Touched {
     global_copies: bool,
     /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
     mul_trial: bool,
+    /// The build widened the class of a pass-through copy temp.
+    relax_classes: bool,
+    /// The build marked a `moveq` constant rematerializable
+    /// ([`crate::moveqremat`]).
+    remat_constants: bool,
+    /// The shared `MachineCSE` changed the function.
+    shared_cse: bool,
+    /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
+    /// trial credits clocks only inside loops, since a straight-line multiply
+    /// may never run.
+    mul_synthesized: bool,
 }
 
 impl Touched {
@@ -460,7 +553,29 @@ impl Touched {
             || self.carry_chain
             || self.global_copies
             || self.mul_trial
+            || self.remat_constants
     }
+}
+
+/// Whether `name` is built for size: the level, or an `optsize`/`minsize`
+/// attribute.
+fn size_build(
+    module: &Module,
+    name: &str,
+    options: Options,
+) -> bool {
+    options.size
+        || module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
+}
+
+fn same_instructions(
+    a: &crate::mfunc::MFunction,
+    b: &crate::mfunc::MFunction,
+) -> bool {
+    a.blocks.len() == b.blocks.len() && a.blocks.iter().zip(&b.blocks).all(|(a, b)| a.insts == b.insts)
 }
 
 /// The bytes of `items` as assembled (a branch not yet sized counts 6).
@@ -496,15 +611,118 @@ pub fn libcalls_for(
     crate::libcalls::mask(&kinds)
 }
 
+/// Everything that decides what selection and emission make of a function: the
+/// trials of [`items_with`] that change none of it share one result.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Selection {
+    source_order: bool,
+    indexed: bool,
+    short: bool,
+    absolute_data: bool,
+    wants_size: bool,
+    strict: bool,
+    carry_chain: bool,
+    mul: crate::dagisel::mulprice::Mode,
+    libcalls: Vec<crate::libcalls::Kind>,
+    direct_copies: bool,
+    copy_destinations: bool,
+}
+
+thread_local! {
+    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0 }) };
+}
+
+/// How often this thread ran each stage of a build: the regression tests of
+/// the shared stages count them.
+#[derive(Clone, Copy, Debug)]
+pub struct Runs {
+    pub builds: usize,
+    pub selections: usize,
+    /// The rewrites up to the shared `MachineCSE`.
+    pub early: usize,
+    /// The rewrites from `MachineSink` to allocation.
+    pub late: usize,
+}
+
+pub fn runs() -> Runs {
+    RUNS.with(std::cell::Cell::get)
+}
+
+fn counted(count: impl FnOnce(&mut Runs)) {
+    RUNS.with(|runs| {
+        let mut now = runs.get();
+        count(&mut now);
+        runs.set(now);
+    });
+}
+
+/// The function as emitted, with whether the build decomposed a multiply and
+/// took a chain beyond the pin's shape.
+type Emission = (crate::mfunc::MFunction, bool, bool);
+
+/// A result kept by the inputs that made it.
+struct Memo<K, V>(std::cell::RefCell<llrm_support::hash::HashMap<K, V>>);
+
+impl<K, V> Default for Memo<K, V> {
+    fn default() -> Self {
+        Memo(Default::default())
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> Memo<K, V> {
+    fn get_or(
+        &self,
+        key: K,
+        make: impl FnOnce() -> Result<V, String>,
+    ) -> Result<V, String> {
+        if let Some(found) = self.0.borrow().get(&key) {
+            return Ok(found.clone());
+        }
+        let made = make()?;
+        self.0.borrow_mut().insert(key, made.clone());
+        Ok(made)
+    }
+}
+
+/// The function before allocation, with what its rewrites touched.
+type Prepared = (crate::mfunc::MFunction, Touched);
+
+/// What the builds of one function share, stage by stage. Each key is the
+/// inputs the stage and those before it read, so a trial that changes only a
+/// later option takes the earlier stages' result: selection and emission (a
+/// third of a build; only the multiply and carry-chain trials change its
+/// inputs), the rewrites up to the shared `MachineCSE`, and the rest of
+/// the rewrites before allocation. The options as text: a new option is in
+/// every key until it is taken out below.
+#[derive(Default)]
+struct Prefixes {
+    emitted: Memo<Selection, Emission>,
+    early: Memo<(Selection, String), Prepared>,
+    late: Memo<(Selection, String), Prepared>,
+}
+
+/// The options that only the stages after `MachineCSE` read, left out of the
+/// key of the stage before it.
+fn before_late_stage(options: Options) -> Options {
+    Options { relax_classes: false, remat_constants: false, ..before_allocation(options) }
+}
+
+/// The options that only allocation and the stages after it read.
+fn before_allocation(options: Options) -> Options {
+    Options { global_copies: false, tail_duplicate: false, return_dup: false, ..options }
+}
+
 /// One build of the function, and the optional rewrites that changed it.
 fn items_once(
     module: &Module,
     name: &str,
     cpu: Cpu,
     options: Options,
+    prefixes: &Prefixes,
 ) -> Result<(Vec<Item>, Touched), String> {
     // one full select, allocate and emit; a function with optional rewrites
     // runs it again per trial
+    counted(|runs| runs.builds += 1);
     let _build = llrm_support::debug::span("m68k build");
     if llrm_support::debug::enabled("builds") {
         eprintln!("[builds] {name}");
@@ -521,96 +739,147 @@ fn items_once(
     } else {
         Vec::new()
     };
-    let chain = crate::dagisel::mulprice::Chain::of(options.mul);
-    let blocks = select_function_with(
-        module,
-        name,
-        cpu,
-        options.source_order,
-        options.indexed,
-        options.short,
-        options.code_model.absolute_data(),
+    let selection = Selection {
+        source_order: options.source_order,
+        indexed: options.indexed,
+        short: options.short,
+        absolute_data: options.code_model.absolute_data(),
         wants_size,
-        options.carry_chain,
-        crate::timing::Price::of(wants_size, options.strict),
-        &chain,
-        &libcalls,
-    )?;
-    let mut function = emit_with(
-        name,
-        &blocks,
-        Shape {
-            direct_copies: options.direct_copies,
-            // what the hosted stages read: a result is defined in its copy's
-            // register
-            copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
-        },
-    )?;
-    let mut touched = Touched::default();
-    touched.carry_chain = options.carry_chain && uses_extend(&function);
-    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
-    function.returns_twice =
-        module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
-    if options.short {
-        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters, options.rematerialize_arguments);
-        if options.reuse_shift_flags {
-            crate::cmpshift::reuse_shift_flags(&mut function);
-        }
-        crate::shiftadd::shifts_to_adds(&mut function);
-        crate::negadd::negative_adds_to_subq(&mut function);
-        crate::addrroles::address_roles(&mut function);
-        crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
-        crate::foldload::fold_loads(&mut function);
-        crate::divrem::remainders_from_quotients(&mut function);
-        if wants_size {
-            crate::foldarg::fold_argument_loads(&mut function);
-        }
-        if options.compare_destinations {
-            touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
-        }
-        // priced inside the pass (`Price`), so a function it changed is not
-        // built again
-        if options.sext_adds {
-            crate::sextacc::sign_extended_words(
-                &mut function,
-                cpu,
-                crate::timing::Price::of(wants_size, options.strict),
-            );
-        }
-        if options.class_split {
-            touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
-        }
-        if cpu.at_least(Cpu::M68020) {
-            crate::scaledindex::scale_indexes(&mut function);
-        }
-        if options.indexed && options.post_inc_across_blocks {
-            crate::loopinc::post_increment_across_blocks(&mut function);
-        }
-    }
-    function.odds = Some(edge_odds(module, name)?);
-    expand_cmov(&mut function)?;
-    if options.shared_licm {
-        function = crate::regalloc::shared_licm(&function, wants_size)?;
-    }
-    if options.shared_cse {
-        function = crate::regalloc::shared_cse(&function)?;
-    }
-    machine_sink(&mut function);
-    if options.short && options.reuse_shift_out_flags {
-        crate::cmpcarry::reuse_shift_out_flags(&mut function);
-    }
-    crate::regalloc::split_flag_edges(&mut function);
-    if !options.shared_prelude {
-        eliminate_phis_with(&mut function, false);
-    }
-    fold_reserved_copies(&mut function);
-    if options.short {
-        crate::commutative::mark_commutative(&mut function, wants_size);
-    }
-    if !options.shared_prelude {
-        commute_tied(&mut function);
-        two_address(&mut function);
-    }
+        strict: options.strict,
+        carry_chain: options.carry_chain,
+        mul: options.mul,
+        libcalls: libcalls.clone(),
+        direct_copies: options.direct_copies,
+        // what the hosted stages read: a result is defined in its copy's
+        // register
+        copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+    };
+    let (emitted, mul_used, mul_synthesized) = prefixes
+        .emitted
+        .get_or(
+            selection.clone(),
+            || {
+                let selection = &selection;
+                counted(|runs| runs.selections += 1);
+                let chain = crate::dagisel::mulprice::Chain::of(selection.mul);
+                let blocks = {
+                    let _span = llrm_support::debug::span("m68k select");
+                    select_function_with(
+                        module,
+                        name,
+                        cpu,
+                        selection.source_order,
+                        selection.indexed,
+                        selection.short,
+                        selection.absolute_data,
+                        selection.wants_size,
+                        selection.carry_chain,
+                        crate::timing::Price::of(selection.wants_size, selection.strict),
+                        &chain,
+                        &selection.libcalls,
+                    )?
+                };
+                let _span = llrm_support::debug::span("m68k emit");
+                let function = emit_with(
+                    name,
+                    &blocks,
+                    Shape { direct_copies: selection.direct_copies, copy_destinations: selection.copy_destinations },
+                )?;
+                Ok((function, chain.used(), chain.synthesized()))
+            },
+        )?;
+    let sp = llrm_support::debug::span("m68k prealloc");
+    let (function, touched) =
+        prefixes.early.get_or((selection.clone(), format!("{:?}", before_late_stage(options))), || {
+            counted(|runs| runs.early += 1);
+            let mut function = emitted.clone();
+            let mut touched = Touched::default();
+            touched.carry_chain = options.carry_chain && uses_extend(&function);
+            touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && mul_used;
+            touched.mul_synthesized = mul_synthesized;
+            function.returns_twice =
+                module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
+            if options.short {
+                crate::cmpelim::eliminate_tests(
+                    &mut function,
+                    options.hoist_flag_setters,
+                    options.rematerialize_arguments,
+                );
+                if options.reuse_shift_flags {
+                    crate::cmpshift::reuse_shift_flags(&mut function);
+                }
+                crate::shiftadd::shifts_to_adds(&mut function);
+                crate::negadd::negative_adds_to_subq(&mut function);
+                crate::addrroles::address_roles(&mut function);
+                crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
+                crate::foldload::fold_loads(&mut function);
+                crate::divrem::remainders_from_quotients(&mut function);
+                if wants_size {
+                    crate::foldarg::fold_argument_loads(&mut function);
+                }
+                if options.compare_destinations {
+                    touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
+                }
+                // priced inside the pass (`Price`), so a function it changed is
+                // not built again
+                if options.sext_adds {
+                    crate::sextacc::sign_extended_words(
+                        &mut function,
+                        cpu,
+                        crate::timing::Price::of(wants_size, options.strict),
+                    );
+                }
+                if options.class_split {
+                    touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
+                }
+                if cpu.at_least(Cpu::M68020) {
+                    crate::scaledindex::scale_indexes(&mut function);
+                }
+                if options.indexed && options.post_inc_across_blocks {
+                    crate::loopinc::post_increment_across_blocks(&mut function);
+                }
+            }
+            function.odds = Some(edge_odds(module, name)?);
+            expand_cmov(&mut function)?;
+            if options.shared_licm {
+                function = crate::regalloc::shared_licm(&function, wants_size)?;
+            }
+            if options.shared_cse {
+                let shared = crate::regalloc::shared_cse(&function)?;
+                touched.shared_cse = !same_instructions(&function, &shared);
+                function = shared;
+            }
+            Ok((function, touched))
+        })?;
+    let (mut function, mut touched) =
+        prefixes.late.get_or((selection, format!("{:?}", before_allocation(options))), || {
+            counted(|runs| runs.late += 1);
+            let (mut function, mut touched) = (function, touched);
+            machine_sink(&mut function);
+            if options.short && options.reuse_shift_out_flags {
+                crate::cmpcarry::reuse_shift_out_flags(&mut function);
+            }
+            crate::regalloc::split_flag_edges(&mut function);
+            if !options.shared_prelude {
+                eliminate_phis_with(&mut function, false);
+            }
+            fold_reserved_copies(&mut function);
+            if options.short {
+                crate::commutative::mark_commutative(&mut function, wants_size);
+            }
+            if !options.shared_prelude {
+                commute_tied(&mut function);
+                two_address(&mut function);
+            }
+            if options.indexed && options.relax_classes && !options.shared_prelude {
+                touched.relax_classes = crate::regalloc::relax_copy_only_classes(&mut function);
+            }
+            if options.remat_constants {
+                touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
+            }
+            Ok((function, touched))
+        })?;
+    drop(sp);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     let allocating = llrm_support::debug::span("m68k allocate");
@@ -629,6 +898,7 @@ fn items_once(
     };
     drop(allocating);
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    let sp = llrm_support::debug::span("m68k postalloc");
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
@@ -679,6 +949,8 @@ fn items_once(
         }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
+    drop(sp);
+    let sp = llrm_support::debug::span("m68k expand");
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).
@@ -718,6 +990,7 @@ fn items_once(
         });
     }
     out.extend(jump_tables(&function, number));
+    drop(sp);
     Ok((out, touched))
 }
 

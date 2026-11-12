@@ -1715,13 +1715,13 @@ b1:
             "cdq",
             "shld edx, eax, 16",
             "shl eax, 16",
-            "mov ecx, edx",
-            "sar ecx, 31",
-            "shr ecx, 22",
-            "xor ebx, ebx",
-            "add ecx, eax",
-            "adc ebx, edx",
-            "shrd ecx, ebx, 10",
+            "mov ebx, edx",
+            "sar ebx, 31",
+            "shr ebx, 22",
+            "xor ecx, ecx",
+            "add ebx, eax",
+            "adc ecx, edx",
+            "shld ecx, ebx, 22",
             "shld edx, ecx, 16",
             "mov ax, cx",
             "pop bp",
@@ -1853,8 +1853,9 @@ define i1 @uge(double %a, double %b) addrspace(1) {
             .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
-    assert_eq!(answered("ult"), ["setb al"]);
-    assert_eq!(answered("uge"), ["setbe al"]);
+    // DEVIATE X87-FCMP-AH: at a 486 the status word's carry bit is `test ah, 1`; "below or equal" is the mask 65 (C0 | C3).
+    assert_eq!(answered("ult"), ["test ah, 1", "setne al"]);
+    assert_eq!(answered("uge"), ["test ah, 65", "setne al"]);
 }
 
 /// A port below 256 is an immediate, any other is in dx; the byte is in al.
@@ -4507,8 +4508,12 @@ b2:
         .map(|line| line.trim().to_owned())
         .collect();
     let writes_ax = |one: &str| {
-        one.split_once(' ')
-            .is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"))
+        // `test` and `cmp` read their first operand (the 486 tests `ah` instead of `sahf`).
+        !one.starts_with("test ")
+            && !one.starts_with("cmp ")
+            && one
+                .split_once(' ')
+                .is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"))
     };
     let mut status = false;
     for one in &got {

@@ -38,7 +38,7 @@ Clocks / bytes of the kernel, i486 model, `tools/rows/row.sh`; main is `854bb7ef
 | recpow | -O3 | 430457 / 888 | 434368 / 315 > | 424974 / 427 |
 | recsum | -O3 | 77291 / 83 | 79296 / 91 > | 79296 / 91 > |
 
-ipa-cp clones are off at -O3 (on at -Omax and under `-fipa-cp-clone`): the pin makes none. recchop -O3 is 101 lines of assembly with three procs where the clones made 1378 and eleven; the recchop -O3 row above predates this and its clocks and bytes are not re-measured.
+ipa-cp clones are off at -O3 unless the target says otherwise (on at -Omax and under `-fipa-cp-clone`; x86-m32 takes gcc's -O3 default, DEVIATE IPACP-O3): the pin makes none. recchop -O3 is 101 lines of assembly with three procs where the clones made 1378 and eleven; the recchop -O3 row above predates this and its clocks and bytes are not re-measured.
 
 No row is above base in clocks at any level (34 below, 10 equal of the 44 rows of the recursion programs at -O1/-O2/-O3/-Os); recchop -O3 is under main (5932 against 5946). Clocks go down and bytes go up on the rows that gain: fib 537 to 392 bytes is both, x_hanoi2 and recchop trade 4-7x bytes for clocks, and the three loop-bearing rows (bintree, quicksort, x_mergesort) pay 3-5x main's bytes for 0-8% clocks against base.
 
