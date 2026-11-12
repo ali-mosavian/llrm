@@ -202,6 +202,12 @@ fn the_compact_word_division_agrees_with_the_fast_one() {
         (65535, 32768, 1, 32767),
         (65535, 65535, 1, 0),
         (40000, 0, 65535, 40000),
+        (7, 2, 3, 1),
+        (999, 1000, 0, 999),
+        (1000, 999, 1, 1),
+        (32768, 32768, 1, 0),
+        (65535, 2, 32767, 1),
+        (65535, 16385, 3, 16380),
     ] {
         let n = format!("c{a}-{b}");
         assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
@@ -823,4 +829,37 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     let saved: Vec<i64> = shapes.iter().map(|&b| call("__mulsi3", b) - call("__mulsi3_fast", b)).collect();
     let mean = saved.iter().sum::<i64>() as f64 / saved.len() as f64;
     assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
+}
+
+/// The compact word divide ran its 16 bit steps whatever the quotient: `gcd`'s `a % b` (quotients of one or
+/// two bits) took about 430 clocks a call, 2.2x llvm-mos's loop around it (idiv_loop_os -Os: 2,374,468
+/// clocks against 1,083,830, 2026-11-12). It runs for the quotient's bits.
+#[test]
+fn a_compact_word_modulo_runs_for_the_quotients_bits() {
+    let clocks = |name: &str, a: u16, b: u16| {
+        let setup = two_words(a, b);
+        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __umodhi3c\n"), "");
+        with - common::cycles_with(&format!("{name}-none"), &setup, "")
+    };
+    let (one, two) = (clocks("umodc-q1", 1000, 600), clocks("umodc-q2", 2300, 1000));
+    assert!(one < 200, "1000 % 600: {one} clocks");
+    assert!(two < 300, "2300 % 1000: {two} clocks");
+}
+
+/// A divide-remainder pair is one `__udivhi3` call that leaves the remainder in `rc6:rc7`; at -Os that call
+/// is `__udivhi3c`, which must too (the aligned loop keeps the remainder in `rc2:rc3`).
+#[test]
+fn the_compact_unsigned_divide_leaves_the_remainder_in_rc6_rc7() {
+    for (a, b, remainder) in [(50000, 7, 6), (2300, 1000, 300), (7, 2, 1), (999, 1000, 999), (65535, 16385, 16380)] {
+        let n = format!("rem{a}-{b}");
+        let low = common::run_with_runtime(
+            &format!("{n}-lo"),
+            &format!("{}  jsr __udivhi3c\n  lda rc6\n", two_words(a, b)),
+        );
+        let high = common::run_with_runtime(
+            &format!("{n}-hi"),
+            &format!("{}  jsr __udivhi3c\n  lda rc7\n", two_words(a, b)),
+        );
+        assert_eq!(high << 8 | low, remainder, "{a} % {b}");
+    }
 }
