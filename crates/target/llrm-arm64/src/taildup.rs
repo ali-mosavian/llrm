@@ -40,19 +40,37 @@ use crate::layout::label_of;
 use crate::mc::inst::{Gpr, Inst, Logic, Shift, Target, Width};
 use crate::mc::visit::{Reg, RegRef, Role};
 
-/// `TailDuplicator::shouldTailDuplicate` for `block`.
+/// Whether `inst` is a conditional branch to a label.
+fn is_conditional(inst: &Inst) -> bool {
+    matches!(inst, Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
+}
+
+/// `TailDuplicator::shouldTailDuplicate` for `block`, followed in layout by
+/// `next`: the instructions the copy runs, ending in its way on (a block that
+/// falls through ends in the jump to `next`).
 fn copyable(
     block: &Lowered,
-    own: &str,
+    next: Option<&str>,
     size: usize,
-) -> bool {
-    let ends = matches!(
-        block.insts.last(),
-        Some(Inst::Branch { link: false, .. } | Inst::Ret { .. })
-    );
-    ends && block.insts.len() <= size
-        && !block.insts.iter().any(|inst| matches!(inst, Inst::Cfi(_) | Inst::Label(_)))
-        && !block.insts.iter().filter_map(label_of).any(|label| label == own)
+) -> Option<Vec<Inst>> {
+    if block.insts.iter().any(|inst| matches!(inst, Inst::Cfi(_) | Inst::Label(_))) {
+        return None;
+    }
+    let own = block.label.as_str();
+    let mut insts = block.insts.clone();
+    // A conditional branch ends the block with the way it does not take:
+    // the jump after it is not an instruction of the pin's block, which
+    // falls through.
+    let counted = match insts.as_slice() {
+        [.., before, Inst::Branch { link: false, .. }] if is_conditional(before) => insts.len() - 1,
+        [.., last] if is_conditional(last) => {
+            insts.push(Inst::Branch { link: false, target: Target::Label(next?.to_owned()) });
+            insts.len() - 2
+        }
+        _ => insts.len(),
+    };
+    let ends = matches!(insts.last(), Some(Inst::Branch { link: false, .. } | Inst::Ret { .. }));
+    (ends && counted <= size && !insts.iter().filter_map(label_of).any(|label| label == own)).then_some(insts)
 }
 
 /// Copies the short blocks into their sole-exit jumpers; returns each
@@ -62,12 +80,15 @@ pub fn tail_duplicate(
     optsize: bool,
 ) -> Vec<(String, String)> {
     let size = if optsize { 1 } else { 2 };
-    let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
-        .iter()
-        .enumerate()
-        .skip(1)
-        .filter(|(_, block)| copyable(block, &block.label, size))
-        .map(|(_, block)| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
+    let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = (1..blocks.len())
+        .filter_map(|at| {
+            let block = &blocks[at];
+            let next = blocks.get(at + 1).map(|next| next.label.as_str());
+            let insts = copyable(block, next, size)?;
+            let mut locs = block.locs.clone();
+            locs.resize(insts.len(), None);
+            Some((block.label.clone(), (insts, locs)))
+        })
         .collect();
     let mut copies = Vec::new();
     if short.is_empty() {
