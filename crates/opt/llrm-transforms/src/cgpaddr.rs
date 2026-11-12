@@ -180,7 +180,7 @@ impl FunctionPass for CgpAddr {
         // A closing phi (`lcssa`) whose arms are all one value is that value:
         // nothing after this needs loop-closed form, and isel cannot
         // fold a phi into an addressing mode.
-        let merged = crate::emptyblocks::eliminated(unit.context, unit.function);
+        let merged = crate::emptyblocks::eliminated(unit.context, unit.layout, analyses, unit.function);
         // `dupRetToEnableTailCallOpts`: a return after a tail call is the
         // call's.
         let merged =

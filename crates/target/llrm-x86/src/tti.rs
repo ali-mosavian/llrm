@@ -930,6 +930,10 @@ impl Tti for X86 {
         self.tuning.lftr_any_stride
     }
 
+    fn mul_chains_hot_at_size(&self) -> bool {
+        self.tuning.mul_chains_hot_at_size
+    }
+
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
     }

@@ -141,6 +141,12 @@ fn cell_dead_from(
         if inst.op == Op::Jsr && n >= 16 {
             return true;
         }
+        // a call of a routine that names no cell reads none of them
+        if inst.op == Op::Jsr
+            && matches!(&inst.operand, Operand::Direct(routine) if crate::routines::leaves_cells_alone(routine))
+        {
+            continue;
+        }
         let label = |inst: &Inst| {
             let name = inst.target()?;
             lines.iter().position(|l| *l == Line::Label(name.to_owned()))
