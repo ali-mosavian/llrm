@@ -230,7 +230,21 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
-    @unittest.skipUnless(bench.DOSERROR_OBJ.exists(), "needs error086.obj from an Open Watcom v2 clib build in the tree tools/ow-fetch.sh makes")
+    @unittest.skipUnless(bench.DOSERROR_ASM.exists(), "needs error086.asm from the Open Watcom v2 tree tools/ow-fetch.sh makes")
+    def test_watcom_stft_single_prints_its_output_through_a_far_doserror(self):
+        """stft_single's Watcom row died with UC_ERR_INSN_INVALID: error086.obj returns near and clibm.lib's `_dos_open` calls it far, so the first DOS error returned into the stack."""
+        import tempfile
+
+        name = "stft_single"
+        variant = next(one for one in bench.variants(bench.BENCH / name) if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
+            built = bench.build_watcom(variant, "O1", Path(where), "F000")
+            self.assertNotIsInstance(built, str, built)
+            obj = next(built[0].parent.glob(built[0].stem + ".[oO][bB][jJ]"))
+            got = bench.measure(("F000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / name), obj, bench.input_files(variant)))
+        self.assertGreater(got.get("instructions", 0), 0, got)
+
+    @unittest.skipUnless(bench.DOSERROR_ASM.exists(), "needs error086.asm from the Open Watcom v2 tree tools/ow-fetch.sh makes")
     def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
         """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
         import tempfile
@@ -1500,11 +1514,19 @@ def test_a_noted_row_is_counted_in_the_header_by_its_note():
     assert bench.note_lines(measured) == ["NOTE n (2 cells)"]
 
 
-def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkeypatch):
-    """stft_single's Watcom build died at jwlink E2028 `__doserror_` undefined (clibm.lib's creatdos and opendos want it; the shipped dictionary has no definition): the Watcom column had no row. The link is retried with error086.obj, the module that defines it."""
-    obj = tmp_path / "error086.obj"
-    obj.write_bytes(b"")
-    monkeypatch.setattr(bench, "DOSERROR_OBJ", obj)
+def test_watcom_links_a_far_error086_when_the_library_has_no_doserror(tmp_path, monkeypatch):
+    """stft_single's Watcom build died at jwlink E2028 `__doserror_` undefined (clibm.lib's creatdos and opendos want it; the shipped dictionary has no definition): the Watcom column had no row. The link is retried with error086 assembled for the medium model (far return: the tree's object returns near and the library calls it far)."""
+    asm = tmp_path / "error086.asm"
+    asm.write_text("xdefp __doserror_\ndefn __doserror_\nret\nxrefn __set_errno_dos\n")
+    monkeypatch.setattr(bench, "DOSERROR_ASM", asm)
+    assembled = []
+
+    def run(command, *a, **k):
+        if "bwasm" in command[0]:
+            assembled.append(Path(next(word for word in command if word.endswith(".asm"))).read_text())
+            Path(next(word for word in command if word.startswith("-fo="))[4:]).write_bytes(b"")
+        return types.SimpleNamespace(returncode=0, stderr="", stdout="")
+
     links = []
 
     def host(command, *a, **k):
@@ -1514,14 +1536,16 @@ def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkey
 
     monkeypatch.setattr(bench.dosbatch, "_host", host)
     monkeypatch.setattr(bench.dosbatch, "c_support", lambda *a, **k: [])
-    monkeypatch.setattr(bench.cpulimit, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+    monkeypatch.setattr(bench.cpulimit, "run", run)
     variant = next(one for one in bench.variants(bench.BENCH / "hanoi") if one.language == "c")
     work = tmp_path / "w"
     work.mkdir()
     (work / "F000.obj").write_bytes(b"")
     built = bench.build_watcom(variant, "O2", work, "F000")
     assert not isinstance(built, str), built
-    assert str(obj) not in links[0] and str(obj) in links[1]
+    assert str(work / "error086.obj") not in links[0] and str(work / "error086.obj") in links[1]
+    assert "defp" in assembled[0] and "defn" not in assembled[0] and "xrefp" in assembled[0], assembled
+    assert "ret" in assembled[0]
 
 
 def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):

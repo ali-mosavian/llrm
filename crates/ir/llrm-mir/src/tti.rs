@@ -2428,6 +2428,23 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE LU24 (`lsr_solve.rs`): the search's required-register rule
+    /// ("formulae that do not use a register the solution so far could
+    /// share are ignored") is left off for address uses, as the pin does for
+    /// post-indexed targets: the cost model weighs a pointer that steps
+    /// against the index and base add it replaces.
+    fn lsr_address_left_to_cost_model(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU23 (`lsr_use.rs`): in the baseline, an address `gep p, n` of
+    /// a pointer in a register and a counter that is the only phi is a base
+    /// add each trip (`num_base_adds`), not a recurrence of its own. False
+    /// where the add folds into the access (the pin's x86).
+    fn lsr_written_pointer_add_is_base_add(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU22 (`lsr_use.rs`): an addrec of another loop that is the
     /// extension of a phi of that loop (`zext i8 j`) is as free as the phi
     /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
