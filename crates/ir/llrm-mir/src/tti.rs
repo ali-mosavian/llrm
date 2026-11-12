@@ -1303,6 +1303,11 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::pops_arguments_at_size`.
+    fn pops_arguments_at_size(&self) -> bool {
+        true
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
