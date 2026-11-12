@@ -1132,6 +1132,10 @@ impl Tti for X86 {
         self.tuning.rotation_guard_must_fold_at_size
     }
 
+    fn load_pre_off_at_size(&self) -> bool {
+        self.tuning.load_pre_off_at_size
+    }
+
     fn rotation_trial_at_size(&self) -> bool {
         self.tuning.rotation_trial_at_size
     }
