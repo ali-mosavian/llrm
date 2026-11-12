@@ -112,7 +112,11 @@ pub fn target_lowering() -> TargetLowering {
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     // no rotate or funnel shift instruction: shifts and an or (`expandROT`,
     // `expandFunnelShift`)
-    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[Rotl, Rotr], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[FShl, FShr], &[MVT::I8], Action::Expand);
+    // `MatchRotate` makes `fshl` of the two shifts of a long shifted by one; a word funnel by 15 left or 1 right is
+    // `FSHR1`, the other amounts are the shifts and an or again
+    set(&[FShl, FShr], &[MVT::I16], Action::Custom);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
@@ -379,6 +383,12 @@ impl Hooks for Z80Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
+            ISD::FShr => (dag.constant(dag.operand(node, 2)) == Some(1)).then_some(node),
+            ISD::FShl if dag.constant(dag.operand(node, 2)) == Some(15) => {
+                let (high, low) = (dag.operand(node, 0), dag.operand(node, 1));
+                let one = dag.get_constant(1, dag.value_type(dag.operand(node, 2)));
+                Some(dag.get_node(ISD::FShr, EVT::I16, &[high, low, one]))
+            }
             ISD::Sub => Some(lower_sub(dag, node)),
             ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry if dag.value_type(node) == EVT::I16 => {
                 Some(lower_carry_op(dag, node))

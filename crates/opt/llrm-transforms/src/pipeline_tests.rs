@@ -3240,3 +3240,14 @@ b:
     let after = run(pipeline::Options::standard());
     assert!(!after.contains("select") && after.contains("add i32 %x, 1"), "{after}");
 }
+
+/// wasm32 shift_int32_variable at -O2: the outer loop over a 3-entry constant
+/// table is unrolled by the function passes after the module's dead-code pass,
+/// its loads become constants, and the table stayed in the object (+18 B of
+/// Data the pin does not have). The pin's GlobalDCE follows the function passes.
+#[test]
+fn a_table_whose_loads_the_late_unroll_folded_leaves_the_module() {
+    let (module, _) = pipelined(include_str!("fixtures/late_unroll_table.ll"), pipeline::Options::standard());
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("@main.xs"), "{text}");
+}

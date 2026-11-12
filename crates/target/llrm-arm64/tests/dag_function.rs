@@ -14,6 +14,10 @@ fn names(one: &Selected) -> Vec<&'static str> {
             ISD::Machine(code) => MACHINE_OPCODES.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, name)| *name),
             _ => None,
         })
+        // Since #9048 `COPY` has a number in the table; the lists below are
+        // the pin's opcodes without the copies a `freeze` and the arguments
+        // leave (`Select_FREEZE` is a `COPY`).
+        .filter(|name| *name != "COPY")
         .collect()
 }
 

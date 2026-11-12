@@ -212,6 +212,23 @@ pub(crate) fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
     count
 }
 
+/// How many fresh definitions each virtual register has: a write that is
+/// not also a read. A pre- or post-indexed access updates its base in place
+/// (`UseDef`), which is no second input of a phi.
+fn fresh_definitions(function: &MFunc) -> HashMap<Reg, usize> {
+    let mut count: HashMap<Reg, usize> = HashMap::default();
+    for block in &function.blocks {
+        for op in &block.ops {
+            op.for_each_register(&mut |register, role| {
+                if role == Role::Def {
+                    *count.entry(register).or_default() += 1;
+                }
+            });
+        }
+    }
+    count
+}
+
 /// Whether `op` only computes registers, so that it can go when none is read.
 /// Loads stay (a volatile load is not told apart), and so does anything that
 /// sets the flags.
@@ -648,7 +665,7 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// Exit: 11-30.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
-    definitions: &HashMap<Reg, usize>,
+    fresh: &HashMap<Reg, usize>,
     blocks: &[crate::mfunc::MBlock],
     earlier: Reg,
     register: Reg,
@@ -680,7 +697,7 @@ fn profitable(
             }
             for &(block, index) in reads(one) {
                 if let Op::Copy { dst, .. } = blocks[block].ops[index] {
-                    if definitions.get(&dst) != Some(&1) {
+                    if fresh.get(&dst) != Some(&1) {
                         return true;
                     }
                     pending.push(dst);
@@ -717,6 +734,7 @@ fn cse(
     optsize: bool,
 ) {
     let definitions = definitions(function);
+    let fresh = fresh_definitions(function);
     // The table, scoped by the dominator tree: a block sees what its
     // dominators computed.
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
@@ -756,7 +774,7 @@ fn cse(
                                 || home.get(&earlier) == Some(block)
                                 || profitable(
                                     &readers,
-                                    &definitions,
+                                    &fresh,
                                     &function.blocks,
                                     earlier,
                                     register,
