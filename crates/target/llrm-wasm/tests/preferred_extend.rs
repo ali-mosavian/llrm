@@ -13,9 +13,10 @@ fn assembly() -> String {
     String::from_utf8_lossy(&made.stdout).into_owned()
 }
 
-/// A value read signed in another block is exported sign-extended (`PreferredExtendType`): the `i16`
-/// compared with `slt` in the loop loads with `load16_s` before it. Exported any-extended it was
-/// `load16_u` and an `extend16_s` in the loop (phi_slot_unknown_arm +1 B at -O2, -O3, -Os).
+/// A value read signed in another block is exported sign-extended
+/// (`PreferredExtendType`): the `i16` compared with `slt` in the loop loads
+/// with `load16_s` before it. Exported any-extended it was `load16_u` and an
+/// `extend16_s` in the loop (phi_slot_unknown_arm +1 B at -O2, -O3, -Os).
 #[test]
 fn a_value_compared_signed_in_another_block_is_loaded_sign_extended() {
     let text = assembly();

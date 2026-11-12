@@ -3507,10 +3507,11 @@ impl Builder<'_> {
         self.copy_leaf_to_register(value, reg, extend)
     }
 
-    /// `PreferredExtendType[V]` (`getPreferredExtendForValue`, FunctionLoweringInfo.cpp#L59), which
-    /// `CopyValueToVirtualRegister` takes over `ANY_EXTEND`: a value its other blocks compare or
-    /// pass signed more often than unsigned is exported sign-extended. Set for instructions only
-    /// and not at -O0.
+    /// `PreferredExtendType[V]` (`getPreferredExtendForValue`,
+    /// FunctionLoweringInfo.cpp#L59), which `CopyValueToVirtualRegister`
+    /// takes over `ANY_EXTEND`: a value its other blocks compare or
+    /// pass signed more often than unsigned is exported sign-extended. Set for
+    /// instructions only and not at -O0.
     fn preferred_extend(
         &self,
         result: ValueId,
