@@ -2226,6 +2226,12 @@ pub trait Tti {
         &[]
     }
 
+    /// `ComplexityLimit` (`-lsr-complexity-limit`): the search space past which
+    /// LSR narrows it by heuristics. DEVIATE LU16: a target may raise it.
+    fn lsr_complexity_limit(&self) -> usize {
+        65535
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
