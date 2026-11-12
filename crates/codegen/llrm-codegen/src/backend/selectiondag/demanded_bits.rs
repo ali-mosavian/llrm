@@ -80,6 +80,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return false;
         }
         let Some((old, new)) = tlo else { return false };
+        // "Revisit the node."
+        self.add_to_worklist(node.node);
         self.replace_value(old, new);
         self.add_to_worklist_with_users(new.node);
         true
