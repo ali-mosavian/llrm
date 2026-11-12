@@ -401,7 +401,12 @@ impl Collection<'_, '_> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
-        if self.tti.preferred_addressing_mode() != AddressingMode::PostIndexed || !self.too_complex() {
+        // DEVIATE LU31: a register-starved target
+        // (`Tti::lsr_address_fewest_registers`) takes the same filter
+        // for every address use, post-indexed or not.
+        let post_indexed = self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed;
+        let starved = self.tti.lsr_address_fewest_registers();
+        if !(post_indexed || starved) || !self.too_complex() {
             return;
         }
         for lu_idx in 0..self.uses.len() {
@@ -411,10 +416,17 @@ impl Collection<'_, '_> {
             }
             let Some(ty) = lu.access_ty.mem_ty.and_then(|ty| se.ty_of(self.cx, ty)) else { continue };
             let ty = crate::lsr_generate::tti_ty(ty);
-            if !self.tti.is_post_inc_load_legal(ty) && !self.tti.is_post_inc_store_legal(ty) {
+            if !starved && !self.tti.is_post_inc_load_legal(ty) && !self.tti.is_post_inc_store_legal(ty) {
                 continue;
             }
             let min_regs = lu.formulae.iter().map(Formula::num_regs).min().unwrap_or(usize::MAX);
+            // Not post-indexed: only where a frame slot is what saves the
+            // register.
+            if !post_indexed
+                && !lu.formulae.iter().any(|f| f.num_regs() == min_regs && matches!(f.symbol, Some(Symbol::Frame(_))))
+            {
+                continue;
+            }
             let mut any = false;
             let mut at = 0;
             while at < self.uses[lu_idx].formulae.len() {

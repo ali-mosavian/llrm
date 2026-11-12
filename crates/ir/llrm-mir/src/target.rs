@@ -388,6 +388,8 @@ pub struct Tuning {
     /// registers where an address takes `[frame + index + displacement]`
     /// (x86-m16: `[bp+si+disp]`). false: the pin's.
     pub frame_slot_is_free_base: bool,
+    /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
+    pub lsr_address_fewest_registers: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
     pub keep_constant_arith_operands: bool,
@@ -570,6 +572,7 @@ impl Tuning {
         size_rotation_header_limit: None,
         keep_constant_displacements: false,
         frame_slot_is_free_base: false,
+        lsr_address_fewest_registers: false,
         keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,

@@ -1148,6 +1148,10 @@ impl Tti for X86 {
         self.tuning.frame_slot_is_free_base
     }
 
+    fn lsr_address_fewest_registers(&self) -> bool {
+        self.tuning.lsr_address_fewest_registers
+    }
+
     fn constant_arith_phi_is_cheap(
         &self,
         optsize: bool,

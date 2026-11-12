@@ -562,9 +562,12 @@ impl Implement<'_, '_> {
                 Symbol::Global(global) => {
                     let space = self.env.globals[global.0 as usize].address_space;
                     let pointer = self.context.types.ptr(space);
-                    Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
+                    Operand::Constant(
+                        self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }),
+                    )
                 }
-                // A static alloca is in the entry block: it dominates every use.
+                // A static alloca is in the entry block: it dominates every
+                // use.
                 Symbol::Frame(value) => Operand::Value(value),
             };
             let u = self.unknown(operand);
